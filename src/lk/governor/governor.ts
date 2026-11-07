@@ -32,6 +32,7 @@ import {
   type ExecuteRequest,
   type GovernorEvents,
   type TierSnapshot,
+  type VerifyResult,
 } from './types.js';
 import { SlidingWindow, type WindowEvent } from './window.js';
 
@@ -270,7 +271,8 @@ export class Governor {
    */
   readonly fetch = async (input: string | URL | Request, init: RequestInit = {}): Promise<Response> => {
     const ctx = this.als.getStore();
-    if (!ctx || ctx.governor !== this) {
+    // A released ticket means this is a straggler (e.g. a background task spawned by an earlier `run`).
+    if (!ctx || ctx.governor !== this || ctx.ticket.released) {
       throw new BridgeLkError({
         message: 'LegendKeeper may only be called inside governor.execute()',
         code: 'GOVERNOR_BYPASS',
@@ -663,7 +665,12 @@ export class Governor {
 
   private async verify<T>(req: ExecuteRequest<T>, ctx: AttemptContext, error: BridgeLkError): Promise<T> {
     if (req.verify) {
-      const result = await req.verify({ error, signal: req.signal ?? new AbortController().signal });
+      let result: VerifyResult<T>;
+      try {
+        result = await req.verify({ error, signal: req.signal ?? new AbortController().signal });
+      } catch (e) {
+        throw toBridgeLkError(e, req.opId);
+      }
       if (result.ok) return result.value;
       throw error;
     }

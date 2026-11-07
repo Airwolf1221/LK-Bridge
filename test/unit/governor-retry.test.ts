@@ -4,7 +4,7 @@ import { defaultGovernorSettings } from '../../src/config/lk.js';
 import { BridgeLkError, BudgetWaitError, fromLkResponse } from '../../src/lk/errors.js';
 import { backoffMs, decideRetry, INITIAL_RETRY_STATE, type RetryInput } from '../../src/lk/governor/retry.js';
 import type { BudgetWaitEvent } from '../../src/lk/governor/types.js';
-import { json, lkError, rate, setup, track, WRITE } from './governor-helpers.js';
+import { json, lkError, rate, READ, setup, track, WRITE } from './governor-helpers.js';
 
 const settings = defaultGovernorSettings().retry;
 const NOW = 1_000_000;
@@ -365,5 +365,67 @@ describe('retry matrix: through the governor', () => {
     await env.clock.advance(1000);
     expect(p.error).toMatchObject({ code: 'ABORTED' });
     expect(env.seen).toHaveLength(1);
+  });
+});
+
+describe('governor guards', () => {
+  it('refuses a fetch outside execute, and a straggler fetch after its call finished', async () => {
+    const env = setup();
+    await expect(env.governor.fetch('http://lk.test/x')).rejects.toMatchObject({ code: 'GOVERNOR_BYPASS' });
+    let later: (() => Promise<Response>) | undefined;
+    await env.governor.execute({
+      opId: 'test.op',
+      kind: 'read',
+      costs: READ,
+      priority: 'P1',
+      run: () => {
+        later = () => env.governor.fetch('http://lk.test/x');
+        return Promise.resolve('done');
+      },
+    });
+    await expect(later!()).rejects.toMatchObject({ code: 'GOVERNOR_BYPASS' });
+    expect(env.seen).toHaveLength(0);
+    expect(env.used('key-min')).toBe(0); // a call that never sent anything is refunded
+  });
+
+  it('wraps a throwing verify hook into a BridgeLkError', async () => {
+    const env = setup();
+    env.setResponder((_r, i) => (i === 0 ? lkError(503, 'X') : lkError(404, 'NOT_FOUND')));
+    const p = track(
+      env.call({
+        costs: WRITE,
+        method: 'DELETE',
+        verify: () => Promise.reject(new Error('re-read blew up')),
+      }),
+    );
+    await env.clock.advance(1000);
+    expect(p.error).toBeInstanceOf(BridgeLkError);
+    expect(p.error).toMatchObject({ code: 'UNEXPECTED', classification: 'bridge' });
+  });
+
+  it('rejects invalid requests up front', async () => {
+    const env = setup();
+    await expect(env.call({ idempotencyKey: 'has space' })).rejects.toMatchObject({
+      code: 'INVALID_REQUEST',
+    });
+    await expect(
+      env.governor.execute({
+        opId: 'x',
+        kind: 'read',
+        costs: WRITE,
+        priority: 'P1',
+        run: () => Promise.resolve(1),
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    await expect(
+      env.governor.execute({
+        opId: 'x',
+        kind: 'write',
+        costs: { tiers: [...WRITE.tiers, 'items-min'], items: 600 },
+        priority: 'P2',
+        run: () => Promise.resolve(1),
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+    expect(env.seen).toHaveLength(0);
   });
 });
