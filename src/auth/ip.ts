@@ -7,7 +7,9 @@ import { BlockList, isIP } from 'node:net';
  * including IPv4 addresses embedded in IPv6 (mapped, compatible, NAT64, 6to4, Teredo).
  */
 
-const blocked = new BlockList();
+// Separate lists: a single BlockList matches IPv4 addresses against IPv4-mapped IPv6 rules too.
+const blocked4 = new BlockList();
+const blocked6 = new BlockList();
 for (const [net, prefix] of [
   ['0.0.0.0', 8], // "this" network
   ['10.0.0.0', 8], // private
@@ -25,7 +27,7 @@ for (const [net, prefix] of [
   ['224.0.0.0', 4], // multicast
   ['240.0.0.0', 4], // reserved, includes broadcast
 ] as const) {
-  blocked.addSubnet(net, prefix, 'ipv4');
+  blocked4.addSubnet(net, prefix, 'ipv4');
 }
 for (const [net, prefix] of [
   ['::', 128], // unspecified
@@ -45,17 +47,17 @@ for (const [net, prefix] of [
   ['fec0::', 10], // site-local (deprecated)
   ['ff00::', 8], // multicast
 ] as const) {
-  blocked.addSubnet(net, prefix, 'ipv6');
+  blocked6.addSubnet(net, prefix, 'ipv6');
 }
 
 /** True only for globally routable unicast addresses. Non-IP strings are not public. */
 export function isPublicAddress(address: string): boolean {
   const bare = address.replace(/^\[|\]$/g, '').replace(/%.*$/, '');
   const family = isIP(bare);
-  if (family === 4) return !blocked.check(bare, 'ipv4');
+  if (family === 4) return !blocked4.check(bare, 'ipv4');
   if (family === 6) {
     // Embedded IPv4 forms (mapped, compatible, NAT64) fall in blocked subnets; refuse them all.
-    if (bare.includes('.') || blocked.check(bare, 'ipv6')) return false;
+    if (bare.includes('.') || blocked6.check(bare, 'ipv6')) return false;
     // Global unicast is 2000::/3; everything else is reserved or special-purpose.
     const first = parseInt(bare.split(':')[0] || '0', 16);
     return first >= 0x2000 && first <= 0x3fff;
