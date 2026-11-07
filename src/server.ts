@@ -5,11 +5,12 @@ import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyServerO
 import { authPlugin } from './auth/plugin.js';
 import { type AuthServices, type CreateAuthServicesOptions, createAuthServices } from './auth/services.js';
 import { type AuthConfig, AuthConfigError, loadAuthConfig } from './config/auth.js';
-import { ConfigError, loadConfig } from './config/index.js';
+import { ConfigError, loadConfig, loadToolsConfig } from './config/index.js';
 import { runMigrations } from './db/migrate.js';
 import { type Db, openDatabase } from './db/open.js';
 import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/server.js';
 import { mcpTransportPlugin } from './mcp/transport.js';
+import { createRuntime } from './runtime.js';
 
 /**
  * Composition root. Chunk 4 wires the authorization server and the MCP transport; later chunks
@@ -28,6 +29,8 @@ export interface BuildServerOptions {
   /** MCP tools. Defaults to the `bridge_info` stub. */
   readonly tools?: readonly McpToolProvider[];
   readonly bridgeInfo?: () => BridgeInfo;
+  /** MCP server `instructions` shown to connecting agents. */
+  readonly instructions?: string;
   /** Overrides `TRUST_PROXY` (tests only). */
   readonly trustProxy?: FastifyServerOptions['trustProxy'];
   /** Test seams for the auth services (clock, CIMD fetcher, rate limits). */
@@ -85,7 +88,11 @@ export async function buildServer(
     config: o.authConfig,
     bearer: services.bearer,
     event: services.event,
-    serverInfo: { name: 'lk-bridge', version: BRIDGE_VERSION },
+    serverInfo: {
+      name: 'lk-bridge',
+      version: BRIDGE_VERSION,
+      ...(o.instructions ? { instructions: o.instructions } : {}),
+    },
     tools: o.tools ?? [bridgeInfoStub(bridgeInfo)],
   });
 
@@ -108,21 +115,27 @@ async function main(): Promise<void> {
   }
   const db = openDatabase(config.server.dbPath);
   runMigrations(db);
+  // Chunk 3: governor, LK client, job engine (its startup recovery runs here, before /mcp accepts anything) and
+  // tools, in dependency order. Chunk 2b adds the policy gate and proposal sink to `createRuntime`.
+  const runtime = createRuntime({
+    config,
+    toolsSettings: loadToolsConfig(),
+    db,
+    version: BRIDGE_VERSION,
+  });
   const { app } = await buildServer({
     authConfig,
     db,
     logLevel: config.logLevel,
-    bridgeInfo: () => ({
-      version: BRIDGE_VERSION,
-      projectId: config.lk.projectId,
-      readOnly: config.lk.readOnly,
-      writersMax: config.writers.max,
-    }),
+    tools: runtime.tools,
+    instructions: runtime.instructions,
   });
+  // SIGTERM: stop new work and let running jobs finish (drain), then stop HTTP, then close the database.
   const shutdown = (signal: string) => {
     app.log.info({ signal }, 'shutting down');
-    app
-      .close()
+    runtime
+      .shutdown()
+      .then(() => app.close())
       .then(() => db.close())
       .then(
         () => process.exit(0),
