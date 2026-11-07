@@ -8,7 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint .",
     "format": "prettier --check .",
@@ -17,19 +17,28 @@
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts --passWithNoTests",
     "gen:registry": "tsx scripts/gen-registry.ts",
     "check:drift": "tsx scripts/check-spec-drift.ts",
-    "ci": "npm run typecheck && npm run lint && npm run format && npm run gen:registry -- --check && npm run check:drift && npm test"
+    "ci": "npm run typecheck && npm run lint && npm run format && npm run gen:registry -- --check && npm run check:drift && npm test",
+    "start": "node dist/server.js",
+    "dev": "tsx src/server.ts",
+    "db:migrate": "node dist/db/migrate.js",
+    "setup:owner": "node dist/auth/cli/setup-owner.js",
+    "pat": "node dist/auth/cli/pat.js"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.5",
     "@legendkeeper/sdk": "^4.1.0",
     "@modelcontextprotocol/node": "2.1.2",
     "@modelcontextprotocol/server": "2.4.0",
+    "argon2": "^0.45.2",
     "better-sqlite3": "^13.0.3",
     "fastify": "^5.12.8",
+    "jose": "^6.2.15",
     "pino": "^10.4.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/client": "2.4.0",
     "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.19.2",
     "eslint": "^10.14.0",

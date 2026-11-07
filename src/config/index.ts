@@ -183,3 +183,4 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 export * from './lk.js';
+export { AuthConfigError, loadAuthConfig, type AuthConfig } from './auth.js';
