@@ -1,0 +1,7 @@
+dist
+node_modules
+**/*.generated.ts
+spec/*.json
+package-lock.json
+CLAUDE.md
+docs/PLAN.md
