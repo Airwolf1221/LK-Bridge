@@ -165,6 +165,14 @@ export class ClientService {
     };
   }
 
+  /** The stored registration for a CIMD client, if its document is still fresh. */
+  freshCimd(clientId: string): ClientRecord | undefined {
+    const c = this.deps.store.getClient(clientId);
+    return c?.kind === 'cimd' && c.metadataExpiresAt !== null && c.metadataExpiresAt > this.deps.now()
+      ? c
+      : undefined;
+  }
+
   /**
    * Resolves a client for the authorization endpoint. CIMD clients are fetched when missing or
    * stale. Throws {@link CimdError} when a document cannot be used; returns undefined when a
@@ -173,8 +181,9 @@ export class ClientService {
   async resolveForAuthorization(clientId: string): Promise<ClientRecord | undefined> {
     if (!isCimdClientId(clientId)) return this.deps.store.getClient(clientId);
     const now = this.deps.now();
+    const fresh = this.freshCimd(clientId);
+    if (fresh) return fresh;
     const cached = this.deps.store.getClient(clientId);
-    if (cached && cached.metadataExpiresAt !== null && cached.metadataExpiresAt > now) return cached;
     try {
       const { metadata, cacheSeconds } = await this.deps.cimd.fetch(clientId);
       const client: ClientRecord = {
