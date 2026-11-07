@@ -1,0 +1,121 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON */
+import { describe, expect, it } from 'vitest';
+import { ConfigError, loadToolsConfig } from '../../src/config/index.js';
+import { principalFor, project, summarise } from '../../src/mcp/tools/shape.js';
+import { sniffImageType, checkTargetUrl, UploadHttpError } from '../../src/mcp/tools/upload-http.js';
+import { suggestOperations } from '../../src/mcp/tools/schemas.js';
+import { operations } from '../../src/lk/registry.js';
+import { BRIDGE_INSTRUCTIONS } from '../../src/mcp/tools/index.js';
+
+describe('tools configuration', () => {
+  it('has the documented defaults', () => {
+    expect(loadToolsConfig({})).toEqual({
+      upload: { maxBytes: 10 * 1024 * 1024, allowUrlSource: true, fetchTimeoutMs: 15_000 },
+      resultMaxChars: 40_000,
+    });
+  });
+  it('reads overrides and rejects bad values by name only', () => {
+    expect(
+      loadToolsConfig({ UPLOAD_ALLOW_URL_SOURCE: 'false', UPLOAD_MAX_BYTES: '5000' }).upload,
+    ).toMatchObject({
+      allowUrlSource: false,
+      maxBytes: 5000,
+    });
+    expect(() => loadToolsConfig({ UPLOAD_MAX_BYTES: 'lots' })).toThrow(ConfigError);
+  });
+});
+
+describe('result shaping', () => {
+  it('summarises block trees to an outline and counts, with unsupported ids', () => {
+    const s = summarise('getDocumentBlocks', {
+      id: 'd1',
+      version: 'v9',
+      schema: 1,
+      text: 'x',
+      blocks: [
+        { id: 'b1', kind: 'heading', level: 2, content: [{ text: 'Title' }] },
+        { id: 'b2', kind: 'bulletList', children: [{ id: 'b3', kind: 'unsupported' }] },
+      ],
+    }) as any;
+    expect(s).toMatchObject({ version: 'v9', blockCount: 3, topLevelBlocks: 2, unsupportedBlockIds: ['b3'] });
+    expect(s.outline[0]).toMatchObject({ id: 'b1', level: 2, text: 'Title' });
+    expect(s).not.toHaveProperty('blocks');
+  });
+  it('summarises lists to scalar fields and counts', () => {
+    const s = summarise('listResources', {
+      data: [{ id: 'r1', name: 'N', tags: ['a', 'b'], documents: [{ id: 'd' }], banner: { url: 'x' } }],
+      hasMore: true,
+      nextCursor: 'c',
+    }) as any;
+    expect(s).toMatchObject({ count: 1, hasMore: true, nextCursor: 'c' });
+    expect(s.items[0]).toEqual({
+      id: 'r1',
+      name: 'N',
+      tags: ['a', 'b'],
+      documents: '[1 items]',
+      banner: '{…}',
+    });
+  });
+  it('clips long strings', () => {
+    expect((project({ text: 'x'.repeat(500) }) as { text: string }).text.length).toBeLessThan(130);
+  });
+  it('maps a caller to a placeholder principal', () => {
+    expect(principalFor(undefined).principalId).toBe('system');
+    expect(
+      principalFor({ kind: 'pat', clientId: 'pat:abc', scopes: [], tokenId: 'abc', label: 'laptop' }),
+    ).toEqual({
+      principalId: 'pat:abc',
+      profile: 'default',
+      label: 'laptop',
+    });
+    expect(principalFor({ kind: 'oauth', clientId: 'claude', scopes: [], tokenId: 't' }).principalId).toBe(
+      'oauth:claude',
+    );
+  });
+  it('suggests close operation names', () => {
+    expect(
+      suggestOperations(
+        'getDocumnt',
+        operations.map((o) => o.operationId),
+      )[0],
+    ).toBe('getDocument');
+  });
+  it('tells agents what the plan requires', () => {
+    for (const phrase of [
+      'bridge_estimate',
+      'lk_api_batch',
+      'ifMatch',
+      'loop',
+      'waiting_budget',
+      'proposal_captured',
+    ]) {
+      expect(BRIDGE_INSTRUCTIONS).toContain(phrase);
+    }
+  });
+});
+
+describe('image helpers', () => {
+  it('recognises the four image formats by their first bytes', () => {
+    expect(sniffImageType(Buffer.from('89504e470d0a1a0a00', 'hex'))).toBe('image/png');
+    expect(sniffImageType(Buffer.from('ffd8ffe000', 'hex'))).toBe('image/jpeg');
+    expect(sniffImageType(Buffer.from('GIF89a....'))).toBe('image/gif');
+    expect(sniffImageType(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBP')]))).toBe(
+      'image/webp',
+    );
+    expect(sniffImageType(Buffer.from('<svg></svg>'))).toBeNull();
+  });
+  it('checks the shape of a target URL', () => {
+    expect(() => checkTargetUrl('https://example.com/a')).not.toThrow();
+    for (const bad of [
+      'http://example.com/',
+      'https://u:p@example.com/',
+      'https://[::1]/',
+      'https://127.0.0.1/',
+      'https://169.254.169.254/',
+      'ftp://x',
+      'nonsense',
+    ]) {
+      expect(() => checkTargetUrl(bad), bad).toThrow(UploadHttpError);
+    }
+  });
+});

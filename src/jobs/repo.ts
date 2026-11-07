@@ -649,6 +649,39 @@ export class JobsRepo {
     return {};
   }
 
+  /** Replaces a step's stored params (upload_image binds the upload key; the PUT step drops its bytes). */
+  setStepParams(jobId: string, stepNo: number, params: OpParams): void {
+    const paramsJson = JSON.stringify(params);
+    const row = this.db
+      .prepare('SELECT params_artifact_id FROM steps WHERE job_id = ? AND step_no = ?')
+      .get(jobId, stepNo) as { params_artifact_id: string | null } | undefined;
+    if (!row) return;
+    this.db.transaction(() => {
+      if (row.params_artifact_id !== null) {
+        this.db
+          .prepare('UPDATE job_artifacts SET data = ?, bytes = ?, updated_at = ? WHERE id = ?')
+          .run(paramsJson, Buffer.byteLength(paramsJson), this.now(), row.params_artifact_id);
+        this.db
+          .prepare('UPDATE steps SET params_hash = ? WHERE job_id = ? AND step_no = ?')
+          .run(sha256(paramsJson), jobId, stepNo);
+      } else {
+        this.db
+          .prepare('UPDATE steps SET params = ?, params_hash = ? WHERE job_id = ? AND step_no = ?')
+          .run(paramsJson, sha256(paramsJson), jobId, stepNo);
+      }
+    })();
+  }
+
+  /** The stored result of a step: its summary, or the whole result artefact when the summary is truncated. */
+  stepResult(step: StepView): unknown {
+    if (step.resultArtifactId) {
+      const a = this.db.prepare('SELECT data FROM job_artifacts WHERE id = ?').get(step.resultArtifactId) as
+        { data: string | null } | undefined;
+      if (a?.data) return parse<unknown>(a.data, null);
+    }
+    return step.resultSummary;
+  }
+
   // -------------------------------------------------------------------------------- artefacts
 
   createArtifact(

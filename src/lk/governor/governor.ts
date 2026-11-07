@@ -38,6 +38,9 @@ import { SlidingWindow, type WindowEvent } from './window.js';
 
 export type Transport = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+/** The network transport under the governor when none is given: the platform `fetch`. */
+export const defaultTransport: Transport = (input, init) => fetch(input, init);
+
 export interface GovernorOptions {
   readonly settings: GovernorSettings;
   readonly clock?: Clock;
@@ -159,7 +162,7 @@ export class Governor {
   constructor(options: GovernorOptions) {
     this.settings = options.settings;
     this.clock = options.clock ?? systemClock;
-    this.transport = options.transport ?? ((input, init) => fetch(input, init));
+    this.transport = options.transport ?? defaultTransport;
     this.random = options.random ?? Math.random;
     const s = this.settings;
     this.tiers = Object.fromEntries(
