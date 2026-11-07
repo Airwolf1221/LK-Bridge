@@ -189,7 +189,7 @@ describe('read-only mode and budget', () => {
 describe('the tool list', () => {
   it('every tool carries an access tag consistent with its annotations', () => {
     const tools = stack.runtime.tools;
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(18); // chunk 3's 16, plus chunk 2b's two proposal tools
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');

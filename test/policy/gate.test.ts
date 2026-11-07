@@ -15,7 +15,7 @@ import {
 import { operations } from '../../src/lk/registry.js';
 import type { OperationDef } from '../../src/lk/registry-types.js';
 import { issueApprovalToken } from '../../src/policy/approval.js';
-import { SCOPES, createPolicy, type Policy, type Scope } from '../../src/policy/index.js';
+import { SCOPES, UPLOAD_OPERATIONS, createPolicy, type Policy, type Scope } from '../../src/policy/index.js';
 import { makePat, mcpOriginFor } from './helpers.js';
 
 let db: Db;
@@ -59,6 +59,8 @@ const ask = (
  */
 function expected(scope: Scope, def: OperationDef): PolicyDecision['decision'] {
   if (def.kind === 'read') return 'allow';
+  // v1: uploads are not proposable (docs/policy.md).
+  if (scope === 'propose' && UPLOAD_OPERATIONS.has(def.operationId)) return 'deny';
   return scope === 'write' ? 'allow' : scope === 'propose' ? 'propose' : 'deny';
 }
 

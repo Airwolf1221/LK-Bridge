@@ -11,7 +11,12 @@ import { BRIDGE_INSTRUCTIONS } from '../../src/mcp/tools/index.js';
 describe('tools configuration', () => {
   it('has the documented defaults', () => {
     expect(loadToolsConfig({})).toEqual({
-      upload: { maxBytes: 10 * 1024 * 1024, allowUrlSource: true, fetchTimeoutMs: 15_000 },
+      upload: {
+        maxBytes: 10 * 1024 * 1024,
+        allowUrlSource: true,
+        fetchTimeoutMs: 15_000,
+        putTimeoutMs: 120_000,
+      },
       resultMaxChars: 40_000,
     });
   });

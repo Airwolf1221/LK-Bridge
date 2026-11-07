@@ -5,6 +5,7 @@
  */
 import * as z from 'zod';
 import type { JobView, JobWithSteps, StepView } from '../../jobs/index.js';
+import type { McpToolContext } from '../server.js';
 import { TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
 import type { BudgetSnapshot, TierSnapshot } from '../../lk/index.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
@@ -228,6 +229,25 @@ export function jobBody(job: JobView | JobWithSteps, detail: 'summary' | 'steps'
   };
 }
 
+// ------------------------------------------------------------------------------------------------ visibility
+
+/**
+ * Agents see only their OWN jobs, errors and stored results (chunk 2b): those whose principal is the caller's. A job
+ * of another principal answers exactly like an unknown id, so its existence is never revealed.
+ */
+function callerId(ctx: McpToolContext): string | undefined {
+  return ctx.principal?.principalId;
+}
+
+function ownJob(deps: ToolDeps, ctx: McpToolContext, id: string): JobWithSteps | undefined {
+  const who = callerId(ctx);
+  const job = who === undefined ? undefined : deps.engine.queries.getJob(id);
+  return job && job.principalId === who ? job : undefined;
+}
+
+const jobNotFound = (deps: ToolDeps, id: string) =>
+  errorResult({ code: 'JOB_NOT_FOUND', message: `No job ${id}` }, deps);
+
 function jobTools(deps: ToolDeps) {
   const jobId = z.string().min(1).max(100);
   return [
@@ -237,7 +257,7 @@ function jobTools(deps: ToolDeps) {
       access: 'read',
       description:
         'Shows one job (from lk_api_batch, lk_api_paginate_all, lk_upload_image or a queued write): status, progress, the current step, ' +
-        'the last error and its result. Without jobId, lists recent jobs. Cost: none. Risk: none.',
+        'the last error and its result. Without jobId, lists your recent jobs. Only your own jobs are visible. Cost: none. Risk: none.',
       inputSchema: z.object({
         jobId: jobId.optional(),
         steps: z
@@ -260,9 +280,17 @@ function jobTools(deps: ToolDeps) {
         limit: z.number().int().min(1).max(50).optional().describe('When listing: default 10.'),
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ jobId: id, steps, status, limit }) => {
+      handler: ({ jobId: id, steps, status, limit }, ctx) => {
         if (id === undefined) {
-          const jobs = deps.engine.queries.listJobs({ ...(status ? { status } : {}), limit: limit ?? 10 });
+          const who = callerId(ctx);
+          const jobs =
+            who === undefined
+              ? []
+              : deps.engine.queries.listJobs({
+                  principalId: who,
+                  ...(status ? { status } : {}),
+                  limit: limit ?? 10,
+                });
           return render(
             {
               count: jobs.length,
@@ -278,8 +306,8 @@ function jobTools(deps: ToolDeps) {
             deps,
           );
         }
-        const job = deps.engine.queries.getJob(id);
-        if (!job) return errorResult({ code: 'JOB_NOT_FOUND', message: `No job ${id}` }, deps);
+        const job = ownJob(deps, ctx, id);
+        if (!job) return jobNotFound(deps, id);
         return render(jobBody(job, steps ? 'steps' : 'summary'), deps);
       },
     }),
@@ -295,13 +323,13 @@ function jobTools(deps: ToolDeps) {
         seconds: z.number().min(1).max(25).optional().describe('How long to wait, 1-25. Default 20.'),
       }),
       annotations: READ_ANNOTATIONS,
-      handler: async ({ jobId: id, seconds }) => {
+      handler: async ({ jobId: id, seconds }, ctx) => {
+        // Checked before waiting, so another principal's job returns at once, exactly like an unknown id.
+        if (!ownJob(deps, ctx, id)) return jobNotFound(deps, id);
         try {
           await deps.engine.wait(id, Math.min(25, seconds ?? 20) * 1000);
-          const job = deps.engine.queries.getJob(id);
-          return job
-            ? render(jobBody(job, 'summary'), deps)
-            : errorResult({ code: 'JOB_NOT_FOUND', message: `No job ${id}` }, deps);
+          const job = ownJob(deps, ctx, id);
+          return job ? render(jobBody(job, 'summary'), deps) : jobNotFound(deps, id);
         } catch (e) {
           return errorFromThrown(e, deps);
         }
@@ -321,7 +349,8 @@ function jobTools(deps: ToolDeps) {
         idempotentHint: true,
         openWorldHint: false,
       },
-      handler: ({ jobId: id }) => {
+      handler: ({ jobId: id }, ctx) => {
+        if (!ownJob(deps, ctx, id)) return jobNotFound(deps, id);
         try {
           const job = deps.engine.controls.cancel(id);
           return render(jobBody(deps.engine.queries.getJob(job.id) ?? job, 'summary'), deps);
@@ -404,7 +433,7 @@ function otherTools(deps: ToolDeps) {
       title: 'Recent errors',
       access: 'read',
       description:
-        'Lists recent failures the bridge recorded: grouped by operation, code and path with counts (default), or one row each. ' +
+        'Lists recent failures of YOUR calls: grouped by operation, code and path with counts (default), or one row each. ' +
         'Each carries the LegendKeeper requestId. Cost: none. Risk: none.',
       inputSchema: z.object({
         grouped: z.boolean().optional().describe('Default true: one row per fingerprint with a count.'),
@@ -417,10 +446,13 @@ function otherTools(deps: ToolDeps) {
         jobId: z.string().max(100).optional().describe('Only when grouped is false.'),
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ grouped, limit, sinceMinutes, jobId }) => {
+      handler: ({ grouped, limit, sinceMinutes, jobId }, ctx) => {
         const since = sinceMinutes ? (deps.now ?? Date.now)() - sinceMinutes * 60_000 : undefined;
+        // Only the caller's own failures (by principal); nobody else's errors, request ids or job ids.
+        const principalId = callerId(ctx) ?? 'unknown-caller';
         if (grouped === false) {
           const rows = deps.engine.queries.listErrors({
+            principalId,
             limit: limit ?? 20,
             ...(since !== undefined ? { since } : {}),
             ...(jobId ? { jobId } : {}),
@@ -444,6 +476,7 @@ function otherTools(deps: ToolDeps) {
           );
         }
         const groups = deps.engine.queries.listErrorGroups({
+          principalId,
           limit: limit ?? 20,
           ...(since !== undefined ? { since } : {}),
         });
@@ -475,6 +508,8 @@ function otherTools(deps: ToolDeps) {
       description:
         'Looks up the write journal: before each destructive write the bridge stores the pre-image (previous blocks, board, metadata, ids). ' +
         'Filter by resource, document, target id or operation, newest first. Use it to see what a write replaced. ' +
+        'Shows every connection’s writes (principal, profile and approver on each entry), so agents can cross-check each other; ' +
+        'job ids appear on your own entries only. ' +
         'Pre-images can be large (they are paged like other big results). Cost: none. Risk: none.',
       inputSchema: z.object({
         resourceId: z.string().max(256).optional(),
@@ -498,16 +533,22 @@ function otherTools(deps: ToolDeps) {
         { resourceId, documentId, targetId, operationId, jobId, sinceMinutes, limit, includePreImage },
         ctx,
       ) => {
-        const entries = deps.engine.queries.journalLookup({
-          ...(resourceId ? { resourceId } : {}),
-          ...(documentId ? { documentId } : {}),
-          ...(targetId ? { targetId } : {}),
-          ...(operationId ? { opId: operationId } : {}),
-          ...(jobId ? { jobId } : {}),
-          ...(sinceMinutes ? { since: (deps.now ?? Date.now)() - sinceMinutes * 60_000 } : {}),
-          limit: limit ?? 10,
-          includePreImage: includePreImage === true,
-        });
+        // Every principal's entries are shown (agents cross-check each other's edits), each with its principal and
+        // profile; job ids, which the job tools keep private, only on the caller's own entries.
+        const who = callerId(ctx);
+        const foreignJob = jobId !== undefined && !ownJob(deps, ctx, jobId);
+        const entries = foreignJob
+          ? []
+          : deps.engine.queries.journalLookup({
+              ...(resourceId ? { resourceId } : {}),
+              ...(documentId ? { documentId } : {}),
+              ...(targetId ? { targetId } : {}),
+              ...(operationId ? { opId: operationId } : {}),
+              ...(jobId ? { jobId } : {}),
+              ...(sinceMinutes ? { since: (deps.now ?? Date.now)() - sinceMinutes * 60_000 } : {}),
+              limit: limit ?? 10,
+              includePreImage: includePreImage === true,
+            });
         const body = {
           count: entries.length,
           entries: entries.map((e) => ({
@@ -523,8 +564,11 @@ function otherTools(deps: ToolDeps) {
               documentId: e.documentId,
             },
             version: e.version,
-            jobId: e.jobId,
+            jobId: e.principalId === who ? e.jobId : null,
             principalId: e.principalId,
+            profile: e.profile,
+            approvedBy: e.approvedBy,
+            mine: e.principalId === who,
             bytes: e.bytes,
             ...(includePreImage === true ? { preImage: e.preImage } : {}),
           })),
@@ -569,12 +613,13 @@ function otherTools(deps: ToolDeps) {
         detail: z.enum(['summary', 'full']).optional().describe('Items only. Default summary.'),
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ handle, offset, limit, detail }) => {
+      handler: ({ handle, offset, limit, detail }, ctx) => {
         const page = deps.engine.queries.readArtifact(handle, {
           offset: offset ?? 0,
           limit: Math.min(limit ?? 50, 500),
         });
-        if (!page)
+        // A stored result belongs to the job that stored it: someone else's handle is "not found".
+        if (!page || !ownJob(deps, ctx, page.artifact.jobId))
           return errorResult({ code: 'HANDLE_NOT_FOUND', message: `No stored result ${handle}` }, deps);
         const maxChars = Math.floor(deps.settings.resultMaxChars * 0.75);
         const a = page.artifact;

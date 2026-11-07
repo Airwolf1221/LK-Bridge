@@ -46,14 +46,17 @@ export function mcpOrigin(ctx: McpToolContext, tool: string): JobOrigin {
   };
 }
 
-const text = (body: unknown, isError = false): McpToolResult => ({
-  content: [{ type: 'text', text: JSON.stringify(body, null, 2) }],
-  ...(isError ? { isError: true } : {}),
-});
-
 const NO_PRINCIPAL = { error: 'This connection is not known to the bridge.' };
 
-export function proposalTools(proposals: ProposalService): McpToolProvider[] {
+/**
+ * The two agent-facing proposal tools. Results follow the tool layer's shape (src/mcp/tools/shape.ts): compact JSON,
+ * then the budget footer on its own last line when `footer` is given (the runtime passes `lk.budgetFooter`).
+ */
+export function proposalTools(proposals: ProposalService, footer?: () => string): McpToolProvider[] {
+  const text = (body: unknown, isError = false): McpToolResult => ({
+    content: [{ type: 'text', text: `${JSON.stringify(body)}${footer ? `\n${footer()}` : ''}` }],
+    ...(isError ? { isError: true } : {}),
+  });
   const status: McpToolProvider<z.ZodObject<{ proposalId: z.ZodString }>> = {
     name: 'bridge_proposal_status',
     title: 'Proposal status',

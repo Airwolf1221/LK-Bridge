@@ -4,6 +4,29 @@
 
 ### Chunk 2b: identity, scopes and proposals
 
+- **Integration with chunk 3** (merged from `main`):
+  - `createRuntime` builds the policy layer and passes the live gate and the proposal sink to the engine
+    (`policy.attach(engine)` after start); new `createBridge()` in `src/server.ts` is the boot path `main` runs, so the
+    runtime and the HTTP server share one policy layer. Every engine-backed tool uses `mcpOrigin(ctx, tool)` (chunk 3's
+    placeholder `principalFor` is gone).
+  - Visibility: `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_result_page` and
+    `bridge_errors_recent` show only the caller's own work; another principal's id answers like an unknown one.
+    `bridge_journal_lookup` shows every principal's entries with principal, profile, approver and `mine`; job ids on
+    your own entries only.
+  - Uploads are not proposable: at `propose`, `lk_upload_image` and raw `createImageUpload` / `createImageAsset`
+    are refused before anything is sent.
+  - `UPLOAD_PUT_TIMEOUT_MS` (default 120000, 5000-600000, validated at start-up): the signed-URL PUT's own per-attempt
+    deadline; `governor.execute` takes an optional `timeoutMs` (**interface addition** in `src/lk`).
+  - `bridge_info` reports the caller's `profile`, `scope` and `canWriteAs`.
+  - Hidden write tools stay callable so a direct call gets the read-only message; only `tools/list` is filtered.
+  - Member admin is refused by the engine guard (`MEMBER_ADMIN_DISABLED`), not the gate, so agents see that code.
+  - List summaries over 24,000 characters reduce items to id, name, type and parent: `listResources` at limit 100
+    stays inline (it had become a stored handle). Measured default results: getDocumentBlocks on a 3,000-block page
+    about 2,300 tokens, listResources at 100 about 3,900, search at 100 about 1,100 (`test/tools/result-size.test.ts`).
+  - The proposal tools return compact JSON with the budget footer, like every tool; `proposal_captured` results
+    carry the summary and point to `bridge_proposal_status`.
+  - ADR renumbered: live policy evaluation is ADR 0012 (chunk 3's tool layer keeps 0011).
+
 - `src/policy` ([docs/policy.md](policy.md), [ADR 0012](adr/0012-live-policy-evaluation.md)): profiles
   (`agent_profiles`: label, kind `claude` · `chatgpt` · `claude-code` · `other`, scope), scopes `read` · `propose` ·
   `write`, the default scope for new connections (`read`), and the audit log. Migration `0300_policy_init.sql` adds

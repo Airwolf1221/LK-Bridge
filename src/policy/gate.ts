@@ -43,6 +43,13 @@ export function readOnlyReason(profile: string): string {
   );
 }
 
+/** v1: uploads are not proposable (a proposal cannot hold the image bytes and signed URL safely). */
+export const UPLOAD_OPERATIONS: ReadonlySet<string> = new Set(['createImageUpload', 'createImageAsset']);
+
+export const UPLOAD_PROPOSE_REASON =
+  'image uploads cannot be proposed: they need a connection with scope "write". ' +
+  'The bridge owner can raise this profile’s scope in the LK-Bridge dashboard.';
+
 export const MEMBER_ADMIN_REASON =
   'member and invite administration is disabled on this bridge (LK_ALLOW_MEMBER_ADMIN=false)';
 
@@ -119,6 +126,10 @@ export class LivePolicyGate implements PolicyGate {
       case 'write':
         return { decision: 'allow' };
       case 'propose':
+        // Refused before anything is sent: lk_upload_image, and raw createImageUpload / createImageAsset calls.
+        if (ctx.jobKind === 'upload_image' || UPLOAD_OPERATIONS.has(op.operationId)) {
+          return deny(UPLOAD_PROPOSE_REASON);
+        }
         return { decision: 'propose' };
       default:
         return deny(readOnlyReason(resolved.principal.profile));

@@ -6,7 +6,7 @@ Source: `src/mcp/tools/`. Design notes: [ADR 0011](adr/0011-tool-layer.md). Auth
 
 ## Agent guidance (the MCP server `instructions`)
 
-> LK-Bridge gives governed access to one LegendKeeper project. Rate budget is shared and finite: every result ends with a budget line. Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. Read before you write, and pass the version you read as params.ifMatch. Never loop on budget errors: wait until the stated retry time. Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost, so follow it with bridge_job_status. Results are summaries; ask for detail "full" only when you need the whole payload, and page oversized results with bridge_result_page.
+> LK-Bridge gives governed access to one LegendKeeper project. Rate budget is shared and finite: every result ends with a budget line. Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. Read before you write, and pass the version you read as params.ifMatch. Never loop on budget errors: wait until the stated retry time. Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost: follow a job with bridge_job_status and a proposal with bridge_proposal_status. Results are summaries; ask for detail "full" only when you need the whole payload, and page oversized results with bridge_result_page.
 
 The text is `BRIDGE_INSTRUCTIONS` in `src/mcp/tools/index.ts`; a test checks it covers each point.
 
@@ -26,7 +26,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 ## Tool reference
 
-`access` is the tag chunk 2b uses to filter and enforce (`read` or `write`). Annotations are what Claude and ChatGPT use to decide what to auto-approve: read tools are `readOnlyHint: true`; write tools are `readOnlyHint: false`.
+`access` (`read` or `write`) is what the policy layer filters on: a connection whose profile has scope `read` sees only `read` tools, and a direct call to a hidden `write` tool is refused with the read-only message; the engine's policy gate refuses the write in any case ([policy.md](policy.md)). Annotations are what Claude and ChatGPT use to decide what to auto-approve: read tools are `readOnlyHint: true`; write tools are `readOnlyHint: false`.
 
 | Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                              |
 | --------------------------- | ------ | --------------------------------------------------------------- | --------------------------------- |
@@ -46,6 +46,8 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 | `bridge_errors_recent`      | read   | true / false / true / false                                     | none                              |
 | `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                              |
 | `bridge_result_page`        | read   | true / false / true / false                                     | none                              |
+| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                              |
+| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                              |
 | `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation             |
 
 `lk_api_write` is annotated `destructiveHint: true` because it covers the destructive operations; clients therefore ask before each write.
@@ -89,15 +91,17 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (105 tools in all). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (105 tools in all, 107 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
-**`bridge_info`**: version; project id and name; the key's role (`ADMIN`, `MEMBER` or `unknown`; inferred from `listMembers`, because LK shows member emails to ADMIN keys only); read-only flag (effective, configured, overridden); whether writes are paused or draining, and `canWrite`; writer pool; the calling connection and its profile.
+**`bridge_info`**: version; project id and name; the key's role (`ADMIN`, `MEMBER` or `unknown`; inferred from `listMembers`, because LK shows member emails to ADMIN keys only); read-only flag (effective, configured, overridden); whether writes are paused or draining, and `canWrite`; writer pool; the calling connection, its profile and its live scope (`read`, `propose` or `write`), and `canWriteAs` (`direct`, `proposal (the owner approves)` or `no (read-only)`).
 
 **`bridge_budget`**: every tier (used, limit, remaining, seconds to reset, any block after a 429, drift), queue depth per priority, write pacing.
 
 **`bridge_estimate`** `{ reads?, writes?, createManyItems?, priority? }`: projected wall-clock time, the tightest tier, whether it fits today's request budget, with advice. Call it before large workloads.
+
+**Your own work only.** `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_result_page` and `bridge_errors_recent` show only the calling connection's jobs, stored results and errors; another connection's job id or handle answers exactly like one that does not exist. `bridge_journal_lookup` shows every connection's writes (so agents can cross-check each other), each with its principal, profile and approver; job ids appear only on your own entries, and a `jobId` filter matches only your own jobs.
 
 **`bridge_job_status`** `{ jobId?, steps?, status?, limit? }`: one job (status, progress, last error, result, failed steps), or recent jobs when `jobId` is omitted. Signed-URL material is redacted.
 
@@ -109,11 +113,13 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 **`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, sinceMinutes?, limit?, includePreImage? }`: the write journal (what a destructive write replaced), newest first.
 
+**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)).
+
 **`bridge_result_page`** `{ handle, offset?, limit?, detail? }`: for a paginate handle `offset` and `limit` count items (the page is trimmed to the output budget; use `nextOffset`); for a stored oversized result `offset` counts characters of the JSON text and slices must be concatenated in order.
 
 ## Image upload
 
-`lk_upload_image` runs one `upload_image` job of three steps:
+`lk_upload_image` runs one `upload_image` job of three steps (it needs scope `write`: uploads are not proposable in v1, so at `propose` it, and raw `createImageUpload` / `createImageAsset` calls, are refused before anything is sent):
 
 1. `createImageUpload` (an LK call through the governor, with an idempotency key);
 2. `upload_image.put`, a custom step: a `PUT` of the file to the signed `uploadUrl` with exactly the headers LK returned. This is **not** an LK API call and goes to another host, but it still runs inside `governor.execute`, on the reactive-only `upload` tier;
@@ -126,6 +132,7 @@ Network rules for both the URL fetch and the PUT (the address policy of chunk 4,
 - https only, no credentials in the URL;
 - private, loopback, link-local, CGNAT and other non-public addresses are refused, whether literal or by DNS (`UPLOAD_URL_REFUSED`, `UPLOAD_TARGET_REFUSED`);
 - URL fetches follow at most 3 redirects, each hop checked; they time out after `UPLOAD_FETCH_TIMEOUT_MS`;
+- each PUT attempt has its own deadline, `UPLOAD_PUT_TIMEOUT_MS` (default 120 s), not the governor's 30-second LegendKeeper request timeout;
 - the PUT is retried with backoff on 502/503/504 and connection errors; a `429` from the storage host becomes `UPLOAD_RATE_EXCEEDED`, so the governor blocks the upload tier and honours `Retry-After`;
 - the signed URL is never logged, put in an error message, or shown by a tool, and the storage host's error body is replaced.
 
@@ -135,12 +142,13 @@ Codes: `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`, `UPLO
 
 ## Settings
 
-| Variable                  | Default            | Meaning                                                      |
-| ------------------------- | ------------------ | ------------------------------------------------------------ |
-| `MCP_EXPOSE_PER_OP_TOOLS` | `false`            | Also register `lk_op_<operationId>` for all 89 operations    |
-| `MCP_RESULT_MAX_CHARS`    | `40000`            | Results longer than this are stored and returned as a handle |
-| `UPLOAD_MAX_BYTES`        | `10485760` (10 MB) | Largest image `lk_upload_image` accepts                      |
-| `UPLOAD_ALLOW_URL_SOURCE` | `true`             | `false`: base64 only                                         |
-| `UPLOAD_FETCH_TIMEOUT_MS` | `15000`            | Deadline for fetching an image from a URL                    |
+| Variable                  | Default            | Meaning                                                                                                         |
+| ------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `MCP_EXPOSE_PER_OP_TOOLS` | `false`            | Also register `lk_op_<operationId>` for all 89 operations                                                       |
+| `MCP_RESULT_MAX_CHARS`    | `40000`            | Results longer than this are stored and returned as a handle                                                    |
+| `UPLOAD_MAX_BYTES`        | `10485760` (10 MB) | Largest image `lk_upload_image` accepts                                                                         |
+| `UPLOAD_ALLOW_URL_SOURCE` | `true`             | `false`: base64 only                                                                                            |
+| `UPLOAD_FETCH_TIMEOUT_MS` | `15000`            | Deadline for fetching an image from a URL                                                                       |
+| `UPLOAD_PUT_TIMEOUT_MS`   | `120000`           | Per-attempt deadline of the signed-URL PUT (5 s to 10 min), separate from the 30 s LegendKeeper request timeout |
 
 The governor's per-attempt timeout (30 s) also bounds the PUT.

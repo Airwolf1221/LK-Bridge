@@ -288,6 +288,52 @@ function summariseBoard(v: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
+/**
+ * A list page's summary stays inline (under about 7,000 tokens) even at 100 rich items: items are projected as
+ * usual, and when that would exceed `LIST_SUMMARY_MAX_CHARS` they are reduced to the fields that identify them.
+ */
+export const LIST_SUMMARY_MAX_CHARS = 24_000;
+const ESSENTIAL_KEYS = [
+  'id',
+  'name',
+  'title',
+  'type',
+  'kind',
+  'parentId',
+  'resourceId',
+  'documentId',
+  'version',
+];
+
+function essentials(item: unknown): unknown {
+  if (item === null || typeof item !== 'object' || Array.isArray(item)) return project(item, 1);
+  const o = item as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of ESSENTIAL_KEYS) {
+    const v = o[k];
+    if (typeof v === 'string') out[k] = clip(v, 80);
+    else if (typeof v === 'number' || typeof v === 'boolean') out[k] = v;
+    else if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      // Search hits nest the entity ({ resource, document }): keep their identity too.
+      out[k] = essentials(v);
+    }
+  }
+  for (const k of ['resource', 'document']) {
+    const v = o[k];
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) out[k] = essentials(v);
+  }
+  return out;
+}
+
+function listItems(data: readonly unknown[]): { items: unknown[]; note?: string } {
+  const items = data.map((x) => project(x));
+  if ((JSON.stringify(items) ?? '').length <= LIST_SUMMARY_MAX_CHARS) return { items };
+  return {
+    items: data.map((x) => essentials(x)),
+    note: 'Items reduced to id, name, type and parent to stay small. Pass detail: "full" (or a smaller limit) for every field.',
+  };
+}
+
 /** Per-operation shaping of a successful result. Falls back to a generic digest. */
 export function summarise(opId: string, value: unknown): unknown {
   if (value === null || typeof value !== 'object') return value ?? null;
@@ -303,10 +349,10 @@ export function summarise(opId: string, value: unknown): unknown {
       count: v.data.length,
       hasMore: v.hasMore === true,
       nextCursor: typeof v.nextCursor === 'string' ? v.nextCursor : null,
-      items: v.data.map((x) => project(x)),
+      ...listItems(v.data),
     };
   }
-  if (Array.isArray(v.data)) return { count: v.data.length, items: v.data.map((x) => project(x)) };
+  if (Array.isArray(v.data)) return { count: v.data.length, ...listItems(v.data) };
   const text = JSON.stringify(v);
   if (text.length <= 6_000) return v;
   return { ...(project(v) as object), note: 'Large result shortened. Pass detail: "full" for everything.' };

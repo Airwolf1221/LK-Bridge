@@ -12,6 +12,7 @@ import { loadConfig, DEFAULT_TOOLS_SETTINGS, type ToolsSettings } from '../../sr
 import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase, type Db } from '../../src/db/open.js';
 import { systemClock } from '../../src/lk/index.js';
+import type { AuthServices } from '../../src/auth/services.js';
 import type { Policy, Scope } from '../../src/policy/index.js';
 import type { Runtime } from '../../src/runtime.js';
 import { createBridge } from '../../src/server.js';
@@ -43,6 +44,7 @@ export interface Stack {
   readonly base: string;
   readonly token: string;
   readonly policy: Policy;
+  readonly services: AuthServices;
   /** A PAT on profile `label` (created at `scope` if absent), and its id. */
   newToken(label: string, scope: Scope): { token: string; patId: string; profileId: string };
   /** Connects with the default token, or another one. */
@@ -128,6 +130,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     base,
     token,
     policy,
+    services,
     newToken,
     async connect(with_ = token) {
       const client = new Client({ name: 'lk-bridge-tools-tests', version: '1.0.0' });

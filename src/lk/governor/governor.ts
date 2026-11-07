@@ -616,7 +616,7 @@ export class Governor {
       const reason = new DOMException('LegendKeeper request timed out', 'TimeoutError');
       controller.abort(reason);
       rejectAbort(reason);
-    }, this.settings.requestTimeoutMs);
+    }, req.timeoutMs ?? this.settings.requestTimeoutMs);
     try {
       const result = await Promise.race([this.als.run(ctx, () => req.run(controller.signal)), aborted]);
       if (result instanceof Response) {

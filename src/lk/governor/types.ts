@@ -39,6 +39,8 @@ export interface ExecuteRequest<T> {
   readonly idempotencyKey?: string;
   /** Cancels the call while queued or in flight. */
   readonly signal?: AbortSignal;
+  /** Per-attempt deadline for this call, instead of `requestTimeoutMs` (the signed upload PUT uses its own). */
+  readonly timeoutMs?: number;
   /**
    * Makes exactly one LK request through the governed fetch (the SDK client from `createLkClient`, or
    * `governor.fetch`). Must honour `signal`. May return the raw `Response`; non-2xx responses then throw.

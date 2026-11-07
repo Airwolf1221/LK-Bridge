@@ -210,10 +210,40 @@ export function createMcpServerFactory(
     // Per request, so a scope change shows in the very next tools/list. Unknown callers see read tools only.
     const caller = ctx?.authInfo?.extra?.caller as CallerIdentity | undefined;
     const policy = access.resolve(caller) ?? null;
-    const visible = tools.filter((t) => toolVisible(toolAccess(t), policy?.scope));
-    registerTools(server, { tools: visible, log, policy });
-    return server;
+    const visible = new Set(
+      tools.filter((t) => toolVisible(toolAccess(t), policy?.scope)).map((t) => t.name),
+    );
+    // Every tool is registered, so a direct call to a hidden write tool gets the clear read-only refusal (from
+    // registerTools) rather than "not found"; tools/list then shows only the visible ones.
+    if (hideFromList(server, visible, () => registerTools(server, { tools, log, policy }))) return server;
+    // Fallback (the SDK internals moved): register only the visible tools, as strict as before.
+    const strict = new McpServer(
+      { name: info.name, version: info.version },
+      { capabilities: { tools: {} }, ...(info.instructions ? { instructions: info.instructions } : {}) },
+    );
+    registerTools(strict, { tools: tools.filter((t) => visible.has(t.name)), log, policy });
+    return strict;
   };
+}
+
+type RequestHandler = (request: unknown, ctx: unknown) => Promise<unknown>;
+
+/**
+ * Registers the tools (`register`), then wraps the SDK's own `tools/list` handler so it returns only `visible`.
+ * Uses the SDK's request-handler map (pinned SDK version; test/tools/policy-e2e.test.ts covers it). Returns false
+ * when that map or handler is not where it is expected; the caller then serves a server with visible tools only.
+ */
+function hideFromList(server: McpServer, visible: ReadonlySet<string>, register: () => void): boolean {
+  const handlers = (server.server as unknown as { _requestHandlers?: unknown })._requestHandlers;
+  if (!(handlers instanceof Map)) return false;
+  register();
+  const inner = handlers.get('tools/list') as RequestHandler | undefined;
+  if (typeof inner !== 'function') return false;
+  handlers.set('tools/list', async (request: unknown, ctx: unknown) => {
+    const result = (await inner(request, ctx)) as { tools?: { name: string }[] };
+    return { ...result, tools: (result.tools ?? []).filter((t) => visible.has(t.name)) };
+  });
+  return true;
 }
 
 export interface BridgeInfo {

@@ -76,6 +76,7 @@ export function setup(overrides: Partial<GovernorSettings> = {}, responder?: Res
       signal?: AbortSignal;
       headers?: Record<string, string>;
       verify?: ExecuteRequest<Response>['verify'];
+      timeoutMs?: number;
     } = {},
   ): Promise<Response> {
     const method = o.method ?? (o.costs && o.costs.tiers.includes('write-min') ? 'POST' : 'GET');
@@ -89,6 +90,7 @@ export function setup(overrides: Partial<GovernorSettings> = {}, responder?: Res
       ...(o.idempotencyKey !== undefined ? { idempotencyKey: o.idempotencyKey } : {}),
       ...(o.signal ? { signal: o.signal } : {}),
       ...(o.verify ? { verify: o.verify } : {}),
+      ...(o.timeoutMs !== undefined ? { timeoutMs: o.timeoutMs } : {}),
       run: (signal) =>
         governor.fetch('http://lk.test/api/v3/x', { method, signal, headers: o.headers ?? {} }),
     });

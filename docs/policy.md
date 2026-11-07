@@ -33,8 +33,13 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 | `propose` | allow | captured as a proposal; the agent gets `{ status: 'proposal_captured', proposalId, summary }`         |
 | `write`   | allow | run, within every existing guard (read-only mode, pause, If-Match, unsupported blocks, cascade, etc.) |
 
-- Member and invite administration (`inviteMember`, `removeMember`, `revokeInvite`) is denied for every agent, at any
-  scope, unless `LK_ALLOW_MEMBER_ADMIN=true`.
+- Member and invite administration (`inviteMember`, `removeMember`, `revokeInvite`) is refused for every agent, at any
+  scope, unless `LK_ALLOW_MEMBER_ADMIN=true`: by the engine's guard (`MEMBER_ADMIN_DISABLED`), after the gate, and at
+  proposal capture (so it is never captured).
+- **Uploads are not proposable (v1).** At scope `propose`, `lk_upload_image`, and raw `createImageUpload` /
+  `createImageAsset` calls through `lk_api_write` or `lk_api_batch`, are refused before anything is sent, with a
+  message that uploads need scope `write` and that the owner can raise the profile's scope. (A proposal would have to
+  hold the image bytes and a signed URL that expires within minutes.)
 - The `system` principal (internal and dashboard work) is always allowed, except on an MCP origin, where it could only
   mean a tool forgot to pass the caller: denied.
 - Unknown, revoked or expired principals are denied, reads included.
@@ -46,12 +51,21 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 
 `tools/list` is built per request: a principal at `read` sees only tools with `access: 'read'`; at `propose` and
 `write` it sees every tool (at `propose`, a write tool returns the proposal result). A tool without `access` counts as
-`write` unless it is annotated `readOnlyHint: true`. The list is a convenience, not the control: a write tool called
-by a `read` connection is refused at call time, and the policy gate refuses the write in the engine whatever the tool
-says about itself (defence in depth; `test/policy/mcp.test.ts`).
+`write` unless it is annotated `readOnlyHint: true`. The list is a convenience, not the control: a hidden write tool
+called directly by a `read` connection is refused at call time with the read-only message (every tool stays
+registered; only `tools/list` is filtered), and the policy gate refuses the write in the engine whatever the tool says
+about itself (defence in depth; `test/policy/mcp.test.ts`, `test/tools/policy-e2e.test.ts`).
 
-Tool handlers get `ctx.principal` (and `ctx.scope`). Tools that call the job engine must pass the principal as
-`origin.principal`; `mcpOrigin(ctx, tool)` builds that origin and throws if the request has none.
+**Visibility of work.** `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_result_page` and
+`bridge_errors_recent` show only the caller's own jobs, stored results and errors (by principal). Another principal's
+job id or handle answers exactly like an unknown one. `bridge_journal_lookup` shows every principal's entries,
+read-only, with principal, profile and approver on each, because cross-checking another agent's edits is a
+consistency need; job ids appear only on the caller's own entries. `bridge_info` reports the caller's profile and
+scope.
+
+Tool handlers get `ctx.principal` (and `ctx.scope`). Every engine-backed tool builds its origin with
+`mcpOrigin(ctx, tool)`, which carries the principal and the tool name, never `approvedBy`, and refuses (a
+`PolicyDeniedError`) when the request has no principal, so a tool can never fall back to `system`.
 
 ## The proposal lifecycle
 
@@ -164,19 +178,15 @@ Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PR
 
 ## Wiring
 
-```ts
-const policy = createPolicy({
-  db,
-  settings: loadPolicyConfig(),
-  allowMemberAdmin: config.lk.allowMemberAdmin,
-});
-const engine = createJobEngine({ db, lk, settings, policyGate: policy.gate, proposalSink: policy.proposals });
-policy.attach(engine); // follows job outcomes, reconciles after a crash, runs the expiry sweep, joins the event stream
-const { app } = await buildServer({ authConfig, db, policy, tools }); // consent, tool lists, the proposal tools
-```
+`src/runtime.ts` (`createRuntime`) is the one place things are built: governor and LK client, then the policy layer
+(`createPolicy`), then the job engine with `policyGate: policy.gate` and `proposalSink: policy.proposals`, then
+`policy.attach(engine)` once the engine has started (job outcomes, restart reconciliation, the expiry sweep, the event
+stream), then the tools (chunk 3's, plus the two proposal tools with the budget footer). `createBridge` in
+`src/server.ts`, which `main` runs, passes `runtime.policy` to `buildServer`, so consent, tool lists and the engine
+share one policy layer (`test/tools/policy-e2e.test.ts` › boot).
 
-`buildServer` creates a policy layer on `db` when none is passed (consent and tool lists work; approval needs an
-attached engine). It appends `policy.tools` to the tools it is given.
+`buildServer` alone (auth tests) creates a policy layer on `db` when none is passed: consent and tool lists work, and
+approval needs an attached engine. It appends the proposal tools unless the given tools already include them.
 
 ## Settings
 

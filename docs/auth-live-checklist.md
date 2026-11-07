@@ -88,7 +88,7 @@ Record each step as passed or failed, with the time and any `ofid_` reference, f
 
 ## 10. Profiles and scopes: ChatGPT and Claude (chunk 2b)
 
-Needs chunk 3's tools and an engine wired with the policy layer (`docs/policy.md` › Wiring). Use the **sandbox**
+Chunk 3's tools are wired to the policy layer (`src/runtime.ts`). Use the **sandbox**
 LegendKeeper project, with `LK_READ_ONLY=false`. Keep the dashboard (or `sqlite3`) open to watch `agent_profiles`,
 `proposals` and `audit_log`.
 
@@ -117,5 +117,9 @@ LegendKeeper project, with `LK_READ_ONLY=false`. Keep the dashboard (or `sqlite3
    `bridge_proposal_status` with ChatGPT's id says there is no such proposal.
 9. **Claude at propose and write.** Repeat 4-5 for the `claude` profile, then set it to `write` and check that a
    write runs at once. Set both profiles back to the scopes you want to keep.
-10. **Claude Code.** `npm run pat -- create --name "Claude Code" --profile claude-code --scope write`; connect
+10. **Uploads at propose.** With a profile at `propose`, ask for an image upload: it is refused with "uploads need
+    scope write; the owner can raise it", and nothing reaches LegendKeeper or the storage host.
+11. **Own work only.** From Claude, ask for `bridge_job_status` with a job id ChatGPT created: "No job …", exactly as
+    for a made-up id. `bridge_journal_lookup` shows ChatGPT's writes with its principal and profile.
+12. **Claude Code.** `npm run pat -- create --name "Claude Code" --profile claude-code --scope write`; connect
     (§7 above); a write runs at once. `npm run pat -- list` shows `profile claude-code (write)`.

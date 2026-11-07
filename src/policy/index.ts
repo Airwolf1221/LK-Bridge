@@ -81,7 +81,14 @@ export function createPolicy(o: CreatePolicyOptions): Policy {
 }
 
 export { PolicyStore, validateLabel, type AuditRow, type ConnectionView } from './store.js';
-export { LivePolicyGate, createPolicyGate, readOnlyReason, MEMBER_ADMIN_REASON } from './gate.js';
+export {
+  LivePolicyGate,
+  createPolicyGate,
+  readOnlyReason,
+  MEMBER_ADMIN_REASON,
+  UPLOAD_OPERATIONS,
+  UPLOAD_PROPOSE_REASON,
+} from './gate.js';
 export { ProposalService, readerTarget, proposalSummary } from './proposals.js';
 export type { ProposalDetail, ProposalOpDetail, AgentProposalView } from './proposals.js';
 export { createOwnerCommands, type OwnerCommands, type BulkResult, type ProfileSummary } from './commands.js';

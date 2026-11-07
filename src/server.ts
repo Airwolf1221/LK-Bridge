@@ -49,6 +49,14 @@ export interface BuildServerOptions {
   readonly policy?: Policy;
 }
 
+function withPolicyTools(
+  tools: readonly McpToolProvider[],
+  extra: readonly McpToolProvider[],
+): McpToolProvider[] {
+  const have = new Set(tools.map((t) => t.name));
+  return [...tools, ...extra.filter((t) => !have.has(t.name))];
+}
+
 /** Strips query strings from logged URLs: no code, state or stray token ever reaches the log. */
 function pathOnly(url: string): string {
   return url.split('?')[0] ?? '';
@@ -111,7 +119,8 @@ export async function buildServer(
       version: BRIDGE_VERSION,
       ...(o.instructions ? { instructions: o.instructions } : {}),
     },
-    tools: [...(o.tools ?? [bridgeInfoStub(bridgeInfo)]), ...policy.tools],
+    // The policy layer's proposal tools, unless the caller's list has them already (the runtime's does).
+    tools: withPolicyTools(o.tools ?? [bridgeInfoStub(bridgeInfo)], policy.tools),
     access: policy.access,
   });
 
@@ -171,10 +180,13 @@ async function main(): Promise<void> {
   let config;
   let authConfig;
   let policySettings;
+  let toolsSettings;
   try {
+    // Every setting is validated here, at start-up, before anything is built.
     config = loadConfig();
     authConfig = loadAuthConfig();
     policySettings = loadPolicyConfig();
+    toolsSettings = loadToolsConfig();
   } catch (err) {
     if (err instanceof ConfigError || err instanceof AuthConfigError || err instanceof PolicyConfigError) {
       process.stderr.write(`${err.message}\n`);
@@ -189,7 +201,7 @@ async function main(): Promise<void> {
   const { app, runtime } = await createBridge({
     config,
     authConfig,
-    toolsSettings: loadToolsConfig(),
+    toolsSettings,
     policySettings,
     db,
   });

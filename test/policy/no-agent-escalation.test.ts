@@ -8,17 +8,27 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { AuthServices } from '../../src/auth/services.js';
+import type { Db } from '../../src/db/open.js';
+import type { Policy } from '../../src/policy/index.js';
 import { type TestBridge, startBridge } from '../auth/helpers.js';
+import { startStack, type Stack } from '../tools/helpers.js';
+import { specRespond } from '../tools/spec-mock.js';
 
 let bridge: TestBridge;
+let stack: Stack;
 beforeAll(async () => {
-  bridge = await startBridge(); // the production tool list
+  bridge = await startBridge(); // the auth harness: stub tools plus the proposal tools
+  stack = await startStack({ respond: specRespond() }); // the real runtime: every production tool
 });
-afterAll(() => bridge.close());
+afterAll(async () => {
+  await bridge.close();
+  await stack.close();
+});
 
 /** Everything an escalation would change (last-use timestamps excluded). */
-function snapshot(): string {
-  const q = (sql: string) => bridge.db.prepare(sql).all();
+function snapshot(db: Db): string {
+  const q = (sql: string) => db.prepare(sql).all();
   return JSON.stringify({
     profiles: q('SELECT id, label, kind, scope FROM agent_profiles ORDER BY id'),
     settings: q('SELECT key, value FROM policy_settings ORDER BY key'),
@@ -58,64 +68,86 @@ function argumentSets(
   return sets;
 }
 
-describe('no MCP tool can change policy, tokens or proposal decisions', () => {
-  it('calls every registered tool with hostile arguments and finds nothing changed', async () => {
-    const profile = bridge.policy.commands.createProfile('owner', {
-      label: 'agent',
-      kind: 'other',
-      scope: 'write',
-    });
-    const victim = bridge.policy.commands.createProfile('owner', {
-      label: 'victim',
-      kind: 'other',
-      scope: 'read',
-    });
-    const { token, pat } = bridge.services.pats.create({ name: 'agent', profileId: profile.id });
-    const other = bridge.services.pats.create({ name: 'other', profileId: victim.id });
-    const now = Date.now();
-    for (const [id, who] of [
-      ['prop_mine', pat.id],
-      ['prop_theirs', other.pat.id],
-    ] as const) {
-      bridge.db
-        .prepare(
-          `INSERT INTO proposals (id, principal_id, principal_label, profile, origin, job_kind, title, priority,
-             summary, state, created_at, updated_at, expires_at)
-           VALUES (?, ?, 'x', 'agent', '{"kind":"mcp"}', 'single_op', 't', 'P1', 's', 'pending', ?, ?, ?)`,
-        )
-        .run(id, who, now, now, now + 86_400_000);
-    }
-    const ids = ['prop_mine', 'prop_theirs', profile.id, victim.id, pat.id, other.pat.id];
-    const before = snapshot();
+interface Target {
+  readonly db: Db;
+  readonly policy: Policy;
+  readonly pats: AuthServices['pats'];
+  readonly mcpUrl: string;
+  readonly fetch?: (url: string | URL, init?: RequestInit) => Promise<Response>;
+}
 
-    const client = new Client({ name: 'attacker', version: '1.0.0' });
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL(bridge.mcpUrl), {
-        fetch: (url: string | URL, init?: RequestInit) => fetch(bridge.local(String(url)), init),
-        requestInit: { headers: { authorization: `Bearer ${token}` } },
-      }),
-    );
-    try {
-      const { tools } = await client.listTools();
-      expect(tools.length).toBeGreaterThan(0);
-      for (const tool of tools) {
-        // No tool even claims to administer policy.
-        expect(tool.name).not.toMatch(
-          /approve|reject|revoke|scope|profile|token|grant|policy|consent|audit/i,
-        );
-        for (const args of argumentSets(tool.inputSchema as never, ids)) {
-          await client.callTool({ name: tool.name, arguments: args }).catch(() => undefined);
-        }
+async function attack(t: Target): Promise<string[]> {
+  const profile = t.policy.commands.createProfile('owner', { label: 'agent', kind: 'other', scope: 'write' });
+  const victim = t.policy.commands.createProfile('owner', { label: 'victim', kind: 'other', scope: 'read' });
+  const { token, pat } = t.pats.create({ name: 'agent', profileId: profile.id });
+  const other = t.pats.create({ name: 'other', profileId: victim.id });
+  const now = Date.now();
+  for (const [id, who] of [
+    ['prop_mine', pat.id],
+    ['prop_theirs', other.pat.id],
+  ] as const) {
+    t.db
+      .prepare(
+        `INSERT INTO proposals (id, principal_id, principal_label, profile, origin, job_kind, title, priority,
+           summary, state, created_at, updated_at, expires_at)
+         VALUES (?, ?, 'x', 'agent', '{"kind":"mcp"}', 'single_op', 't', 'P1', 's', 'pending', ?, ?, ?)`,
+      )
+      .run(id, who, now, now, now + 86_400_000);
+  }
+  const ids = ['prop_mine', 'prop_theirs', profile.id, victim.id, pat.id, other.pat.id];
+  const before = snapshot(t.db);
+  const client = new Client({ name: 'attacker', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(t.mcpUrl), {
+      ...(t.fetch ? { fetch: t.fetch } : {}),
+      requestInit: { headers: { authorization: `Bearer ${token}` } },
+    }),
+  );
+  const names: string[] = [];
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      names.push(tool.name);
+      // No tool even claims to administer policy.
+      expect(tool.name).not.toMatch(/approve|reject|revoke|scope|profile|token|grant|policy|consent|audit/i);
+      for (const args of argumentSets(tool.inputSchema as never, ids)) {
+        await client.callTool({ name: tool.name, arguments: args }).catch(() => undefined);
       }
-    } finally {
-      await client.close();
     }
-    expect(snapshot()).toBe(before);
+  } finally {
+    await client.close();
+  }
+  expect(snapshot(t.db)).toBe(before);
+  return names;
+}
+
+describe('no MCP tool can change policy, tokens or proposal decisions', () => {
+  it('calls every registered tool with hostile arguments and finds nothing changed (auth harness)', async () => {
+    await attack({
+      db: bridge.db,
+      policy: bridge.policy,
+      pats: bridge.services.pats,
+      mcpUrl: bridge.mcpUrl,
+      fetch: (url, init) => fetch(bridge.local(String(url)), init),
+    });
+  });
+
+  it('the same against the real runtime, with every production tool', async () => {
+    const names = await attack({
+      db: stack.db,
+      policy: stack.policy,
+      pats: stack.services.pats,
+      mcpUrl: `${stack.base}/mcp`,
+    });
+    expect(names).toEqual(expect.arrayContaining(stack.runtime.tools.map((t) => t.name)));
+    expect(names).toHaveLength(stack.runtime.tools.length);
   });
 
   it('no MCP module imports the owner command layer or mints approval tokens', () => {
     const files = [
       ...readdirSync(join('src', 'mcp')).map((f) => join('src', 'mcp', f)),
+      ...readdirSync(join('src', 'mcp', 'tools')).map((f) => join('src', 'mcp', 'tools', f)),
       join('src', 'policy', 'mcp.ts'),
     ].filter((f) => f.endsWith('.ts'));
     for (const f of files) {

@@ -18,7 +18,7 @@ import {
   createUploadTransport,
 } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
-import { createPolicy, type Policy } from './policy/index.js';
+import { createPolicy, proposalTools, type Policy } from './policy/index.js';
 
 /**
  * The bridge's working parts, in the order they depend on each other: governor-backed LK client, then the job
@@ -81,14 +81,19 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     policyGate: policy.gate,
     proposalSink: policy.proposals,
     ...(o.clock ? { clock: o.clock } : {}),
-    customSteps: { [UPLOAD_PUT_STEP]: createUploadPutHandler(o.uploadGuard ? { guard: o.uploadGuard } : {}) },
+    customSteps: {
+      [UPLOAD_PUT_STEP]: createUploadPutHandler({
+        putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,
+        ...(o.uploadGuard ? { guard: o.uploadGuard } : {}),
+      }),
+    },
     autoStart: false,
   });
   engine.start(); // restart-resume: jobs left running by a crash are verified and continued
   // Follows approved proposals' jobs, reconciles proposals left mid-approval by a crash, runs the expiry sweep.
   const detachPolicy = policy.attach(engine);
 
-  const tools = createBridgeTools(
+  const bridgeTools = createBridgeTools(
     {
       engine,
       lk,
@@ -100,6 +105,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
   );
+  // The agent-facing proposal tools (read-only, own proposals only), with the budget footer like every tool.
+  const tools = [...bridgeTools, ...proposalTools(policy.proposals, () => lk.budgetFooter())];
 
   return {
     lk,

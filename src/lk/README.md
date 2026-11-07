@@ -50,6 +50,7 @@ governor.execute<T>({
   jobId?: string;                     // fair-share key within a class
   idempotencyKey?: string;            // sent on POST, reused on every retry; without it a POST is never retried
   signal?: AbortSignal;               // cancels while queued or in flight
+  timeoutMs?: number;                 // this call's per-attempt deadline instead of requestTimeoutMs (the upload PUT)
   verify?: ({ error, signal }) => Promise<{ ok: true; value: T } | { ok: false }>;
   run: (signal: AbortSignal) => Promise<Response | T>;
 });
