@@ -1,0 +1,42 @@
+{
+  "name": "lk-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LegendKeeper v3 API bridge with rate governor, job engine and MCP surface",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "test": "vitest run",
+    "test:sandbox": "vitest run --config vitest.sandbox.config.ts --passWithNoTests",
+    "gen:registry": "tsx scripts/gen-registry.ts",
+    "check:drift": "tsx scripts/check-spec-drift.ts",
+    "ci": "npm run typecheck && npm run lint && npm run format && npm run gen:registry -- --check && npm run check:drift && npm test"
+  },
+  "dependencies": {
+    "@legendkeeper/sdk": "^4.1.0",
+    "@modelcontextprotocol/node": "2.1.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.12.8",
+    "pino": "^10.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^24.19.2",
+    "eslint": "^10.14.0",
+    "prettier": "^3.9.10",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  }
+}
