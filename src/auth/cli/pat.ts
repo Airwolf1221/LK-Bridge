@@ -1,5 +1,5 @@
 import { pathToFileURL } from 'node:url';
-import { pino } from 'pino';
+import { type DestinationStream, pino } from 'pino';
 import { runMigrations } from '../../db/migrate.js';
 import { openDatabase } from '../../db/open.js';
 import { createAuthEventLogger } from '../events.js';
@@ -22,11 +22,16 @@ const usage = `Usage:
 
 const iso = (t: number | null) => (t === null ? '-' : new Date(t * 1000).toISOString());
 
-export function runPatCommand(argv: readonly string[], dbPath: string, out: (s: string) => void): number {
+export function runPatCommand(
+  argv: readonly string[],
+  dbPath: string,
+  out: (s: string) => void,
+  logDestination: DestinationStream = pino.destination(2),
+): number {
   const db = openDatabase(dbPath);
   try {
     runMigrations(db);
-    const log = pino({ level: 'info' }, pino.destination(2));
+    const log = pino({ level: 'info' }, logDestination);
     const pats = new PatService({
       store: new AuthStore(db),
       event: createAuthEventLogger(log),

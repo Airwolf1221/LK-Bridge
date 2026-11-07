@@ -1,4 +1,5 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { Writable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -75,22 +76,30 @@ describe('npm run pat', () => {
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('creates, lists and revokes tokens in the database', () => {
+  it('creates, lists and revokes tokens in the database, logging events by id', () => {
     const db = join(dir, 'bridge.db');
+    const logged: string[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _e, cb) {
+        logged.push(chunk.toString());
+        cb();
+      },
+    });
+    const run = (argv: string[], out: (s: string) => void) => runPatCommand(argv, db, out, sink);
     const out: string[] = [];
-    expect(
-      runPatCommand(['create', '--name', 'cli token', '--expires-days', '30'], db, (s) => out.push(s)),
-    ).toBe(0);
+    expect(run(['create', '--name', 'cli token', '--expires-days', '30'], (s) => out.push(s))).toBe(0);
     const token = /(lkb_pat_[A-Za-z0-9_-]+)/.exec(out.join('\n'))?.[1] as string;
     expect(token).toBeDefined();
     const id = /Created (pat_[A-Za-z0-9_-]+)/.exec(out.join('\n'))?.[1] as string;
     out.length = 0;
-    expect(runPatCommand(['list'], db, (s) => out.push(s))).toBe(0);
+    expect(run(['list'], (s) => out.push(s))).toBe(0);
     expect(out.join('\n')).toContain(id);
     expect(out.join('\n')).not.toContain(token);
     expect(readFileSync(db).includes(Buffer.from(token))).toBe(false);
-    expect(runPatCommand(['revoke', id], db, () => undefined)).toBe(0);
-    expect(runPatCommand(['revoke', id], db, () => undefined)).toBe(1);
-    expect(runPatCommand(['nonsense'], db, () => undefined)).toBe(2);
+    expect(run(['revoke', id], () => undefined)).toBe(0);
+    expect(run(['revoke', id], () => undefined)).toBe(1);
+    expect(run(['nonsense'], () => undefined)).toBe(2);
+    expect(logged.join('')).toContain('"event":"pat.created"');
+    expect(logged.join('')).not.toContain(token);
   });
 });
