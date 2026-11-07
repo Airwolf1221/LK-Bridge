@@ -5,7 +5,12 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { BearerGuard } from '../auth/bearer.js';
 import type { AuthEventLogger } from '../auth/events.js';
 import type { AuthConfig } from '../config/auth.js';
-import { type McpServerInfo, type McpToolProvider, createMcpServerFactory } from './server.js';
+import {
+  type McpAccessControl,
+  type McpServerInfo,
+  type McpToolProvider,
+  createMcpServerFactory,
+} from './server.js';
 
 /**
  * Streamable HTTP transport at `/mcp` (MCP 2025-era stateless serving, and the 2026-07-28
@@ -27,6 +32,8 @@ export interface McpTransportOptions {
   readonly event: AuthEventLogger;
   readonly serverInfo: McpServerInfo;
   readonly tools: readonly McpToolProvider[];
+  /** Per-principal tool lists and the principal in each tool's context (src/policy). */
+  readonly access?: McpAccessControl;
 }
 
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/;
@@ -40,7 +47,7 @@ export function originAllowed(origin: string | undefined, config: AuthConfig): b
 
 export function mcpTransportPlugin(app: FastifyInstance, opts: McpTransportOptions): Promise<void> {
   const { config, bearer, event } = opts;
-  const factory = createMcpServerFactory(opts.serverInfo, opts.tools, app.log);
+  const factory = createMcpServerFactory(opts.serverInfo, opts.tools, app.log, opts.access);
   const onerror = (err: Error) => app.log.warn({ err }, 'MCP transport error');
   const handler = createMcpHandler(factory, { legacy: 'stateless', onerror });
   const serve = toNodeHandler(handler, { onerror });

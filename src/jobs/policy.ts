@@ -76,7 +76,7 @@ export interface ProposalSink {
     principal: Principal,
     ops: readonly ProposedOp[],
     meta: ProposalMeta,
-  ): Promise<{ proposalId: string }>;
+  ): Promise<{ proposalId: string; summary?: string }>;
 }
 
 /** The default gate: allows everything. */

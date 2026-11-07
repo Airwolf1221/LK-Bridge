@@ -2,6 +2,9 @@ import { pathToFileURL } from 'node:url';
 import { type DestinationStream, pino } from 'pino';
 import { runMigrations } from '../../db/migrate.js';
 import { openDatabase } from '../../db/open.js';
+import { ensureProfile, DEFAULT_PAT_PROFILE } from '../../policy/consent.js';
+import { PolicyStore } from '../../policy/store.js';
+import { isScope, type ProfileKind } from '../../policy/types.js';
 import { createAuthEventLogger } from '../events.js';
 import { PatService } from '../pats.js';
 import { AuthStore } from '../store.js';
@@ -10,13 +13,16 @@ import { AuthStore } from '../store.js';
  * `npm run pat -- <command>`: manage personal access tokens on the server until the dashboard
  * (chunk 5) offers the same. Uses DB_PATH (default ./data/bridge.db).
  *
- *   create --name "Claude Code on my laptop" [--expires-days 90]
+ *   create --name "Claude Code on my laptop" [--profile claude-code] [--scope read|propose|write] [--expires-days 90]
  *   list
  *   revoke <pat_id>
  */
 
 const usage = `Usage:
-  npm run pat -- create --name "<name>" [--expires-days <n>]
+  npm run pat -- create --name "<name>" [--profile <label>] [--scope read|propose|write] [--expires-days <n>]
+      --profile  the policy profile the token acts under (default: claude-code); created if absent,
+                 at the default scope for new connections (read) unless --scope is given
+      --scope    with a new profile: its scope; with an existing one: changes that profile's scope
   npm run pat -- list
   npm run pat -- revoke <pat_id>`;
 
@@ -32,6 +38,7 @@ export function runPatCommand(
   try {
     runMigrations(db);
     const log = pino({ level: 'info' }, logDestination);
+    const policy = new PolicyStore(db);
     const pats = new PatService({
       store: new AuthStore(db),
       event: createAuthEventLogger(log),
@@ -45,13 +52,30 @@ export function runPatCommand(
     if (cmd === 'create') {
       const name = opt('--name');
       const days = opt('--expires-days');
-      if (!name) {
+      const label = opt('--profile') ?? DEFAULT_PAT_PROFILE;
+      const scope = opt('--scope');
+      if (!name || (scope !== undefined && !isScope(scope))) {
         out(usage);
         return 2;
       }
-      const created = pats.create({ name, ...(days !== undefined ? { expiresInDays: Number(days) } : {}) });
+      const kind: ProfileKind = label.toLowerCase() === DEFAULT_PAT_PROFILE ? 'claude-code' : 'other';
+      const profile = policy.tx(() => {
+        const { id, created } = ensureProfile(policy, label, kind, scope);
+        const p = policy.getProfile(id)!;
+        if (!created && scope !== undefined && p.scope !== scope) {
+          policy.updateScope(id, scope);
+          policy.audit('owner', 'profile.set_scope', id, { scope: p.scope }, { scope, via: 'pat-cli' });
+        }
+        return policy.getProfile(id)!;
+      });
+      const created = pats.create({
+        name,
+        profileId: profile.id,
+        ...(days !== undefined ? { expiresInDays: Number(days) } : {}),
+      });
       out(
-        `Created ${created.pat.id} ("${created.pat.name}"). This token is shown once; store it now:\n\n` +
+        `Created ${created.pat.id} ("${created.pat.name}") on profile "${profile.label}" (scope ${profile.scope}). ` +
+          `This token is shown once; store it now:\n\n` +
           `  ${created.token}\n\n` +
           'Connect Claude Code with:\n' +
           `  claude mcp add --transport http lk-bridge <BRIDGE_PUBLIC_URL>/mcp --scope user -H "Authorization: Bearer ${created.token}"`,
@@ -63,8 +87,10 @@ export function runPatCommand(
       if (list.length === 0) out('No personal access tokens.');
       for (const p of list) {
         const status = p.revokedAt !== null ? 'revoked' : 'active';
+        const profile = p.profileId ? policy.getProfile(p.profileId) : undefined;
+        const prof = profile ? `${profile.label} (${profile.scope})` : '(no profile)';
         out(
-          `${p.id}  ${status.padEnd(7)}  …${p.hint}  created ${iso(p.createdAt)}  last used ${iso(p.lastUsedAt)}  expires ${iso(p.expiresAt)}  ${p.name}`,
+          `${p.id}  ${status.padEnd(7)}  …${p.hint}  profile ${prof}  created ${iso(p.createdAt)}  last used ${iso(p.lastUsedAt)}  expires ${iso(p.expiresAt)}  ${p.name}`,
         );
       }
       return 0;

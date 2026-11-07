@@ -25,6 +25,11 @@ input{width:100%;padding:.6rem;border:1px solid var(--line);border-radius:6px;ba
 .actions{display:flex;gap:.75rem;margin-top:1.25rem;flex-wrap:wrap}
 button{font:inherit;padding:.6rem 1.2rem;border-radius:6px;border:1px solid var(--line);background:transparent;color:inherit;cursor:pointer}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--card)}
+select{width:100%;padding:.6rem;border:1px solid var(--line);border-radius:6px;background:transparent;color:inherit;font:inherit}
+fieldset{border:1px solid var(--line);border-radius:8px;padding:.75rem 1rem;margin:1rem 0}legend{font-weight:600;padding:0 .25rem}
+label.choice{display:flex;gap:.5rem;align-items:flex-start;font-weight:400;margin:.5rem 0}
+label.choice input{width:auto;margin-top:.3rem}
+.badge{display:inline-block;font-size:.75rem;font-weight:600;padding:0 .4rem;border-radius:4px;background:var(--warn-bg);color:var(--warn-ink)}
 `;
 
 function layout(title: string, body: string): string {
@@ -88,14 +93,65 @@ export interface ConsentView {
   /** True when every redirect URI the client registered is a loopback address. */
   readonly onlyLoopback: boolean;
   readonly scopes: readonly string[];
+  /** The policy profile and scope choice (src/policy). Omitted: no profile choice is shown. */
+  readonly profiles?: ConsentProfileView;
+}
+
+export interface ConsentProfileView {
+  readonly options: readonly { id: string; label: string; kind: string; scope: string }[];
+  /** The suggested profile: an existing one with this label is preselected, else "new" with these values. */
+  readonly suggested: { readonly kind: string; readonly label: string };
+  readonly kinds: readonly string[];
+  /** Preselected scope (always `read`). */
+  readonly defaultScope: string;
+}
+
+const SCOPE_CHOICES: Readonly<Record<string, string>> = {
+  read: 'Read only: it can read the LegendKeeper project; every write is refused.',
+  propose:
+    'Propose: its writes become proposals that you approve or reject in the dashboard. Nothing is written until you approve.',
+  write: 'Write: its writes run at once (the bridge’s safety guards still apply).',
+};
+
+function renderProfileChoice(p: ConsentProfileView): string {
+  const existing = p.options.find((o) => o.label.toLowerCase() === p.suggested.label.toLowerCase());
+  const options = p.options
+    .map(
+      (o) =>
+        `<option value="${escapeHtml(o.id)}"${existing?.id === o.id ? ' selected' : ''}>${escapeHtml(o.label)} (${escapeHtml(o.kind)}, currently ${escapeHtml(o.scope)})</option>`,
+    )
+    .join('');
+  const kinds = p.kinds
+    .map(
+      (k) =>
+        `<option value="${escapeHtml(k)}"${k === p.suggested.kind ? ' selected' : ''}>${escapeHtml(k)}</option>`,
+    )
+    .join('');
+  const scopes = Object.entries(SCOPE_CHOICES)
+    .map(
+      ([v, text]) =>
+        `<label class="choice"><input type="radio" name="scope" value="${v}"${v === p.defaultScope ? ' checked' : ''}><span><strong>${v}</strong>: ${escapeHtml(text.slice(text.indexOf(':') + 2))}</span></label>`,
+    )
+    .join('');
+  return `<fieldset><legend>Profile</legend>
+<p class="muted">The connection acts under a profile. Permissions belong to the profile and apply at once to every connection that uses it.</p>
+<label for="profile">Use profile</label>
+<select id="profile" name="profile">${options}<option value="new"${existing ? '' : ' selected'}>New profile…</option></select>
+<label for="new_label">New profile label</label><input id="new_label" name="new_label" value="${escapeHtml(p.suggested.label)}" maxlength="64">
+<label for="new_kind">New profile kind</label><select id="new_kind" name="new_kind">${kinds}</select>
+</fieldset>
+<fieldset><legend>Scope</legend>
+<p class="muted">Applies to the chosen profile, so it also changes what other connections on that profile may do.</p>
+${scopes}
+</fieldset>`;
 }
 
 export function renderConsent(v: ConsentView): string {
   const who =
     v.kind === 'cimd' && v.clientHost
       ? `<p class="muted">Application published at</p><p class="host">${escapeHtml(v.clientHost)}</p>
-<p class="muted">It calls itself “${escapeHtml(v.clientName ?? 'unnamed')}”. Identified by <code>${escapeHtml(v.clientId)}</code>.</p>`
-      : `<p class="muted">Application</p><p class="host">${escapeHtml(v.clientName ?? 'Unnamed application')}</p>
+<p class="muted">It calls itself “${escapeHtml(v.clientName ?? 'unnamed')}” <span class="badge">untrusted name</span>. Identified by <code>${escapeHtml(v.clientId)}</code>.</p>`
+      : `<p class="muted">Application <span class="badge">untrusted name</span></p><p class="host">${escapeHtml(v.clientName ?? 'Unnamed application')}</p>
 <p class="muted">This name was supplied by the application when it registered itself and has not been verified. Client ID <code>${escapeHtml(v.clientId)}</code>.</p>`;
   const destination = v.redirectIsLoopback
     ? `${escapeHtml(v.redirectHost)} (this computer)`
@@ -122,6 +178,7 @@ ${loopbackWarning}
 <form method="post" action="${escapeHtml(v.action)}">
 <input type="hidden" name="request_id" value="${escapeHtml(v.requestId)}">
 <input type="hidden" name="csrf_token" value="${escapeHtml(v.csrf)}">
+${v.profiles ? renderProfileChoice(v.profiles) : ''}
 <div class="actions"><button class="primary" type="submit" name="decision" value="approve">Approve</button>
 <button type="submit" name="decision" value="deny">Deny</button></div>
 </form>`,

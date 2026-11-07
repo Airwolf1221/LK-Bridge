@@ -85,3 +85,37 @@ Setup steps are in `docs/auth.md` › ChatGPT. Then:
 9. **Refresh.** After an hour of use, `token.refreshed` appears for the ChatGPT `client_id` and the connector keeps working.
 
 Record each step as passed or failed, with the time and any `ofid_` reference, for chunk 8's review.
+
+## 10. Profiles and scopes: ChatGPT and Claude (chunk 2b)
+
+Needs chunk 3's tools and an engine wired with the policy layer (`docs/policy.md` › Wiring). Use the **sandbox**
+LegendKeeper project, with `LK_READ_ONLY=false`. Keep the dashboard (or `sqlite3`) open to watch `agent_profiles`,
+`proposals` and `audit_log`.
+
+1. **Claude, connect.** Add the connector in claude.ai (§9.4 of the plan). On the consent page check: the destination
+   **claude.ai** in large type; the application name with the _untrusted name_ badge; profile preselected as
+   **New profile… `claude`** (kind `claude`), or the existing `claude` profile; scope **read** selected. Approve with
+   `read`. Log: `consent.granted` with a `profile_id`.
+2. **ChatGPT, connect.** Create the connector (§9). The consent page suggests `chatgpt` and preselects **read**.
+   Approve with `read`.
+3. **Read-scoped connections cannot write.** In each client, ask for `tools/list` (or look at the connector's tool
+   list): no write tools are listed, the proposal tools are. Ask each to read a page: it works. Ask each to make a
+   harmless write (create a test resource): it must fail with a message that the connection is read-only and that the
+   owner can change this. Nothing appears in LegendKeeper; the errors table has a `policy` row for the principal.
+4. **Propose.** Set the `chatgpt` profile to `propose` (`setScope`, or reconnect and pick `propose`). Without
+   reconnecting, ask ChatGPT for the same write: it now sees the write tools, and the result is
+   `proposal_captured` with a `proposalId` and a summary. Check LegendKeeper: unchanged. Ask ChatGPT to call
+   `bridge_proposal_status` with that id: `pending`.
+5. **Approve.** Approve the proposal as the owner (dashboard, or `commands.approve('owner', id)`). The proposal goes
+   `approved` → `executing` → `executed`; the resource exists in LegendKeeper exactly once; the job shows the
+   ChatGPT principal and `approvedBy: owner`; ChatGPT's `bridge_proposal_status` shows `executed` and the job id.
+6. **Reject.** Make a second proposal and reject it with a reason. `bridge_proposal_status` shows `rejected` and the
+   reason.
+7. **Conflict.** Propose an edit to a page, then edit that page in the LegendKeeper app, then approve: the proposal
+   ends `conflicted`, naming the operation, and the page keeps your edit.
+8. **Isolation.** Ask Claude to call `bridge_proposals_mine`: ChatGPT's proposals are not listed, and
+   `bridge_proposal_status` with ChatGPT's id says there is no such proposal.
+9. **Claude at propose and write.** Repeat 4-5 for the `claude` profile, then set it to `write` and check that a
+   write runs at once. Set both profiles back to the scopes you want to keep.
+10. **Claude Code.** `npm run pat -- create --name "Claude Code" --profile claude-code --scope write`; connect
+    (§7 above); a write runs at once. `npm run pat -- list` shows `profile claude-code (write)`.

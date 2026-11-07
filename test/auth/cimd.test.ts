@@ -11,6 +11,7 @@ import {
   type TestBridge,
   authorizeAndApprove,
   authorizeUrl,
+  consentDefaults,
   mcpPost,
   pkcePair,
   reachConsent,
@@ -212,6 +213,7 @@ describe('CIMD end to end', () => {
       request_id: page.requestId,
       csrf_token: page.csrf,
       decision: 'approve',
+      ...consentDefaults(page.html),
     });
     const cb = new URL(res.headers.get('location') as string);
     expect(cb.origin).toBe('http://localhost:51234');

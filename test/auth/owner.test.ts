@@ -6,6 +6,7 @@ import {
   Browser,
   PUBLIC_URL,
   authorizeUrl,
+  consentDefaults,
   hiddenField,
   pkcePair,
   reachConsent,
@@ -315,6 +316,7 @@ describe('consent screen and its POST', () => {
         request_id: page.requestId,
         csrf_token: page.csrf,
         decision: 'approve',
+        ...consentDefaults(page.html),
       });
       expect(ok.status).toBe(303);
       expect(

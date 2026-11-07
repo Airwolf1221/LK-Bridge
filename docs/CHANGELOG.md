@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Chunk 2b: identity, scopes and proposals
+
+- `src/policy` ([docs/policy.md](policy.md), [ADR 0011](adr/0011-live-policy-evaluation.md)): profiles
+  (`agent_profiles`: label, kind `claude` · `chatgpt` · `claude-code` · `other`, scope), scopes `read` · `propose` ·
+  `write`, the default scope for new connections (`read`), and the audit log. Migration `0300_policy_init.sql` adds
+  the tables and a `profile_id` on auth codes, grants and PATs; grants and PATs from before this chunk move to a
+  `legacy` profile at `read`.
+- The real `PolicyGate` (`LivePolicyGate`), evaluated live (≤ 1 s cache, cleared on any change): `read` denies writes
+  with a clear message, `propose` turns writes into proposals, `write` allows; member admin refused unless
+  `LK_ALLOW_MEMBER_ADMIN=true`; `system` allowed except on MCP origins; unknown, revoked or expired principals denied.
+- The real `ProposalSink` (`ProposalService`): capture with validation, dry-run guards and governed reads of each
+  target (version, fingerprint, pre-state); one proposal per request; compare-and-set states (`pending`, `approved`,
+  `rejected`, `conflicted`, `expired`, `executing`, `executed`, `failed`); approval re-reads and detects conflicts,
+  then submits a `batch_ops` job (stop on error) as the proposer with `approvedBy: 'owner'` and a single-use approval
+  token bound to the proposal, so approval never loops and cannot be forged; restart reconciliation; expiry timer
+  (`POLICY_PROPOSAL_EXPIRY_DAYS`, `POLICY_EXPIRY_SWEEP_SECONDS`); rejection with a reason.
+- Owner command layer (`createPolicy().commands`, `actor: 'owner'`): profiles, scopes, default scope, connections
+  (list, move, revoke), proposals (list, detail with diff data, approve, reject, bulk). Audited and evented; not
+  reachable from MCP.
+- Agent tools `bridge_proposal_status` and `bridge_proposals_mine` (read; own proposals only).
+- Auth: the consent screen offers profile and scope (suggested from the redirect host; `read` preselected; the client
+  name marked untrusted); grants and their tokens inherit the profile; `CallerIdentity.principalId`;
+  `npm run pat -- create --profile <label> [--scope …]` and the profile in `list`.
+- MCP: `McpToolProvider.access` (`read` | `write`), `ctx.principal` / `ctx.scope` in tool handlers, per-principal
+  `tools/list`, call-time refusal of write tools for `read` connections; `buildServer({ policy })`.
+- **Interface changes (src/jobs):** `JobOrigin.approval` (opaque), `ProposalCaptured.summary`, sink `JobsError`s are
+  passed through, `policy` and `proposal` events on `JobEngineEvents`.
+- Config: `src/config/policy.ts` (`loadPolicyConfig`).
+- Tests: `test/policy/` (scope matrix over all 89 operations, live changes, capture without writes, exactly-once
+  approval including double approval and crash/restart, conflicts, the unsupported-block guard at execution, partial
+  failure, expiry, read-only and paused approval, forged approvals, tool lists per scope, consent, the `legacy`
+  migration, PAT profiles, and an escalation test over every registered MCP tool). Chunk 4 tests updated for the
+  consent fields and per-scope tool lists.
+
 ### Chunk 2 follow-up: principals, policy hooks and batch-create recovery
 
 - Principals: `origin.principal` (`{ principalId, profile, label }`, default `SYSTEM_PRINCIPAL`) and optional

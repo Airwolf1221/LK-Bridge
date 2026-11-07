@@ -87,11 +87,20 @@ async function connect(token: string): Promise<Client> {
 
 describe('the tool seam (requirement 14)', () => {
   it('serves every provider through the official client, with text and image content', async () => {
-    const pat = bridge.services.pats.create({ name: 'sdk' }).token;
-    const client = await connect(pat);
+    const created = bridge.services.pats.create({ name: 'sdk' });
+    // PATs default to the `claude-code` profile at `read`; this test exercises write tools too (chunk 2b).
+    bridge.policy.commands.setScope('owner', created.pat.profileId!, 'write');
+    const client = await connect(created.token);
     try {
       const { tools } = await client.listTools();
-      expect(tools.map((t) => t.name).sort()).toEqual(['bridge_info', 'echo', 'explode', 'needs_admin']);
+      expect(tools.map((t) => t.name).sort()).toEqual([
+        'bridge_info',
+        'bridge_proposal_status',
+        'bridge_proposals_mine',
+        'echo',
+        'explode',
+        'needs_admin',
+      ]);
       const echoDef = tools.find((t) => t.name === 'echo');
       // Title and every annotation reach tools/list (follow-up item E).
       expect(echoDef?.title).toBe('Echo');

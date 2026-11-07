@@ -33,6 +33,8 @@ export interface CodeRecord {
   readonly expiresAt: number;
   readonly usedAt: number | null;
   readonly familyId: string | null;
+  /** The policy profile the owner chose at consent (migration 0300); the grant inherits it. */
+  readonly profileId: string | null;
 }
 
 export interface FamilyRecord {
@@ -45,6 +47,8 @@ export interface FamilyRecord {
   readonly revokedAt: number | null;
   readonly revokedReason: string | null;
   readonly lastUsedAt: number | null;
+  /** The policy profile (migration 0300). Null only for a grant made without the policy layer. */
+  readonly profileId: string | null;
 }
 
 export interface RefreshRecord {
@@ -80,6 +84,8 @@ export interface PatRecord {
   readonly expiresAt: number | null;
   readonly revokedAt: number | null;
   readonly lastUsedAt: number | null;
+  /** The policy profile (migration 0300). */
+  readonly profileId: string | null;
 }
 
 export interface SessionRecord {
@@ -132,6 +138,7 @@ function toCode(r: Row): CodeRecord {
     expiresAt: Number(r.expires_at),
     usedAt: num(r.used_at),
     familyId: str(r.family_id),
+    profileId: str(r.profile_id),
   };
 }
 
@@ -146,6 +153,7 @@ function toFamily(r: Row): FamilyRecord {
     revokedAt: num(r.revoked_at),
     revokedReason: str(r.revoked_reason),
     lastUsedAt: num(r.last_used_at),
+    profileId: str(r.profile_id),
   };
 }
 
@@ -187,6 +195,7 @@ function toPat(r: Row): PatRecord {
     expiresAt: num(r.expires_at),
     revokedAt: num(r.revoked_at),
     lastUsedAt: num(r.last_used_at),
+    profileId: str(r.profile_id),
   };
 }
 
@@ -268,11 +277,11 @@ export class AuthStore {
 
   // --- Authorization codes ---
 
-  insertCode(c: Omit<CodeRecord, 'usedAt' | 'familyId'>): void {
+  insertCode(c: Omit<CodeRecord, 'usedAt' | 'familyId' | 'profileId'> & { profileId?: string | null }): void {
     this.db
       .prepare(
         `INSERT INTO auth_codes (code_hash, client_id, redirect_uri, redirect_uri_provided, code_challenge, scope,
-           resource, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           resource, created_at, expires_at, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         c.codeHash,
@@ -284,6 +293,7 @@ export class AuthStore {
         c.resource,
         c.createdAt,
         c.expiresAt,
+        c.profileId ?? null,
       );
   }
 
@@ -308,13 +318,17 @@ export class AuthStore {
 
   // --- Grants (token families) ---
 
-  insertFamily(f: Omit<FamilyRecord, 'revokedAt' | 'revokedReason' | 'lastUsedAt'>): void {
+  insertFamily(
+    f: Omit<FamilyRecord, 'revokedAt' | 'revokedReason' | 'lastUsedAt' | 'profileId'> & {
+      profileId?: string | null;
+    },
+  ): void {
     this.db
       .prepare(
-        `INSERT INTO auth_token_families (family_id, client_id, scope, resource, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO auth_token_families (family_id, client_id, scope, resource, created_at, expires_at, profile_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(f.familyId, f.clientId, f.scope, f.resource, f.createdAt, f.expiresAt);
+      .run(f.familyId, f.clientId, f.scope, f.resource, f.createdAt, f.expiresAt, f.profileId ?? null);
   }
 
   getFamily(familyId: string): FamilyRecord | undefined {
@@ -416,13 +430,15 @@ export class AuthStore {
 
   // --- Personal access tokens ---
 
-  insertPat(p: Omit<PatRecord, 'revokedAt' | 'lastUsedAt'>): void {
+  insertPat(
+    p: Omit<PatRecord, 'revokedAt' | 'lastUsedAt' | 'profileId'> & { profileId?: string | null },
+  ): void {
     this.db
       .prepare(
-        `INSERT INTO auth_pats (id, name, token_hash, token_hint, scope, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO auth_pats (id, name, token_hash, token_hint, scope, created_at, expires_at, profile_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(p.id, p.name, p.tokenHash, p.tokenHint, p.scope, p.createdAt, p.expiresAt);
+      .run(p.id, p.name, p.tokenHash, p.tokenHint, p.scope, p.createdAt, p.expiresAt, p.profileId ?? null);
   }
 
   getPatByHash(tokenHash: string): PatRecord | undefined {

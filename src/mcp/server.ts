@@ -2,6 +2,7 @@ import { McpServer, type CallToolResult, type McpServerFactory } from '@modelcon
 import type { FastifyBaseLogger } from 'fastify';
 import * as z from 'zod';
 import type { CallerIdentity } from '../auth/bearer.js';
+import type { Principal } from '../jobs/types.js';
 
 /**
  * The tool-registration seam (requirement 14).
@@ -27,6 +28,33 @@ export interface McpToolContext {
   /** Aborted when the client cancels the request or disconnects. */
   readonly signal: AbortSignal;
   readonly log: FastifyBaseLogger;
+  /**
+   * Who the call acts for, resolved from the server-issued token (never from `clientInfo` or a client name). Pass
+   * it as `origin.principal` to the job engine. Undefined only when no policy layer is wired.
+   */
+  readonly principal?: Principal;
+  /** The principal's scope, read live for this request. */
+  readonly scope?: string;
+}
+
+/** Whether a tool only reads (`read`) or may write (`write`). Tools without it count as `write` unless read-only. */
+export type ToolAccess = 'read' | 'write';
+
+export function toolAccess(tool: Pick<McpToolProvider, 'access' | 'annotations'>): ToolAccess {
+  return tool.access ?? (tool.annotations?.readOnlyHint === true ? 'read' : 'write');
+}
+
+/** `read` scope sees read tools only; `propose` and `write` see every tool (for `propose`, writes become proposals). */
+export function toolVisible(access: ToolAccess, scope: string | undefined): boolean {
+  return access === 'read' || scope === 'propose' || scope === 'write';
+}
+
+/** The policy layer's view of a request (src/policy/mcp.ts implements it). */
+export interface McpAccessControl {
+  /** The caller's principal and live scope, or undefined when the bridge does not know it. */
+  resolve(
+    caller: CallerIdentity | undefined,
+  ): { readonly principal: Principal; readonly scope: string } | undefined;
 }
 
 /**
@@ -55,6 +83,8 @@ export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
   readonly description: string;
   readonly inputSchema: S;
   readonly annotations?: McpToolAnnotations;
+  /** `read` or `write`; filters tools/list per principal (see {@link toolVisible}). */
+  readonly access?: ToolAccess;
   /** Scopes the caller must hold (checked before the handler). Default: none beyond `/mcp` access. */
   readonly requiredScopes?: readonly string[];
   handler(input: z.output<S>, ctx: McpToolContext): McpToolResult | Promise<McpToolResult>;
@@ -66,6 +96,11 @@ export type McpServerLike = Pick<McpServer, 'registerTool'>;
 export interface RegisterToolsDeps {
   readonly tools: readonly McpToolProvider[];
   readonly log: FastifyBaseLogger;
+  /**
+   * The request's principal and scope when a policy layer is wired. Write tools are then refused at call time for a
+   * `read` scope even if a client calls one it was not shown (the job engine's policy gate refuses too).
+   */
+  readonly policy?: { readonly principal: Principal; readonly scope: string } | null;
 }
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -114,8 +149,27 @@ export function registerTools(server: McpServerLike, deps: RegisterToolsDeps): v
             content: [{ type: 'text', text: `This tool needs scope: ${missing.join(' ')}` }],
           };
         }
+        const policy = deps.policy;
+        if (policy !== undefined && !toolVisible(toolAccess(tool), policy?.scope)) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text:
+                  `${tool.name} is not available: this connection is read-only. ` +
+                  'The bridge owner can change its profile’s scope in the LK-Bridge dashboard.',
+              },
+            ],
+          };
+        }
         try {
-          const result = await tool.handler(args, { caller, signal: ctx.mcpReq.signal, log: deps.log });
+          const result = await tool.handler(args, {
+            caller,
+            signal: ctx.mcpReq.signal,
+            log: deps.log,
+            ...(policy ? { principal: policy.principal, scope: policy.scope } : {}),
+          });
           return result as CallToolResult;
         } catch (err) {
           deps.log.error({ err, tool: tool.name }, 'MCP tool failed');
@@ -140,15 +194,24 @@ export function createMcpServerFactory(
   info: McpServerInfo,
   tools: readonly McpToolProvider[],
   log: FastifyBaseLogger,
+  access?: McpAccessControl,
 ): McpServerFactory {
   // Validate names once at start-up rather than on the first request.
   registerTools({ registerTool: () => undefined as never }, { tools, log });
-  return () => {
+  return (ctx) => {
     const server = new McpServer(
       { name: info.name, version: info.version },
       { capabilities: { tools: {} }, ...(info.instructions ? { instructions: info.instructions } : {}) },
     );
-    registerTools(server, { tools, log });
+    if (!access) {
+      registerTools(server, { tools, log });
+      return server;
+    }
+    // Per request, so a scope change shows in the very next tools/list. Unknown callers see read tools only.
+    const caller = ctx?.authInfo?.extra?.caller as CallerIdentity | undefined;
+    const policy = access.resolve(caller) ?? null;
+    const visible = tools.filter((t) => toolVisible(toolAccess(t), policy?.scope));
+    registerTools(server, { tools: visible, log, policy });
     return server;
   };
 }
@@ -173,6 +236,7 @@ export function bridgeInfoStub(info: () => BridgeInfo): McpToolProvider {
       'Costs no LegendKeeper rate budget. Risk: none (read-only).',
     inputSchema: z.object({}),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    access: 'read',
     handler: (_input, ctx) => {
       const i = info();
       const body = {

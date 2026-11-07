@@ -60,16 +60,27 @@ It asks for the password twice (hidden), offers TOTP enrolment (scan the `otpaut
 Until the dashboard (chunk 5) has a page for them:
 
 ```bash
-DB_PATH=/var/lib/lk-bridge/bridge.db npm run pat -- create --name "Claude Code on my laptop" --expires-days 365
+DB_PATH=/var/lib/lk-bridge/bridge.db npm run pat -- create --name "Claude Code on my laptop" --profile claude-code --expires-days 365
 DB_PATH=/var/lib/lk-bridge/bridge.db npm run pat -- list
 DB_PATH=/var/lib/lk-bridge/bridge.db npm run pat -- revoke pat_XXXXXXXXXXXX
 ```
 
-The token is printed once; only its SHA-256 is stored.
+The token is printed once; only its SHA-256 is stored. Every PAT acts under a policy profile (default `claude-code`,
+created at the default scope `read` if absent; `--scope read|propose|write` sets it). `list` shows each token's
+profile and scope. See [policy.md](policy.md).
+
+## Consent and profiles (chunk 2b)
+
+After sign-in the consent page also asks which **profile** the connection acts under (an existing one, or a new one
+with a label and kind) and that profile's **scope** (`read` preselected). The suggestion comes from the redirect host:
+claude.ai and claude.com → `claude`, chatgpt.com → `chatgpt`, loopback → `claude-code`. The client's self-reported name
+is shown HTML-escaped with an _untrusted name_ badge. The grant, and every refresh and access token issued from it,
+acts under the chosen profile; the scope is evaluated live on every call ([ADR 0011](adr/0011-live-policy-evaluation.md)).
+Grants and PATs from before chunk 2b are on a `legacy` profile at `read`.
 
 ## For chunk 3: adding tools
 
-Tools plug in without touching `src/auth` or `src/mcp/transport.ts`. Implement `McpToolProvider` (`src/mcp/server.ts`): `name`, `title`, `description` (state the rate cost and risk), a `zod` object `inputSchema`, `annotations`, and a `handler(input, ctx)` returning `{ content: [{ type: 'text', text } | { type: 'image', data, mimeType }], isError? }`. `ctx.caller` says which OAuth client or PAT is calling; `ctx.signal` aborts on cancellation. Pass the list to `buildServer({ tools })` in `src/server.ts`, replacing the `bridge_info` stub. `registerTools(server, { tools, log })` accepts any `McpServerLike` (`Pick<McpServer, 'registerTool'>`).
+Tools plug in without touching `src/auth` or `src/mcp/transport.ts`. Implement `McpToolProvider` (`src/mcp/server.ts`): `name`, `title`, `description` (state the rate cost and risk), a `zod` object `inputSchema`, `annotations`, and a `handler(input, ctx)` returning `{ content: [{ type: 'text', text } | { type: 'image', data, mimeType }], isError? }`. `ctx.caller` says which OAuth client or PAT is calling; `ctx.principal` is who the call acts for (from the token; pass it as `origin.principal`, or use `mcpOrigin(ctx, tool)` from `src/policy`), `ctx.scope` its live scope; `ctx.signal` aborts on cancellation. Set `access: 'read' | 'write'` on every tool: `tools/list` hides `write` tools from `read`-scoped connections (see [policy.md](policy.md)). Pass the list to `buildServer({ tools })` in `src/server.ts`, replacing the `bridge_info` stub. `registerTools(server, { tools, log })` accepts any `McpServerLike` (`Pick<McpServer, 'registerTool'>`).
 
 `annotations` takes `readOnlyHint`, `destructiveHint`, `idempotentHint` and `openWorldHint` (booleans), and `title` is also sent as `annotations.title` for older clients. They appear in `tools/list` exactly as given; a tool marked both read-only and destructive is refused at start-up. Claude and ChatGPT use them to decide what to ask the user about, so (PLAN amendment 2) mark every read tool `readOnlyHint: true, destructiveHint: false`, and every write tool `readOnlyHint: false` with an honest `destructiveHint`. The stub `bridge_info` is `readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false`.
 

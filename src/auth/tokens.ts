@@ -84,6 +84,8 @@ export class TokenService {
     readonly codeChallenge: string;
     readonly scopes: readonly string[];
     readonly resource: string;
+    /** The policy profile the owner chose at consent; the grant (and every token from it) inherits it. */
+    readonly profileId?: string | null;
   }): string {
     const code = `${CODE_PREFIX}${randomToken(32)}`;
     const now = this.deps.now();
@@ -97,6 +99,7 @@ export class TokenService {
       resource: p.resource,
       createdAt: now,
       expiresAt: now + this.deps.config.ttl.authCodeSeconds,
+      profileId: p.profileId ?? null,
     });
     return code;
   }
@@ -161,6 +164,7 @@ export class TokenService {
         resource: rec.resource,
         createdAt: now,
         expiresAt: now + config.ttl.refreshFamilyMaxSeconds,
+        profileId: rec.profileId,
       });
       store.linkCodeToFamily(codeHash, familyId);
       store.insertAccess(access.record);

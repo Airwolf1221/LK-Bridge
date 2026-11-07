@@ -21,6 +21,23 @@ export interface JobEngineEvents {
   error: ErrorRecordView;
   /** Pause all writes, drain, read-only override or WRITERS_MAX changed. */
   controls: ControlsView;
+  /** An owner command or policy change (src/policy): the same facts as its audit_log row. */
+  policy: {
+    readonly action: string;
+    readonly actor: string;
+    readonly target: string | null;
+    readonly before?: unknown;
+    readonly after?: unknown;
+  };
+  /** A proposal was captured or changed state (src/policy). */
+  proposal: {
+    readonly type: 'captured' | 'updated';
+    readonly proposalId: string;
+    readonly state: string;
+    readonly principalId: string;
+    readonly profile: string;
+    readonly jobId: string | null;
+  };
 }
 
 type Listener<E extends keyof JobEngineEvents> = (event: JobEngineEvents[E]) => void;

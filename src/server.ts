@@ -10,6 +10,7 @@ import { runMigrations } from './db/migrate.js';
 import { type Db, openDatabase } from './db/open.js';
 import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/server.js';
 import { mcpTransportPlugin } from './mcp/transport.js';
+import { type Policy, createPolicy } from './policy/index.js';
 
 /**
  * Composition root. Chunk 4 wires the authorization server and the MCP transport; later chunks
@@ -33,6 +34,8 @@ export interface BuildServerOptions {
   /** Test seams for the auth services (clock, CIMD fetcher, rate limits). */
   readonly authOverrides?: Omit<Partial<CreateAuthServicesOptions>, 'config' | 'db' | 'log'>;
   readonly pruneIntervalMs?: number;
+  /** The policy layer (profiles, scopes, proposals). Defaults to one on `db`, without a job engine attached. */
+  readonly policy?: Policy;
 }
 
 /** Strips query strings from logged URLs: no code, state or stray token ever reaches the log. */
@@ -42,7 +45,7 @@ function pathOnly(url: string): string {
 
 export async function buildServer(
   o: BuildServerOptions,
-): Promise<{ app: FastifyInstance; services: AuthServices }> {
+): Promise<{ app: FastifyInstance; services: AuthServices; policy: Policy }> {
   const app = Fastify({
     logger: {
       level: o.logLevel ?? 'info',
@@ -73,7 +76,14 @@ export async function buildServer(
     return503OnClosing: true,
   });
 
-  const services = createAuthServices({ config: o.authConfig, db: o.db, log: app.log, ...o.authOverrides });
+  const policy = o.policy ?? createPolicy({ db: o.db, allowMemberAdmin: false });
+  const services = createAuthServices({
+    config: o.authConfig,
+    db: o.db,
+    log: app.log,
+    profiles: policy.consent,
+    ...o.authOverrides,
+  });
   await app.register(authPlugin, {
     services,
     ...(o.pruneIntervalMs !== undefined ? { pruneIntervalMs: o.pruneIntervalMs } : {}),
@@ -86,11 +96,12 @@ export async function buildServer(
     bearer: services.bearer,
     event: services.event,
     serverInfo: { name: 'lk-bridge', version: BRIDGE_VERSION },
-    tools: o.tools ?? [bridgeInfoStub(bridgeInfo)],
+    tools: [...(o.tools ?? [bridgeInfoStub(bridgeInfo)]), ...policy.tools],
+    access: policy.access,
   });
 
   app.get('/healthz', () => ({ ok: true, version: BRIDGE_VERSION }));
-  return { app, services };
+  return { app, services, policy };
 }
 
 async function main(): Promise<void> {
