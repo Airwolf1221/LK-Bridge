@@ -206,7 +206,7 @@ export function isRetryableFailure(code: string | undefined, status: number | un
   if (code === 'RATE_LIMITED' || code === 'UPLOAD_RATE_EXCEEDED' || status === 429) return true;
   if (code === 'IN_PROGRESS') return true;
   if (code === 'CONNECTION_ERROR' || code === 'TIMEOUT') return true;
-  if (code === 'INTERNAL') return false;
+  // 502/503/504 are transient whatever the body says (gateways send none); 500 INTERNAL never is.
   return status !== undefined && TRANSIENT_STATUSES.has(status);
 }
 

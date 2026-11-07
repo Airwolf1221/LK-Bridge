@@ -77,7 +77,6 @@ export function backoffMs(
 
 export function isTransient(error: BridgeLkError): boolean {
   if (error.code === 'CONNECTION_ERROR' || error.code === 'TIMEOUT') return true;
-  if (error.code === 'INTERNAL') return false;
   return error.status !== undefined && TRANSIENT_STATUSES.has(error.status);
 }
 
