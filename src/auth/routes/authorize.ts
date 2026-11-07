@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CimdError } from '../cimd.js';
+import { CimdError, isCimdClientId, validateCimdUrl } from '../cimd.js';
 import { CODE_CHALLENGE_S256 } from '../crypto.js';
 import { OAuthError } from '../errors.js';
 import { FormBody } from '../form.js';
@@ -60,8 +60,29 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
     }
     const clientId = get('client_id');
     if (!clientId) return sendErrorPage(reply, 400, 'Invalid request', 'The request has no client_id.');
+    const sessionToken = req.cookies[s.owner.sessionCookie];
+    const session = s.owner.getSession(sessionToken);
+    const toLogin = () => {
+      const returnTo = req.url.startsWith(OAUTH_PATHS.authorize)
+        ? req.url
+        : `${OAUTH_PATHS.authorize}${req.url.slice(LEGACY_ALIASES.authorize.length)}`;
+      return reply
+        .header('cache-control', 'no-store')
+        .redirect(`${OAUTH_PATHS.login}?${new URLSearchParams({ return_to: returnTo }).toString()}`, 302);
+    };
     let client: ClientRecord | undefined;
     try {
+      if (isCimdClientId(clientId)) {
+        validateCimdUrl(clientId);
+        // Fetch a metadata document only for the signed-in owner, so that nobody else can make the
+        // bridge fetch URLs of their choosing. A fresh cached document may be used before sign-in.
+        if ((!session || !sessionToken) && !s.clients.freshCimd(clientId)) {
+          if (get('prompt') === 'none') {
+            return sendErrorPage(reply, 400, 'Sign-in required', 'Sign in to LK-Bridge, then try again.');
+          }
+          return toLogin();
+        }
+      }
       client = await s.clients.resolveForAuthorization(clientId);
     } catch (err) {
       if (!(err instanceof CimdError)) throw err;
@@ -160,17 +181,10 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
       }
 
       // 3. The owner must be signed in.
-      const sessionToken = req.cookies[s.owner.sessionCookie];
-      const session = s.owner.getSession(sessionToken);
       const prompt = get('prompt');
       if (!session || !sessionToken) {
         if (prompt === 'none') throw new RedirectError('login_required', 'The owner is not signed in');
-        const returnTo = req.url.startsWith(OAUTH_PATHS.authorize)
-          ? req.url
-          : `${OAUTH_PATHS.authorize}${req.url.slice(LEGACY_ALIASES.authorize.length)}`;
-        return reply
-          .header('cache-control', 'no-store')
-          .redirect(`${OAUTH_PATHS.login}?${new URLSearchParams({ return_to: returnTo }).toString()}`, 302);
+        return toLogin();
       }
       if (prompt === 'none')
         throw new RedirectError('consent_required', 'Approval is required for every connection');

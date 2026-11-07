@@ -155,8 +155,34 @@ function testFetcher(timeoutMs = 400): JsonFetcher {
 
 describe('CIMD end to end', () => {
   let bridge: TestBridge;
+  /** A browser where the owner is already signed in. */
+  const signedIn = async () => {
+    const b = new Browser(bridge);
+    expect((await b.login()).status).toBe(200);
+    return b;
+  };
   beforeAll(async () => {
     bridge = await startBridge({ authOverrides: { fetchJson: testFetcher() } });
+  });
+
+  it('fetches nothing for a visitor who is not signed in', async () => {
+    const before = hits.get('/fresh-for-anonymous') ?? 0;
+    const res = await new Browser(bridge).request(
+      authorizeUrl({
+        clientId: cimdUrl('/fresh-for-anonymous'),
+        redirectUri: 'http://127.0.0.1:4/callback',
+        challenge: pkcePair().challenge,
+        method: 'S256',
+      }),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toMatch(/^\/oauth\/login\?return_to=/);
+    expect(hits.get('/fresh-for-anonymous') ?? 0).toBe(before);
+    // A malformed client_id URL is refused before sign-in, still without fetching.
+    const bad = await new Browser(bridge).request(
+      authorizeUrl({ clientId: `${cimdUrl('/x')}#frag`, challenge: pkcePair().challenge, method: 'S256' }),
+    );
+    expect(bad.status).toBe(400);
   });
   afterAll(() => bridge.close());
 
@@ -269,7 +295,9 @@ describe('CIMD end to end', () => {
     ['/not-json', /could not be fetched/],
     ['/404', /could not be fetched/],
   ])('refuses %s with an error page and no redirect', async (path, message) => {
-    const res = await new Browser(bridge).request(
+    const res = await (
+      await signedIn()
+    ).request(
       authorizeUrl({
         clientId: cimdUrl(path),
         redirectUri: 'http://127.0.0.1:4/callback',
@@ -284,7 +312,9 @@ describe('CIMD end to end', () => {
 
   it('gives up on a slow document server quickly, well inside the 10-second budget', async () => {
     const t0 = performance.now();
-    const res = await new Browser(bridge).request(
+    const res = await (
+      await signedIn()
+    ).request(
       authorizeUrl({
         clientId: cimdUrl('/slow'),
         redirectUri: 'http://127.0.0.1:4/callback',
@@ -300,7 +330,9 @@ describe('CIMD end to end', () => {
 
   it('refuses a redirect URI the document does not list, and escapes the self-asserted name', async () => {
     const clientId = cimdUrl('/hosted');
-    const wrong = await new Browser(bridge).request(
+    const wrong = await (
+      await signedIn()
+    ).request(
       authorizeUrl({
         clientId,
         redirectUri: 'http://127.0.0.1:4/callback',
@@ -310,7 +342,7 @@ describe('CIMD end to end', () => {
     );
     expect(wrong.status).toBe(400);
     const page = await reachConsent(
-      new Browser(bridge),
+      await signedIn(),
       authorizeUrl({
         clientId,
         redirectUri: 'https://claude.ai/api/mcp/auth_callback',
@@ -331,7 +363,9 @@ describe('CIMD end to end', () => {
       `https://cimd.test:${port}/cached#x`,
       `https://cimd.test:${port}/`,
     ]) {
-      const res = await new Browser(bridge).request(
+      const res = await (
+        await signedIn()
+      ).request(
         authorizeUrl({
           clientId,
           redirectUri: 'http://127.0.0.1:4/callback',
