@@ -200,12 +200,14 @@ function parseTrustProxy(raw: string | undefined, issues: string[]): readonly st
     return false;
   }
   const out: string[] = [];
-  for (const entry of value.split(',').map((x) => x.trim()).filter(Boolean)) {
+  for (const entry of value
+    .split(',')
+    .map((x) => x.trim())
+    .filter(Boolean)) {
     const [addr = '', prefix, extra] = entry.split('/');
     const family = isIP(addr);
     const prefixOk =
-      prefix === undefined ||
-      (/^\d{1,3}$/.test(prefix) && Number(prefix) <= (family === 6 ? 128 : 32));
+      prefix === undefined || (/^\d{1,3}$/.test(prefix) && Number(prefix) <= (family === 6 ? 128 : 32));
     if (PROXY_KEYWORDS.has(entry) || (family !== 0 && prefixOk && extra === undefined)) {
       out.push(entry);
     } else {
