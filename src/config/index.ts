@@ -181,3 +181,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
   };
 }
+
+export * from './lk.js';
