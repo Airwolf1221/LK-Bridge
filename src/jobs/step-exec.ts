@@ -1,0 +1,559 @@
+/**
+ * Executes one persisted step: lock → writer slot → (one read) → guards → journal → send → record.
+ * Also the verify-before-resend logic used after a restart and after an ambiguous failure (PLAN §5.3, §6.1).
+ */
+import type { LkClient } from '../lk/client.js';
+import { BridgeLkError, BudgetWaitError } from '../lk/errors.js';
+import type { VerifyResult } from '../lk/governor/types.js';
+import { requireOperation } from '../lk/registry.js';
+import type { OperationDef } from '../lk/registry-types.js';
+import type { JobsSettings } from '../config/jobs.js';
+import { matchesIntent } from './compare.js';
+import {
+  JobsError,
+  LkOperationError,
+  UncertainOutcomeError,
+  VersionConflictError,
+  errorToJson,
+  type JobRef,
+} from './errors.js';
+import { assertNoUnsupportedLoss } from './guards.js';
+import type { WriteJournal } from './journal.js';
+import { callOp, isNotFound, newCallStats, type CallStats } from './lk-call.js';
+import type { LockManager } from './locks.js';
+import { READERS, opMeta, type OpMeta, type ReaderDef } from './op-meta.js';
+import type { JobsRepo } from './repo.js';
+import type { JobView, OpParams, StepView } from './types.js';
+import type { WriterPool } from './writers.js';
+
+export type StepOutcome =
+  | { readonly kind: 'succeeded'; readonly value: unknown; readonly requestIds: readonly string[] }
+  | { readonly kind: 'failed'; readonly error: JobsError; readonly uncertain: boolean }
+  | { readonly kind: 'budget'; readonly retryAtMs: number; readonly error: BudgetWaitError }
+  | { readonly kind: 'aborted' }
+  /** Writes were paused (or read-only switched on) while the step waited for its lock or slot; nothing was sent. */
+  | { readonly kind: 'held'; readonly reason: 'writes_paused' | 'read_only' };
+
+export interface StepExecDeps {
+  readonly lk: LkClient;
+  readonly repo: JobsRepo;
+  readonly journal: WriteJournal;
+  readonly locks: LockManager;
+  readonly writers: WriterPool;
+  readonly settings: JobsSettings;
+  readonly now: () => number;
+  readonly recordLkError: (error: BridgeLkError, ref: { opId: string; jobId?: string; stepNo?: number }) => void;
+  readonly setJobWaiting: (jobId: string, waiting: 'lock' | null, detail?: Record<string, unknown>) => void;
+  /** Null when a new write may start now; otherwise why not. */
+  readonly writeHold: () => 'writes_paused' | 'read_only' | null;
+}
+
+interface Current {
+  readonly exists: boolean;
+  readonly body: unknown;
+  /** The targeted entity (list readers select it; otherwise the body). */
+  readonly entity: unknown;
+  readonly version: string | undefined;
+}
+
+type Recovery =
+  | { readonly kind: 'applied'; readonly value: unknown }
+  /** Safe to send (again). `ambiguous`: it may still have applied, but the key or version makes a re-send safe. */
+  | { readonly kind: 'not-applied'; readonly ifMatch?: string | undefined; readonly ambiguous?: boolean }
+  | { readonly kind: 'uncertain'; readonly reason: string };
+
+const RESOURCE_CREATES = new Set(['createResource', 'createManyResources', 'createResourceFromTemplate']);
+
+/** The lock a write step must hold (see locks.ts for the key scheme and ordering rules). */
+export function lockKeyFor(op: OperationDef, params: OpParams): string | null {
+  if (op.kind === 'read') return null;
+  const path = params.path ?? {};
+  if (RESOURCE_CREATES.has(op.operationId)) {
+    const parent = createParent(op, params);
+    return parent === null ? null : `res:${parent}`;
+  }
+  if (op.concurrency === 'document' && path.documentId) return `doc:${path.documentId}`;
+  if (op.concurrency === 'resource' && path.resourceId) return `res:${path.resourceId}`;
+  if (path.calendarId) return `cal:${path.calendarId}`;
+  if (path.assetId) return `asset:${path.assetId}`;
+  return null;
+}
+
+/** Parent of a resource create: `@root` when none; for a batch, the one outside parent (null if several). */
+function createParent(op: OperationDef, params: OpParams): string | null {
+  const body = (params.body ?? {}) as { parentId?: unknown; resources?: unknown };
+  if (op.operationId !== 'createManyResources') {
+    return typeof body.parentId === 'string' && body.parentId ? body.parentId : '@root';
+  }
+  const items = Array.isArray(body.resources) ? (body.resources as { id?: unknown; parentId?: unknown }[]) : [];
+  const own = new Set(items.map((i) => i.id).filter((x): x is string => typeof x === 'string'));
+  const outside = new Set(
+    items.map((i) => (typeof i.parentId === 'string' && i.parentId ? i.parentId : '@root')).filter((p) => !own.has(p)),
+  );
+  return outside.size === 1 ? [...outside][0]! : null;
+}
+
+function str(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+function isDeleted(entity: unknown): boolean {
+  return typeof entity === 'object' && entity !== null && typeof (entity as { deletedAt?: unknown }).deletedAt === 'string';
+}
+
+export class StepExecutor {
+  constructor(private readonly d: StepExecDeps) {}
+
+  /** Runs a step to an outcome and persists it. `signal` aborts only lock/slot waits, never an in-flight call. */
+  async execute(
+    job: JobView,
+    step: StepView,
+    signal: AbortSignal,
+    opts: { readonly storeResult?: boolean } = {},
+  ): Promise<StepOutcome> {
+    const op = requireOperation(step.opId);
+    const params = this.d.repo.stepParams(step);
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const store = opts.storeResult !== false;
+    if (op.kind === 'read') return this.runRead(job, step, op, params, store);
+
+    const lockKey = lockKeyFor(op, params);
+    let releaseLock: (() => void) | undefined;
+    let releaseSlot: () => void;
+    try {
+      if (lockKey) {
+        if (!this.d.locks.isFree(lockKey)) this.d.setJobWaiting(job.id, 'lock', { lockKey });
+        releaseLock = await this.d.locks.acquire(lockKey, { jobId: job.id, stepNo: step.stepNo }, signal);
+        this.d.setJobWaiting(job.id, null);
+      }
+      releaseSlot = await this.d.writers.acquire(
+        {
+          jobId: job.id,
+          stepNo: step.stepNo,
+          opId: op.operationId,
+          lockKey,
+          resourceId: params.path?.resourceId ?? null,
+          documentId: params.path?.documentId ?? null,
+        },
+        signal,
+      );
+    } catch (e) {
+      releaseLock?.();
+      this.d.setJobWaiting(job.id, null);
+      if (signal.aborted) return { kind: 'aborted' };
+      throw e;
+    }
+    try {
+      const hold = step.status === 'running' ? null : this.d.writeHold();
+      if (hold) return { kind: 'held', reason: hold };
+      return await this.runWrite(job, step, op, params, ref, store);
+    } finally {
+      releaseSlot();
+      releaseLock?.();
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------ reads
+
+  private async runRead(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    params: OpParams,
+    store: boolean,
+  ): Promise<StepOutcome> {
+    const stats = newCallStats();
+    this.d.repo.updateStep(job.id, step.stepNo, {
+      status: 'running',
+      startedAt: step.startedAt ?? this.d.now(),
+    });
+    try {
+      const value = await callOp(this.d.lk, op, params, this.callOptions(job, step, stats));
+      return this.succeed(job, step, stats, value, false, store);
+    } catch (e) {
+      return this.fail(job, step, stats, e);
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------ writes
+
+  private async runWrite(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    params: OpParams,
+    ref: JobRef,
+    store: boolean,
+  ): Promise<StepOutcome> {
+    const meta = opMeta(op.operationId);
+    const stats = newCallStats();
+    let forcedIfMatch: string | undefined;
+    let ambiguous = false;
+
+    // A step that may already have reached LK is verified before anything is re-sent.
+    if (step.status === 'running' || step.maybeSent) {
+      let r: Recovery;
+      try {
+        r = await this.recover(job, step, op, meta, params);
+      } catch (e) {
+        return this.fail(job, step, stats, e);
+      }
+      if (r.kind === 'applied') return this.succeed(job, step, stats, r.value, true);
+      if (r.kind === 'uncertain') {
+        return this.fail(job, step, stats, new UncertainOutcomeError(op.operationId, r.reason, ref));
+      }
+      forcedIfMatch = r.ifMatch;
+      ambiguous = r.ambiguous === true;
+    }
+
+    try {
+      const callerVersion = str(params.ifMatch);
+      const journalled = this.d.journal.hasEntry(job.id, step.stepNo);
+      const resend = forcedIfMatch !== undefined;
+      const needRead =
+        !resend &&
+        meta.reader !== undefined &&
+        ((op.versioned && !callerVersion) ||
+          meta.guard !== undefined ||
+          (meta.journal === 'pre-image' && !journalled));
+
+      // ONE read serves the If-Match version, the unsupported-block guard and the journal pre-image.
+      const current = needRead ? await this.readCurrent(job, step, op, meta, params, step.clientIds) : undefined;
+
+      let ifMatch: string | undefined;
+      if (op.versioned) {
+        ifMatch = forcedIfMatch ?? callerVersion ?? current?.version;
+        if (!ifMatch) {
+          throw new JobsError('BRIDGE_ERROR', `${op.operationId}: could not read the current version`, ref);
+        }
+        if (callerVersion && current?.version && current.version !== callerVersion) {
+          throw new VersionConflictError(op.operationId, callerVersion, current.version, ref);
+        }
+      }
+
+      if (meta.guard && current) {
+        const incoming = meta.guard === 'document' ? (params.body as { blocks?: unknown })?.blocks : params.body;
+        const existing = meta.guard === 'document' ? (current.body as { blocks?: unknown })?.blocks : current.body;
+        assertNoUnsupportedLoss(op.operationId, existing, incoming, step.options, ref);
+      }
+
+      let journalId: number | undefined;
+      if (meta.journal && !journalled) {
+        journalId = this.d.journal.record({
+          jobId: job.id,
+          stepNo: step.stepNo,
+          opId: op.operationId,
+          risk: op.risk,
+          targetKind: meta.reader ?? op.tag,
+          targetId: targetIdOf(op, params),
+          resourceId: params.path?.resourceId ?? null,
+          documentId: params.path?.documentId ?? null,
+          version: ifMatch ?? current?.version ?? null,
+          params,
+          ...(meta.journal === 'pre-image' && current ? { preImage: current.entity ?? current.body } : {}),
+        });
+      }
+
+      // Durable "running" marker before the request leaves: a restart from here verifies before re-sending.
+      const now = this.d.now();
+      this.d.repo.updateStep(job.id, step.stepNo, {
+        status: 'running',
+        ifMatch: ifMatch ?? null,
+        startedAt: step.startedAt ?? now,
+        firstSentAt: step.firstSentAt ?? now,
+      });
+
+      try {
+        const value = await callOp(this.d.lk, op, params, {
+          ...this.callOptions(job, step, stats),
+          ifMatch,
+          verify: (ctx) => this.verifyHook(job, step, op, meta, params, ctx.error),
+        });
+        if (journalId !== undefined) this.d.journal.setOutcome(journalId, 'applied');
+        else if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+        return this.succeed(job, step, stats, value, false, store);
+      } catch (e) {
+        if (meta.journal) {
+          const outcome = stats.maybeSent && !(e instanceof BudgetWaitError) ? 'unknown' : 'not_applied';
+          this.d.journal.setOutcomeForStep(job.id, step.stepNo, outcome);
+        }
+        if (e instanceof BridgeLkError && (e.status === 412 || e.code === 'VERSION_MISMATCH')) {
+          throw new VersionConflictError(op.operationId, ifMatch ?? null, null, ref, e);
+        }
+        // A transient failure after the write may have applied: find out now rather than leave it ambiguous.
+        if (stats.maybeSent && e instanceof BridgeLkError && !(e instanceof BudgetWaitError) && e.classification === 'upstream') {
+          const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
+          const r = await this.recover(job, { ...latest, maybeSent: true }, op, meta, params).catch(
+            (): Recovery => ({ kind: 'uncertain', reason: 'the write may have applied and could not be re-read' }),
+          );
+          if (r.kind === 'applied') return this.succeed(job, step, stats, r.value, true);
+          if (r.kind === 'uncertain') throw new UncertainOutcomeError(op.operationId, r.reason, ref);
+        }
+        throw e;
+      }
+    } catch (e) {
+      return this.fail(job, step, stats, e, ambiguous);
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------ verify
+
+  /** Governor `verify` for 412 / DUPLICATE_ID / NOT_FOUND after an ambiguous retry inside one execute. */
+  private async verifyHook(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    meta: OpMeta,
+    params: OpParams,
+    error: BridgeLkError,
+  ): Promise<VerifyResult<unknown>> {
+    if (!meta.reader) return { ok: false };
+    if (error.code === 'DUPLICATE_ID' && meta.verify === 'client-id') {
+      const r = await this.recoverClientId(job, step, op, meta, params);
+      return r.kind === 'applied' ? { ok: true, value: r.value } : { ok: false };
+    }
+    if ((error.code === 'NOT_FOUND' || error.code === 'ALREADY_DELETED') && meta.verify === 'gone') {
+      const cur = await this.readCurrent(job, step, op, meta, params, step.clientIds);
+      return this.isGone(cur, meta, params) ? { ok: true, value: undefined } : { ok: false };
+    }
+    if ((error.status === 412 || error.code === 'VERSION_MISMATCH') && meta.verify === 'state') {
+      const cur = await this.readCurrent(job, step, op, meta, params, step.clientIds);
+      return cur.exists && this.matches(meta, params, cur) ? { ok: true, value: cur.entity ?? cur.body } : { ok: false };
+    }
+    return { ok: false };
+  }
+
+  /** Decides, from LK's current state, whether a step that may have been sent already applied. */
+  private async recover(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    meta: OpMeta,
+    params: OpParams,
+  ): Promise<Recovery> {
+    if (step.firstSentAt === null && !step.maybeSent) return { kind: 'not-applied' };
+    const withinWindow = step.firstSentAt !== null && this.d.now() - step.firstSentAt <= this.d.settings.idempotencyWindowMs;
+    const ifMatch = step.ifMatch ?? undefined;
+    switch (meta.verify) {
+      case 'read':
+      case 'idempotent':
+        return { kind: 'not-applied', ifMatch: op.versioned ? ifMatch : undefined };
+      case 'client-id':
+        if (step.clientIds.length > 0) return this.recoverClientId(job, step, op, meta, params);
+        return withinWindow
+          ? { kind: 'not-applied', ambiguous: true }
+          : { kind: 'uncertain', reason: 'no client id and the idempotency window has passed' };
+      case 'gone': {
+        const cur = await this.readCurrent(job, step, op, meta, params, step.clientIds);
+        if (this.isGone(cur, meta, params)) return { kind: 'applied', value: undefined };
+        return { kind: 'not-applied', ifMatch: op.versioned ? ifMatch : undefined };
+      }
+      case 'state': {
+        const cur = await this.readCurrent(job, step, op, meta, params, step.clientIds);
+        if (cur.exists && this.matches(meta, params, cur)) return { kind: 'applied', value: cur.entity ?? cur.body };
+        if (!op.versioned) return { kind: 'not-applied' };
+        if (ifMatch && cur.version === ifMatch) return { kind: 'not-applied', ifMatch };
+        if (op.method === 'POST' && withinWindow) return { kind: 'not-applied', ifMatch, ambiguous: true };
+        return {
+          kind: 'uncertain',
+          reason: `the entity changed since version ${ifMatch ?? '(unknown)'} and does not match the intended state`,
+        };
+      }
+      case 'key': {
+        if (op.versioned && meta.reader && ifMatch) {
+          const cur = await this.readCurrent(job, step, op, meta, params, step.clientIds);
+          if (cur.version === ifMatch) return { kind: 'not-applied', ifMatch };
+        }
+        if (withinWindow) {
+          return { kind: 'not-applied', ifMatch: op.versioned ? ifMatch : undefined, ambiguous: true };
+        }
+        return {
+          kind: 'uncertain',
+          reason: 'the idempotency window has passed and LK offers no other way to tell whether it applied',
+        };
+      }
+    }
+  }
+
+  private async recoverClientId(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    meta: OpMeta,
+    params: OpParams,
+  ): Promise<Recovery> {
+    const ids = step.clientIds;
+    const first = await this.readCurrent(job, step, op, meta, params, [ids[0]!]);
+    if (!first.exists) return { kind: 'not-applied' };
+    if (ids.length === 1) return { kind: 'applied', value: first.body };
+    const last = await this.readCurrent(job, step, op, meta, params, [ids[ids.length - 1]!]);
+    if (last.exists) return { kind: 'applied', value: { resources: ids.map((id) => ({ id })), verified: true } };
+    return { kind: 'uncertain', reason: 'only part of the batch exists at LK' };
+  }
+
+  private isGone(cur: Current, meta: OpMeta, params: OpParams): boolean {
+    if (meta.gone) return cur.exists ? meta.gone(cur.body, params) : true;
+    return !cur.exists || isDeleted(cur.entity);
+  }
+
+  private matches(meta: OpMeta, params: OpParams, cur: Current): boolean {
+    const intent = meta.intent ? meta.intent(params) : params.body;
+    const actual = meta.actual ? meta.actual(cur.body, cur.entity) : (cur.entity ?? cur.body);
+    return matchesIntent(intent, actual, meta.compare ?? 'patch');
+  }
+
+  /** The reader op for a write: the entity's current state (and version). 404 means it does not exist. */
+  private async readCurrent(
+    job: JobView,
+    step: StepView,
+    _op: OperationDef,
+    meta: OpMeta,
+    params: OpParams,
+    clientIds: readonly string[],
+  ): Promise<Current> {
+    const reader: ReaderDef = READERS[meta.reader!];
+    const readOp = requireOperation(reader.op);
+    const path: Record<string, string> = {};
+    for (const m of readOp.pathTemplate.matchAll(/\{(\w+)\}/g)) {
+      const name = m[1]!;
+      if (name === 'projectId') continue;
+      const v = name === reader.idParam && clientIds[0] ? clientIds[0] : params.path?.[name];
+      if (v !== undefined) path[name] = v;
+    }
+    let body: unknown;
+    try {
+      body = await callOp(this.d.lk, readOp, { path }, this.callOptions(job, step, newCallStats(), 'r'));
+    } catch (e) {
+      if (isNotFound(e)) return { exists: false, body: undefined, entity: undefined, version: undefined };
+      throw e;
+    }
+    let entity: unknown = body;
+    if (reader.list) {
+      const data = (body as { data?: unknown } | undefined)?.data;
+      const want = reader.selectBy ? params.path?.[reader.selectBy] : undefined;
+      entity =
+        want !== undefined && Array.isArray(data)
+          ? (data as { id?: unknown }[]).find((x) => x?.id === want)
+          : reader.selectBy
+            ? undefined
+            : body;
+    }
+    const version = reader.version?.(body, entity);
+    return { exists: entity !== undefined, body, entity, version };
+  }
+
+  // ------------------------------------------------------------------------------------------ bookkeeping
+
+  private callOptions(job: JobView, step: StepView, stats: CallStats, suffix = '') {
+    return {
+      priority: job.priority,
+      jobId: job.id,
+      idempotencyKey: suffix ? null : step.idempotencyKey,
+      requestIdPrefix: `lkb.${job.id}.${step.stepNo}.${step.attempt0}${suffix ? `.${suffix}${this.seq++}` : ''}`,
+      stats,
+      onError: (err: BridgeLkError) =>
+        this.d.recordLkError(err, { opId: err.opId ?? step.opId, jobId: job.id, stepNo: step.stepNo }),
+    };
+  }
+
+  private seq = 1;
+
+  private succeed(
+    job: JobView,
+    step: StepView,
+    stats: CallStats,
+    value: unknown,
+    verified = false,
+    store = true,
+  ): StepOutcome {
+    const requestIds = [...step.requestIds, ...stats.requestIds];
+    const { summary, artifactId } = store
+      ? this.summarise(job.id, step.stepNo, value, verified)
+      : { summary: pageSummary(value), artifactId: null };
+    this.d.repo.updateStep(job.id, step.stepNo, {
+      status: 'succeeded',
+      attempts: step.attempts + stats.attempts,
+      requestIds,
+      resultSummary: summary,
+      resultArtifactId: artifactId,
+      error: null,
+      maybeSent: false,
+      finishedAt: this.d.now(),
+    });
+    return { kind: 'succeeded', value, requestIds };
+  }
+
+  private fail(job: JobView, step: StepView, stats: CallStats, e: unknown, ambiguous = false): StepOutcome {
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
+    const requestIds = [...latest.requestIds, ...stats.requestIds.filter((r) => !latest.requestIds.includes(r))];
+    const attempts = step.attempts + stats.attempts;
+    if (e instanceof BudgetWaitError) {
+      // Not failed: parked. Keep the key; remember whether the write may have reached LK.
+      this.d.repo.updateStep(job.id, step.stepNo, {
+        status: 'pending',
+        attempts,
+        requestIds,
+        maybeSent: stats.maybeSent || ambiguous,
+      });
+      return { kind: 'budget', retryAtMs: e.retryAtMs, error: e };
+    }
+    const error: JobsError =
+      e instanceof JobsError ? e : e instanceof BridgeLkError ? new LkOperationError(e, ref) : new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), ref, { cause: e });
+    const uncertain = error instanceof UncertainOutcomeError;
+    this.d.repo.updateStep(job.id, step.stepNo, {
+      status: uncertain ? 'uncertain' : 'failed',
+      attempts,
+      requestIds,
+      error: errorToJson(error),
+      maybeSent: stats.maybeSent || ambiguous,
+      finishedAt: this.d.now(),
+    });
+    return { kind: 'failed', error, uncertain };
+  }
+
+  private summarise(
+    jobId: string,
+    stepNo: number,
+    value: unknown,
+    verified: boolean,
+  ): { summary: unknown; artifactId: string | null } {
+    if (value === undefined) return { summary: verified ? { verified: true } : null, artifactId: null };
+    const text = JSON.stringify(value);
+    if (Buffer.byteLength(text) <= this.d.settings.resultSummaryBytes) {
+      return { summary: verified ? { verified: true, value } : value, artifactId: null };
+    }
+    const artifactId = this.d.repo.createArtifact(jobId, stepNo, 'result', text);
+    const v = value as { id?: unknown; version?: unknown; data?: unknown; blocks?: unknown };
+    return {
+      summary: {
+        ...(verified ? { verified: true } : {}),
+        truncated: true,
+        bytes: Buffer.byteLength(text),
+        ...(typeof v.id === 'string' ? { id: v.id } : {}),
+        ...(typeof v.version === 'string' ? { version: v.version } : {}),
+        ...(Array.isArray(v.data) ? { items: v.data.length } : {}),
+        ...(Array.isArray(v.blocks) ? { blocks: v.blocks.length } : {}),
+      },
+      artifactId,
+    };
+  }
+}
+
+/** A list page's summary (the items themselves go to the job's `items` artefact). */
+function pageSummary(value: unknown): unknown {
+  const v = (value ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+  return {
+    items: Array.isArray(v.data) ? v.data.length : 0,
+    hasMore: v.hasMore === true,
+    nextCursor: typeof v.nextCursor === 'string' ? v.nextCursor : null,
+  };
+}
+
+function targetIdOf(op: OperationDef, params: OpParams): string | null {
+  const names = [...op.pathTemplate.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).filter((n) => n !== 'projectId');
+  const last = names[names.length - 1];
+  return last ? (params.path?.[last] ?? null) : null;
+}
+
+export { errorToJson };
