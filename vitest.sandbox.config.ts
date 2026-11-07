@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     include: ['test/sandbox/**/*.test.ts'],
     environment: 'node',
+    disableConsoleIntercept: true,
     testTimeout: 120_000,
   },
 });
