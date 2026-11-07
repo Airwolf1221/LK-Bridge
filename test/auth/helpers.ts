@@ -198,6 +198,8 @@ export async function rpcResult(res: Response): Promise<Record<string, unknown>>
 
 export class Browser {
   readonly cookies = new Map<string, string>();
+  /** Headers sent on every request, e.g. the X-Forwarded-For a reverse proxy would add. */
+  readonly headers: Record<string, string> = {};
 
   readonly base: string;
 
@@ -210,6 +212,7 @@ export class Browser {
 
   async request(url: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
+    for (const [k, v] of Object.entries(this.headers)) if (!headers.has(k)) headers.set(k, v);
     if (this.cookies.size > 0) {
       headers.set('cookie', [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; '));
     }

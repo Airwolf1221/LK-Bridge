@@ -29,7 +29,9 @@ const PNG_1PX =
 
 const echoTool: McpToolProvider<z.ZodObject<{ text: z.ZodString }>> = {
   name: 'echo',
+  title: 'Echo',
   description: 'Echoes text back with a tiny image.',
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   inputSchema: z.object({ text: z.string().max(100) }),
   handler: ({ text }, ctx) => ({
     content: [
@@ -91,6 +93,26 @@ describe('the tool seam (requirement 14)', () => {
       const { tools } = await client.listTools();
       expect(tools.map((t) => t.name).sort()).toEqual(['bridge_info', 'echo', 'explode', 'needs_admin']);
       const echoDef = tools.find((t) => t.name === 'echo');
+      // Title and every annotation reach tools/list (follow-up item E).
+      expect(echoDef?.title).toBe('Echo');
+      expect(echoDef?.annotations).toEqual({
+        title: 'Echo',
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: true,
+      });
+      const infoDef = tools.find((t) => t.name === 'bridge_info');
+      expect(infoDef?.title).toBe('Bridge information');
+      expect(infoDef?.annotations).toEqual({
+        title: 'Bridge information',
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      });
+      // A tool that declares nothing sends no annotations at all.
+      expect(tools.find((t) => t.name === 'explode')?.annotations).toBeUndefined();
       expect(echoDef?.inputSchema).toMatchObject({
         type: 'object',
         properties: { text: { type: 'string' } },
@@ -136,6 +158,23 @@ describe('the tool seam (requirement 14)', () => {
       ToolRegistrationError,
     );
     expect(() => registerTools(server, { tools: [failingTool, failingTool], log })).toThrow(/Duplicate/);
+  });
+
+  it('refuses contradictory or non-boolean annotations', () => {
+    const server: McpServerLike = { registerTool: () => undefined as never };
+    const log = bridge.app.log;
+    expect(() =>
+      registerTools(server, {
+        tools: [{ ...failingTool, annotations: { readOnlyHint: true, destructiveHint: true } }],
+        log,
+      }),
+    ).toThrow(/read-only tool cannot also be destructive/);
+    expect(() =>
+      registerTools(server, {
+        tools: [{ ...failingTool, annotations: { readOnlyHint: 'yes' as unknown as boolean } }],
+        log,
+      }),
+    ).toThrow(/must be a boolean/);
   });
 });
 

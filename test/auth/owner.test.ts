@@ -184,6 +184,55 @@ describe('owner login', () => {
   });
 });
 
+describe('TRUST_PROXY: the login limit keys on the real client address', () => {
+  const limits = { perIp: { limit: 2, windowMs: 60_000 }, global: { limit: 100, windowMs: 60_000 } };
+  const from = (bridge: Awaited<ReturnType<typeof startBridge>>, xff: string) => {
+    const b = new Browser(bridge);
+    b.headers['x-forwarded-for'] = xff;
+    return b;
+  };
+
+  it('uses X-Forwarded-For from the trusted local proxy (the default)', async () => {
+    const bridge = await startBridge({ authOverrides: { loginLimits: limits } });
+    try {
+      const attacker = from(bridge, '203.0.113.5');
+      await attacker.login('', { password: 'wrong' });
+      await attacker.login('', { password: 'wrong' });
+      expect((await attacker.login()).status).toBe(429);
+      // Another real client behind the same proxy is not affected.
+      expect((await from(bridge, '203.0.113.6').login()).status).toBe(200);
+      // A forged left-most entry does not help: the proxy-appended address is used.
+      expect((await from(bridge, '198.51.100.1, 203.0.113.5').login()).status).toBe(429);
+      const failures = bridge.logs
+        .map((l) => JSON.parse(l) as { event?: string; ip?: string })
+        .filter((l) => l.event === 'login.failed');
+      expect(failures.map((l) => l.ip)).toEqual(['203.0.113.5', '203.0.113.5']);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it.each([
+    ['none', 'TRUST_PROXY=none'],
+    ['10.9.8.7', 'a proxy address that is not the peer'],
+  ])('ignores X-Forwarded-For with TRUST_PROXY=%s (%s)', async (trust) => {
+    const bridge = await startBridge({ env: { TRUST_PROXY: trust }, authOverrides: { loginLimits: limits } });
+    try {
+      await from(bridge, '203.0.113.5').login('', { password: 'wrong' });
+      await from(bridge, '203.0.113.6').login('', { password: 'wrong' });
+      // Both failures were counted against the socket address, so a third "client" is limited.
+      expect((await from(bridge, '203.0.113.7').login()).status).toBe(429);
+      const ips = bridge.logs
+        .map((l) => JSON.parse(l) as { event?: string; ip?: string })
+        .filter((l) => l.event === 'login.failed')
+        .map((l) => l.ip);
+      expect(ips).toEqual(['127.0.0.1', '127.0.0.1']);
+    } finally {
+      await bridge.close();
+    }
+  });
+});
+
 describe('consent screen and its POST', () => {
   it('names the client and the scopes, and shows the redirect hostname', async () => {
     const bridge = await startBridge();
