@@ -98,10 +98,29 @@ interface Fault {
   readonly action: FaultAction;
 }
 
+/** A counted request, as handed to an optional state model (`MockLkOptions.respond`). */
+export interface MockRequest {
+  readonly method: string;
+  readonly path: string;
+  readonly query: Record<string, string>;
+  readonly body: unknown;
+  readonly headers: Record<string, string | undefined>;
+}
+
+export interface MockResponse {
+  readonly status: number;
+  readonly body?: unknown;
+}
+
 export interface MockLkOptions {
   readonly clock: Clock;
   readonly apiKey: string;
   readonly limits?: Partial<Record<CountedTier, number>>;
+  /**
+   * Optional state model (chunk 2's job tests): answers each request that passed rate limiting, faults and
+   * idempotency replay, instead of the generic body. Return undefined to fall back to the generic body.
+   */
+  readonly respond?: (req: MockRequest) => MockResponse | undefined;
 }
 
 export class MockLk {
@@ -323,12 +342,26 @@ export class MockLk {
       return;
     }
 
-    const status = method === 'POST' ? 201 : method === 'DELETE' ? 204 : 200;
+    const modelled = this.opts.respond?.({
+      method,
+      path,
+      query: Object.fromEntries(new URLSearchParams(req.url.split('?')[1] ?? '')),
+      body: req.body,
+      headers: Object.fromEntries(Object.keys(req.headers).map((h) => [h, header(h)])),
+    });
+    const status = modelled?.status ?? (method === 'POST' ? 201 : method === 'DELETE' ? 204 : 200);
     const body =
-      method === 'GET' && /\/resources\/?$/.test(path)
-        ? { data: [{ id: 'r1' }], hasMore: false, nextCursor: null }
-        : { id: `id${call.n}`, name: 'mock', ok: true };
-    if (key !== undefined) this.idem.set(key, { status, body });
+      modelled !== undefined
+        ? modelled.status >= 400 && modelled.body === undefined
+          ? { message: 'mock error', code: 'INTERNAL' }
+          : modelled.body
+        : method === 'GET' && /\/resources\/?$/.test(path)
+          ? { data: [{ id: 'r1' }], hasMore: false, nextCursor: null }
+          : { id: `id${call.n}`, name: 'mock', ok: true };
+    if (modelled && modelled.status >= 400) call.outcome = `status-${modelled.status}`;
+    // LK does not store 400/401/403/404 or 5xx responses for idempotency replay.
+    const storable = status < 500 && ![400, 401, 403, 404].includes(status);
+    if (key !== undefined && storable) this.idem.set(key, { status, body });
     if (action?.kind === 'drop-after-commit') {
       call.outcome = 'dropped-after-commit';
       reply.hijack();
