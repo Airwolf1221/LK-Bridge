@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Chunk 2: persistence, job engine, writers, locks, journal and guards
+
+- `src/jobs`: the job engine (`createJobEngine`). Every LK call runs as a persisted step through `lk.call` /
+  `governor.execute` (one request per call, `jobId` passed for fair round-robin). Job kinds `single_op`, `batch_ops`
+  (`stopOnError` or `continue`) and `paginate_all` (one governed call per page, items in a pageable artefact with
+  item, page and size caps). Interface in `src/jobs/README.md`.
+- `engine.run(op, params, { priority, origin })`: single reads inline (not recorded), single writes inline as one-step
+  jobs; queued with `{ jobId, status: 'queued', eta }` when the estimate exceeds 20 s or writes are paused.
+  `engine.wait(jobId, ms)` is bounded at 25 s.
+- Idempotency keys `lkb.{jobId}.{stepNo}.{attempt0}`, reused across retries and restarts. Client ids (cuid2 shape) are
+  minted for every create that accepts one and persisted before the first send.
+- Restart-resume with verify-before-resend for each operation family; `governor.execute` `verify` hooks for 412,
+  `DUPLICATE_ID` and `NOT_FOUND` after ambiguous retries. New step status `uncertain` (job ends `failed` with
+  `uncertain: true`) when an outcome cannot be established without risking a duplicate (ADR 0010).
+- `BudgetWaitError` parks a job in `waiting_budget` with a persisted resume time; resumes automatically, also after a
+  restart. `waiting_lock` while a step waits for its lock.
+- Writer pool (`WRITERS_MAX` 1–8, live and persisted), in-process FIFO locks per document, resource, parent, calendar
+  and asset, with lock-before-slot ordering (no deadlock).
+- Guards (PLAN §4): `If-Match` read immediately before versioned writes (caller versions honoured; 412 is a typed
+  `VersionConflictError` with the current version, never retried); the unsupported-block guard on
+  `replaceDocumentBlocks` / `replaceBlock` (nested included, `allowUnsupportedLoss: true` to override), sharing one read
+  with the version and the journal pre-image; cascade confirmation; member-admin refusal; read-only mode with a
+  persisted runtime override.
+- Write journal with pre-images, `journalLookup(filter)` and `pruneJournal` (30 days or 2 GB). No rollback in v1.
+- Controls: pause all writes (persisted), drain, cancel, pause and resume a job, retry a failed step.
+- Errors table (every failed call with status, LK code, `errors[]`, `requestId`, retryable, classification), grouped by
+  fingerprint with count, first and last seen and a resolved flag. Event emitter and query layer for chunk 5;
+  `recordBudgetSample(snapshot)` for chunk 6's sampler.
+- `src/config/jobs.ts` (`jobsSettingsFrom`, `defaultJobsSettings`), exported from the config index. Migration
+  `0200_jobs_init.sql`: `jobs`, `steps`, `job_artifacts` (+ `job_artifact_items`), `errors`, `budget_samples`,
+  `write_journal`, `runtime_settings`.
+- Per-operation engine metadata for all 89 operations (`src/jobs/op-meta.ts`). The generated registry already carries
+  `risk`, `concurrency` and `versioned` for every operation, so no registry overlay was needed.
+- Test support outside `src/jobs`: chunk 1's mock LK takes an optional `respond` state model (`test/contract/mock-lk.ts`;
+  default behaviour unchanged, and LK's rule that 400/401/403/404 and 5xx are not stored for idempotency replay is now
+  applied); `vitest.config.ts` includes `test/jobs`.
+- Tests: `test/jobs/` (crash-resume with no duplicates for creates, deletes, versioned and key-only writes; guards;
+  locks and slots; controls; budget waits across restarts; job kinds; metadata for all 89 operations).
+- ADR 0010 (verification families, the 23-hour window, `uncertain`, write holds, lock keys).
+
 ### Chunk 4 follow-up: ChatGPT support and review fixes
 
 - ChatGPT is a supported client (OAuth only; ADR 0008). Redirect allowlist adds `https://chatgpt.com/connector_platform_oauth_redirect` and `https://chatgpt.com/connector/oauth/<id>`. `OAUTH_EXTRA_REDIRECT_URIS` adds exact URIs without a code change (validated at start-up; replaces the never-deployed `AUTH_EXTRA_REDIRECT_URIS`). Refused and registered redirect URIs are logged in full. `https://chatgpt.com` joins the default `/mcp` Origin allowlist.

@@ -152,8 +152,9 @@ export class WriteJournal {
   /** Whether a step already has a journal entry (a resumed step does not record a second pre-image). */
   hasEntry(jobId: string, stepNo: number): boolean {
     return (
-      this.db.prepare('SELECT 1 FROM write_journal WHERE job_id = ? AND step_no = ? LIMIT 1').get(jobId, stepNo) !==
-      undefined
+      this.db
+        .prepare('SELECT 1 FROM write_journal WHERE job_id = ? AND step_no = ? LIMIT 1')
+        .get(jobId, stepNo) !== undefined
     );
   }
 
@@ -227,10 +228,13 @@ export function pruneJournal(
   return db.transaction(() => {
     const cutoff = nowMs - retention.retentionDays * 86_400_000;
     const removedByAge = db.prepare('DELETE FROM write_journal WHERE at < ?').run(cutoff).changes;
-    let total = (db.prepare('SELECT COALESCE(SUM(bytes), 0) AS b FROM write_journal').get() as { b: number }).b;
+    let total = (db.prepare('SELECT COALESCE(SUM(bytes), 0) AS b FROM write_journal').get() as { b: number })
+      .b;
     let removedBySize = 0;
     if (total > retention.maxBytes) {
-      const rows = db.prepare('SELECT id, bytes FROM write_journal ORDER BY id').iterate() as IterableIterator<{
+      const rows = db
+        .prepare('SELECT id, bytes FROM write_journal ORDER BY id')
+        .iterate() as IterableIterator<{
         id: number;
         bytes: number;
       }>;

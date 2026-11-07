@@ -74,7 +74,10 @@ export async function harness(): Promise<Harness> {
     let onKilled: () => void = () => {};
     const never = () => new Promise<never>(() => {});
     const transport = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      const w: Wire = { method: (init?.method ?? 'GET').toUpperCase(), url: String(input) };
+      const w: Wire = {
+        method: (init?.method ?? 'GET').toUpperCase(),
+        url: input instanceof Request ? input.url : input.toString(),
+      };
       if (killed) return never();
       sent.push(w);
       for (const h of holds) if (h.match(w)) await h.gate;
@@ -156,6 +159,7 @@ export async function harness(): Promise<Harness> {
       let quiet = 0;
       while (quiet < 3 && performance.now() - start < 2000) {
         await flushMicrotasks();
+        if (done()) return;
         if (h.lk.governor.snapshot().inFlight === 0) quiet++;
         else {
           quiet = 0;

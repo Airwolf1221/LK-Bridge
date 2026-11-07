@@ -44,7 +44,13 @@ export class JobsError extends Error {
 
   /** Plain JSON for the steps table, the error table and MCP results. */
   toJSON(): Record<string, unknown> {
-    return { name: this.name, code: this.code, message: this.message, jobId: this.jobId, stepNo: this.stepNo };
+    return {
+      name: this.name,
+      code: this.code,
+      message: this.message,
+      jobId: this.jobId,
+      stepNo: this.stepNo,
+    };
   }
 }
 
@@ -123,7 +129,10 @@ export class CascadeConfirmationRequiredError extends JobsError {
 export class DrainingError extends JobsError {
   override readonly name = 'DrainingError';
   constructor() {
-    super('DRAINING', 'The bridge is draining (finishing running jobs before a restart) and accepts no new jobs');
+    super(
+      'DRAINING',
+      'The bridge is draining (finishing running jobs before a restart) and accepts no new jobs',
+    );
   }
 }
 

@@ -12,7 +12,12 @@ import type { OperationDef } from '../lk/registry-types.js';
 import { InvalidParamsError } from './errors.js';
 import type { OpParams, PriorityClass } from './types.js';
 
-const LOCAL_CODES = new Set(['GOVERNOR_BYPASS', 'ONE_REQUEST_PER_CALL', 'IF_MATCH_REQUIRED', 'INVALID_REQUEST']);
+const LOCAL_CODES = new Set([
+  'GOVERNOR_BYPASS',
+  'ONE_REQUEST_PER_CALL',
+  'IF_MATCH_REQUIRED',
+  'INVALID_REQUEST',
+]);
 
 export interface CallStats {
   /** Times `run` was invoked (each is one request attempt). */
@@ -34,8 +39,7 @@ export interface CallOptions {
   readonly signal?: AbortSignal | undefined;
   readonly requestIdPrefix: string;
   readonly verify?:
-    | ((ctx: { error: BridgeLkError; signal: AbortSignal }) => Promise<VerifyResult<unknown>>)
-    | undefined;
+    ((ctx: { error: BridgeLkError; signal: AbortSignal }) => Promise<VerifyResult<unknown>>) | undefined;
   readonly stats?: CallStats;
   /** Called with every failure (for the errors table), before it is thrown. */
   readonly onError?: ((error: BridgeLkError) => void) | undefined;

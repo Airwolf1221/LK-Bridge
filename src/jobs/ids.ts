@@ -37,10 +37,7 @@ function base36(seed: Buffer, length: number): string {
 export function mintClientId(length: 8 | 24 = 24): string {
   const first = LETTERS[randomBytes(1)[0]! % 26]!;
   counter = (counter + 1) >>> 0;
-  const hash = createHash('sha512')
-    .update(`${Date.now()}:${counter}:`)
-    .update(randomBytes(32))
-    .digest();
+  const hash = createHash('sha512').update(`${Date.now()}:${counter}:`).update(randomBytes(32)).digest();
   return first + base36(hash, length - 1);
 }
 

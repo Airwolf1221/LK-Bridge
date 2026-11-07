@@ -130,7 +130,11 @@ export interface JobView {
   readonly priority: PriorityClass;
   readonly status: JobStatus;
   readonly onError: OnError;
-  readonly progress: { readonly stepsDone: number; readonly stepsTotal: number; readonly stepsFailed: number };
+  readonly progress: {
+    readonly stepsDone: number;
+    readonly stepsTotal: number;
+    readonly stepsFailed: number;
+  };
   readonly currentStep: number | null;
   readonly resumeAt: number | null;
   readonly waitReason: Record<string, unknown> | null;

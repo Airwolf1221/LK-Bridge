@@ -13,3 +13,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0007](0007-oauth-authorization-server-design.md)  | OAuth authorization server design choices                      | Accepted |
 | [0008](0008-chatgpt-as-a-client.md)                | ChatGPT as a supported client                                  | Accepted |
 | [0009](0009-refresh-token-grace-window.md)         | Refresh-token grace window                                     | Accepted |
+| [0010](0010-job-engine-verification-and-holds.md)  | Job engine verification, `uncertain` steps and write holds     | Accepted |

@@ -60,7 +60,10 @@ export class LkModel {
   constructor(private readonly now: () => number) {}
 
   /** Seeds a resource with its `Main` document. */
-  seedResource(id: string, opts: { parentId?: string; name?: string; blocks?: Block[] } = {}): { resourceId: string; documentId: string } {
+  seedResource(
+    id: string,
+    opts: { parentId?: string; name?: string; blocks?: Block[] } = {},
+  ): { resourceId: string; documentId: string } {
     const docId = `d_${id}`;
     this.resources.set(id, {
       id,
@@ -124,7 +127,7 @@ export class LkModel {
     if (this.resources.has(id)) return err(409, 'DUPLICATE_ID');
     if (typeof body.parentId === 'string' && !this.liveResource(body.parentId)) return err(404, 'NOT_FOUND');
     this.seedResource(id, {
-      name: String(body.name ?? 'Untitled'),
+      name: typeof body.name === 'string' ? body.name : 'Untitled',
       ...(typeof body.parentId === 'string' ? { parentId: body.parentId } : {}),
     });
     this.resources.get(id)!.tags = Array.isArray(body.tags) ? (body.tags as string[]) : [];
@@ -139,7 +142,8 @@ export class LkModel {
 
     // /members
     if (p[0] === 'members') {
-      if (M === 'GET') return { status: 200, body: { data: [...this.members.values()], hasMore: false, nextCursor: null } };
+      if (M === 'GET')
+        return { status: 200, body: { data: [...this.members.values()], hasMore: false, nextCursor: null } };
       if (M === 'POST') {
         const id = serverId('m');
         this.members.set(id, { id, email: body.email });
@@ -162,12 +166,16 @@ export class LkModel {
         const offset = Number(req.query.cursor ?? 0);
         const data = all.slice(offset, offset + limit).map((r) => this.resourceView(r));
         const more = offset + limit < all.length;
-        return { status: 200, body: { data, hasMore: more, nextCursor: more ? String(offset + limit) : null } };
+        return {
+          status: 200,
+          body: { data, hasMore: more, nextCursor: more ? String(offset + limit) : null },
+        };
       }
     }
     if (p.length === 2 && p[1] === 'batch' && M === 'POST') {
       const items = (body.resources ?? []) as Record<string, unknown>[];
-      for (const i of items) if (typeof i.id === 'string' && this.resources.has(i.id)) return err(409, 'DUPLICATE_ID');
+      for (const i of items)
+        if (typeof i.id === 'string' && this.resources.has(i.id)) return err(409, 'DUPLICATE_ID');
       const out = items.map((i) => this.createResource(i).body);
       return { status: 201, body: { resources: out } };
     }
@@ -205,8 +213,8 @@ export class LkModel {
       this.docs.set(id, {
         id,
         resourceId: rid,
-        name: String(body.name ?? 'Doc'),
-        type: String(body.type ?? 'page'),
+        name: typeof body.name === 'string' ? body.name : 'Doc',
+        type: typeof body.type === 'string' ? body.type : 'page',
         version: 1,
         blocks: [],
         lanes: new Map(),
@@ -227,11 +235,18 @@ export class LkModel {
       doc.version++;
     };
     if (p.length === 4) {
-      if (M === 'GET') return { status: 200, body: { id: doc.id, name: doc.name, type: doc.type, rank: 'a', isHidden: false } };
+      if (M === 'GET')
+        return {
+          status: 200,
+          body: { id: doc.id, name: doc.name, type: doc.type, rank: 'a', isHidden: false },
+        };
       if (M === 'PATCH') {
         if (typeof body.name === 'string') doc.name = body.name;
         this.log('updateDocument', did);
-        return { status: 200, body: { id: doc.id, name: doc.name, type: doc.type, rank: 'a', isHidden: false } };
+        return {
+          status: 200,
+          body: { id: doc.id, name: doc.name, type: doc.type, rank: 'a', isHidden: false },
+        };
       }
     }
     const sub = p[4];
@@ -290,7 +305,8 @@ export class LkModel {
         this.log(`create${op}`, id);
         return { status: 201, body: store.get(id) };
       }
-      if (p.length === 5 && M === 'GET') return { status: 200, body: { data: [...store.values()], hasMore: false, nextCursor: null } };
+      if (p.length === 5 && M === 'GET')
+        return { status: 200, body: { data: [...store.values()], hasMore: false, nextCursor: null } };
       const eid = p[5]!;
       const ent = store.get(eid);
       if (!ent) return err(404, 'NOT_FOUND');
@@ -307,7 +323,14 @@ export class LkModel {
       }
     }
     if (sub === 'board' && p.length === 5) {
-      const view = () => ({ schema: { schemaVersion: 2, sequences: {} }, pages: [], shapes: doc.shapes, bindings: [], assets: [], version: version() });
+      const view = () => ({
+        schema: { schemaVersion: 2, sequences: {} },
+        pages: [],
+        shapes: doc.shapes,
+        bindings: [],
+        assets: [],
+        version: version(),
+      });
       if (M === 'GET') return { status: 200, body: view() };
       if (M === 'PUT') {
         if (stale()) return err(412, 'VERSION_MISMATCH');
@@ -321,7 +344,13 @@ export class LkModel {
   }
 
   private blocksView(doc: Doc) {
-    return { id: doc.id, version: `v${doc.version}`, schema: 1, text: '', blocks: structuredClone(doc.blocks) };
+    return {
+      id: doc.id,
+      version: `v${doc.version}`,
+      schema: 1,
+      text: '',
+      blocks: structuredClone(doc.blocks),
+    };
   }
 
   /** Test helper: an edit made "in the LK app" (bumps the version, as any outside change would). */

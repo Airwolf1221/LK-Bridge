@@ -30,7 +30,11 @@ describe('engine.run inline path', () => {
     expect(isClientId(v.result.id)).toBe(true);
     expect(h.model.resources.get(v.result.id)?.name).toBe('Aster');
     const job = e.engine.queries.getJob(v.jobId)!;
-    expect(job).toMatchObject({ kind: 'single_op', status: 'succeeded', progress: { stepsDone: 1, stepsTotal: 1 } });
+    expect(job).toMatchObject({
+      kind: 'single_op',
+      status: 'succeeded',
+      progress: { stepsDone: 1, stepsTotal: 1 },
+    });
     expect(job.steps[0]).toMatchObject({
       status: 'succeeded',
       clientIds: [v.result.id],
@@ -44,14 +48,19 @@ describe('engine.run inline path', () => {
 
   it('reads the version immediately before a versioned write and sends it as If-Match', async () => {
     h = await harness();
-    const { resourceId, documentId } = h.model.seedResource('r1', { blocks: [{ id: 'p1', kind: 'paragraph', content: [] }] });
+    const { resourceId, documentId } = h.model.seedResource('r1', {
+      blocks: [{ id: 'p1', kind: 'paragraph', content: [] }],
+    });
     const e = h.newEngine();
     const r = await settle(
       h,
       e,
       e.engine.run(
         'replaceDocumentBlocks',
-        { path: { resourceId, documentId }, body: { blocks: [{ kind: 'paragraph', content: [{ text: 'hi' }] }] } },
+        {
+          path: { resourceId, documentId },
+          body: { blocks: [{ kind: 'paragraph', content: [{ text: 'hi' }] }] },
+        },
         { origin },
       ),
     );
@@ -73,10 +82,15 @@ describe('engine.run inline path', () => {
     const r = await settle(
       h,
       e,
-      e.engine.run('replaceDocumentBlocks', { path: { resourceId, documentId }, ifMatch: 'v1', body: { blocks: [] } }, { origin }),
+      e.engine.run(
+        'replaceDocumentBlocks',
+        { path: { resourceId, documentId }, ifMatch: 'v1', body: { blocks: [] } },
+        { origin },
+      ),
     );
     expect(r.error).toBeInstanceOf(VersionConflictError);
-    expect(r.error).toMatchObject({ sentVersion: 'v1', currentVersion: 'v2', jobId: expect.any(String) });
+    expect(r.error).toMatchObject({ sentVersion: 'v1', currentVersion: 'v2' });
+    expect(typeof (r.error as VersionConflictError).jobId).toBe('string');
     expect(seen(h.mock, 'PUT', /\/blocks$/)).toHaveLength(0);
 
     // A non-guarded versioned write (updateBlock): the stale version reaches LK, 412 comes back typed, once.
@@ -91,6 +105,7 @@ describe('engine.run inline path', () => {
       ),
     );
     expect(r2.error).toBeInstanceOf(VersionConflictError);
+    expect(r2.error).toMatchObject({ sentVersion: 'v2', currentVersion: 'v3' });
     expect(seen(h.mock, 'PATCH', /\/blocks\/x$/)).toHaveLength(1);
   });
 
@@ -106,7 +121,12 @@ describe('engine.run inline path', () => {
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({ opId: 'getResource', code: 'NOT_FOUND', count: 3, resolved: false });
     const one = e.engine.queries.listErrors({ fingerprint: groups[0]!.fingerprint })[0]!;
-    expect(one).toMatchObject({ status: 404, classification: 'user_fixable', retryable: false, requestId: expect.any(String) });
+    expect(one).toMatchObject({
+      status: 404,
+      classification: 'user_fixable',
+      retryable: false,
+    });
+    expect(typeof one.requestId).toBe('string');
     expect(e.engine.queries.resolveErrorGroup(groups[0]!.fingerprint)).toBe(3);
     expect(e.engine.queries.listErrorGroups({ resolved: false })).toHaveLength(0);
     await settle(h, e, e.engine.run('getResource', { path: { resourceId: 'nope' } }, { origin }));

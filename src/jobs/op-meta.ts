@@ -53,7 +53,8 @@ export interface ReaderDef {
 }
 
 const bodyVersion = (body: unknown) => str((body as { version?: unknown } | undefined)?.version);
-const entityVersion = (_: unknown, entity: unknown) => str((entity as { version?: unknown } | undefined)?.version);
+const entityVersion = (_: unknown, entity: unknown) =>
+  str((entity as { version?: unknown } | undefined)?.version);
 
 function str(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
@@ -100,8 +101,14 @@ export interface OpMeta {
 const read: OpMeta = { verify: 'read' };
 const key = (reader?: ReaderId): OpMeta => (reader ? { verify: 'key', reader } : { verify: 'key' });
 const patch = (reader: ReaderId, journal?: 'pre-image'): OpMeta =>
-  journal ? { verify: 'state', compare: 'patch', reader, journal } : { verify: 'state', compare: 'patch', reader };
-const gone = (reader: ReaderId, journal: 'pre-image' | 'ids'): OpMeta => ({ verify: 'gone', reader, journal });
+  journal
+    ? { verify: 'state', compare: 'patch', reader, journal }
+    : { verify: 'state', compare: 'patch', reader };
+const gone = (reader: ReaderId, journal: 'pre-image' | 'ids'): OpMeta => ({
+  verify: 'gone',
+  reader,
+  journal,
+});
 const created = (reader: ReaderId, clientId: OpMeta['clientId'] = 'body.id'): OpMeta => ({
   verify: 'client-id',
   reader,
@@ -155,7 +162,13 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   // Blocks
   getBlock: read,
   insertBlock: key('docBlocks'),
-  replaceBlock: { verify: 'state', compare: 'replace', reader: 'block', journal: 'pre-image', guard: 'block' },
+  replaceBlock: {
+    verify: 'state',
+    compare: 'replace',
+    reader: 'block',
+    journal: 'pre-image',
+    guard: 'block',
+  },
   updateBlock: patch('block'),
   deleteBlock: gone('block', 'pre-image'),
   moveBlock: key('block'),

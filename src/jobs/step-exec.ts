@@ -42,7 +42,10 @@ export interface StepExecDeps {
   readonly writers: WriterPool;
   readonly settings: JobsSettings;
   readonly now: () => number;
-  readonly recordLkError: (error: BridgeLkError, ref: { opId: string; jobId?: string; stepNo?: number }) => void;
+  readonly recordLkError: (
+    error: BridgeLkError,
+    ref: { opId: string; jobId?: string; stepNo?: number },
+  ) => void;
   readonly setJobWaiting: (jobId: string, waiting: 'lock' | null, detail?: Record<string, unknown>) => void;
   /** Null when a new write may start now; otherwise why not. */
   readonly writeHold: () => 'writes_paused' | 'read_only' | null;
@@ -85,10 +88,14 @@ function createParent(op: OperationDef, params: OpParams): string | null {
   if (op.operationId !== 'createManyResources') {
     return typeof body.parentId === 'string' && body.parentId ? body.parentId : '@root';
   }
-  const items = Array.isArray(body.resources) ? (body.resources as { id?: unknown; parentId?: unknown }[]) : [];
+  const items = Array.isArray(body.resources)
+    ? (body.resources as { id?: unknown; parentId?: unknown }[])
+    : [];
   const own = new Set(items.map((i) => i.id).filter((x): x is string => typeof x === 'string'));
   const outside = new Set(
-    items.map((i) => (typeof i.parentId === 'string' && i.parentId ? i.parentId : '@root')).filter((p) => !own.has(p)),
+    items
+      .map((i) => (typeof i.parentId === 'string' && i.parentId ? i.parentId : '@root'))
+      .filter((p) => !own.has(p)),
   );
   return outside.size === 1 ? [...outside][0]! : null;
 }
@@ -98,7 +105,11 @@ function str(v: unknown): string | undefined {
 }
 
 function isDeleted(entity: unknown): boolean {
-  return typeof entity === 'object' && entity !== null && typeof (entity as { deletedAt?: unknown }).deletedAt === 'string';
+  return (
+    typeof entity === 'object' &&
+    entity !== null &&
+    typeof (entity as { deletedAt?: unknown }).deletedAt === 'string'
+  );
 }
 
 export class StepExecutor {
@@ -198,8 +209,12 @@ export class StepExecutor {
       } catch (e) {
         return this.fail(job, step, stats, e);
       }
-      if (r.kind === 'applied') return this.succeed(job, step, stats, r.value, true);
+      if (r.kind === 'applied') {
+        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+        return this.succeed(job, step, stats, r.value, true);
+      }
       if (r.kind === 'uncertain') {
+        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'unknown');
         return this.fail(job, step, stats, new UncertainOutcomeError(op.operationId, r.reason, ref));
       }
       forcedIfMatch = r.ifMatch;
@@ -218,7 +233,9 @@ export class StepExecutor {
           (meta.journal === 'pre-image' && !journalled));
 
       // ONE read serves the If-Match version, the unsupported-block guard and the journal pre-image.
-      const current = needRead ? await this.readCurrent(job, step, op, meta, params, step.clientIds) : undefined;
+      const current = needRead
+        ? await this.readCurrent(job, step, op, meta, params, step.clientIds)
+        : undefined;
 
       let ifMatch: string | undefined;
       if (op.versioned) {
@@ -232,8 +249,10 @@ export class StepExecutor {
       }
 
       if (meta.guard && current) {
-        const incoming = meta.guard === 'document' ? (params.body as { blocks?: unknown })?.blocks : params.body;
-        const existing = meta.guard === 'document' ? (current.body as { blocks?: unknown })?.blocks : current.body;
+        const incoming =
+          meta.guard === 'document' ? (params.body as { blocks?: unknown })?.blocks : params.body;
+        const existing =
+          meta.guard === 'document' ? (current.body as { blocks?: unknown })?.blocks : current.body;
         assertNoUnsupportedLoss(op.operationId, existing, incoming, step.options, ref);
       }
 
@@ -278,15 +297,30 @@ export class StepExecutor {
           this.d.journal.setOutcomeForStep(job.id, step.stepNo, outcome);
         }
         if (e instanceof BridgeLkError && (e.status === 412 || e.code === 'VERSION_MISMATCH')) {
-          throw new VersionConflictError(op.operationId, ifMatch ?? null, null, ref, e);
+          // PLAN §4 rule 1: re-read, and return a clear conflict with the current version. Never retried.
+          const now = meta.reader
+            ? await this.readCurrent(job, step, op, meta, params, step.clientIds).catch(() => undefined)
+            : undefined;
+          throw new VersionConflictError(op.operationId, ifMatch ?? null, now?.version ?? null, ref, e);
         }
         // A transient failure after the write may have applied: find out now rather than leave it ambiguous.
-        if (stats.maybeSent && e instanceof BridgeLkError && !(e instanceof BudgetWaitError) && e.classification === 'upstream') {
+        if (
+          stats.maybeSent &&
+          e instanceof BridgeLkError &&
+          !(e instanceof BudgetWaitError) &&
+          e.classification === 'upstream'
+        ) {
           const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
           const r = await this.recover(job, { ...latest, maybeSent: true }, op, meta, params).catch(
-            (): Recovery => ({ kind: 'uncertain', reason: 'the write may have applied and could not be re-read' }),
+            (): Recovery => ({
+              kind: 'uncertain',
+              reason: 'the write may have applied and could not be re-read',
+            }),
           );
-          if (r.kind === 'applied') return this.succeed(job, step, stats, r.value, true);
+          if (r.kind === 'applied') {
+            if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+            return this.succeed(job, step, stats, r.value, true);
+          }
           if (r.kind === 'uncertain') throw new UncertainOutcomeError(op.operationId, r.reason, ref);
         }
         throw e;
@@ -318,7 +352,9 @@ export class StepExecutor {
     }
     if ((error.status === 412 || error.code === 'VERSION_MISMATCH') && meta.verify === 'state') {
       const cur = await this.readCurrent(job, step, op, meta, params, step.clientIds);
-      return cur.exists && this.matches(meta, params, cur) ? { ok: true, value: cur.entity ?? cur.body } : { ok: false };
+      return cur.exists && this.matches(meta, params, cur)
+        ? { ok: true, value: cur.entity ?? cur.body }
+        : { ok: false };
     }
     return { ok: false };
   }
@@ -332,7 +368,8 @@ export class StepExecutor {
     params: OpParams,
   ): Promise<Recovery> {
     if (step.firstSentAt === null && !step.maybeSent) return { kind: 'not-applied' };
-    const withinWindow = step.firstSentAt !== null && this.d.now() - step.firstSentAt <= this.d.settings.idempotencyWindowMs;
+    const withinWindow =
+      step.firstSentAt !== null && this.d.now() - step.firstSentAt <= this.d.settings.idempotencyWindowMs;
     const ifMatch = step.ifMatch ?? undefined;
     switch (meta.verify) {
       case 'read':
@@ -350,7 +387,8 @@ export class StepExecutor {
       }
       case 'state': {
         const cur = await this.readCurrent(job, step, op, meta, params, step.clientIds);
-        if (cur.exists && this.matches(meta, params, cur)) return { kind: 'applied', value: cur.entity ?? cur.body };
+        if (cur.exists && this.matches(meta, params, cur))
+          return { kind: 'applied', value: cur.entity ?? cur.body };
         if (!op.versioned) return { kind: 'not-applied' };
         if (ifMatch && cur.version === ifMatch) return { kind: 'not-applied', ifMatch };
         if (op.method === 'POST' && withinWindow) return { kind: 'not-applied', ifMatch, ambiguous: true };
@@ -387,7 +425,8 @@ export class StepExecutor {
     if (!first.exists) return { kind: 'not-applied' };
     if (ids.length === 1) return { kind: 'applied', value: first.body };
     const last = await this.readCurrent(job, step, op, meta, params, [ids[ids.length - 1]!]);
-    if (last.exists) return { kind: 'applied', value: { resources: ids.map((id) => ({ id })), verified: true } };
+    if (last.exists)
+      return { kind: 'applied', value: { resources: ids.map((id) => ({ id })), verified: true } };
     return { kind: 'uncertain', reason: 'only part of the batch exists at LK' };
   }
 
@@ -421,8 +460,20 @@ export class StepExecutor {
       if (v !== undefined) path[name] = v;
     }
     let body: unknown;
+    const opts = this.callOptions(job, step, newCallStats(), 'r');
     try {
-      body = await callOp(this.d.lk, readOp, { path }, this.callOptions(job, step, newCallStats(), 'r'));
+      // A 404 here is an answer ("not there"), not a failure: it is not recorded in the errors table.
+      body = await callOp(
+        this.d.lk,
+        readOp,
+        { path },
+        {
+          ...opts,
+          onError: (err: BridgeLkError) => {
+            if (!isNotFound(err)) opts.onError(err);
+          },
+        },
+      );
     } catch (e) {
       if (isNotFound(e)) return { exists: false, body: undefined, entity: undefined, version: undefined };
       throw e;
@@ -486,7 +537,10 @@ export class StepExecutor {
   private fail(job: JobView, step: StepView, stats: CallStats, e: unknown, ambiguous = false): StepOutcome {
     const ref = { jobId: job.id, stepNo: step.stepNo };
     const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
-    const requestIds = [...latest.requestIds, ...stats.requestIds.filter((r) => !latest.requestIds.includes(r))];
+    const requestIds = [
+      ...latest.requestIds,
+      ...stats.requestIds.filter((r) => !latest.requestIds.includes(r)),
+    ];
     const attempts = step.attempts + stats.attempts;
     if (e instanceof BudgetWaitError) {
       // Not failed: parked. Keep the key; remember whether the write may have reached LK.
@@ -499,7 +553,11 @@ export class StepExecutor {
       return { kind: 'budget', retryAtMs: e.retryAtMs, error: e };
     }
     const error: JobsError =
-      e instanceof JobsError ? e : e instanceof BridgeLkError ? new LkOperationError(e, ref) : new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), ref, { cause: e });
+      e instanceof JobsError
+        ? e
+        : e instanceof BridgeLkError
+          ? new LkOperationError(e, ref)
+          : new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), ref, { cause: e });
     const uncertain = error instanceof UncertainOutcomeError;
     this.d.repo.updateStep(job.id, step.stepNo, {
       status: uncertain ? 'uncertain' : 'failed',
@@ -551,7 +609,9 @@ function pageSummary(value: unknown): unknown {
 }
 
 function targetIdOf(op: OperationDef, params: OpParams): string | null {
-  const names = [...op.pathTemplate.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).filter((n) => n !== 'projectId');
+  const names = [...op.pathTemplate.matchAll(/\{(\w+)\}/g)]
+    .map((m) => m[1]!)
+    .filter((n) => n !== 'projectId');
   const last = names[names.length - 1];
   return last ? (params.path?.[last] ?? null) : null;
 }

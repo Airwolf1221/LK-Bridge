@@ -270,7 +270,8 @@ export class JobEngine {
       });
       return { status: 'succeeded', jobId: null, result, requestIds: stats.requestIds };
     } catch (e) {
-      if (e instanceof BudgetWaitError) throw new BudgetExhaustedError(def.operationId, e.tier, e.retryAtMs, e);
+      if (e instanceof BudgetWaitError)
+        throw new BudgetExhaustedError(def.operationId, e.tier, e.retryAtMs, e);
       if (e instanceof BridgeLkError) throw new LkOperationError(e);
       if (e instanceof JobsError) throw e;
       throw new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), {}, { cause: e });
@@ -286,7 +287,8 @@ export class JobEngine {
   }
 
   private submitBatch(req: BatchSubmit): SubmitResult {
-    if (req.steps.length === 0) throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
+    if (req.steps.length === 0)
+      throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
     const guard = this.guardContext();
     const prepared = req.steps.map((s: StepSpec, i) => {
       const params = s.params ?? {};
@@ -322,7 +324,9 @@ export class JobEngine {
     const params = req.params ?? {};
     const def = this.validate(req.op, params);
     if (!def.paged || def.kind !== 'read') {
-      throw new InvalidParamsError(req.op, [{ path: 'op', message: 'paginate_all needs a paged read operation' }]);
+      throw new InvalidParamsError(req.op, [
+        { path: 'op', message: 'paginate_all needs a paged read operation' },
+      ]);
     }
     const caps = this.settings.paginate;
     const query = { ...params.query };
@@ -348,7 +352,11 @@ export class JobEngine {
     this.repo.updateJob(job.id, { result: { artifactId, items: 0, pages: 0, truncated: false } });
     this.emitJob(job.id, 'updated');
     this.pump();
-    return { jobId: job.id, status: 'queued', eta: this.clock.now() + this.estimateFor([{ def, params }], priority).wallClockMs };
+    return {
+      jobId: job.id,
+      status: 'queued',
+      eta: this.clock.now() + this.estimateFor([{ def, params }], priority).wallClockMs,
+    };
   }
 
   /** Bounded wait (at most `maxWaitMs`, 25 s) for a job to finish. Resolves with the job as it then stands. */
@@ -421,7 +429,8 @@ export class JobEngine {
     /** Pauses a job after its in-flight step. */
     pauseJob: (jobId: string): JobView => {
       const job = this.requireJob(jobId);
-      if (TERMINAL_JOB_STATUSES.has(job.status)) throw new InvalidControlError(`Job ${jobId} has finished`, { jobId });
+      if (TERMINAL_JOB_STATUSES.has(job.status))
+        throw new InvalidControlError(`Job ${jobId} has finished`, { jobId });
       if (this.active.has(jobId)) {
         this.repo.updateJob(jobId, { pauseRequested: true });
         this.active.get(jobId)!.current.abort(new CancelledError({ jobId }));
@@ -444,10 +453,15 @@ export class JobEngine {
       return this.emitJob(jobId, 'updated');
     },
     /**
-     * Retries a failed (or uncertain) step as new work: `attempt0` goes up, so the idempotency key is new; client ids
-     * stay, so a create that did apply is recognised (DUPLICATE_ID → verify). The job continues from that step.
+     * Retries a failed (or uncertain) step; the job continues from it.
+     * - A definite failure (LK refused it) is re-run as new work: `attempt0` goes up, so the idempotency key is new
+     *   (LK stores some refusals, such as 409, under the old key). Client ids stay, so a create that did apply is
+     *   recognised (DUPLICATE_ID, then verify).
+     * - A failure that may have applied (`maybeSent`, or `uncertain`) keeps its key, version and first-send time, so
+     *   it goes through verify-before-resend again and can never duplicate.
+     * - `force: true` (a person checked LK and wants it sent again) re-runs even those as new work.
      */
-    retryStep: (jobId: string, stepNo: number): JobView => {
+    retryStep: (jobId: string, stepNo: number, opts: { readonly force?: boolean } = {}): JobView => {
       const job = this.requireJob(jobId);
       if (this.active.has(jobId) || !TERMINAL_JOB_STATUSES.has(job.status) || job.status === 'cancelled') {
         throw new InvalidControlError(`Job ${jobId} must have failed to retry a step`, { jobId, stepNo });
@@ -457,17 +471,27 @@ export class JobEngine {
         throw new InvalidControlError(`Step ${stepNo} of ${jobId} has not failed`, { jobId, stepNo });
       }
       const def = getOperation(step.opId)!;
-      const attempt0 = step.attempt0 + 1;
-      this.repo.updateStep(jobId, stepNo, {
-        status: 'pending',
-        attempt0,
-        idempotencyKey: def.method === 'POST' ? idempotencyKeyFor(jobId, stepNo, attempt0) : null,
-        error: null,
-        maybeSent: false,
-        firstSentAt: null,
-        ifMatch: null,
-        finishedAt: null,
-      });
+      const ambiguous = step.maybeSent || step.status === 'uncertain';
+      if (ambiguous && opts.force !== true) {
+        this.repo.updateStep(jobId, stepNo, {
+          status: 'pending',
+          maybeSent: true,
+          error: null,
+          finishedAt: null,
+        });
+      } else {
+        const attempt0 = step.attempt0 + 1;
+        this.repo.updateStep(jobId, stepNo, {
+          status: 'pending',
+          attempt0,
+          idempotencyKey: def.method === 'POST' ? idempotencyKeyFor(jobId, stepNo, attempt0) : null,
+          error: null,
+          maybeSent: false,
+          firstSentAt: null,
+          ifMatch: null,
+          finishedAt: null,
+        });
+      }
       this.refreshProgress(jobId);
       const steps = this.repo.steps(jobId);
       this.repo.updateJob(jobId, {
@@ -538,7 +562,11 @@ export class JobEngine {
       .catch((e: unknown): RunnerResult => {
         this.log.error({ err: e, jobId }, 'job runner failed');
         try {
-          this.repo.updateJob(jobId, { status: 'failed', lastError: errorToJson(e), finishedAt: this.clock.now() });
+          this.repo.updateJob(jobId, {
+            status: 'failed',
+            lastError: errorToJson(e),
+            finishedAt: this.clock.now(),
+          });
           this.emitJob(jobId, 'updated');
         } catch {
           // The database may be gone (shutdown); the job is recovered on the next start.
@@ -562,7 +590,7 @@ export class JobEngine {
       resumeAt: null,
       startedAt: job.startedAt ?? this.clock.now(),
     });
-    this.emitJob(jobId, job.status === 'running' ? 'updated' : 'updated');
+    this.emitJob(jobId, 'updated');
     let last: StepOutcome | undefined;
     for (;;) {
       job = this.requireJob(jobId);
@@ -626,7 +654,11 @@ export class JobEngine {
           this.scheduleResume(jobId, outcome.retryAtMs);
           return { last };
         case 'held':
-          this.repo.updateJob(jobId, { status: 'queued', waitReason: { held: outcome.reason }, currentStep: null });
+          this.repo.updateJob(jobId, {
+            status: 'queued',
+            waitReason: { held: outcome.reason },
+            currentStep: null,
+          });
           this.emitJob(jobId, 'updated');
           return { last };
         case 'aborted':
@@ -684,7 +716,14 @@ export class JobEngine {
       this.repo.appendStep(job.id, this.prepare(def, next, {}).step);
     }
     this.repo.updateJob(job.id, {
-      result: { artifactId, items: totals.itemCount, bytes: totals.bytes, pages: stepNo, truncated: truncated !== null, ...(truncated ? { truncatedReason: truncated } : {}) },
+      result: {
+        artifactId,
+        items: totals.itemCount,
+        bytes: totals.bytes,
+        pages: stepNo,
+        truncated: truncated !== null,
+        ...(truncated ? { truncatedReason: truncated } : {}),
+      },
     });
   }
 
@@ -795,7 +834,9 @@ export class JobEngine {
       const body = { ...(params.body as Record<string, unknown> | undefined) };
       const supplied = body.id;
       if (supplied !== undefined && !isClientId(supplied)) {
-        throw new InvalidParamsError(def.operationId, [{ path: 'body.id', message: 'Must be a cuid2 id (8 or 24 chars)' }]);
+        throw new InvalidParamsError(def.operationId, [
+          { path: 'body.id', message: 'Must be a cuid2 id (8 or 24 chars)' },
+        ]);
       }
       body.id = supplied ?? mintClientId();
       clientIds.push(body.id as string);
@@ -847,7 +888,10 @@ export class JobEngine {
     return job;
   }
 
-  private estimateFor(items: readonly { def: OperationDef; params: OpParams | undefined }[], priority: PriorityClass) {
+  private estimateFor(
+    items: readonly { def: OperationDef; params: OpParams | undefined }[],
+    priority: PriorityClass,
+  ) {
     let reads = 0;
     let writes = 0;
     let createManyItems = 0;

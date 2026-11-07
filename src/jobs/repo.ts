@@ -436,12 +436,15 @@ export class JobsRepo {
   }
 
   jobOptions(id: string): Record<string, unknown> {
-    const r = this.db.prepare('SELECT options FROM jobs WHERE id = ?').get(id) as { options: string | null } | undefined;
+    const r = this.db.prepare('SELECT options FROM jobs WHERE id = ?').get(id) as
+      { options: string | null } | undefined;
     return parse<Record<string, unknown>>(r?.options, {});
   }
 
   setJobOptions(id: string, options: Record<string, unknown>): void {
-    this.db.prepare('UPDATE jobs SET options = ?, updated_at = ? WHERE id = ? ').run(JSON.stringify(options), this.now(), id);
+    this.db
+      .prepare('UPDATE jobs SET options = ?, updated_at = ? WHERE id = ? ')
+      .run(JSON.stringify(options), this.now(), id);
   }
 
   updateJob(id: string, p: JobPatch): JobView | undefined {
@@ -474,7 +477,9 @@ export class JobsRepo {
   queuedJobs(limit: number): JobView[] {
     return (
       this.db
-        .prepare(`SELECT * FROM jobs WHERE status = 'queued' ORDER BY ${PRIORITY_ORDER}, created_at, id LIMIT ?`)
+        .prepare(
+          `SELECT * FROM jobs WHERE status = 'queued' ORDER BY ${PRIORITY_ORDER}, created_at, rowid LIMIT ?`,
+        )
         .all(limit) as JobRow[]
     ).map(toJob);
   }
@@ -483,7 +488,7 @@ export class JobsRepo {
     const marks = statuses.map(() => '?').join(', ');
     return (
       this.db
-        .prepare(`SELECT * FROM jobs WHERE status IN (${marks}) ORDER BY created_at, id`)
+        .prepare(`SELECT * FROM jobs WHERE status IN (${marks}) ORDER BY created_at, rowid`)
         .all(...statuses) as JobRow[]
     ).map(toJob);
   }
@@ -509,8 +514,7 @@ export class JobsRepo {
 
   step(jobId: string, stepNo: number): StepView | undefined {
     const r = this.db.prepare('SELECT * FROM steps WHERE job_id = ? AND step_no = ?').get(jobId, stepNo) as
-      | StepRow
-      | undefined;
+      StepRow | undefined;
     return r ? toStep(r) : undefined;
   }
 
@@ -551,7 +555,9 @@ export class JobsRepo {
     if (p.startedAt !== undefined) add('started_at', p.startedAt);
     if (p.finishedAt !== undefined) add('finished_at', p.finishedAt);
     if (sets.length === 0) return this.step(jobId, stepNo);
-    this.db.prepare(`UPDATE steps SET ${sets.join(', ')} WHERE job_id = ? AND step_no = ?`).run(...vals, jobId, stepNo);
+    this.db
+      .prepare(`UPDATE steps SET ${sets.join(', ')} WHERE job_id = ? AND step_no = ?`)
+      .run(...vals, jobId, stepNo);
     return this.step(jobId, stepNo);
   }
 
@@ -569,8 +575,7 @@ export class JobsRepo {
     if (step.params) return step.params;
     if (step.paramsArtifactId) {
       const a = this.db.prepare('SELECT data FROM job_artifacts WHERE id = ?').get(step.paramsArtifactId) as
-        | { data: string | null }
-        | undefined;
+        { data: string | null } | undefined;
       return parse<OpParams>(a?.data, {});
     }
     return {};
@@ -598,11 +603,15 @@ export class JobsRepo {
   /** Appends list items to an `items` artefact. Returns the new totals. */
   appendItems(artifactId: string, items: readonly unknown[]): { itemCount: number; bytes: number } {
     return this.db.transaction(() => {
-      const a = this.db.prepare('SELECT item_count, bytes FROM job_artifacts WHERE id = ?').get(artifactId) as {
+      const a = this.db
+        .prepare('SELECT item_count, bytes FROM job_artifacts WHERE id = ?')
+        .get(artifactId) as {
         item_count: number;
         bytes: number;
       };
-      const insert = this.db.prepare('INSERT INTO job_artifact_items (artifact_id, idx, data) VALUES (?, ?, ?)');
+      const insert = this.db.prepare(
+        'INSERT INTO job_artifact_items (artifact_id, idx, data) VALUES (?, ?, ?)',
+      );
       let bytes = a.bytes;
       let idx = a.item_count;
       for (const item of items) {
@@ -685,8 +694,7 @@ export class JobsRepo {
 
   getSetting<T>(key: string): T | undefined {
     const r = this.db.prepare('SELECT value FROM runtime_settings WHERE key = ?').get(key) as
-      | { value: string }
-      | undefined;
+      { value: string } | undefined;
     return r ? parse<T | undefined>(r.value, undefined) : undefined;
   }
 
@@ -753,18 +761,20 @@ export function createJobQueries(db: Db) {
         vals.push(filter.before);
       }
       const sql = `SELECT * FROM jobs ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-        ORDER BY created_at DESC, id DESC LIMIT ?`;
+        ORDER BY created_at DESC, rowid DESC LIMIT ?`;
       return (db.prepare(sql).all(...vals, Math.min(filter.limit ?? 50, 500)) as JobRow[]).map(toJob);
     },
 
     getJob(id: string): JobWithSteps | undefined {
       const r = db.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as JobRow | undefined;
       if (!r) return undefined;
-      const steps = (db.prepare('SELECT * FROM steps WHERE job_id = ? ORDER BY step_no').all(id) as StepRow[]).map(
-        toStep,
-      );
+      const steps = (
+        db.prepare('SELECT * FROM steps WHERE job_id = ? ORDER BY step_no').all(id) as StepRow[]
+      ).map(toStep);
       const artifacts = (
-        db.prepare('SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at, id').all(id) as ArtifactRow[]
+        db
+          .prepare('SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at, id')
+          .all(id) as ArtifactRow[]
       ).map(toArtifact);
       return { ...toJob(r), steps, artifacts };
     },
@@ -781,7 +791,9 @@ export function createJobQueries(db: Db) {
       const offset = Math.max(0, page.offset ?? 0);
       const limit = Math.min(Math.max(1, page.limit ?? 100), 1000);
       const rows = db
-        .prepare('SELECT data FROM job_artifact_items WHERE artifact_id = ? AND idx >= ? ORDER BY idx LIMIT ?')
+        .prepare(
+          'SELECT data FROM job_artifact_items WHERE artifact_id = ? AND idx >= ? ORDER BY idx LIMIT ?',
+        )
         .all(id, offset, limit) as { data: string }[];
       const items = rows.map((x) => parse<unknown>(x.data, null));
       const next = offset + items.length;
@@ -867,7 +879,11 @@ export function createJobQueries(db: Db) {
     listBudgetSamples(range: { since?: number; until?: number; limit?: number } = {}): BudgetSampleView[] {
       const rows = db
         .prepare('SELECT at, data FROM budget_samples WHERE at >= ? AND at <= ? ORDER BY at LIMIT ?')
-        .all(range.since ?? 0, range.until ?? Number.MAX_SAFE_INTEGER, Math.min(range.limit ?? 10_000, 50_000)) as {
+        .all(
+          range.since ?? 0,
+          range.until ?? Number.MAX_SAFE_INTEGER,
+          Math.min(range.limit ?? 10_000, 50_000),
+        ) as {
         at: number;
         data: string;
       }[];
@@ -882,7 +898,12 @@ export function createJobQueries(db: Db) {
           updated_at: number;
           updated_by: string | null;
         }[]
-      ).map((r) => ({ key: r.key, value: parse(r.value, null), updatedAt: r.updated_at, updatedBy: r.updated_by }));
+      ).map((r) => ({
+        key: r.key,
+        value: parse(r.value, null),
+        updatedAt: r.updated_at,
+        updatedBy: r.updated_by,
+      }));
     },
   };
 }
