@@ -13,6 +13,9 @@ export interface JournalEntryInput {
   readonly jobId?: string | undefined;
   readonly stepNo?: number | undefined;
   readonly opId: string;
+  readonly principalId?: string | undefined;
+  readonly profile?: string | undefined;
+  readonly approvedBy?: string | null | undefined;
   readonly risk: string;
   readonly targetKind: string;
   readonly targetId?: string | null | undefined;
@@ -31,6 +34,9 @@ export interface JournalEntry {
   readonly jobId: string | null;
   readonly stepNo: number | null;
   readonly opId: string;
+  readonly principalId: string;
+  readonly profile: string;
+  readonly approvedBy: string | null;
   readonly risk: string;
   readonly targetKind: string;
   readonly targetId: string | null;
@@ -50,6 +56,8 @@ export interface JournalFilter {
   readonly documentId?: string;
   readonly targetId?: string;
   readonly opId?: string;
+  readonly principalId?: string;
+  readonly profile?: string;
   readonly since?: number;
   readonly until?: number;
   readonly limit?: number;
@@ -71,6 +79,9 @@ interface Row {
   job_id: string | null;
   step_no: number | null;
   op_id: string;
+  principal_id: string;
+  profile: string;
+  approved_by: string | null;
   risk: string;
   target_kind: string;
   target_id: string | null;
@@ -113,15 +124,18 @@ export class WriteJournal {
     const bytes = Buffer.byteLength(pre ?? '') + Buffer.byteLength(params ?? '');
     const info = this.db
       .prepare(
-        `INSERT INTO write_journal (at, job_id, step_no, op_id, risk, target_kind, target_id, resource_id,
-           document_id, version, params, pre_image, bytes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO write_journal (at, job_id, step_no, op_id, principal_id, profile, approved_by, risk,
+           target_kind, target_id, resource_id, document_id, version, params, pre_image, bytes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         this.now(),
         e.jobId ?? null,
         e.stepNo ?? null,
         e.opId,
+        e.principalId ?? 'system',
+        e.profile ?? 'system',
+        e.approvedBy ?? null,
         e.risk,
         e.targetKind,
         e.targetId ?? null,
@@ -180,6 +194,8 @@ export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[
   if (filter.documentId !== undefined) eq('document_id', filter.documentId);
   if (filter.targetId !== undefined) eq('target_id', filter.targetId);
   if (filter.opId !== undefined) eq('op_id', filter.opId);
+  if (filter.principalId !== undefined) eq('principal_id', filter.principalId);
+  if (filter.profile !== undefined) eq('profile', filter.profile);
   if (filter.since !== undefined) {
     where.push('at >= ?');
     vals.push(filter.since);
@@ -189,7 +205,7 @@ export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[
     vals.push(filter.until);
   }
   const withPre = filter.includePreImage !== false;
-  const cols = `id, at, job_id, step_no, op_id, risk, target_kind, target_id, resource_id, document_id, version,
+  const cols = `id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk, target_kind, target_id, resource_id, document_id, version,
     params, bytes, outcome${withPre ? ', pre_image' : ''}`;
   const rows = db
     .prepare(
@@ -203,6 +219,9 @@ export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[
     jobId: r.job_id,
     stepNo: r.step_no,
     opId: r.op_id,
+    principalId: r.principal_id,
+    profile: r.profile,
+    approvedBy: r.approved_by,
     risk: r.risk,
     targetKind: r.target_kind,
     targetId: r.target_id,

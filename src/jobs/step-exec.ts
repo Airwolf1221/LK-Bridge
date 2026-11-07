@@ -44,7 +44,7 @@ export interface StepExecDeps {
   readonly now: () => number;
   readonly recordLkError: (
     error: BridgeLkError,
-    ref: { opId: string; jobId?: string; stepNo?: number },
+    ref: { opId: string; jobId?: string; stepNo?: number; principalId?: string; profile?: string },
   ) => void;
   readonly setJobWaiting: (jobId: string, waiting: 'lock' | null, detail?: Record<string, unknown>) => void;
   /** Null when a new write may start now; otherwise why not. */
@@ -63,7 +63,9 @@ type Recovery =
   | { readonly kind: 'applied'; readonly value: unknown }
   /** Safe to send (again). `ambiguous`: it may still have applied, but the key or version makes a re-send safe. */
   | { readonly kind: 'not-applied'; readonly ifMatch?: string | undefined; readonly ambiguous?: boolean }
-  | { readonly kind: 'uncertain'; readonly reason: string };
+  | { readonly kind: 'uncertain'; readonly reason: string }
+  /** createManyResources only: some minted ids exist at LK, the rest (`missing`) do not. */
+  | { readonly kind: 'partial'; readonly found: readonly unknown[]; readonly missing: readonly string[] };
 
 const RESOURCE_CREATES = new Set(['createResource', 'createManyResources', 'createResourceFromTemplate']);
 
@@ -134,7 +136,11 @@ export class StepExecutor {
     try {
       if (lockKey) {
         if (!this.d.locks.isFree(lockKey)) this.d.setJobWaiting(job.id, 'lock', { lockKey });
-        releaseLock = await this.d.locks.acquire(lockKey, { jobId: job.id, stepNo: step.stepNo }, signal);
+        releaseLock = await this.d.locks.acquire(
+          lockKey,
+          { jobId: job.id, stepNo: step.stepNo, principalId: job.principalId },
+          signal,
+        );
         this.d.setJobWaiting(job.id, null);
       }
       releaseSlot = await this.d.writers.acquire(
@@ -142,6 +148,8 @@ export class StepExecutor {
           jobId: job.id,
           stepNo: step.stepNo,
           opId: op.operationId,
+          principalId: job.principalId,
+          profile: job.profile,
           lockKey,
           resourceId: params.path?.resourceId ?? null,
           documentId: params.path?.documentId ?? null,
@@ -203,22 +211,13 @@ export class StepExecutor {
 
     // A step that may already have reached LK is verified before anything is re-sent.
     if (step.status === 'running' || step.maybeSent) {
-      let r: Recovery;
-      try {
-        r = await this.recover(job, step, op, meta, params);
-      } catch (e) {
-        return this.fail(job, step, stats, e);
+      const r = await this.safeRecover(job, step, op, meta, params);
+      const settled = this.settle(job, step, op, meta, params, stats, r, ref);
+      if (settled) return settled;
+      if (r.kind === 'not-applied') {
+        forcedIfMatch = r.ifMatch;
+        ambiguous = r.ambiguous === true;
       }
-      if (r.kind === 'applied') {
-        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
-        return this.succeed(job, step, stats, r.value, true);
-      }
-      if (r.kind === 'uncertain') {
-        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'unknown');
-        return this.fail(job, step, stats, new UncertainOutcomeError(op.operationId, r.reason, ref));
-      }
-      forcedIfMatch = r.ifMatch;
-      ambiguous = r.ambiguous === true;
     }
 
     try {
@@ -262,6 +261,9 @@ export class StepExecutor {
           jobId: job.id,
           stepNo: step.stepNo,
           opId: op.operationId,
+          principalId: job.principalId,
+          profile: job.profile,
+          approvedBy: job.approvedBy,
           risk: op.risk,
           targetKind: meta.reader ?? op.tag,
           targetId: targetIdOf(op, params),
@@ -303,25 +305,19 @@ export class StepExecutor {
             : undefined;
           throw new VersionConflictError(op.operationId, ifMatch ?? null, now?.version ?? null, ref, e);
         }
-        // A transient failure after the write may have applied: find out now rather than leave it ambiguous.
-        if (
-          stats.maybeSent &&
+        // A failure after the write may have applied: find out now rather than leave it ambiguous. A batch create is
+        // not atomic (LK's guide): a failure part-way, or DUPLICATE_ID on a retry, leaves some items created.
+        const batch = meta.clientId === 'body.resources[].id';
+        const mayHaveApplied =
           e instanceof BridgeLkError &&
           !(e instanceof BudgetWaitError) &&
-          e.classification === 'upstream'
-        ) {
+          ((stats.maybeSent && (e.classification === 'upstream' || batch)) ||
+            (batch && e.code === 'DUPLICATE_ID'));
+        if (mayHaveApplied) {
           const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
-          const r = await this.recover(job, { ...latest, maybeSent: true }, op, meta, params).catch(
-            (): Recovery => ({
-              kind: 'uncertain',
-              reason: 'the write may have applied and could not be re-read',
-            }),
-          );
-          if (r.kind === 'applied') {
-            if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
-            return this.succeed(job, step, stats, r.value, true);
-          }
-          if (r.kind === 'uncertain') throw new UncertainOutcomeError(op.operationId, r.reason, ref);
+          const r = await this.safeRecover(job, { ...latest, maybeSent: true }, op, meta, params);
+          const settled = this.settle(job, step, op, meta, params, stats, r, ref);
+          if (settled) return settled;
         }
         throw e;
       }
@@ -343,6 +339,7 @@ export class StepExecutor {
   ): Promise<VerifyResult<unknown>> {
     if (!meta.reader) return { ok: false };
     if (error.code === 'DUPLICATE_ID' && meta.verify === 'client-id') {
+      // A partial batch is not "ok" here: the step handles it (re-submits the missing items) once this returns.
       const r = await this.recoverClientId(job, step, op, meta, params);
       return r.kind === 'applied' ? { ok: true, value: r.value } : { ok: false };
     }
@@ -421,13 +418,90 @@ export class StepExecutor {
     params: OpParams,
   ): Promise<Recovery> {
     const ids = step.clientIds;
-    const first = await this.readCurrent(job, step, op, meta, params, [ids[0]!]);
-    if (!first.exists) return { kind: 'not-applied' };
-    if (ids.length === 1) return { kind: 'applied', value: first.body };
-    const last = await this.readCurrent(job, step, op, meta, params, [ids[ids.length - 1]!]);
-    if (last.exists)
-      return { kind: 'applied', value: { resources: ids.map((id) => ({ id })), verified: true } };
-    return { kind: 'uncertain', reason: 'only part of the batch exists at LK' };
+    if (meta.clientId !== 'body.resources[].id') {
+      const one = await this.readCurrent(job, step, op, meta, params, [ids[0]!]);
+      return one.exists ? { kind: 'applied', value: one.body } : { kind: 'not-applied' };
+    }
+    // createManyResources is not atomic: check EVERY minted id (at most 100 reads, each through the governor).
+    const found: unknown[] = [];
+    const missing: string[] = [];
+    for (const id of ids) {
+      const cur = await this.readCurrent(job, step, op, meta, params, [id]);
+      if (cur.exists) found.push(cur.body);
+      else missing.push(id);
+    }
+    if (missing.length === 0) return { kind: 'applied', value: { resources: found } };
+    if (found.length === 0) return { kind: 'not-applied' };
+    return { kind: 'partial', found, missing };
+  }
+
+  /**
+   * `recover`, except that verification which cannot complete becomes `uncertain`, and a budget wait during it is
+   * passed on (the step parks and stays ambiguous, so it is verified again on resume).
+   */
+  private async safeRecover(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    meta: OpMeta,
+    params: OpParams,
+  ): Promise<Recovery | { readonly kind: 'park'; readonly error: BudgetWaitError }> {
+    try {
+      return await this.recover(job, step, op, meta, params);
+    } catch (e) {
+      if (e instanceof BudgetWaitError) return { kind: 'park', error: e };
+      const why = e instanceof Error ? e.message : String(e);
+      return {
+        kind: 'uncertain',
+        reason: `the write may have applied and verification could not complete (${why})`,
+      };
+    }
+  }
+
+  /** Turns a recovery result into the step's outcome; null means "not applied: go on and send". */
+  private settle(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    meta: OpMeta,
+    params: OpParams,
+    stats: CallStats,
+    r: Recovery | { readonly kind: 'park'; readonly error: BudgetWaitError },
+    ref: JobRef,
+  ): StepOutcome | null {
+    switch (r.kind) {
+      case 'not-applied':
+        return null;
+      case 'park':
+        return this.fail(job, step, stats, r.error, true);
+      case 'applied':
+        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+        return this.succeed(job, step, stats, r.value, true);
+      case 'uncertain':
+        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'unknown');
+        return this.fail(job, step, stats, new UncertainOutcomeError(op.operationId, r.reason, ref));
+      case 'partial': {
+        // Re-submit only the missing items, with their same ids, as a new step that runs next.
+        const body = (params.body ?? {}) as { resources?: Record<string, unknown>[] };
+        const missing = new Set(r.missing);
+        const items = (body.resources ?? []).filter((i) => typeof i.id === 'string' && missing.has(i.id));
+        const next = this.d.repo.insertStepAfter(job.id, step.stepNo, {
+          opId: op.operationId,
+          opKind: op.kind,
+          params: { ...params, body: { ...body, resources: items } },
+          options: step.options,
+          clientIds: [...r.missing],
+          post: true,
+        });
+        return this.succeed(
+          job,
+          step,
+          stats,
+          { resources: r.found, partial: true, missing: r.missing, continuedInStep: next },
+          true,
+        );
+      }
+    }
   }
 
   private isGone(cur: Current, meta: OpMeta, params: OpParams): boolean {
@@ -503,7 +577,13 @@ export class StepExecutor {
       requestIdPrefix: `lkb.${job.id}.${step.stepNo}.${step.attempt0}${suffix ? `.${suffix}${this.seq++}` : ''}`,
       stats,
       onError: (err: BridgeLkError) =>
-        this.d.recordLkError(err, { opId: err.opId ?? step.opId, jobId: job.id, stepNo: step.stepNo }),
+        this.d.recordLkError(err, {
+          opId: err.opId ?? step.opId,
+          jobId: job.id,
+          stepNo: step.stepNo,
+          principalId: job.principalId,
+          profile: job.profile,
+        }),
     };
   }
 

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { LockManager, WriterPool, lockKeyFor, type JobView } from '../../src/jobs/index.js';
 import { requireOperation } from '../../src/lk/registry.js';
-import { harness, origin, type Harness, type Wire } from './helpers.js';
+import { harness, origin, type Harness, type Wire, queue } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -36,9 +36,9 @@ describe('locks', () => {
     const { a, b } = seedTwoDocs(h);
     const e = h.newEngine({ governor: { writeSpacingMs: 0 } });
     const release = e.hold(isPatchBlock);
-    const j1 = e.engine.submit(updateBlock(a.resourceId, a.documentId, 'p1', 'one')).jobId;
-    const j2 = e.engine.submit(updateBlock(a.resourceId, a.documentId, 'p1', 'two')).jobId;
-    const j3 = e.engine.submit(updateBlock(b.resourceId, b.documentId, 'q1', 'three')).jobId;
+    const j1 = (await queue(e.engine, updateBlock(a.resourceId, a.documentId, 'p1', 'one'))).jobId;
+    const j2 = (await queue(e.engine, updateBlock(a.resourceId, a.documentId, 'p1', 'two'))).jobId;
+    const j3 = (await queue(e.engine, updateBlock(b.resourceId, b.documentId, 'q1', 'three'))).jobId;
 
     // j1 and j3 are in flight together (two documents, two slots); j2 waits for d_r1's lock.
     await h.until(
@@ -119,8 +119,8 @@ describe('writer pool', () => {
     const { a, b } = seedTwoDocs(h);
     const e = h.newEngine({ settings: { writersMax: 1 }, governor: { writeSpacingMs: 0 } });
     const release = e.hold(isPatchBlock);
-    const j1 = e.engine.submit(updateBlock(a.resourceId, a.documentId, 'p1', 'one')).jobId;
-    const j2 = e.engine.submit(updateBlock(b.resourceId, b.documentId, 'q1', 'two')).jobId;
+    const j1 = (await queue(e.engine, updateBlock(a.resourceId, a.documentId, 'p1', 'one'))).jobId;
+    const j2 = (await queue(e.engine, updateBlock(b.resourceId, b.documentId, 'q1', 'two'))).jobId;
     await h.until(
       () => e.sent.filter(isPatchBlock).length === 1 && e.engine.queries.writers().waiting.length === 1,
     );

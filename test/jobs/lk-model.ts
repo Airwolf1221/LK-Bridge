@@ -56,6 +56,11 @@ export class LkModel {
   readonly docs = new Map<string, Doc>();
   readonly members = new Map<string, Record<string, unknown>>();
   readonly mutations: Mutation[] = [];
+  /**
+   * createManyResources is not atomic at LK: when set, the next batch creates this many items, then fails with
+   * 500 INTERNAL, leaving them created.
+   */
+  batchFailAfter: number | null = null;
 
   constructor(private readonly now: () => number) {}
 
@@ -176,7 +181,13 @@ export class LkModel {
       const items = (body.resources ?? []) as Record<string, unknown>[];
       for (const i of items)
         if (typeof i.id === 'string' && this.resources.has(i.id)) return err(409, 'DUPLICATE_ID');
-      const out = items.map((i) => this.createResource(i).body);
+      const failAfter = this.batchFailAfter;
+      this.batchFailAfter = null;
+      const out: unknown[] = [];
+      for (const [n, i] of items.entries()) {
+        if (failAfter !== null && n >= failAfter) return err(500, 'INTERNAL', 'model: batch failed part-way');
+        out.push(this.createResource(i).body);
+      }
       return { status: 201, body: { resources: out } };
     }
 

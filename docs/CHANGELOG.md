@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Chunk 2 follow-up: principals, policy hooks and batch-create recovery
+
+- Principals: `origin.principal` (`{ principalId, profile, label }`, default `SYSTEM_PRINCIPAL`) and optional
+  `origin.approvedBy`. `principal_id` and `profile` are stored on jobs, errors and journal rows (`approved_by` on jobs
+  and journal rows; migration `0200_jobs_init.sql` edited in place, as it was never deployed), shown in views, the
+  `step` event and writer slots, and filterable in `listJobs`, `listErrors`, `listErrorGroups` and `journalLookup`.
+- Policy hooks (no policy store or proposal workflow yet): an injectable `PolicyGate` (`allow` / `deny` / `propose`;
+  default allows everything) asked about every operation, reads included, at entry of `run` and `submit`, before
+  anything is queued. Batches are evaluated up front (any deny denies the batch; any propose makes one proposal).
+  Deny throws `PolicyDeniedError` and records an error with classification `policy`; propose calls an injectable
+  `ProposalSink` and returns `{ status: 'proposal_captured', proposalId }` (the default sink treats propose as deny).
+  A gate that throws counts as a deny.
+- **Interface change:** `engine.submit` is now async and may resolve with `proposal_captured`.
+- `createManyResources` recovery: LK's batch create is not atomic, so after an ambiguous outcome every minted id is
+  verified and only the missing items are re-submitted, with their same ids, as a new step inserted to run next. The
+  step is `uncertain` only when verification cannot complete (it was: first and last item checked, partial =
+  uncertain). A budget wait during verification now parks the step and keeps it ambiguous.
+- ADR 0010: answers to the request-id and block-version questions from LK's spec (to be confirmed by chunk 3's sandbox
+  script); batch recovery updated.
+- Tests: `test/jobs/policy.test.ts`, `test/jobs/batch-recovery.test.ts` (including a batch half-created at a crash);
+  the stateful LK model can fail a batch part-way.
+
 ### Chunk 2: persistence, job engine, writers, locks, journal and guards
 
 - `src/jobs`: the job engine (`createJobEngine`). Every LK call runs as a persisted step through `lk.call` /

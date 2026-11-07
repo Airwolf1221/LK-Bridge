@@ -20,6 +20,7 @@ import {
   JobNotFoundError,
   JobsError,
   LkOperationError,
+  PolicyDeniedError,
   UncertainOutcomeError,
   UnknownOperationError,
   UnsupportedBlockLossError,
@@ -33,9 +34,20 @@ import { WriteJournal, journalLookup, type JournalFilter } from './journal.js';
 import { callOp, newCallStats } from './lk-call.js';
 import { LockManager } from './locks.js';
 import { opMeta } from './op-meta.js';
+import {
+  ALLOW_ALL_GATE,
+  DENY_PROPOSALS_SINK,
+  policyOpMeta,
+  type PolicyDecision,
+  type PolicyGate,
+  type ProposalMeta,
+  type ProposalSink,
+  type ProposedOp,
+} from './policy.js';
 import { createJobQueries, JobsRepo, type ErrorInput, type NewStep } from './repo.js';
 import { StepExecutor, type StepOutcome } from './step-exec.js';
 import {
+  SYSTEM_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
   type BatchSubmit,
   type ControlsView,
@@ -48,6 +60,8 @@ import {
   type OpParams,
   type PaginateSubmit,
   type PriorityClass,
+  type Principal,
+  type ProposalCaptured,
   type RunOptions,
   type RunResult,
   type StepOptions,
@@ -72,6 +86,10 @@ export interface CreateJobEngineOptions {
   readonly log?: EngineLogger;
   /** Start scheduling (and restart-resume) at once. Default true. */
   readonly autoStart?: boolean;
+  /** Asked about every operation at entry (default: allow everything). See policy.ts. */
+  readonly policyGate?: PolicyGate;
+  /** Receives work the gate wants approved (default: treats "propose" as "deny"). */
+  readonly proposalSink?: ProposalSink;
 }
 
 const SETTING = {
@@ -89,6 +107,8 @@ interface Active {
 
 interface RunnerResult {
   readonly last: StepOutcome | undefined;
+  /** Values of every step that succeeded in this run, in order. */
+  readonly values?: readonly unknown[];
 }
 
 interface PreparedStep {
@@ -108,6 +128,8 @@ export class JobEngine {
   private readonly settings: JobsSettings;
   private readonly lk: LkClient;
   private readonly db: Db;
+  private readonly policyGate: PolicyGate;
+  private readonly proposalSink: ProposalSink;
   private readonly active = new Map<string, Active>();
   private readonly resumeTimers = new Map<string, TimerHandle>();
   private readonly waitingLock = new Set<string>();
@@ -126,6 +148,8 @@ export class JobEngine {
     this.settings = o.settings;
     this.clock = o.clock ?? systemClock;
     this.log = o.log ?? silentLog;
+    this.policyGate = o.policyGate ?? ALLOW_ALL_GATE;
+    this.proposalSink = o.proposalSink ?? DENY_PROPOSALS_SINK;
     const now = () => this.clock.now();
     this.repo = new JobsRepo(o.db, now, o.settings.largeParamsBytes);
     this.journal = new WriteJournal(o.db, now);
@@ -204,19 +228,25 @@ export class JobEngine {
   async run(opId: string, params: OpParams = {}, opts: RunOptions): Promise<RunResult> {
     const def = this.validate(opId, params);
     const options = stepOptions(opts);
-    checkSubmitGuards(def, params, options, this.guardContext());
+    const origin = normaliseOrigin(opts.origin);
+    const title = opts.title ?? def.operationId;
     const priority = opts.priority ?? 'P1';
+    const proposal = await this.authorize([{ def, params, options }], origin, 'single_op', {
+      title,
+      priority,
+    });
+    if (proposal) return proposal;
+    checkSubmitGuards(def, params, options, this.guardContext());
     const estimate = this.estimateFor([{ def, params }], priority);
     const slow = estimate.wallClockMs > this.settings.inlineMaxEstimateMs;
 
-    if (!isWriteOp(def) && !slow) return this.runInlineRead(def, params, priority, opts.signal);
+    if (!isWriteOp(def) && !slow) return this.runInlineRead(def, params, priority, origin, opts.signal);
     if (this.draining) throw new DrainingError();
 
     const prepared = this.prepare(def, params, options);
-    const title = opts.title ?? def.operationId;
     const hold = isWriteOp(def) ? this.writeHold() : null;
     if (slow || hold) {
-      const job = this.createJob('single_op', title, opts.origin, priority, 'stop', [prepared], 'queued');
+      const job = this.createJob('single_op', title, origin, priority, 'stop', [prepared], 'queued');
       this.pump();
       return {
         status: 'queued',
@@ -227,7 +257,7 @@ export class JobEngine {
     }
 
     // Inline write: recorded as a one-step job and run now, through the same slots, locks and guards.
-    const job = this.createJob('single_op', title, opts.origin, priority, 'stop', [prepared], 'running');
+    const job = this.createJob('single_op', title, origin, priority, 'stop', [prepared], 'running');
     const onAbort = () => this.cancelJob(job.id);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     let result: RunnerResult;
@@ -239,7 +269,14 @@ export class JobEngine {
     const final = this.repo.job(job.id)!;
     const last = result.last;
     if (last?.kind === 'succeeded' && final.status === 'succeeded') {
-      return { status: 'succeeded', jobId: job.id, result: last.value, requestIds: last.requestIds };
+      // A createManyResources recovered part-way ran a continuation step: return every resource it created.
+      const values = result.values ?? [];
+      const value =
+        values.length > 1 && values.every((v) => Array.isArray((v as { resources?: unknown })?.resources))
+          ? { resources: values.flatMap((v) => (v as { resources: unknown[] }).resources) }
+          : last.value;
+      const requestIds = this.repo.steps(job.id).flatMap((s) => s.requestIds);
+      return { status: 'succeeded', jobId: job.id, result: value, requestIds };
     }
     if (final.status === 'waiting_budget') {
       return { status: 'waiting_budget', jobId: job.id, eta: final.resumeAt, reason: 'budget' };
@@ -257,16 +294,23 @@ export class JobEngine {
     def: OperationDef,
     params: OpParams,
     priority: PriorityClass,
+    origin: JobOrigin,
     signal: AbortSignal | undefined,
   ): Promise<RunResult> {
     const stats = newCallStats();
+    const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     try {
       const result = await callOp(this.lk, def, params, {
         priority,
         signal,
         requestIdPrefix: `lkb.r${randomBytes(6).toString('hex')}`,
         stats,
-        onError: (err) => this.recordLkError(err, { opId: def.operationId }),
+        onError: (err) =>
+          this.recordLkError(err, {
+            opId: def.operationId,
+            principalId: principal.principalId,
+            profile: principal.profile,
+          }),
       });
       return { status: 'succeeded', jobId: null, result, requestIds: stats.requestIds };
     } catch (e) {
@@ -281,20 +325,19 @@ export class JobEngine {
   // ============================================================================================ jobs
 
   /** Queues a multi-step job: `batch_ops` (ordered registry calls) or `paginate_all` (every page of a list). */
-  submit(req: SubmitRequest): SubmitResult {
+  async submit(req: SubmitRequest): Promise<SubmitResult | ProposalCaptured> {
     if (this.draining) throw new DrainingError();
     return req.kind === 'batch_ops' ? this.submitBatch(req) : this.submitPaginate(req);
   }
 
-  private submitBatch(req: BatchSubmit): SubmitResult {
+  private async submitBatch(req: BatchSubmit): Promise<SubmitResult | ProposalCaptured> {
     if (req.steps.length === 0)
       throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
-    const guard = this.guardContext();
-    const prepared = req.steps.map((s: StepSpec, i) => {
+    const origin = normaliseOrigin(req.origin);
+    const validated = req.steps.map((s: StepSpec, i) => {
       const params = s.params ?? {};
-      let def: OperationDef;
       try {
-        def = this.validate(s.op, params);
+        return { def: this.validate(s.op, params), params, options: stepOptions(s) };
       } catch (e) {
         if (e instanceof InvalidParamsError) {
           throw new InvalidParamsError(
@@ -304,13 +347,19 @@ export class JobEngine {
         }
         throw e;
       }
-      checkSubmitGuards(def, params, stepOptions(s), guard);
-      return this.prepare(def, params, stepOptions(s));
     });
     const priority = req.priority ?? 'P2';
     const onError: OnError = req.onError ?? 'stop';
-    const title = req.title ?? `batch of ${prepared.length} operation(s)`;
-    const job = this.createJob('batch_ops', title, req.origin, priority, onError, prepared, 'queued');
+    const title = req.title ?? `batch of ${validated.length} operation(s)`;
+    // Every step is put to the policy gate before anything is queued: one deny denies the batch, one propose
+    // turns the whole batch into one proposal.
+    const proposal = await this.authorize(validated, origin, 'batch_ops', { title, priority, onError });
+    if (proposal) return proposal;
+    if (this.draining) throw new DrainingError();
+    const guard = this.guardContext();
+    for (const v of validated) checkSubmitGuards(v.def, v.params, v.options, guard);
+    const prepared = validated.map((v) => this.prepare(v.def, v.params, v.options));
+    const job = this.createJob('batch_ops', title, origin, priority, onError, prepared, 'queued');
     const estimate = this.estimateFor(
       prepared.map((p) => ({ def: p.def, params: p.step.params })),
       priority,
@@ -320,7 +369,7 @@ export class JobEngine {
     return { jobId: job.id, status: job.status, eta: held ? null : this.clock.now() + estimate.wallClockMs };
   }
 
-  private submitPaginate(req: PaginateSubmit): SubmitResult {
+  private async submitPaginate(req: PaginateSubmit): Promise<SubmitResult | ProposalCaptured> {
     const params = req.params ?? {};
     const def = this.validate(req.op, params);
     if (!def.paged || def.kind !== 'read') {
@@ -328,6 +377,18 @@ export class JobEngine {
         { path: 'op', message: 'paginate_all needs a paged read operation' },
       ]);
     }
+    const origin = normaliseOrigin(req.origin);
+    const title = req.title ?? `${def.operationId}: every page`;
+    const proposal = await this.authorize([{ def, params, options: {} }], origin, 'paginate_all', {
+      title,
+      priority: req.priority ?? 'P2',
+      paginate: {
+        ...(req.maxItems !== undefined ? { maxItems: req.maxItems } : {}),
+        ...(req.maxPages !== undefined ? { maxPages: req.maxPages } : {}),
+      },
+    });
+    if (proposal) return proposal;
+    if (this.draining) throw new DrainingError();
     const caps = this.settings.paginate;
     const query = { ...params.query };
     if (query.limit === undefined) query.limit = caps.pageSize;
@@ -335,8 +396,8 @@ export class JobEngine {
     const priority = req.priority ?? 'P2';
     const job = this.createJob(
       'paginate_all',
-      req.title ?? `${def.operationId}: every page`,
-      req.origin,
+      title,
+      origin,
       priority,
       'stop',
       [this.prepare(def, first, {})],
@@ -592,27 +653,28 @@ export class JobEngine {
     });
     this.emitJob(jobId, 'updated');
     let last: StepOutcome | undefined;
+    const values: unknown[] = [];
     for (;;) {
       job = this.requireJob(jobId);
       const step = this.repo.nextStep(jobId);
       if (!step) {
         this.finish(jobId);
-        return { last };
+        return { last, values };
       }
       const recovering = step.status === 'running';
       if (!recovering) {
         if (job.cancelRequested) {
           this.finishCancelled(jobId);
-          return { last };
+          return { last, values };
         }
         if (job.pauseRequested) {
           this.repo.updateJob(jobId, { status: 'paused', pauseRequested: false, currentStep: null });
           this.emitJob(jobId, 'updated');
-          return { last };
+          return { last, values };
         }
         if (this.stopped) {
           this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
-          return { last };
+          return { last, values };
         }
       }
       entry.current = new AbortController();
@@ -621,16 +683,17 @@ export class JobEngine {
         storeResult: job.kind !== 'paginate_all',
       });
       if (outcome.kind !== 'aborted' && outcome.kind !== 'held') last = outcome;
+      if (outcome.kind === 'succeeded') values.push(outcome.value);
       switch (outcome.kind) {
         case 'succeeded':
           if (job.kind === 'paginate_all') this.handlePage(job, step.stepNo, outcome.value);
-          this.emitStep(jobId, step.stepNo);
+          this.emitStep(job, step.stepNo);
           this.refreshProgress(jobId);
           this.emitJob(jobId, 'updated');
           continue;
         case 'failed': {
-          this.emitStep(jobId, step.stepNo);
-          this.recordStepFailure(step.opId, jobId, step.stepNo, outcome.error);
+          this.emitStep(job, step.stepNo);
+          this.recordStepFailure(job, step.opId, step.stepNo, outcome.error);
           this.refreshProgress(jobId);
           this.repo.updateJob(jobId, {
             lastError: errorToJson(outcome.error),
@@ -639,7 +702,7 @@ export class JobEngine {
           this.emitJob(jobId, 'updated');
           if (job.onError === 'stop') {
             this.finish(jobId);
-            return { last };
+            return { last, values };
           }
           continue;
         }
@@ -652,7 +715,7 @@ export class JobEngine {
           });
           this.emitJob(jobId, 'updated');
           this.scheduleResume(jobId, outcome.retryAtMs);
-          return { last };
+          return { last, values };
         case 'held':
           this.repo.updateJob(jobId, {
             status: 'queued',
@@ -660,11 +723,11 @@ export class JobEngine {
             currentStep: null,
           });
           this.emitJob(jobId, 'updated');
-          return { last };
+          return { last, values };
         case 'aborted':
           if (this.stopped) {
             this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
-            return { last };
+            return { last, values };
           }
           continue; // cancel or pause: the loop head decides
       }
@@ -967,9 +1030,11 @@ export class JobEngine {
     return job;
   }
 
-  private emitStep(jobId: string, stepNo: number): void {
-    const step = this.repo.step(jobId, stepNo);
-    if (step) this.events.emit('step', { jobId, step });
+  private emitStep(job: JobView, stepNo: number): void {
+    const step = this.repo.step(job.id, stepNo);
+    if (step) {
+      this.events.emit('step', { jobId: job.id, principalId: job.principalId, profile: job.profile, step });
+    }
   }
 
   private controlsView(): ControlsView {
@@ -989,11 +1054,16 @@ export class JobEngine {
     return v;
   }
 
-  private recordLkError(err: BridgeLkError, ref: { opId: string; jobId?: string; stepNo?: number }): void {
+  private recordLkError(
+    err: BridgeLkError,
+    ref: { opId: string; jobId?: string; stepNo?: number; principalId?: string; profile?: string },
+  ): void {
     this.recordError({
       opId: ref.opId,
       jobId: ref.jobId,
       stepNo: ref.stepNo,
+      principalId: ref.principalId,
+      profile: ref.profile,
       status: err.status,
       code: err.code,
       message: err.message,
@@ -1006,7 +1076,8 @@ export class JobEngine {
   }
 
   /** Step failures that are not LK errors (those were recorded per call): refusals, conflicts, uncertainty. */
-  private recordStepFailure(opId: string, jobId: string, stepNo: number, error: JobsError): void {
+  private recordStepFailure(job: JobView, opId: string, stepNo: number, error: JobsError): void {
+    const jobId = job.id;
     if (error instanceof LkOperationError) return;
     if (error instanceof VersionConflictError && error.cause instanceof BridgeLkError) return;
     const classification =
@@ -1026,7 +1097,93 @@ export class JobEngine {
       retryable: false,
       classification,
       detail: error.toJSON(),
+      principalId: job.principalId,
+      profile: job.profile,
     });
+  }
+
+  // ============================================================================================ policy
+
+  /**
+   * Puts every operation to the policy gate before anything is queued. Throws `PolicyDeniedError` (recorded with
+   * classification `policy`) on any deny; on any propose, hands the whole request to the proposal sink and returns
+   * its result; otherwise returns null. A gate that throws counts as a deny (fail closed).
+   */
+  private async authorize(
+    items: readonly { def: OperationDef; params: OpParams; options: StepOptions }[],
+    origin: JobOrigin,
+    jobKind: JobKind,
+    meta: Omit<ProposalMeta, 'kind' | 'origin'>,
+  ): Promise<ProposalCaptured | null> {
+    const principal = origin.principal ?? SYSTEM_PRINCIPAL;
+    const batch = jobKind === 'batch_ops';
+    let propose = false;
+    for (let i = 0; i < items.length; i++) {
+      const { def, params, options } = items[i]!;
+      let decision: PolicyDecision;
+      try {
+        decision = await this.policyGate.authorize(principal, policyOpMeta(def, options), params, {
+          origin,
+          jobKind,
+          ...(batch ? { stepIndex: i } : {}),
+        });
+      } catch (e) {
+        decision = {
+          decision: 'deny',
+          reason: `the policy gate failed: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+      if (decision.decision === 'deny') {
+        throw this.policyDenied(
+          new PolicyDeniedError(
+            def.operationId,
+            decision.reason,
+            principal.principalId,
+            batch ? i : undefined,
+          ),
+          principal,
+        );
+      }
+      if (decision.decision === 'propose') propose = true;
+    }
+    if (!propose) return null;
+    const ops: ProposedOp[] = items.map(({ def, params, options }) => ({
+      op: def.operationId,
+      params,
+      ...options,
+    }));
+    try {
+      const { proposalId } = await this.proposalSink.capture(principal, ops, {
+        ...meta,
+        kind: jobKind,
+        origin,
+      });
+      return { status: 'proposal_captured', proposalId };
+    } catch (e) {
+      if (e instanceof PolicyDeniedError) throw this.policyDenied(e, principal);
+      throw new JobsError(
+        'BRIDGE_ERROR',
+        `The proposal sink failed: ${e instanceof Error ? e.message : String(e)}`,
+        {},
+        {
+          cause: e,
+        },
+      );
+    }
+  }
+
+  private policyDenied(error: PolicyDeniedError, principal: Principal): PolicyDeniedError {
+    this.recordError({
+      opId: error.opId,
+      code: error.code,
+      message: error.message,
+      retryable: false,
+      classification: 'policy',
+      detail: error.toJSON(),
+      principalId: principal.principalId,
+      profile: principal.profile,
+    });
+    return error;
   }
 
   private recordError(input: ErrorInput): void {
@@ -1042,6 +1199,18 @@ export class JobEngine {
   get database(): Db {
     return this.db;
   }
+}
+
+/** Fills in the default principal (`system`) and checks a supplied one is usable. */
+function normaliseOrigin(origin: JobOrigin): JobOrigin {
+  const p = origin.principal;
+  if (p === undefined) return { ...origin, principal: SYSTEM_PRINCIPAL };
+  for (const k of ['principalId', 'profile', 'label'] as const) {
+    if (typeof p[k] !== 'string' || p[k].length === 0) {
+      throw new InvalidParamsError('origin', [{ path: `origin.principal.${k}`, message: 'Required' }]);
+    }
+  }
+  return origin;
 }
 
 function stepOptions(o: StepOptions): StepOptions {

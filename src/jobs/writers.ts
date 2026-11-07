@@ -10,6 +10,8 @@ export interface SlotInfo {
   readonly jobId: string;
   readonly stepNo: number;
   readonly opId: string;
+  readonly principalId?: string;
+  readonly profile?: string;
   readonly lockKey: string | null;
   readonly resourceId: string | null;
   readonly documentId: string | null;
@@ -109,6 +111,8 @@ export class WriterPool {
               jobId: b.jobId,
               stepNo: b.stepNo,
               opId: b.opId,
+              ...(b.principalId !== undefined ? { principalId: b.principalId } : {}),
+              ...(b.profile !== undefined ? { profile: b.profile } : {}),
               lockKey: b.lockKey,
               resourceId: b.resourceId,
               documentId: b.documentId,

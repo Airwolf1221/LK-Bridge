@@ -9,6 +9,7 @@ import type { TierId } from '../lk/registry-types.js';
 export type JobsErrorCode =
   | 'UNKNOWN_OPERATION'
   | 'INVALID_PARAMS'
+  | 'POLICY_DENIED'
   | 'READ_ONLY'
   | 'MEMBER_ADMIN_DISABLED'
   | 'CASCADE_CONFIRM_REQUIRED'
@@ -87,6 +88,32 @@ export class InvalidParamsError extends JobsError {
   }
   override toJSON() {
     return { ...super.toJSON(), opId: this.opId, issues: this.issues };
+  }
+}
+
+/** The policy gate refused the call (or asked for approval and no proposal sink is configured). Nothing was queued. */
+export class PolicyDeniedError extends JobsError {
+  override readonly name = 'PolicyDeniedError';
+  constructor(
+    readonly opId: string,
+    readonly reason: string,
+    readonly principalId: string,
+    /** For batch_ops: the index of the step the gate refused. */
+    readonly stepIndex?: number,
+  ) {
+    super(
+      'POLICY_DENIED',
+      `${opId}${stepIndex !== undefined ? ` (step ${stepIndex + 1})` : ''} is not allowed for ${principalId}: ${reason}`,
+    );
+  }
+  override toJSON() {
+    return {
+      ...super.toJSON(),
+      opId: this.opId,
+      reason: this.reason,
+      principalId: this.principalId,
+      ...(this.stepIndex !== undefined ? { stepIndex: this.stepIndex } : {}),
+    };
   }
 }
 

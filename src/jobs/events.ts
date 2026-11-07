@@ -7,7 +7,12 @@ export interface JobEngineEvents {
   /** A job was created, or anything about it changed (status, progress, wait reason, flags). */
   job: { readonly type: 'created' | 'updated'; readonly job: JobView };
   /** A step reached a final state (succeeded, failed, uncertain, cancelled). */
-  step: { readonly jobId: string; readonly step: StepView };
+  step: {
+    readonly jobId: string;
+    readonly principalId: string;
+    readonly profile: string;
+    readonly step: StepView;
+  };
   /** A lock was acquired, waited for, or released. */
   lock: LockEvent;
   /** A writer slot changed (busy/idle, WRITERS_MAX, wait queue). */

@@ -58,6 +58,9 @@ interface JobRow {
   title: string;
   origin: string;
   origin_kind: string;
+  principal_id: string;
+  profile: string;
+  approved_by: string | null;
   priority: PriorityClass;
   status: JobStatus;
   on_error: OnError;
@@ -124,6 +127,9 @@ function toJob(r: JobRow): JobView {
     kind: r.kind,
     title: r.title,
     origin: parse<JobOrigin>(r.origin, { kind: 'system' }),
+    principalId: r.principal_id,
+    profile: r.profile,
+    approvedBy: r.approved_by,
     priority: r.priority,
     status: r.status,
     onError: r.on_error,
@@ -252,8 +258,11 @@ export interface ErrorInput {
   readonly issues?: readonly { path: string; message: string }[] | undefined;
   readonly requestId?: string | undefined;
   readonly retryable: boolean;
-  readonly classification: ErrorClassification;
+  readonly classification: ErrorClassification | 'policy';
   readonly detail?: Record<string, unknown> | undefined;
+  /** Who the failed work was for (default `system`). */
+  readonly principalId?: string | undefined;
+  readonly profile?: string | undefined;
 }
 
 export interface ErrorRecordView {
@@ -262,6 +271,8 @@ export interface ErrorRecordView {
   readonly opId: string;
   readonly jobId: string | null;
   readonly stepNo: number | null;
+  readonly principalId: string;
+  readonly profile: string;
   readonly status: number | null;
   readonly code: string | null;
   readonly message: string;
@@ -297,6 +308,8 @@ interface ErrorRow {
   op_id: string;
   job_id: string | null;
   step_no: number | null;
+  principal_id: string;
+  profile: string;
   http_status: number | null;
   code: string | null;
   message: string;
@@ -317,6 +330,8 @@ function toError(r: ErrorRow): ErrorRecordView {
     opId: r.op_id,
     jobId: r.job_id,
     stepNo: r.step_no,
+    principalId: r.principal_id,
+    profile: r.profile,
     status: r.http_status,
     code: r.code,
     message: r.message,
@@ -362,9 +377,9 @@ export class JobsRepo {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO jobs (id, kind, title, origin, origin_kind, priority, status, on_error, steps_total,
-             options, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO jobs (id, kind, title, origin, origin_kind, principal_id, profile, approved_by, priority,
+             status, on_error, steps_total, options, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           job.id,
@@ -372,6 +387,9 @@ export class JobsRepo {
           job.title,
           JSON.stringify(job.origin),
           job.origin.kind,
+          job.origin.principal?.principalId ?? 'system',
+          job.origin.principal?.profile ?? 'system',
+          job.origin.approvedBy ?? null,
           job.priority,
           job.status,
           job.onError,
@@ -398,6 +416,56 @@ export class JobsRepo {
         .prepare('UPDATE jobs SET steps_total = steps_total + 1, updated_at = ? WHERE id = ?')
         .run(at, jobId);
       return stepNo;
+    })();
+  }
+
+  /**
+   * Inserts a step directly after `afterStepNo`, so it runs next (createManyResources recovery). Later steps move
+   * up by one when none of them has been sent yet (their keys are re-derived); otherwise the step is appended.
+   */
+  insertStepAfter(jobId: string, afterStepNo: number, step: NewStep): number {
+    const at = this.now();
+    return this.db.transaction(() => {
+      const later = this.db
+        .prepare(
+          'SELECT step_no, attempt0, idempotency_key, first_sent_at, status FROM steps WHERE job_id = ? AND step_no > ?',
+        )
+        .all(jobId, afterStepNo) as {
+        step_no: number;
+        attempt0: number;
+        idempotency_key: string | null;
+        first_sent_at: number | null;
+        status: StepStatus;
+      }[];
+      const movable = later.every((r) => r.first_sent_at === null && r.status === 'pending');
+      if (!movable) {
+        const row = this.db
+          .prepare('SELECT COALESCE(MAX(step_no), 0) AS n FROM steps WHERE job_id = ?')
+          .get(jobId) as { n: number };
+        this.insertStepRow(jobId, row.n + 1, step, at);
+        this.db
+          .prepare('UPDATE jobs SET steps_total = steps_total + 1, updated_at = ? WHERE id = ?')
+          .run(at, jobId);
+        return row.n + 1;
+      }
+      // Two passes keep the primary key unique: negate, then flip back one higher.
+      this.db
+        .prepare('UPDATE steps SET step_no = -step_no - 1 WHERE job_id = ? AND step_no > ?')
+        .run(jobId, afterStepNo);
+      this.db.prepare('UPDATE steps SET step_no = -step_no WHERE job_id = ? AND step_no < 0').run(jobId);
+      this.db
+        .prepare('UPDATE job_artifacts SET step_no = step_no + 1 WHERE job_id = ? AND step_no > ?')
+        .run(jobId, afterStepNo);
+      const rekey = this.db.prepare('UPDATE steps SET idempotency_key = ? WHERE job_id = ? AND step_no = ?');
+      for (const r of later) {
+        if (r.idempotency_key !== null)
+          rekey.run(idempotencyKeyFor(jobId, r.step_no + 1, r.attempt0), jobId, r.step_no + 1);
+      }
+      this.insertStepRow(jobId, afterStepNo + 1, step, at);
+      this.db
+        .prepare('UPDATE jobs SET steps_total = steps_total + 1, updated_at = ? WHERE id = ?')
+        .run(at, jobId);
+      return afterStepNo + 1;
     })();
   }
 
@@ -644,15 +712,17 @@ export class JobsRepo {
     const fingerprint = errorFingerprint(e.opId, e.code, path);
     const info = this.db
       .prepare(
-        `INSERT INTO errors (at, op_id, job_id, step_no, http_status, code, message, issues, path, request_id,
-           retryable, classification, fingerprint, detail)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO errors (at, op_id, job_id, step_no, principal_id, profile, http_status, code, message, issues,
+           path, request_id, retryable, classification, fingerprint, detail)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         this.now(),
         e.opId,
         e.jobId ?? null,
         e.stepNo ?? null,
+        e.principalId ?? 'system',
+        e.profile ?? 'system',
         e.status ?? null,
         e.code ?? null,
         e.message.slice(0, 2000),
@@ -724,12 +794,15 @@ export interface RuntimeSettingView {
 
 export interface ErrorGroupFilter {
   readonly resolved?: boolean;
+  /** Only occurrences for this principal. */
+  readonly principalId?: string;
   readonly since?: number;
   readonly limit?: number;
 }
 
 export interface ErrorFilter {
   readonly fingerprint?: string;
+  readonly principalId?: string;
   readonly jobId?: string;
   readonly since?: number;
   readonly limit?: number;
@@ -751,6 +824,14 @@ export function createJobQueries(db: Db) {
       if (filter.originKind) {
         where.push('origin_kind = ?');
         vals.push(filter.originKind);
+      }
+      if (filter.principalId !== undefined) {
+        where.push('principal_id = ?');
+        vals.push(filter.principalId);
+      }
+      if (filter.profile !== undefined) {
+        where.push('profile = ?');
+        vals.push(filter.profile);
       }
       if (filter.kind) {
         where.push('kind = ?');
@@ -804,8 +885,17 @@ export function createJobQueries(db: Db) {
       const having: string[] = [];
       if (filter.resolved === true) having.push('SUM(resolved_at IS NULL) = 0');
       if (filter.resolved === false) having.push('SUM(resolved_at IS NULL) > 0');
-      const where = filter.since !== undefined ? 'WHERE at >= ?' : '';
-      const vals: unknown[] = filter.since !== undefined ? [filter.since] : [];
+      const conds: string[] = [];
+      const vals: unknown[] = [];
+      if (filter.since !== undefined) {
+        conds.push('at >= ?');
+        vals.push(filter.since);
+      }
+      if (filter.principalId !== undefined) {
+        conds.push('principal_id = ?');
+        vals.push(filter.principalId);
+      }
+      const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
       const rows = db
         .prepare(
           `SELECT fingerprint, op_id, code, path, COUNT(*) AS count, MIN(at) AS first_seen, MAX(at) AS last_seen,
@@ -855,6 +945,10 @@ export function createJobQueries(db: Db) {
       if (filter.jobId !== undefined) {
         where.push('job_id = ?');
         vals.push(filter.jobId);
+      }
+      if (filter.principalId !== undefined) {
+        where.push('principal_id = ?');
+        vals.push(filter.principalId);
       }
       if (filter.since !== undefined) {
         where.push('at >= ?');

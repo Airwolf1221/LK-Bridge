@@ -10,7 +10,7 @@ import {
   unsupportedLoss,
 } from '../../src/jobs/index.js';
 import type { Block } from './lk-model.js';
-import { harness, origin, seen, settle, type Harness } from './helpers.js';
+import { harness, origin, seen, settle, type Harness, queue } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -176,7 +176,7 @@ describe('other guards', () => {
         { origin },
       ),
     ).rejects.toBeInstanceOf(CascadeConfirmationRequiredError);
-    expect(() =>
+    await expect(
       e.engine.submit({
         kind: 'batch_ops',
         origin,
@@ -184,7 +184,7 @@ describe('other guards', () => {
           { op: 'deleteResource', params: { path: { resourceId: 'rparent1' }, query: { cascade: true } } },
         ],
       }),
-    ).toThrow(CascadeConfirmationRequiredError);
+    ).rejects.toThrow(CascadeConfirmationRequiredError);
     expect(e.engine.queries.listJobs()).toHaveLength(0);
     const r = await settle(
       h,
@@ -238,7 +238,7 @@ describe('other guards', () => {
     await expect(
       e.engine.run('updateResource', { path: { resourceId: 'r1' }, body: { name: 'x' } }, { origin }),
     ).rejects.toBeInstanceOf(ReadOnlyError);
-    expect(() =>
+    await expect(
       e.engine.submit({
         kind: 'batch_ops',
         origin,
@@ -247,7 +247,7 @@ describe('other guards', () => {
           { op: 'createResource', params: { body: { name: 'n' } } },
         ],
       }),
-    ).toThrow(ReadOnlyError);
+    ).rejects.toThrow(ReadOnlyError);
     expect(e.engine.queries.listJobs()).toHaveLength(0);
     // Reads still work.
     expect(
@@ -280,15 +280,15 @@ describe('other guards', () => {
     h = await harness();
     h.model.seedResource('r1');
     const e = h.newEngine();
-    e.engine.controls.setReadOnly(true);
-    // Queued directly in the database before read-only (simulates a job accepted earlier).
-    e.engine.controls.setReadOnly(false);
-    const { jobId } = e.engine.submit({
+    // Accepted while writes are paused (so it stays queued), then read-only is switched on and writes resumed.
+    e.engine.controls.pauseWrites();
+    const { jobId } = await queue(e.engine, {
       kind: 'batch_ops',
       origin,
       steps: [{ op: 'updateResource', params: { path: { resourceId: 'r1' }, body: { name: 'x' } } }],
     });
     e.engine.controls.setReadOnly(true);
+    e.engine.controls.resumeWrites();
     await h.drive(e, () => e.engine.queries.getJob(jobId)?.waitReason?.held === 'read_only');
     expect(seen(h.mock, 'PATCH', /\/resources\/r1$/)).toHaveLength(0);
     e.engine.controls.setReadOnly(false);
@@ -304,7 +304,7 @@ describe('write journal', () => {
     h.model.seedResource('r2');
     h.model.seedResource('r3');
     const e = h.newEngine();
-    const { jobId } = e.engine.submit({
+    const { jobId } = await queue(e.engine, {
       kind: 'batch_ops',
       origin,
       steps: [

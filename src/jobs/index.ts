@@ -31,6 +31,18 @@ export {
   assertNoUnsupportedLoss,
   type GuardContext,
 } from './guards.js';
+export {
+  ALLOW_ALL_GATE,
+  DENY_PROPOSALS_SINK,
+  policyOpMeta,
+  type PolicyGate,
+  type PolicyDecision,
+  type PolicyOpMeta,
+  type PolicyContext,
+  type ProposalSink,
+  type ProposedOp,
+  type ProposalMeta,
+} from './policy.js';
 export { matchesIntent, type CompareMode } from './compare.js';
 export { lockKeyFor } from './step-exec.js';
 export { LockManager, type LockEvent, type LockOwner } from './locks.js';

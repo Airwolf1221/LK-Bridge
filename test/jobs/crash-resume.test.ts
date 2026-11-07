@@ -4,7 +4,16 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BatchSubmit, JobView } from '../../src/jobs/index.js';
-import { harness, origin, seen, settle, type EngineHandle, type Harness, type Wire } from './helpers.js';
+import {
+  harness,
+  origin,
+  seen,
+  settle,
+  type EngineHandle,
+  type Harness,
+  type Wire,
+  queue,
+} from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -70,7 +79,7 @@ async function crashDuring(
   const { batch } = setup(hh);
   const e1 = hh.newEngine();
   const killed = e1.killAfter(matches(method, path));
-  const { jobId } = e1.engine.submit(batch);
+  const { jobId } = await queue(e1.engine, batch);
   await hh.drive(e1, () => e1.killed());
   await killed;
   e1.crash(); // no clean shutdown; the job row still says "running"
@@ -156,7 +165,7 @@ describe('crash-resume', () => {
     const e1 = h.newEngine();
     // Kill on the read before step 3's PUT: the PUT was never sent.
     const killed = e1.killAfter(matches('GET', /\/blocks$/));
-    const { jobId } = e1.engine.submit(batch);
+    const { jobId } = await queue(e1.engine, batch);
     await h.drive(e1, () => e1.killed());
     await killed;
     e1.crash();
@@ -232,7 +241,7 @@ describe('retrying a step that may have applied', () => {
     // Every attempt dropped after LK committed: the governor gives up with a transient error.
     h.mock.inject((c) => c.method === 'POST', { kind: 'drop-after-commit' }, 1);
     h.mock.inject((c) => c.method === 'POST', { kind: 'drop' }, 3);
-    const { jobId } = e.engine.submit({
+    const { jobId } = await queue(e.engine, {
       kind: 'batch_ops',
       origin,
       steps: [

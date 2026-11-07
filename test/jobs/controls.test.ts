@@ -1,7 +1,7 @@
 /** Controls (PLAN §6.2): pause all writes, drain, cancel, pause/resume a job, retry a failed step. */
 import { afterEach, describe, expect, it } from 'vitest';
 import { DrainingError, InvalidControlError, type JobView } from '../../src/jobs/index.js';
-import { harness, origin, seen, settle, type Harness, type Wire } from './helpers.js';
+import { harness, origin, seen, settle, type Harness, type Wire, queue } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -29,7 +29,7 @@ describe('pause all writes', () => {
     h = await harness();
     const e = h.newEngine({ governor: { writeSpacingMs: 0 } });
     const release = e.hold(isPatch);
-    const { jobId } = e.engine.submit(threeRenames(h));
+    const { jobId } = await queue(e.engine, threeRenames(h));
     await h.until(() => e.sent.filter(isPatch).length === 1);
     e.engine.controls.pauseWrites('owner');
     release();
@@ -67,12 +67,12 @@ describe('drain', () => {
     h = await harness();
     const e = h.newEngine({ governor: { writeSpacingMs: 0 } });
     const release = e.hold(isPatch);
-    const { jobId } = e.engine.submit(threeRenames(h));
+    const { jobId } = await queue(e.engine, threeRenames(h));
     await h.until(() => e.sent.filter(isPatch).length === 1);
     let drained = false;
     void e.engine.controls.drain().then(() => (drained = true));
     expect(e.engine.queries.controls().draining).toBe(true);
-    expect(() => e.engine.submit(threeRenames(h!))).toThrow(DrainingError);
+    await expect(e.engine.submit(threeRenames(h))).rejects.toThrow(DrainingError);
     await expect(
       e.engine.run('updateResource', { path: { resourceId: 'r1' }, body: { name: 'y' } }, { origin }),
     ).rejects.toBeInstanceOf(DrainingError);
@@ -90,7 +90,7 @@ describe('cancel', () => {
     h = await harness();
     const e = h.newEngine({ governor: { writeSpacingMs: 0 } });
     const release = e.hold(isPatch);
-    const { jobId } = e.engine.submit(threeRenames(h));
+    const { jobId } = await queue(e.engine, threeRenames(h));
     await h.until(() => e.sent.filter(isPatch).length === 1);
     expect(e.engine.controls.cancel(jobId).cancelRequested).toBe(true);
     release();
@@ -104,7 +104,7 @@ describe('cancel', () => {
     h = await harness();
     const e = h.newEngine();
     e.engine.controls.pauseWrites();
-    const { jobId } = e.engine.submit(threeRenames(h));
+    const { jobId } = await queue(e.engine, threeRenames(h));
     expect(e.engine.controls.cancel(jobId).status).toBe('cancelled');
     e.engine.controls.resumeWrites();
     await h.drive(e, () => true);
@@ -117,7 +117,7 @@ describe('pause and resume a job', () => {
     h = await harness();
     const e = h.newEngine({ governor: { writeSpacingMs: 0 } });
     const release = e.hold(isPatch);
-    const { jobId } = e.engine.submit(threeRenames(h));
+    const { jobId } = await queue(e.engine, threeRenames(h));
     await h.until(() => e.sent.filter(isPatch).length === 1);
     e.engine.controls.pauseJob(jobId);
     release();
@@ -139,7 +139,7 @@ describe('retry a failed step', () => {
     h = await harness();
     h.model.seedResource('r1');
     const e = h.newEngine();
-    const { jobId } = e.engine.submit({
+    const { jobId } = await queue(e.engine, {
       kind: 'batch_ops',
       origin,
       onError: 'stop',
@@ -178,7 +178,7 @@ describe('retry a failed step', () => {
     h = await harness();
     h.model.seedResource('r1');
     const e = h.newEngine();
-    const { jobId } = e.engine.submit({
+    const { jobId } = await queue(e.engine, {
       kind: 'batch_ops',
       origin,
       onError: 'continue',

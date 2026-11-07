@@ -19,6 +19,7 @@
 export interface LockOwner {
   readonly jobId: string;
   readonly stepNo: number;
+  readonly principalId?: string;
 }
 
 export interface LockEvent {

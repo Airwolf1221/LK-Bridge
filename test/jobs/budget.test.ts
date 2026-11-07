@@ -1,7 +1,7 @@
 /** BudgetWaitError parking and resumption (PLAN §5.3), including across a restart; the >20 s queued path. */
 import { afterEach, describe, expect, it } from 'vitest';
 import { BudgetExhaustedError, type JobView } from '../../src/jobs/index.js';
-import { harness, origin, seen, settle, type Harness } from './helpers.js';
+import { harness, origin, seen, settle, type Harness, queue } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -19,7 +19,7 @@ describe('budget waits', () => {
     const e = h.newEngine();
     injectLong429(h);
     const t0 = h.clock.now();
-    const { jobId } = e.engine.submit({
+    const { jobId } = await queue(e.engine, {
       kind: 'batch_ops',
       origin,
       steps: [{ op: 'createResource', params: { body: { name: 'A' } } }],
@@ -43,7 +43,7 @@ describe('budget waits', () => {
     const e1 = h.newEngine();
     injectLong429(h);
     const t0 = h.clock.now();
-    const { jobId } = e1.engine.submit({
+    const { jobId } = await queue(e1.engine, {
       kind: 'batch_ops',
       origin,
       steps: [{ op: 'createResource', params: { body: { name: 'A' } } }],
@@ -64,7 +64,7 @@ describe('budget waits', () => {
     h = await harness();
     const e1 = h.newEngine();
     injectLong429(h);
-    const { jobId } = e1.engine.submit({
+    const { jobId } = await queue(e1.engine, {
       kind: 'batch_ops',
       origin,
       steps: [{ op: 'createResource', params: { body: { name: 'A' } } }],

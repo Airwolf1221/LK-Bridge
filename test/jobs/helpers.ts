@@ -10,7 +10,13 @@ import { defaultJobsSettings, type JobsSettings } from '../../src/config/jobs.js
 import { defaultGovernorSettings, type GovernorSettings } from '../../src/config/lk.js';
 import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase, type Db } from '../../src/db/open.js';
-import { createJobEngine, type JobEngine } from '../../src/jobs/index.js';
+import {
+  createJobEngine,
+  type CreateJobEngineOptions,
+  type JobEngine,
+  type SubmitRequest,
+  type SubmitResult,
+} from '../../src/jobs/index.js';
 import { createLkClient, type LkClient } from '../../src/lk/client.js';
 import { FakeClock, flushMicrotasks } from '../../src/lk/governor/clock.js';
 import { MockLk, type SeenCall } from '../contract/mock-lk.js';
@@ -47,7 +53,12 @@ export interface Harness {
   readonly model: LkModel;
   readonly dbPath: string;
   readonly engines: EngineHandle[];
-  newEngine(o?: { settings?: Partial<JobsSettings>; governor?: Partial<GovernorSettings> }): EngineHandle;
+  newEngine(o?: {
+    settings?: Partial<JobsSettings>;
+    governor?: Partial<GovernorSettings>;
+    policyGate?: CreateJobEngineOptions['policyGate'];
+    proposalSink?: CreateJobEngineOptions['proposalSink'];
+  }): EngineHandle;
   /** Moves fake time only when no request of `h` is in flight (zero-latency network), until `done()`. */
   drive(h: EngineHandle, done: () => boolean, maxVirtualMs?: number): Promise<void>;
   /** Waits in real time (fake time frozen) until `done()`. */
@@ -106,6 +117,8 @@ export async function harness(): Promise<Harness> {
       lk,
       clock,
       settings: defaultJobsSettings({ readOnly: false, ...o.settings }),
+      ...(o.policyGate ? { policyGate: o.policyGate } : {}),
+      ...(o.proposalSink ? { proposalSink: o.proposalSink } : {}),
     });
     const handle: EngineHandle = {
       engine,
@@ -226,4 +239,11 @@ export async function settle<T>(
   );
   await h.drive(e, () => state.done);
   return state;
+}
+
+/** `engine.submit` for tests that expect a job (not a proposal). */
+export async function queue(engine: JobEngine, req: SubmitRequest): Promise<SubmitResult> {
+  const r = await engine.submit(req);
+  if (!('jobId' in r)) throw new Error(`expected a job, got ${r.status}`);
+  return r;
 }

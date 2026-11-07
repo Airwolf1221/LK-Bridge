@@ -7,6 +7,9 @@ CREATE TABLE jobs (
   title            TEXT NOT NULL,
   origin           TEXT NOT NULL,                 -- JSON: { kind, client?, tool?, detail? }
   origin_kind      TEXT NOT NULL,                 -- copy of origin.kind, for filtering
+  principal_id     TEXT NOT NULL DEFAULT 'system', -- origin.principal (who the work is done for)
+  profile          TEXT NOT NULL DEFAULT 'system', -- the policy profile it acts under
+  approved_by      TEXT,                          -- set when the work ran from an approved proposal
   priority         TEXT NOT NULL CHECK (priority IN ('P0', 'P1', 'P2', 'P3')),
   status           TEXT NOT NULL CHECK (status IN ('queued', 'running', 'waiting_budget', 'waiting_lock',
                                                     'paused', 'succeeded', 'failed', 'cancelled')),
@@ -30,6 +33,7 @@ CREATE TABLE jobs (
 );
 CREATE INDEX jobs_status ON jobs (status, priority, created_at);
 CREATE INDEX jobs_created ON jobs (created_at);
+CREATE INDEX jobs_principal ON jobs (principal_id, created_at);
 
 CREATE TABLE steps (
   job_id             TEXT NOT NULL REFERENCES jobs (id) ON DELETE CASCADE,
@@ -89,6 +93,8 @@ CREATE TABLE errors (
   op_id          TEXT NOT NULL,
   job_id         TEXT,
   step_no        INTEGER,
+  principal_id   TEXT NOT NULL DEFAULT 'system',
+  profile        TEXT NOT NULL DEFAULT 'system',
   http_status    INTEGER,
   code           TEXT,
   message        TEXT NOT NULL,
@@ -96,7 +102,7 @@ CREATE TABLE errors (
   path           TEXT NOT NULL DEFAULT '',        -- first errors[] path, part of the fingerprint
   request_id     TEXT,
   retryable      INTEGER NOT NULL CHECK (retryable IN (0, 1)),
-  classification TEXT NOT NULL,
+  classification TEXT NOT NULL,                   -- the governor's, or 'policy' for policy refusals
   fingerprint    TEXT NOT NULL,
   detail         TEXT,                            -- JSON: the full error, safe to show
   resolved_at    INTEGER
@@ -104,6 +110,7 @@ CREATE TABLE errors (
 CREATE INDEX errors_fingerprint ON errors (fingerprint, at);
 CREATE INDEX errors_at ON errors (at);
 CREATE INDEX errors_job ON errors (job_id);
+CREATE INDEX errors_principal ON errors (principal_id, at);
 
 CREATE TABLE budget_samples (
   at   INTEGER NOT NULL,
@@ -118,6 +125,9 @@ CREATE TABLE write_journal (
   job_id      TEXT,
   step_no     INTEGER,
   op_id       TEXT NOT NULL,
+  principal_id TEXT NOT NULL DEFAULT 'system',
+  profile     TEXT NOT NULL DEFAULT 'system',
+  approved_by TEXT,
   risk        TEXT NOT NULL,
   target_kind TEXT NOT NULL,
   target_id   TEXT,
@@ -133,6 +143,7 @@ CREATE INDEX write_journal_at ON write_journal (at);
 CREATE INDEX write_journal_resource ON write_journal (resource_id, at);
 CREATE INDEX write_journal_document ON write_journal (document_id, at);
 CREATE INDEX write_journal_job ON write_journal (job_id);
+CREATE INDEX write_journal_principal ON write_journal (principal_id, at);
 
 CREATE TABLE runtime_settings (
   key        TEXT PRIMARY KEY,

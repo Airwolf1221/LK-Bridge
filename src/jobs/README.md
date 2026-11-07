@@ -36,22 +36,22 @@ restart-resume; `await engine.stop()` is the clean shutdown (in-flight calls fin
 
 ## Exported interface
 
-| Export                                                 | What it is                                                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createJobEngine({ db, lk, settings, clock?, log? })`  | Builds the engine on a migrated database, an `LkClient` and `JobsSettings` (`jobsSettingsFrom(config)` in `src/config/jobs.ts`). `clock` defaults to the system clock (tests pass chunk 1's `FakeClock`, the same one the `LkClient` uses).                                                                                     |
-| `engine.run(op, params, opts)`                         | One registry operation. `params` is the registry's caller-facing input `{ path?, query?, ifMatch?, body? }`; `opts` is `{ origin, priority? = 'P1', title?, signal?, allowUnsupportedLoss?, confirm? }`. Returns `RunResult` (below). Throws only `JobsError` subclasses.                                                       |
-| `engine.submit(req)`                                   | Queues a multi-step job and returns `{ jobId, status, eta }` at once. `req` is `{ kind: 'batch_ops', steps: [{ op, params, allowUnsupportedLoss?, confirm? }], onError?: 'stop' \| 'continue', priority? = 'P2', origin, title? }` or `{ kind: 'paginate_all', op, params?, maxItems?, maxPages?, priority?, origin, title? }`. |
-| `engine.wait(jobId, ms)`                               | Bounded wait (at most 25 s, `maxWaitMs`) for the job to finish. Resolves with the `JobView` as it stands then (finished or not).                                                                                                                                                                                                |
-| `engine.controls`                                      | `pauseWrites(by?)`, `resumeWrites(by?)`, `drain()` (resolves when nothing runs), `undrain()`, `setWritersMax(1–8, by?)`, `setReadOnly(true \| false \| null, by?)`, `cancel(jobId)`, `pauseJob(jobId)`, `resumeJob(jobId)`, `retryStep(jobId, stepNo, { force? })`. Each returns the new `ControlsView` or `JobView`.           |
-| `engine.queries`                                       | `listJobs(filter)`, `getJob(id)` (with steps and artefacts), `readArtifact(id, { offset, limit })`, `listErrorGroups(filter)`, `listErrors(filter)`, `resolveErrorGroup(fingerprint)`, `journalLookup(filter)`, `listBudgetSamples(range)`, `runtimeSettings()`, and in-memory `writers()`, `locks()`, `controls()`.            |
-| `createJobQueries(db)`                                 | The database half of `engine.queries`, for code that has only the `db`.                                                                                                                                                                                                                                                         |
-| `engine.events.on(name, cb)`                           | Typed events for the SSE stream; returns an unsubscribe function. `job` (`{ type: 'created' \| 'updated', job }`), `step` (a step reached a final state), `lock` (`acquired` / `waiting` / `released`), `writers` (`WritersView`), `error` (`ErrorRecordView`), `controls` (`ControlsView`).                                    |
-| `engine.recordBudgetSample(snapshot?)`                 | Stores one budget sample (defaults to `lk.governor.snapshot()`). Chunk 6's `budget-sampler` calls it every 10 s.                                                                                                                                                                                                                |
-| `engine.pruneJournal()`, `pruneJournal(db, retention)` | Journal retention (default 30 days or 2 GB). Chunk 6's `journal-prune` calls it.                                                                                                                                                                                                                                                |
-| `journalLookup(db, filter)`                            | `{ jobId?, resourceId?, documentId?, targetId?, opId?, since?, until?, limit?, includePreImage? }`, newest first. Backs `bridge_journal_lookup`.                                                                                                                                                                                |
-| Guard helpers                                          | `checkSubmitGuards(op, params, options, { readOnly, allowMemberAdmin })`, `cascadeRequested(params)`, `unsupportedBlockIds(tree)`, `unsupportedLoss(current, incoming)`, `assertNoUnsupportedLoss(...)`.                                                                                                                        |
-| Other helpers                                          | `lockKeyFor(op, params)`, `matchesIntent(intended, actual, mode)`, `mintClientId()`, `isClientId()`, `OP_META` / `opMeta(op)` (per-operation verify, reader, journal and guard metadata), `LockManager`, `WriterPool`.                                                                                                          |
-| Typed errors (`JobsError` and subclasses)              | See below.                                                                                                                                                                                                                                                                                                                      |
+| Export                                                                            | What it is                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createJobEngine({ db, lk, settings, clock?, log?, policyGate?, proposalSink? })` | Builds the engine on a migrated database, an `LkClient` and `JobsSettings` (`jobsSettingsFrom(config)` in `src/config/jobs.ts`). `clock` defaults to the system clock (tests pass chunk 1's `FakeClock`, the same one the `LkClient` uses). `policyGate` / `proposalSink`: see _Principals and policy hooks_.                                                                                                     |
+| `engine.run(op, params, opts)`                                                    | One registry operation. `params` is the registry's caller-facing input `{ path?, query?, ifMatch?, body? }`; `opts` is `{ origin, priority? = 'P1', title?, signal?, allowUnsupportedLoss?, confirm? }`. Returns `RunResult` (below). Throws only `JobsError` subclasses.                                                                                                                                         |
+| `engine.submit(req)`                                                              | **Async.** Queues a multi-step job and resolves with `{ jobId, status, eta }` at once (or `{ status: 'proposal_captured', proposalId }`). `req` is `{ kind: 'batch_ops', steps: [{ op, params, allowUnsupportedLoss?, confirm? }], onError?: 'stop' \| 'continue', priority? = 'P2', origin, title? }` or `{ kind: 'paginate_all', op, params?, maxItems?, maxPages?, priority?, origin, title? }`.               |
+| `engine.wait(jobId, ms)`                                                          | Bounded wait (at most 25 s, `maxWaitMs`) for the job to finish. Resolves with the `JobView` as it stands then (finished or not).                                                                                                                                                                                                                                                                                  |
+| `engine.controls`                                                                 | `pauseWrites(by?)`, `resumeWrites(by?)`, `drain()` (resolves when nothing runs), `undrain()`, `setWritersMax(1–8, by?)`, `setReadOnly(true \| false \| null, by?)`, `cancel(jobId)`, `pauseJob(jobId)`, `resumeJob(jobId)`, `retryStep(jobId, stepNo, { force? })`. Each returns the new `ControlsView` or `JobView`.                                                                                             |
+| `engine.queries`                                                                  | `listJobs(filter)` (status, origin kind, `principalId`, `profile`, kind, before), `getJob(id)` (with steps and artefacts), `readArtifact(id, { offset, limit })`, `listErrorGroups(filter)`, `listErrors(filter)` (both filter by `principalId`), `resolveErrorGroup(fingerprint)`, `journalLookup(filter)`, `listBudgetSamples(range)`, `runtimeSettings()`, and in-memory `writers()`, `locks()`, `controls()`. |
+| `createJobQueries(db)`                                                            | The database half of `engine.queries`, for code that has only the `db`.                                                                                                                                                                                                                                                                                                                                           |
+| `engine.events.on(name, cb)`                                                      | Typed events for the SSE stream; returns an unsubscribe function. `job` (`{ type: 'created' \| 'updated', job }`), `step` (`{ jobId, principalId, profile, step }`: a step reached a final state), `lock` (`acquired` / `waiting` / `released`), `writers` (`WritersView`), `error` (`ErrorRecordView`), `controls` (`ControlsView`).                                                                             |
+| `engine.recordBudgetSample(snapshot?)`                                            | Stores one budget sample (defaults to `lk.governor.snapshot()`). Chunk 6's `budget-sampler` calls it every 10 s.                                                                                                                                                                                                                                                                                                  |
+| `engine.pruneJournal()`, `pruneJournal(db, retention)`                            | Journal retention (default 30 days or 2 GB). Chunk 6's `journal-prune` calls it.                                                                                                                                                                                                                                                                                                                                  |
+| `journalLookup(db, filter)`                                                       | `{ jobId?, resourceId?, documentId?, targetId?, opId?, principalId?, profile?, since?, until?, limit?, includePreImage? }`, newest first. Backs `bridge_journal_lookup`.                                                                                                                                                                                                                                          |
+| Guard helpers                                                                     | `checkSubmitGuards(op, params, options, { readOnly, allowMemberAdmin })`, `cascadeRequested(params)`, `unsupportedBlockIds(tree)`, `unsupportedLoss(current, incoming)`, `assertNoUnsupportedLoss(...)`.                                                                                                                                                                                                          |
+| Other helpers                                                                     | `lockKeyFor(op, params)`, `matchesIntent(intended, actual, mode)`, `mintClientId()`, `isClientId()`, `OP_META` / `opMeta(op)` (per-operation verify, reader, journal and guard metadata), `LockManager`, `WriterPool`.                                                                                                                                                                                            |
+| Typed errors (`JobsError` and subclasses)                                         | See below.                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ### `RunResult`
 
@@ -59,6 +59,7 @@ restart-resume; `await engine.stop()` is the clean shutdown (in-flight calls fin
 | { status: 'succeeded'; jobId: string | null; result: unknown; requestIds: string[] } // jobId null for reads
 | { status: 'queued' | 'waiting_budget'; jobId: string; eta: number | null;
     reason: 'estimate' | 'budget' | 'writes_paused' | 'read_only' }
+| { status: 'proposal_captured'; proposalId: string } // the policy gate asked for approval; nothing was queued
 ```
 
 - A single read runs inline and is not recorded as a job. A single write runs inline and is recorded as a one-step
@@ -72,27 +73,29 @@ restart-resume; `await engine.stop()` is the clean shutdown (in-flight calls fin
 
 All have `code`, `message`, and `jobId` / `stepNo` when a job recorded the work; `toJSON()` is safe to show.
 
-| Class                              | `code`                     | When                                                                                      |
-| ---------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------- |
-| `UnknownOperationError`            | `UNKNOWN_OPERATION`        | Not one of the 89 operations                                                              |
-| `InvalidParamsError`               | `INVALID_PARAMS`           | Params fail the registry's schema (`issues[]` with paths); nothing is queued              |
-| `ReadOnlyError`                    | `READ_ONLY`                | A write while read-only mode is on (refused before it is queued)                          |
-| `MemberAdminDisabledError`         | `MEMBER_ADMIN_DISABLED`    | `inviteMember`, `removeMember`, `revokeInvite` without `LK_ALLOW_MEMBER_ADMIN=true`       |
-| `CascadeConfirmationRequiredError` | `CASCADE_CONFIRM_REQUIRED` | `deleteResource` with `cascade=true` but no `confirm: "cascade"`                          |
-| `DrainingError`                    | `DRAINING`                 | A new job (or inline write) while draining                                                |
-| `UnsupportedBlockLossError`        | `UNSUPPORTED_BLOCK_LOSS`   | A replace would delete `unsupported` blocks; `blockIds` lists them                        |
-| `VersionConflictError`             | `VERSION_CONFLICT`         | 412, or a caller version older than LK's; `sentVersion`, `currentVersion`. Never retried. |
-| `UncertainOutcomeError`            | `UNCERTAIN_OUTCOME`        | A write may have applied and that cannot be established; the step is `uncertain`          |
-| `LkOperationError`                 | `LK_ERROR`                 | LK (or the governor) failed the call; `lk` is the `BridgeLkError` (`status`, `lkCode`, …) |
-| `BudgetExhaustedError`             | `BUDGET_EXHAUSTED`         | Inline reads only: `tier`, `retryAtMs`                                                    |
-| `JobNotFoundError`                 | `JOB_NOT_FOUND`            | Controls and `wait` on an unknown job                                                     |
-| `InvalidControlError`              | `INVALID_CONTROL`          | E.g. retrying a step that has not failed                                                  |
-| `CancelledError`                   | `CANCELLED`                | An inline write whose job was cancelled before it ran                                     |
+| Class                              | `code`                     | When                                                                                                                                          |
+| ---------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `UnknownOperationError`            | `UNKNOWN_OPERATION`        | Not one of the 89 operations                                                                                                                  |
+| `InvalidParamsError`               | `INVALID_PARAMS`           | Params fail the registry's schema (`issues[]` with paths); nothing is queued                                                                  |
+| `PolicyDeniedError`                | `POLICY_DENIED`            | The policy gate denied it (or proposed it with no proposal sink); `opId`, `reason`, `principalId`, `stepIndex` for batches; nothing is queued |
+| `ReadOnlyError`                    | `READ_ONLY`                | A write while read-only mode is on (refused before it is queued)                                                                              |
+| `MemberAdminDisabledError`         | `MEMBER_ADMIN_DISABLED`    | `inviteMember`, `removeMember`, `revokeInvite` without `LK_ALLOW_MEMBER_ADMIN=true`                                                           |
+| `CascadeConfirmationRequiredError` | `CASCADE_CONFIRM_REQUIRED` | `deleteResource` with `cascade=true` but no `confirm: "cascade"`                                                                              |
+| `DrainingError`                    | `DRAINING`                 | A new job (or inline write) while draining                                                                                                    |
+| `UnsupportedBlockLossError`        | `UNSUPPORTED_BLOCK_LOSS`   | A replace would delete `unsupported` blocks; `blockIds` lists them                                                                            |
+| `VersionConflictError`             | `VERSION_CONFLICT`         | 412, or a caller version older than LK's; `sentVersion`, `currentVersion`. Never retried.                                                     |
+| `UncertainOutcomeError`            | `UNCERTAIN_OUTCOME`        | A write may have applied and that cannot be established; the step is `uncertain`                                                              |
+| `LkOperationError`                 | `LK_ERROR`                 | LK (or the governor) failed the call; `lk` is the `BridgeLkError` (`status`, `lkCode`, …)                                                     |
+| `BudgetExhaustedError`             | `BUDGET_EXHAUSTED`         | Inline reads only: `tier`, `retryAtMs`                                                                                                        |
+| `JobNotFoundError`                 | `JOB_NOT_FOUND`            | Controls and `wait` on an unknown job                                                                                                         |
+| `InvalidControlError`              | `INVALID_CONTROL`          | E.g. retrying a step that has not failed                                                                                                      |
+| `CancelledError`                   | `CANCELLED`                | An inline write whose job was cancelled before it ran                                                                                         |
 
 ## Model
 
 **Job** (`jobs`): `kind` (`single_op`, `batch_ops`, `paginate_all`; `upload_image` is reserved for chunk 3), `title`,
-`origin` (`{ kind: 'mcp' | 'ui' | 'system' | 'maintenance' | 'test', client?, tool?, detail? }`), `priority` P0–P3,
+`origin` (`{ kind: 'mcp' | 'ui' | 'system' | 'maintenance' | 'test', client?, tool?, detail?, principal?, approvedBy? }`),
+`principalId`, `profile` and `approvedBy` (copied into columns for filtering), `priority` P0–P3,
 `status` (`queued`, `running`, `waiting_budget`, `waiting_lock`, `paused`, `succeeded`, `failed`, `cancelled`),
 progress, `resumeAt`, `waitReason`, `uncertain`, `lastError`, `result`, timestamps.
 
@@ -104,10 +107,38 @@ ids, the result summary (whole results above 4 KB go to a `result` artefact), th
 **Artefacts** (`job_artifacts`, `job_artifact_items`): `params`, `result`, and `items` (the pageable list a
 `paginate_all` job builds; capped by `settings.paginate`, with `truncated` and a reason when a cap is hit).
 
+## Principals and policy hooks
+
+These prepare for a later chunk; the policy store and the proposal workflow are not built here.
+
+- **Principal.** `origin.principal` is `{ principalId, profile, label }`: who the work is done for and the policy
+  profile it acts under. Omitted, it is `SYSTEM_PRINCIPAL` (`{ principalId: 'system', profile: 'system', label:
+'System' }`), the default for internal and UI-initiated work. `principal_id` and `profile` are stored on jobs, errors
+  and journal rows, appear in `JobView`, `ErrorRecordView`, `JournalEntry`, the `step` event and writer slots, and
+  filter `listJobs`, `listErrors`, `listErrorGroups` and `journalLookup`.
+- **`origin.approvedBy`** (optional): who approved the work (when it runs from an approved proposal). Stored on the job
+  and on its journal entries.
+- **`PolicyGate`** (`policyGate` option; default `ALLOW_ALL_GATE`): `authorize(principal, opMeta, params, ctx)`
+  returns (or resolves to) `{ decision: 'allow' }`, `{ decision: 'deny', reason }` or `{ decision: 'propose' }`.
+  `opMeta` is `PolicyOpMeta` (operation id, kind, method, tag, risk, concurrency, versioned, paged and the step
+  options); `ctx` is `{ origin, jobKind, stepIndex? }`. The engine calls it at entry of `run` and `submit` for EVERY
+  operation, reads included, after params are validated and before any other guard, so nothing is queued or sent
+  first. A gate that throws counts as a deny (fail closed).
+- **Batches**: every step is evaluated up front. Any deny denies the whole batch (`stepIndex` says which step); else any
+  propose turns the whole batch into one proposal.
+- **Deny**: `PolicyDeniedError` is thrown and recorded in the errors table with classification `policy` (and the
+  principal); nothing is queued.
+- **Propose**: the engine calls the `ProposalSink` (`proposalSink` option): `capture(principal, ops, meta)` with
+  `ops` = `[{ op, params, allowUnsupportedLoss?, confirm? }]` and `meta` = `{ kind, title, origin, priority, onError?,
+paginate? }`, and returns `{ status: 'proposal_captured', proposalId }`. Client ids are not minted for a proposal; they
+  are minted when the approved work is submitted. The default sink, `DENY_PROPOSALS_SINK`, treats propose as deny.
+- To run approved work later, call `run` / `submit` again with `origin.approvedBy` set; the gate sees `approvedBy` in
+  `ctx.origin` and can allow it.
+
 ## How a step runs
 
-1. **Guards before queueing** (`checkSubmitGuards`): read-only, member admin (registry `risk: admin`), cascade
-   confirmation. Params are validated against the registry schema.
+1. **Entry**: params are validated against the registry schema, then the policy gate decides (above), then the guards
+   (`checkSubmitGuards`): read-only, member admin (registry `risk: admin`), cascade confirmation.
 2. **Client ids** are minted (or a caller's well-formed id kept) and persisted with the step before it is ever sent.
 3. **Lock, then writer slot** (writes only). See _Locks_.
 4. **One read** (when needed) gives the `If-Match` version, the unsupported-block guard's current tree and the journal
@@ -124,6 +155,15 @@ failed in a way that may have applied) is verified before anything is re-sent, p
 with a client id GET by that id; deletes check the entity is gone; updates re-read and compare with the intent (an
 unchanged version proves a versioned write did not apply, and a re-send reuses the original `If-Match`); POSTs with no
 other evidence are re-sent with their original key within 23 hours, and otherwise marked `uncertain`.
+
+**`createManyResources`** is not atomic (LK's SDK guide): if it fails part-way, the items created before the failure
+remain, and a retry gets `409 DUPLICATE_ID` for them. After any ambiguous outcome (a crash while it was in flight, a
+failure after it may have reached LK, or `DUPLICATE_ID`), the engine GETs EVERY minted id (at most 100 reads, each
+through the governor). All present: the step succeeded. None present: it is sent again. Some present: the step is
+marked succeeded with `{ partial: true, missing, continuedInStep }`, and a new `createManyResources` step with only the
+missing items, under their same ids and a fresh key, is inserted directly after it so it runs next (later steps move
+up one place if none of them has been sent yet; otherwise it is appended). An inline `run` returns every created
+resource. The step is `uncertain` only if the verification itself cannot complete.
 
 ## Locks
 
@@ -185,5 +225,9 @@ params (capped at 16 KB), the version and an outcome (`pending`, `applied`, `not
   cascade, member admin, read-only (with the persisted override), journal capture and pruning.
 - `concurrency.test.ts`: same-document writers serialised, different documents in parallel, slot limits, live
   `WRITERS_MAX`, fair locks.
+- `batch-recovery.test.ts`: a batch half-created at a crash (every id verified, only the missing items re-sent, in
+  order), a batch failing part-way inline, a fully applied batch, and verification that cannot complete.
+- `policy.test.ts`: the default gate, principals on jobs, errors and journal rows (filters, events, `approvedBy`),
+  deny (single, batch, throwing gate), propose (single and batch) and the default sink.
 - `controls.test.ts`, `budget.test.ts`, `jobs.test.ts`, `inline.test.ts`: controls, budget parking across restarts,
   the >20 s queued path, job kinds, artefacts, events, errors, and metadata for all 89 operations.

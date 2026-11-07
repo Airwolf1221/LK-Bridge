@@ -11,7 +11,7 @@ import {
   type JobView,
 } from '../../src/jobs/index.js';
 import { getOperation, operations } from '../../src/lk/registry.js';
-import { harness, origin, settle, type Harness } from './helpers.js';
+import { harness, origin, settle, type Harness, queue } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -59,10 +59,10 @@ describe('batch_ops', () => {
     h = await harness();
     h.model.seedResource('r1');
     const e = h.newEngine();
-    expect(() => e.engine.submit({ kind: 'batch_ops', origin, steps: [{ op: 'nope' }] })).toThrow(
+    await expect(e.engine.submit({ kind: 'batch_ops', origin, steps: [{ op: 'nope' }] })).rejects.toThrow(
       UnknownOperationError,
     );
-    expect(() =>
+    await expect(
       e.engine.submit({
         kind: 'batch_ops',
         origin,
@@ -71,10 +71,10 @@ describe('batch_ops', () => {
           { op: 'createResource', params: { body: {} } },
         ],
       }),
-    ).toThrow(InvalidParamsError);
+    ).rejects.toThrow(InvalidParamsError);
     expect(e.engine.queries.listJobs()).toHaveLength(0);
 
-    const { jobId, eta } = e.engine.submit({
+    const { jobId, eta } = await queue(e.engine, {
       kind: 'batch_ops',
       origin: { kind: 'mcp', client: 'claude', tool: 'lk_api_batch' },
       title: 'three things',
@@ -105,7 +105,7 @@ describe('batch_ops', () => {
       kind: 'paragraph',
       content: [{ text: `line ${i} `.repeat(5) }],
     }));
-    const { jobId } = e.engine.submit({
+    const { jobId } = await queue(e.engine, {
       kind: 'batch_ops',
       origin,
       steps: [
@@ -129,7 +129,7 @@ describe('paginate_all', () => {
     h = await harness();
     for (let i = 0; i < 250; i++) h.model.seedResource(`r${String(i).padStart(3, '0')}`);
     const e = h.newEngine();
-    const { jobId } = e.engine.submit({ kind: 'paginate_all', origin, op: 'listResources' });
+    const { jobId } = await queue(e.engine, { kind: 'paginate_all', origin, op: 'listResources' });
     await h.drive(e, () => status(e.engine.queries.getJob(jobId)) === 'succeeded');
     const job = e.engine.queries.getJob(jobId)!;
     expect(job.steps).toHaveLength(3);
@@ -149,7 +149,12 @@ describe('paginate_all', () => {
     h = await harness();
     for (let i = 0; i < 250; i++) h.model.seedResource(`r${String(i).padStart(3, '0')}`);
     const e = h.newEngine();
-    const { jobId } = e.engine.submit({ kind: 'paginate_all', origin, op: 'listResources', maxItems: 120 });
+    const { jobId } = await queue(e.engine, {
+      kind: 'paginate_all',
+      origin,
+      op: 'listResources',
+      maxItems: 120,
+    });
     await h.drive(e, () => status(e.engine.queries.getJob(jobId)) === 'succeeded');
     const job = e.engine.queries.getJob(jobId)!;
     expect(job.result).toMatchObject({ items: 120, pages: 2, truncated: true });
@@ -162,14 +167,14 @@ describe('paginate_all', () => {
   it('refuses operations that are not paged reads', async () => {
     h = await harness();
     const e = h.newEngine();
-    expect(() =>
+    await expect(
       e.engine.submit({
         kind: 'paginate_all',
         origin,
         op: 'getResource',
         params: { path: { resourceId: 'x' } },
       }),
-    ).toThrow(InvalidParamsError);
+    ).rejects.toThrow(InvalidParamsError);
   });
 });
 
