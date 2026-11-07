@@ -1,0 +1,16 @@
+# Dependency audit
+
+## 7 November 2026 (chunk 4 follow-up)
+
+`npm audit` reports 10 moderate advisories. They are one advisory reported once per package in the chain:
+
+- **Advisory:** [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249), `minimatch` before 11.0.1: denial of service through glob-pattern ("globparts") amplification.
+- **Installed:** `minimatch` 10.2.6, the newest 10.x.
+- **Chain:** `eslint` 10.14.0 (directly, and through `@eslint/config-array` 0.23.5), and `typescript-eslint` 8.72.1 (through `@typescript-eslint/typescript-estree`, `parser`, `utils`, `type-utils` and `eslint-plugin`). The 10 entries are these packages plus `@eslint/js` and `minimatch` itself.
+
+| Question                | Answer                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Production dependency?  | No. `npm audit --omit=dev` finds **0 vulnerabilities**. Every affected package is a devDependency (linting only), absent from a production install and never loaded by the bridge.                                                                                                                                                                                                                        |
+| Reachable in our usage? | No. The DoS needs an attacker-controlled glob pattern. Our patterns are fixed in `eslint.config.js`, in the repository. Anyone able to change them could already run arbitrary code in CI, because the ESLint config is JavaScript.                                                                                                                                                                       |
+| Non-breaking fix?       | None. The fix is `minimatch` 11, a major version. Every parent is already at its latest release and requires `^10`. `npm audit fix` (without `--force`) changes nothing. Its `--force` proposal is to _downgrade_ ESLint to 9.x and `typescript-eslint` to 8.36, a breaking change, so it was not applied. Overriding to `minimatch` 11 would force a major version under ESLint, which is also not safe. |
+| Action                  | None now. Re-run `npm audit` when ESLint or `typescript-eslint` release a version that depends on `minimatch` 11, and take that upgrade. Chunk 8's review should re-check.                                                                                                                                                                                                                                |

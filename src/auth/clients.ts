@@ -74,6 +74,17 @@ export class ClientService {
     const redirectUris = [...new Set(m.redirect_uris)];
     for (const uri of redirectUris) {
       if (!isAllowedRedirectUri(uri, this.deps.config.extraRedirectUris)) {
+        // Redirect URIs are not secrets. Logging the refused one tells the owner exactly what to
+        // add to OAUTH_EXTRA_REDIRECT_URIS if a client starts using a new callback.
+        this.deps.event(
+          'client.registration_rejected',
+          {
+            error: 'invalid_redirect_uri',
+            redirect_uri: uri.slice(0, 300),
+            client_name: m.client_name ?? null,
+          },
+          'warn',
+        );
         throw registrationError(
           'invalid_redirect_uri',
           'Redirect URI not accepted. Allowed: https://claude.ai/api/mcp/auth_callback, ' +
@@ -160,6 +171,7 @@ export class ClientService {
       client_name: clientName,
       auth_method: method,
       redirect_hosts: redirectUris.map((u) => safeHost(u)).join(' '),
+      redirect_uris: redirectUris.join(' '),
     });
     return {
       client,

@@ -11,3 +11,5 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0005](0005-meta-tool-mcp-surface.md)              | Low-level API behind meta-tools                                | Accepted |
 | [0006](0006-mcp-sdk-v2-confirmed-for-transport.md) | MCP SDK v2 confirmed for the transport, with our own auth gate | Accepted |
 | [0007](0007-oauth-authorization-server-design.md)  | OAuth authorization server design choices                      | Accepted |
+| [0008](0008-chatgpt-as-a-client.md)                | ChatGPT as a supported client                                  | Accepted |
+| [0009](0009-refresh-token-grace-window.md)         | Refresh-token grace window                                     | Accepted |

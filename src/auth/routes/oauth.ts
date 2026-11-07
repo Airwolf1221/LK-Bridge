@@ -113,7 +113,9 @@ export function registerOAuthRoutes(app: FastifyInstance, s: AuthServices): void
       return reply.code(201).header('cache-control', 'no-store').type('application/json').send(response);
     } catch (err) {
       if (!(err instanceof OAuthError)) throw err;
-      s.event('client.registration_rejected', { error: err.error, ip }, 'warn');
+      if (err.error !== 'invalid_redirect_uri') {
+        s.event('client.registration_rejected', { error: err.error, ip }, 'warn');
+      }
       return sendOAuthError(reply, err);
     }
   };

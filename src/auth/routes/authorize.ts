@@ -116,7 +116,11 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
         !findRegisteredRedirect(requestedRedirect, client.redirectUris) ||
         !isAllowedRedirectUri(requestedRedirect, config.extraRedirectUris)
       ) {
-        s.event('authorize.rejected', { client_id: clientId, reason: 'redirect_uri' }, 'warn');
+        s.event(
+          'authorize.rejected',
+          { client_id: clientId, reason: 'redirect_uri', redirect_uri: requestedRedirect.slice(0, 300) },
+          'warn',
+        );
         return sendErrorPage(
           reply,
           400,

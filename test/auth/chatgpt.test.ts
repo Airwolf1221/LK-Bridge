@@ -234,6 +234,17 @@ describe('ChatGPT with Dynamic Client Registration', () => {
       token_endpoint_auth_method: 'none',
     });
     expect(sibling.status).toBe(400);
+    // The refused URI is logged in full, so the owner can copy it into OAUTH_EXTRA_REDIRECT_URIS.
+    const rejected = bridge.logs
+      .map((l) => JSON.parse(l) as { event?: string; redirect_uri?: string })
+      .filter((l) => l.event === 'client.registration_rejected');
+    expect(rejected.map((l) => l.redirect_uri)).toContain(
+      'https://chatgpt.com/aip/g-9999999999/oauth/callback',
+    );
+    const registered = bridge.logs
+      .map((l) => JSON.parse(l) as { event?: string; redirect_uris?: string })
+      .filter((l) => l.event === 'client.registered');
+    expect(registered.map((l) => l.redirect_uris)).toContain(extra);
   });
 
   it.each([

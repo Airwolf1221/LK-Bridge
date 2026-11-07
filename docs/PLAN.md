@@ -561,3 +561,10 @@ Effort levels are `low`, `medium`, `high`, `xhigh` and `max`. The default for Op
 - Adding custom connectors: https://claude.com/docs/connectors/custom
 - Claude Code model configuration: https://code.claude.com/docs/en/model-config
 - Claude Code MCP: https://code.claude.com/docs/en/mcp
+
+## Amendments (7 November 2026)
+
+1. ChatGPT is a supported client (OAuth only). Redirect URIs, RFC 9207 and the ChatGPT checks are in docs/auth.md.
+2. Chunk 3: split `lk_api_call` into `lk_api_read` and `lk_api_write` (batch and paginate_all follow the same split), and set tool annotations, so users can auto-approve reads and keep confirmations on writes in both Claude and ChatGPT.
+3. Chunk 7: add a ChatGPT connection test.
+4. Chunk 4 added a refresh-token grace window and a TRUST_PROXY setting.

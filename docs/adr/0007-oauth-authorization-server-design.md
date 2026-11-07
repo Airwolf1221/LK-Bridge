@@ -1,6 +1,6 @@
 # ADR 0007: OAuth authorization server design choices
 
-Status: Accepted (chunk 4). Implements PLAN §9.4 to §9.6; records the choices the plan leaves open and the places where this chunk reads the plan in a particular way.
+Status: Accepted (chunk 4). Implements PLAN §9.4 to §9.6; records the choices the plan leaves open and the places where this chunk reads the plan in a particular way. Partly superseded: redirect URIs, `AUTH_EXTRA_REDIRECT_URIS` and DCR client pruning by [ADR 0008](0008-chatgpt-as-a-client.md); the strict no-grace-window rule by [ADR 0009](0009-refresh-token-grace-window.md).
 
 ## Decisions
 
