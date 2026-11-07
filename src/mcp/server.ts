@@ -55,6 +55,8 @@ export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
   readonly description: string;
   readonly inputSchema: S;
   readonly annotations?: McpToolAnnotations;
+  /** Whether the tool only reads or may write; chunk 2b filters and enforces on it (not enforced here). */
+  readonly access?: 'read' | 'write';
   /** Scopes the caller must hold (checked before the handler). Default: none beyond `/mcp` access. */
   readonly requiredScopes?: readonly string[];
   handler(input: z.output<S>, ctx: McpToolContext): McpToolResult | Promise<McpToolResult>;

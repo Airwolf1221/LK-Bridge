@@ -43,6 +43,12 @@ export {
   type ProposedOp,
   type ProposalMeta,
 } from './policy.js';
+export {
+  UPLOAD_PUT_STEP,
+  type CustomStepContext,
+  type CustomStepHandler,
+  type CustomStepHandlers,
+} from './custom-steps.js';
 export { matchesIntent, type CompareMode } from './compare.js';
 export { lockKeyFor } from './step-exec.js';
 export { LockManager, type LockEvent, type LockOwner } from './locks.js';
