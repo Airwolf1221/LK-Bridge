@@ -28,7 +28,7 @@ export interface BuildServerOptions {
   /** MCP tools. Defaults to the `bridge_info` stub. */
   readonly tools?: readonly McpToolProvider[];
   readonly bridgeInfo?: () => BridgeInfo;
-  /** Fastify `trustProxy`. Default: loopback only (Caddy on the same host). */
+  /** Overrides `TRUST_PROXY` (tests only). */
   readonly trustProxy?: FastifyServerOptions['trustProxy'];
   /** Test seams for the auth services (clock, CIMD fetcher, rate limits). */
   readonly authOverrides?: Omit<Partial<CreateAuthServicesOptions>, 'config' | 'db' | 'log'>;
@@ -65,7 +65,9 @@ export async function buildServer(
         }),
       },
     },
-    trustProxy: o.trustProxy ?? '127.0.0.1,::1',
+    // TRUST_PROXY (default loopback: Caddy on the same host). `request.ip` is then the client
+    // address from X-Forwarded-For, taken from the right, skipping only trusted proxies.
+    trustProxy: o.trustProxy ?? (o.authConfig.trustProxy === false ? false : [...o.authConfig.trustProxy]),
     routerOptions: { ignoreTrailingSlash: true },
     bodyLimit: 1024 * 1024,
     return503OnClosing: true,

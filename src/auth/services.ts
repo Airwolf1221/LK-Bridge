@@ -138,6 +138,6 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
     consents: new PendingConsents(config.ttl.consentSeconds, now),
     registrationLimiter: new SlidingWindowLimiter(reg.limit, reg.windowMs, () => now() * 1000),
     sessionHash: hashSecret,
-    prune: () => store.prune(now(), { unusedDcrClientSeconds: 86400 }),
+    prune: () => store.prune(now()),
   };
 }

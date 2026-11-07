@@ -1,9 +1,4 @@
-import {
-  McpServer,
-  type CallToolResult,
-  type McpServerFactory,
-  type ToolAnnotations,
-} from '@modelcontextprotocol/server';
+import { McpServer, type CallToolResult, type McpServerFactory } from '@modelcontextprotocol/server';
 import type { FastifyBaseLogger } from 'fastify';
 import * as z from 'zod';
 import type { CallerIdentity } from '../auth/bearer.js';
@@ -34,14 +29,32 @@ export interface McpToolContext {
   readonly log: FastifyBaseLogger;
 }
 
+/**
+ * MCP tool annotations (hints for the client, not guarantees). Claude and ChatGPT use them to
+ * decide what to auto-approve: set `readOnlyHint: true` on tools that never write, and leave
+ * writes `readOnlyHint: false` with an honest `destructiveHint`, so users keep confirmations on
+ * them (PLAN amendment 2).
+ */
+export interface McpToolAnnotations {
+  /** The tool does not modify anything. */
+  readonly readOnlyHint?: boolean;
+  /** A write may destroy or overwrite data (only meaningful when not read-only). */
+  readonly destructiveHint?: boolean;
+  /** Repeating the call with the same arguments has no further effect. */
+  readonly idempotentHint?: boolean;
+  /** The tool reaches an open world (the internet) rather than a closed system. */
+  readonly openWorldHint?: boolean;
+}
+
 export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
   /** Tool name: 1-64 of `A-Z a-z 0-9 _ -`. Unique across providers. */
   readonly name: string;
+  /** Human-readable name shown in client UIs (`title`, and `annotations.title` for older clients). */
   readonly title?: string;
   /** Shown to the model. State the rate cost and risk (PLAN §7). */
   readonly description: string;
   readonly inputSchema: S;
-  readonly annotations?: ToolAnnotations;
+  readonly annotations?: McpToolAnnotations;
   /** Scopes the caller must hold (checked before the handler). Default: none beyond `/mcp` access. */
   readonly requiredScopes?: readonly string[];
   handler(input: z.output<S>, ctx: McpToolContext): McpToolResult | Promise<McpToolResult>;
@@ -56,8 +69,25 @@ export interface RegisterToolsDeps {
 }
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+const HINTS = ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'] as const;
 
 export class ToolRegistrationError extends Error {}
+
+/** The annotations object sent in `tools/list`: only the known hints, plus the title. */
+function toolAnnotations(tool: McpToolProvider): Record<string, string | boolean> | undefined {
+  const out: Record<string, string | boolean> = {};
+  for (const hint of HINTS) {
+    const v = tool.annotations?.[hint];
+    if (v === undefined) continue;
+    if (typeof v !== 'boolean') throw new ToolRegistrationError(`${tool.name}: ${hint} must be a boolean`);
+    out[hint] = v;
+  }
+  if (out.readOnlyHint === true && out.destructiveHint === true) {
+    throw new ToolRegistrationError(`${tool.name}: a read-only tool cannot also be destructive`);
+  }
+  if (tool.title !== undefined) out.title = tool.title;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 /** Registers every provider on `server`. Throws {@link ToolRegistrationError} on a bad or duplicate name. */
 export function registerTools(server: McpServerLike, deps: RegisterToolsDeps): void {
@@ -66,13 +96,14 @@ export function registerTools(server: McpServerLike, deps: RegisterToolsDeps): v
     if (!TOOL_NAME.test(tool.name)) throw new ToolRegistrationError(`Invalid tool name: ${tool.name}`);
     if (seen.has(tool.name)) throw new ToolRegistrationError(`Duplicate tool name: ${tool.name}`);
     seen.add(tool.name);
+    const annotations = toolAnnotations(tool);
     server.registerTool(
       tool.name,
       {
         ...(tool.title !== undefined ? { title: tool.title } : {}),
         description: tool.description,
         inputSchema: tool.inputSchema,
-        ...(tool.annotations !== undefined ? { annotations: tool.annotations } : {}),
+        ...(annotations !== undefined ? { annotations } : {}),
       },
       async (args, ctx): Promise<CallToolResult> => {
         const caller = ctx.http?.authInfo?.extra?.caller as CallerIdentity | undefined;
@@ -141,7 +172,7 @@ export function bridgeInfoStub(info: () => BridgeInfo): McpToolProvider {
       'Shows the LK-Bridge version, LegendKeeper project, read-only flag and writer pool size. ' +
       'Costs no LegendKeeper rate budget. Risk: none (read-only).',
     inputSchema: z.object({}),
-    annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     handler: (_input, ctx) => {
       const i = info();
       const body = {

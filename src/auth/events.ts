@@ -15,6 +15,7 @@ export type AuthEventName =
   | 'consent.denied'
   | 'token.issued'
   | 'token.refreshed'
+  | 'token.refresh_replayed'
   | 'token.revoked'
   | 'token.rejected'
   | 'token.reuse_detected'

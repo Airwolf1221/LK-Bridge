@@ -180,15 +180,46 @@ describe('dynamic client registration', () => {
     }
   });
 
-  it('prunes registrations that were never used', async () => {
-    const res = await registerClient(bridge, { redirect_uris: [CB], token_endpoint_auth_method: 'none' });
+  it('keeps DCR registrations indefinitely: a client registered long ago still completes a flow', async () => {
+    // ChatGPT registers once per connection and reuses the client; nothing may expire it.
+    const res = await registerClient(bridge, {
+      redirect_uris: ['https://chatgpt.com/connector_platform_oauth_redirect'],
+      token_endpoint_auth_method: 'none',
+    });
     const { client_id } = (await res.json()) as { client_id: string };
-    bridge.clock.advance(2 * 86400);
+    const fiveYears = 5 * 365 * 86400;
+    bridge.clock.advance(fiveYears);
     try {
       bridge.services.prune();
-      expect(bridge.services.store.getClient(client_id)).toBeUndefined();
+      expect(bridge.services.store.getClient(client_id)).toBeDefined();
+      const { verifier, challenge } = pkcePair();
+      const cb = await authorizeAndApprove(new Browser(bridge), {
+        clientId: client_id,
+        redirectUri: 'https://chatgpt.com/connector_platform_oauth_redirect',
+        challenge,
+        method: 'S256',
+      });
+      const t = await tokenRequest(bridge, {
+        grant_type: 'authorization_code',
+        code: cb.searchParams.get('code') ?? undefined,
+        redirect_uri: 'https://chatgpt.com/connector_platform_oauth_redirect',
+        code_verifier: verifier,
+        client_id,
+      });
+      expect(t.res.status).toBe(200);
+      // And after the grant itself has long expired and been pruned, the client is still there.
+      bridge.clock.advance(fiveYears);
+      bridge.services.prune();
+      expect(bridge.services.store.getClient(client_id)).toBeDefined();
     } finally {
-      bridge.clock.advance(-2 * 86400);
+      bridge.clock.advance(-2 * fiveYears);
     }
+  });
+
+  it('removes a client only on explicit deletion', async () => {
+    const res = await registerClient(bridge, { redirect_uris: [CB], token_endpoint_auth_method: 'none' });
+    const { client_id } = (await res.json()) as { client_id: string };
+    expect(bridge.services.store.deleteClient(client_id)).toBe(true);
+    expect(bridge.services.store.getClient(client_id)).toBeUndefined();
   });
 });

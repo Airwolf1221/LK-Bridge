@@ -77,7 +77,9 @@ export class ClientService {
         throw registrationError(
           'invalid_redirect_uri',
           'Redirect URI not accepted. Allowed: https://claude.ai/api/mcp/auth_callback, ' +
-            'https://claude.com/api/mcp/auth_callback, http://localhost[:port]/callback, http://127.0.0.1[:port]/callback',
+            'https://claude.com/api/mcp/auth_callback, https://chatgpt.com/connector_platform_oauth_redirect, ' +
+            'https://chatgpt.com/connector/oauth/<id>, http://localhost[:port]/callback, ' +
+            'http://127.0.0.1[:port]/callback, and any listed in OAUTH_EXTRA_REDIRECT_URIS',
         );
       }
     }

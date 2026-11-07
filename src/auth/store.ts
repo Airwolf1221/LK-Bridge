@@ -499,8 +499,12 @@ export class AuthStore {
 
   // --- Housekeeping ---
 
-  /** Deletes expired and long-dead rows. Returns the number of rows removed. */
-  prune(now: number, opts: { readonly unusedDcrClientSeconds: number }): number {
+  /**
+   * Deletes expired and long-dead codes, tokens, grants and sessions. Returns the rows removed.
+   * Client registrations are never removed here: DCR clients (ChatGPT reuses one per connection)
+   * and CIMD records live until deleted explicitly with {@link deleteClient} (ADR 0008).
+   */
+  prune(now: number): number {
     const day = 86400;
     return this.tx(() => {
       let n = 0;
@@ -521,12 +525,6 @@ export class AuthStore {
           'DELETE FROM auth_owner_sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)',
         )
         .run(now, now - day).changes;
-      n += this.db
-        .prepare(
-          `DELETE FROM auth_clients WHERE kind = 'dcr' AND last_used_at IS NULL AND created_at < ?
-             AND NOT EXISTS (SELECT 1 FROM auth_token_families f WHERE f.client_id = auth_clients.client_id)`,
-        )
-        .run(now - opts.unusedDcrClientSeconds).changes;
       return n;
     });
   }

@@ -169,6 +169,8 @@ describe('the claude.ai-equivalent flow (DCR, PKCE, resource, refresh rotation)'
     expect(next.access_token).not.toBe(tokens.access_token);
     expect((await mcpPost(bridge, next.access_token as string)).status).toBe(200);
 
+    // Outside the 10-second grace window, the old refresh token is dead.
+    bridge.clock.advance(11);
     const again = await tokenRequest(bridge, {
       grant_type: 'refresh_token',
       refresh_token: tokens.refresh_token as string,

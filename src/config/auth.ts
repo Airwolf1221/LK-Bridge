@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import * as z from 'zod';
 
 /**
@@ -40,6 +41,8 @@ export interface AuthConfig {
     readonly authCodeSeconds: number;
     readonly sessionSeconds: number;
     readonly consentSeconds: number;
+    /** How long a just-rotated refresh token may be presented again for the same successor. 0 disables. */
+    readonly refreshGraceSeconds: number;
   };
   readonly cimd: {
     readonly timeoutMs: number;
@@ -47,10 +50,15 @@ export interface AuthConfig {
     readonly defaultCacheSeconds: number;
     readonly maxCacheSeconds: number;
   };
-  /** Extra exact redirect URIs (testing aids such as the MCP Inspector). Empty by default. */
+  /** Extra exact redirect URIs from `OAUTH_EXTRA_REDIRECT_URIS` (for example a new ChatGPT callback). */
   readonly extraRedirectUris: readonly string[];
   /** Browser origins allowed to call `/mcp` besides the public origin and loopback. */
   readonly mcpAllowedOrigins: readonly string[];
+  /**
+   * Fastify `trustProxy`: the proxy addresses whose `X-Forwarded-For` is believed, or `false` to
+   * believe none. Default `['loopback']` (Caddy on the same host).
+   */
+  readonly trustProxy: readonly string[] | false;
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -104,16 +112,18 @@ const authEnvSchema = z.object({
   AUTH_REFRESH_FAMILY_MAX_SECONDS: intFrom(90 * 86400, 3600, 730 * 86400),
   AUTH_CODE_TTL_SECONDS: intFrom(300, 30, 600),
   AUTH_SESSION_TTL_SECONDS: intFrom(12 * 3600, 300, 30 * 86400),
+  AUTH_REFRESH_GRACE_SECONDS: intFrom(10, 0, 60),
 
   AUTH_CIMD_TIMEOUT_MS: intFrom(4000, 100, 8000),
   AUTH_CIMD_MAX_BYTES: intFrom(8192, 512, 65536),
 
-  AUTH_EXTRA_REDIRECT_URIS: csv,
+  OAUTH_EXTRA_REDIRECT_URIS: csv,
+  TRUST_PROXY: z.string().optional(),
   AUTH_MCP_ALLOWED_ORIGINS: z
     .string()
     .optional()
     .transform((raw) =>
-      (raw ?? 'https://claude.ai,https://claude.com')
+      (raw ?? 'https://claude.ai,https://claude.com,https://chatgpt.com')
         .split(',')
         .map((s) => s.trim())
         .filter((s) => s.length > 0),
@@ -145,19 +155,66 @@ function parsePublicUrl(raw: string, issues: string[]): { origin: string; secure
   return { origin: url.origin, secure: url.protocol === 'https:' };
 }
 
+/**
+ * Each extra redirect URI must be an exact, already-normalised absolute URL: https (http only on
+ * loopback), no credentials, no fragment, no wildcard. Redirect URIs are compared as exact strings,
+ * so a value the URL parser would rewrite (upper-case host, default port) could never match.
+ */
 function checkRedirectList(list: readonly string[], issues: string[]): void {
   for (const entry of list) {
+    let u: URL | undefined;
     try {
-      const u = new URL(entry);
-      const ok = u.protocol === 'https:' || (u.protocol === 'http:' && isLoopbackHost(u.hostname));
-      if (!ok || u.hash || entry.includes('#')) throw new Error('bad');
+      u = new URL(entry);
     } catch {
+      u = undefined;
+    }
+    const ok =
+      u !== undefined &&
+      (u.protocol === 'https:' || (u.protocol === 'http:' && isLoopbackHost(u.hostname))) &&
+      !u.username &&
+      !u.password &&
+      !entry.includes('#') &&
+      !entry.includes('*') &&
+      entry.length <= 2048;
+    if (!ok) {
       issues.push(
-        'AUTH_EXTRA_REDIRECT_URIS: each entry must be an absolute https URL, or http on localhost, with no fragment',
+        `OAUTH_EXTRA_REDIRECT_URIS: "${entry.slice(0, 200)}" must be an exact https URL (http only on localhost), with no fragment, credentials or wildcard`,
       );
-      return;
+    } else if (u && u.href !== entry) {
+      issues.push(`OAUTH_EXTRA_REDIRECT_URIS: write "${entry.slice(0, 200)}" exactly as ${u.href}`);
     }
   }
+}
+
+const PROXY_KEYWORDS = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+/** TRUST_PROXY: `loopback` (default), `none`, or a comma list of addresses, CIDR ranges and keywords. */
+function parseTrustProxy(raw: string | undefined, issues: string[]): readonly string[] | false {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (value === '' || value === 'loopback') return ['loopback'];
+  if (value === 'none' || value === 'false' || value === 'off') return false;
+  if (value === 'true' || value === '*' || value === 'all') {
+    issues.push(
+      'TRUST_PROXY: trusting every address would let any client forge X-Forwarded-For; list the proxy addresses instead (default: loopback)',
+    );
+    return false;
+  }
+  const out: string[] = [];
+  for (const entry of value.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const [addr = '', prefix, extra] = entry.split('/');
+    const family = isIP(addr);
+    const prefixOk =
+      prefix === undefined ||
+      (/^\d{1,3}$/.test(prefix) && Number(prefix) <= (family === 6 ? 128 : 32));
+    if (PROXY_KEYWORDS.has(entry) || (family !== 0 && prefixOk && extra === undefined)) {
+      out.push(entry);
+    } else {
+      issues.push(
+        `TRUST_PROXY: "${entry.slice(0, 100)}" is not an IP address, a CIDR range, or one of loopback, linklocal, uniquelocal`,
+      );
+    }
+  }
+  return out;
 }
 
 function normaliseOrigins(list: readonly string[], issues: string[]): string[] {
@@ -195,8 +252,9 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
   if (e.AUTH_REFRESH_FAMILY_MAX_SECONDS < e.AUTH_REFRESH_TOKEN_TTL_SECONDS) {
     issues.push('AUTH_REFRESH_FAMILY_MAX_SECONDS must be at least AUTH_REFRESH_TOKEN_TTL_SECONDS');
   }
-  checkRedirectList(e.AUTH_EXTRA_REDIRECT_URIS, issues);
+  checkRedirectList(e.OAUTH_EXTRA_REDIRECT_URIS, issues);
   const origins = normaliseOrigins(e.AUTH_MCP_ALLOWED_ORIGINS, issues);
+  const trustProxy = parseTrustProxy(e.TRUST_PROXY, issues);
   if (issues.length > 0 || !pub) throw new AuthConfigError(issues);
 
   const publicUrl = pub.origin;
@@ -220,6 +278,7 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
       authCodeSeconds: e.AUTH_CODE_TTL_SECONDS,
       sessionSeconds: e.AUTH_SESSION_TTL_SECONDS,
       consentSeconds: 600,
+      refreshGraceSeconds: e.AUTH_REFRESH_GRACE_SECONDS,
     },
     cimd: {
       timeoutMs: e.AUTH_CIMD_TIMEOUT_MS,
@@ -227,7 +286,8 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
       defaultCacheSeconds: 600,
       maxCacheSeconds: 86400,
     },
-    extraRedirectUris: e.AUTH_EXTRA_REDIRECT_URIS,
+    extraRedirectUris: e.OAUTH_EXTRA_REDIRECT_URIS,
     mcpAllowedOrigins: origins,
+    trustProxy,
   };
 }

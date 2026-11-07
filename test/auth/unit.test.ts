@@ -84,6 +84,9 @@ describe('redirect URI policy (requirement 9)', () => {
     'http://localhost:3118/callback',
     'http://127.0.0.1/callback',
     'http://127.0.0.1:65535/callback',
+    'https://chatgpt.com/connector_platform_oauth_redirect',
+    'https://chatgpt.com/connector/oauth/abc123',
+    'https://chatgpt.com/connector/oauth/A-b_C-9',
   ])('allows %s', (uri) => {
     expect(isAllowedRedirectUri(uri)).toBe(true);
   });
@@ -104,6 +107,17 @@ describe('redirect URI policy (requirement 9)', () => {
     'http://127.0.0.2/callback',
     'http://LOCALHOST/callback',
     'javascript:alert(1)',
+    'https://chatgpt.com/connector_platform_oauth_redirect/',
+    'http://chatgpt.com/connector_platform_oauth_redirect',
+    'https://chatgpt.com/connector/oauth/',
+    'https://chatgpt.com/connector/oauth/a/b',
+    'https://chatgpt.com/connector/oauth/a?x=1',
+    'https://chatgpt.com/connector/oauth/a.b',
+    'https://chatgpt.com/connector/oauth/a%2Fb',
+    'https://chatgptXcom/connector/oauth/a',
+    'https://chatgpt.com.evil.example/connector/oauth/a',
+    'https://evil.example/https://chatgpt.com/connector/oauth/a',
+    'https://chat.openai.com/connector_platform_oauth_redirect',
   ])('refuses %s', (uri) => {
     expect(isAllowedRedirectUri(uri)).toBe(false);
   });
@@ -360,13 +374,44 @@ describe('auth configuration (requirement 15)', () => {
     [{ JWT_SIGNING_KEY: 'x'.repeat(31) }, /JWT_SIGNING_KEY/],
     [{ OWNER_TOTP_SECRET: 'not base32!' }, /OWNER_TOTP_SECRET/],
     [{ OWNER_TOTP_SECRET: 'JBSWY3DP' }, /OWNER_TOTP_SECRET/],
-    [{ AUTH_EXTRA_REDIRECT_URIS: 'http://evil.example/cb' }, /AUTH_EXTRA_REDIRECT_URIS/],
+    [{ OAUTH_EXTRA_REDIRECT_URIS: 'http://evil.example/cb' }, /OAUTH_EXTRA_REDIRECT_URIS/],
+    [{ OAUTH_EXTRA_REDIRECT_URIS: 'https://chatgpt.com/connector/oauth/*' }, /wildcard/],
+    [{ OAUTH_EXTRA_REDIRECT_URIS: 'https://chatgpt.com/cb#x' }, /fragment/],
+    [{ OAUTH_EXTRA_REDIRECT_URIS: 'https://user:pw@chatgpt.com/cb' }, /credentials/],
+    [{ OAUTH_EXTRA_REDIRECT_URIS: 'https://ChatGPT.com/cb' }, /exactly as https:\/\/chatgpt\.com\/cb/],
+    [{ OAUTH_EXTRA_REDIRECT_URIS: 'not a url' }, /OAUTH_EXTRA_REDIRECT_URIS/],
+    [{ TRUST_PROXY: 'true' }, /TRUST_PROXY: trusting every address/],
+    [{ TRUST_PROXY: '10.0.0.1/40' }, /TRUST_PROXY/],
+    [{ TRUST_PROXY: 'proxy.example' }, /TRUST_PROXY/],
+    [{ AUTH_REFRESH_GRACE_SECONDS: '61' }, /AUTH_REFRESH_GRACE_SECONDS/],
     [{ AUTH_MCP_ALLOWED_ORIGINS: 'https://claude.ai/path' }, /AUTH_MCP_ALLOWED_ORIGINS/],
   ])('rejects %o with a clear message', async (patch, message) => {
     const env: Record<string, string | undefined> = { ...(await base()), ...patch };
     for (const k of Object.keys(env)) if (env[k] === undefined) delete env[k];
     expect(() => loadAuthConfig(env)).toThrow(AuthConfigError);
     expect(() => loadAuthConfig(env)).toThrow(message);
+  });
+
+  it('parses OAUTH_EXTRA_REDIRECT_URIS, TRUST_PROXY and the grace window', async () => {
+    const env = await base();
+    const c = loadAuthConfig(env);
+    expect(c.extraRedirectUris).toEqual([]);
+    expect(c.trustProxy).toEqual(['loopback']);
+    expect(c.ttl.refreshGraceSeconds).toBe(10);
+    expect(c.mcpAllowedOrigins).toEqual(['https://claude.ai', 'https://claude.com', 'https://chatgpt.com']);
+    const d = loadAuthConfig({
+      ...env,
+      OAUTH_EXTRA_REDIRECT_URIS: ' https://chatgpt.com/aip/g-123/oauth/callback , https://chatgpt.com/other ',
+      TRUST_PROXY: '127.0.0.1, 10.0.0.0/8, ::1, uniquelocal',
+      AUTH_REFRESH_GRACE_SECONDS: '0',
+    });
+    expect(d.extraRedirectUris).toEqual([
+      'https://chatgpt.com/aip/g-123/oauth/callback',
+      'https://chatgpt.com/other',
+    ]);
+    expect(d.trustProxy).toEqual(['127.0.0.1', '10.0.0.0/8', '::1', 'uniquelocal']);
+    expect(d.ttl.refreshGraceSeconds).toBe(0);
+    expect(loadAuthConfig({ ...env, TRUST_PROXY: 'none' }).trustProxy).toBe(false);
   });
 
   it('allows plain http only for loopback, and refuses identical secrets', async () => {

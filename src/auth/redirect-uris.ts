@@ -1,15 +1,24 @@
 /**
- * Redirect URI policy (PLAN §9.6).
+ * Redirect URI policy (PLAN §9.6, ADR 0008).
  *
- * Exact-match hosted callbacks, plus RFC 8252 loopback callbacks where only the port may vary.
- * Claude Code's Client ID Metadata Document declares `http://localhost/callback` and
- * `http://127.0.0.1/callback` and then uses an ephemeral port, so both hostnames are matched with
- * the port ignored.
+ * - Exact-match hosted callbacks for Claude and ChatGPT.
+ * - ChatGPT's per-connector callbacks, `https://chatgpt.com/connector/oauth/<id>`.
+ * - RFC 8252 loopback callbacks where only the port may vary. Claude Code's Client ID Metadata
+ *   Document declares `http://localhost/callback` and `http://127.0.0.1/callback` and then uses an
+ *   ephemeral port, so both hostnames are matched with the port ignored.
+ * - Exact URIs from `OAUTH_EXTRA_REDIRECT_URIS`.
+ * A client's own registered or declared URIs must also match the requested one exactly.
  */
 
 export const HOSTED_CALLBACKS: readonly string[] = [
   'https://claude.ai/api/mcp/auth_callback',
   'https://claude.com/api/mcp/auth_callback',
+  'https://chatgpt.com/connector_platform_oauth_redirect',
+];
+
+/** Hosted callbacks with a variable final segment. The dots are literal. */
+export const HOSTED_CALLBACK_PATTERNS: readonly RegExp[] = [
+  /^https:\/\/chatgpt\.com\/connector\/oauth\/[A-Za-z0-9_-]+$/,
 ];
 
 export const LOOPBACK_CALLBACKS: readonly string[] = [
@@ -67,6 +76,7 @@ export function redirectUriMatches(requested: string, registered: string): boole
 export function isAllowedRedirectUri(uri: string, extra: readonly string[] = []): boolean {
   if (uri.length > 2048 || uri.includes('#')) return false;
   if (HOSTED_CALLBACKS.includes(uri)) return true;
+  if (HOSTED_CALLBACK_PATTERNS.some((re) => re.test(uri))) return true;
   if (LOOPBACK_CALLBACKS.some((allowed) => redirectUriMatches(uri, allowed))) return true;
   return extra.some((allowed) => redirectUriMatches(uri, allowed));
 }

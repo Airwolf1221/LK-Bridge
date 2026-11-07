@@ -4,7 +4,7 @@ import type { AuthConfig } from '../config/auth.js';
 import { CODE_VERIFIER, type KeyRing, hashSecret, pkceS256, randomToken, safeEqual } from './crypto.js';
 import { invalidGrant, invalidRequest, invalidScope, invalidTarget, unauthorizedClient } from './errors.js';
 import type { AuthEventLogger } from './events.js';
-import { ScopeSyntaxError, formatScope, parseScope } from './scopes.js';
+import { SUPPORTED_SCOPES, ScopeSyntaxError, formatScope, parseScope } from './scopes.js';
 import type { AuthStore, ClientRecord } from './store.js';
 import { canonicaliseResource } from './url.js';
 
@@ -50,8 +50,19 @@ export function resolveResource(values: readonly string[], config: AuthConfig): 
   return audience;
 }
 
+/** A rotation that may be replayed within the grace window (held in memory only, briefly). */
+interface RecentRotation {
+  readonly until: number;
+  readonly clientId: string;
+  readonly familyId: string;
+  readonly successorHash: string;
+  readonly response: Promise<TokenResponse>;
+}
+
 export class TokenService {
   private readonly audience: string;
+  /** Keyed by the hash of the rotated-out refresh token. Entries live for the grace window. */
+  private readonly recentRotations = new Map<string, RecentRotation>();
 
   constructor(
     private readonly deps: {
@@ -201,7 +212,12 @@ export class TokenService {
       throw invalidGrant('Refresh token was issued to another client');
     }
     if (rec.revokedAt !== null) throw invalidGrant('Refresh token has been revoked');
+    this.sweepRotations(now);
     if (rec.rotatedAt !== null) {
+      // Claude refreshes both proactively and on a 401, so two requests can carry the same token.
+      // Within the grace window the second one gets the same successor tokens (ADR 0009).
+      const replay = this.replayRotation(tokenHash, client.clientId, now);
+      if (replay) return replay;
       store.revokeFamily(rec.familyId, 'refresh_token_reuse', now);
       this.deps.event(
         'token.reuse_detected',
@@ -221,7 +237,9 @@ export class TokenService {
     if (p.scope !== undefined) {
       let requested: string[];
       try {
-        requested = parseScope(p.scope);
+        // Scopes this server does not support (for example openid or email) are ignored, as at
+        // the authorization endpoint; only a supported scope outside the grant is an error.
+        requested = parseScope(p.scope).filter((s) => SUPPORTED_SCOPES.includes(s));
       } catch (err) {
         if (err instanceof ScopeSyntaxError) throw invalidScope(err.message);
         throw err;
@@ -253,7 +271,9 @@ export class TokenService {
       return true;
     });
     if (!rotated) {
-      // Lost a race with a concurrent use of the same token: treat as reuse.
+      // Lost a race with a concurrent use of the same token: replay within grace, else reuse.
+      const replay = this.replayRotation(tokenHash, client.clientId, now);
+      if (replay) return replay;
       store.revokeFamily(rec.familyId, 'refresh_token_reuse', now);
       this.deps.event(
         'token.reuse_detected',
@@ -262,13 +282,48 @@ export class TokenService {
       );
       throw invalidGrant('Refresh token has already been used; the grant has been revoked');
     }
+    // Registered synchronously, before any await, so a concurrent request always finds it.
+    const response = this.sign(access).then((jwt) => this.response(jwt, scopes, next));
+    const grace = config.ttl.refreshGraceSeconds;
+    if (grace > 0) {
+      this.recentRotations.set(tokenHash, {
+        until: now + grace,
+        clientId: client.clientId,
+        familyId: family.familyId,
+        successorHash: hashSecret(next),
+        response,
+      });
+    }
     this.deps.event('token.refreshed', {
       client_id: client.clientId,
       grant_id: family.familyId,
       token_id: access.record.jti,
       scope: formatScope(scopes),
     });
-    return this.response(await this.sign(access), scopes, next);
+    return response;
+  }
+
+  /**
+   * The successor response for a refresh token rotated less than the grace window ago, provided
+   * the same client presents it and neither the grant nor the successor has been revoked since.
+   */
+  private replayRotation(
+    tokenHash: string,
+    clientId: string,
+    now: number,
+  ): Promise<TokenResponse> | undefined {
+    const entry = this.recentRotations.get(tokenHash);
+    if (!entry || entry.until < now || entry.clientId !== clientId) return undefined;
+    const family = this.deps.store.getFamily(entry.familyId);
+    const successor = this.deps.store.getRefresh(entry.successorHash);
+    if (!family || family.revokedAt !== null || !successor || successor.revokedAt !== null) return undefined;
+    this.deps.event('token.refresh_replayed', { client_id: clientId, grant_id: entry.familyId });
+    return entry.response;
+  }
+
+  private sweepRotations(now: number): void {
+    for (const [hash, entry] of this.recentRotations)
+      if (entry.until < now) this.recentRotations.delete(hash);
   }
 
   /** RFC 7009 revocation. Unknown tokens and other clients' tokens are ignored (still 200). */
