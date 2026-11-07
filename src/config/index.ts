@@ -185,4 +185,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 export * from './lk.js';
 export * from './jobs.js';
 export { AuthConfigError, loadAuthConfig, type AuthConfig } from './auth.js';
+export { defaultPolicySettings, loadPolicyConfig, PolicyConfigError, type PolicySettings } from './policy.js';
 export * from './tools.js';

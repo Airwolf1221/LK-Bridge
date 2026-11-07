@@ -19,6 +19,8 @@ export interface PatView {
   readonly expiresAt: number | null;
   readonly revokedAt: number | null;
   readonly lastUsedAt: number | null;
+  /** The policy profile the token acts under (migration 0300). */
+  readonly profileId: string | null;
 }
 
 export interface CreatedPat {
@@ -36,6 +38,7 @@ const view = (p: PatRecord): PatView => ({
   expiresAt: p.expiresAt,
   revokedAt: p.revokedAt,
   lastUsedAt: p.lastUsedAt,
+  profileId: p.profileId,
 });
 
 export class PatService {
@@ -44,10 +47,17 @@ export class PatService {
       readonly store: AuthStore;
       readonly event: AuthEventLogger;
       readonly now: () => number;
+      /** The profile for a PAT created without one (the policy layer supplies `claude-code`). */
+      readonly defaultProfileId?: () => string;
     },
   ) {}
 
-  create(input: { readonly name: string; readonly expiresInDays?: number }): CreatedPat {
+  create(input: {
+    readonly name: string;
+    readonly expiresInDays?: number;
+    /** The policy profile it acts under. Defaults to `defaultProfileId()` when the policy layer is wired. */
+    readonly profileId?: string;
+  }): CreatedPat {
     const name = input.name.trim();
     if (name.length < 1 || name.length > 100) throw new Error('PAT name must be 1-100 characters');
     if (
@@ -67,9 +77,15 @@ export class PatService {
       scope: formatScope([SCOPE_MCP]),
       createdAt: now,
       expiresAt: input.expiresInDays !== undefined ? now + input.expiresInDays * 86400 : null,
+      profileId: input.profileId ?? this.deps.defaultProfileId?.() ?? null,
     };
     this.deps.store.insertPat(record);
-    this.deps.event('pat.created', { pat_id: id, name, expires_at: record.expiresAt });
+    this.deps.event('pat.created', {
+      pat_id: id,
+      name,
+      expires_at: record.expiresAt,
+      profile_id: record.profileId,
+    });
     return { token, pat: view({ ...record, revokedAt: null, lastUsedAt: null }) };
   }
 

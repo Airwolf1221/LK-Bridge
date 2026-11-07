@@ -120,7 +120,8 @@ ids, the result summary (whole results above 4 KB go to a `result` artefact), th
 
 ## Principals and policy hooks
 
-These prepare for a later chunk; the policy store and the proposal workflow are not built here.
+The engine only defines the hooks. The real gate and sink are in `src/policy` (chunk 2b, [docs/policy.md](../../docs/policy.md));
+wire them with `createPolicy(...)` and `policy.attach(engine)`.
 
 - **Principal.** `origin.principal` is `{ principalId, profile, label }`: who the work is done for and the policy
   profile it acts under. Omitted, it is `SYSTEM_PRINCIPAL` (`{ principalId: 'system', profile: 'system', label:
@@ -143,8 +144,14 @@ These prepare for a later chunk; the policy store and the proposal workflow are 
   `ops` = `[{ op, params, allowUnsupportedLoss?, confirm? }]` and `meta` = `{ kind, title, origin, priority, onError?,
 paginate? }`, and returns `{ status: 'proposal_captured', proposalId }`. Client ids are not minted for a proposal; they
   are minted when the approved work is submitted. The default sink, `DENY_PROPOSALS_SINK`, treats propose as deny.
-- To run approved work later, call `run` / `submit` again with `origin.approvedBy` set; the gate sees `approvedBy` in
-  `ctx.origin` and can allow it.
+- A sink may return `summary` with the proposal id; it is passed through in `ProposalCaptured`. A sink that refuses
+  with a `JobsError` (a guard, invalid params, a failed read) keeps that error; other failures become `BRIDGE_ERROR`.
+- **`origin.approval`** (opaque): proof of the owner's approval, minted only by `src/policy`. The engine never reads
+  it; it reaches the gate in `ctx.origin` and is stored with the job's origin (it serialises to `{ proposalId }`).
+  The real gate refuses `approvedBy` without a valid approval, so approved work runs only through the owner's
+  approval of a proposal.
+- Events `policy` (owner commands and policy changes) and `proposal` (captured, state changes) are emitted on
+  `engine.events` by `src/policy` once attached.
 
 ## How a step runs
 

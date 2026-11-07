@@ -12,8 +12,10 @@ import { loadConfig, DEFAULT_TOOLS_SETTINGS, type ToolsSettings } from '../../sr
 import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase, type Db } from '../../src/db/open.js';
 import { systemClock } from '../../src/lk/index.js';
-import { createRuntime, type Runtime } from '../../src/runtime.js';
-import { buildServer } from '../../src/server.js';
+import type { AuthServices } from '../../src/auth/services.js';
+import type { Policy, Scope } from '../../src/policy/index.js';
+import type { Runtime } from '../../src/runtime.js';
+import { createBridge } from '../../src/server.js';
 import type { GuardOptions } from '../../src/mcp/tools/upload-http.js';
 import { MockLk, type MockRequest, type MockResponse } from '../contract/mock-lk.js';
 import { ownerCredentials, throwawaySecret } from '../auth/helpers.js';
@@ -30,6 +32,8 @@ export interface StackOptions {
   /** Reuse this database file (restart tests). */
   readonly dbPath?: string;
   readonly limits?: ConstructorParameters<typeof MockLk>[0]['limits'];
+  /** Scope of the default token's profile (`tools-test`). Default `write`, so every tool is exercised. */
+  readonly scope?: Scope;
 }
 
 export interface Stack {
@@ -39,7 +43,12 @@ export interface Stack {
   readonly dbPath: string;
   readonly base: string;
   readonly token: string;
-  connect(): Promise<Client>;
+  readonly policy: Policy;
+  readonly services: AuthServices;
+  /** A PAT on profile `label` (created at `scope` if absent), and its id. */
+  newToken(label: string, scope: Scope): { token: string; patId: string; profileId: string };
+  /** Connects with the default token, or another one. */
+  connect(token?: string): Promise<Client>;
   /** Calls a tool and returns the parsed JSON, the footer line and the isError flag. */
   call(client: Client, name: string, args?: Record<string, unknown>): Promise<ToolCall>;
   close(): Promise<void>;
@@ -82,15 +91,6 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     ...o.tools,
     upload: { ...DEFAULT_TOOLS_SETTINGS.upload, ...o.tools?.upload },
   };
-  const runtime = createRuntime({
-    config,
-    toolsSettings,
-    db,
-    version: '0.0.0-test',
-    // The mock LK is plain http on loopback; everything else (the upload host) goes through the real guard.
-    lkTransport: (input, init) => fetch(input, init),
-    ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
-  });
   const { password: _p, hash } = await ownerCredentials();
   const authConfig = loadAuthConfig({
     BRIDGE_PUBLIC_URL: PUBLIC_URL,
@@ -98,16 +98,29 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     SESSION_SECRET: throwawaySecret(),
     JWT_SIGNING_KEY: throwawaySecret(),
   });
-  const { app, services } = await buildServer({
+  // The real boot path: runtime (engine with the live policy gate) and server, sharing one policy layer.
+  const { app, services, runtime } = await createBridge({
+    config,
     authConfig,
+    toolsSettings,
     db,
+    version: '0.0.0-test',
     logLevel: 'silent',
     pruneIntervalMs: 0,
-    tools: runtime.tools,
-    instructions: runtime.instructions,
+    // The mock LK is plain http on loopback; everything else (the upload host) goes through the real guard.
+    lkTransport: (input, init) => fetch(input, init),
+    ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
   });
   const base = await app.listen({ host: '127.0.0.1', port: 0 });
-  const token = services.pats.create({ name: 'tools-test' }).token;
+  const policy = runtime.policy;
+  const newToken: Stack['newToken'] = (label, scope) => {
+    const profile =
+      policy.store.getProfileByLabel(label) ??
+      policy.commands.createProfile('owner', { label, kind: 'other', scope });
+    const created = services.pats.create({ name: label, profileId: profile.id });
+    return { token: created.token, patId: created.pat.id, profileId: profile.id };
+  };
+  const token = newToken('tools-test', o.scope ?? 'write').token;
   const clients: Client[] = [];
   const stack: Stack = {
     mock,
@@ -116,10 +129,13 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     dbPath,
     base,
     token,
-    async connect() {
+    policy,
+    services,
+    newToken,
+    async connect(with_ = token) {
       const client = new Client({ name: 'lk-bridge-tools-tests', version: '1.0.0' });
       const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
-        requestInit: { headers: { authorization: `Bearer ${token}` } },
+        requestInit: { headers: { authorization: `Bearer ${with_}` } },
       });
       await client.connect(transport);
       clients.push(client);

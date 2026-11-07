@@ -56,6 +56,11 @@ export interface JobOrigin {
   readonly principal?: Principal;
   /** Who approved this work, when it ran from an approved proposal (recorded on the job and journal entries). */
   readonly approvedBy?: string;
+  /**
+   * Opaque proof of the owner's approval (src/policy). The engine never reads it; it only hands it to the policy
+   * gate in `ctx.origin`. Only the policy layer can mint a valid one, and it serialises to `{ proposalId }` only.
+   */
+  readonly approval?: unknown;
 }
 
 /** Caller-facing input of a registry operation: `{ path?, query?, ifMatch?, body? }` (see src/lk/registry). */
@@ -158,6 +163,8 @@ export type RunResult =
 export interface ProposalCaptured {
   readonly status: 'proposal_captured';
   readonly proposalId: string;
+  /** One line describing what was proposed, when the sink gives one. */
+  readonly summary?: string;
 }
 
 export interface JobError {

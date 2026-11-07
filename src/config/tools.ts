@@ -19,6 +19,11 @@ const toolsEnvSchema = z.object({
   UPLOAD_ALLOW_URL_SOURCE: bool(true),
   /** Deadline for fetching an image from a URL (DNS, connect, TLS and body). */
   UPLOAD_FETCH_TIMEOUT_MS: intFrom(15_000, 1_000, 120_000),
+  /**
+   * Per-attempt deadline of the signed-URL PUT (the image upload itself). Its own setting: a large image on a slow
+   * link needs longer than the governor's 30-second LegendKeeper request timeout. 5 s to 10 minutes.
+   */
+  UPLOAD_PUT_TIMEOUT_MS: intFrom(120_000, 5_000, 600_000),
   /** A tool result longer than this many characters is stored as a job artefact and returned as a handle. */
   MCP_RESULT_MAX_CHARS: intFrom(40_000, 4_000, 400_000),
 });
@@ -28,13 +33,15 @@ export interface ToolsSettings {
     readonly maxBytes: number;
     readonly allowUrlSource: boolean;
     readonly fetchTimeoutMs: number;
+    /** UPLOAD_PUT_TIMEOUT_MS: per-attempt deadline of the signed-URL PUT. */
+    readonly putTimeoutMs: number;
   };
   /** Results above this many characters become artefact handles (PLAN §7: about 40,000). */
   readonly resultMaxChars: number;
 }
 
 export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
-  upload: { maxBytes: 10 * 1024 * 1024, allowUrlSource: true, fetchTimeoutMs: 15_000 },
+  upload: { maxBytes: 10 * 1024 * 1024, allowUrlSource: true, fetchTimeoutMs: 15_000, putTimeoutMs: 120_000 },
   resultMaxChars: 40_000,
 };
 
@@ -50,6 +57,7 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       maxBytes: e.UPLOAD_MAX_BYTES,
       allowUrlSource: e.UPLOAD_ALLOW_URL_SOURCE,
       fetchTimeoutMs: e.UPLOAD_FETCH_TIMEOUT_MS,
+      putTimeoutMs: e.UPLOAD_PUT_TIMEOUT_MS,
     },
     resultMaxChars: e.MCP_RESULT_MAX_CHARS,
   };

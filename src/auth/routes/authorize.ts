@@ -219,6 +219,16 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
         redirectIsLoopback: isLoopbackRedirect(redirectUri),
         onlyLoopback: client.redirectUris.every((u) => isLoopbackRedirect(u)),
         scopes,
+        ...(s.profiles
+          ? {
+              profiles: {
+                options: s.profiles.options(),
+                suggested: s.profiles.suggest(redirectUri),
+                kinds: s.profiles.kinds,
+                defaultScope: 'read',
+              },
+            }
+          : {}),
       });
       return sendHtml(reply, 200, html, [new URL(redirectUri).origin]);
     } catch (err) {
@@ -273,6 +283,31 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
     if (decision !== 'approve' && decision !== 'deny') {
       return sendErrorPage(reply, 400, 'Invalid request', 'Choose Approve or Deny.');
     }
+    // The owner's choice of profile and scope (policy layer). Checked before the request is used up, so a mistake
+    // can be corrected with the browser's Back button.
+    let profileId: string | undefined;
+    if (decision === 'approve' && s.profiles) {
+      const choice = form.get('profile');
+      const scope = form.get('scope');
+      if (!choice || !scope) {
+        return sendErrorPage(
+          reply,
+          400,
+          'Choose a profile',
+          'Choose a profile and a scope for this connection.',
+        );
+      }
+      const newLabel = form.get('new_label');
+      const newKind = form.get('new_kind');
+      const applied = s.profiles.apply({
+        profileId: choice,
+        scope,
+        ...(newLabel !== undefined ? { newLabel } : {}),
+        ...(newKind !== undefined ? { newKind } : {}),
+      });
+      if (!applied.ok) return sendErrorPage(reply, 400, 'Choose a profile', applied.error);
+      profileId = applied.profileId;
+    }
     s.consents.delete(requestId);
     const back = (params: Record<string, string | undefined>) =>
       reply
@@ -292,11 +327,13 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
       codeChallenge: pending.codeChallenge,
       scopes: pending.scopes,
       resource: pending.resource,
+      ...(profileId !== undefined ? { profileId } : {}),
     });
     s.event('consent.granted', {
       client_id: pending.clientId,
       scope: pending.scopes.join(' '),
       redirect_host: displayHost(pending.redirectUri),
+      ...(profileId !== undefined ? { profile_id: profileId } : {}),
     });
     return back({ code });
   };

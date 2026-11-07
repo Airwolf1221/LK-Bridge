@@ -1319,14 +1319,16 @@ export class JobEngine {
       ...options,
     }));
     try {
-      const { proposalId } = await this.proposalSink.capture(principal, ops, {
+      const { proposalId, summary } = await this.proposalSink.capture(principal, ops, {
         ...meta,
         kind: jobKind,
         origin,
       });
-      return { status: 'proposal_captured', proposalId };
+      return { status: 'proposal_captured', proposalId, ...(summary !== undefined ? { summary } : {}) };
     } catch (e) {
       if (e instanceof PolicyDeniedError) throw this.policyDenied(e, principal);
+      // A sink that refuses with a typed reason (a guard, invalid params, a failed read) keeps it.
+      if (e instanceof JobsError) throw e;
       throw new JobsError(
         'BRIDGE_ERROR',
         `The proposal sink failed: ${e instanceof Error ? e.message : String(e)}`,

@@ -23,6 +23,11 @@ export interface CallerIdentity {
   readonly tokenId: string;
   readonly expiresAt?: number;
   readonly label?: string;
+  /**
+   * Who the request acts for in the policy layer: the grant (OAuth token family, `grant_…`) or PAT (`pat_…`) id.
+   * Taken from the server-issued token only, never from anything the client says about itself.
+   */
+  readonly principalId?: string;
 }
 
 export type BearerResult =
@@ -87,6 +92,7 @@ export class BearerGuard {
         clientId: `pat:${pat.id}`,
         scopes: parseScope(pat.scope),
         tokenId: pat.id,
+        principalId: pat.id,
         label: pat.name,
         ...(pat.expiresAt !== null ? { expiresAt: pat.expiresAt } : {}),
       };
@@ -99,6 +105,7 @@ export class BearerGuard {
         scopes: check.token.scopes,
         tokenId: check.token.jti,
         expiresAt: check.token.expiresAt,
+        ...(check.token.familyId ? { principalId: check.token.familyId } : {}),
       };
     }
 

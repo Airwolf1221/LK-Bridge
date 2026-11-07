@@ -20,7 +20,7 @@ import {
 import {
   errorFromThrown,
   errorResult,
-  originFor,
+  mcpOrigin,
   render,
   runResultBody,
   shapeRead,
@@ -87,8 +87,8 @@ export async function executeOne(
       deps,
     );
   }
-  const origin = originFor(tool, ctx);
   try {
+    const origin = mcpOrigin(ctx, tool);
     const r = await deps.engine.run(op.operationId, input.params, {
       origin,
       priority: 'P1',
@@ -226,7 +226,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         opId: 'lk_api_describe_operation',
         params: { path: { operationId } },
         value: body,
-        origin: originFor('lk_api_describe_operation', ctx),
+        origin: mcpOrigin(ctx, 'lk_api_describe_operation'),
         title: `describe ${op.operationId}`,
       });
       return render(
@@ -351,7 +351,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             ...(c.confirm ? { confirm: c.confirm } : {}),
           })),
           onError: onError === 'continue' ? 'continue' : 'stop',
-          origin: originFor('lk_api_batch', ctx),
+          origin: mcpOrigin(ctx, 'lk_api_batch'),
           priority: 'P2',
           ...(title ? { title } : {}),
         });
@@ -399,7 +399,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
           params: (params ?? {}) as OpParams,
           ...(maxItems !== undefined ? { maxItems } : {}),
           ...(maxPages !== undefined ? { maxPages } : {}),
-          origin: originFor('lk_api_paginate_all', ctx),
+          origin: mcpOrigin(ctx, 'lk_api_paginate_all'),
           priority: 'P2',
         });
         if (!('jobId' in r)) return render(submitBody(r, 1), deps);
@@ -431,7 +431,8 @@ export function submitBody(
     return {
       status: 'proposal_captured',
       proposalId: r.proposalId,
-      hint: 'The work needs the owner’s approval and was not started. Never retry it; tell the user it is waiting for approval.',
+      ...(r.summary !== undefined ? { summary: r.summary } : {}),
+      hint: 'The work needs the owner’s approval and was not started. Never retry it; tell the user it is waiting for approval, and follow it with bridge_proposal_status.',
     };
   }
   return {

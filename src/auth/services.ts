@@ -67,6 +67,39 @@ export class PendingConsents {
   }
 }
 
+/** A profile the owner can pick on the consent screen. */
+export interface ProfileOption {
+  readonly id: string;
+  readonly label: string;
+  readonly kind: string;
+  readonly scope: string;
+}
+
+/** The owner's choice on the consent screen: an existing profile, or a new one; and its scope. */
+export interface ConsentProfileChoice {
+  /** An existing profile id, or `new`. */
+  readonly profileId: string;
+  readonly newLabel?: string;
+  readonly newKind?: string;
+  readonly scope: string;
+}
+
+/**
+ * The policy layer's side of consent (implemented in src/policy/consent.ts). The owner, signed in, picks the profile
+ * a new connection acts under and that profile's scope. Without it, consent behaves as in chunk 4 (no profile).
+ */
+export interface ConsentProfiles {
+  readonly kinds: readonly string[];
+  readonly scopes: readonly string[];
+  options(): readonly ProfileOption[];
+  /** The suggested profile for a redirect URI (claude.ai/claude.com → claude, chatgpt.com → chatgpt, loopback → claude-code). */
+  suggest(redirectUri: string): { readonly kind: string; readonly label: string };
+  /** Applies the owner's choice (creates the profile or sets its scope, audited). */
+  apply(choice: ConsentProfileChoice): { ok: true; profileId: string } | { ok: false; error: string };
+  /** The profile id a PAT created without one gets. */
+  defaultPatProfileId(): string;
+}
+
 export interface AuthServices {
   readonly config: AuthConfig;
   readonly store: AuthStore;
@@ -79,6 +112,8 @@ export interface AuthServices {
   readonly pats: PatService;
   readonly bearer: BearerGuard;
   readonly consents: PendingConsents;
+  /** Profile choice at consent (policy layer). Undefined: consent issues grants without a profile. */
+  readonly profiles: ConsentProfiles | undefined;
   readonly registrationLimiter: SlidingWindowLimiter;
   readonly sessionHash: (sessionToken: string) => string;
   /** Deletes expired rows; called periodically. */
@@ -95,6 +130,8 @@ export interface CreateAuthServicesOptions {
   readonly fetchJson?: JsonFetcher;
   readonly loginLimits?: LoginLimits;
   readonly registrationLimit?: { readonly limit: number; readonly windowMs: number };
+  /** The policy layer's consent hooks (profiles and scopes). */
+  readonly profiles?: ConsentProfiles;
 }
 
 export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
@@ -121,7 +158,13 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
     now,
     ...(o.loginLimits ? { limits: o.loginLimits } : {}),
   });
-  const pats = new PatService({ store, event, now });
+  const profiles = o.profiles;
+  const pats = new PatService({
+    store,
+    event,
+    now,
+    ...(profiles ? { defaultProfileId: () => profiles.defaultPatProfileId() } : {}),
+  });
   const bearer = new BearerGuard({ config, tokens, pats });
   const reg = o.registrationLimit ?? { limit: 30, windowMs: 3600_000 };
   return {
@@ -136,6 +179,7 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
     pats,
     bearer,
     consents: new PendingConsents(config.ttl.consentSeconds, now),
+    profiles,
     registrationLimiter: new SlidingWindowLimiter(reg.limit, reg.windowMs, () => now() * 1000),
     sessionHash: hashSecret,
     prune: () => store.prune(now()),

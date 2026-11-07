@@ -30,8 +30,16 @@ interface CreatedUpload {
 const fail = (code: string, message: string, classification: 'user_fixable' | 'bridge' = 'user_fixable') =>
   new BridgeLkError({ message, code, retryable: false, classification, opId: UPLOAD_PUT_STEP });
 
+/** Default per-attempt deadline of the PUT (UPLOAD_PUT_TIMEOUT_MS). */
+export const DEFAULT_UPLOAD_PUT_TIMEOUT_MS = 120_000;
+
 export function createUploadPutHandler(
-  opts: { readonly guard?: GuardOptions; readonly now?: () => number } = {},
+  opts: {
+    readonly guard?: GuardOptions;
+    readonly now?: () => number;
+    /** UPLOAD_PUT_TIMEOUT_MS: the PUT's own per-attempt deadline, not the governor's LK request timeout. */
+    readonly putTimeoutMs?: number;
+  } = {},
 ): CustomStepHandler {
   const now = opts.now ?? Date.now;
   return async (ctx) => {
@@ -90,7 +98,8 @@ export function createUploadPutHandler(
       costs: { tiers: ['upload'] },
       priority: ctx.priority,
       jobId: ctx.jobId,
-      run: () => ctx.lk.fetch(url, { method: 'PUT', headers, body: new Uint8Array(bytes) }),
+      timeoutMs: opts.putTimeoutMs ?? DEFAULT_UPLOAD_PUT_TIMEOUT_MS,
+      run: (signal) => ctx.lk.fetch(url, { method: 'PUT', headers, body: new Uint8Array(bytes), signal }),
     });
 
     // The bytes are no longer needed: keep the database small, and keep the image out of job exports.

@@ -9,6 +9,7 @@ import { type AuthConfig, loadAuthConfig } from '../../src/config/auth.js';
 import { runMigrations } from '../../src/db/migrate.js';
 import { type Db, openDatabase } from '../../src/db/open.js';
 import type { McpToolProvider } from '../../src/mcp/server.js';
+import type { Policy } from '../../src/policy/index.js';
 import { type BuildServerOptions, buildServer } from '../../src/server.js';
 
 /**
@@ -56,6 +57,7 @@ export function testClock(): Clock {
 export interface TestBridge {
   readonly app: FastifyInstance;
   readonly services: AuthServices;
+  readonly policy: Policy;
   readonly config: AuthConfig;
   readonly db: Db;
   readonly base: string;
@@ -101,7 +103,7 @@ export async function startBridge(o: StartBridgeOptions = {}): Promise<TestBridg
     },
   });
   const clock = testClock();
-  const { app, services } = await buildServer({
+  const { app, services, policy } = await buildServer({
     authConfig: config,
     db,
     logLevel: 'info',
@@ -116,6 +118,7 @@ export async function startBridge(o: StartBridgeOptions = {}): Promise<TestBridg
   return {
     app,
     services,
+    policy,
     config,
     db,
     base,
@@ -312,15 +315,36 @@ export async function reachConsent(browser: Browser, url: string): Promise<Conse
   return { html, requestId: hiddenField(html, 'request_id'), csrf: hiddenField(html, 'csrf_token') };
 }
 
+/** The profile and scope fields a consent page preselects (what a browser would submit unchanged). */
+export function consentDefaults(html: string): Record<string, string> {
+  const unescape = (v: string) => v.replace(/&#(\d+);/g, (_, n: string) => String.fromCharCode(Number(n)));
+  const out: Record<string, string> = {};
+  const select = (name: string) => {
+    const m = new RegExp(`<select id="${name}" name="${name}">([\\s\\S]*?)</select>`).exec(html);
+    const opt = m?.[1] ? /<option value="([^"]*)" selected>/.exec(m[1]) : null;
+    if (opt?.[1] !== undefined) out[name] = unescape(opt[1]);
+  };
+  select('profile');
+  select('new_kind');
+  const label = /name="new_label" value="([^"]*)"/.exec(html);
+  if (label?.[1] !== undefined) out.new_label = unescape(label[1]);
+  const scope = /name="scope" value="([a-z]+)" checked/.exec(html);
+  if (scope?.[1]) out.scope = scope[1];
+  return out;
+}
+
 export async function decide(
   browser: Browser,
   page: ConsentPage,
   decision: 'approve' | 'deny',
+  fields: Readonly<Record<string, string>> = {},
 ): Promise<{ res: Response; location: URL }> {
   const res = await browser.post(`${browser.base}/oauth/consent`, {
     request_id: page.requestId,
     csrf_token: page.csrf,
     decision,
+    ...consentDefaults(page.html),
+    ...fields,
   });
   expect(res.status).toBe(303);
   return { res, location: new URL(res.headers.get('location') as string) };

@@ -7,7 +7,7 @@ import * as z from 'zod';
 import type { JobView } from '../../jobs/index.js';
 import { defineTool } from './define.js';
 import { submitBody } from './lk-api.js';
-import { errorFromThrown, errorResult, originFor, render, type ToolDeps } from './shape.js';
+import { errorFromThrown, errorResult, mcpOrigin, render, type ToolDeps } from './shape.js';
 import { resolveImage, UploadSourceError } from './upload-source.js';
 
 export function uploadTools(deps: ToolDeps) {
@@ -74,7 +74,7 @@ export function uploadTools(deps: ToolDeps) {
             name: input.name,
             ...(input.description !== undefined ? { description: input.description } : {}),
             ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
-            origin: originFor('lk_upload_image', ctx),
+            origin: mcpOrigin(ctx, 'lk_upload_image'),
             priority: 'P1',
           });
           if (!('jobId' in r)) return render(submitBody(r, 3), deps);

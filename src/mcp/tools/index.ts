@@ -20,7 +20,7 @@ export const BRIDGE_INSTRUCTIONS =
   'Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. ' +
   'Read before you write, and pass the version you read as params.ifMatch. ' +
   'Never loop on budget errors: wait until the stated retry time. ' +
-  'Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost, so follow it with bridge_job_status. ' +
+  'Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost: follow a job with bridge_job_status and a proposal with bridge_proposal_status. ' +
   'Results are summaries; ask for detail "full" only when you need the whole payload, and page oversized results with bridge_result_page.';
 
 export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: boolean }): McpToolProvider[] {

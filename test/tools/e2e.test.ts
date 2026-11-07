@@ -33,6 +33,8 @@ describe('the MCP surface with the official client', () => {
         'bridge_job_status',
         'bridge_job_wait',
         'bridge_journal_lookup',
+        'bridge_proposal_status',
+        'bridge_proposals_mine',
         'bridge_result_page',
         'lk_api_batch',
         'lk_api_describe_operation',
@@ -109,7 +111,8 @@ describe('the MCP surface with the official client', () => {
     const job = stack.runtime.engine.queries.getJob(w.body.jobId)!;
     expect(job.origin.tool).toBe('lk_api_write');
     expect(job.origin.kind).toBe('mcp');
-    expect(job.principalId).toMatch(/^pat:/);
+    expect(job.principalId).toMatch(/^pat_/);
+    expect(job.profile).toBe('tools-test');
     // A stale version is refused with the current one.
     const stale = await stack.call(client, 'lk_api_write', {
       operationId: 'replaceDocumentBlocks',
@@ -195,7 +198,9 @@ describe('the MCP surface with the official client', () => {
       bridge: 'LK-Bridge',
       version: '0.0.0-test',
       project: { id: 'proj_mock' },
-      profile: 'default',
+      profile: 'tools-test',
+      scope: 'write',
+      canWriteAs: 'direct',
     });
     expect(info.body.writes.canWrite).toBe(true);
     expect(info.body.caller.kind).toBe('pat');

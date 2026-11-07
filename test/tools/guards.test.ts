@@ -189,7 +189,7 @@ describe('read-only mode and budget', () => {
 describe('the tool list', () => {
   it('every tool carries an access tag consistent with its annotations', () => {
     const tools = stack.runtime.tools;
-    expect(tools).toHaveLength(16);
+    expect(tools).toHaveLength(18); // chunk 3's 16, plus chunk 2b's two proposal tools
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');
@@ -201,7 +201,7 @@ describe('the tool list', () => {
     try {
       const c = await on.connect();
       const { tools } = await c.listTools();
-      expect(tools).toHaveLength(16 + 89);
+      expect(tools).toHaveLength(18 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));

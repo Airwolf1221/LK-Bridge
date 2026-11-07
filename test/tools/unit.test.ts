@@ -1,7 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON */
 import { describe, expect, it } from 'vitest';
 import { ConfigError, loadToolsConfig } from '../../src/config/index.js';
-import { principalFor, project, summarise } from '../../src/mcp/tools/shape.js';
+import { mcpOrigin, project, summarise } from '../../src/mcp/tools/shape.js';
+import type { McpToolContext } from '../../src/mcp/server.js';
 import { sniffImageType, checkTargetUrl, UploadHttpError } from '../../src/mcp/tools/upload-http.js';
 import { suggestOperations } from '../../src/mcp/tools/schemas.js';
 import { operations } from '../../src/lk/registry.js';
@@ -10,7 +11,12 @@ import { BRIDGE_INSTRUCTIONS } from '../../src/mcp/tools/index.js';
 describe('tools configuration', () => {
   it('has the documented defaults', () => {
     expect(loadToolsConfig({})).toEqual({
-      upload: { maxBytes: 10 * 1024 * 1024, allowUrlSource: true, fetchTimeoutMs: 15_000 },
+      upload: {
+        maxBytes: 10 * 1024 * 1024,
+        allowUrlSource: true,
+        fetchTimeoutMs: 15_000,
+        putTimeoutMs: 120_000,
+      },
       resultMaxChars: 40_000,
     });
   });
@@ -59,18 +65,16 @@ describe('result shaping', () => {
   it('clips long strings', () => {
     expect((project({ text: 'x'.repeat(500) }) as { text: string }).text.length).toBeLessThan(130);
   });
-  it('maps a caller to a placeholder principal', () => {
-    expect(principalFor(undefined).principalId).toBe('system');
-    expect(
-      principalFor({ kind: 'pat', clientId: 'pat:abc', scopes: [], tokenId: 'abc', label: 'laptop' }),
-    ).toEqual({
-      principalId: 'pat:abc',
-      profile: 'default',
-      label: 'laptop',
+  it('builds the engine origin from the request principal, and refuses without one', () => {
+    const principal = { principalId: 'pat_abc', profile: 'claude-code', label: 'laptop (PAT)' };
+    const caller = { kind: 'pat' as const, clientId: 'pat:pat_abc', scopes: [], tokenId: 'pat_abc' };
+    expect(mcpOrigin({ caller, principal } as unknown as McpToolContext, 'lk_api_write')).toEqual({
+      kind: 'mcp',
+      client: 'pat:pat_abc',
+      tool: 'lk_api_write',
+      principal,
     });
-    expect(principalFor({ kind: 'oauth', clientId: 'claude', scopes: [], tokenId: 't' }).principalId).toBe(
-      'oauth:claude',
-    );
+    expect(() => mcpOrigin({ caller } as unknown as McpToolContext, 'lk_api_write')).toThrow(/not known/);
   });
   it('suggests close operation names', () => {
     expect(
