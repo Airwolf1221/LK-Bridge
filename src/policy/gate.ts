@@ -9,9 +9,9 @@
  * | `propose` | allow | propose (the proposal service captures it; nothing is sent to LegendKeeper) |
  * | `write`   | allow | allow (the engine's guards still apply)                                    |
  *
- * Member and invite administration (registry `risk: admin`) is denied for every agent unless
- * LK_ALLOW_MEMBER_ADMIN=true. The `system` principal (internal and dashboard work) is always allowed, except on an MCP
- * origin, where it can only mean a tool forgot to pass the caller. Unknown, revoked or expired principals are denied.
+ * Member and invite administration (registry `risk: admin`) stays refused for every agent unless
+ * LK_ALLOW_MEMBER_ADMIN=true: by the engine's guard (`MEMBER_ADMIN_DISABLED`) and, for proposals, at capture.
+ * The `system` principal (internal and dashboard work) is always allowed, except on an MCP origin, where it can only mean a tool forgot to pass the caller. Unknown, revoked or expired principals are denied.
  *
  * Approved proposals: see approval.ts. A valid token for the proposal containing the operation wins over the
  * proposer's (possibly since lowered) scope; `approvedBy` or a token that is not valid is refused outright.
@@ -113,7 +113,8 @@ export class LivePolicyGate implements PolicyGate {
     if (!resolved) return deny('the connection is not known to the bridge');
     if (!resolved.active) return deny('the connection has been revoked or has expired');
     if (op.kind === 'read') return { decision: 'allow' };
-    if (adminBlocked) return deny(MEMBER_ADMIN_REASON);
+    // Member and invite administration is refused by the engine's own guard (MEMBER_ADMIN_DISABLED) at every scope,
+    // after this gate, and by the dry-run of the guards at proposal capture; that typed refusal is clearer for agents.
     switch (resolved.scope) {
       case 'write':
         return { decision: 'allow' };

@@ -5,12 +5,21 @@ import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyServerO
 import { authPlugin } from './auth/plugin.js';
 import { type AuthServices, type CreateAuthServicesOptions, createAuthServices } from './auth/services.js';
 import { type AuthConfig, AuthConfigError, loadAuthConfig } from './config/auth.js';
-import { ConfigError, loadConfig } from './config/index.js';
+import {
+  type Config,
+  ConfigError,
+  loadConfig,
+  loadPolicyConfig,
+  loadToolsConfig,
+  PolicyConfigError,
+  type ToolsSettings,
+} from './config/index.js';
 import { runMigrations } from './db/migrate.js';
 import { type Db, openDatabase } from './db/open.js';
 import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/server.js';
 import { mcpTransportPlugin } from './mcp/transport.js';
 import { type Policy, createPolicy } from './policy/index.js';
+import { createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
 
 /**
  * Composition root. Chunk 4 wires the authorization server and the MCP transport; later chunks
@@ -29,6 +38,8 @@ export interface BuildServerOptions {
   /** MCP tools. Defaults to the `bridge_info` stub. */
   readonly tools?: readonly McpToolProvider[];
   readonly bridgeInfo?: () => BridgeInfo;
+  /** MCP server `instructions` shown to connecting agents. */
+  readonly instructions?: string;
   /** Overrides `TRUST_PROXY` (tests only). */
   readonly trustProxy?: FastifyServerOptions['trustProxy'];
   /** Test seams for the auth services (clock, CIMD fetcher, rate limits). */
@@ -95,7 +106,11 @@ export async function buildServer(
     config: o.authConfig,
     bearer: services.bearer,
     event: services.event,
-    serverInfo: { name: 'lk-bridge', version: BRIDGE_VERSION },
+    serverInfo: {
+      name: 'lk-bridge',
+      version: BRIDGE_VERSION,
+      ...(o.instructions ? { instructions: o.instructions } : {}),
+    },
     tools: [...(o.tools ?? [bridgeInfoStub(bridgeInfo)]), ...policy.tools],
     access: policy.access,
   });
@@ -104,14 +119,64 @@ export async function buildServer(
   return { app, services, policy };
 }
 
+export interface CreateBridgeOptions {
+  readonly config: Config;
+  readonly authConfig: AuthConfig;
+  readonly toolsSettings: ToolsSettings;
+  /** Opened and migrated. */
+  readonly db: Db;
+  readonly policySettings?: RuntimeOptions['policySettings'];
+  /** Reported by bridge_info (defaults to package.json's version). */
+  readonly version?: string;
+  readonly logLevel?: string;
+  readonly logStream?: Writable;
+  readonly pruneIntervalMs?: number;
+  /** Test seams, passed to `createRuntime`. */
+  readonly clock?: RuntimeOptions['clock'];
+  readonly lkTransport?: RuntimeOptions['lkTransport'];
+  readonly uploadGuard?: RuntimeOptions['uploadGuard'];
+}
+
+/**
+ * The real boot path (what `main` runs): the runtime (governor, LK client, engine with the live policy gate and
+ * proposal sink, tools) and the HTTP server around it, sharing ONE policy layer.
+ */
+export async function createBridge(
+  o: CreateBridgeOptions,
+): Promise<{ app: FastifyInstance; services: AuthServices; runtime: Runtime }> {
+  const runtime = createRuntime({
+    config: o.config,
+    toolsSettings: o.toolsSettings,
+    db: o.db,
+    version: o.version ?? BRIDGE_VERSION,
+    ...(o.policySettings ? { policySettings: o.policySettings } : {}),
+    ...(o.clock ? { clock: o.clock } : {}),
+    ...(o.lkTransport ? { lkTransport: o.lkTransport } : {}),
+    ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
+  });
+  const { app, services } = await buildServer({
+    authConfig: o.authConfig,
+    db: o.db,
+    logLevel: o.logLevel ?? o.config.logLevel,
+    ...(o.logStream ? { logStream: o.logStream } : {}),
+    ...(o.pruneIntervalMs !== undefined ? { pruneIntervalMs: o.pruneIntervalMs } : {}),
+    tools: runtime.tools,
+    instructions: runtime.instructions,
+    policy: runtime.policy,
+  });
+  return { app, services, runtime };
+}
+
 async function main(): Promise<void> {
   let config;
   let authConfig;
+  let policySettings;
   try {
     config = loadConfig();
     authConfig = loadAuthConfig();
+    policySettings = loadPolicyConfig();
   } catch (err) {
-    if (err instanceof ConfigError || err instanceof AuthConfigError) {
+    if (err instanceof ConfigError || err instanceof AuthConfigError || err instanceof PolicyConfigError) {
       process.stderr.write(`${err.message}\n`);
       process.exit(1);
     }
@@ -119,21 +184,21 @@ async function main(): Promise<void> {
   }
   const db = openDatabase(config.server.dbPath);
   runMigrations(db);
-  const { app } = await buildServer({
+  // Governor, LK client, policy layer, job engine (its startup recovery runs here, before /mcp accepts anything) and
+  // tools, in dependency order; then the HTTP server with the same policy layer.
+  const { app, runtime } = await createBridge({
+    config,
     authConfig,
+    toolsSettings: loadToolsConfig(),
+    policySettings,
     db,
-    logLevel: config.logLevel,
-    bridgeInfo: () => ({
-      version: BRIDGE_VERSION,
-      projectId: config.lk.projectId,
-      readOnly: config.lk.readOnly,
-      writersMax: config.writers.max,
-    }),
   });
+  // SIGTERM: stop new work and let running jobs finish (drain), then stop HTTP, then close the database.
   const shutdown = (signal: string) => {
     app.log.info({ signal }, 'shutting down');
-    app
-      .close()
+    runtime
+      .shutdown()
+      .then(() => app.close())
       .then(() => db.close())
       .then(
         () => process.exit(0),

@@ -5,6 +5,7 @@
  */
 import * as z from 'zod';
 import type { CallerIdentity } from '../auth/bearer.js';
+import { PolicyDeniedError } from '../jobs/errors.js';
 import type { JobOrigin } from '../jobs/types.js';
 import type { McpAccessControl, McpToolContext, McpToolProvider, McpToolResult } from '../mcp/server.js';
 import type { LivePolicyGate } from './gate.js';
@@ -30,7 +31,13 @@ export function createMcpAccessControl(gate: LivePolicyGate): McpAccessControl {
  * no principal, so a tool can never fall back to the `system` principal.
  */
 export function mcpOrigin(ctx: McpToolContext, tool: string): JobOrigin {
-  if (!ctx.principal) throw new Error('This request has no principal; refusing to act');
+  if (!ctx.principal) {
+    throw new PolicyDeniedError(
+      tool,
+      'the connection is not known to the bridge, so it cannot act',
+      'unknown',
+    );
+  }
   return {
     kind: 'mcp',
     ...(ctx.caller?.clientId ? { client: ctx.caller.clientId } : {}),

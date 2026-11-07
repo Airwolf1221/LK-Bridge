@@ -1,4 +1,10 @@
-export { Governor, createGovernor, type GovernorOptions, type Transport } from './governor.js';
+export {
+  Governor,
+  createGovernor,
+  defaultTransport,
+  type GovernorOptions,
+  type Transport,
+} from './governor.js';
 export { FakeClock, systemClock, sleep, flushMicrotasks, type Clock, type TimerHandle } from './clock.js';
 export { SlidingWindow } from './window.js';
 export { decideRetry, backoffMs, INITIAL_RETRY_STATE } from './retry.js';

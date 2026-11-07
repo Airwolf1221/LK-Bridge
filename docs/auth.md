@@ -75,7 +75,7 @@ After sign-in the consent page also asks which **profile** the connection acts u
 with a label and kind) and that profile's **scope** (`read` preselected). The suggestion comes from the redirect host:
 claude.ai and claude.com → `claude`, chatgpt.com → `chatgpt`, loopback → `claude-code`. The client's self-reported name
 is shown HTML-escaped with an _untrusted name_ badge. The grant, and every refresh and access token issued from it,
-acts under the chosen profile; the scope is evaluated live on every call ([ADR 0011](adr/0011-live-policy-evaluation.md)).
+acts under the chosen profile; the scope is evaluated live on every call ([ADR 0012](adr/0012-live-policy-evaluation.md)).
 Grants and PATs from before chunk 2b are on a `legacy` profile at `read`.
 
 ## For chunk 3: adding tools

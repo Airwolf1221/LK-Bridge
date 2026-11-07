@@ -15,13 +15,7 @@ import {
 import { operations } from '../../src/lk/registry.js';
 import type { OperationDef } from '../../src/lk/registry-types.js';
 import { issueApprovalToken } from '../../src/policy/approval.js';
-import {
-  MEMBER_ADMIN_REASON,
-  SCOPES,
-  createPolicy,
-  type Policy,
-  type Scope,
-} from '../../src/policy/index.js';
+import { SCOPES, createPolicy, type Policy, type Scope } from '../../src/policy/index.js';
 import { makePat, mcpOriginFor } from './helpers.js';
 
 let db: Db;
@@ -58,10 +52,13 @@ const ask = (
     },
   );
 
-/** What the scope table in docs/policy.md says each operation gets. */
-function expected(scope: Scope, def: OperationDef, allowMemberAdmin: boolean): PolicyDecision['decision'] {
+/**
+ * What the scope table in docs/policy.md says each operation gets from the gate. Member administration follows the
+ * scope here; the engine's guard then refuses it unless LK_ALLOW_MEMBER_ADMIN=true (tested in proposals.test.ts and
+ * test/tools/guards.test.ts), so the setting does not change the gate's answer.
+ */
+function expected(scope: Scope, def: OperationDef): PolicyDecision['decision'] {
   if (def.kind === 'read') return 'allow';
-  if (def.risk === 'admin' && !allowMemberAdmin) return 'deny';
   return scope === 'write' ? 'allow' : scope === 'propose' ? 'propose' : 'deny';
 }
 
@@ -75,10 +72,7 @@ describe('scope matrix (every registry operation × every scope)', () => {
         const { principal } = makePat(db, policy, `p-${scope}`, scope, clock);
         for (const def of operations) {
           const d = ask(policy, principal, def);
-          expect(d.decision, `${scope} ${def.operationId}`).toBe(expected(scope, def, allowMemberAdmin));
-          if (d.decision === 'deny' && def.risk === 'admin' && !allowMemberAdmin) {
-            expect(d.reason).toBe(MEMBER_ADMIN_REASON);
-          }
+          expect(d.decision, `${scope} ${def.operationId}`).toBe(expected(scope, def));
           checked++;
         }
       }

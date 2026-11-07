@@ -9,6 +9,7 @@ import { requireOperation } from '../lk/registry.js';
 import type { OperationDef } from '../lk/registry-types.js';
 import type { JobsSettings } from '../config/jobs.js';
 import { matchesIntent } from './compare.js';
+import type { CustomStepHandler, CustomStepHandlers } from './custom-steps.js';
 import {
   JobsError,
   LkOperationError,
@@ -49,6 +50,8 @@ export interface StepExecDeps {
   readonly setJobWaiting: (jobId: string, waiting: 'lock' | null, detail?: Record<string, unknown>) => void;
   /** Null when a new write may start now; otherwise why not. */
   readonly writeHold: () => 'writes_paused' | 'read_only' | null;
+  /** Non-registry step types (the upload_image PUT), by step id. */
+  readonly customSteps?: CustomStepHandlers | undefined;
 }
 
 interface Current {
@@ -124,6 +127,8 @@ export class StepExecutor {
     signal: AbortSignal,
     opts: { readonly storeResult?: boolean } = {},
   ): Promise<StepOutcome> {
+    const custom = this.d.customSteps?.[step.opId];
+    if (custom) return this.runCustom(job, step, custom);
     const op = requireOperation(step.opId);
     const params = this.d.repo.stepParams(step);
     const ref = { jobId: job.id, stepNo: step.stepNo };
@@ -169,6 +174,52 @@ export class StepExecutor {
     } finally {
       releaseSlot();
       releaseLock?.();
+    }
+  }
+
+  // ------------------------------------------------------------------------------------------ custom steps
+
+  /**
+   * A non-registry step (the upload_image PUT). Not an LK write, so it takes no lock or writer slot, but it is held
+   * while writes are paused or read-only is on, like the LK steps around it. The handler's own network calls go
+   * through the governor; a failure it throws is recorded like any LK failure. Nothing here can have changed LK, so
+   * the step is never "maybe sent": a restart simply runs it again.
+   */
+  private async runCustom(job: JobView, step: StepView, handler: CustomStepHandler): Promise<StepOutcome> {
+    const hold = step.status === 'running' ? null : this.d.writeHold();
+    if (hold) return { kind: 'held', reason: hold };
+    const stats = newCallStats();
+    const now = this.d.now();
+    this.d.repo.updateStep(job.id, step.stepNo, {
+      status: 'running',
+      startedAt: step.startedAt ?? now,
+      firstSentAt: step.firstSentAt ?? now,
+    });
+    try {
+      const value = await handler({
+        jobId: job.id,
+        stepNo: step.stepNo,
+        priority: job.priority,
+        lk: this.d.lk,
+        params: this.d.repo.stepParams(step),
+        resultOf: (n) => {
+          const s = this.d.repo.step(job.id, n);
+          return s ? this.d.repo.stepResult(s) : null;
+        },
+        replaceParams: (p) => this.d.repo.setStepParams(job.id, step.stepNo, p),
+      });
+      return this.succeed(job, step, stats, value);
+    } catch (e) {
+      if (e instanceof BridgeLkError && !(e instanceof BudgetWaitError && e.status === undefined)) {
+        this.d.recordLkError(e, {
+          opId: step.opId,
+          jobId: job.id,
+          stepNo: step.stepNo,
+          principalId: job.principalId,
+          profile: job.profile,
+        });
+      }
+      return this.fail(job, step, stats, e);
     }
   }
 

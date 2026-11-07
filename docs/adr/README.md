@@ -14,4 +14,5 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0008](0008-chatgpt-as-a-client.md)                | ChatGPT as a supported client                                  | Accepted |
 | [0009](0009-refresh-token-grace-window.md)         | Refresh-token grace window                                     | Accepted |
 | [0010](0010-job-engine-verification-and-holds.md)  | Job engine verification, `uncertain` steps and write holds     | Accepted |
-| [0011](0011-live-policy-evaluation.md)             | Policy attaches to profiles and is evaluated live              | Accepted |
+| [0011](0011-tool-layer.md)                         | The MCP tool layer, stored results and the upload job          | Accepted |
+| [0012](0012-live-policy-evaluation.md)             | Policy attaches to profiles and is evaluated live              | Accepted |

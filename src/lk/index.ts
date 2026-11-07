@@ -8,6 +8,7 @@ export {
   formatBudgetFooter,
   estimateFrom,
   FakeClock,
+  defaultTransport,
   systemClock,
   type GovernorOptions,
   type Transport,

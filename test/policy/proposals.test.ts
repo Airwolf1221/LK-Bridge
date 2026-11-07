@@ -501,8 +501,7 @@ describe('member administration', () => {
         r.e,
         r.e.engine.run('removeMember', { path: { userId: 'u1' } }, { origin: o }),
       );
-      expect(out.error).toBeInstanceOf(PolicyDeniedError);
-      expect((out.error as Error).message).toContain('LK_ALLOW_MEMBER_ADMIN');
+      expect((out.error as { code?: string }).code).toBe('MEMBER_ADMIN_DISABLED');
     }
     expect(r.policy.commands.listProposals('owner')).toEqual([]);
     expect(writesAtMock(r)).toEqual([]);

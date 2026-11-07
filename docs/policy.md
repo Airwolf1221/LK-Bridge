@@ -3,7 +3,7 @@
 Every connection to `/mcp` acts **for a principal under a profile**, and the profile's **scope** decides what it may do.
 The owner sets both, at consent or later in the dashboard. Writes from a connection at scope `propose` become
 **proposals** that the owner approves or rejects; nothing is sent to LegendKeeper until then. The design decision that
-scopes are evaluated live is [ADR 0011](adr/0011-live-policy-evaluation.md).
+scopes are evaluated live is [ADR 0012](adr/0012-live-policy-evaluation.md).
 
 Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 

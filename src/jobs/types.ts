@@ -113,7 +113,28 @@ export interface PaginateSubmit {
   readonly title?: string;
 }
 
-export type SubmitRequest = BatchSubmit | PaginateSubmit;
+/**
+ * An image upload (PLAN §4 rule 5): `createImageUpload`, the signed-URL PUT (a custom step, not an LK call), then
+ * `createImageAsset`. The bytes are checked by the caller (type, size, magic bytes) and stored with the PUT step so a
+ * restart can send them again.
+ */
+export interface UploadImageSubmit {
+  readonly kind: 'upload_image';
+  readonly contentType: string;
+  /** Exactly the number of bytes in `dataBase64`. */
+  readonly contentLength: number;
+  /** Lowercase hex SHA-256 of the bytes; sent to LK so storage rejects a mismatch. */
+  readonly contentHash?: string;
+  readonly dataBase64: string;
+  readonly name: string;
+  readonly description?: string;
+  readonly folderId?: string;
+  readonly priority?: PriorityClass;
+  readonly origin: JobOrigin;
+  readonly title?: string;
+}
+
+export type SubmitRequest = BatchSubmit | PaginateSubmit | UploadImageSubmit;
 
 export interface SubmitResult {
   readonly jobId: string;

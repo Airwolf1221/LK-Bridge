@@ -28,6 +28,7 @@ import {
   errorToJson,
 } from './errors.js';
 import { JobEventEmitter } from './events.js';
+import { UPLOAD_PUT_STEP, type CustomStepHandlers } from './custom-steps.js';
 import { checkSubmitGuards, isWriteOp } from './guards.js';
 import { isClientId, mintClientId, newJobId } from './ids.js';
 import { WriteJournal, journalLookup, type JournalFilter } from './journal.js';
@@ -66,8 +67,10 @@ import {
   type RunResult,
   type StepOptions,
   type StepSpec,
+  type StepView,
   type SubmitRequest,
   type SubmitResult,
+  type UploadImageSubmit,
   type WritersView,
 } from './types.js';
 import { WriterPool, clampWriters } from './writers.js';
@@ -90,6 +93,8 @@ export interface CreateJobEngineOptions {
   readonly policyGate?: PolicyGate;
   /** Receives work the gate wants approved (default: treats "propose" as "deny"). */
   readonly proposalSink?: ProposalSink;
+  /** Non-registry step types, by step id (`upload_image.put`, supplied by the MCP tools). */
+  readonly customSteps?: CustomStepHandlers;
 }
 
 const SETTING = {
@@ -173,6 +178,7 @@ export class JobEngine {
       recordLkError: (err, ref) => this.recordLkError(err, ref),
       setJobWaiting: (jobId, waiting, detail) => this.setWaitingLock(jobId, waiting, detail),
       writeHold: () => this.writeHold(),
+      customSteps: o.customSteps,
     });
     const base = createJobQueries(o.db);
     this.queries = {
@@ -327,7 +333,9 @@ export class JobEngine {
   /** Queues a multi-step job: `batch_ops` (ordered registry calls) or `paginate_all` (every page of a list). */
   async submit(req: SubmitRequest): Promise<SubmitResult | ProposalCaptured> {
     if (this.draining) throw new DrainingError();
-    return req.kind === 'batch_ops' ? this.submitBatch(req) : this.submitPaginate(req);
+    if (req.kind === 'batch_ops') return this.submitBatch(req);
+    if (req.kind === 'upload_image') return this.submitUpload(req);
+    return this.submitPaginate(req);
   }
 
   private async submitBatch(req: BatchSubmit): Promise<SubmitResult | ProposalCaptured> {
@@ -418,6 +426,157 @@ export class JobEngine {
       status: 'queued',
       eta: this.clock.now() + this.estimateFor([{ def, params }], priority).wallClockMs,
     };
+  }
+
+  /**
+   * `upload_image` (PLAN §4 rule 5): three steps. `createImageUpload` and `createImageAsset` are registry calls (so
+   * policy, guards, keys and recovery apply as usual); the PUT between them is the custom `upload_image.put` step.
+   * The upload key is bound into the last step when it is about to run (see `bindUploadStep`).
+   */
+  private async submitUpload(req: UploadImageSubmit): Promise<SubmitResult | ProposalCaptured> {
+    const origin = normaliseOrigin(req.origin);
+    const uploadParams: OpParams = {
+      body: {
+        contentType: req.contentType,
+        contentLength: req.contentLength,
+        ...(req.contentHash ? { contentHash: req.contentHash } : {}),
+      },
+    };
+    const assetBody = {
+      name: req.name,
+      ...(req.description !== undefined ? { description: req.description } : {}),
+      ...(req.folderId !== undefined ? { folderId: req.folderId } : {}),
+    };
+    // The upload key does not exist yet; validate the rest with a stand-in.
+    const upload = this.validate('createImageUpload', uploadParams);
+    const asset = this.validate('createImageAsset', { body: { uploadKey: 'pending', ...assetBody } });
+    const priority = req.priority ?? 'P2';
+    const title = req.title ?? `upload image: ${req.name}`;
+    const items = [
+      { def: upload, params: uploadParams, options: {} },
+      { def: asset, params: { body: assetBody } as OpParams, options: {} },
+    ];
+    const proposal = await this.authorize(items, origin, 'upload_image', { title, priority });
+    if (proposal) return proposal;
+    if (this.draining) throw new DrainingError();
+    const guard = this.guardContext();
+    for (const v of items) checkSubmitGuards(v.def, v.params, v.options, guard);
+    const steps: Pick<PreparedStep, 'step'>[] = [
+      this.prepare(upload, uploadParams, {}),
+      {
+        step: {
+          opId: UPLOAD_PUT_STEP,
+          opKind: 'upload',
+          params: {
+            body: {
+              contentType: req.contentType,
+              contentLength: req.contentLength,
+              ...(req.contentHash ? { contentHash: req.contentHash } : {}),
+              dataBase64: req.dataBase64,
+            },
+          },
+          options: {},
+          clientIds: [],
+          post: false,
+        },
+      },
+      this.prepare(asset, { body: assetBody }, {}),
+    ];
+    const job = this.createJob('upload_image', title, origin, priority, 'stop', steps, 'queued');
+    const estimate = this.estimateFor(
+      [
+        { def: upload, params: uploadParams },
+        { def: asset, params: { body: assetBody } },
+      ],
+      priority,
+    );
+    this.pump();
+    return {
+      jobId: job.id,
+      status: job.status,
+      eta: this.writeHold() !== null ? null : this.clock.now() + estimate.wallClockMs,
+    };
+  }
+
+  /**
+   * Binds the `uploadKey` from step 1's stored result into `createImageAsset`'s params just before it runs.
+   * Idempotent, and safe across restarts: it works from the persisted result. Returns true when it changed the step.
+   */
+  private bindUploadStep(jobId: string, step: StepView): boolean {
+    if (step.opId !== 'createImageAsset') return false;
+    const params = this.repo.stepParams(step);
+    const body = (params.body ?? {}) as Record<string, unknown>;
+    if (typeof body.uploadKey === 'string' && body.uploadKey.length > 0) return false;
+    const first = this.repo.step(jobId, 1);
+    const created = first ? (this.repo.stepResult(first) as { uploadKey?: unknown } | null) : null;
+    if (typeof created?.uploadKey !== 'string' || created.uploadKey.length === 0) {
+      throw new JobsError('BRIDGE_ERROR', 'createImageUpload returned no uploadKey', {
+        jobId,
+        stepNo: step.stepNo,
+      });
+    }
+    this.repo.setStepParams(jobId, step.stepNo, {
+      ...params,
+      body: { ...body, uploadKey: created.uploadKey },
+    });
+    return true;
+  }
+
+  /**
+   * Stores a result that was already produced (an oversized inline read) as a succeeded one-step job holding the
+   * whole value in a `result` artefact, so MCP tools can return a handle and page it (PLAN §7). Reads are normally
+   * not recorded as jobs; this is the exception, and it makes the stored result visible in the job list.
+   */
+  recordResult(args: {
+    /** What produced the value: a registry operation id, or a label such as `bridge_journal_lookup`. */
+    readonly opId: string;
+    readonly params: OpParams;
+    readonly value: unknown;
+    readonly origin: JobOrigin;
+    readonly title?: string;
+    readonly priority?: PriorityClass;
+  }): { readonly jobId: string; readonly artifactId: string; readonly bytes: number } {
+    const origin = normaliseOrigin(args.origin);
+    const job = this.createJob(
+      'single_op',
+      args.title ?? `${args.opId} (stored result)`,
+      origin,
+      args.priority ?? 'P1',
+      'stop',
+      [
+        {
+          step: {
+            opId: args.opId,
+            opKind: 'read',
+            params: args.params,
+            options: {},
+            clientIds: [],
+            post: false,
+          },
+        },
+      ],
+      'succeeded',
+    );
+    const text = JSON.stringify(args.value) ?? 'null';
+    const artifactId = this.repo.createArtifact(job.id, 1, 'result', text);
+    const bytes = Buffer.byteLength(text);
+    const at = this.clock.now();
+    this.repo.updateStep(job.id, 1, {
+      status: 'succeeded',
+      attempts: 1,
+      resultSummary: { stored: true, bytes },
+      resultArtifactId: artifactId,
+      startedAt: at,
+      finishedAt: at,
+    });
+    this.refreshProgress(job.id);
+    this.repo.updateJob(job.id, {
+      result: { stepsSucceeded: 1, stepsFailed: 0, stepsNotRun: 0, resultArtifactId: artifactId },
+      startedAt: at,
+      finishedAt: at,
+    });
+    this.emitJob(job.id, 'updated');
+    return { jobId: job.id, artifactId, bytes };
   }
 
   /** Bounded wait (at most `maxWaitMs`, 25 s) for a job to finish. Resolves with the job as it then stands. */
@@ -531,7 +690,7 @@ export class JobEngine {
       if (!step || (step.status !== 'failed' && step.status !== 'uncertain')) {
         throw new InvalidControlError(`Step ${stepNo} of ${jobId} has not failed`, { jobId, stepNo });
       }
-      const def = getOperation(step.opId)!;
+      const def = getOperation(step.opId); // undefined for a custom step (the upload PUT): never a POST
       const ambiguous = step.maybeSent || step.status === 'uncertain';
       if (ambiguous && opts.force !== true) {
         this.repo.updateStep(jobId, stepNo, {
@@ -545,7 +704,7 @@ export class JobEngine {
         this.repo.updateStep(jobId, stepNo, {
           status: 'pending',
           attempt0,
-          idempotencyKey: def.method === 'POST' ? idempotencyKeyFor(jobId, stepNo, attempt0) : null,
+          idempotencyKey: def?.method === 'POST' ? idempotencyKeyFor(jobId, stepNo, attempt0) : null,
           error: null,
           maybeSent: false,
           firstSentAt: null,
@@ -656,7 +815,10 @@ export class JobEngine {
     const values: unknown[] = [];
     for (;;) {
       job = this.requireJob(jobId);
-      const step = this.repo.nextStep(jobId);
+      let step = this.repo.nextStep(jobId);
+      if (step && job.kind === 'upload_image' && this.bindUploadStep(jobId, step)) {
+        step = this.repo.nextStep(jobId);
+      }
       if (!step) {
         this.finish(jobId);
         return { last, values };
@@ -802,6 +964,10 @@ export class JobEngine {
         const s = this.repo.step(jobId, 1);
         if (s) result = { ...result, step: s.resultSummary, resultArtifactId: s.resultArtifactId };
       }
+      if (job.kind === 'upload_image') {
+        const s = this.repo.step(jobId, 3);
+        if (s?.status === 'succeeded') result = { ...result, asset: s.resultSummary };
+      }
     }
     this.refreshProgress(jobId);
     this.repo.updateJob(jobId, {
@@ -932,7 +1098,7 @@ export class JobEngine {
     origin: JobOrigin,
     priority: PriorityClass,
     onError: OnError,
-    steps: readonly PreparedStep[],
+    steps: readonly Pick<PreparedStep, 'step'>[],
     status: JobStatus,
     options?: Record<string, unknown>,
   ): JobView {

@@ -1,4 +1,4 @@
-# ADR 0011: Policy attaches to profiles and is evaluated live
+# ADR 0012: Policy attaches to profiles and is evaluated live
 
 Status: Accepted (chunk 2b, 7 November 2026). Adds to PLAN §8 page 8 and §9.6; no PLAN decision is changed.
 
