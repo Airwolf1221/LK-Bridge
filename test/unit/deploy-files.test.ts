@@ -172,7 +172,9 @@ describe('systemd units', () => {
           ],
           { encoding: 'utf8' },
         );
-        expect((r.stdout + r.stderr).trim()).toBe('');
+        // Other units on the machine (CI runners have some) may warn about themselves; only our own matter.
+        const ours = (r.stdout + r.stderr).split('\n').filter((l) => l.includes('lk-bridge'));
+        expect(ours).toEqual([]);
         expect(r.status).toBe(0);
       } finally {
         rmSync(dir, { recursive: true, force: true });
