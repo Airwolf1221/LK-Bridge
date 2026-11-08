@@ -13,6 +13,7 @@ export type AuthEventName =
   | 'authorize.rejected'
   | 'consent.shown'
   | 'consent.granted'
+  | 'consent.scope_change_confirm'
   | 'consent.denied'
   | 'token.issued'
   | 'token.refreshed'

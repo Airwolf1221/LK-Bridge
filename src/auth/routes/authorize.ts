@@ -4,7 +4,7 @@ import { CODE_CHALLENGE_S256 } from '../crypto.js';
 import { OAuthError } from '../errors.js';
 import { FormBody } from '../form.js';
 import { originAllowed, rawQuery, redirectWith, sendErrorPage, sendHtml } from '../http.js';
-import { renderConsent } from '../pages.js';
+import { renderConsent, renderScopeConfirm } from '../pages.js';
 import { findRegisteredRedirect, isAllowedRedirectUri, isLoopbackRedirect } from '../redirect-uris.js';
 import { ScopeSyntaxError, grantableScopes, parseScope } from '../scopes.js';
 import type { AuthServices } from '../services.js';
@@ -235,7 +235,7 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
                 options: s.profiles.options(),
                 suggested: s.profiles.suggest(redirectUri),
                 kinds: s.profiles.kinds,
-                defaultScope: 'read',
+                defaultScope: s.profiles.defaultScope(),
               },
             }
           : {}),
@@ -309,12 +309,36 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
       }
       const newLabel = form.get('new_label');
       const newKind = form.get('new_kind');
+      const confirmScopeChange = form.get('confirm_scope_change');
       const applied = s.profiles.apply({
         profileId: choice,
         scope,
         ...(newLabel !== undefined ? { newLabel } : {}),
         ...(newKind !== undefined ? { newKind } : {}),
+        ...(confirmScopeChange !== undefined ? { confirmScopeChange } : {}),
       });
+      if (!applied.ok && 'confirm' in applied) {
+        // A change to an existing profile's scope: ask once more, with the warning, before anything changes. The
+        // request is not used up; the confirmation form posts it again with the same CSRF token.
+        s.event('consent.scope_change_confirm', {
+          client_id: pending.clientId,
+          profile_id: applied.confirm.profileId,
+          from: applied.confirm.from,
+          to: applied.confirm.to,
+        });
+        return sendHtml(
+          reply,
+          200,
+          renderScopeConfirm({
+            action: OAUTH_PATHS.consent,
+            requestId,
+            csrf: form.get('csrf_token') ?? '',
+            redirectHost: displayHost(pending.redirectUri),
+            ...applied.confirm,
+          }),
+          [new URL(pending.redirectUri).origin],
+        );
+      }
       if (!applied.ok) return sendErrorPage(reply, 400, 'Choose a profile', applied.error);
       profileId = applied.profileId;
     }

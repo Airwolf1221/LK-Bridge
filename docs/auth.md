@@ -109,7 +109,8 @@ profile and scope. See [policy.md](policy.md).
 ## Consent and profiles (chunk 2b)
 
 After sign-in the consent page also asks which **profile** the connection acts under (an existing one, or a new one
-with a label and kind) and that profile's **scope** (`read` preselected). The suggestion comes from the redirect host:
+with a label and kind) and that profile's **scope** (an existing profile's current scope preselected, a new one at the
+default `read`; a change to an existing profile is confirmed on a second page, [ADR 0019](adr/0019-consent-keeps-existing-scope.md)). The suggestion comes from the redirect host:
 claude.ai and claude.com → `claude`, chatgpt.com → `chatgpt`, loopback → `claude-code`. The client's self-reported name
 is shown HTML-escaped with an _untrusted name_ badge. The grant, and every refresh and access token issued from it,
 acts under the chosen profile; the scope is evaluated live on every call ([ADR 0012](adr/0012-live-policy-evaluation.md)).

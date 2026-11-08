@@ -1,6 +1,8 @@
 # ADR 0012: Policy attaches to profiles and is evaluated live
 
-Status: Accepted (chunk 2b, 7 November 2026). Adds to PLAN §8 page 8 and §9.6; no PLAN decision is changed.
+Status: Accepted (chunk 2b, 7 November 2026). Adds to PLAN §8 page 8 and §9.6; no PLAN decision is changed. Decision 4's
+consent preselection is amended by [ADR 0019](0019-consent-keeps-existing-scope.md) (v1.0.1): an existing profile keeps its
+scope unless the owner confirms a change; new profiles still default to `read`.
 
 ## Context
 

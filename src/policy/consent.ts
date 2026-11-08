@@ -1,9 +1,16 @@
 /**
  * The policy layer's consent hooks (chunk 4's consent screen and PAT creation). The signed-in owner chooses the
- * profile a new connection acts under, and that profile's scope; the preselected scope is always `read`.
+ * profile a new connection acts under, and that profile's scope. The page preselects an existing profile's CURRENT scope
+ * (so approving untouched changes nothing) and the configured default scope for a new profile; a change to an existing
+ * profile's scope is applied only after the owner confirms it on a second page (v1.0.1, F-15).
  * Only the redirect host (which the bridge verified) drives the suggestion; the client's self-reported name never does.
  */
-import type { ConsentProfileChoice, ConsentProfiles, ProfileOption } from '../auth/services.js';
+import type {
+  ConsentApplyResult,
+  ConsentProfileChoice,
+  ConsentProfiles,
+  ProfileOption,
+} from '../auth/services.js';
 import { PolicyError } from './errors.js';
 import type { PolicyStore } from './store.js';
 import { PROFILE_KINDS, SCOPES, isProfileKind, isScope, type ProfileKind, type Scope } from './types.js';
@@ -42,17 +49,40 @@ export function ensureProfile(
 /** The default label (and kind) of a PAT's profile: Claude Code's. */
 export const DEFAULT_PAT_PROFILE = 'claude-code';
 
+/** Active connections (grants and PATs) per profile id. */
+function connectionCounts(store: PolicyStore): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const c of store.listConnections()) {
+    if (c.active && c.profileId) counts.set(c.profileId, (counts.get(c.profileId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/** The confirmation token for one exact change: profile, current scope and new scope. */
+export function scopeChangeToken(profileId: string, from: Scope, to: Scope): string {
+  return `${profileId}:${from}:${to}`;
+}
+
 export function createConsentProfiles(store: PolicyStore): ConsentProfiles {
   return {
     kinds: PROFILE_KINDS,
     scopes: SCOPES,
-    options: (): ProfileOption[] =>
-      store.listProfiles().map((p) => ({ id: p.id, label: p.label, kind: p.kind, scope: p.scope })),
+    options: (): ProfileOption[] => {
+      const counts = connectionCounts(store);
+      return store.listProfiles().map((p) => ({
+        id: p.id,
+        label: p.label,
+        kind: p.kind,
+        scope: p.scope,
+        connections: counts.get(p.id) ?? 0,
+      }));
+    },
+    defaultScope: () => store.defaultScope(),
     suggest: (redirectUri) => {
       const kind = suggestKind(redirectUri);
       return { kind, label: kind };
     },
-    apply: (choice: ConsentProfileChoice) => {
+    apply: (choice: ConsentProfileChoice): ConsentApplyResult => {
       if (!isScope(choice.scope)) return { ok: false, error: 'Choose read, propose or write.' };
       const scope: Scope = choice.scope;
       try {
@@ -74,6 +104,22 @@ export function createConsentProfiles(store: PolicyStore): ConsentProfiles {
         if (!p)
           return { ok: false, error: 'That profile no longer exists. Start again from the application.' };
         if (p.scope !== scope) {
+          // Never change an existing profile's scope without an explicit, confirmed choice for exactly this change.
+          // The token names the scope the profile has NOW, so a profile changed elsewhere meanwhile asks again.
+          const token = scopeChangeToken(p.id, p.scope, scope);
+          if (choice.confirmScopeChange !== token) {
+            return {
+              ok: false,
+              confirm: {
+                profileId: p.id,
+                label: p.label,
+                from: p.scope,
+                to: scope,
+                connections: connectionCounts(store).get(p.id) ?? 0,
+                token,
+              },
+            };
+          }
           store.updateScope(p.id, scope);
           store.audit('owner', 'profile.set_scope', p.id, { scope: p.scope }, { scope, via: 'consent' });
         }

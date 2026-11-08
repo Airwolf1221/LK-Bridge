@@ -86,7 +86,7 @@ each with a recommendation below; none is a vulnerability reachable by an intern
 | F-12 | Low      | Tests               | `test/policy/no-agent-escalation.test.ts:144`             | The tool-enumeration test does not cover the 89 `lk_op_*` tools (`MCP_EXPOSE_PER_OP_TOOLS=true`)                                                  | Fixed    |
 | F-13 | Low      | Shutdown            | `src/jobs/engine.ts:217`, `:595`                          | `engine.stop()` does not release `bridge_job_wait` callers, which can hold `app.close()` up to 25 s                                               | Fixed    |
 | F-14 | Low      | Governor            | `src/lk/governor/governor.ts`                             | Tier counters are in memory only; right after a restart the bridge believes the minute and hour are empty                                         | Open     |
-| F-15 | Low      | Consent             | `src/policy/consent.ts:3`                                 | Re-approving a connection with the preselected `read` lowers an existing profile for every connection on it                                       | Open     |
+| F-15 | Low      | Consent             | `src/policy/consent.ts:3`                                 | Re-approving a connection with the preselected `read` lowers an existing profile for every connection on it                                       | Fixed    |
 | F-16 | Low      | Retention           | `src/policy/proposals.ts`                                 | Finished proposals (and their pre-states) are never pruned                                                                                        | Open     |
 | F-17 | Low      | Supply chain        | `deploy/deploy.sh:161`                                    | `npm ci` and the build run as `lkbridge`, which can read the env file                                                                             | Open     |
 | F-26 | Low      | Logging             | `src/server.ts` (Fastify default `routeNotFound`)         | Fastify's not-found log line carried the raw URL, query string included                                                                           | Fixed    |
@@ -290,6 +290,12 @@ without touching the selector sets that profile to `read` for every connection o
 example when ChatGPT reconnects. **Recommendation:** for an existing profile, preselect its current scope (never raising it),
 or warn on the page that the profile will be lowered. Left open because it changes a documented consent decision; it needs
 the owner's call.
+
+**Status: fixed in v1.0.1** (owner's decision, [ADR 0019](../adr/0019-consent-keeps-existing-scope.md); `src/policy/consent.ts`,
+`src/auth/pages.ts`, `src/auth/routes/authorize.ts`). An existing profile's current scope is preselected; a new profile
+gets the configured default (`read`); any change to an existing profile's scope is applied only after a confirmation page
+that shows the profile-wide warning. Tests: `test/policy/mcp.test.ts` › "consent keeps an existing profile's scope unless
+the owner confirms a change" (six tests).
 
 ### F-16 (Low, open): proposals are never pruned
 

@@ -98,12 +98,27 @@ export interface ConsentView {
 }
 
 export interface ConsentProfileView {
-  readonly options: readonly { id: string; label: string; kind: string; scope: string }[];
+  readonly options: readonly {
+    id: string;
+    label: string;
+    kind: string;
+    scope: string;
+    connections?: number;
+  }[];
   /** The suggested profile: an existing one with this label is preselected, else "new" with these values. */
   readonly suggested: { readonly kind: string; readonly label: string };
   readonly kinds: readonly string[];
-  /** Preselected scope (always `read`). */
+  /**
+   * The scope a NEW profile gets (the configured default, `read` out of the box). It is preselected only when the
+   * suggestion is a new profile; for an existing profile the page preselects that profile's current scope (F-15).
+   */
   readonly defaultScope: string;
+}
+
+/** The scope the page preselects: the suggested existing profile's current scope, else the default for new ones. */
+export function preselectedScope(p: ConsentProfileView): string {
+  const existing = p.options.find((o) => o.label.toLowerCase() === p.suggested.label.toLowerCase());
+  return existing ? existing.scope : p.defaultScope;
 }
 
 const SCOPE_CHOICES: Readonly<Record<string, string>> = {
@@ -127,12 +142,16 @@ function renderProfileChoice(p: ConsentProfileView): string {
         `<option value="${escapeHtml(k)}"${k === p.suggested.kind ? ' selected' : ''}>${escapeHtml(k)}</option>`,
     )
     .join('');
+  const checked = preselectedScope(p);
   const scopes = Object.entries(SCOPE_CHOICES)
     .map(
       ([v, text]) =>
-        `<label class="choice"><input type="radio" name="scope" value="${v}"${v === p.defaultScope ? ' checked' : ''}><span><strong>${v}</strong>: ${escapeHtml(text.slice(text.indexOf(':') + 2))}</span></label>`,
+        `<label class="choice"><input type="radio" name="scope" value="${v}"${v === checked ? ' checked' : ''}><span><strong>${v}</strong>${existing && v === existing.scope ? ' (its current scope)' : ''}: ${escapeHtml(text.slice(text.indexOf(':') + 2))}</span></label>`,
     )
     .join('');
+  const preselectNote = existing
+    ? `<p class="muted">Preselected: the current scope of profile “${escapeHtml(existing.label)}”, so approving without changing anything leaves it as it is. A new profile starts at ${escapeHtml(p.defaultScope)}.</p>`
+    : `<p class="muted">A new profile starts at ${escapeHtml(p.defaultScope)}, the default for new connections.</p>`;
   return `<fieldset><legend>Profile</legend>
 <p class="muted">The connection acts under a profile. Permissions belong to the profile and apply at once to every connection that uses it.</p>
 <label for="profile">Use profile</label>
@@ -141,9 +160,49 @@ function renderProfileChoice(p: ConsentProfileView): string {
 <label for="new_kind">New profile kind</label><select id="new_kind" name="new_kind">${kinds}</select>
 </fieldset>
 <fieldset><legend>Scope</legend>
-<p class="muted">Applies to the chosen profile, so it also changes what other connections on that profile may do.</p>
+<p class="muted">Applies to the chosen profile, so it also changes what other connections on that profile may do. Changing an existing profile’s scope asks you to confirm first.</p>
+${preselectNote}
 ${scopes}
 </fieldset>`;
+}
+
+/** The confirmation page for a scope change to an existing profile (F-15). Re-posts the consent form. */
+export interface ScopeConfirmView {
+  readonly action: string;
+  readonly requestId: string;
+  readonly csrf: string;
+  readonly redirectHost: string;
+  readonly profileId: string;
+  readonly label: string;
+  readonly from: string;
+  readonly to: string;
+  readonly connections: number;
+  readonly token: string;
+}
+
+export function renderScopeConfirm(v: ScopeConfirmView): string {
+  const others =
+    v.connections === 0
+      ? 'No other connection uses it yet.'
+      : `${v.connections} existing connection${v.connections === 1 ? '' : 's'} on this profile will change too, at once.`;
+  const raise = ['read', 'propose', 'write'].indexOf(v.to) > ['read', 'propose', 'write'].indexOf(v.from);
+  return layout(
+    'Confirm scope change',
+    `<h1>Change the scope of profile “${escapeHtml(v.label)}”?</h1>
+<div class="box warn" role="alert"><strong>This affects every connection on the profile “${escapeHtml(v.label)}”, not only this one.</strong>
+<p>Its scope would change from <strong>${escapeHtml(v.from)}</strong> to <strong>${escapeHtml(v.to)}</strong>${raise ? ' (a raise)' : ' (a lowering)'}. ${escapeHtml(others)}</p></div>
+<p class="muted">The connection you are approving goes to ${escapeHtml(v.redirectHost)}. Nothing has been changed yet.</p>
+<form method="post" action="${escapeHtml(v.action)}">
+<input type="hidden" name="request_id" value="${escapeHtml(v.requestId)}">
+<input type="hidden" name="csrf_token" value="${escapeHtml(v.csrf)}">
+<input type="hidden" name="decision" value="approve">
+<input type="hidden" name="profile" value="${escapeHtml(v.profileId)}">
+<input type="hidden" name="confirm_scope_change" value="${escapeHtml(v.token)}">
+<div class="actions"><button class="primary" type="submit" name="scope" value="${escapeHtml(v.to)}">Change to ${escapeHtml(v.to)} and approve</button>
+<button type="submit" name="scope" value="${escapeHtml(v.from)}">Keep ${escapeHtml(v.from)} and approve</button></div>
+</form>
+<p class="muted">To deny the connection instead, go back and choose Deny.</p>`,
+  );
 }
 
 export function renderConsent(v: ConsentView): string {
