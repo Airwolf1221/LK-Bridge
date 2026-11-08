@@ -34,6 +34,8 @@ export interface CreateMaintenanceOptions {
   readonly settings: MaintenanceSettings;
   /** POLICY_EXPIRY_SWEEP_SECONDS in milliseconds: the default schedule of `proposal-expiry`. */
   readonly expirySweepMs: number;
+  /** POLICY_PROPOSAL_RETENTION_DAYS in milliseconds: what `proposal-prune` keeps. Default 90 days. */
+  readonly proposalRetentionMs?: number;
   readonly log?: { warn(o: Record<string, unknown>, m: string): void };
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
@@ -53,6 +55,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         db: o.db,
         proposals: o.policy.proposals,
         expirySweepMs: o.expirySweepMs,
+        proposalRetentionMs: o.proposalRetentionMs ?? 90 * 86_400_000,
       }),
       ...(o.extraJobs ?? []),
     ],

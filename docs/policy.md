@@ -127,6 +127,11 @@ not (it returns to `pending`; nothing was sent; the owner approves again). A pro
 
 **Reject** (owner only) takes an optional reason, which the agent can read.
 
+**Retention (v1.0.1).** `executed`, `rejected`, `expired` and `failed` proposals are deleted, with their operations and
+pre-state, `POLICY_PROPOSAL_RETENTION_DAYS` (90) days after they finished, by the `proposal-prune` maintenance job
+([maintenance.md](maintenance.md#proposal-prune-v101)). `pending`, `approved`, `executing` and `conflicted` proposals are
+never pruned. Jobs, journal entries and audit rows keep the proposal id as text.
+
 ### Agent-facing tools
 
 Both are read tools (`access: 'read'`, `readOnlyHint: true`) restricted to the caller's own proposals (by principal);
@@ -205,9 +210,10 @@ approval needs an attached engine. It appends the proposal tools unless the give
 
 ## Settings
 
-| Variable                      | Meaning                                         | Default |
-| ----------------------------- | ----------------------------------------------- | ------- |
-| `POLICY_PROPOSAL_EXPIRY_DAYS` | A pending proposal expires after this many days | 14      |
-| `POLICY_EXPIRY_SWEEP_SECONDS` | How often expiry is checked                     | 300     |
+| Variable                         | Meaning                                                                                                                                                                                        | Default |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `POLICY_PROPOSAL_EXPIRY_DAYS`    | A pending proposal expires after this many days                                                                                                                                                | 14      |
+| `POLICY_EXPIRY_SWEEP_SECONDS`    | How often expiry is checked                                                                                                                                                                    | 300     |
+| `POLICY_PROPOSAL_RETENTION_DAYS` | Finished proposals (executed, rejected, expired, failed) older than this are deleted by the `proposal-prune` maintenance job, with their pre-state; pending and conflicted ones never (v1.0.1) | 90      |
 
 The scope cache is fixed at one second at most (`cacheMs`, 0-1000, in code).

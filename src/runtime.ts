@@ -136,6 +136,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     clock: o.clock ?? systemClock,
     settings: maintenanceSettings,
     expirySweepMs: policySettings.expirySweepMs,
+    proposalRetentionMs: policySettings.proposalRetentionMs,
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   maintenance.start();
