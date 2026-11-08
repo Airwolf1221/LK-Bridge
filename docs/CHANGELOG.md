@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased: v1.0.1 hotfix (8 November 2026)
+
+- **Fixed: `migrate-to-build-user.sh` always stopped at the deploy-key check** ("lkbuild cannot authenticate to
+  GitHub"), even with a working key. It piped `ssh -T git@github.com` into `grep` under `set -o pipefail`, and GitHub
+  ends `ssh -T` with exit status 1 even when it accepts the key. The check is now `git ls-remote <origin> HEAD`, run as
+  `lkbuild` in exactly the environment `deploy.sh` uses for git (same clean environment, `PATH`, key and SSH options);
+  exit status 0 passes, and on failure git's own error is printed. Nothing is removed from `lkbridge` unless it passes,
+  as before. Running the script again after this fix is safe: it picks up where it stopped (the key is then already in
+  `lkbuild`'s home; it completes a partly copied SSH set-up, checks the key, and only then removes the key, its SSH
+  config and `known_hosts` from `lkbridge`'s home, the same files a first run removes).
+- `deploy.sh` now runs git as `lkbuild` with `GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=15'`, so a deploy
+  fails at once instead of waiting for an SSH prompt; the migration's check uses the same setting.
+- Runbook: the manual key checks use `git ls-remote … HEAD` (meaningful exit status) and say that `ssh -T` is to be read
+  by its message only. Nothing else in `deploy/` used `ssh`.
+- Tests (`test/unit/deploy-files.test.ts`): the script's own check runs against a stub GitHub whose `ssh -T` exits 1
+  with the success message and whose upload-pack serves a real repository (passes; the old pipe fails against the same
+  stub); a refused key fails with git's message; the check's environment must match `deploy.sh`'s `as_build`; no script
+  relies on `ssh -T`.
+
 ## 1.0.1 (8 November 2026)
 
 The open items of the chunk 8 hardening review ([docs/review/2026-11-hardening.md](review/2026-11-hardening.md)): F-14,

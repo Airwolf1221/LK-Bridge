@@ -33,7 +33,9 @@ some of them. npm 11 skips unapproved install scripts, but build-time code still
 3. **Root only orchestrates.** It never runs git, npm, node or a script from the checkout itself, and never sources
    anything from it. Each phase uses `runuser -u <user> -- env -i HOME=… PATH=<private Node>:/usr/bin:/bin …`, so no
    variable (and no secret) is inherited:
-   - as `lkbuild`, with umask 022: `git status`, `git fetch`, `git merge --ff-only`, `npm ci`, `npm run build`;
+   - as `lkbuild`, with umask 022 and `GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=15'` (git never waits
+     for an SSH prompt; added by the v1.0.1 hotfix): `git status`, `git fetch`, `git merge --ff-only`, `npm ci`,
+     `npm run build`;
    - as `lkbridge`: the `pre-deploy` backup, the database migrations and the health check;
    - the stop and start of the service: as `lkbridge`, through its existing narrow sudoers rule
      (`sudo -n /usr/bin/systemctl stop|start lk-bridge`), unchanged, so that rule keeps being exercised.
@@ -51,7 +53,7 @@ some of them. npm 11 skips unapproved install scripts, but build-time code still
    a second way in. The migration still installs the sudoers file through `visudo -cf` if it differs.
 6. **An existing install is migrated by a one-off, idempotent script**, `deploy/migrate-to-build-user.sh`, run as root
    from a root-owned copy outside the checkout (the checkout is still `lkbridge`'s when it starts). It creates
-   `lkbuild`, moves the deploy key (only after `lkbuild` has authenticated to GitHub with it; with no key to move it
+   `lkbuild`, moves the deploy key (only after `lkbuild` can read the repository with it: `git ls-remote <origin> HEAD` in the deploy's own environment, exit status 0; not `ssh -T`, which GitHub ends with status 1 even on success; with no key to move it
    stops and says how to add a new one), fixes ownership and modes, installs `/opt/lk-bridge/bin`, validates the
    sudoers file, verifies the separation as each user with `runuser`, then runs a normal deploy (built by `lkbuild`) and
    the health check. `--check` reports what it would change and changes nothing. Each step looks before it acts, so it

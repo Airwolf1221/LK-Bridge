@@ -487,3 +487,145 @@ describe('Caddyfile.lk-bridge', () => {
     }
   });
 });
+
+describe('migrate-to-build-user.sh: the GitHub check (v1.0.1 hotfix)', () => {
+  const migrate = read('migrate-to-build-user.sh');
+  const deploy = read('deploy.sh');
+  const block = /# >>> github check[^\n]*\n([\s\S]*?)# <<< github check/.exec(migrate)![1]!;
+
+  /**
+   * A stand-in GitHub on a temporary directory: `ssh` answers `-T` exactly like GitHub (the success message on stderr
+   * and exit status 1) and serves a local bare repository to git's upload-pack request; `runuser` just runs the
+   * command (no second user is needed). The stub ssh sits first on the check's PATH (the private Node's bin), as the
+   * private Node would. `mode: 'deny'` makes ssh refuse the key, as GitHub does.
+   */
+  function stubGithub(mode: 'ok' | 'deny') {
+    const dir = mkdtempSync(join(tmpdir(), 'lkb-gh-'));
+    const run = (cmd: string, args: string[], cwd?: string) => {
+      const r = spawnSync(cmd, args, { cwd, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')}: ${r.stderr}`);
+    };
+    run('git', ['init', '-q', join(dir, 'src')]);
+    writeFileSync(join(dir, 'src', 'README'), 'x');
+    run('git', ['-C', join(dir, 'src'), 'add', 'README']);
+    run('git', [
+      '-C',
+      join(dir, 'src'),
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.test',
+      'commit',
+      '-qm',
+      'one',
+    ]);
+    run('git', ['clone', '-q', '--bare', join(dir, 'src'), join(dir, 'LK-Bridge.git')]);
+    const nodeBin = join(dir, 'node', 'bin');
+    const stubs = join(dir, 'stubs');
+    run('mkdir', ['-p', nodeBin, stubs, join(dir, 'home')]);
+    writeFileSync(
+      join(nodeBin, 'ssh'),
+      [
+        '#!/bin/bash',
+        `printf '%s\\n' "$*" >> '${join(dir, 'ssh-args.log')}'`,
+        mode === 'deny'
+          ? 'echo "git@github.com: Permission denied (publickey)." >&2; exit 255'
+          : `for a; do case "$a" in git-upload-pack*) exec git upload-pack '${join(dir, 'LK-Bridge.git')}' ;; esac; done`,
+        'echo "Hi Airwolf1221/LK-Bridge! You\'ve successfully authenticated, but GitHub does not provide shell access." >&2',
+        'exit 1',
+        '',
+      ].join('\n'),
+      { mode: 0o755 },
+    );
+    // runuser -u USER -- CMD...: runs CMD as the current user.
+    writeFileSync(join(stubs, 'runuser'), '#!/bin/bash\nshift 3\nexec "$@"\n', { mode: 0o755 });
+    return { dir, nodeBin, stubs, args: () => readFileSync(join(dir, 'ssh-args.log'), 'utf8') };
+  }
+
+  /** Runs the script's own check block under `set -euo pipefail`, as the script does. */
+  function runCheck(gh: ReturnType<typeof stubGithub>, extra = 'github_ok') {
+    return spawnSync('bash', ['-c', `set -euo pipefail\n${block}\n${extra}`], {
+      encoding: 'utf8',
+      env: {
+        PATH: `${gh.stubs}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+        LKB_NODE_DIR: join(gh.dir, 'node'),
+        B: 'lkbuild',
+        B_HOME: join(gh.dir, 'home'),
+        remote: 'git@github.com:Airwolf1221/LK-Bridge.git',
+      },
+    });
+  }
+
+  it('passes when ssh -T exits 1 with the success message and git ls-remote succeeds', () => {
+    const gh = stubGithub('ok');
+    try {
+      // The stub behaves like GitHub: `ssh -T` reports success on stderr with exit status 1 ...
+      const t = spawnSync(join(gh.nodeBin, 'ssh'), ['-T', 'git@github.com'], { encoding: 'utf8' });
+      expect(t.status).toBe(1);
+      expect(t.stderr).toMatch(/successfully authenticated/);
+      // ... which is why the old check (a pipe into grep under pipefail) always failed:
+      const old = runCheck(
+        gh,
+        `ssh -o BatchMode=yes -T git@github.com 2>&1 | grep -q 'successfully authenticated'`,
+      );
+      expect(old.status).not.toBe(0);
+      // The check now passes, through git's own SSH, with the deploy's options.
+      const r = runCheck(gh);
+      expect(r.stderr).toBe('');
+      expect(r.status).toBe(0);
+      // git ran ssh with the deploy's options (git may add its own, such as -o SendEnv=GIT_PROTOCOL, between them).
+      const fetchLine = gh
+        .args()
+        .split('\n')
+        .find((l) => l.includes('git-upload-pack'));
+      expect(fetchLine).toMatch(/^-o BatchMode=yes -o ConnectTimeout=15 /);
+      expect(fetchLine).toMatch(/git@github\.com git-upload-pack 'Airwolf1221\/LK-Bridge\.git'$/);
+    } finally {
+      rmSync(gh.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when git ls-remote fails, and prints git's own error", () => {
+    const gh = stubGithub('deny');
+    try {
+      const r = runCheck(gh);
+      expect(r.status).toBe(1);
+      expect(r.stderr).toMatch(
+        /git ls-remote git@github\.com:Airwolf1221\/LK-Bridge\.git HEAD, run as lkbuild, failed:/,
+      );
+      expect(r.stderr).toMatch(/Permission denied \(publickey\)/);
+    } finally {
+      rmSync(gh.dir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses exactly the environment deploy.sh uses for git as the build user', () => {
+    const def = (text: string, name: string) => new RegExp(`^${name}=.*$`, 'm').exec(text)?.[0];
+    for (const name of ['node_path', 'git_ssh_command']) {
+      expect(def(block, name), name).toBeDefined();
+      expect(def(block, name), name).toBe(def(deploy, name));
+    }
+    const envOf = (text: string) =>
+      /-- (env -i HOME="\$build_home"[\s\S]*?bash -c 'umask 022 && cd "\$1" && shift && exec "\$@"')/.exec(
+        text,
+      )?.[1];
+    const asBuild = /as_build\(\) \{[\s\S]*?\n\}/.exec(deploy)![0];
+    expect(envOf(block)).toBeDefined();
+    expect(envOf(block)).toBe(envOf(asBuild));
+    expect(envOf(asBuild)).toMatch(/GIT_SSH_COMMAND="\$git_ssh_command"/);
+  });
+
+  it('nothing in deploy/ or the runbook relies on the exit status of ssh -T', () => {
+    for (const name of scripts) {
+      const code = read(name)
+        .split('\n')
+        .filter((l) => !l.trim().startsWith('#'))
+        .join('\n');
+      expect(code, name).not.toMatch(/ssh\b[^\n]*\s-T\b/);
+    }
+    const runbook = readFileSync(new URL('../../docs/runbook-deploy.md', import.meta.url), 'utf8');
+    for (const line of runbook.split('\n').filter((l) => /ssh\b.*\s-T\b/.test(l))) {
+      expect(line, line).not.toMatch(/&&|\|\||; *then|\bif\b/);
+    }
+  });
+});

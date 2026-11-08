@@ -71,13 +71,17 @@ svc_user="$LKB_SERVICE_USER"
 build_home="$(getent passwd "$build_user" | cut -d: -f6 || true)"
 svc_home="$(getent passwd "$svc_user" | cut -d: -f6 || true)"
 node_path="${LKB_NODE_DIR}/bin:/usr/local/bin:/usr/bin:/bin"
+# git's SSH for the build user: never prompt (a deploy must not hang), give up on a dead connection. The migration script
+# checks GitHub access with exactly this environment (test/unit/deploy-files.test.ts keeps the two in step).
+git_ssh_command='ssh -o BatchMode=yes -o ConnectTimeout=15'
 
 # as_build CMD...: runs CMD as the build user in the checkout, with a clean environment and umask 022 (so lkbridge can
 # read what it writes and write none of it). LKB_RUNAS exists so tests can exercise the script without two users.
 as_build() {
   # shellcheck disable=SC2016 # the inner script's $1 and $@ belong to the inner bash
   ${LKB_RUNAS:-runuser -u} "$build_user" -- env -i HOME="$build_home" USER="$build_user" LOGNAME="$build_user" \
-    PATH="$node_path" LANG=C.UTF-8 bash -c 'umask 022 && cd "$1" && shift && exec "$@"' lkb-build "$app_dir" "$@"
+    PATH="$node_path" LANG=C.UTF-8 GIT_SSH_COMMAND="$git_ssh_command" \
+    bash -c 'umask 022 && cd "$1" && shift && exec "$@"' lkb-build "$app_dir" "$@"
 }
 
 # as_service CMD...: runs CMD as the service user with a clean environment. Only non-secret settings are passed: the
