@@ -33,21 +33,25 @@ function inspectLoaders(): { read: Set<string>; required: Set<string> } {
   const read = new Set<string>();
   const required = new Set<string>();
   for (const [name, load] of loaders) {
-    const env = new Proxy({} as NodeJS.ProcessEnv, {
-      get: (_t, key) => {
-        if (typeof key === 'string') read.add(key);
-        return undefined;
+    const env = new Proxy<NodeJS.ProcessEnv>(
+      {},
+      {
+        get: (_t, key) => {
+          if (typeof key === 'string') read.add(key);
+          return undefined;
+        },
+        has: (_t, key) => {
+          if (typeof key === 'string') read.add(key);
+          return false;
+        },
       },
-      has: (_t, key) => {
-        if (typeof key === 'string') read.add(key);
-        return false;
-      },
-    });
+    );
     try {
       load(env);
     } catch (err) {
       const issues = (err as { issues?: readonly string[] }).issues;
-      if (!Array.isArray(issues)) throw new Error(`${name} failed in an unexpected way: ${String(err)}`);
+      if (!Array.isArray(issues))
+        throw new Error(`${name} failed in an unexpected way: ${String(err)}`, { cause: err });
       for (const issue of issues as string[]) {
         const m = /^([A-Z][A-Z0-9_]*)\b/.exec(issue);
         if (m?.[1]) required.add(m[1]);
