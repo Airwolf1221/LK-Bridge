@@ -5,8 +5,13 @@ reviewer did not write the code and did not treat earlier reports, the changelog
 below was checked by reading the code and, where a test could settle it, by running one. Nothing here was run against
 the real LegendKeeper API or the live server.
 
-Status values: **Open** (not fixed; the recommendation stands), **Fixed** (changed on `chunk-8-hardening`, with a test),
-**Accepted** (no change; the reason is given), **Pass** (checked, nothing to change).
+Status values: **Open** (not fixed; the recommendation stands), **Fixed** (changed on `chunk-8-hardening`, or for
+F-14, F-15, F-16, F-17, F-19 and F-21 on `v1.0.1-fixes`, with a test), **Accepted** (no change; the reason is given),
+**Pass** (checked, nothing to change).
+
+**Update, v1.0.1 (8 November 2026).** The open Low and Info findings F-14, F-15, F-16, F-17, F-19 and F-21 were fixed in
+release 1.0.1 (each finding below has a "Status: fixed in v1.0.1" paragraph; decisions in ADR 0019 and ADR 0020). F-23
+(a dev-only `minimatch` advisory with no fix published) stays open. The original findings text is unchanged.
 
 ## 1. Threat model
 
@@ -52,7 +57,8 @@ Status values: **Open** (not fixed; the recommendation stands), **Fixed** (chang
    signed in), the image URL fetch (an agent with scope `write`) and the signed-URL PUT (a host named by LegendKeeper).
    All go through the address policy (`src/auth/ip.ts`) with the check inside the connection's DNS lookup.
 7. **Service user → secrets.** `lkbridge` can read the env file; so can anything that runs as `lkbridge`, including
-   `npm ci` and the build during a deploy.
+   `npm ci` and the build during a deploy. (v1.0.1: no longer the build, which now runs as
+   `lkbuild`, a user that cannot read the env file; ADR 0020.)
 
 ## 2. Summary
 
@@ -61,12 +67,13 @@ Status values: **Open** (not fixed; the recommendation stands), **Fixed** (chang
 | Critical |     0 |     0 |    0 |               0 |
 | High     |     1 |     1 |    0 |               0 |
 | Medium   |     4 |     4 |    0 |               0 |
-| Low      |    13 |     9 |    4 |               0 |
-| Info     |     8 |     1 |    3 |               4 |
-| **All**  |    26 |    15 |    7 |               4 |
+| Low      |    13 |    13 |    0 |               0 |
+| Info     |     8 |     3 |    1 |               4 |
+| **All**  |    26 |    21 |    1 |               4 |
 
-Every Critical, High and Medium finding is fixed, with a test that fails without the fix. The open items are Low or Info,
-each with a recommendation below; none is a vulnerability reachable by an internet attacker.
+Every Critical, High and Medium finding is fixed, with a test that fails without the fix. After v1.0.1 every Low finding
+is fixed too; the one open item is Info (F-23), with its recommendation below. None was a vulnerability reachable by an
+internet attacker.
 
 ## 3. Findings
 
@@ -434,24 +441,24 @@ the SSRF guard (decimal, octal and hex IPv4 forms are normalised by the URL pars
 Verdicts: **Pass** (checked; nothing to change), **Pass after fixes** (the findings named were fixed), **Open** (a
 finding remains open, with its recommendation).
 
-| #   | Area                                                                             | Verdict           | Findings                           |
-| --- | -------------------------------------------------------------------------------- | ----------------- | ---------------------------------- |
-| 1   | The hand-written access-token check (ADR 0006)                                   | Pass              | F-24                               |
-| 2   | The OAuth server, redirect allowlists, CIMD/DCR leniency                         | Pass              | F-25 (F-19 open, Info)             |
-| 3   | Policy gate, approval token, visibility, tool enumeration                        | Pass after fixes  | F-02, F-04, F-07, F-12 (F-15 open) |
-| 4   | The hidden-tools mechanism                                                       | Pass after fixes  | F-11                               |
-| 5   | SSRF (CIMD fetch, image fetch, signed PUT)                                       | Pass              | F-07 (F-19 open, Info)             |
-| 6   | Dashboard and admin API                                                          | Pass after fixes  | F-01, F-08                         |
-| 7   | Secrets: history, logs, templates                                                | Pass after fixes  | F-22, F-26 (F-17 open)             |
-| 8   | `npm audit` and pinned versions                                                  | Open (no fix yet) | F-23                               |
-| 9   | Governor under load, after restarts, retries, parking                            | Pass, one open    | F-14 open; soak below              |
-| 10  | Crash-resume, verify, the unsupported-block guard, If-Match, createMany recovery | Pass after fixes  | F-03, F-06                         |
-| 11  | The proposal approval path end to end                                            | Pass after fixes  | F-02, F-04 (F-16 open)             |
-| 12  | Body limit against `UPLOAD_MAX_BYTES`                                            | Pass after fixes  | F-05                               |
-| 13  | Logging noise                                                                    | Pass after fixes  | F-09, F-26                         |
-| 14  | Env drift                                                                        | Pass after fixes  | F-10                               |
-| 15  | systemd hardening and memory                                                     | Pass              | F-18                               |
-| 16  | Graceful shutdown, backups and restore, rollback                                 | Pass after fixes  | F-13, F-20                         |
+| #   | Area                                                                             | Verdict           | Findings                     |
+| --- | -------------------------------------------------------------------------------- | ----------------- | ---------------------------- |
+| 1   | The hand-written access-token check (ADR 0006)                                   | Pass              | F-24                         |
+| 2   | The OAuth server, redirect allowlists, CIMD/DCR leniency                         | Pass              | F-25 (F-19 fixed in v1.0.1)  |
+| 3   | Policy gate, approval token, visibility, tool enumeration                        | Pass after fixes  | F-02, F-04, F-07, F-12, F-15 |
+| 4   | The hidden-tools mechanism                                                       | Pass after fixes  | F-11                         |
+| 5   | SSRF (CIMD fetch, image fetch, signed PUT)                                       | Pass after fixes  | F-07, F-19                   |
+| 6   | Dashboard and admin API                                                          | Pass after fixes  | F-01, F-08                   |
+| 7   | Secrets: history, logs, templates                                                | Pass after fixes  | F-22, F-26, F-17             |
+| 8   | `npm audit` and pinned versions                                                  | Open (no fix yet) | F-23                         |
+| 9   | Governor under load, after restarts, retries, parking                            | Pass after fixes  | F-14; soak below             |
+| 10  | Crash-resume, verify, the unsupported-block guard, If-Match, createMany recovery | Pass after fixes  | F-03, F-06                   |
+| 11  | The proposal approval path end to end                                            | Pass after fixes  | F-02, F-04, F-16             |
+| 12  | Body limit against `UPLOAD_MAX_BYTES`                                            | Pass after fixes  | F-05                         |
+| 13  | Logging noise                                                                    | Pass after fixes  | F-09, F-26                   |
+| 14  | Env drift                                                                        | Pass after fixes  | F-10                         |
+| 15  | systemd hardening and memory                                                     | Pass              | F-18                         |
+| 16  | Graceful shutdown, backups and restore, rollback                                 | Pass after fixes  | F-13, F-20                   |
 
 Notes per area, beyond the findings:
 
@@ -484,13 +491,13 @@ Notes per area, beyond the findings:
 8. **Dependencies.** See F-23.
 9. **Governor.** The 1,000-call contract workload (published and tight limits, another key draining the project tier, an
    injected 429) never makes the mock refuse; every retry-matrix row and budget-wait parking (across restarts) is tested.
-   F-14 remains. The soak against the mock with the real pacing is in section 5.
+   F-14 was fixed in v1.0.1. The soak against the mock with the real pacing is in section 5.
 10. **Job engine.** Crash-resume verifies before re-sending per operation family; versioned writes always carry `If-Match`
     (the governor refuses one without it); `createManyResources` verifies every minted id and re-sends only the missing
     ones. The guard misses were F-03 and F-06.
 11. **Approval.** Compare-and-set transitions (double approval cannot run twice), a re-read of every target with conflict
     on any change, versions pinned as `If-Match`, crash reconciliation by the job's origin. A lowered scope mid-approval
-    does not stop owner-approved work (documented, kept). F-04 limited capture; F-16 is open.
+    does not stop owner-approved work (documented, kept). F-04 limited capture; F-16 was fixed in v1.0.1.
 12. **Body limit.** See F-05: the 1 MiB Fastify limit in the brief never applied to `/mcp`; the SDK's 4 MiB did.
 13. **Logging.** See F-09 and F-26.
 14. **Env drift.** See F-10.
@@ -566,4 +573,3 @@ Noted for later chunks; none was started here.
 - **A per-agent activity view** on the dashboard, built on the journal's principal and profile filters: what Claude and
   ChatGPT each changed today.
 - **A tree index** (the deferred `tree-snapshot` job) would let the journal show page names, not only ids.
-- **Consent that keeps an existing profile's scope** (F-15), once the owner decides.

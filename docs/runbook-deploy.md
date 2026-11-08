@@ -308,7 +308,7 @@ ls -l /opt/lk-bridge/bin                # both root root, neither group- nor wor
 sudo systemctl enable --now lk-bridge
 sudo systemctl status lk-bridge --no-pager
 sudo journalctl -u lk-bridge -n 40 --no-pager
-curl -s http://127.0.0.1:8787/healthz           # {"ok":true,"version":"1.0.0"}
+curl -s http://127.0.0.1:8787/healthz           # {"ok":true,"version":"1.0.1"}
 sudo systemctl enable --now lk-bridge-backup.timer
 systemctl list-timers lk-bridge-backup.timer --no-pager
 ```
