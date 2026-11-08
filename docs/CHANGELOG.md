@@ -1,5 +1,74 @@
 # Changelog
 
+## 1.0.1 (8 November 2026)
+
+The open items of the chunk 8 hardening review ([docs/review/2026-11-hardening.md](review/2026-11-hardening.md)): F-14,
+F-15, F-16, F-17, F-19 and F-21 are fixed. No tag is pushed from here; the owner creates the release.
+
+**Upgrading the live server needs a one-off migration** (the deploy now uses a separate build user): follow
+[runbook › Migrating an existing install to v1.0.1](runbook-deploy.md#migrating-an-existing-install-to-v101). From then on
+deploy with `sudo /opt/lk-bridge/bin/deploy.sh`.
+
+**Security and operations**
+
+- **F-17: a separate build user** ([ADR 0020](adr/0020-separate-build-user.md)). `lkbuild` owns the checkout and the
+  read-only deploy key and cannot read `/etc/lk-bridge` or `/var/lib/lk-bridge`; `lkbridge` can read and run the app but
+  not write it. `deploy.sh` runs as root from a root-owned copy in `/opt/lk-bridge/bin` (it refuses to run from the
+  checkout) and drops to `lkbuild` for git, `npm ci` and the build, and to `lkbridge` for the backup, migrations, health
+  check and restart, each with `runuser` and an empty environment. New `deploy/migrate-to-build-user.sh` (idempotent,
+  `--check` mode) moves an existing install. `healthcheck.sh` gains six PASS/FAIL permission checks. No new sudo rule:
+  `lkbridge` keeps exactly start, stop, restart and status; `lkbuild` has none.
+- **F-19: outbound port 443 only.** The CIMD document fetch, the image source fetch (every redirect hop) and the signed
+  upload PUT refuse any other port, before DNS or connecting, unless the exact `host:port` is listed in the new setting
+  `OUTBOUND_EXTRA_PORTS_ALLOWLIST` (default empty; a malformed entry stops the bridge at start-up).
+- **F-14: the governor keeps its counts across restarts.** Every tier's recent counts (compact buckets, stamped late so
+  they can only over-count) and any active 429 block are saved at most every 10 s while they change and on shutdown, and
+  restored at start without anything older than the tier's window. Missing or corrupt data starts empty with a warning.
+  Migration `0500_governor_counters.sql` (one new table). The governor's interface is unchanged apart from one optional
+  constructor option (`persistence`); `src/lk/README.md` documents it.
+
+**Policy and retention**
+
+- **F-15: consent keeps an existing profile's scope** ([ADR 0019](adr/0019-consent-keeps-existing-scope.md), the owner's
+  decision). An existing profile's current scope is preselected; a new profile still starts at the default (`read`). A
+  change to an existing profile's scope is applied only after a confirmation page that shows the warning that it affects
+  every connection on the profile, and is audited as before.
+- **F-16: `proposal-prune`.** A new daily maintenance job (03:45 London, after `journal-prune` at 03:30) deletes
+  executed, rejected, expired and failed proposals that finished more than `POLICY_PROPOSAL_RETENTION_DAYS` (new, default 90) days ago, with their stored pre-state. Pending, approved, executing and conflicted proposals are never pruned. Jobs,
+  journal entries and audit rows keep the proposal id as text.
+- **F-21:** `bridge_info`'s shared, cached project lookup now runs as the bridge's own work, so a failure there is
+  recorded against `system`, not against the caller that happened to refresh it.
+
+**Behaviour you will notice**
+
+- Deploying is `sudo /opt/lk-bridge/bin/deploy.sh`; `sudo -u lkbridge …/deploy.sh` stops with a message. The health
+  check prints twelve PASS lines instead of six. After a failed health check the deploy now says the new version is
+  still running (it used to say "stopped").
+- Re-approving a connection on an existing profile no longer lowers it to `read`; changing its scope asks for a second
+  confirmation.
+- Image URLs, their redirects, signed upload URLs and client metadata documents on a port other than 443 are refused
+  (`UPLOAD_URL_REFUSED`, `UPLOAD_TARGET_REFUSED`, or a refused CIMD client) unless allowlisted.
+- The Maintenance Jobs page lists `proposal-prune` (enabled); finished proposals older than 90 days disappear from the
+  Proposals page and from `bridge_proposal_status` (they answer as unknown ids). One `proposal.pruned` audit row per run
+  that removed anything.
+- Straight after a restart the governor may make a call wait that it used to send at once (the counts it now remembers).
+  The budget page shows the remembered counts at once.
+- New env names (optional, commented in `deploy/env.template`): `OUTBOUND_EXTRA_PORTS_ALLOWLIST`,
+  `POLICY_PROPOSAL_RETENTION_DAYS`. The env drift check mentions them until they are copied across.
+
+**Tests changed, and why** (none weakened)
+
+- `test/policy/mcp.test.ts`: the existing "pick an existing profile and set its scope" test now goes through the
+  confirmation page, which is the new rule; six new tests cover F-15.
+- `test/tools/policy-e2e.test.ts`: "every tool sends the real principal" allows exactly one exception, `bridge_info`'s
+  two cached reads with the fixed system origin (F-21); every other tool is checked as before.
+- `test/auth/cimd.test.ts`, `test/tools/upload.test.ts`: their local HTTPS servers listen on random ports, so their
+  guards now list those exact `host:port` pairs, as `OUTBOUND_EXTRA_PORTS_ALLOWLIST` would; the address checks are
+  unchanged and new tests cover the port rule.
+- `test/unit/deploy-files.test.ts`: "deploy.sh refuses to run as root" became "runs only as root, from the installed
+  copy" (the new design), with new tests for the per-step users and the migration script.
+- `test/maintenance/*`: the registry has five implemented jobs; `test/policy/defaults.test.ts` lists migration 0500.
+
 ## 1.0.0 (8 November 2026)
 
 The first versioned release: everything below, from chunk 0 to the hotfix, plus chunk 8's review. The owner creates the

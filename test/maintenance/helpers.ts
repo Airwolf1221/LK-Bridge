@@ -25,6 +25,8 @@ export async function maintenanceRig(
     settings?: Partial<MaintenanceSettings>;
     start?: boolean;
     rig?: Parameters<typeof policyRig>[0];
+    /** POLICY_PROPOSAL_RETENTION_DAYS in ms for `proposal-prune` (default 90 days). */
+    proposalRetentionMs?: number;
   } = {},
 ): Promise<MaintenanceRig> {
   const rig = await policyRig({ externalExpirySweep: true, ...o.rig });
@@ -40,6 +42,7 @@ export async function maintenanceRig(
         clock: rig.h.clock,
         settings: defaultMaintenanceSettings({ ...o.settings, ...mo.settings }),
         expirySweepMs: 300_000,
+        ...(o.proposalRetentionMs !== undefined ? { proposalRetentionMs: o.proposalRetentionMs } : {}),
         extraJobs: mo.extraJobs ?? o.extraJobs ?? [],
       });
       if (mo.start ?? o.start ?? true) m.maintenance.start();

@@ -2,11 +2,13 @@ import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { request } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
 import { isPublicAddress } from './ip.js';
+import { type OutboundPortAllowlist, outboundPortAllowed, portRefusalMessage } from './ports.js';
 
 /**
  * SSRF-hardened HTTPS GET for small JSON documents (Client ID Metadata Documents).
  *
- * - HTTPS only; redirects are refused, not followed.
+ * - HTTPS only, port 443 only unless `host:port` is in OUTBOUND_EXTRA_PORTS_ALLOWLIST (`ports.ts`); redirects are
+ *   refused, not followed.
  * - Every address the hostname resolves to must be globally routable, and the socket connects to
  *   an address that was checked (the check runs inside the connection's DNS lookup, so a second
  *   resolution cannot swap in a private address).
@@ -20,6 +22,7 @@ import { isPublicAddress } from './ip.js';
 export type SafeFetchFailure =
   | 'invalid_url'
   | 'blocked_address'
+  | 'blocked_port'
   | 'dns'
   | 'timeout'
   | 'network'
@@ -42,6 +45,8 @@ export class SafeFetchError extends Error {
 export interface SafeFetchOptions {
   readonly timeoutMs: number;
   readonly maxBytes: number;
+  /** `host:port` pairs allowed besides port 443 (OUTBOUND_EXTRA_PORTS_ALLOWLIST). Default: none. */
+  readonly allowedPorts?: OutboundPortAllowlist;
   /** Test seam: replaces DNS resolution. */
   readonly resolve?: (hostname: string) => Promise<readonly LookupAddress[]>;
   /** Test seam: additional trusted CA certificates (PEM). */
@@ -105,6 +110,11 @@ export function createSafeJsonFetcher(options: SafeFetchOptions): JsonFetcher {
       }
       if (url.protocol !== 'https:' || url.username || url.password) {
         reject(new SafeFetchError('invalid_url', 'Only credential-free https URLs are fetched'));
+        return;
+      }
+      // Before any DNS lookup or connection: the port, then a literal address.
+      if (!outboundPortAllowed(url, options.allowedPorts)) {
+        reject(new SafeFetchError('blocked_port', portRefusalMessage(url)));
         return;
       }
       const hostname = url.hostname.replace(/^\[|\]$/g, '');

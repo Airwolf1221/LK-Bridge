@@ -5,6 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parseOutboundPortAllowlist } from '../../src/auth/ports.js';
 import { type JsonFetcher, SafeFetchError, createSafeJsonFetcher } from '../../src/auth/safe-fetch.js';
 import {
   Browser,
@@ -156,8 +157,13 @@ function testFetcher(timeoutMs = 400): JsonFetcher {
     resolve: toLoopback,
     ca: cert,
     allowAddress: (a) => a === '127.0.0.1',
+    allowedPorts: testPorts(),
   });
 }
+
+/** The document server's random port, allowed by exact host:port as OUTBOUND_EXTRA_PORTS_ALLOWLIST would (v1.0.1). */
+const testPorts = () =>
+  parseOutboundPortAllowlist(`cimd.test:${port},127.0.0.1:${port},[::1]:${port},localhost:${port}`);
 
 describe('CIMD end to end', () => {
   let bridge: TestBridge;
@@ -596,7 +602,14 @@ describe('claude.ai’s published client_id (custom connectors, “Use Claude’
 
 describe('SSRF protection in the metadata fetcher', () => {
   const production = (resolve?: (h: string) => Promise<{ address: string; family: number }[]>) =>
-    createSafeJsonFetcher({ timeoutMs: 400, maxBytes: 8192, ca: cert, ...(resolve ? { resolve } : {}) });
+    createSafeJsonFetcher({
+      timeoutMs: 400,
+      maxBytes: 8192,
+      ca: cert,
+      // The test server's port is allowed, so these tests exercise the address policy; the port policy has its own.
+      allowedPorts: testPorts(),
+      ...(resolve ? { resolve } : {}),
+    });
 
   const reason = async (fetcher: JsonFetcher, url: string) => {
     try {
@@ -654,12 +667,44 @@ describe('SSRF protection in the metadata fetcher', () => {
     expect(await reason(f, cimdUrl('/cached'))).toBe('ok');
   });
 
+  it('allows only port 443 unless host:port is listed, before any DNS lookup (v1.0.1, F-19)', async () => {
+    let lookups = 0;
+    const f = createSafeJsonFetcher({
+      timeoutMs: 400,
+      maxBytes: 8192,
+      ca: cert,
+      allowAddress: (a) => a === '127.0.0.1',
+      resolve: (h) => {
+        lookups++;
+        return toLoopback(h);
+      },
+    });
+    expect(await reason(f, cimdUrl('/cached'))).toBe('blocked_port');
+    expect(await reason(f, 'https://cimd.test:22/cached')).toBe('blocked_port');
+    expect(await reason(f, 'https://8.8.8.8:8443/cached')).toBe('blocked_port');
+    expect(lookups).toBe(0);
+    // The same server, its exact host:port listed: fetched.
+    const listed = createSafeJsonFetcher({
+      timeoutMs: 400,
+      maxBytes: 8192,
+      ca: cert,
+      allowAddress: (a) => a === '127.0.0.1',
+      resolve: toLoopback,
+      allowedPorts: parseOutboundPortAllowlist(`cimd.test:${port}`),
+    });
+    expect(await reason(listed, cimdUrl('/cached'))).toBe('ok');
+    // Listing it does not open another host or another port.
+    expect(await reason(listed, `https://other.test:${port}/cached`)).toBe('blocked_port');
+    expect(await reason(listed, 'https://cimd.test:8443/cached')).toBe('blocked_port');
+  });
+
   it('verifies TLS: an untrusted certificate is refused', async () => {
     const f = createSafeJsonFetcher({
       timeoutMs: 400,
       maxBytes: 8192,
       resolve: toLoopback,
       allowAddress: (a) => a === '127.0.0.1',
+      allowedPorts: testPorts(),
     });
     expect(await reason(f, cimdUrl('/cached'))).toBe('network');
   });

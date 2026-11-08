@@ -78,6 +78,7 @@ describe('the registry', () => {
       'budget-sampler',
       'journal-prune',
       'proposal-expiry',
+      'proposal-prune',
       'sqlite-optimise',
       'assign-block-ids-sweep',
       'tree-snapshot',
@@ -91,7 +92,7 @@ describe('the registry', () => {
       scheduleText: 'Every 10 seconds',
       lastRun: null,
     });
-    expect(r.json.jobs[4]).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
+    expect(r.json.jobs[5]).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
   });
 
   it('404s an unknown job', async () => {

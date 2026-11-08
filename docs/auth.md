@@ -67,6 +67,7 @@ All optional; defaults in brackets. Names are also in `.env.example`.
 | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `TRUST_PROXY`                                                                                        | Whose `X-Forwarded-For` to believe, so the login rate limit and the logs see the real client IP. `loopback` (Caddy on the same host), `none`, or a list of addresses and CIDR ranges. Trusting everyone is refused. [`loopback`] |
 | `AUTH_REFRESH_GRACE_SECONDS`                                                                         | Within this many seconds, presenting a just-rotated refresh token again returns the same successor instead of revoking the grant; 0 disables. [10]                                                                               |
+| `OUTBOUND_EXTRA_PORTS_ALLOWLIST`                                                                     | Exact `host:port` pairs (comma-separated) the CIMD document fetch, and the image upload's fetches, may use besides port 443 (v1.0.1). [none: 443 only]                                                                           |
 | `OAUTH_EXTRA_REDIRECT_URIS`                                                                          | Extra exact redirect URIs. [none]                                                                                                                                                                                                |
 | `AUTH_MCP_ALLOWED_ORIGINS`                                                                           | Browser origins allowed at `/mcp`, besides the bridge itself and loopback. [`https://claude.ai,https://claude.com,https://chatgpt.com`]                                                                                          |
 | `AUTH_ACCESS_TOKEN_TTL_SECONDS`, `AUTH_REFRESH_TOKEN_TTL_SECONDS`, `AUTH_REFRESH_FAMILY_MAX_SECONDS` | Token lifetimes. [1 hour, 30 days, 90 days]                                                                                                                                                                                      |
@@ -109,7 +110,8 @@ profile and scope. See [policy.md](policy.md).
 ## Consent and profiles (chunk 2b)
 
 After sign-in the consent page also asks which **profile** the connection acts under (an existing one, or a new one
-with a label and kind) and that profile's **scope** (`read` preselected). The suggestion comes from the redirect host:
+with a label and kind) and that profile's **scope** (an existing profile's current scope preselected, a new one at the
+default `read`; a change to an existing profile is confirmed on a second page, [ADR 0019](adr/0019-consent-keeps-existing-scope.md)). The suggestion comes from the redirect host:
 claude.ai and claude.com → `claude`, chatgpt.com → `chatgpt`, loopback → `claude-code`. The client's self-reported name
 is shown HTML-escaped with an _untrusted name_ badge. The grant, and every refresh and access token issued from it,
 acts under the chosen profile; the scope is evaluated live on every call ([ADR 0012](adr/0012-live-policy-evaluation.md)).

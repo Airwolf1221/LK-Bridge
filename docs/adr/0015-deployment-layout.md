@@ -1,6 +1,9 @@
 # ADR 0015: Deployment on the shared server (private Node, `/opt/lk-bridge/app`, stop-to-drain)
 
 Status: Accepted (chunk 7a, 8 November 2026). Amends PLAN §9.2 and §9.3 for the actual server; the rest of §9 stands.
+Decisions 2 (layout: the checkout's owner) and 3 (who holds the deploy key), and how the deploy is run, are amended by
+[ADR 0020](0020-separate-build-user.md) (v1.0.1): a separate build user `lkbuild` owns the checkout and the key, and
+`sudo /opt/lk-bridge/bin/deploy.sh` runs each step as the right user.
 
 ## Context
 

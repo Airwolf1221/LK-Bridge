@@ -94,10 +94,11 @@ LegendKeeper project, with `LK_READ_ONLY=false`. Keep the dashboard (or `sqlite3
 
 1. **Claude, connect.** Add the connector in claude.ai (§9.4 of the plan). On the consent page check: the destination
    **claude.ai** in large type; the application name with the _untrusted name_ badge; profile preselected as
-   **New profile… `claude`** (kind `claude`), or the existing `claude` profile; scope **read** selected. Approve with
-   `read`. Log: `consent.granted` with a `profile_id`.
-2. **ChatGPT, connect.** Create the connector (§9). The consent page suggests `chatgpt` and preselects **read**.
-   Approve with `read`.
+   **New profile… `claude`** (kind `claude`) with scope **read** selected, or the existing `claude` profile with **its
+   current scope** selected (v1.0.1). Approve without changing the scope; for an existing profile nothing changes. Log: `consent.granted` with a `profile_id`.
+2. **ChatGPT, connect.** Create the connector (§9). The consent page suggests `chatgpt` and preselects **read** for a new
+   profile (or the existing `chatgpt` profile's current scope). Approve with `read`; changing an existing profile's
+   scope shows a confirmation page first.
 3. **Read-scoped connections cannot write.** In each client, ask for `tools/list` (or look at the connector's tool
    list): no write tools are listed, the proposal tools are. Ask each to read a page: it works. Ask each to make a
    harmless write (create a test resource): it must fail with a message that the connection is read-only and that the

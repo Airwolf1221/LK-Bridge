@@ -16,6 +16,7 @@ import { PolicyDeniedError, SYSTEM_PRINCIPAL, type JobOrigin } from '../../src/j
 import { LivePolicyGate, UPLOAD_PROPOSE_REASON } from '../../src/policy/index.js';
 import { LkModel } from '../jobs/lk-model.js';
 import { systemClock } from '../../src/lk/index.js';
+import { BRIDGE_INFO_LOOKUP_ORIGIN } from '../../src/mcp/tools/bridge.js';
 import { startStack, type Stack } from './helpers.js';
 
 const PNG_1PX =
@@ -73,7 +74,7 @@ describe('every engine-backed tool acts as the caller', () => {
     const me = await as('origins', 'write');
     const principal = stack.runtime.policy.store.lookupPrincipal(me.patId)!.principal;
     const engine = stack.runtime.engine;
-    const seen: { tool: string; origin: JobOrigin }[] = [];
+    const seen: { tool: string; origin: JobOrigin; opId?: string }[] = [];
     const spies = {
       run: vi.spyOn(engine, 'run'),
       submit: vi.spyOn(engine, 'submit'),
@@ -84,10 +85,10 @@ describe('every engine-backed tool acts as the caller', () => {
       spies.submit.mock.calls.length,
       spies.recordResult.mock.calls.length,
     ];
-    const originsSince = ([r, sub, rec]: number[]): JobOrigin[] => [
-      ...spies.run.mock.calls.slice(r).map((c) => c[2].origin),
-      ...spies.submit.mock.calls.slice(sub).map((c) => c[0].origin),
-      ...spies.recordResult.mock.calls.slice(rec).map((c) => c[0].origin),
+    const originsSince = ([r, sub, rec]: number[]): { origin: JobOrigin; opId?: string }[] => [
+      ...spies.run.mock.calls.slice(r).map((c) => ({ origin: c[2].origin, opId: c[0] })),
+      ...spies.submit.mock.calls.slice(sub).map((c) => ({ origin: c[0].origin })),
+      ...spies.recordResult.mock.calls.slice(rec).map((c) => ({ origin: c[0].origin })),
     ];
     const args: Record<string, Record<string, unknown>> = {
       lk_api_read: { operationId: 'getResource', params: { path: { resourceId: 'res1' } } },
@@ -106,7 +107,7 @@ describe('every engine-backed tool acts as the caller', () => {
       for (const name of await names(me.client)) {
         const before = counts();
         await stack.call(me.client, name, args[name] ?? {}).catch(() => undefined);
-        for (const origin of originsSince(before)) seen.push({ tool: name, origin });
+        for (const o of originsSince(before)) seen.push({ tool: name, ...o });
       }
     } finally {
       vi.restoreAllMocks();
@@ -123,6 +124,13 @@ describe('every engine-backed tool acts as the caller', () => {
       expect(reached, t).toContain(t);
     }
     for (const s of seen) {
+      // The one exception (v1.0.1, F-21): bridge_info's shared, cached project lookup is the bridge's own work. It
+      // must be exactly that origin (system kind, no principal, no approver) and only its two reads.
+      if (s.tool === 'bridge_info' && s.origin.kind === 'system') {
+        expect(s.origin).toEqual(BRIDGE_INFO_LOOKUP_ORIGIN);
+        expect(['getProject', 'listMembers']).toContain(s.opId);
+        continue;
+      }
       expect(s.origin, s.tool).toMatchObject({ kind: 'mcp', tool: s.tool, principal });
       expect(s.origin.principal?.principalId, s.tool).not.toBe('system');
       expect(s.origin.approvedBy, s.tool).toBeUndefined();

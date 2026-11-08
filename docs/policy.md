@@ -127,6 +127,11 @@ not (it returns to `pending`; nothing was sent; the owner approves again). A pro
 
 **Reject** (owner only) takes an optional reason, which the agent can read.
 
+**Retention (v1.0.1).** `executed`, `rejected`, `expired` and `failed` proposals are deleted, with their operations and
+pre-state, `POLICY_PROPOSAL_RETENTION_DAYS` (90) days after they finished, by the `proposal-prune` maintenance job
+([maintenance.md](maintenance.md#proposal-prune-v101)). `pending`, `approved`, `executing` and `conflicted` proposals are
+never pruned. Jobs, journal entries and audit rows keep the proposal id as text.
+
 ### Agent-facing tools
 
 Both are read tools (`access: 'read'`, `readOnlyHint: true`) restricted to the caller's own proposals (by principal);
@@ -177,9 +182,15 @@ Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PR
   self-reported name marked _untrusted name_ (HTML-escaped), and chooses an existing profile or a new one (label and
   kind) and its scope. The suggestion comes from the redirect host only: `claude.ai` and `claude.com` → `claude`,
   `chatgpt.com` → `chatgpt`, loopback → `claude-code`, anything else → `other`. An existing profile with the
-  suggested label is preselected; otherwise "New profile" with that label. The preselected scope is always `read`.
-  Choosing a scope for an existing profile changes that profile (audited, `via: consent`). A bad choice shows an error
-  without using up the request; denial is unchanged.
+  suggested label is preselected; otherwise "New profile" with that label. **Preselected scope (v1.0.1,
+  [ADR 0019](adr/0019-consent-keeps-existing-scope.md)):** an existing profile's **current** scope, so approving
+  without touching anything changes nothing; a new profile gets the default scope for new connections (`read` unless
+  the owner changed it). **A change to an existing profile's scope is confirmed first:** the bridge shows a second page
+  with the warning that it affects every connection on that profile (and how many there are), the change (`from` →
+  `to`) and two buttons, _Change to … and approve_ and _Keep … and approve_. Only that confirmation, for exactly that
+  change, applies it (audited `profile.set_scope`, `via: consent`); picking another existing profile in the list
+  without choosing its scope therefore never changes it silently. A bad choice shows an error without using up the
+  request; denial is unchanged.
 - **PATs:** `npm run pat -- create --name "<name>" [--profile <label>] [--scope read|propose|write]`. The profile
   (default `claude-code`) is created if absent, at the default scope unless `--scope` is given; with an existing
   profile, `--scope` changes its scope (audited). `npm run pat -- list` shows each token's profile and scope. Claude
@@ -199,9 +210,10 @@ approval needs an attached engine. It appends the proposal tools unless the give
 
 ## Settings
 
-| Variable                      | Meaning                                         | Default |
-| ----------------------------- | ----------------------------------------------- | ------- |
-| `POLICY_PROPOSAL_EXPIRY_DAYS` | A pending proposal expires after this many days | 14      |
-| `POLICY_EXPIRY_SWEEP_SECONDS` | How often expiry is checked                     | 300     |
+| Variable                         | Meaning                                                                                                                                                                                        | Default |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `POLICY_PROPOSAL_EXPIRY_DAYS`    | A pending proposal expires after this many days                                                                                                                                                | 14      |
+| `POLICY_EXPIRY_SWEEP_SECONDS`    | How often expiry is checked                                                                                                                                                                    | 300     |
+| `POLICY_PROPOSAL_RETENTION_DAYS` | Finished proposals (executed, rejected, expired, failed) older than this are deleted by the `proposal-prune` maintenance job, with their pre-state; pending and conflicted ones never (v1.0.1) | 90      |
 
 The scope cache is fixed at one second at most (`cacheMs`, 0-1000, in code).

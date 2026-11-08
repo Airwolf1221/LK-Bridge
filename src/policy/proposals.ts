@@ -57,6 +57,10 @@ import {
   type ProposalView,
 } from './types.js';
 
+/** Finished states the `proposal-prune` job may delete. `pending`, `approved`, `executing` and `conflicted` never. */
+export const PRUNABLE_STATES = ['executed', 'rejected', 'expired', 'failed'] as const;
+const PRUNE_BATCH = 500;
+
 /** Pre-state kept for the diff, per operation. Larger states keep only a prefix (the fingerprint is always whole). */
 const PRE_STATE_MAX_BYTES = 512 * 1024;
 /**
@@ -670,6 +674,52 @@ export class ProposalService implements ProposalSink {
     let n = 0;
     for (const { id } of due) if (this.expireOne(id)) n++;
     return n;
+  }
+
+  // ============================================================================================ retention
+
+  /**
+   * Deletes finished proposals (`executed`, `rejected`, `expired`, `failed`) that finished more than the retention
+   * (`POLICY_PROPOSAL_RETENTION_DAYS`, default 90) ago, with their operations and stored pre-state (v1.0.1, F-16).
+   * `pending`, `approved`, `executing` and `conflicted` proposals are never touched. Jobs, journal entries and audit
+   * rows that name a proposal keep its id as plain text (no foreign key points at `proposals` except its own
+   * operations). Runs in batches so the database's write lock is held briefly. Called by the `proposal-prune`
+   * maintenance job.
+   */
+  pruneFinished(retentionMs: number = this.o.settings.proposalRetentionMs): {
+    readonly removed: number;
+    readonly cutoff: number;
+  } {
+    const cutoff = this.now() - retentionMs;
+    const select = this.store.db.prepare(
+      `SELECT id FROM proposals
+       WHERE state IN (${PRUNABLE_STATES.map(() => '?').join(', ')})
+         AND COALESCE(finished_at, decided_at, updated_at) <= ?
+       ORDER BY COALESCE(finished_at, decided_at, updated_at)
+       LIMIT ${PRUNE_BATCH}`,
+    );
+    const del = this.store.db.prepare(
+      `DELETE FROM proposals WHERE id = ? AND state IN (${PRUNABLE_STATES.map(() => '?').join(', ')})`,
+    );
+    let removed = 0;
+    for (;;) {
+      const batch = this.store.db.transaction(() => {
+        const ids = (select.all(...PRUNABLE_STATES, cutoff) as { id: string }[]).map((r) => r.id);
+        let n = 0;
+        for (const id of ids) n += del.run(id, ...PRUNABLE_STATES).changes; // proposal_ops cascade
+        return { found: ids.length, n };
+      })();
+      removed += batch.n;
+      if (batch.found < PRUNE_BATCH) break;
+    }
+    if (removed > 0) {
+      this.store.audit('system', 'proposal.pruned', null, undefined, {
+        removed,
+        finishedBefore: new Date(cutoff).toISOString(),
+        states: PRUNABLE_STATES,
+      });
+    }
+    return { removed, cutoff };
   }
 
   private expireOne(id: string): boolean {

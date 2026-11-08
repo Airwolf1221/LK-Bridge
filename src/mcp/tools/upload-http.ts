@@ -7,6 +7,9 @@
  * that was checked and a second resolution cannot swap in a private one.
  *
  * - https only, no URL credentials; private, loopback, link-local, CGNAT and other non-public targets are refused.
+ * - Port 443 only, unless `host:port` is listed in OUTBOUND_EXTRA_PORTS_ALLOWLIST (v1.0.1, `src/auth/ports.ts`). The
+ *   check is part of `checkTargetUrl`, which every redirect hop and the PUT pass, and `guardedRequest` checks again
+ *   before it resolves or connects.
  * - `createUploadTransport` is a governor `Transport`: calls to the LK host go to the platform transport, anything
  *   else goes through this guard. The PUT therefore still runs inside `governor.execute` (pacing, retries, upload
  *   tier). A 429 from the storage host is rewritten to `UPLOAD_RATE_EXCEEDED` so the governor applies the upload
@@ -20,12 +23,14 @@ import { lookup as dnsLookup, type LookupAddress } from 'node:dns';
 import { request } from 'node:https';
 import { isIP, type LookupFunction } from 'node:net';
 import { isPublicAddress } from '../../auth/ip.js';
+import { type OutboundPortAllowlist, outboundPortAllowed, portRefusalMessage } from '../../auth/ports.js';
 import type { Transport } from '../../lk/index.js';
 import { BridgeLkError } from '../../lk/index.js';
 
 export type UploadHttpFailure =
   | 'invalid_url'
   | 'blocked_address'
+  | 'blocked_port'
   | 'dns'
   | 'timeout'
   | 'network'
@@ -46,6 +51,8 @@ export class UploadHttpError extends Error {
 }
 
 export interface GuardOptions {
+  /** `host:port` pairs allowed besides port 443 (OUTBOUND_EXTRA_PORTS_ALLOWLIST). Default: none. */
+  readonly allowedPorts?: OutboundPortAllowlist;
   /** Test seam: replaces DNS resolution. */
   readonly resolve?: (hostname: string) => Promise<readonly LookupAddress[]>;
   /** Test seam: extra trusted CA certificates (PEM). */
@@ -63,7 +70,7 @@ function defaultResolve(hostname: string): Promise<readonly LookupAddress[]> {
   });
 }
 
-/** Parses and checks the URL's shape (https, no credentials, a public literal address if it is one). */
+/** Parses and checks the URL's shape (https, no credentials, port 443 or allowlisted, a public literal address). */
 export function checkTargetUrl(raw: string, o: GuardOptions = {}): URL {
   let url: URL;
   try {
@@ -73,6 +80,9 @@ export function checkTargetUrl(raw: string, o: GuardOptions = {}): URL {
   }
   if (url.protocol !== 'https:' || url.username || url.password) {
     throw new UploadHttpError('invalid_url', 'Only credential-free https URLs are used');
+  }
+  if (!outboundPortAllowed(url, o.allowedPorts)) {
+    throw new UploadHttpError('blocked_port', portRefusalMessage(url));
   }
   const host = url.hostname.replace(/^\[|\]$/g, '');
   if (isIP(host) !== 0 && !addressAllowed(host, o)) {
@@ -161,6 +171,11 @@ export function guardedRequest(r: RawRequest): Promise<RawResponse> {
   return new Promise<RawResponse>((resolvePromise, reject) => {
     if (r.signal?.aborted) {
       reject(r.signal.reason instanceof Error ? r.signal.reason : new UploadHttpError('network', 'Aborted'));
+      return;
+    }
+    // The choke point for every outbound exchange in this module: the port policy again, before DNS or connect.
+    if (!outboundPortAllowed(r.url, r.allowedPorts)) {
+      reject(new UploadHttpError('blocked_port', portRefusalMessage(r.url)));
       return;
     }
     let settled = false;
@@ -303,7 +318,8 @@ export function createUploadTransport(o: UploadTransportOptions): Transport {
       return toResponse(res);
     } catch (e) {
       if (e instanceof UploadHttpError) {
-        if (e.reason === 'blocked_address' || e.reason === 'invalid_url') throw refused(e.message);
+        if (e.reason === 'blocked_address' || e.reason === 'blocked_port' || e.reason === 'invalid_url')
+          throw refused(e.message);
         throw e; // a connection or timeout failure: the governor retries it with backoff
       }
       throw e;

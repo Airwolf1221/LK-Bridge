@@ -73,6 +73,8 @@ export interface ProfileOption {
   readonly label: string;
   readonly kind: string;
   readonly scope: string;
+  /** Active connections (grants and PATs) on this profile, for the scope-change warning. */
+  readonly connections?: number;
 }
 
 /** The owner's choice on the consent screen: an existing profile, or a new one; and its scope. */
@@ -82,7 +84,29 @@ export interface ConsentProfileChoice {
   readonly newLabel?: string;
   readonly newKind?: string;
   readonly scope: string;
+  /**
+   * Set by the confirmation page: `<profileId>:<from>:<to>`. A change to an EXISTING profile's scope is applied only
+   * when this matches exactly (v1.0.1, F-15), so it always takes an explicit, confirmed choice.
+   */
+  readonly confirmScopeChange?: string;
 }
+
+/** A scope change on an existing profile that the owner has not yet confirmed. */
+export interface ScopeChangeToConfirm {
+  readonly profileId: string;
+  readonly label: string;
+  readonly from: string;
+  readonly to: string;
+  /** Active connections on the profile (all of them change). */
+  readonly connections: number;
+  /** The value the confirmation form sends back as `confirm_scope_change`. */
+  readonly token: string;
+}
+
+export type ConsentApplyResult =
+  | { ok: true; profileId: string }
+  | { ok: false; error: string }
+  | { ok: false; confirm: ScopeChangeToConfirm };
 
 /**
  * The policy layer's side of consent (implemented in src/policy/consent.ts). The owner, signed in, picks the profile
@@ -92,10 +116,15 @@ export interface ConsentProfiles {
   readonly kinds: readonly string[];
   readonly scopes: readonly string[];
   options(): readonly ProfileOption[];
+  /** The scope a NEW profile gets unless the owner chooses another (the configured default, `read` out of the box). */
+  defaultScope(): string;
   /** The suggested profile for a redirect URI (claude.ai/claude.com → claude, chatgpt.com → chatgpt, loopback → claude-code). */
   suggest(redirectUri: string): { readonly kind: string; readonly label: string };
-  /** Applies the owner's choice (creates the profile or sets its scope, audited). */
-  apply(choice: ConsentProfileChoice): { ok: true; profileId: string } | { ok: false; error: string };
+  /**
+   * Applies the owner's choice (creates the profile, or sets an existing profile's scope, audited). A change to an
+   * existing profile's scope without a matching `confirmScopeChange` is not applied: the result asks for confirmation.
+   */
+  apply(choice: ConsentProfileChoice): ConsentApplyResult;
   /** The profile id a PAT created without one gets. */
   defaultPatProfileId(): string;
 }
@@ -142,7 +171,11 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
   const event = createAuthEventLogger(o.log);
   const fetchJson =
     o.fetchJson ??
-    createSafeJsonFetcher({ timeoutMs: config.cimd.timeoutMs, maxBytes: config.cimd.maxBytes });
+    createSafeJsonFetcher({
+      timeoutMs: config.cimd.timeoutMs,
+      maxBytes: config.cimd.maxBytes,
+      ...(config.outboundExtraPorts ? { allowedPorts: config.outboundExtraPorts } : {}),
+    });
   const cimd = new CimdFetcher(fetchJson, {
     extraRedirectUris: config.extraRedirectUris,
     defaultCacheSeconds: config.cimd.defaultCacheSeconds,

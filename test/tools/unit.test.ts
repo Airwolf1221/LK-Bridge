@@ -18,7 +18,16 @@ describe('tools configuration', () => {
         putTimeoutMs: 120_000,
       },
       resultMaxChars: 40_000,
+      outboundExtraPorts: new Set(),
     });
+  });
+  it('parses OUTBOUND_EXTRA_PORTS_ALLOWLIST and refuses a malformed entry (v1.0.1)', () => {
+    expect([
+      ...loadToolsConfig({ OUTBOUND_EXTRA_PORTS_ALLOWLIST: 'images.example.org:8443' }).outboundExtraPorts,
+    ]).toEqual(['images.example.org:8443']);
+    expect(() => loadToolsConfig({ OUTBOUND_EXTRA_PORTS_ALLOWLIST: '*.example.org:8443' })).toThrow(
+      /OUTBOUND_EXTRA_PORTS_ALLOWLIST/,
+    );
   });
   it('reads overrides and rejects bad values by name only', () => {
     expect(

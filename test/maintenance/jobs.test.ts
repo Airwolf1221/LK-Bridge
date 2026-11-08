@@ -196,3 +196,143 @@ describe('placeholders', () => {
     ]);
   });
 });
+
+describe('proposal-prune (v1.0.1, F-16)', () => {
+  /** Captures one real proposal (with its pre-state) from a propose-scope agent. */
+  async function capture(r: MaintenanceRig['rig'], resourceId: string, name: string): Promise<string> {
+    r.h.model.seedResource(resourceId);
+    const agent = makePat(r.db, r.policy, 'proposer', 'propose', () => r.h.clock.now());
+    const out = await settle(
+      r.h,
+      r.e,
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId }, body: { name } },
+        { origin: mcpOriginFor(agent.principal) },
+      ),
+    );
+    return (out.value as { proposalId: string }).proposalId;
+  }
+  const count = (sql: string, ...args: unknown[]) => (m!.rig.db.prepare(sql).get(...args) as { n: number }).n;
+  const exists = (id: string) => count('SELECT count(*) AS n FROM proposals WHERE id = ?', id) === 1;
+  const ops = (id: string) => count('SELECT count(*) AS n FROM proposal_ops WHERE proposal_id = ?', id);
+  /** Puts a captured proposal into a state, finished at `at` (what the state machine would have recorded). */
+  const force = (id: string, state: string, at: number) =>
+    m!.rig.db
+      .prepare('UPDATE proposals SET state = ?, decided_at = ?, finished_at = ?, updated_at = ? WHERE id = ?')
+      .run(state, at, at, at, id);
+
+  it('runs daily at 03:45, after journal-prune at 03:30', async () => {
+    m = await maintenanceRig();
+    expect(m.maintenance.scheduler.get('proposal-prune').schedule).toEqual({ kind: 'daily', time: '03:45' });
+    expect(m.maintenance.scheduler.get('journal-prune').schedule).toEqual({ kind: 'daily', time: '03:30' });
+  });
+
+  it('deletes finished proposals past the retention with their pre-state; keeps the job and journal that name them', async () => {
+    m = await maintenanceRig();
+    const r = m.rig;
+    for (const id of [
+      'budget-sampler',
+      'proposal-expiry',
+      'sqlite-optimise',
+      'journal-prune',
+      'proposal-prune',
+    ])
+      m.maintenance.commands.disable('owner', id);
+
+    // A real executed proposal: approved by the owner, run as a job, journalled.
+    const executed = await capture(r, 'raaaaaaa', 'Executed');
+    const approved = await settle(r.h, r.e, r.policy.commands.approve('owner', executed));
+    expect(approved.error).toBeUndefined();
+    await r.h.drive(r.e, () => r.policy.proposals.state(executed) === 'executed');
+    const jobId = r.policy.proposals.get(executed)!.jobId!;
+    expect(ops(executed)).toBe(1);
+    expect(
+      count(
+        'SELECT count(*) AS n FROM proposal_ops WHERE proposal_id = ? AND pre_state IS NOT NULL',
+        executed,
+      ),
+    ).toBe(1);
+    const journalBefore = r.e.engine.queries.journalLookup({ limit: 100 }).filter((j) => j.jobId === jobId);
+    expect(journalBefore.length).toBeGreaterThan(0);
+
+    // One of each other state, all captured for real.
+    const ids: Record<string, string> = { executed };
+    for (const [i, state] of ['rejected', 'expired', 'failed', 'pending', 'conflicted'].entries()) {
+      ids[state] = await capture(r, `rb${i}aaaaa`, state);
+    }
+    const t0 = r.h.clock.now();
+    for (const state of ['rejected', 'expired', 'failed', 'conflicted']) force(ids[state]!, state, t0);
+
+    // Inside the 90-day retention: nothing goes.
+    await r.h.clock.advance(89 * D);
+    expect((await run('proposal-prune')).detail).toMatch(/^Removed 0 finished proposals/);
+    for (const id of Object.values(ids)) expect(exists(id)).toBe(true);
+
+    // Past it: the four finished states go, with their operations and pre-state; pending and conflicted stay.
+    await r.h.clock.advance(2 * D);
+    const result = await run('proposal-prune');
+    expect(result).toMatchObject({ outcome: 'succeeded' });
+    expect(result.detail).toMatch(/^Removed 4 finished proposals/);
+    for (const state of ['executed', 'rejected', 'expired', 'failed']) {
+      expect(exists(ids[state]!), state).toBe(false);
+      expect(ops(ids[state]!), state).toBe(0);
+    }
+    for (const state of ['pending', 'conflicted']) {
+      expect(exists(ids[state]!), state).toBe(true);
+      expect(ops(ids[state]!), state).toBe(1);
+    }
+    // The job that executed it, and its journal entries, are kept; the job still names the proposal as text.
+    const job = r.e.engine.queries.getJob(jobId)!;
+    expect(job).toMatchObject({ status: 'succeeded' });
+    expect(job.origin.detail).toBe(`proposal:${executed}`);
+    expect(r.e.engine.queries.journalLookup({ limit: 100 }).filter((j) => j.jobId === jobId)).toEqual(
+      journalBefore,
+    );
+    // Recorded as a P3 maintenance job, and one system audit row says what went.
+    expect(r.e.engine.queries.getJob(result.jobId!)).toMatchObject({
+      priority: 'P3',
+      origin: { kind: 'maintenance', tool: 'proposal-prune' },
+    });
+    const audit = r.policy.commands.listAudit('owner').filter((a) => a.action === 'proposal.pruned');
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ actor: 'system', after: { removed: 4 } });
+    // The owner's views no longer list them; the agent's own view answers "not found" like any unknown id.
+    expect(r.policy.proposals.get(executed)).toBeUndefined();
+    expect(writesAtMock().filter((c) => c.method !== 'PATCH')).toEqual([]); // only the approved update was sent
+  });
+
+  it('never prunes pending, approved, executing or conflicted proposals, however old', async () => {
+    m = await maintenanceRig();
+    const r = m.rig;
+    const ids: Record<string, string> = {};
+    for (const [i, state] of ['pending', 'approved', 'executing', 'conflicted'].entries()) {
+      ids[state] = await capture(r, `rc${i}aaaaa`, state);
+      if (state !== 'pending') force(ids[state], state, r.h.clock.now());
+    }
+    // Keep them from being expired or reconciled, so only the prune is under test.
+    r.db.prepare('UPDATE proposals SET expires_at = ?').run(Number.MAX_SAFE_INTEGER);
+    expect(r.policy.proposals.pruneFinished(0).removed).toBe(0);
+    for (const id of Object.values(ids)) expect(exists(id)).toBe(true);
+  });
+
+  it('follows the configured retention (POLICY_PROPOSAL_RETENTION_DAYS)', async () => {
+    m = await maintenanceRig({ proposalRetentionMs: 7 * D });
+    const r = m.rig;
+    for (const job of [
+      'budget-sampler',
+      'proposal-expiry',
+      'sqlite-optimise',
+      'journal-prune',
+      'proposal-prune',
+    ])
+      m.maintenance.commands.disable('owner', job);
+    const id = await capture(r, 'rdaaaaaa', 'Rejected');
+    force(id, 'rejected', r.h.clock.now());
+    await r.h.clock.advance(6 * D);
+    expect((await run('proposal-prune')).detail).toMatch(/^Removed 0/);
+    await r.h.clock.advance(2 * D);
+    expect((await run('proposal-prune')).detail).toMatch(/^Removed 1 finished proposal /);
+    expect(exists(id)).toBe(false);
+  });
+});

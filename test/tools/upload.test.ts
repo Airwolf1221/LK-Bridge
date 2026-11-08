@@ -13,6 +13,7 @@ import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase } from '../../src/db/open.js';
 import { createRuntime } from '../../src/runtime.js';
 import type { GuardOptions } from '../../src/mcp/tools/upload-http.js';
+import { parseOutboundPortAllowlist } from '../../src/auth/ports.js';
 import { MockLk, type MockRequest } from '../contract/mock-lk.js';
 import { systemClock } from '../../src/lk/index.js';
 import { API_KEY, PROJECT, startStack, type Stack } from './helpers.js';
@@ -39,6 +40,7 @@ const puts: Put[] = [];
 /** Scripted storage behaviour for the next PUTs: a status, or 'hang'. */
 const script: (number | 'hang' | { status: number; retryAfter: string })[] = [];
 const images = new Map<string, { type: string; body: Buffer }>();
+const gets: string[] = [];
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'lkb-upload-'));
@@ -72,6 +74,12 @@ beforeAll(async () => {
     req.on('end', () => {
       const body = Buffer.concat(chunks);
       if (req.method === 'GET') {
+        gets.push(req.url ?? '');
+        // /redirect?to=<url>: a redirect hop, to test that every hop passes the guard (v1.0.1 port policy).
+        if ((req.url ?? '').startsWith('/redirect?to=')) {
+          const to = decodeURIComponent((req.url ?? '').slice('/redirect?to='.length));
+          return void res.writeHead(302, { location: to }).end();
+        }
         const img = images.get((req.url ?? '').split('?')[0]!);
         if (!img) return void res.writeHead(404).end();
         res.writeHead(200, { 'content-type': img.type, 'content-length': img.body.length });
@@ -105,6 +113,9 @@ const testGuard = (): GuardOptions => ({
   resolve: toLoopback,
   ca: cert,
   allowAddress: (a) => a === '127.0.0.1',
+  // The test storage and image server listens on a random port: allowed by exact host:port, as
+  // OUTBOUND_EXTRA_PORTS_ALLOWLIST would (v1.0.1; the default is 443 only).
+  allowedPorts: parseOutboundPortAllowlist(`storage.test:${port},images.test:${port}`),
 });
 
 let uploadUrl = (): string => `https://storage.test:${port}/put/abc?sig=${SECRET_SIG}`;
@@ -350,6 +361,99 @@ describe('SSRF refusals', () => {
       expect(puts).toHaveLength(0);
     } finally {
       uploadUrl = () => `https://storage.test:${port}/put/abc?sig=${SECRET_SIG}`;
+      await stack.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------- ports (v1.0.1)
+
+describe('outbound ports: 443 only unless OUTBOUND_EXTRA_PORTS_ALLOWLIST lists host:port (F-19)', () => {
+  /** The test guard without the allowlist for the test server's port: what production does by default. */
+  const noPorts = (): GuardOptions => ({ ...testGuard(), allowedPorts: new Set() });
+
+  it('refuses an image URL on another port before any DNS lookup or connection; allows a listed one', async () => {
+    images.set('/ok.png', { type: 'image/png', body: PNG_BYTES });
+    let lookups = 0;
+    const counting: GuardOptions = {
+      ...noPorts(),
+      resolve: (h) => {
+        lookups++;
+        return toLoopback(h);
+      },
+    };
+    const refused = await uploadStack({ uploadGuard: counting });
+    gets.length = 0;
+    try {
+      const r = await refused.stack.call(refused.client, 'lk_upload_image', {
+        name: 'x',
+        url: `https://images.test:${port}/ok.png`,
+      });
+      expect(r.body.error.code).toBe('UPLOAD_URL_REFUSED');
+      expect(r.body.error.message).toMatch(/Only port 443/);
+      expect(lookups).toBe(0);
+      expect(gets).toEqual([]);
+      expect(refused.stack.runtime.engine.queries.listJobs({}).length).toBe(0);
+    } finally {
+      await refused.stack.close();
+    }
+    const allowed = await uploadStack(); // testGuard(): images.test:<port> is listed
+    try {
+      const r = await allowed.stack.call(allowed.client, 'lk_upload_image', {
+        name: 'x',
+        url: `https://images.test:${port}/ok.png`,
+      });
+      expect(r.body.status).toBe('succeeded');
+    } finally {
+      await allowed.stack.close();
+    }
+  });
+
+  it('checks every redirect hop: a hop to an unlisted port is refused, a hop to a listed one is followed', async () => {
+    images.set('/ok.png', { type: 'image/png', body: PNG_BYTES });
+    const { stack, client } = await uploadStack({
+      // The test server's own host:port pairs are listed; images.test:22 and storage.test:8443 are not.
+      uploadGuard: {
+        ...testGuard(),
+        allowedPorts: parseOutboundPortAllowlist(`images.test:${port},storage.test:${port}`),
+      },
+    });
+    try {
+      for (const to of ['https://images.test:22/ok.png', 'https://storage.test:8443/ok.png']) {
+        gets.length = 0;
+        const r = await stack.call(client, 'lk_upload_image', {
+          name: 'x',
+          url: `https://images.test:${port}/redirect?to=${encodeURIComponent(to)}`,
+        });
+        expect(r.body.error?.code, to).toBe('UPLOAD_URL_REFUSED');
+        expect(gets, to).toEqual([`/redirect?to=${encodeURIComponent(to)}`]); // the refused hop was never sent
+      }
+      gets.length = 0;
+      const ok = await stack.call(client, 'lk_upload_image', {
+        name: 'x',
+        url: `https://images.test:${port}/redirect?to=${encodeURIComponent(`https://images.test:${port}/ok.png`)}`,
+      });
+      expect(ok.body.status).toBe('succeeded');
+      expect(gets).toHaveLength(2);
+    } finally {
+      await stack.close();
+    }
+  });
+
+  it('refuses a signed upload URL on an unlisted port and never contacts it', async () => {
+    puts.length = 0;
+    const { stack, client } = await uploadStack({ uploadGuard: noPorts() });
+    try {
+      const r = await stack.call(client, 'lk_upload_image', { name: 'x', base64: PNG_1PX });
+      expect(r.isError).toBe(true);
+      expect(r.text).not.toContain(SECRET_SIG);
+      const job = stack.runtime.engine.queries.listJobs({ kind: 'upload_image', limit: 1 })[0]!;
+      expect(job.status).toBe('failed');
+      expect(JSON.stringify(job.lastError)).toContain('UPLOAD_TARGET_REFUSED');
+      expect(JSON.stringify(job.lastError)).toContain('Only port 443');
+      expect(puts).toHaveLength(0);
+      expect(wireOf(stack, /assets\/images/)).toHaveLength(0);
+    } finally {
       await stack.close();
     }
   });

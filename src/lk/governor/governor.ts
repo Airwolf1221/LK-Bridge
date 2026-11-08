@@ -35,6 +35,14 @@ import {
   type VerifyResult,
 } from './types.js';
 import { SlidingWindow, type WindowEvent } from './window.js';
+import {
+  COUNTERS_FORMAT,
+  DEFAULT_PERSIST_INTERVAL_MS,
+  restoreCounters,
+  toBuckets,
+  type GovernorPersistence,
+  type PersistedCounters,
+} from './persist.js';
 
 export type Transport = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -48,6 +56,11 @@ export interface GovernorOptions {
   readonly transport?: Transport;
   /** Jitter source for backoff (tests pass a constant). */
   readonly random?: () => number;
+  /**
+   * v1.0.1 (F-14): keep the tiers' recent counts across restarts. Restored here, saved at most every `intervalMs` while
+   * they change and on `close()` (`persist.ts`). Optional: without it the governor starts empty, as before.
+   */
+  readonly persistence?: GovernorPersistence;
 }
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._-]{1,255}$/;
@@ -158,6 +171,8 @@ export class Governor {
   private pumping = false;
   private repump = false;
   private closed = false;
+  private readonly persistence: GovernorPersistence | undefined;
+  private saveTimer: TimerHandle | null = null;
 
   constructor(options: GovernorOptions) {
     this.current = options.settings;
@@ -183,6 +198,8 @@ export class Governor {
         return [id, state];
       }),
     ) as Record<TierId, TierState>;
+    this.persistence = options.persistence;
+    this.restorePersisted();
   }
 
   /** The effective settings. Only the reserve floors can change while running (`setReserveFloors`). */
@@ -401,11 +418,14 @@ export class Governor {
     return () => set.delete(cb);
   }
 
-  /** Rejects everything queued and stops the wake timer. In-flight calls finish. */
+  /** Rejects everything queued and stops the wake timer. In-flight calls finish. Saves the counters (if persisted). */
   close(): void {
     this.closed = true;
     if (this.wakeTimer) this.clock.clearTimeout(this.wakeTimer);
     this.wakeTimer = null;
+    if (this.saveTimer) this.clock.clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    this.savePersisted();
     for (const cls of PRIORITY_CLASSES) {
       for (const lane of this.lanes[cls].values()) {
         for (const p of lane) {
@@ -613,6 +633,7 @@ export class Governor {
       t.inFlight += n;
       consumed.push({ tier: t, n, event });
     }
+    this.countersChanged();
     if (isWrite(p.req.costs)) {
       this.lastWriteAt = now;
       this.spacing(now);
@@ -674,6 +695,7 @@ export class Governor {
       tier.inFlight -= n;
       if (uncounted && event && tier.window) tier.window.refund(now, event);
     }
+    if (uncounted) this.countersChanged();
     this.pump();
   }
 
@@ -770,6 +792,7 @@ export class Governor {
     } else if (target < modelled) {
       t.window.removeOldest(now, modelled - target);
     }
+    if (target !== modelled) this.countersChanged();
     t.serverResetAt = rate.resetAtMs;
     const modelledComparable = modelled - othersInFlight;
     t.drift = {
@@ -805,6 +828,7 @@ export class Governor {
       }
     }
     if (changed) {
+      this.countersChanged();
       this.emit('throttled', { atMs: this.clock.now(), opId: ctx.req.opId, code, tiers, retryAtMs: until });
     }
   }
@@ -833,6 +857,72 @@ export class Governor {
       opId,
       cause,
     });
+  }
+
+  // ---------------------------------------------------------------------------------------------- persistence (F-14)
+
+  /** Seeds the windows and 429 blocks from the saved record. Anything wrong restores nothing; never throws. */
+  private restorePersisted(): void {
+    if (!this.persistence) return;
+    let raw: unknown;
+    try {
+      raw = this.persistence.store.load();
+    } catch (e) {
+      this.persistence.warn?.('Could not read the saved governor counters; starting from empty counters', e);
+      return;
+    }
+    if (raw === undefined || raw === null) return; // first start, or nothing saved yet
+    const now = this.clock.now();
+    let restored: ReturnType<typeof restoreCounters>;
+    try {
+      const shape = Object.fromEntries(
+        TIER_IDS.map((id) => [
+          id,
+          { windowMs: this.tiers[id].windowMs, limit: this.tiers[id].configuredLimit },
+        ]),
+      ) as Parameters<typeof restoreCounters>[2];
+      restored = restoreCounters(raw, now, shape);
+    } catch (e) {
+      this.persistence.warn?.('The saved governor counters are malformed; starting from empty counters', e);
+      return;
+    }
+    for (const id of TIER_IDS) {
+      const r = restored[id];
+      if (!r) continue;
+      const t = this.tiers[id];
+      if (t.window) for (const e of r.events) t.window.add(now, e.n, e.t);
+      if (r.blockedUntil > t.blockedUntil) t.blockedUntil = r.blockedUntil;
+    }
+  }
+
+  /** Arms one save at most `intervalMs` from now, unless one is already armed. No timer while nothing changes. */
+  private countersChanged(): void {
+    if (!this.persistence || this.closed || this.saveTimer) return;
+    this.saveTimer = this.clock.setTimeout(() => {
+      this.saveTimer = null;
+      this.savePersisted();
+    }, this.persistence.intervalMs ?? DEFAULT_PERSIST_INTERVAL_MS);
+  }
+
+  private savePersisted(): void {
+    if (!this.persistence) return;
+    const now = this.clock.now();
+    const tiers: PersistedCounters['tiers'] = {};
+    for (const id of TIER_IDS) {
+      const t = this.tiers[id];
+      const buckets = t.window && t.windowMs !== null ? toBuckets(t.window.liveEvents(now), t.windowMs) : [];
+      const blocked = t.blockedUntil > now ? t.blockedUntil : undefined;
+      if (buckets.length > 0 || blocked !== undefined)
+        (tiers as Record<string, unknown>)[id] = {
+          buckets,
+          ...(blocked !== undefined ? { blockedUntil: blocked } : {}),
+        };
+    }
+    try {
+      this.persistence.store.save({ v: COUNTERS_FORMAT, savedAt: now, tiers });
+    } catch (e) {
+      this.persistence.warn?.('Could not save the governor counters; the next change tries again', e);
+    }
   }
 
   private emit<E extends keyof GovernorEvents>(event: E, payload: GovernorEvents[E]): void {

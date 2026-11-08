@@ -5,8 +5,13 @@ reviewer did not write the code and did not treat earlier reports, the changelog
 below was checked by reading the code and, where a test could settle it, by running one. Nothing here was run against
 the real LegendKeeper API or the live server.
 
-Status values: **Open** (not fixed; the recommendation stands), **Fixed** (changed on `chunk-8-hardening`, with a test),
-**Accepted** (no change; the reason is given), **Pass** (checked, nothing to change).
+Status values: **Open** (not fixed; the recommendation stands), **Fixed** (changed on `chunk-8-hardening`, or for
+F-14, F-15, F-16, F-17, F-19 and F-21 on `v1.0.1-fixes`, with a test), **Accepted** (no change; the reason is given),
+**Pass** (checked, nothing to change).
+
+**Update, v1.0.1 (8 November 2026).** The open Low and Info findings F-14, F-15, F-16, F-17, F-19 and F-21 were fixed in
+release 1.0.1 (each finding below has a "Status: fixed in v1.0.1" paragraph; decisions in ADR 0019 and ADR 0020). F-23
+(a dev-only `minimatch` advisory with no fix published) stays open. The original findings text is unchanged.
 
 ## 1. Threat model
 
@@ -52,7 +57,8 @@ Status values: **Open** (not fixed; the recommendation stands), **Fixed** (chang
    signed in), the image URL fetch (an agent with scope `write`) and the signed-URL PUT (a host named by LegendKeeper).
    All go through the address policy (`src/auth/ip.ts`) with the check inside the connection's DNS lookup.
 7. **Service user → secrets.** `lkbridge` can read the env file; so can anything that runs as `lkbridge`, including
-   `npm ci` and the build during a deploy.
+   `npm ci` and the build during a deploy. (v1.0.1: no longer the build, which now runs as
+   `lkbuild`, a user that cannot read the env file; ADR 0020.)
 
 ## 2. Summary
 
@@ -61,12 +67,13 @@ Status values: **Open** (not fixed; the recommendation stands), **Fixed** (chang
 | Critical |     0 |     0 |    0 |               0 |
 | High     |     1 |     1 |    0 |               0 |
 | Medium   |     4 |     4 |    0 |               0 |
-| Low      |    13 |     9 |    4 |               0 |
-| Info     |     8 |     1 |    3 |               4 |
-| **All**  |    26 |    15 |    7 |               4 |
+| Low      |    13 |    13 |    0 |               0 |
+| Info     |     8 |     3 |    1 |               4 |
+| **All**  |    26 |    21 |    1 |               4 |
 
-Every Critical, High and Medium finding is fixed, with a test that fails without the fix. The open items are Low or Info,
-each with a recommendation below; none is a vulnerability reachable by an internet attacker.
+Every Critical, High and Medium finding is fixed, with a test that fails without the fix. After v1.0.1 every Low finding
+is fixed too; the one open item is Info (F-23), with its recommendation below. None was a vulnerability reachable by an
+internet attacker.
 
 ## 3. Findings
 
@@ -85,15 +92,15 @@ each with a recommendation below; none is a vulnerability reachable by an intern
 | F-11 | Low      | MCP surface         | `src/mcp/server.ts:236-247`                               | The hidden-tools wrapper uses SDK internals; its fallback is silent, and the legacy protocol era is untested                                      | Fixed    |
 | F-12 | Low      | Tests               | `test/policy/no-agent-escalation.test.ts:144`             | The tool-enumeration test does not cover the 89 `lk_op_*` tools (`MCP_EXPOSE_PER_OP_TOOLS=true`)                                                  | Fixed    |
 | F-13 | Low      | Shutdown            | `src/jobs/engine.ts:217`, `:595`                          | `engine.stop()` does not release `bridge_job_wait` callers, which can hold `app.close()` up to 25 s                                               | Fixed    |
-| F-14 | Low      | Governor            | `src/lk/governor/governor.ts`                             | Tier counters are in memory only; right after a restart the bridge believes the minute and hour are empty                                         | Open     |
-| F-15 | Low      | Consent             | `src/policy/consent.ts:3`                                 | Re-approving a connection with the preselected `read` lowers an existing profile for every connection on it                                       | Open     |
-| F-16 | Low      | Retention           | `src/policy/proposals.ts`                                 | Finished proposals (and their pre-states) are never pruned                                                                                        | Open     |
-| F-17 | Low      | Supply chain        | `deploy/deploy.sh:161`                                    | `npm ci` and the build run as `lkbridge`, which can read the env file                                                                             | Open     |
+| F-14 | Low      | Governor            | `src/lk/governor/governor.ts`                             | Tier counters are in memory only; right after a restart the bridge believes the minute and hour are empty                                         | Fixed    |
+| F-15 | Low      | Consent             | `src/policy/consent.ts:3`                                 | Re-approving a connection with the preselected `read` lowers an existing profile for every connection on it                                       | Fixed    |
+| F-16 | Low      | Retention           | `src/policy/proposals.ts`                                 | Finished proposals (and their pre-states) are never pruned                                                                                        | Fixed    |
+| F-17 | Low      | Supply chain        | `deploy/deploy.sh:161`                                    | `npm ci` and the build run as `lkbridge`, which can read the env file                                                                             | Fixed    |
 | F-26 | Low      | Logging             | `src/server.ts` (Fastify default `routeNotFound`)         | Fastify's not-found log line carried the raw URL, query string included                                                                           | Fixed    |
 | F-18 | Info     | systemd             | `deploy/lk-bridge.service:20-23`                          | The comment on `NODE_OPTIONS` misstates systemd's precedence; memory values reviewed                                                              | Fixed    |
-| F-19 | Info     | SSRF                | `src/auth/safe-fetch.ts`, `src/mcp/tools/upload-http.ts`  | Outbound fetches allow any port on a public host                                                                                                  | Open     |
+| F-19 | Info     | SSRF                | `src/auth/safe-fetch.ts`, `src/mcp/tools/upload-http.ts`  | Outbound fetches allow any port on a public host                                                                                                  | Fixed    |
 | F-20 | Info     | Durability          | `src/db/open.ts:17`                                       | `synchronous=NORMAL` under WAL can lose the last commits on power loss                                                                            | Accepted |
-| F-21 | Info     | Tools               | `src/mcp/tools/bridge.ts:37-73`                           | `bridge_info`'s shared lookup records its errors against whichever caller triggered it                                                            | Open     |
+| F-21 | Info     | Tools               | `src/mcp/tools/bridge.ts:37-73`                           | `bridge_info`'s shared lookup records its errors against whichever caller triggered it                                                            | Fixed    |
 | F-22 | Info     | Secrets             | git history                                               | Whole-history scan: no real secret found                                                                                                          | Pass     |
 | F-23 | Info     | Dependencies        | `package-lock.json`                                       | `npm audit --omit=dev`: 0; dev: 10 moderate (one `minimatch` advisory, no fix published)                                                          | Open     |
 | F-24 | Info     | Auth                | `src/auth/tokens.ts`, `bearer.ts`, `pats.ts`, `crypto.ts` | Access-token and PAT checks reviewed in full                                                                                                      | Pass     |
@@ -283,6 +290,14 @@ governor then honours). **Recommendation:** persist a compact snapshot of the wr
 budget samples) and seed the windows from it at start, conservatively. Not done here: the governor is chunk 1's core and the
 gain is small.
 
+**Status: fixed in v1.0.1** (`src/lk/governor/persist.ts`, `governor.ts`; migration `0500_governor_counters.sql`). Every
+tier's recent counts (not only the write tiers) are saved as compact buckets stamped with the latest time in each, so the
+restored model can only over-count; at most every 10 s while they change and on shutdown; restored at start with stale
+buckets dropped, future ones clamped, totals capped at the limit and an active 429 block kept. A missing, corrupt or
+unreadable record starts empty with a warning. The governor's public interface is unchanged (one optional constructor
+option). Tests: `test/unit/governor-persist.test.ts` (a full write-minute across a restart makes the next write wait until
+the minute has passed; stale data ignored; corrupt and missing records; save timing; the SQLite store).
+
 ### F-15 (Low, open): re-consent lowers an existing profile
 
 The consent page always preselects `read` (a documented decision). Choosing an existing profile at `write` and approving
@@ -291,11 +306,25 @@ example when ChatGPT reconnects. **Recommendation:** for an existing profile, pr
 or warn on the page that the profile will be lowered. Left open because it changes a documented consent decision; it needs
 the owner's call.
 
+**Status: fixed in v1.0.1** (owner's decision, [ADR 0019](../adr/0019-consent-keeps-existing-scope.md); `src/policy/consent.ts`,
+`src/auth/pages.ts`, `src/auth/routes/authorize.ts`). An existing profile's current scope is preselected; a new profile
+gets the configured default (`read`); any change to an existing profile's scope is applied only after a confirmation page
+that shows the profile-wide warning. Tests: `test/policy/mcp.test.ts` › "consent keeps an existing profile's scope unless
+the owner confirms a change" (six tests).
+
 ### F-16 (Low, open): proposals are never pruned
 
 `expired`, `rejected`, `executed`, `failed` and `conflicted` proposals, with their pre-states, stay for ever.
 **Recommendation:** a `proposal-prune` maintenance job (for example: drop pre-states of finished proposals after 30 days,
 rows after 180), matching `journal-prune`.
+
+**Status: fixed in v1.0.1** (`ProposalService.pruneFinished` in `src/policy/proposals.ts`, job `proposal-prune` in
+`src/maintenance/jobs.ts`). Daily at 03:45 (London), the job deletes `executed`, `rejected`, `expired` and `failed`
+proposals that finished more than `POLICY_PROPOSAL_RETENTION_DAYS` (default 90) days ago, with their operations and
+pre-state; `pending`, `approved`, `executing` and `conflicted` proposals are never pruned (the owner chose to keep
+conflicted ones). Jobs, journal entries and audit rows keep the proposal id as text. Tests: `test/maintenance/jobs.test.ts`
+› "proposal-prune" (a real executed proposal and one of each other state; inside and past the retention; job and journal
+kept; never the open states; the configured retention).
 
 ### F-17 (Low, open): the deploy builds as the service user
 
@@ -304,6 +333,18 @@ rows after 180), matching `journal-prune`.
 prebuilds), but build-time code (TypeScript, Vite and their plugins) still runs with access to the LegendKeeper key.
 **Recommendation:** build as a separate user without read access to `/etc/lk-bridge`, or in CI, and deploy the built
 artefacts; at least keep `package-lock.json` reviewed on every dependency change.
+
+**Status: fixed in v1.0.1** ([ADR 0020](../adr/0020-separate-build-user.md); `deploy/deploy.sh`, `deploy/lib.sh`,
+`deploy/healthcheck.sh`, `deploy/migrate-to-build-user.sh`, runbook). A new system user `lkbuild` owns the checkout and the
+deploy key and cannot read `/etc/lk-bridge` or `/var/lib/lk-bridge`; `lkbridge` can read and run the app but not write it.
+The deploy runs as root from a root-owned copy (`sudo /opt/lk-bridge/bin/deploy.sh`; a copy in the checkout would let
+build-time code become root) and drops, with `runuser` and `env -i`, to `lkbuild` for git, `npm ci` and the build, and
+to `lkbridge` for the backup, migrations, health check and the service restart (its existing sudoers rule). The health
+check gains six permission checks; an existing install is moved by an idempotent migration script with a `--check` mode.
+Runtime dependencies still run with the secrets, as they must; `sandbox-test.sh` and `soak-sandbox.sh` still run test
+tooling as `lkbridge` (opt-in; a follow-up). Tests: `test/unit/deploy-files.test.ts` (static rules for both scripts, the
+permission helpers checked against the kernel); shellcheck; a rehearsal of the deploy flow under a scratch prefix. The
+migration itself has not run against real accounts (no server here).
 
 ### F-18 (Info): systemd memory settings
 
@@ -322,6 +363,15 @@ The CIMD fetcher and the image fetcher accept any port on a public address, so a
 bridge open TLS connections to arbitrary ports of public hosts. **Recommendation:** allow only 443 for image URLs, if the
 owner never needs other ports.
 
+**Status: fixed in v1.0.1** (`src/auth/ports.ts`, used by `src/auth/safe-fetch.ts` and `src/mcp/tools/upload-http.ts`).
+All three outbound paths (the CIMD document, the image source URL and every redirect hop, the signed-URL PUT) allow port
+443 only, unless the exact `host:port` is in the new setting `OUTBOUND_EXTRA_PORTS_ALLOWLIST` (default empty; parsed at
+start-up, a malformed entry stops the bridge). The check is part of each guard's URL check, which every hop passes, and
+`guardedRequest` checks again before DNS or connect. Tests: `test/unit/outbound-ports.test.ts`; `test/auth/cimd.test.ts` ›
+allows only port 443 unless host:port is listed (no DNS lookup happens); `test/tools/upload.test.ts` › "outbound ports"
+(refused and listed image URLs, redirect hops to unlisted ports refused and never sent, a listed hop followed, a signed PUT
+on an unlisted port never contacted).
+
 ### F-20 (Info, accepted): `synchronous=NORMAL`
 
 Under WAL, NORMAL can lose the last transactions on power loss (not on a process crash) but never corrupts the database. A
@@ -331,6 +381,11 @@ lost "running" marker means a step is sent again with the same idempotency key a
 
 The 10-minute project lookup is shared; if it fails, the error is recorded against the principal whose call triggered it.
 Cosmetic.
+
+**Status: fixed in v1.0.1** (`src/mcp/tools/bridge.ts`, `BRIDGE_INFO_LOOKUP_ORIGIN`). The lookup's `getProject` and
+`listMembers` reads run as the bridge's own work (origin kind `system`, no principal, P1), so their errors are recorded
+against `system`; the tool still checks that the caller has a principal and still reports the caller's profile and scope.
+Test: `test/tools/info.test.ts` › records the lookup's errors against the system principal (fails without the fix).
 
 ### F-22 (Info, pass): secrets in the git history
 
@@ -386,24 +441,24 @@ the SSRF guard (decimal, octal and hex IPv4 forms are normalised by the URL pars
 Verdicts: **Pass** (checked; nothing to change), **Pass after fixes** (the findings named were fixed), **Open** (a
 finding remains open, with its recommendation).
 
-| #   | Area                                                                             | Verdict           | Findings                           |
-| --- | -------------------------------------------------------------------------------- | ----------------- | ---------------------------------- |
-| 1   | The hand-written access-token check (ADR 0006)                                   | Pass              | F-24                               |
-| 2   | The OAuth server, redirect allowlists, CIMD/DCR leniency                         | Pass              | F-25 (F-19 open, Info)             |
-| 3   | Policy gate, approval token, visibility, tool enumeration                        | Pass after fixes  | F-02, F-04, F-07, F-12 (F-15 open) |
-| 4   | The hidden-tools mechanism                                                       | Pass after fixes  | F-11                               |
-| 5   | SSRF (CIMD fetch, image fetch, signed PUT)                                       | Pass              | F-07 (F-19 open, Info)             |
-| 6   | Dashboard and admin API                                                          | Pass after fixes  | F-01, F-08                         |
-| 7   | Secrets: history, logs, templates                                                | Pass after fixes  | F-22, F-26 (F-17 open)             |
-| 8   | `npm audit` and pinned versions                                                  | Open (no fix yet) | F-23                               |
-| 9   | Governor under load, after restarts, retries, parking                            | Pass, one open    | F-14 open; soak below              |
-| 10  | Crash-resume, verify, the unsupported-block guard, If-Match, createMany recovery | Pass after fixes  | F-03, F-06                         |
-| 11  | The proposal approval path end to end                                            | Pass after fixes  | F-02, F-04 (F-16 open)             |
-| 12  | Body limit against `UPLOAD_MAX_BYTES`                                            | Pass after fixes  | F-05                               |
-| 13  | Logging noise                                                                    | Pass after fixes  | F-09, F-26                         |
-| 14  | Env drift                                                                        | Pass after fixes  | F-10                               |
-| 15  | systemd hardening and memory                                                     | Pass              | F-18                               |
-| 16  | Graceful shutdown, backups and restore, rollback                                 | Pass after fixes  | F-13, F-20                         |
+| #   | Area                                                                             | Verdict           | Findings                     |
+| --- | -------------------------------------------------------------------------------- | ----------------- | ---------------------------- |
+| 1   | The hand-written access-token check (ADR 0006)                                   | Pass              | F-24                         |
+| 2   | The OAuth server, redirect allowlists, CIMD/DCR leniency                         | Pass              | F-25 (F-19 fixed in v1.0.1)  |
+| 3   | Policy gate, approval token, visibility, tool enumeration                        | Pass after fixes  | F-02, F-04, F-07, F-12, F-15 |
+| 4   | The hidden-tools mechanism                                                       | Pass after fixes  | F-11                         |
+| 5   | SSRF (CIMD fetch, image fetch, signed PUT)                                       | Pass after fixes  | F-07, F-19                   |
+| 6   | Dashboard and admin API                                                          | Pass after fixes  | F-01, F-08                   |
+| 7   | Secrets: history, logs, templates                                                | Pass after fixes  | F-22, F-26, F-17             |
+| 8   | `npm audit` and pinned versions                                                  | Open (no fix yet) | F-23                         |
+| 9   | Governor under load, after restarts, retries, parking                            | Pass after fixes  | F-14; soak below             |
+| 10  | Crash-resume, verify, the unsupported-block guard, If-Match, createMany recovery | Pass after fixes  | F-03, F-06                   |
+| 11  | The proposal approval path end to end                                            | Pass after fixes  | F-02, F-04, F-16             |
+| 12  | Body limit against `UPLOAD_MAX_BYTES`                                            | Pass after fixes  | F-05                         |
+| 13  | Logging noise                                                                    | Pass after fixes  | F-09, F-26                   |
+| 14  | Env drift                                                                        | Pass after fixes  | F-10                         |
+| 15  | systemd hardening and memory                                                     | Pass              | F-18                         |
+| 16  | Graceful shutdown, backups and restore, rollback                                 | Pass after fixes  | F-13, F-20                   |
 
 Notes per area, beyond the findings:
 
@@ -423,7 +478,7 @@ Notes per area, beyond the findings:
    decimal, octal and hex IPv4 forms are normalised by the WHATWG URL parser before the literal check; IPv4-mapped, NAT64,
    6to4, Teredo and every non-`2000::/3` IPv6 address are refused; CIMD follows no redirect, the image fetch at most 3,
    each re-checked; deadlines and byte caps on both; the PUT only to a host LegendKeeper named, with its error body
-   replaced. Ports are not restricted (F-19).
+   replaced. Ports were not restricted (F-19, fixed in v1.0.1: 443 only unless listed).
 6. **Dashboard.** `__Host-` cookie, HttpOnly, Secure, SameSite=Lax; state-changing requests need the bridge's own `Origin`
    and a session-bound HMAC token; cross-site requests are now refused (F-08); the CSP has no inline script or style;
    ADR 0014's `same-origin` referrer on the auth pages is sound (nothing is sent to other sites, and it is what makes the
@@ -436,13 +491,13 @@ Notes per area, beyond the findings:
 8. **Dependencies.** See F-23.
 9. **Governor.** The 1,000-call contract workload (published and tight limits, another key draining the project tier, an
    injected 429) never makes the mock refuse; every retry-matrix row and budget-wait parking (across restarts) is tested.
-   F-14 remains. The soak against the mock with the real pacing is in section 5.
+   F-14 was fixed in v1.0.1. The soak against the mock with the real pacing is in section 5.
 10. **Job engine.** Crash-resume verifies before re-sending per operation family; versioned writes always carry `If-Match`
     (the governor refuses one without it); `createManyResources` verifies every minted id and re-sends only the missing
     ones. The guard misses were F-03 and F-06.
 11. **Approval.** Compare-and-set transitions (double approval cannot run twice), a re-read of every target with conflict
     on any change, versions pinned as `If-Match`, crash reconciliation by the job's origin. A lowered scope mid-approval
-    does not stop owner-approved work (documented, kept). F-04 limited capture; F-16 is open.
+    does not stop owner-approved work (documented, kept). F-04 limited capture; F-16 was fixed in v1.0.1.
 12. **Body limit.** See F-05: the 1 MiB Fastify limit in the brief never applied to `/mcp`; the SDK's 4 MiB did.
 13. **Logging.** See F-09 and F-26.
 14. **Env drift.** See F-10.
@@ -514,9 +569,7 @@ Noted for later chunks; none was started here.
 
 - **Undo from the journal.** Now that every write is journalled with its target and pre-images are kept for destructive
   writes, a "restore this pre-image" owner action (a proposal the owner approves) is a small step.
-- **Persisted governor windows** (F-14).
-- **Proposal and stored-result retention jobs** (F-16), alongside `journal-prune`.
+- **Stored-result retention** alongside `journal-prune` (proposal retention is done: `proposal-prune`, v1.0.1, F-16).
 - **A per-agent activity view** on the dashboard, built on the journal's principal and profile filters: what Claude and
   ChatGPT each changed today.
 - **A tree index** (the deferred `tree-snapshot` job) would let the journal show page names, not only ids.
-- **Consent that keeps an existing profile's scope** (F-15), once the owner decides.

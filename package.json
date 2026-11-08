@@ -1,6 +1,6 @@
 {
   "name": "lk-bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "type": "module",
   "description": "LegendKeeper v3 API bridge with rate governor, job engine and MCP surface",

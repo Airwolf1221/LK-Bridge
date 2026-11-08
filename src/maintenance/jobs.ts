@@ -1,5 +1,5 @@
 /**
- * The maintenance job registry: four implemented jobs and four placeholders (PLAN §8 page 6, docs/maintenance.md).
+ * The maintenance job registry: five implemented jobs and four placeholders (PLAN §8 page 6, docs/maintenance.md).
  * A placeholder has no `run`, cannot be enabled and cannot be run. Its real logic is a later chunk's work.
  */
 import type { JobEngine } from '../jobs/index.js';
@@ -12,7 +12,9 @@ export interface BuiltinJobDeps {
   readonly engine: JobEngine;
   readonly lk: LkClient;
   readonly db: Db;
-  readonly proposals: Pick<ProposalService, 'expireDue'>;
+  readonly proposals: Pick<ProposalService, 'expireDue' | 'pruneFinished'>;
+  /** POLICY_PROPOSAL_RETENTION_DAYS in milliseconds: what `proposal-prune` keeps. */
+  readonly proposalRetentionMs: number;
   /** The proposal expiry sweep interval from the policy settings (POLICY_EXPIRY_SWEEP_SECONDS). */
   readonly expirySweepMs: number;
 }
@@ -99,6 +101,25 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
           summary:
             n === 0 ? 'No proposals had expired.' : `Expired ${n} ${n === 1 ? 'proposal' : 'proposals'}.`,
           changed: n > 0,
+        };
+      },
+    },
+    {
+      id: 'proposal-prune',
+      name: 'Proposal prune',
+      description: `Deletes executed, rejected, expired and failed proposals that finished more than ${Math.round(d.proposalRetentionMs / 86_400_000)} days ago, with their stored before-state. Pending and conflicted proposals are never deleted; jobs and journal entries keep the proposal id.`,
+      // Daily, a quarter of an hour after journal-prune, so the two never contend for the database.
+      defaultSchedule: { kind: 'daily', time: '03:45' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: false,
+      record: 'always',
+      run: () => {
+        const r = d.proposals.pruneFinished(d.proposalRetentionMs);
+        return {
+          summary: `Removed ${r.removed} finished ${r.removed === 1 ? 'proposal' : 'proposals'} that finished before ${new Date(r.cutoff).toISOString()}.`,
+          changed: r.removed > 0,
         };
       },
     },

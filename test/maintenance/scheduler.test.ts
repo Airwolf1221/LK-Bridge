@@ -43,13 +43,14 @@ function probe(over: Partial<MaintenanceJobDef> = {}) {
 }
 
 describe('the registry', () => {
-  it('lists the four implemented jobs and the four placeholders, with schedule, last run and next run', async () => {
+  it('lists the five implemented jobs and the four placeholders, with schedule, last run and next run', async () => {
     m = await maintenanceRig();
     const jobs = m.maintenance.scheduler.list();
     expect(jobs.map((j) => j.id)).toEqual([
       'budget-sampler',
       'journal-prune',
       'proposal-expiry',
+      'proposal-prune',
       'sqlite-optimise',
       'assign-block-ids-sweep',
       'tree-snapshot',
@@ -68,6 +69,13 @@ describe('the registry', () => {
     expect(view('journal-prune')).toMatchObject({ scheduleText: 'Daily at 03:30 (London time)' });
     expect(view('journal-prune').nextRunAt).toBe(nextDailyRun(now, '03:30'));
     expect(view('proposal-expiry').scheduleText).toBe('Every 5 minutes');
+    // v1.0.1: daily, at a different time from journal-prune.
+    expect(view('proposal-prune')).toMatchObject({
+      implemented: true,
+      enabled: true,
+      scheduleText: 'Daily at 03:45 (London time)',
+    });
+    expect(view('proposal-prune').nextRunAt).toBe(nextDailyRun(now, '03:45'));
     expect(view('sqlite-optimise').scheduleText).toBe('Weekly');
     for (const id of ['assign-block-ids-sweep', 'tree-snapshot', 'orphan-and-link-audit', 'tag-audit']) {
       expect(view(id)).toMatchObject({
@@ -475,6 +483,6 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(8);
+    expect(m.maintenance.scheduler.list()).toHaveLength(9);
   });
 });

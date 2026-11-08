@@ -11,6 +11,13 @@
 : "${LKB_ENV_FILE:=/etc/lk-bridge/lk-bridge.env}"
 : "${LKB_DATA_DIR:=/var/lib/lk-bridge}"
 : "${LKB_SERVICE:=lk-bridge}"
+: "${LKB_RUNTIME_DIR:=${LKB_ROOT}/runtime}"
+: "${LKB_APP_DIR:=${LKB_ROOT}/app}"
+: "${LKB_BIN_DIR:=${LKB_ROOT}/bin}"
+# v1.0.1 (ADR 0020): two users. LKB_BUILD_USER owns the checkout and builds it, and cannot read the secrets;
+# LKB_SERVICE_USER runs the bridge, reads the env file and the app, and writes only the data directory.
+: "${LKB_BUILD_USER:=lkbuild}"
+: "${LKB_SERVICE_USER:=lkbridge}"
 
 log() { printf '%s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
@@ -85,4 +92,79 @@ env_drift_report() {
   done < <(comm -13 <(env_names "$template") <(env_names "$live" active))
   if ((count == 0)); then log "Env file matches deploy/env.template (names only checked)."; fi
   return 0
+}
+
+# ------------------------------------------------------------------------------------- permissions (v1.0.1, ADR 0020)
+
+# lkb_user_can USER r|w|x PATH: succeeds when USER would be allowed to read, write or execute (search) PATH, judged from
+# owners, groups and mode bits along the whole path (every parent directory needs search permission). Needs no
+# privileges, so the health check can run it as the service user. It does not know about ACLs: lkb_has_acl says whether
+# one is present, and callers treat that as "check by hand". Root is not special-cased; do not ask about root.
+lkb_user_can() {
+  local user="$1" want="$2" path="$3" uid groups
+  uid="$(id -u "$user" 2>/dev/null)" || return 1
+  groups=" $(id -G "$user" 2>/dev/null) "
+  local p="$path" parts=() dir
+  # The parents, from / down, each need x; the target needs the asked-for bit.
+  dir="$(dirname -- "$p")"
+  while [[ "$dir" != "/" && "$dir" != "." ]]; do
+    parts=("$dir" "${parts[@]}")
+    dir="$(dirname -- "$dir")"
+  done
+  local d
+  for d in "${parts[@]}"; do
+    _lkb_bit "$uid" "$groups" x "$d" || return 1
+  done
+  _lkb_bit "$uid" "$groups" "$want" "$p"
+}
+
+# _lkb_bit UID " GIDS " r|w|x PATH: the one permission class (owner, group or other) that applies to UID, as the kernel
+# chooses it (the first that matches, not the most generous).
+_lkb_bit() {
+  local uid="$1" groups="$2" want="$3" path="$4" st owner group mode bits
+  st="$(stat -L -c '%u %g %a' -- "$path" 2>/dev/null)" || return 1
+  read -r owner group mode <<<"$st"
+  mode=$((8#$mode))
+  if [[ "$owner" == "$uid" ]]; then
+    bits=$(((mode >> 6) & 7))
+  elif [[ "$groups" == *" ${group} "* ]]; then
+    bits=$(((mode >> 3) & 7))
+  else
+    bits=$((mode & 7))
+  fi
+  case "$want" in
+    r) ((bits & 4)) ;;
+    w) ((bits & 2)) ;;
+    x) ((bits & 1)) ;;
+    *) return 1 ;;
+  esac
+}
+
+# lkb_has_acl PATH: succeeds when PATH carries a POSIX ACL (ls shows a "+" after the mode), which mode bits do not show.
+lkb_has_acl() {
+  if command -v getfacl >/dev/null 2>&1; then
+    [[ -n "$(getfacl --skip-base --absolute-names -- "$1" 2>/dev/null)" ]]
+    return
+  fi
+  local m
+  # shellcheck disable=SC2012 # one known path; only the mode column is read
+  m="$(ls -ld -- "$1" 2>/dev/null | awk '{print $1}')"
+  [[ "$m" == *+ ]]
+}
+
+# lkb_in_group USER GROUP: succeeds when USER is a member of GROUP (primary or supplementary).
+lkb_in_group() {
+  local g
+  for g in $(id -Gn "$1" 2>/dev/null); do [[ "$g" == "$2" ]] && return 0; done
+  return 1
+}
+
+# lkb_writable_by USER DIR: prints the first path under DIR (DIR included) that USER could write by its mode bits, or
+# nothing. Owned by USER, or group-writable by one of USER's groups, or writable by anyone. Symlinks are not followed.
+lkb_writable_by() {
+  local user="$1" dir="$2" uid g expr=()
+  uid="$(id -u "$user" 2>/dev/null)" || return 0
+  expr=(-uid "$uid" -o -perm -o+w)
+  for g in $(id -G "$user"); do expr+=(-o \( -gid "$g" -perm -g+w \)); done
+  find "$dir" \( -type f -o -type d \) \( "${expr[@]}" \) -print -quit 2>/dev/null
 }

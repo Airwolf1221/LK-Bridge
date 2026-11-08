@@ -1,15 +1,24 @@
 # Deployment runbook: lk.ottomoons.co.uk
 
 Step by step, for **this** server: Ubuntu 24.04 LTS, Caddy already installed and serving other sites, the system Node
-left alone. Design reasons are in [ADR 0015](adr/0015-deployment-layout.md); what the bridge does once it is up is in
-[PLAN §9](PLAN.md) and [auth-live-checklist.md](auth-live-checklist.md).
+left alone. Design reasons are in [ADR 0015](adr/0015-deployment-layout.md) and, for the separate build user (v1.0.1),
+[ADR 0020](adr/0020-separate-build-user.md); what the bridge does once it is up is in [PLAN §9](PLAN.md) and
+[auth-live-checklist.md](auth-live-checklist.md).
+
+> **Upgrading a server that already runs 1.0.0?** Do not follow the fresh-install steps. Go to
+> [Migrating an existing install to v1.0.1](#migrating-an-existing-install-to-v101).
+
+**Two users (v1.0.1).** `lkbuild` owns the checkout and builds it; it cannot read the secrets or the database.
+`lkbridge` runs the service; it reads the secrets and the app and writes only `/var/lib/lk-bridge`, never the app. The
+deploy runs as root from a root-owned copy (`sudo /opt/lk-bridge/bin/deploy.sh`) and drops to the right user for each
+step.
 
 ## How to read this
 
-- **🔒 sudo** marks every command that needs `sudo` (including `sudo -u lkbridge …`, which is `sudo` too). A block with
-  no mark runs as any user and changes nothing.
+- **🔒 sudo** marks every command that needs `sudo` (including `sudo -u lkbridge …` and `sudo -u lkbuild …`, which are
+  `sudo` too). A block with no mark runs as any user and changes nothing.
 - Commands run as your administrator account unless a block says otherwise. `sudo -u lkbridge` runs a command as the
-  service user.
+  service user, `sudo -u lkbuild` as the build user.
 - **✋ Owner** marks a step only you can do: it involves a secret, a password, or an account on GitHub, LegendKeeper,
   Claude or ChatGPT. If a Claude Code session is following this runbook for you, it must stop at those steps and let you
   do them. **Never paste an API key, a secret or the owner password into a chat or a command line**; secrets go into the
@@ -18,19 +27,22 @@ left alone. Design reasons are in [ADR 0015](adr/0015-deployment-layout.md); wha
 
 ## The order, in one list
 
-Prerequisites (DNS, packages, checks) → user and directories → deploy key and clone → private Node → first build →
-env file ✋ → `setup:owner` ✋ → systemd units and the sudo rule → start and check locally → Caddy block → health check →
-sandbox script ✋ → connect Claude and ChatGPT ✋ → go live ✋. These are sections 1 to 14 below, in that order.
+Prerequisites (DNS, packages, checks) → users and directories → deploy key and clone → private Node → first build →
+env file ✋ → `setup:owner` ✋ → systemd units, the sudo rule and the deploy script → start and check locally → Caddy
+block → health check → sandbox script ✋ → connect Claude and ChatGPT ✋ → go live ✋. These are sections 1 to 14 below,
+in that order.
 
 Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), [rollback](#rollback),
 [logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the browser smoke test](#browser-smoke-test),
-[memory](#memory).
+[memory](#memory), [migrating an existing install to v1.0.1](#migrating-an-existing-install-to-v101).
 
 ## What is where
 
 | Path                                     | What                                                                                   | Owner / mode          |
 | ---------------------------------------- | -------------------------------------------------------------------------------------- | --------------------- |
-| `/opt/lk-bridge/app`                     | the git checkout and build output                                                      | `lkbridge`, 0755      |
+| `/opt/lk-bridge`                         | the three directories below                                                            | `root`, 0755          |
+| `/opt/lk-bridge/app`                     | the git checkout and build output; readable by all, writable only by `lkbuild`         | `lkbuild`, 0755       |
+| `/opt/lk-bridge/bin`                     | the installed `deploy.sh` and `lib.sh`, run as root (v1.0.1)                           | `root`, 0755          |
 | `/opt/lk-bridge/runtime/node`            | symlink to the private Node 24 (`node-v24.x.y-linux-x64` beside it)                    | `root`, 0755          |
 | `/var/lib/lk-bridge`                     | `bridge.db` and its WAL files; the only place the service may write                    | `lkbridge`, **0700**  |
 | `/var/lib/lk-bridge/backups`             | `nightly-*.db.gz` (newest 14) and `pre-deploy-*.db.gz` (newest 5)                      | `lkbridge`, 0700      |
@@ -39,12 +51,16 @@ Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), 
 | `/etc/systemd/system/lk-bridge-backup.*` | the nightly backup service and timer                                                   | `root`, 0644          |
 | `/etc/sudoers.d/lk-bridge`               | lets `lkbridge` start, stop, restart and show the status of `lk-bridge` — nothing else | `root`, 0440          |
 | `/etc/caddy/Caddyfile`                   | one block appended                                                                     | unchanged otherwise   |
-| `/home/lkbridge/.ssh`                    | the read-only GitHub deploy key                                                        | `lkbridge`, 0700      |
+| `/home/lkbuild/.ssh`                     | the read-only GitHub deploy key (v1.0.1; it was in `/home/lkbridge/.ssh` before)       | `lkbuild`, 0700       |
+| `/home/lkbuild`, `/home/lkbridge`        | the users' homes (npm cache, SSH config); neither can read the other's                 | each its own, 0750    |
+
+`lkbuild` has no login shell, no password and no sudo rights, and is not in group `lkbridge`.
 
 The scripts, all in `deploy/`: `install-node.sh`, `deploy.sh`, `backup.sh`, `restore.sh` (chunk 8), `healthcheck.sh`,
-`lk-run.sh` (runs a command with the private Node and `DB_PATH` set), `sandbox-test.sh`, `soak-sandbox.sh` (chunk 8), plus
-`lib.sh` (shared helpers) and the files the steps install: `lk-bridge.service`, `lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`,
-`sudoers.lk-bridge`, `env.template`.
+`lk-run.sh` (runs a command with the private Node and `DB_PATH` set), `sandbox-test.sh`, `soak-sandbox.sh` (chunk 8),
+`migrate-to-build-user.sh` (v1.0.1, once), plus `lib.sh` (shared helpers) and the files the steps install:
+`lk-bridge.service`, `lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`, `sudoers.lk-bridge`,
+`env.template`. `deploy.sh` and `lib.sh` are also installed into `/opt/lk-bridge/bin` (step 8).
 
 ---
 
@@ -76,6 +92,7 @@ systemctl is-active caddy                     # active
 sudo -u caddy caddy validate --config /etc/caddy/Caddyfile   # must pass BEFORE we touch it  (🔒 sudo)
 sudo ss -ltnp | grep -E ':(80|443|8787)\s'    # 80 and 443 belong to caddy; nothing may be on 8787  (🔒 sudo)
 id lkbridge 2>&1 | head -1                    # "no such user" is what we want
+id lkbuild 2>&1 | head -1                     # the same
 df -h /opt /var | cat                         # a few hundred MB free is plenty
 timedatectl | grep -i synchronized            # "System clock synchronized: yes" (tokens and TOTP depend on it)
 ```
@@ -85,21 +102,27 @@ If `caddy validate` already fails, stop: fix that first, or you will not know wh
 `npm ci` installs two native modules, `better-sqlite3` and `argon2`. Both normally arrive prebuilt; if step 5 fails with
 `node-gyp` or compiler errors, install the build tools (`sudo apt install -y build-essential python3`) and run it again.
 
-## 2. The user and the directories
+## 2. The users and the directories
 
 🔒 sudo
 
 ```bash
 sudo useradd --system --create-home --home-dir /home/lkbridge --shell /bin/bash --user-group lkbridge
+sudo useradd --system --create-home --home-dir /home/lkbuild --shell /usr/sbin/nologin --user-group lkbuild
+sudo chmod 0750 /home/lkbridge /home/lkbuild
 
-sudo install -d -o root     -g root     -m 0755 /opt/lk-bridge /opt/lk-bridge/runtime
-sudo install -d -o lkbridge -g lkbridge -m 0755 /opt/lk-bridge/app
+sudo install -d -o root     -g root     -m 0755 /opt/lk-bridge /opt/lk-bridge/runtime /opt/lk-bridge/bin
+sudo install -d -o lkbuild  -g lkbuild  -m 0755 /opt/lk-bridge/app
 sudo install -d -o lkbridge -g lkbridge -m 0700 /var/lib/lk-bridge /var/lib/lk-bridge/backups
 sudo install -d -o root     -g lkbridge -m 0750 /etc/lk-bridge
+
+id lkbuild                                     # groups: lkbuild only — never lkbridge, sudo or adm
 ```
 
-The service needs `/var/lib/lk-bridge` to exist before it starts (the unit's `ReadWritePaths=` points at it). The
-`lkbridge` account has no password and no way to log in remotely; you reach it only through `sudo -u lkbridge`.
+The service needs `/var/lib/lk-bridge` to exist before it starts (the unit's `ReadWritePaths=` points at it). Neither
+account has a password or a way to log in remotely; you reach them only through `sudo -u lkbridge` and `sudo -u lkbuild`.
+`lkbuild` owns the checkout and builds it; it is deliberately **not** in group `lkbridge`, so it cannot read
+`/etc/lk-bridge` or `/var/lib/lk-bridge` ([ADR 0020](adr/0020-separate-build-user.md)).
 
 Run the commands in the rest of this runbook from a directory the service user can read, for example:
 
@@ -109,14 +132,14 @@ cd /opt/lk-bridge
 
 ## 3. The deploy key and the clone
 
-The repository is private. The server reads it over SSH with a **read-only deploy key** that belongs to `lkbridge`.
+The repository is private. The server reads it over SSH with a **read-only deploy key** that belongs to `lkbuild`.
 
 🔒 sudo
 
 ```bash
-sudo -u lkbridge install -d -m 0700 /home/lkbridge/.ssh
-sudo -u lkbridge ssh-keygen -t ed25519 -N '' -C 'lk-bridge deploy key (lk.ottomoons.co.uk)' -f /home/lkbridge/.ssh/lk_bridge_deploy
-sudo cat /home/lkbridge/.ssh/lk_bridge_deploy.pub        # the PUBLIC half; safe to copy
+sudo -u lkbuild install -d -m 0700 /home/lkbuild/.ssh
+sudo -u lkbuild ssh-keygen -t ed25519 -N '' -C 'lk-bridge deploy key (lk.ottomoons.co.uk)' -f /home/lkbuild/.ssh/lk_bridge_deploy
+sudo cat /home/lkbuild/.ssh/lk_bridge_deploy.pub        # the PUBLIC half; safe to copy
 ```
 
 **✋ Owner:** on GitHub open the repository → _Settings → Deploy keys → Add deploy key_. Title it
@@ -127,16 +150,16 @@ Tell SSH to use that key for github.com, and pin GitHub's host key after checkin
 🔒 sudo
 
 ```bash
-sudo -u lkbridge tee /home/lkbridge/.ssh/config >/dev/null <<'EOF'
+sudo -u lkbuild tee /home/lkbuild/.ssh/config >/dev/null <<'EOF'
 Host github.com
     HostName github.com
     User git
     IdentityFile ~/.ssh/lk_bridge_deploy
     IdentitiesOnly yes
 EOF
-sudo -u lkbridge chmod 0600 /home/lkbridge/.ssh/config
+sudo -u lkbuild chmod 0600 /home/lkbuild/.ssh/config
 
-sudo -u lkbridge sh -c 'ssh-keyscan -t ed25519 github.com > /home/lkbridge/.ssh/known_hosts.candidate 2>/dev/null && ssh-keygen -lf /home/lkbridge/.ssh/known_hosts.candidate'
+sudo -u lkbuild sh -c 'ssh-keyscan -t ed25519 github.com > /home/lkbuild/.ssh/known_hosts.candidate 2>/dev/null && ssh-keygen -lf /home/lkbuild/.ssh/known_hosts.candidate'
 ```
 
 The line printed must contain GitHub's published ed25519 fingerprint, `SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`.
@@ -144,14 +167,14 @@ Confirm it against <https://docs.github.com/en/authentication/keeping-your-accou
 (do not trust this page alone). If it matches:
 
 ```bash
-sudo -u lkbridge mv /home/lkbridge/.ssh/known_hosts.candidate /home/lkbridge/.ssh/known_hosts
-sudo -u lkbridge ssh -T git@github.com       # "Hi Airwolf1221/LK-Bridge! You've successfully authenticated, but GitHub does not provide shell access."
-sudo -u lkbridge git clone git@github.com:Airwolf1221/LK-Bridge.git /opt/lk-bridge/app
-sudo -u lkbridge git -C /opt/lk-bridge/app log --oneline -3
+sudo -u lkbuild mv /home/lkbuild/.ssh/known_hosts.candidate /home/lkbuild/.ssh/known_hosts
+sudo -u lkbuild ssh -T git@github.com       # "Hi Airwolf1221/LK-Bridge! You've successfully authenticated, but GitHub does not provide shell access."
+sudo -u lkbuild sh -c 'umask 022 && git clone git@github.com:Airwolf1221/LK-Bridge.git /opt/lk-bridge/app'
+sudo -u lkbuild git -C /opt/lk-bridge/app log --oneline -3
 ```
 
-The checkout is on `main`. (Before this chunk is merged, clone with `--branch chunk-7a-deploy` and prefix
-`DEPLOY_BRANCH=chunk-7a-deploy` to the `deploy.sh` commands.)
+The checkout is on `main`. (To deploy another branch, clone with `--branch <name>` and prefix `DEPLOY_BRANCH=<name>` to
+the `deploy.sh` commands.)
 
 ## 4. The private Node 24
 
@@ -173,15 +196,16 @@ release signature checked, verify `SHASUMS256.txt.sig` against the Node.js relea
 
 ## 5. The first build
 
-🔒 sudo (as `lkbridge`)
+🔒 sudo (as `lkbuild`, with an empty environment, exactly as `deploy.sh` does it later)
 
 ```bash
-sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm ci
-sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run build
+sudo -u lkbuild env -i HOME=/home/lkbuild PATH=/opt/lk-bridge/runtime/node/bin:/usr/bin:/bin \
+  bash -c 'umask 022 && cd /opt/lk-bridge/app && npm ci --no-audit --no-fund && npm run build'
 ls /opt/lk-bridge/app/dist/server.js /opt/lk-bridge/app/ui/dist/index.html
 ```
 
-`lk-run.sh` puts the private Node first on `PATH` and runs the command in the app directory.
+`env -i` starts from an empty environment, so nothing from your shell reaches the build; `umask 022` keeps everything
+it writes readable by `lkbridge` and writable only by `lkbuild`.
 
 ## 6. The env file ✋
 
@@ -218,6 +242,7 @@ Check that nothing required is still blank, **without printing any value**:
 sudo grep -E '^(LK_API_KEY|LK_PROJECT_ID|SESSION_SECRET|JWT_SIGNING_KEY|OWNER_PASSWORD_HASH)=$' /etc/lk-bridge/lk-bridge.env
 # prints only the names still empty (OWNER_PASSWORD_HASH is expected until step 7); prints nothing when all are set
 sudo -u lkbridge test -r /etc/lk-bridge/lk-bridge.env && echo "lkbridge can read it"
+sudo -u lkbuild test -r /etc/lk-bridge/lk-bridge.env && echo "WRONG: lkbuild must not read it" || echo "good: lkbuild cannot read it"
 ```
 
 ## 7. The owner password ✋
@@ -236,7 +261,7 @@ TOTP) into the env file with `sudoedit`, replacing the blank `OWNER_PASSWORD_HAS
 Keep the password and the TOTP secret in your password manager; the bridge cannot recover them, only replace them
 (run this step again).
 
-## 8. systemd units and the sudo rule
+## 8. systemd units, the sudo rule and the deploy script
 
 🔒 sudo
 
@@ -260,6 +285,21 @@ sudo -u lkbridge sudo -n /usr/bin/systemctl restart caddy && echo "WRONG: this m
 If `visudo -cf` reports an error, remove the `.new` file (`sudo rm /etc/sudoers.d/lk-bridge.new`) and stop; a broken file
 in `/etc/sudoers.d` can lock you out of `sudo`.
 
+`lkbuild` gets **no** sudo rule. Check:
+
+```bash
+sudo sudo -l -U lkbuild                # "User lkbuild is not allowed to run sudo on …"
+```
+
+Then install the deploy script where only root can change it (v1.0.1). It runs as root, so it must never be run from
+the checkout, which `lkbuild` can change; it refuses to.
+
+```bash
+sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/deploy.sh /opt/lk-bridge/bin/deploy.sh
+sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/lib.sh /opt/lk-bridge/bin/lib.sh
+ls -l /opt/lk-bridge/bin                # both root root, neither group- nor world-writable
+```
+
 ## 9. Start it and check it locally
 
 🔒 sudo
@@ -268,7 +308,7 @@ in `/etc/sudoers.d` can lock you out of `sudo`.
 sudo systemctl enable --now lk-bridge
 sudo systemctl status lk-bridge --no-pager
 sudo journalctl -u lk-bridge -n 40 --no-pager
-curl -s http://127.0.0.1:8787/healthz           # {"ok":true,"version":"1.0.0"}
+curl -s http://127.0.0.1:8787/healthz           # {"ok":true,"version":"1.0.1"}
 sudo systemctl enable --now lk-bridge-backup.timer
 systemctl list-timers lk-bridge-backup.timer --no-pager
 ```
@@ -337,9 +377,13 @@ as shipped imports nothing. If you ever need to undo this step, restore the back
 sudo -u lkbridge /opt/lk-bridge/app/deploy/healthcheck.sh        # 🔒 sudo
 ```
 
-Expected: six lines starting `PASS` and `All checks passed.`:
+Expected: twelve lines starting `PASS` and `All checks passed.`:
 
 - the bridge answers on `127.0.0.1:8787/healthz`;
+- six permission checks (v1.0.1): `lkbuild exists and is not in group lkbridge`, `lkbuild cannot read the secrets`,
+  `lkbuild cannot read the database`, `lkbridge cannot write the app`, `lkbridge can read the app and the env file`,
+  `the private Node … is root's and writable by neither user`. A FAIL names the path and the fix; an ACL on
+  `/etc/lk-bridge` or `/var/lib/lk-bridge` is a FAIL too (check it by hand with `getfacl`);
 - `POST https://lk.ottomoons.co.uk/mcp` gives **401** (not a redirect) with exactly
   `WWW-Authenticate: Bearer resource_metadata="https://lk.ottomoons.co.uk/.well-known/oauth-protected-resource/mcp"`;
 - `/mcp/` does not redirect either;
@@ -424,32 +468,38 @@ Follows PLAN §9.7. The bridge starts read-only (`LK_READ_ONLY=true`, `WRITERS_M
 
 ## Updating
 
-As the service user, from anywhere:
+As root, from the installed copy (v1.0.1; `sudo -u lkbridge …/deploy.sh` was the 1.0.0 way and now refuses):
 
 ```bash
-sudo -u lkbridge /opt/lk-bridge/app/deploy/deploy.sh          # 🔒 sudo
+sudo /opt/lk-bridge/bin/deploy.sh          # 🔒 sudo
 ```
 
-What it does, in order (it stops at the first problem and says what to do):
+Root only orchestrates; every step runs as the user it needs, with an empty environment (`runuser … env -i`): git,
+`npm ci` and the build as **`lkbuild`**; the backup, the migrations and the health check as **`lkbridge`**; the stop and
+start through `lkbridge`'s sudo rule. What it does, in order (it stops at the first problem and says what to do):
 
-1. **Pre-flight, nothing changed yet:** it is not root, the private Node is present, the env file is readable (and, by
-   variable **name** only, whether it has drifted from `deploy/env.template`: see below), the checkout has **no local
-   changes or untracked files** (otherwise it refuses and lists them), the sudo rule works, and
-   `origin/main` is a **fast-forward** of what is checked out (otherwise it refuses). If there is nothing new it says so and
-   exits (`--force` redeploys anyway).
-2. **Drains and stops** the service: `sudo systemctl stop lk-bridge`. This is the drain. SIGTERM makes the bridge stop
+1. **Pre-flight, nothing changed yet:** it runs as root from `/opt/lk-bridge/bin` (root's, not writable by others), both
+   users exist, `lkbuild` owns the app, is not in group `lkbridge` and **cannot read the env file**, the private Node is
+   root's, `lkbridge` can read the env file (and, by variable **name** only, whether it has drifted from
+   `deploy/env.template`: see below), the checkout has **no local changes or untracked files** (otherwise it refuses and
+   lists them), the sudo rule works, and `origin/main` is a **fast-forward** of what is checked out (otherwise it
+   refuses). If there is nothing new it says so and exits (`--force` redeploys anyway).
+2. **Drains and stops** the service: `systemctl stop lk-bridge` (as `lkbridge`, through sudo). This is the drain. SIGTERM makes the bridge stop
    taking new work and give running jobs up to 20 seconds to finish; the unit allows 45 seconds before killing it. A job
    still unfinished then is picked up again by the engine's start-up recovery when the service starts. (The admin API could
    drain without stopping, but it accepts only your browser session and a script has none; see ADR 0015. For a gentler
    hand-over, press _Drain_ on the dashboard's Writers page before you start.)
-3. Takes a **`pre-deploy` backup** of the database (kept: the newest 5).
-4. `git merge --ff-only`, `npm ci`, `npm run build`, then the **database migrations**.
-5. **Starts** the service (`sudo systemctl start lk-bridge`) and waits up to 60 seconds for `/healthz`.
-6. Runs `healthcheck.sh` and prints **`DEPLOY SUCCEEDED`** or **`DEPLOY FAILED`**.
+3. Takes a **`pre-deploy` backup** of the database (kept: the newest 5), as `lkbridge`.
+4. As `lkbuild`: `git merge --ff-only`, `npm ci`, `npm run build`; then checks that **nothing in the app is writable by
+   `lkbridge`**. As `lkbridge`: the **database migrations**.
+5. **Starts** the service (as `lkbridge`, through sudo) and waits up to 60 seconds for `/healthz`.
+6. Runs `healthcheck.sh` as `lkbridge` (with the permission checks) and prints **`DEPLOY SUCCEEDED`** or
+   **`DEPLOY FAILED`**.
 
 Expect about a minute of downtime. If a step fails **before the checkout changes** (a dirty tree, a failed backup), the
 previous version is started again for you. If it fails after, the service stays **stopped** and the message gives the exact
-rollback command.
+rollback command. If only a check **after** the start fails (the health check), the new version keeps running and the
+message says so.
 
 Options: `--current` (deploy the checked-out commit without fetching; used for rollback), `--force`, `--local-health`
 (skip the public checks).
@@ -460,9 +510,17 @@ not; an optional setting a release added (the template shows it as `# NAME=…`;
 the file in step); and a variable your file still sets that the template no longer lists (the bridge ignores it; remove the
 line). When everything matches it says `Env file matches deploy/env.template`.
 
-The unit files, the sudoers file and the Caddy block are **not** updated by `deploy.sh`. If a release changes one, the
-script warns after a successful deploy ("installed unit differs from deploy/…"); an administrator then repeats step 8
-(and `sudo systemctl restart lk-bridge`) or step 10 for that file. To upgrade Node: `sudo NODE_VERSION=v24.x.y
+The unit files, the sudoers file, the Caddy block and the installed deploy script are **not** updated by `deploy.sh`. If
+a release changes one, the script warns after a successful deploy ("… differs from deploy/…"); an administrator then
+repeats step 8 (and `sudo systemctl restart lk-bridge`) or step 10 for that file. For the deploy script itself, **read
+the difference first**, because it runs as root:
+
+````bash
+diff /opt/lk-bridge/bin/deploy.sh /opt/lk-bridge/app/deploy/deploy.sh
+diff /opt/lk-bridge/bin/lib.sh /opt/lk-bridge/app/deploy/lib.sh
+sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/deploy.sh /opt/lk-bridge/bin/deploy.sh   # 🔒 sudo
+sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/lib.sh /opt/lk-bridge/bin/lib.sh         # 🔒 sudo
+``` To upgrade Node: `sudo NODE_VERSION=v24.x.y
 /opt/lk-bridge/app/deploy/install-node.sh`, then `sudo systemctl restart lk-bridge`.
 
 ## Backups and restore
@@ -478,7 +536,7 @@ script warns after a successful deploy ("installed unit differs from deploy/…"
   sudo journalctl -u lk-bridge-backup -n 20 --no-pager
   sudo ls -lh /var/lib/lk-bridge/backups/
   sudo systemctl start lk-bridge-backup.service        # a backup right now
-  ```
+````
 
 - **Off the server:** the backups sit on the same disk as the database. Copy them somewhere else now and then, from your
   own computer: `scp` or `rsync` of `/var/lib/lk-bridge/backups/` (they are readable only by `lkbridge` and root, so copy
@@ -513,14 +571,16 @@ script warns after a successful deploy ("installed unit differs from deploy/…"
 Each deploy prints the previous commit. To go back (🔒 sudo):
 
 ```bash
-sudo -u lkbridge git -C /opt/lk-bridge/app log --oneline -10                  # find the commit to return to
-sudo -u lkbridge git -C /opt/lk-bridge/app checkout --detach <commit>
-sudo -u lkbridge /opt/lk-bridge/app/deploy/deploy.sh --current --force
+sudo -u lkbuild git -C /opt/lk-bridge/app log --oneline -10                  # find the commit to return to
+sudo -u lkbuild git -C /opt/lk-bridge/app checkout --detach <commit>
+sudo /opt/lk-bridge/bin/deploy.sh --current --force
 ```
 
 This builds and starts exactly that commit, with the same drain, backup and health checks. To move forward again:
-`sudo -u lkbridge git -C /opt/lk-bridge/app checkout main`, then run `deploy.sh` as usual (while the checkout is on a
-detached commit, plain `deploy.sh` refuses and says why).
+`sudo -u lkbuild git -C /opt/lk-bridge/app checkout main`, then run `deploy.sh` as usual (while the checkout is on a
+detached commit, plain `deploy.sh` refuses and says why). The installed copy in `/opt/lk-bridge/bin` is the one that
+runs, so rolling back to a commit from before v1.0.1 still deploys with the two users; that release's health check simply
+has no permission checks.
 
 **Migrations are not reversed.** If the release you are leaving changed the database schema, an older build may refuse to
 start on it. Then restore the `pre-deploy-…` backup taken just before that release (see "Restore"; changes made since
@@ -529,6 +589,10 @@ are lost), and deploy the older commit.
 Release 1.0.0 (chunk 8) adds one migration, `0201_journal_every_write.sql`: new indexes and one new table, nothing
 removed or renamed. An older build runs on a 1.0.0 database unchanged (it ignores the table and indexes), so rolling
 back from 1.0.0 needs **no** restore; the journal entries 1.0.0 wrote for non-destructive writes simply stay.
+
+Release 1.0.1 adds one migration, `0500_governor_counters.sql`: one new table (the governor's saved counts), nothing
+removed or renamed. 1.0.0 ignores it, so rolling back from 1.0.1 needs **no** restore either. (1.0.1's
+`proposal-prune` job deletes old finished proposals; a rollback does not bring them back.)
 
 ## Logs and useful commands
 
@@ -558,14 +622,16 @@ Caddy's own log goes to its journal. The bridge's request log keeps paths only (
 probing `/info.php`, `/actuator/env`, `/wp-login.php`…) get a plain 404 and are logged at **debug** only, so they do not
 appear with the default `LOG_LEVEL=info` (chunk 8). Auth events keep their levels.
 
-| Symptom                                                   | Look at                                                                                              |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `502` from the public URL                                 | the bridge is down: `systemctl status lk-bridge`, then its journal                                   |
-| Certificate error on the new name                         | DNS not pointing here yet, or ports 80/443 blocked: `journalctl -u caddy`                            |
-| Claude cannot connect, "redirect" or "401 without header" | `healthcheck.sh` (a failing line names the cause); then checklist section 1                          |
-| Everyone locked out of sign-in at once                    | the log shows `127.0.0.1` as the client: `TRUST_PROXY` or Caddy's forwarding (checklist 1.7)         |
-| Dashboard live data stalls                                | something is buffering `/api/admin/stream`: the Caddy block must be exactly as shipped (no `encode`) |
-| `deploy.sh` says the checkout has local changes           | something edited files under `/opt/lk-bridge/app`; `git status`, then `git restore`/remove them      |
+| Symptom                                                      | Look at                                                                                                                                         |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `502` from the public URL                                    | the bridge is down: `systemctl status lk-bridge`, then its journal                                                                              |
+| Certificate error on the new name                            | DNS not pointing here yet, or ports 80/443 blocked: `journalctl -u caddy`                                                                       |
+| Claude cannot connect, "redirect" or "401 without header"    | `healthcheck.sh` (a failing line names the cause); then checklist section 1                                                                     |
+| Everyone locked out of sign-in at once                       | the log shows `127.0.0.1` as the client: `TRUST_PROXY` or Caddy's forwarding (checklist 1.7)                                                    |
+| Dashboard live data stalls                                   | something is buffering `/api/admin/stream`: the Caddy block must be exactly as shipped (no `encode`)                                            |
+| `deploy.sh` says the checkout has local changes              | something edited files under `/opt/lk-bridge/app`; `sudo -u lkbuild git -C /opt/lk-bridge/app status`, then restore or remove them as `lkbuild` |
+| `deploy.sh` says "Run this as root, from the installed copy" | since v1.0.1: `sudo /opt/lk-bridge/bin/deploy.sh` (not `sudo -u lkbridge …`, not the copy in the checkout)                                      |
+| a health-check permission line FAILs                         | it names the path and the fix; then run the health check again                                                                                  |
 
 ## Soak test ✋
 
@@ -583,7 +649,8 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh                   # t
 ```
 
 - It needs `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID` in the env file (step 6), reads only those two, and prints
-  neither. It **refuses** unless the key's own project (from `listProjects`) is exactly `LK_SANDBOX_PROJECT_ID`.
+  neither. Note (ADR 0020): this and `sandbox-test.sh` still run Vitest and tsx (development tools) as `lkbridge`, which
+  can read the whole env file; run them only when you mean to. It **refuses** unless the key's own project (from `listProjects`) is exactly `LK_SANDBOX_PROJECT_ID`.
 - **While the bridge itself serves the test world** (PLAN amendment 6), `LK_SANDBOX_PROJECT_ID` equals `LK_PROJECT_ID`,
   and the wrapper refuses unless you add `--allow-bridge-project`. Use it only while that is still the test world, and run
   the soak while nothing else is using the bridge: the soak and the bridge then share the key's rate budget, so a busy
@@ -634,3 +701,122 @@ ps -o rss=,vsz= -p "$(systemctl show lk-bridge -p MainPID --value)"             
 If `MemoryPeak` over a busy week stays below about 300 MB, the values can be tightened to `MemoryHigh=500M`,
 `MemoryMax=640M` and `--max-old-space-size=400`; there is no need to. If it ever approaches 900 MB, look for a cause
 before raising anything.
+
+## Migrating an existing install to v1.0.1
+
+For the server that already runs 1.0.0, where `lkbridge` owns and builds the checkout and holds the deploy key. v1.0.1
+moves the checkout and the key to a new build user, `lkbuild`, that cannot read the secrets (review finding F-17,
+[ADR 0020](adr/0020-separate-build-user.md)). `deploy/migrate-to-build-user.sh` does the whole change once; it is safe to
+run again, it has a read-only `--check` mode, and it stops with a message at anything it does not expect. The bridge is
+down for about a minute at the end (step 6), as for any deploy. Nothing in `/var/lib/lk-bridge` or the env file's
+contents changes.
+
+**0. ✋ Owner:** merge the v1.0.1 pull request into `main` on GitHub, and note the merge commit's id.
+
+**1. Look at the starting point** (🔒 sudo for the `sudo` lines; nothing changes):
+
+```bash
+systemctl is-active lk-bridge                                  # active
+curl -s http://127.0.0.1:8787/healthz                          # {"ok":true,"version":"1.0.0"}
+sudo -u lkbridge git -C /opt/lk-bridge/app status --short      # nothing: the checkout must be clean
+sudo ls -l /home/lkbridge/.ssh/                                 # config, known_hosts, lk_bridge_deploy, lk_bridge_deploy.pub
+id lkbuild                                                     # "no such user"
+```
+
+**2. Update the checkout only, the 1.0.0 way** (🔒 sudo; the running bridge is not touched, it keeps its old build):
+
+```bash
+sudo -u lkbridge git -C /opt/lk-bridge/app fetch origin main
+sudo -u lkbridge git -C /opt/lk-bridge/app merge --ff-only origin/main
+sudo -u lkbridge git -C /opt/lk-bridge/app log --oneline -1   # the merge commit from step 0
+```
+
+**3. ✋ Owner:** check that the commit printed is the one you merged, and read the script you are about to run as root:
+`less /opt/lk-bridge/app/deploy/migrate-to-build-user.sh`.
+
+**4. Copy the script out of the checkout, owned by root** (🔒 sudo). The checkout is still `lkbridge`'s, so the script
+refuses to run from there.
+
+```bash
+sudo install -o root -g root -m 0700 /opt/lk-bridge/app/deploy/migrate-to-build-user.sh /root/migrate-to-build-user.sh
+```
+
+**5. Dry run** (🔒 sudo; changes nothing):
+
+```bash
+sudo /root/migrate-to-build-user.sh --check
+```
+
+On the 1.0.0 layout the `would:` lines are, roughly: create system user `lkbuild`; create `/home/lkbuild/.ssh` and copy
+the key, its public half, the SSH config and `known_hosts`; check `lkbuild` reaches GitHub, then remove `lkbridge`'s
+copies; `/opt/lk-bridge/app` to `lkbuild:lkbuild` with nothing group- or world-writable; create `/opt/lk-bridge/bin` and
+install `deploy.sh` and `lib.sh` there from the commit of step 2; possibly `/home/lkbridge` to 0750. The sudoers file is
+unchanged in v1.0.1, so it should say `up to date`. If it **STOPPED** instead, it says why and what to do; fix that and
+run `--check` again.
+
+**6. Migrate** (🔒 sudo). Add `--local-health` if the public checks cannot run from the server (see step 11).
+
+```bash
+sudo /root/migrate-to-build-user.sh
+```
+
+It does steps 1 to 4 as the dry run listed, then **5. verifies as each user** (eleven `PASS` lines: `lkbuild` cannot read
+the env file, the data directory, the database or `lkbridge`'s home, and cannot write the Node; `lkbridge` cannot write
+anything in the app or the Node, and can read the env file and write the data directory), then **6. runs a normal
+deploy** with `--force`, so `lkbuild` rebuilds the app from scratch and the bridge restarts. It ends with
+`DEPLOY SUCCEEDED` and `MIGRATION FINISHED`.
+
+If the key check fails ("lkbuild cannot authenticate to GitHub"), nothing has been removed from `lkbridge`; check with
+`sudo -u lkbuild ssh -T git@github.com` and run the script again. If it says there is no key to move, follow
+[A new deploy key](#a-new-deploy-key) below and run it again.
+
+**7. Check by hand** (🔒 sudo; the script has done this, but see it yourself):
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/healthcheck.sh     # twelve PASS lines (step 11 of the install lists them)
+sudo -u lkbuild test -r /etc/lk-bridge/lk-bridge.env && echo WRONG || echo "good: lkbuild cannot read the secrets"
+sudo -u lkbridge touch /opt/lk-bridge/app/x 2>/dev/null && echo WRONG || echo "good: lkbridge cannot write the app"
+ls -ld /opt/lk-bridge/app /opt/lk-bridge/bin                  # lkbuild lkbuild … app; root root … bin
+sudo ls -l /home/lkbridge/.ssh/ /home/lkbuild/.ssh/            # the key is only in lkbuild's
+sudo -u lkbuild ssh -T git@github.com                         # "Hi Airwolf1221/LK-Bridge! You've successfully authenticated …"
+curl -s http://127.0.0.1:8787/healthz                         # {"ok":true,"version":"1.0.1"}
+```
+
+**8. From now on, deploy with** `sudo /opt/lk-bridge/bin/deploy.sh` (🔒 sudo). The old command,
+`sudo -u lkbridge /opt/lk-bridge/app/deploy/deploy.sh`, now stops and says so.
+
+**9. Tidy up** (🔒 sudo, optional): `sudo rm /root/migrate-to-build-user.sh`. `lkbridge`'s old npm cache is no longer
+used: `sudo rm -r /home/lkbridge/.npm` if you want the space back.
+
+**10. ✋ Owner, optional: rotate the deploy key.** The key moved; it was not regenerated. It is read-only and only reads
+this repository, but if you think `lkbridge` could ever have been compromised, make a new one for `lkbuild` as below,
+add it on GitHub, then delete the old one there (_Settings → Deploy keys_).
+
+### A new deploy key
+
+Needed only if the script says there is no key to move, or for step 10. 🔒 sudo, then ✋ Owner on GitHub.
+
+```bash
+sudo install -d -o lkbuild -g lkbuild -m 0700 /home/lkbuild/.ssh
+sudo -u lkbuild ssh-keygen -t ed25519 -N '' -C 'lk-bridge deploy key (lk.ottomoons.co.uk)' -f /home/lkbuild/.ssh/lk_bridge_deploy
+sudo cat /home/lkbuild/.ssh/lk_bridge_deploy.pub              # the PUBLIC half
+```
+
+**✋ Owner:** add it on GitHub as in [step 3](#3-the-deploy-key-and-the-clone) (read-only), then create
+`/home/lkbuild/.ssh/config` and pin `known_hosts` exactly as step 3 does, with `lkbuild` in place of `lkbridge`. Check
+with `sudo -u lkbuild ssh -T git@github.com`, then run the migration again.
+
+### Going back to the 1.0.0 layout
+
+Only if v1.0.1 must be abandoned (🔒 sudo throughout). The database needs no restore (see [Rollback](#rollback)).
+
+```bash
+sudo systemctl stop lk-bridge
+sudo chown -R lkbridge:lkbridge /opt/lk-bridge/app
+sudo install -d -o lkbridge -g lkbridge -m 0700 /home/lkbridge/.ssh
+sudo sh -c 'for f in lk_bridge_deploy lk_bridge_deploy.pub config known_hosts; do install -o lkbridge -g lkbridge -m 0600 /home/lkbuild/.ssh/$f /home/lkbridge/.ssh/$f; done'
+sudo -u lkbridge git -C /opt/lk-bridge/app checkout --detach <the 1.0.0 commit>
+sudo -u lkbridge /opt/lk-bridge/app/deploy/deploy.sh --current --force
+```
+
+Then, once it runs: `sudo userdel -r lkbuild` and `sudo rm -r /opt/lk-bridge/bin`.

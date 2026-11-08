@@ -211,7 +211,15 @@ describe('consent screen: profile and scope', () => {
     );
     expect((await post({ profile: claude.id, scope: 'write', csrf_token: 'forged' })).status).toBe(403);
     expect(bridge.policy.store.getProfile(claude.id)!.scope).toBe('read');
-    const t = await finish(c, { profile: claude.id, scope: 'propose' });
+    // A change to an existing profile's scope is confirmed on a second page first (v1.0.1, F-15).
+    const ask = await post({ profile: claude.id, scope: 'propose' });
+    expect(ask.status).toBe(200);
+    expect(bridge.policy.store.getProfile(claude.id)!.scope).toBe('read');
+    const t = await finish(c, {
+      profile: claude.id,
+      scope: 'propose',
+      confirm_scope_change: `${claude.id}:read:propose`,
+    });
     expect(bridge.policy.store.getProfile(claude.id)!.scope).toBe('propose');
     expect(await toolNames(t.access)).toContain('stub_write');
     const audit = bridge.policy.commands.listAudit('owner', { action: 'profile.set_scope' });
@@ -238,6 +246,137 @@ describe('consent screen: profile and scope', () => {
     });
     expect(res.status).toBe(303);
     expect(new URL(res.headers.get('location')!).searchParams.get('error')).toBe('access_denied');
+  });
+});
+
+describe("consent keeps an existing profile's scope unless the owner confirms a change (v1.0.1, F-15)", () => {
+  const profile = (label: string, scope: 'read' | 'propose' | 'write') => {
+    const p =
+      bridge.policy.store.getProfileByLabel(label) ??
+      bridge.policy.commands.createProfile('owner', { label, kind: 'chatgpt', scope });
+    if (p.scope !== scope) bridge.policy.commands.setScope('owner', p.id, scope);
+    return bridge.policy.store.getProfile(p.id)!;
+  };
+  const CHATGPT = 'https://chatgpt.com/connector_platform_oauth_redirect';
+  const scopeAudits = (id: string) =>
+    bridge.policy.commands.listAudit('owner', { action: 'profile.set_scope' }).filter((a) => a.target === id);
+  const post = (c: Awaited<ReturnType<typeof consentPage>>, fields: Record<string, string>) =>
+    c.browser.post(`${bridge.publicUrl}/oauth/consent`, {
+      request_id: c.page.requestId,
+      csrf_token: c.page.csrf,
+      decision: 'approve',
+      ...fields,
+    });
+
+  it('preselects the existing profile and its current scope; approving untouched changes nothing', async () => {
+    const chatgpt = profile('chatgpt', 'write');
+    const before = scopeAudits(chatgpt.id).length;
+    const c = await consentPage(CHATGPT, 'ChatGPT');
+    expect(consentDefaults(c.page.html)).toMatchObject({ profile: chatgpt.id, scope: 'write' });
+    expect(c.page.html).toContain('name="scope" value="write" checked');
+    expect(c.page.html).not.toMatch(/value="(read|propose)" checked/);
+    expect(c.page.html).toContain('(its current scope)');
+    await finish(c); // the page's own defaults, unchanged
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
+    expect(scopeAudits(chatgpt.id).length).toBe(before);
+  });
+
+  it('an explicit lower asks for confirmation with the warning, then applies it, audited', async () => {
+    const chatgpt = profile('chatgpt', 'write');
+    const c = await consentPage(CHATGPT, 'ChatGPT');
+    const ask = await post(c, { profile: chatgpt.id, scope: 'read' });
+    expect(ask.status).toBe(200);
+    const html = await ask.text();
+    expect(html).toContain('This affects every connection on the profile');
+    expect(html).toContain('from <strong>write</strong> to <strong>read</strong> (a lowering)');
+    expect(html).toContain(`name="confirm_scope_change" value="${chatgpt.id}:write:read"`);
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write'); // nothing yet
+    await finish(c, { profile: chatgpt.id, scope: 'read', confirm_scope_change: `${chatgpt.id}:write:read` });
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('read');
+    expect(scopeAudits(chatgpt.id)[0]).toMatchObject({
+      actor: 'owner',
+      before: { scope: 'write' },
+      after: { scope: 'read', via: 'consent' },
+    });
+  });
+
+  it('an explicit raise asks for confirmation, then applies it, audited', async () => {
+    const chatgpt = profile('chatgpt', 'read');
+    const c = await consentPage(CHATGPT, 'ChatGPT');
+    const ask = await post(c, { profile: chatgpt.id, scope: 'write' });
+    expect(ask.status).toBe(200);
+    expect(await ask.text()).toContain('(a raise)');
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('read');
+    await finish(c, {
+      profile: chatgpt.id,
+      scope: 'write',
+      confirm_scope_change: `${chatgpt.id}:read:write`,
+    });
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
+    expect(scopeAudits(chatgpt.id)[0]).toMatchObject({
+      before: { scope: 'read' },
+      after: { scope: 'write', via: 'consent' },
+    });
+  });
+
+  it('a confirmation for another change, or a profile changed meanwhile, asks again; "Keep" changes nothing', async () => {
+    const chatgpt = profile('chatgpt', 'propose');
+    const c = await consentPage(CHATGPT, 'ChatGPT');
+    // A token for a different change (wrong current scope, wrong target, wrong profile) is not a confirmation.
+    for (const token of [
+      `${chatgpt.id}:read:write`,
+      `${chatgpt.id}:propose:read`,
+      `prof_other:propose:write`,
+    ]) {
+      const r = await post(c, { profile: chatgpt.id, scope: 'write', confirm_scope_change: token });
+      expect(r.status).toBe(200);
+      expect(await r.text()).toContain('Confirm scope change');
+    }
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('propose');
+    // The "Keep" button on the confirmation page posts the current scope: approved, unchanged.
+    const before = scopeAudits(chatgpt.id).length;
+    await finish(c, {
+      profile: chatgpt.id,
+      scope: 'propose',
+      confirm_scope_change: `${chatgpt.id}:propose:write`,
+    });
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('propose');
+    expect(scopeAudits(chatgpt.id).length).toBe(before);
+  });
+
+  it('switching the page to another existing profile never carries the preselected scope over silently', async () => {
+    const chatgpt = profile('chatgpt', 'write');
+    const other = profile('chatgpt-spare', 'read');
+    const c = await consentPage(CHATGPT, 'ChatGPT');
+    expect(consentDefaults(c.page.html).scope).toBe('write'); // preselected for "chatgpt"
+    const r = await post(c, { profile: other.id, scope: 'write' }); // only the profile select was changed
+    expect(r.status).toBe(200);
+    expect(await r.text()).toContain('chatgpt-spare');
+    expect(bridge.policy.store.getProfile(other.id)!.scope).toBe('read');
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
+  });
+
+  it('a new profile defaults to read, and follows the configured default scope', async () => {
+    const LOOPBACK = 'http://127.0.0.1:43999/callback';
+    expect(bridge.policy.store.getProfileByLabel('claude-code')).toBeUndefined();
+    const c = await consentPage(LOOPBACK, 'Claude Code');
+    expect(consentDefaults(c.page.html)).toMatchObject({
+      profile: 'new',
+      new_label: 'claude-code',
+      scope: 'read',
+    });
+    bridge.policy.commands.setDefaultScope('owner', 'propose');
+    try {
+      const d = await consentPage(LOOPBACK, 'Claude Code');
+      expect(consentDefaults(d.page.html)).toMatchObject({ profile: 'new', scope: 'propose' });
+    } finally {
+      bridge.policy.commands.setDefaultScope('owner', 'read');
+    }
+    await finish(c); // the first page's defaults: a new profile at read
+    expect(bridge.policy.store.getProfileByLabel('claude-code')).toMatchObject({
+      kind: 'claude-code',
+      scope: 'read',
+    });
   });
 });
 

@@ -13,7 +13,14 @@ import {
 } from './config/index.js';
 import type { Db } from './db/open.js';
 import { createJobEngine, UPLOAD_PUT_STEP, type JobEngine } from './jobs/index.js';
-import { createLkClient, defaultTransport, type Clock, type LkClient, type Transport } from './lk/index.js';
+import {
+  createLkClient,
+  createSqliteCounterStore,
+  defaultTransport,
+  type Clock,
+  type LkClient,
+  type Transport,
+} from './lk/index.js';
 import type { McpToolProvider } from './mcp/server.js';
 import {
   BRIDGE_INSTRUCTIONS,
@@ -78,14 +85,25 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const log = pino({ level: config.logLevel, base: { component: 'engine' } });
   // Signed upload URLs are on another host: the transport sends LegendKeeper's host through the platform fetch
   // and every other host through the SSRF guard. Both stay under the governor.
+  // The SSRF guard for every non-LegendKeeper fetch of the tool layer (the signed-URL PUT and an image source URL):
+  // port 443 only unless OUTBOUND_EXTRA_PORTS_ALLOWLIST lists host:port (v1.0.1). Test seams may add to it.
+  const uploadGuard: GuardOptions = {
+    allowedPorts: o.toolsSettings.outboundExtraPorts ?? new Set<string>(),
+    ...(o.uploadGuard ?? {}),
+  };
   const transport = createUploadTransport({
     lkOrigin: new URL(config.lk.baseUrl).origin,
     lk: o.lkTransport ?? defaultTransport,
-    ...(o.uploadGuard ?? {}),
+    ...uploadGuard,
   });
   const lk = createLkClient({
     ...lkSettingsFrom(config),
     transport,
+    // v1.0.1 (F-14): the governor's recent per-tier counts survive a restart (table governor_counters).
+    persistence: {
+      store: createSqliteCounterStore(o.db),
+      warn: (message, err) => log.warn({ err }, message),
+    },
     ...(o.clock ? { clock: o.clock } : {}),
   });
   const maintenanceSettings = o.maintenanceSettings ?? defaultMaintenanceSettings();
@@ -111,7 +129,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     customSteps: {
       [UPLOAD_PUT_STEP]: createUploadPutHandler({
         putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,
-        ...(o.uploadGuard ? { guard: o.uploadGuard } : {}),
+        guard: uploadGuard,
       }),
     },
     autoStart: false,
@@ -130,6 +148,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     clock: o.clock ?? systemClock,
     settings: maintenanceSettings,
     expirySweepMs: policySettings.expirySweepMs,
+    proposalRetentionMs: policySettings.proposalRetentionMs,
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   maintenance.start();
@@ -148,7 +167,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       version: o.version,
       projectId: config.lk.projectId,
       configuredReadOnly: config.lk.readOnly,
-      uploadGuard: o.uploadGuard,
+      uploadGuard,
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
   );

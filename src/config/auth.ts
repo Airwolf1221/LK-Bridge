@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import * as z from 'zod';
+import { type OutboundPortAllowlist, parseOutboundPortAllowlist } from '../auth/ports.js';
 
 /**
  * Configuration for the OAuth 2.1 authorization server, owner login and the MCP resource server
@@ -59,6 +60,11 @@ export interface AuthConfig {
    * believe none. Default `['loopback']` (Caddy on the same host).
    */
   readonly trustProxy: readonly string[] | false;
+  /**
+   * OUTBOUND_EXTRA_PORTS_ALLOWLIST: `host:port` pairs the CIMD document fetch may use besides port 443 (v1.0.1,
+   * src/auth/ports.ts). Empty by default. Optional so that hand-built test configs keep working: absent means none.
+   */
+  readonly outboundExtraPorts?: OutboundPortAllowlist;
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -118,6 +124,7 @@ const authEnvSchema = z.object({
   AUTH_CIMD_MAX_BYTES: intFrom(8192, 512, 65536),
 
   OAUTH_EXTRA_REDIRECT_URIS: csv,
+  OUTBOUND_EXTRA_PORTS_ALLOWLIST: z.string().optional(),
   TRUST_PROXY: z.string().optional(),
   AUTH_MCP_ALLOWED_ORIGINS: z
     .string()
@@ -257,6 +264,12 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
   checkRedirectList(e.OAUTH_EXTRA_REDIRECT_URIS, issues);
   const origins = normaliseOrigins(e.AUTH_MCP_ALLOWED_ORIGINS, issues);
   const trustProxy = parseTrustProxy(e.TRUST_PROXY, issues);
+  let outboundExtraPorts: OutboundPortAllowlist = new Set<string>();
+  try {
+    outboundExtraPorts = parseOutboundPortAllowlist(e.OUTBOUND_EXTRA_PORTS_ALLOWLIST);
+  } catch (err) {
+    issues.push((err as Error).message);
+  }
   if (issues.length > 0 || !pub) throw new AuthConfigError(issues);
 
   const publicUrl = pub.origin;
@@ -291,5 +304,6 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
     extraRedirectUris: e.OAUTH_EXTRA_REDIRECT_URIS,
     mcpAllowedOrigins: origins,
     trustProxy,
+    outboundExtraPorts,
   };
 }
