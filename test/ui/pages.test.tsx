@@ -20,7 +20,7 @@ useDom();
 const h1 = (name: string | RegExp) => screen.findByRole('heading', { level: 1, name });
 
 describe('navigation', () => {
-  it('lists every page, with the two for chunk 6 marked as later', async () => {
+  it('lists every page', async () => {
     installApi({ ...baseRoutes(), 'GET /overview': overview() });
     renderApp('/ui');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
@@ -42,20 +42,6 @@ describe('navigation', () => {
     expect(within(nav).getByRole('link', { name: /^Proposals/ })).toHaveTextContent('2'); // pending count from the API
     expect(within(nav).getByRole('link', { name: /^Overview/ })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByText('Owner dashboard · v9.9.9')).toBeInTheDocument();
-  });
-
-  it('shows “Coming in a later chunk” on the maintenance and mappings pages and builds nothing behind them', async () => {
-    const api = installApi({ ...baseRoutes() });
-    for (const [path, title] of [
-      ['/ui/maintenance', 'Maintenance Jobs'],
-      ['/ui/mappings', 'Repository Mappings'],
-    ] as const) {
-      const view = renderApp(path);
-      expect(await h1(title)).toBeInTheDocument();
-      expect(screen.getByText('Coming in a later chunk.')).toBeInTheDocument();
-      view.unmount();
-    }
-    expect(api.calls.filter((c) => !['/proposals/counts'].includes(c.path))).toEqual([]);
   });
 
   it('says so for an unknown path', async () => {

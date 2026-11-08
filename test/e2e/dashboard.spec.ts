@@ -55,7 +55,6 @@ test('signs in, comes back to where it was going, and every page renders under t
       .click();
     await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
   }
-  await expect(page.getByText('Coming in a later chunk.')).toBeVisible();
   await expect(page.getByRole('status', { name: /Live updates: Live/ })).toBeVisible();
 
   // The headers really are on the document.

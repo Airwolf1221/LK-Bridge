@@ -790,3 +790,14 @@ input[type='radio'] {
   min-height: 0;
   accent-color: var(--accent);
 }
+
+/* Chunk 6: plain lists (maintenance history). */
+ul.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+ul.plain li {
+  padding: 0.35rem 0;
+  border-top: 1px solid var(--border, rgba(127, 127, 127, 0.25));
+}

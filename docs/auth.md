@@ -1,6 +1,6 @@
 # Authentication and the MCP endpoint (chunk 4)
 
-LK-Bridge is its own OAuth 2.1 authorization server and the protected resource at `/mcp`. Supported clients: Claude (web, desktop, mobile), Claude Code (OAuth or a personal access token), and ChatGPT through a Developer Mode connector (OAuth only). Design choices are in ADRs [0006](adr/0006-mcp-sdk-v2-confirmed-for-transport.md), [0007](adr/0007-oauth-authorization-server-design.md), [0008](adr/0008-chatgpt-as-a-client.md) (ChatGPT), [0009](adr/0009-refresh-token-grace-window.md) (refresh grace window) and [0016](adr/0016-unsupported-client-grant-types-ignored.md) (grant types clients may list but the bridge does not issue). What to check on the live server is in [auth-live-checklist.md](auth-live-checklist.md).
+LK-Bridge is its own OAuth 2.1 authorization server and the protected resource at `/mcp`. Supported clients: Claude (web, desktop, mobile), Claude Code (OAuth or a personal access token), and ChatGPT through a Developer Mode connector (OAuth only). Design choices are in ADRs [0006](adr/0006-mcp-sdk-v2-confirmed-for-transport.md), [0007](adr/0007-oauth-authorization-server-design.md), [0008](adr/0008-chatgpt-as-a-client.md) (ChatGPT), [0009](adr/0009-refresh-token-grace-window.md) (refresh grace window) and [0017](adr/0017-unsupported-client-grant-types-ignored.md) (grant types clients may list but the bridge does not issue). What to check on the live server is in [auth-live-checklist.md](auth-live-checklist.md).
 
 ## Endpoints
 
@@ -34,7 +34,7 @@ Every authorization response, success or error, carries `iss` (RFC 9207), equal 
 
 ## Grant types, and why a refused client is logged in full
 
-The bridge issues two grants: `authorization_code` and `refresh_token`. Clients may ask for more. claude.ai's custom connectors do: its client metadata document (`https://claude.ai/oauth/mcp-oauth-client-metadata`) and its "Register automatically" request both list `urn:ietf:params:oauth:grant-type:jwt-bearer`, used for Enterprise Managed Auth. The bridge therefore takes the **intersection** with what it supports ([ADR 0016](adr/0016-unsupported-client-grant-types-ignored.md)):
+The bridge issues two grants: `authorization_code` and `refresh_token`. Clients may ask for more. claude.ai's custom connectors do: its client metadata document (`https://claude.ai/oauth/mcp-oauth-client-metadata`) and its "Register automatically" request both list `urn:ietf:params:oauth:grant-type:jwt-bearer`, used for Enterprise Managed Auth. The bridge therefore takes the **intersection** with what it supports ([ADR 0017](adr/0017-unsupported-client-grant-types-ignored.md)):
 
 - **CIMD.** A document is accepted if its `grant_types` include `authorization_code` and its `response_types`, if present, include `code`. Anything else listed is ignored. The stored registration has only the supported values.
 - **DCR.** The client is registered with the requested grants that the bridge supports (both, if it asks for none), and the registration response returns those adjusted values (RFC 7591 §3.2.1). The request is refused with `invalid_client_metadata` only if `authorization_code` is not among them.

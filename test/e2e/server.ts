@@ -62,7 +62,7 @@ const { app, runtime } = await createBridge({
   version: 'e2e',
   logLevel: 'silent',
   pruneIntervalMs: 0,
-  adminSettings: defaultAdminSettings({ budgetSampleMs: 10_000, budgetPushMs: 1000 }),
+  adminSettings: defaultAdminSettings({ budgetPushMs: 1000 }),
   lkTransport: async (input, init) => {
     if ((init?.method ?? 'GET').toUpperCase() !== 'GET') await new Promise((r) => setTimeout(r, delay));
     return fetch(input, init);

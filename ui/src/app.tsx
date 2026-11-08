@@ -9,8 +9,9 @@ import { ClientsPage } from './pages/clients';
 import { ErrorsPage } from './pages/errors';
 import { JobsPage } from './pages/jobs';
 import { JournalPage } from './pages/journal';
+import { MaintenancePage } from './pages/maintenance';
+import { MappingsPage } from './pages/mappings';
 import { OverviewPage } from './pages/overview';
-import { Placeholder } from './pages/placeholder';
 import { ProposalsPage } from './pages/proposals';
 import { SettingsPage } from './pages/settings';
 import { WritersPage } from './pages/writers';
@@ -44,8 +45,8 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/clients', label: 'Clients & Access' },
   { to: '/journal', label: 'Journal' },
   { to: '/settings', label: 'Settings' },
-  { to: '/maintenance', label: 'Maintenance Jobs', later: true },
-  { to: '/mappings', label: 'Repository Mappings', later: true },
+  { to: '/maintenance', label: 'Maintenance Jobs' },
+  { to: '/mappings', label: 'Repository Mappings' },
 ];
 
 const readTheme = (): Theme => {
@@ -84,8 +85,8 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/clients') return <ClientsPage session={session} />;
   if (path === '/journal') return <JournalPage />;
   if (path === '/settings') return <SettingsPage />;
-  if (path === '/maintenance') return <Placeholder title="Maintenance Jobs" />;
-  if (path === '/mappings') return <Placeholder title="Repository Mappings" />;
+  if (path === '/maintenance') return <MaintenancePage />;
+  if (path === '/mappings' || path.startsWith('/mappings/')) return <MappingsPage />;
   return (
     <>
       <h1>Page not found</h1>

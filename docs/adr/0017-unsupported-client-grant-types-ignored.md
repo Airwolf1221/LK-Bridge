@@ -1,4 +1,4 @@
-# ADR 0016: Grant types the bridge does not issue are ignored, not refused
+# ADR 0017: Grant types the bridge does not issue are ignored, not refused
 
 Status: Accepted (hotfix, 8 November 2026). Supersedes the grant-type and response-type checks for Client ID Metadata Documents and Dynamic Client Registration that ADR 0007 put in place with chunk 4. Recorded in PLAN amendment 5.
 
