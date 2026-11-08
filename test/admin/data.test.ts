@@ -430,3 +430,28 @@ describe('audit', () => {
     ).toBe(true);
   });
 });
+
+describe('secrets and the log', () => {
+  it('never writes a token, cookie or CSRF value to the log while the owner creates and revokes access', async () => {
+    const s = await startAdminStack({ respond: model.respond, captureLogs: true });
+    try {
+      const profile =
+        s.policy.commands.listProfiles('owner')[0] ??
+        s.policy.commands.createProfile('owner', { label: 'Logged', kind: 'other' });
+      const made = await s.post('/api/admin/clients/pats', { name: 'Log check', profileId: profile.id });
+      const token: string = made.json.token;
+      await s.get('/api/admin/clients');
+      await s.post(`/api/admin/clients/connections/${made.json.pat.id}/revoke`);
+      await s.post('/api/admin/writes/pause');
+      await s.post('/api/admin/writes/resume');
+      const log = s.logs.join('\n');
+      expect(log).toContain('/api/admin/clients/pats'); // requests are logged...
+      for (const secret of [token.slice('lkb_pat_'.length), s.sessionToken, s.csrf]) {
+        expect(log).not.toContain(secret); // ...but no secret is
+      }
+      expect(log).not.toMatch(/query|\?/); // and query strings are never logged
+    } finally {
+      await s.close();
+    }
+  });
+});

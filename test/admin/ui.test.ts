@@ -153,3 +153,13 @@ describe('a bridge whose dashboard has not been built', () => {
     }
   });
 });
+
+describe('sign-in pages and real browsers', () => {
+  it('use Referrer-Policy same-origin, because a browser sends "Origin: null" for form POSTs under no-referrer', async () => {
+    // Found in Chromium: under `no-referrer` the sign-in, consent and sign-out forms were refused by their own Origin
+    // check. `same-origin` still sends nothing to other sites. The dashboard itself keeps `no-referrer` (it uses fetch).
+    const res = await anon('/oauth/login');
+    expect(res.headers.get('referrer-policy')).toBe('same-origin');
+    expect(await res.text()).toContain('<meta name="referrer" content="same-origin">');
+  });
+});

@@ -6,6 +6,7 @@
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { Writable } from 'node:stream';
 import { join } from 'node:path';
 import Fastify from 'fastify';
 import { adminPlugin, ADMIN_CSRF_PURPOSE } from '../../src/admin/index.js';
@@ -37,6 +38,8 @@ export interface AdminStackOptions {
   readonly dbPath?: string;
   /** Write a minimal built dashboard here (index.html and one asset) so /ui can be served. Default: yes. */
   readonly withUi?: boolean;
+  /** Collect the server's log lines (at info level) into `AdminStack.logs`. */
+  readonly captureLogs?: boolean;
 }
 
 export interface Reply {
@@ -80,6 +83,8 @@ export interface AdminStack {
   /** Audit rows (newest first) and the policy events seen on the engine's emitter. */
   audit(action?: string): ReturnType<Policy['commands']['listAudit']>;
   events: { action: string; actor: string; target: string | null }[];
+  /** Log lines of the HTTP server, when `captureLogs` is set. */
+  readonly logs: string[];
   /** Holds every LegendKeeper request matching `match` until the returned function is called. */
   hold(match: (method: string, url: string) => boolean): () => void;
   /** Like `hold`, but requests are let through one at a time: `releaseOne()` frees the oldest waiting request. */
@@ -138,6 +143,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     budgetSampleMs: 0, // the sampler has its own test
     ...o.admin,
   });
+  const logs: string[] = [];
   const holds: { match: (method: string, url: string) => boolean; gate: Promise<void> }[] = [];
   const { app, services, runtime } = await createBridge({
     config,
@@ -145,7 +151,17 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     toolsSettings: DEFAULT_TOOLS_SETTINGS,
     db,
     version: '0.0.0-test',
-    logLevel: 'silent',
+    logLevel: o.captureLogs ? 'info' : 'silent',
+    ...(o.captureLogs
+      ? {
+          logStream: new Writable({
+            write(chunk: Buffer, _enc, cb) {
+              logs.push(chunk.toString('utf8'));
+              cb();
+            },
+          }),
+        }
+      : {}),
     pruneIntervalMs: 0,
     adminSettings,
     uiDir,
@@ -251,6 +267,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     put: (path, body, c) => call('PUT', path, { ...c, body }),
     audit: (action) => policy.commands.listAudit('owner', { limit: 500, ...(action ? { action } : {}) }),
     events,
+    logs,
     hold(match) {
       let release: () => void = () => undefined;
       const gate = new Promise<void>((r) => (release = r));
