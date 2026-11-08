@@ -19,7 +19,9 @@ WorkingDirectory=/opt/lk-bridge/app
 # Secrets and settings. systemd strips one pair of single or double quotes, so the owner hash can stay in 'single quotes'.
 EnvironmentFile=/etc/lk-bridge/lk-bridge.env
 # V8 heap ceiling a little under MemoryMax, so a runaway fails inside Node with a clear error before the kernel's OOM
-# killer steps in. The env file is read after this line, so NODE_OPTIONS there would replace it.
+# killer steps in. systemd lets EnvironmentFile= override Environment= whatever their order, so a NODE_OPTIONS line in
+# the env file would replace this one (do not add one there). See docs/runbook-deploy.md, "Memory", for what the
+# bridge really uses and how to watch it.
 Environment=NODE_OPTIONS=--max-old-space-size=700
 # The PRIVATE Node 24 (deploy/install-node.sh). The system Node is never used.
 ExecStart=/opt/lk-bridge/runtime/node/bin/node dist/server.js

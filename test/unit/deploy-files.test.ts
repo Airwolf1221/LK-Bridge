@@ -81,6 +81,68 @@ describe('deploy scripts', () => {
   });
 });
 
+describe('env drift check (chunk 8, F-10)', () => {
+  const run = (template: string, live: string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'lkb-drift-'));
+    try {
+      writeFileSync(join(dir, 'env.template'), template);
+      writeFileSync(join(dir, 'live.env'), live);
+      const r = spawnSync(
+        'bash',
+        [
+          '-c',
+          `source "${join(deployDir, 'lib.sh')}" && env_drift_report "$1" "$2"`,
+          'x',
+          join(dir, 'env.template'),
+          join(dir, 'live.env'),
+        ],
+        { encoding: 'utf8' },
+      );
+      return { status: r.status, out: r.stdout, err: r.stderr };
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  it('is quiet for a live file made from the shipped template', () => {
+    const r = run(read('env.template'), read('env.template'));
+    expect(r.status).toBe(0);
+    expect(r.err).toBe('');
+    expect(r.out).toMatch(/matches deploy\/env.template/);
+  });
+
+  it('warns by name, never by value, about missing, new optional and removed variables, and never fails', () => {
+    const template = [
+      '# A comment with NAME=value inside prose is not a variable',
+      'LK_API_KEY=',
+      'WRITERS_MAX=1',
+      '# UPLOAD_MAX_BYTES=10485760',
+      '# BRAND_NEW_OPTION=on',
+      '',
+    ].join('\n');
+    const live = [
+      "LK_API_KEY='the-real-secret-value'",
+      '# UPLOAD_MAX_BYTES=10485760',
+      'ADMIN_BUDGET_SAMPLE_SECONDS=10',
+      "OLD_SECRET='another-secret-value'",
+      '',
+    ].join('\n');
+    const r = run(template, live);
+    expect(r.status).toBe(0);
+    expect(r.err).toMatch(/does not set WRITERS_MAX/);
+    expect(r.err).toMatch(/optional setting BRAND_NEW_OPTION/);
+    expect(r.err).toMatch(/sets ADMIN_BUDGET_SAMPLE_SECONDS, which deploy\/env.template no longer lists/);
+    expect(r.err).toMatch(/sets OLD_SECRET/);
+    expect(r.err).not.toMatch(/UPLOAD_MAX_BYTES|LK_API_KEY|NAME/);
+    expect(r.err + r.out).not.toMatch(/the-real-secret-value|another-secret-value|10485760/);
+  });
+
+  it('is called by deploy.sh and healthcheck.sh', () => {
+    expect(read('deploy.sh')).toMatch(/^env_drift_report /m);
+    expect(read('healthcheck.sh')).toMatch(/env_drift_report /);
+  });
+});
+
 describe('sudoers.lk-bridge', () => {
   const text = read('sudoers.lk-bridge');
   const rules = text.split('\n').filter((l) => l.trim() !== '' && !l.trim().startsWith('#'));

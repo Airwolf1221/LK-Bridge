@@ -270,6 +270,28 @@ describe('the full loop, end to end', () => {
     expect(writesAtMock()).toBe(before);
   });
 
+  it('read: the 2025-era (stateless legacy) tools/list hides write tools too (chunk 8, F-11)', async () => {
+    const r = await as('loop-read-legacy', 'read');
+    const res = await fetch(`${stack.base}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${r.token}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2025-06-18',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list', params: {} }),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const json = (text.startsWith('{') ? text : (/^data: (.*)$/m.exec(text)?.[1] ?? '{}'));
+    const listed = (JSON.parse(json) as { result?: { tools?: { name: string }[] } }).result?.tools?.map(
+      (t) => t.name,
+    );
+    expect(listed).toContain('lk_api_read');
+    for (const t of WRITE_TOOLS) expect(listed).not.toContain(t);
+  });
+
   it('propose → approve → executed once; lowering to read applies on the same token; write runs directly', async () => {
     const p = await as('loop-propose', 'propose');
     expect(await names(p.client)).toEqual(

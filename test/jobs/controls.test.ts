@@ -85,6 +85,24 @@ describe('drain', () => {
   });
 });
 
+describe('stop', () => {
+  it('answers a pending wait at once instead of keeping the shutdown waiting (chunk 8, F-13)', async () => {
+    h = await harness();
+    const e = h.newEngine();
+    // Writes paused: the job stays queued, so a wait would otherwise run its full 25 seconds.
+    e.engine.controls.pauseWrites();
+    const { jobId } = await queue(e.engine, threeRenames(h));
+    let answered: JobView | undefined;
+    void e.engine.wait(jobId, 25_000).then((j) => (answered = j));
+    await Promise.resolve();
+    expect(answered).toBeUndefined();
+    await e.engine.stop();
+    await Promise.resolve();
+    expect(answered?.id).toBe(jobId);
+    expect(answered?.status).toBe('queued');
+  });
+});
+
 describe('cancel', () => {
   it('lets the in-flight step complete, then stops; nothing further is sent', async () => {
     h = await harness();

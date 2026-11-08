@@ -198,6 +198,7 @@ export function createMcpServerFactory(
 ): McpServerFactory {
   // Validate names once at start-up rather than on the first request.
   registerTools({ registerTool: () => undefined as never }, { tools, log });
+  let fallbackWarned = false;
   return (ctx) => {
     const server = new McpServer(
       { name: info.name, version: info.version },
@@ -216,7 +217,15 @@ export function createMcpServerFactory(
     // Every tool is registered, so a direct call to a hidden write tool gets the clear read-only refusal (from
     // registerTools) rather than "not found"; tools/list then shows only the visible ones.
     if (hideFromList(server, visible, () => registerTools(server, { tools, log, policy }))) return server;
-    // Fallback (the SDK internals moved): register only the visible tools, as strict as before.
+    // Fallback (the SDK internals moved): register only the visible tools, as strict as before. Said once in the log
+    // (chunk 8, F-11), because hidden tools then answer "not found" instead of the read-only explanation.
+    if (!fallbackWarned) {
+      fallbackWarned = true;
+      log.warn(
+        { component: 'mcp' },
+        'MCP SDK internals changed: tools/list filtering falls back to registering visible tools only',
+      );
+    }
     const strict = new McpServer(
       { name: info.name, version: info.version },
       { capabilities: { tools: {} }, ...(info.instructions ? { instructions: info.instructions } : {}) },
@@ -233,7 +242,7 @@ type RequestHandler = (request: unknown, ctx: unknown) => Promise<unknown>;
  * Uses the SDK's request-handler map (pinned SDK version; test/tools/policy-e2e.test.ts covers it). Returns false
  * when that map or handler is not where it is expected; the caller then serves a server with visible tools only.
  */
-function hideFromList(server: McpServer, visible: ReadonlySet<string>, register: () => void): boolean {
+export function hideFromList(server: McpServer, visible: ReadonlySet<string>, register: () => void): boolean {
   const handlers = (server.server as unknown as { _requestHandlers?: unknown })._requestHandlers;
   if (!(handlers instanceof Map)) return false;
   register();

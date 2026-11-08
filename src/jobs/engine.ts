@@ -139,6 +139,8 @@ export class JobEngine {
   private readonly resumeTimers = new Map<string, TimerHandle>();
   private readonly waitingLock = new Set<string>();
   private readonly drainWaiters: (() => void)[] = [];
+  /** Pending `wait` calls; `stop()` answers them at once (chunk 8, F-13), so a shutdown never waits for a long poll. */
+  private readonly jobWaiters = new Set<() => void>();
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -220,6 +222,7 @@ export class JobEngine {
     this.resumeTimers.clear();
     for (const a of this.active.values()) a.current.abort(new CancelledError());
     await Promise.allSettled([...this.active.values()].map((a) => a.done));
+    for (const release of [...this.jobWaiters]) release();
     this.started = false;
   }
 
@@ -602,12 +605,15 @@ export class JobEngine {
       const off = this.events.on('job', (e) => {
         if (e.job.id === jobId && TERMINAL_JOB_STATUSES.has(e.job.status)) finish(e.job);
       });
+      const release = () => finish(this.repo.job(jobId) ?? job);
       const finish = (v: JobView) => {
         off();
+        this.jobWaiters.delete(release);
         if (timer) this.clock.clearTimeout(timer);
         resolve(v);
       };
-      timer = this.clock.setTimeout(() => finish(this.repo.job(jobId) ?? job), bounded);
+      this.jobWaiters.add(release);
+      timer = this.clock.setTimeout(release, bounded);
     });
   }
 

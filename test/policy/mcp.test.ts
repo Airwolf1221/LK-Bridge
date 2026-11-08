@@ -330,3 +330,32 @@ describe('tool lists and calls per scope', () => {
     }
   });
 });
+
+describe('the hidden-tools wrapper and its fallback (chunk 8, F-11)', () => {
+  it('reports when the SDK internals it relies on are missing, so the factory can fall back to the strict server', async () => {
+    const { hideFromList } = await import('../../src/mcp/server.js');
+    let registered = 0;
+    const register = () => {
+      registered++;
+    };
+    // No handler map at all.
+    expect(hideFromList({ server: {} } as never, new Set(), register)).toBe(false);
+    // A map without a tools/list handler.
+    expect(hideFromList({ server: { _requestHandlers: new Map() } } as never, new Set(), register)).toBe(
+      false,
+    );
+    // A handler map with tools/list: it is wrapped and filters to the visible names.
+    const handlers = new Map<string, unknown>([
+      ['tools/list', () => Promise.resolve({ tools: [{ name: 'shown' }, { name: 'hidden' }] })],
+    ]);
+    expect(
+      hideFromList({ server: { _requestHandlers: handlers } } as never, new Set(['shown']), register),
+    ).toBe(true);
+    const wrapped = handlers.get('tools/list') as (
+      r: unknown,
+      c: unknown,
+    ) => Promise<{ tools: { name: string }[] }>;
+    expect((await wrapped({}, {})).tools.map((t) => t.name)).toEqual(['shown']);
+    expect(registered).toBe(2);
+  });
+});
