@@ -47,6 +47,10 @@ export interface SafeFetchOptions {
   readonly maxBytes: number;
   /** `host:port` pairs allowed besides port 443 (OUTBOUND_EXTRA_PORTS_ALLOWLIST). Default: none. */
   readonly allowedPorts?: OutboundPortAllowlist;
+  /** The `User-Agent` sent. Default: the client metadata fetcher's. */
+  readonly userAgent?: string;
+  /** The `Accept` header sent. Default: `application/json`. */
+  readonly accept?: string;
   /** Test seam: replaces DNS resolution. */
   readonly resolve?: (hostname: string) => Promise<readonly LookupAddress[]>;
   /** Test seam: additional trusted CA certificates (PEM). */
@@ -135,9 +139,9 @@ export function createSafeJsonFetcher(options: SafeFetchOptions): JsonFetcher {
       const req = request(url, {
         method: 'GET',
         headers: {
-          accept: 'application/json',
+          accept: options.accept ?? 'application/json',
           'accept-encoding': 'identity',
-          'user-agent': 'LK-Bridge (OAuth client metadata fetcher)',
+          'user-agent': options.userAgent ?? 'LK-Bridge (OAuth client metadata fetcher)',
         },
         lookup: guardedLookup,
         agent: false,
@@ -169,7 +173,10 @@ export function createSafeJsonFetcher(options: SafeFetchOptions): JsonFetcher {
         }
         const contentType = (res.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
         if (contentType !== 'application/json' && !/^application\/[a-z0-9.+-]+\+json$/.test(contentType)) {
-          fail(new SafeFetchError('bad_content_type', 'Expected a JSON content type'));
+          // The received type is logged (an HTML challenge page shows up as text/html), cut short and limited to
+          // the characters a media type may contain.
+          const got = contentType.replace(/[^a-z0-9.+/-]/g, '').slice(0, 80) || '(none)';
+          fail(new SafeFetchError('bad_content_type', `Expected a JSON content type, got ${got}`));
           return;
         }
         const encoding = res.headers['content-encoding'];

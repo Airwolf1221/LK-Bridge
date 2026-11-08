@@ -1,6 +1,47 @@
 # Changelog
 
-## Unreleased: v1.0.1 hotfix (8 November 2026)
+## 1.0.2 (8 November 2026): ChatGPT's `private_key_jwt` client authentication
+
+ChatGPT's custom connector was refused at the consent page ("The application could not be verified: client metadata
+document must use token_endpoint_auth_method "none""). Its client metadata document (`https://chatgpt.com/oauth/client.json`)
+authenticates at the token endpoint with `private_key_jwt` (RFC 7523), signed RS256 with keys at its `jwks_uri`. The
+bridge now supports that ([ADR 0021](adr/0021-private-key-jwt-client-authentication.md)). No tag is pushed from here.
+
+**Upgrading:** deploy as usual; migration `0101_client_assertion_jti.sql` (new table `auth_client_assertion_jtis`) is
+applied at start. No settings change. To fetch ChatGPT's key set the server needs outbound HTTPS to `chatgpt.com:443`,
+which the document fetch already uses.
+
+- **Metadata.** `token_endpoint_auth_methods_supported` (and the revocation equivalent) now list `private_key_jwt` after
+  `none`, which stays first so Claude keeps choosing its metadata document. New
+  `token_endpoint_auth_signing_alg_values_supported` (and revocation): RS256, RS384, RS512, PS256, PS384, PS512, ES256,
+  ES384, ES512; never `none` or HS*.
+- **CIMD validation.** `token_endpoint_auth_method` may be `none` or `private_key_jwt`. A `private_key_jwt` document needs
+  exactly one of an https `jwks_uri` or an inline `jwks` of public keys; a declared `token_endpoint_auth_signing_alg` must
+  be a supported asymmetric algorithm and is then the only one accepted. The non-standard
+  `token_endpoint_auth_methods_supported` in a client document is ignored: it cannot make ChatGPT's client a `none`
+  client. Other methods are refused with the same `client.metadata_rejected` line as before. DCR is unchanged.
+- **Token and revocation endpoints.** A `private_key_jwt` client must send a valid `client_assertion` (both grants, and
+  revocation) and cannot fall back to `none`; a `none` client cannot send one. Checks: signature against the client's key
+  set chosen by `kid` (an unknown `kid` refetches the set once, at most once a minute), the declared algorithm, `iss` and
+  `sub` equal to the `client_id`, `aud` the issuer or the token endpoint (canonical), `exp` present and at most 5 minutes
+  ahead with 60 seconds of skew, `nbf` and `iat`, and a single-use `jti` kept in SQLite until it expires (so a restart
+  does not allow a replay). Failures are `401 invalid_client`.
+- **Key-set fetch** through the existing SSRF guard (https, port 443 unless allowlisted, public addresses, no redirects,
+  4-second deadline), 64 KiB cap, cached per `Cache-Control`/`Expires` for at least 30 seconds and at most an hour,
+  `User-Agent: LK-Bridge/1.0.2 (OAuth client key fetcher)`. A non-JSON answer (an HTML challenge) fails closed and is
+  logged with the status or content type received. The SSRF fetcher's content-type refusal now names the type it got.
+- **Logging.** `client.assertion_rejected` gives the specific reason (`no_assertion`, `bad_signature`, `wrong_alg`,
+  `alg_not_allowed`, `wrong_aud`, `expired`, `exp_too_far`, `replayed_jti`, `unknown_kid`, `jwks_fetch_failed`, …),
+  never the assertion. `client.jwks_fetched` and `client.assertion_accepted` record successes; `client.metadata_fetched`
+  carries `auth_method`, `jwks_uri` and `signing_alg`.
+- **Tests** (`test/auth/private-key-jwt.test.ts`): ChatGPT's real document shape with a local HTTPS key-set server on an
+  allowlisted port and per-run RSA and EC keys; the full flow (authorise with `iss`, consent with the `chatgpt` profile,
+  code exchange, refresh, revocation); every refusal; replay across a restart on the same database; key rotation; an
+  HTML key-set response; Claude's and Claude Code's real documents still working with `none`.
+- Docs: [auth.md](auth.md) (client authentication, ChatGPT), [auth-live-checklist.md](auth-live-checklist.md) §9,
+  PLAN amendment 7.
+
+## v1.0.1 follow-up hotfix, shipped in 1.0.2 (8 November 2026)
 
 - **Fixed: `migrate-to-build-user.sh` always stopped at the deploy-key check** ("lkbuild cannot authenticate to
   GitHub"), even with a working key. It piped `ssh -T git@github.com` into `grep` under `set -o pipefail`, and GitHub

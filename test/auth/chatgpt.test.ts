@@ -22,7 +22,8 @@ import {
  * ChatGPT's documented connector behaviour: discovery from the 401, Dynamic Client Registration
  * or a Client ID Metadata Document, PKCE S256, `resource` on both the authorization and the token
  * request, a public client (`token_endpoint_auth_method: none`), the chatgpt.com callbacks, and
- * RFC 9207 `iss` on every authorization response.
+ * RFC 9207 `iss` on every authorization response. ChatGPT's real metadata document uses
+ * `private_key_jwt` instead; that flow is in private-key-jwt.test.ts (ADR 0021).
  *
  * ChatGPT may also ask for `openid` and `email`. The bridge does not advertise them and ignores
  * them when requested.

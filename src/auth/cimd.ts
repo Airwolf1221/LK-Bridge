@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { type AssertionAlg, isAssertionAlg, JwksShapeError, jwksUriProblem, parseJwks } from './jwks.js';
 import { isAllowedRedirectUri } from './redirect-uris.js';
 import { type JsonFetcher, SafeFetchError } from './safe-fetch.js';
 
@@ -65,7 +66,13 @@ export function validateCimdUrl(clientId: string): URL {
   return url;
 }
 
-const authMethods = ['none'] as const;
+/**
+ * A CIMD client is public (`none`, Claude and Claude Code) or authenticates with a key pair (`private_key_jwt`,
+ * ChatGPT; ADR 0021). There is no client secret in a public document, so nothing else can work. The method is the one
+ * the document names in `token_endpoint_auth_method`, and the token endpoint enforces exactly that one.
+ */
+const authMethods = ['none', 'private_key_jwt'] as const;
+export type CimdAuthMethod = (typeof authMethods)[number];
 
 /**
  * The grants the bridge issues. A document may list others (claude.ai's lists the JWT bearer grant
@@ -90,6 +97,10 @@ const documentSchema = z
       .optional()
       .default([...SUPPORTED_RESPONSE_TYPES]),
     token_endpoint_auth_method: z.string().optional().default('none'),
+    // private_key_jwt only (RFC 7591 §2): where the client's public keys are, and the one algorithm it signs with.
+    jwks_uri: z.string().optional(),
+    jwks: z.unknown().optional(),
+    token_endpoint_auth_signing_alg: z.string().optional(),
     scope: z.string().max(1000).optional(),
   })
   .loose();
@@ -106,7 +117,11 @@ export interface CimdMetadata {
   readonly responseTypes: string[];
   /** Response types the document lists other than `code`, which are ignored. */
   readonly ignoredResponseTypes: string[];
-  readonly tokenEndpointAuthMethod: (typeof authMethods)[number];
+  readonly tokenEndpointAuthMethod: CimdAuthMethod;
+  /** private_key_jwt: the key set's URL, or null when the document carries the keys inline (`jwks`). */
+  readonly jwksUri: string | null;
+  /** private_key_jwt: the only algorithm assertions may use, when the document names one. */
+  readonly signingAlg: AssertionAlg | null;
   readonly document: Record<string, unknown>;
 }
 
@@ -159,10 +174,53 @@ export function validateCimdDocument(
     });
   }
   if (!(authMethods as readonly string[]).includes(doc.token_endpoint_auth_method)) {
-    throw new CimdError('client metadata document must use token_endpoint_auth_method "none"', {
-      field: 'token_endpoint_auth_method',
-      value: doc.token_endpoint_auth_method,
-    });
+    throw new CimdError(
+      'client metadata document must use token_endpoint_auth_method "none" or "private_key_jwt"',
+      { field: 'token_endpoint_auth_method', value: doc.token_endpoint_auth_method },
+    );
+  }
+  const method = doc.token_endpoint_auth_method as CimdAuthMethod;
+  // Only the document's own token_endpoint_auth_method counts. A non-standard list such as
+  // `token_endpoint_auth_methods_supported` (an authorization-server metadata name) is ignored, never a way to "none".
+  let jwksUri: string | null = null;
+  let signingAlg: AssertionAlg | null = null;
+  if (method === 'private_key_jwt') {
+    if (doc.jwks_uri !== undefined && doc.jwks !== undefined) {
+      throw new CimdError('client metadata document must not contain both jwks_uri and jwks', {
+        field: 'jwks_uri',
+        value: doc.jwks_uri,
+      });
+    }
+    if (doc.jwks_uri === undefined && doc.jwks === undefined) {
+      throw new CimdError('client metadata document uses private_key_jwt but names no jwks_uri or jwks', {
+        field: 'jwks_uri',
+      });
+    }
+    if (doc.jwks_uri !== undefined) {
+      const problem = jwksUriProblem(doc.jwks_uri);
+      if (problem)
+        throw new CimdError(`client metadata document ${problem}`, {
+          field: 'jwks_uri',
+          value: doc.jwks_uri,
+        });
+      jwksUri = doc.jwks_uri;
+    } else {
+      try {
+        parseJwks(doc.jwks);
+      } catch (err) {
+        if (!(err instanceof JwksShapeError)) throw err;
+        throw new CimdError(`client metadata document jwks is not usable: ${err.message}`, { field: 'jwks' });
+      }
+    }
+    if (doc.token_endpoint_auth_signing_alg !== undefined) {
+      if (!isAssertionAlg(doc.token_endpoint_auth_signing_alg)) {
+        throw new CimdError(
+          'client metadata document token_endpoint_auth_signing_alg must be an asymmetric algorithm this server supports',
+          { field: 'token_endpoint_auth_signing_alg', value: doc.token_endpoint_auth_signing_alg },
+        );
+      }
+      signingAlg = doc.token_endpoint_auth_signing_alg;
+    }
   }
   const grants = partitionSupported(doc.grant_types, SUPPORTED_GRANT_TYPES);
   if (!grants.kept.includes('authorization_code')) {
@@ -194,7 +252,9 @@ export function validateCimdDocument(
     ignoredGrantTypes: grants.ignored,
     responseTypes: responses.kept,
     ignoredResponseTypes: responses.ignored,
-    tokenEndpointAuthMethod: 'none',
+    tokenEndpointAuthMethod: method,
+    jwksUri,
+    signingAlg,
     document: record,
   };
 }

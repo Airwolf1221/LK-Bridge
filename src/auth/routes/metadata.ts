@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { AuthConfig } from '../../config/auth.js';
 import { cors } from '../http.js';
+import { ASSERTION_SIGNING_ALGS } from '../jwks.js';
 import { RESOURCE_SCOPES, SUPPORTED_SCOPES } from '../scopes.js';
 
 /** OAuth paths. The `/authorize`, `/token` and `/register` aliases serve 2025-03-26 clients. */
@@ -28,7 +29,11 @@ export function protectedResourceMetadata(config: AuthConfig) {
   };
 }
 
-const AUTH_METHODS = ['none', 'client_secret_post', 'client_secret_basic'];
+/**
+ * "none" stays first: Claude chooses its Client ID Metadata Document only when "none" is advertised. ChatGPT picks
+ * from the intersection with its own list, and its document asks for private_key_jwt (ADR 0021).
+ */
+const AUTH_METHODS = ['none', 'private_key_jwt', 'client_secret_post', 'client_secret_basic'];
 
 /** RFC 8414 authorization-server metadata. */
 export function authorizationServerMetadata(config: AuthConfig) {
@@ -44,7 +49,9 @@ export function authorizationServerMetadata(config: AuthConfig) {
     grant_types_supported: ['authorization_code', 'refresh_token'],
     code_challenge_methods_supported: ['S256'],
     token_endpoint_auth_methods_supported: AUTH_METHODS,
+    token_endpoint_auth_signing_alg_values_supported: [...ASSERTION_SIGNING_ALGS],
     revocation_endpoint_auth_methods_supported: AUTH_METHODS,
+    revocation_endpoint_auth_signing_alg_values_supported: [...ASSERTION_SIGNING_ALGS],
     scopes_supported: [...SUPPORTED_SCOPES],
     client_id_metadata_document_supported: true,
     authorization_response_iss_parameter_supported: true,
