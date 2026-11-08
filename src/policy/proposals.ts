@@ -403,9 +403,11 @@ export class ProposalService implements ProposalSink {
   ): Promise<Snapshot> {
     let body: unknown;
     try {
+      // Chunk 6: a reader with no path parameters (listMembers, listInvites, listCalendars) must get `{}`: the registry
+      // rejects an empty `path` object as an unrecognised key, which made proposals for those targets fail at capture.
       const r = await engine.run(
         target.op,
-        { path: target.path },
+        Object.keys(target.path).length > 0 ? { path: target.path } : {},
         { origin, priority, title: 'proposal read' },
       );
       if (r.status !== 'succeeded') {
