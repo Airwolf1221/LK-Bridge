@@ -78,10 +78,16 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const log = pino({ level: config.logLevel, base: { component: 'engine' } });
   // Signed upload URLs are on another host: the transport sends LegendKeeper's host through the platform fetch
   // and every other host through the SSRF guard. Both stay under the governor.
+  // The SSRF guard for every non-LegendKeeper fetch of the tool layer (the signed-URL PUT and an image source URL):
+  // port 443 only unless OUTBOUND_EXTRA_PORTS_ALLOWLIST lists host:port (v1.0.1). Test seams may add to it.
+  const uploadGuard: GuardOptions = {
+    allowedPorts: o.toolsSettings.outboundExtraPorts ?? new Set<string>(),
+    ...(o.uploadGuard ?? {}),
+  };
   const transport = createUploadTransport({
     lkOrigin: new URL(config.lk.baseUrl).origin,
     lk: o.lkTransport ?? defaultTransport,
-    ...(o.uploadGuard ?? {}),
+    ...uploadGuard,
   });
   const lk = createLkClient({
     ...lkSettingsFrom(config),
@@ -111,7 +117,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     customSteps: {
       [UPLOAD_PUT_STEP]: createUploadPutHandler({
         putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,
-        ...(o.uploadGuard ? { guard: o.uploadGuard } : {}),
+        guard: uploadGuard,
       }),
     },
     autoStart: false,
@@ -148,7 +154,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       version: o.version,
       projectId: config.lk.projectId,
       configuredReadOnly: config.lk.readOnly,
-      uploadGuard: o.uploadGuard,
+      uploadGuard,
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
   );

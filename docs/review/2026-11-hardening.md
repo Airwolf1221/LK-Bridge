@@ -91,7 +91,7 @@ each with a recommendation below; none is a vulnerability reachable by an intern
 | F-17 | Low      | Supply chain        | `deploy/deploy.sh:161`                                    | `npm ci` and the build run as `lkbridge`, which can read the env file                                                                             | Open     |
 | F-26 | Low      | Logging             | `src/server.ts` (Fastify default `routeNotFound`)         | Fastify's not-found log line carried the raw URL, query string included                                                                           | Fixed    |
 | F-18 | Info     | systemd             | `deploy/lk-bridge.service:20-23`                          | The comment on `NODE_OPTIONS` misstates systemd's precedence; memory values reviewed                                                              | Fixed    |
-| F-19 | Info     | SSRF                | `src/auth/safe-fetch.ts`, `src/mcp/tools/upload-http.ts`  | Outbound fetches allow any port on a public host                                                                                                  | Open     |
+| F-19 | Info     | SSRF                | `src/auth/safe-fetch.ts`, `src/mcp/tools/upload-http.ts`  | Outbound fetches allow any port on a public host                                                                                                  | Fixed    |
 | F-20 | Info     | Durability          | `src/db/open.ts:17`                                       | `synchronous=NORMAL` under WAL can lose the last commits on power loss                                                                            | Accepted |
 | F-21 | Info     | Tools               | `src/mcp/tools/bridge.ts:37-73`                           | `bridge_info`'s shared lookup records its errors against whichever caller triggered it                                                            | Fixed    |
 | F-22 | Info     | Secrets             | git history                                               | Whole-history scan: no real secret found                                                                                                          | Pass     |
@@ -328,6 +328,15 @@ The CIMD fetcher and the image fetcher accept any port on a public address, so a
 bridge open TLS connections to arbitrary ports of public hosts. **Recommendation:** allow only 443 for image URLs, if the
 owner never needs other ports.
 
+**Status: fixed in v1.0.1** (`src/auth/ports.ts`, used by `src/auth/safe-fetch.ts` and `src/mcp/tools/upload-http.ts`).
+All three outbound paths (the CIMD document, the image source URL and every redirect hop, the signed-URL PUT) allow port
+443 only, unless the exact `host:port` is in the new setting `OUTBOUND_EXTRA_PORTS_ALLOWLIST` (default empty; parsed at
+start-up, a malformed entry stops the bridge). The check is part of each guard's URL check, which every hop passes, and
+`guardedRequest` checks again before DNS or connect. Tests: `test/unit/outbound-ports.test.ts`; `test/auth/cimd.test.ts` ›
+allows only port 443 unless host:port is listed (no DNS lookup happens); `test/tools/upload.test.ts` › "outbound ports"
+(refused and listed image URLs, redirect hops to unlisted ports refused and never sent, a listed hop followed, a signed PUT
+on an unlisted port never contacted).
+
 ### F-20 (Info, accepted): `synchronous=NORMAL`
 
 Under WAL, NORMAL can lose the last transactions on power loss (not on a process crash) but never corrupts the database. A
@@ -434,7 +443,7 @@ Notes per area, beyond the findings:
    decimal, octal and hex IPv4 forms are normalised by the WHATWG URL parser before the literal check; IPv4-mapped, NAT64,
    6to4, Teredo and every non-`2000::/3` IPv6 address are refused; CIMD follows no redirect, the image fetch at most 3,
    each re-checked; deadlines and byte caps on both; the PUT only to a host LegendKeeper named, with its error body
-   replaced. Ports are not restricted (F-19).
+   replaced. Ports were not restricted (F-19, fixed in v1.0.1: 443 only unless listed).
 6. **Dashboard.** `__Host-` cookie, HttpOnly, Secure, SameSite=Lax; state-changing requests need the bridge's own `Origin`
    and a session-bound HMAC token; cross-site requests are now refused (F-08); the CSP has no inline script or style;
    ADR 0014's `same-origin` referrer on the auth pages is sound (nothing is sent to other sites, and it is what makes the

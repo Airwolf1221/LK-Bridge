@@ -109,7 +109,12 @@ export async function resolveImage(
           );
         }
         if (e.reason === 'bad_content_type') throw new UploadSourceError('UPLOAD_NOT_AN_IMAGE', e.message);
-        if (e.reason === 'blocked_address' || e.reason === 'invalid_url' || e.reason === 'redirect') {
+        if (
+          e.reason === 'blocked_address' ||
+          e.reason === 'blocked_port' ||
+          e.reason === 'invalid_url' ||
+          e.reason === 'redirect'
+        ) {
           throw new UploadSourceError('UPLOAD_URL_REFUSED', `The image URL was refused: ${e.message}`);
         }
         throw new UploadSourceError('UPLOAD_URL_FAILED', `The image could not be fetched: ${e.message}`);

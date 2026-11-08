@@ -171,7 +171,11 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
   const event = createAuthEventLogger(o.log);
   const fetchJson =
     o.fetchJson ??
-    createSafeJsonFetcher({ timeoutMs: config.cimd.timeoutMs, maxBytes: config.cimd.maxBytes });
+    createSafeJsonFetcher({
+      timeoutMs: config.cimd.timeoutMs,
+      maxBytes: config.cimd.maxBytes,
+      ...(config.outboundExtraPorts ? { allowedPorts: config.outboundExtraPorts } : {}),
+    });
   const cimd = new CimdFetcher(fetchJson, {
     extraRedirectUris: config.extraRedirectUris,
     defaultCacheSeconds: config.cimd.defaultCacheSeconds,

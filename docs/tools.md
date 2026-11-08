@@ -130,6 +130,9 @@ The source is **base64** (a `data:` URI is accepted) or a **public https URL** (
 Network rules for both the URL fetch and the PUT (the address policy of chunk 4, `src/auth/ip.ts`, enforced inside the connection's DNS lookup as in `src/auth/safe-fetch.ts`):
 
 - https only, no credentials in the URL;
+- **port 443 only** (v1.0.1), unless the exact `host:port` is listed in `OUTBOUND_EXTRA_PORTS_ALLOWLIST`; the check is
+  part of the same guard, so it applies to the first URL, every redirect hop and the PUT, before any DNS lookup or
+  connection (`UPLOAD_URL_REFUSED`, `UPLOAD_TARGET_REFUSED`, with a message naming the port, never the URL);
 - private, loopback, link-local, CGNAT and other non-public addresses are refused, whether literal or by DNS (`UPLOAD_URL_REFUSED`, `UPLOAD_TARGET_REFUSED`);
 - URL fetches follow at most 3 redirects, each hop checked; they time out after `UPLOAD_FETCH_TIMEOUT_MS`;
 - each PUT attempt has its own deadline, `UPLOAD_PUT_TIMEOUT_MS` (default 120 s), not the governor's 30-second LegendKeeper request timeout;
@@ -142,14 +145,15 @@ Codes: `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`, `UPLO
 
 ## Settings
 
-| Variable                  | Default            | Meaning                                                                                                         |
-| ------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
-| `MCP_EXPOSE_PER_OP_TOOLS` | `false`            | Also register `lk_op_<operationId>` for all 89 operations                                                       |
-| `MCP_RESULT_MAX_CHARS`    | `40000`            | Results longer than this are stored and returned as a handle                                                    |
-| `UPLOAD_MAX_BYTES`        | `10485760` (10 MB) | Largest image `lk_upload_image` accepts. The `/mcp` request body limit is sized from it (below)                 |
-| `UPLOAD_ALLOW_URL_SOURCE` | `true`             | `false`: base64 only                                                                                            |
-| `UPLOAD_FETCH_TIMEOUT_MS` | `15000`            | Deadline for fetching an image from a URL                                                                       |
-| `UPLOAD_PUT_TIMEOUT_MS`   | `120000`           | Per-attempt deadline of the signed-URL PUT (5 s to 10 min), separate from the 30 s LegendKeeper request timeout |
+| Variable                         | Default            | Meaning                                                                                                                                                                                                                |
+| -------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MCP_EXPOSE_PER_OP_TOOLS`        | `false`            | Also register `lk_op_<operationId>` for all 89 operations                                                                                                                                                              |
+| `MCP_RESULT_MAX_CHARS`           | `40000`            | Results longer than this are stored and returned as a handle                                                                                                                                                           |
+| `UPLOAD_MAX_BYTES`               | `10485760` (10 MB) | Largest image `lk_upload_image` accepts. The `/mcp` request body limit is sized from it (below)                                                                                                                        |
+| `UPLOAD_ALLOW_URL_SOURCE`        | `true`             | `false`: base64 only                                                                                                                                                                                                   |
+| `UPLOAD_FETCH_TIMEOUT_MS`        | `15000`            | Deadline for fetching an image from a URL                                                                                                                                                                              |
+| `UPLOAD_PUT_TIMEOUT_MS`          | `120000`           | Per-attempt deadline of the signed-URL PUT (5 s to 10 min), separate from the 30 s LegendKeeper request timeout                                                                                                        |
+| `OUTBOUND_EXTRA_PORTS_ALLOWLIST` | empty              | Exact `host:port` pairs, comma-separated, that the image fetch, its redirects, the PUT and the CIMD fetch may use besides 443 (v1.0.1). No wildcards; a malformed entry stops the bridge at start-up, naming the entry |
 
 The governor's per-attempt timeout (30 s) also bounds the PUT.
 
