@@ -1,0 +1,39 @@
+# The ONE site block LK-Bridge adds to the existing /etc/caddy/Caddyfile. Append it at the end of that file; do not
+# touch any other block, the global options or the snippets (docs/runbook-deploy.md, "Caddy").
+#
+# Caddy already serves other sites on this server, so it already holds ports 80 and 443. A new site name is all it needs:
+# it obtains and renews a certificate for lk.ottomoons.co.uk by itself once the DNS A record points at this server.
+
+lk.ottomoons.co.uk {
+	# Everything goes to the bridge, which listens on the loopback address only (HOST=127.0.0.1, PORT=8787), so nothing
+	# can reach it except through this block. Caddy sets X-Forwarded-For, -Proto and -Host on the way through; it replaces
+	# any X-Forwarded-For a client sent. The bridge (TRUST_PROXY=loopback) trusts that header only when the connection
+	# comes from 127.0.0.1, which is how it learns the real client address for its sign-in rate limit.
+	reverse_proxy 127.0.0.1:8787 {
+		# Send each chunk to the client as soon as it arrives instead of buffering. Without this the dashboard's live
+		# event stream (/api/admin/stream, server-sent events) and MCP streamable-HTTP responses would stall until a
+		# buffer filled. -1 means "flush immediately".
+		flush_interval -1
+	}
+
+	# Deliberately absent, because each would break something:
+	#
+	# - No `redir`, `rewrite`, `handle_path`, `uri` or `try_files` anywhere in this block, and nothing here that adds a
+	#   trailing-slash or www redirect. Claude drops the Authorization header when it follows a redirect, so /mcp must
+	#   answer directly, and /.well-known/* must reach the bridge byte for byte (the OAuth discovery documents name the
+	#   exact URLs). A request for /mcp and for /mcp/ both go straight to the bridge, which treats them the same.
+	#
+	# - No `encode` (gzip/zstd). Compressing text/event-stream makes a compressor hold events back; a stream that is
+	#   delayed is as good as broken. If your Caddyfile imports a shared snippet that turns on `encode` for every site,
+	#   do not import it here. (The dashboard's files are small and already minified, so nothing is lost.)
+	#
+	# - No `header` directives. The bridge sets its own security headers (CSP, X-Frame-Options, Referrer-Policy and so
+	#   on) on each page, and a second copy added here could conflict with them.
+	#
+	# - No `basic_auth`, `forward_auth` or WAF in front of it. The bridge does its own authentication, and Claude's
+	#   servers (160.79.104.0/21) must be able to reach /mcp and /.well-known/* without a challenge from anything else.
+	#
+	# Access logs: Caddy's default (no `log` directive here) adds none for this site beyond what your global options
+	# already do. If you turn logging on, note that Caddy logs query strings, and the bridge's own journal is the place
+	# to look first (journalctl -u lk-bridge).
+}

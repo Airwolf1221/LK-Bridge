@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Chunk 7a: deployment files and the runbook
+
+No application behaviour changed. Everything is under `deploy/`, `docs/`, `test/unit/` and the CI file.
+
+- **`deploy/`**: `install-node.sh` (private Node 24 LTS under `/opt/lk-bridge/runtime/node`, version pinned and
+  overridable, SHA-256 checked against `SHASUMS256.txt`, idempotent), `lk-bridge.service` (hardened, `TimeoutStopSec=45`
+  for the engine's 20 s drain), `Caddyfile.lk-bridge` (one site block; `flush_interval -1`; no redirects, rewrites,
+  `encode` or headers), `deploy.sh` (stop-to-drain, pre-deploy backup, fast-forward only, `npm ci`, build, migrate, start,
+  health check; `--current` for rollback), `backup.sh` with `lk-bridge-backup.service` and `.timer` (04:15 Europe/London,
+  integrity-checked, gzip, 14 nightly copies kept), `healthcheck.sh`, `sudoers.lk-bridge` (four `systemctl` commands for
+  `lk-bridge`), `env.template`, and helpers `lib.sh`, `lk-run.sh` (runs the owner CLIs with the private Node and
+  `DB_PATH`) and `sandbox-test.sh`.
+- **`npm run test:sandbox` cannot read the bridge's env file** (vitest loads no env files, and the file is not safe to
+  `source`). `deploy/sandbox-test.sh` reads only `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID`, exports only those, prints
+  neither, and refuses to run if they equal the production key or project id.
+- **[docs/runbook-deploy.md](runbook-deploy.md)**: the step-by-step deployment for this server, with every `sudo` step marked.
+  [ADR 0015](adr/0015-deployment-layout.md) records the departures from PLAN §9 (private Node, `/opt/lk-bridge/app`,
+  stop-to-drain because the admin API accepts only the owner's browser session).
+- **Tests:** `test/unit/deploy-env-template.test.ts` derives the variables the config loaders read and require from the
+  zod schemas and checks `env.template` has them all, holds only the documented production defaults and no secret;
+  `test/unit/deploy-files.test.ts` checks the scripts (strict mode, executable, shellcheck when installed), the sudoers rule,
+  the units (and `systemd-analyze verify` when available) and the Caddy block. CI runs `shellcheck -x deploy/*.sh`.
+
 ### Chunk 5: dashboard, admin API and live stream
 
 - **Dashboard** at `/ui` (`ui/`, Vite + React, TypeScript strict, light and dark, bundled with no external fonts or
