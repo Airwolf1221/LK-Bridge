@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hashSecret } from '../../src/auth/crypto.js';
+import { JWT_BEARER_GRANT } from './fixtures/claude-client-metadata.js';
 import {
   Browser,
   PUBLIC_URL,
   type TestBridge,
   authorizeAndApprove,
+  logEvents,
   pkcePair,
   registerClient,
   startBridge,
@@ -130,13 +132,114 @@ describe('dynamic client registration', () => {
     [{ token_endpoint_auth_method: 'client_secret_jwt' }],
     [{ grant_types: ['client_credentials'] }],
     [{ grant_types: ['refresh_token'] }],
-    [{ grant_types: ['authorization_code', 'implicit'] }],
+    [{ grant_types: ['refresh_token', JWT_BEARER_GRANT] }],
+    [{ grant_types: [] }],
     [{ response_types: ['token'] }],
     [{ client_name: 'x'.repeat(201) }],
   ])('refuses %j with invalid_client_metadata', async (patch) => {
     const res = await registerClient(bridge, { redirect_uris: [CB], ...patch });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toBe('invalid_client_metadata');
+  });
+
+  it('registers only the supported grants a client asks for, as claude.ai does with the JWT bearer grant', async () => {
+    // claude.ai's "Register automatically" asks for the same grants its metadata document lists.
+    const res = await registerClient(bridge, {
+      client_name: 'Claude',
+      redirect_uris: [CB],
+      token_endpoint_auth_method: 'none',
+      grant_types: ['authorization_code', 'refresh_token', JWT_BEARER_GRANT],
+      response_types: ['code'],
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { client_id: string; grant_types: string[] };
+    // RFC 7591 §3.2.1: the response carries the values actually registered.
+    expect(body.grant_types).toEqual(['authorization_code', 'refresh_token']);
+    expect(bridge.services.store.getClient(body.client_id)?.grantTypes).toEqual([
+      'authorization_code',
+      'refresh_token',
+    ]);
+    expect(logEvents(bridge, 'client.grant_types_ignored')).toContainEqual(
+      expect.objectContaining({
+        level: 30,
+        client_id: body.client_id,
+        kind: 'dcr',
+        ignored_grant_types: JWT_BEARER_GRANT,
+        grant_types: 'authorization_code refresh_token',
+      }),
+    );
+
+    // The registered client completes the flow and refreshes.
+    const { verifier, challenge } = pkcePair();
+    const cb = await authorizeAndApprove(new Browser(bridge), {
+      clientId: body.client_id,
+      redirectUri: CB,
+      challenge,
+      method: 'S256',
+      scope: 'mcp offline_access',
+    });
+    const t = await tokenRequest(bridge, {
+      grant_type: 'authorization_code',
+      code: cb.searchParams.get('code') ?? undefined,
+      redirect_uri: CB,
+      code_verifier: verifier,
+      client_id: body.client_id,
+    });
+    expect(t.res.status).toBe(200);
+    const r = await tokenRequest(bridge, {
+      grant_type: 'refresh_token',
+      refresh_token: t.body.refresh_token as string,
+      client_id: body.client_id,
+    });
+    expect(r.res.status).toBe(200);
+    // The ignored grant is never issued: the token endpoint still refuses it.
+    const jwt = await tokenRequest(bridge, {
+      grant_type: JWT_BEARER_GRANT,
+      assertion: 'eyJhbGciOiJub25lIn0.e30.',
+      client_id: body.client_id,
+    });
+    expect(jwt.res.status).toBe(400);
+    expect(jwt.body.error).toBe('unsupported_grant_type');
+  });
+
+  it('logs the refused field and value with every refused registration', async () => {
+    const res = await registerClient(bridge, {
+      client_name: 'Needs logging',
+      redirect_uris: [CB],
+      token_endpoint_auth_method: 'none',
+      grant_types: ['refresh_token', JWT_BEARER_GRANT],
+    });
+    expect(res.status).toBe(400);
+    expect(logEvents(bridge, 'client.registration_rejected')).toContainEqual(
+      expect.objectContaining({
+        level: 40,
+        error: 'invalid_client_metadata',
+        field: 'grant_types',
+        value: `["refresh_token","${JWT_BEARER_GRANT}"]`,
+        reason: 'grant_types must include authorization_code',
+        client_name: 'Needs logging',
+      }),
+    );
+    const method = await registerClient(bridge, {
+      client_name: 'Needs logging',
+      redirect_uris: [CB],
+      token_endpoint_auth_method: 'private_key_jwt',
+    });
+    expect(method.status).toBe(400);
+    expect(logEvents(bridge, 'client.registration_rejected')).toContainEqual(
+      expect.objectContaining({ field: 'token_endpoint_auth_method', value: 'private_key_jwt' }),
+    );
+    const malformed = await registerClient(bridge, {
+      client_name: 'Needs logging',
+      redirect_uris: [CB],
+      grant_types: 'authorization_code',
+      client_secret: 'never-logged',
+    });
+    expect(malformed.status).toBe(400);
+    expect(logEvents(bridge, 'client.registration_rejected')).toContainEqual(
+      expect.objectContaining({ field: 'grant_types', value: 'authorization_code' }),
+    );
+    expect(bridge.logs.join('')).not.toContain('never-logged');
   });
 
   it('takes JSON only', async () => {

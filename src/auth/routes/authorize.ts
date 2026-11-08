@@ -86,7 +86,17 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
       client = await s.clients.resolveForAuthorization(clientId);
     } catch (err) {
       if (!(err instanceof CimdError)) throw err;
-      s.event('authorize.rejected', { client_id: clientId, reason: 'client_metadata' }, 'warn');
+      s.event(
+        'authorize.rejected',
+        {
+          client_id: clientId,
+          reason: 'client_metadata',
+          detail: err.message,
+          field: err.field,
+          value: err.value,
+        },
+        'warn',
+      );
       return sendErrorPage(
         reply,
         400,

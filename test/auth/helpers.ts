@@ -448,3 +448,10 @@ export async function fullFlow(
     browser,
   };
 }
+
+/** The auth log lines a bridge has written for one event, parsed. */
+export function logEvents(bridge: TestBridge, event: string): Record<string, unknown>[] {
+  return bridge.logs
+    .map((l) => JSON.parse(l) as Record<string, unknown>)
+    .filter((l) => l.event === event && l.component === 'auth');
+}

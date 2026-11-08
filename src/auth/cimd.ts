@@ -1,6 +1,6 @@
 import * as z from 'zod';
 import { isAllowedRedirectUri } from './redirect-uris.js';
-import type { JsonFetcher } from './safe-fetch.js';
+import { type JsonFetcher, SafeFetchError } from './safe-fetch.js';
 
 /**
  * Client ID Metadata Documents (draft-ietf-oauth-client-id-metadata-document, MCP 2025-11-25).
@@ -8,10 +8,33 @@ import type { JsonFetcher } from './safe-fetch.js';
  * `client_id` is the identical string, and validates its redirect URIs against the bridge policy.
  */
 
+/** The longest offending value a refusal carries into the log. */
+const MAX_LOGGED_VALUE = 300;
+
+/** A JSON rendering of an offending value, cut to a length that is safe to log. */
+export function loggableValue(value: unknown): string {
+  let text: string;
+  try {
+    text = typeof value === 'string' ? value : (JSON.stringify(value) ?? String(value));
+  } catch {
+    text = String(value);
+  }
+  return text.length > MAX_LOGGED_VALUE ? `${text.slice(0, MAX_LOGGED_VALUE)}…` : text;
+}
+
 export class CimdError extends Error {
-  constructor(message: string) {
+  /**
+   * The document field (or `client_id` URL) that caused the refusal, and its offending value as
+   * logged. Neither is shown to the user. A secret's value is never kept.
+   */
+  readonly field: string | null;
+  readonly value: string | null;
+
+  constructor(message: string, detail: { readonly field: string; readonly value?: unknown } | null = null) {
     super(message);
     this.name = 'CimdError';
+    this.field = detail?.field ?? null;
+    this.value = detail && 'value' in detail ? loggableValue(detail.value) : null;
   }
 }
 
@@ -22,26 +45,34 @@ export function isCimdClientId(clientId: string): boolean {
 
 /** Validates the URL form of a CIMD `client_id`. Throws {@link CimdError}. */
 export function validateCimdUrl(clientId: string): URL {
-  if (clientId.length > 2048) throw new CimdError('client_id URL is too long');
+  const bad = (message: string) => new CimdError(message, { field: 'client_id', value: clientId });
+  if (clientId.length > 2048) throw bad('client_id URL is too long');
   let url: URL;
   try {
     url = new URL(clientId);
   } catch {
-    throw new CimdError('client_id is not a valid URL');
+    throw bad('client_id is not a valid URL');
   }
-  if (url.protocol !== 'https:') throw new CimdError('client_id URL must use https');
-  if (url.username || url.password) throw new CimdError('client_id URL must not contain credentials');
-  if (clientId.includes('#')) throw new CimdError('client_id URL must not contain a fragment');
-  if (clientId.includes('?')) throw new CimdError('client_id URL must not contain a query string');
-  if (url.pathname === '/' || url.pathname === '') throw new CimdError('client_id URL must contain a path');
+  if (url.protocol !== 'https:') throw bad('client_id URL must use https');
+  if (url.username || url.password) throw bad('client_id URL must not contain credentials');
+  if (clientId.includes('#')) throw bad('client_id URL must not contain a fragment');
+  if (clientId.includes('?')) throw bad('client_id URL must not contain a query string');
+  if (url.pathname === '/' || url.pathname === '') throw bad('client_id URL must contain a path');
   const rawPath = clientId.replace(/^https:\/\/[^/]*/i, '');
   if (rawPath.split('/').some((seg) => /^(?:\.|%2e){1,2}$/i.test(seg))) {
-    throw new CimdError('client_id URL must not contain dot segments');
+    throw bad('client_id URL must not contain dot segments');
   }
   return url;
 }
 
 const authMethods = ['none'] as const;
+
+/**
+ * The grants the bridge issues. A document may list others (claude.ai's lists the JWT bearer grant
+ * for Enterprise Managed Auth); they are ignored, never issued, and the token endpoint refuses them.
+ */
+export const SUPPORTED_GRANT_TYPES = ['authorization_code', 'refresh_token'] as const;
+const SUPPORTED_RESPONSE_TYPES = ['code'] as const;
 
 const documentSchema = z
   .object({
@@ -50,8 +81,14 @@ const documentSchema = z
     client_uri: z.string().max(2048).optional(),
     logo_uri: z.string().max(2048).optional(),
     redirect_uris: z.array(z.string().max(2048)).min(1).max(20),
-    grant_types: z.array(z.string()).optional().default(['authorization_code', 'refresh_token']),
-    response_types: z.array(z.string()).optional().default(['code']),
+    grant_types: z
+      .array(z.string())
+      .optional()
+      .default([...SUPPORTED_GRANT_TYPES]),
+    response_types: z
+      .array(z.string())
+      .optional()
+      .default([...SUPPORTED_RESPONSE_TYPES]),
     token_endpoint_auth_method: z.string().optional().default('none'),
     scope: z.string().max(1000).optional(),
   })
@@ -62,10 +99,27 @@ export interface CimdMetadata {
   /** Redirect URIs from the document that the bridge's policy allows. */
   readonly redirectUris: string[];
   readonly declaredRedirectUris: string[];
+  /** The document's grant types that the bridge supports; always includes `authorization_code`. */
   readonly grantTypes: string[];
+  /** Grant types the document lists that the bridge does not support, and so ignores. */
+  readonly ignoredGrantTypes: string[];
   readonly responseTypes: string[];
+  /** Response types the document lists other than `code`, which are ignored. */
+  readonly ignoredResponseTypes: string[];
   readonly tokenEndpointAuthMethod: (typeof authMethods)[number];
   readonly document: Record<string, unknown>;
+}
+
+/** Splits requested values into those the bridge supports and those it ignores, keeping order. */
+export function partitionSupported(
+  requested: readonly string[],
+  supported: readonly string[],
+): { readonly kept: string[]; readonly ignored: string[] } {
+  const unique = [...new Set(requested)];
+  return {
+    kept: unique.filter((v) => supported.includes(v)),
+    ignored: unique.filter((v) => !supported.includes(v)),
+  };
 }
 
 /** Validates a fetched document for `clientId`. Throws {@link CimdError}. */
@@ -75,43 +129,71 @@ export function validateCimdDocument(
   extraRedirectUris: readonly string[],
 ): CimdMetadata {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-    throw new CimdError('client metadata document must be a JSON object');
+    throw new CimdError('client metadata document must be a JSON object', {
+      field: '(document)',
+      value: Array.isArray(body) ? 'array' : body === null ? 'null' : typeof body,
+    });
   }
   const record = body as Record<string, unknown>;
-  if ('client_secret' in record || 'client_secret_expires_at' in record) {
-    throw new CimdError('client metadata document must not contain a client secret');
+  for (const field of ['client_secret', 'client_secret_expires_at']) {
+    // The field name alone is logged: a secret's value must never reach the log.
+    if (field in record) {
+      throw new CimdError('client metadata document must not contain a client secret', { field });
+    }
   }
   const parsed = documentSchema.safeParse(body);
-  if (!parsed.success) throw new CimdError('client metadata document is malformed');
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const top = issue?.path[0];
+    const field = issue && issue.path.length > 0 ? issue.path.map(String).join('.') : '(document)';
+    throw new CimdError(
+      'client metadata document is malformed',
+      typeof top === 'string' ? { field, value: record[top] } : { field },
+    );
+  }
   const doc = parsed.data;
   if (doc.client_id !== clientId) {
-    throw new CimdError('client metadata document client_id does not match the URL it was fetched from');
+    throw new CimdError('client metadata document client_id does not match the URL it was fetched from', {
+      field: 'client_id',
+      value: doc.client_id,
+    });
   }
   if (!(authMethods as readonly string[]).includes(doc.token_endpoint_auth_method)) {
-    throw new CimdError('client metadata document must use token_endpoint_auth_method "none"');
+    throw new CimdError('client metadata document must use token_endpoint_auth_method "none"', {
+      field: 'token_endpoint_auth_method',
+      value: doc.token_endpoint_auth_method,
+    });
   }
-  const grantTypes = [...new Set(doc.grant_types)];
-  if (!grantTypes.includes('authorization_code')) {
-    throw new CimdError('client metadata document must allow the authorization_code grant');
+  const grants = partitionSupported(doc.grant_types, SUPPORTED_GRANT_TYPES);
+  if (!grants.kept.includes('authorization_code')) {
+    throw new CimdError('client metadata document must allow the authorization_code grant', {
+      field: 'grant_types',
+      value: doc.grant_types,
+    });
   }
-  if (grantTypes.some((g) => g !== 'authorization_code' && g !== 'refresh_token')) {
-    throw new CimdError('client metadata document requests an unsupported grant type');
-  }
-  const responseTypes = [...new Set(doc.response_types)];
-  if (responseTypes.length !== 1 || responseTypes[0] !== 'code') {
-    throw new CimdError('client metadata document must use response_types ["code"]');
+  const responses = partitionSupported(doc.response_types, SUPPORTED_RESPONSE_TYPES);
+  if (!responses.kept.includes('code')) {
+    throw new CimdError('client metadata document must allow response type "code"', {
+      field: 'response_types',
+      value: doc.response_types,
+    });
   }
   const declared = [...new Set(doc.redirect_uris)];
   const allowed = declared.filter((u) => isAllowedRedirectUri(u, extraRedirectUris));
   if (allowed.length === 0) {
-    throw new CimdError('client metadata document lists no redirect URI that this bridge accepts');
+    throw new CimdError('client metadata document lists no redirect URI that this bridge accepts', {
+      field: 'redirect_uris',
+      value: declared,
+    });
   }
   return {
     clientName: doc.client_name ?? null,
     redirectUris: allowed,
     declaredRedirectUris: declared,
-    grantTypes,
-    responseTypes,
+    grantTypes: grants.kept,
+    ignoredGrantTypes: grants.ignored,
+    responseTypes: responses.kept,
+    ignoredResponseTypes: responses.ignored,
     tokenEndpointAuthMethod: 'none',
     document: record,
   };
@@ -181,7 +263,10 @@ export class CimdFetcher {
     try {
       result = await this.fetchJson(clientId);
     } catch (err) {
-      throw new CimdError(`client metadata document could not be fetched: ${(err as Error).message}`);
+      throw new CimdError(`client metadata document could not be fetched: ${(err as Error).message}`, {
+        field: '(fetch)',
+        value: err instanceof SafeFetchError ? err.reason : (err as Error).name,
+      });
     }
     const metadata = validateCimdDocument(clientId, result.body, this.options.extraRedirectUris);
     const cacheSeconds = cacheLifetimeSeconds(result.headers, {

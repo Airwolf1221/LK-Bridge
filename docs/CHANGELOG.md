@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Hotfix: claude.ai's grant types (CIMD and DCR)
+
+claude.ai's custom connector was refused through both "Use Claude's published identity" (CIMD) and "Register
+automatically" (DCR), because it lists `urn:ietf:params:oauth:grant-type:jwt-bearer` alongside `authorization_code`
+and `refresh_token` ([ADR 0016](adr/0016-unsupported-client-grant-types-ignored.md)).
+
+- **CIMD:** a document is accepted if its `grant_types` include `authorization_code` and its `response_types`, if
+  present, include `code`. Other values are ignored and logged at info level (`client.grant_types_ignored`); the
+  stored registration holds only the supported ones.
+- **DCR:** the client is registered with the intersection of the requested and supported grant types, and the
+  registration response returns the adjusted values (RFC 7591 §3.2.1). Only a request without `authorization_code`
+  is refused. Requests listing, for example, `implicit` beside `authorization_code` were refused before and are now
+  registered with `authorization_code` only.
+- **Token endpoint:** unchanged; the JWT bearer grant, like any other, gets `unsupported_grant_type`.
+- **Diagnosable refusals:** `client.metadata_rejected`, `client.registration_rejected` and `authorize.rejected` now
+  carry the `field` at fault and its offending `value` (cut to 300 characters; never a secret) beside the `client_id`
+  or `client_name`. DCR refusals other than redirect URIs were not logged at all before.
+- Every other check is unchanged: exact `client_id`, redirect allowlist, SSRF guard, `token_endpoint_auth_method`.
+- **Tests:** a fixture with claude.ai's and Claude Code's published documents, verbatim
+  (`test/auth/fixtures/claude-client-metadata.ts`); claude.ai's document accepted through consent, token issuance and
+  refresh, with the JWT bearer grant still refused at the token endpoint; documents and registrations without
+  `authorization_code` still refused; the DCR intersection; and the new log fields.
+- **Docs:** [docs/auth.md](auth.md) (grant types and refusal logging), the live checklist, PLAN amendment 5, and
+  ADR 0007's status line.
+
 ### Chunk 7a: deployment files and the runbook
 
 No application behaviour changed. Everything is under `deploy/`, `docs/`, `test/unit/` and the CI file.
