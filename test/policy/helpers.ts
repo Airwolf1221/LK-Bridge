@@ -57,7 +57,13 @@ export interface PolicyRig {
 }
 
 export async function policyRig(
-  o: { settings?: Partial<JobsSettings>; policy?: Partial<PolicySettings>; allowMemberAdmin?: boolean } = {},
+  o: {
+    settings?: Partial<JobsSettings>;
+    policy?: Partial<PolicySettings>;
+    allowMemberAdmin?: boolean;
+    /** Chunk 6: the maintenance scheduler runs the proposal expiry sweep, so the service starts no timer. */
+    externalExpirySweep?: boolean;
+  } = {},
 ): Promise<PolicyRig> {
   const h = await harness();
   const dbs: Db[] = [];
@@ -70,6 +76,7 @@ export async function policyRig(
       clock: h.clock,
       allowMemberAdmin: o.allowMemberAdmin ?? false,
       settings: defaultPolicySettings(o.policy),
+      ...(o.externalExpirySweep ? { externalExpirySweep: true } : {}),
     });
     const e = h.newEngine({
       policyGate: policy.gate,

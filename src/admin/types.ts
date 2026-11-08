@@ -2,6 +2,8 @@ import type { AuthServices } from '../auth/services.js';
 import type { AdminSettings, Config } from '../config/index.js';
 import type { JobEngine } from '../jobs/index.js';
 import type { LkClient } from '../lk/index.js';
+import type { Maintenance } from '../maintenance/index.js';
+import type { Mappings } from '../mappings/index.js';
 import type { Policy } from '../policy/index.js';
 
 /**
@@ -11,6 +13,10 @@ export interface AdminRuntime {
   readonly engine: JobEngine;
   readonly lk: LkClient;
   readonly policy: Policy;
+  /** Maintenance registry, scheduler and owner commands (chunk 6). */
+  readonly maintenance: Maintenance;
+  /** Repository mappings store and owner commands (chunk 6). */
+  readonly mappings: Mappings;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

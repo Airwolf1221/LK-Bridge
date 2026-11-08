@@ -44,19 +44,21 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`.
 
-| Area      | Routes                                                                                                                                                                                                                                                                                                                      |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Session   | `GET /session` (user, CSRF token, version)                                                                                                                                                                                                                                                                                  |
-| Overview  | `GET /overview` (health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                         |
-| Jobs      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`) |
-| Errors    | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                       |
-| Budgets   | `GET /budgets` (snapshot, 24 h history in at most 288 buckets, drift, floors), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                |
-| Writers   | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                |
-| Journal   | `GET /journal` (filters; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                 |
-| Proposals | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts`, `GET /proposals/:id` (diff data), `POST /proposals/:id/approve`, `POST /proposals/:id/reject`, `POST /proposals/bulk`                                                                                                             |
-| Access    | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                             |
-| Settings  | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                 |
-| Stream    | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                          |
+| Area        | Routes                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session     | `GET /session` (user, CSRF token, version)                                                                                                                                                                                                                                                                                                                                               |
+| Overview    | `GET /overview` (health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                                                      |
+| Jobs        | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                              |
+| Errors      | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                    |
+| Budgets     | `GET /budgets` (snapshot, 24 h history in at most 288 buckets, drift, floors), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                             |
+| Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                             |
+| Journal     | `GET /journal` (filters; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                              |
+| Proposals   | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts`, `GET /proposals/:id` (diff data), `POST /proposals/:id/approve`, `POST /proposals/:id/reject`, `POST /proposals/bulk`                                                                                                                                                                          |
+| Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                          |
+| Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                                                                              |
+| Maintenance | `GET /maintenance`, `GET /maintenance/:id` (with history), `POST /maintenance/:id/enable\|disable\|run`, `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md))                                                                                                                                                                                                |
+| Mappings    | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md)) |
+| Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                       |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409
 CONFIRMATION_REQUIRED`, and every settings and reserve-floor change needs `confirm: true`. `WRITERS_MAX` outside 1–8 is a 400.
@@ -95,12 +97,11 @@ They are stored in `runtime_settings` (`dash.*` keys) and applied by `applyStore
 Settings page shows _pending restart_ until they match what is running. Clearing a stored value goes back to the
 environment's. A stored value that no longer validates is ignored.
 
-## The interim budget sampler
+## The budget sampler
 
-Every 10 seconds `engine.recordBudgetSample(governor.snapshot())` stores one sample for the sparklines
-(`src/admin/sampler.ts`, started in `createRuntime`, stopped on shutdown; `ADMIN_BUDGET_SAMPLE_SECONDS=0` disables it).
-**Chunk 6 replaces it** with the maintenance scheduler's `budget-sampler`; delete the file and its one call in
-`src/runtime.ts` then (both write the same rows, so run only one).
+The Request Budgets sparklines are drawn from `budget_samples`, one row every 10 seconds. Since chunk 6 the maintenance
+scheduler's `budget-sampler` job writes them ([docs/maintenance.md](maintenance.md)); the interim sampler of chunk 5 is
+gone, and `ADMIN_BUDGET_SAMPLE_SECONDS` with it. Switch the job off or change its interval on the Maintenance Jobs page.
 
 ## Settings (environment)
 
@@ -109,7 +110,6 @@ Every 10 seconds `engine.recordBudgetSample(governor.snapshot())` stores one sam
 | `ADMIN_STREAM_HEARTBEAT_SECONDS` | 15      | Heartbeat interval of the stream                         |
 | `ADMIN_STREAM_REPLAY_EVENTS`     | 500     | Events kept for reconnection                             |
 | `ADMIN_BUDGET_PUSH_SECONDS`      | 2       | How often a budget snapshot is pushed to open dashboards |
-| `ADMIN_BUDGET_SAMPLE_SECONDS`    | 10      | Interim sampler interval (0 disables)                    |
 
 ## Behind Caddy
 
@@ -124,7 +124,7 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
 - `test/admin/actions.test.ts`: each action reaches its command or control and leaves one audit row and one event.
 - `test/admin/stream.test.ts`: events arrive; replay, resync, heartbeats, sign-out, no secrets in events.
 - `test/admin/ui.test.ts`, `data.test.ts`: redirect and return, headers, static files and traversal, every read route,
-  redaction, sampler, PAT shown once and never logged.
+  redaction, PAT shown once and never logged.
 - `test/ui/`: each page with mock data; live job progress from the stream; `WRITERS_MAX` live; approve, reject, bulk and
   conflicted proposals; scope-raise and settings confirmations; a PAT shown once; and `e2e.test.tsx`, the real bridge
   with the real dashboard code in jsdom while a mock job runs.

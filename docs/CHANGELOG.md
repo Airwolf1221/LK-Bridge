@@ -2,6 +2,55 @@
 
 ## Unreleased
 
+### Chunk 6: maintenance framework, repository mappings, two fixes
+
+- **Maintenance framework** (`src/maintenance/`, [docs/maintenance.md](maintenance.md), [ADR 0016](adr/0016-maintenance-and-mappings-choices.md)):
+  a registry (id, name, description, schedule, enabled, implemented, last and next run) and a scheduler that keeps its
+  state in SQLite. Schedules are a fixed interval or a daily time on the Europe/London clock (23 or 25 hours apart across
+  the clocks change). No backlog: at most one overdue run per job after a restart. Every run goes through the job engine
+  at P3 as the `system` principal with an origin naming the job; jobs that write to LegendKeeper are skipped, and the skip
+  recorded, under read-only mode or a writes pause. Owner commands (enable, disable, change schedule, run now) are
+  audited and evented.
+  - Implemented: `budget-sampler` (every 10 s; replaces chunk 5's interim sampler, sparklines unchanged),
+    `journal-prune` (daily 03:30), `proposal-expiry` (every 5 minutes; the proposal service's own timer is now off),
+    `sqlite-optimise` (weekly).
+  - Placeholders, not implementable: `assign-block-ids-sweep`, `tree-snapshot`, `orphan-and-link-audit`, `tag-audit`.
+  - New settings `MAINTENANCE_ENABLED`, `MAINTENANCE_DEFER_SECONDS`, `MAINTENANCE_HISTORY_RUNS`
+    (`src/config/maintenance.ts`). **Removed:** `ADMIN_BUDGET_SAMPLE_SECONDS` and `AdminSettings.budgetSampleMs`.
+- **Repository mappings** (`src/mappings/`, [docs/mappings.md](mappings.md)): mapping sets (at most one active), type rules
+  (subtree, template or tag → semantic type, with priority), field maps (sidebar property, infobox row, or heading/block
+  → expected kind), notes and timestamps; owner CRUD (audited, evented); versioned JSON export and validated import;
+  a readable summary; a read-only preview through the governor at P0. No inference engine and no MCP tool.
+- **Pages:** Maintenance Jobs and Repository Mappings replace chunk 5's placeholders. Admin routes under
+  `/api/admin/maintenance` and `/api/admin/mappings` keep chunk 5's owner-session, Origin and CSRF rules.
+- Migration `0400_maintenance_mappings.sql`.
+- **Fix: `bridge_info`** called `getProject` and `listMembers` with `{ path: … }`, which the registry rejects, so it always
+  reported an unknown role and no project name. It now calls them with `{}` like the dashboard's health check
+  (`test/tools/info.test.ts`).
+- **Fix: member and invite operations under `propose` scope.** Checked end to end for every member and invite operation at
+  every scope, with and without `LK_ALLOW_MEMBER_ADMIN` (`test/policy/member-admin.test.ts`): with it off, the three
+  administrative operations were already refused with `MEMBER_ADMIN_DISABLED` at capture (the dry-run of the engine's
+  guards), never captured as a proposal; the matrix now pins that. It did find a real bug with it **on**: capturing a
+  proposal for `removeMember`, `revokeInvite` (and calendar writes) failed with `INVALID_PARAMS`, because the target read was
+  sent with an empty `path` object. Fixed in `src/policy/proposals.ts`.
+- **Changes outside chunk 6's own files** (all small; each commented in the code):
+  - `src/runtime.ts`: builds and starts the maintenance scheduler and the mappings layer, stops it on shutdown, removes the
+    interim sampler. `src/server.ts`: `loadMaintenanceConfig` at start-up and a `maintenanceSettings` option.
+  - `src/admin/sampler.ts` deleted; `src/admin/index.ts`, `src/config/admin.ts`: sampler export and setting removed.
+  - `src/admin/plugin.ts`, `types.ts`, `http.ts`: the two route groups, `maintenance` and `mappings` on `AdminRuntime`,
+    status codes for the two new error types.
+  - `src/jobs/engine.ts`: `recordResult` takes an optional `failure` (a failed maintenance run is a `failed` job).
+  - `src/policy/proposals.ts`, `src/policy/index.ts`: the `externalExpirySweep` option; the empty-`path` fix above.
+  - `src/mcp/tools/bridge.ts`: the `bridge_info` fix.
+  - `src/config/index.ts`: one export line. `vitest.config.ts`: the two new test directories.
+  - Tests: `test/admin/helpers.ts` (scheduler off by default, `maintenance` option), `test/admin/data.test.ts` (interim
+    sampler tests removed; the job is tested in `test/maintenance/`), `test/policy/helpers.ts` (`externalExpirySweep`),
+    `test/policy/defaults.test.ts` (migration 0400 is applied too), `test/ui/pages.test.tsx` and `test/e2e/dashboard.spec.ts`
+    (the placeholder expectations), `test/e2e/server.ts`.
+  - `ui/src/app.tsx` (routes, nav), `ui/src/pages/placeholder.tsx` deleted, `ui/src/styles.css` (one rule).
+  - Docs: `docs/dashboard.md`, `.env.example`, and `deploy/env.template` (chunk 7a's test requires it to list every
+    `.env.example` variable: `ADMIN_BUDGET_SAMPLE_SECONDS` out, the three `MAINTENANCE_*` in).
+
 ### Chunk 7a: deployment files and the runbook
 
 No application behaviour changed. Everything is under `deploy/`, `docs/`, `test/unit/` and the CI file.
@@ -58,9 +107,8 @@ No application behaviour changed. Everything is under `deploy/`, `docs/`, `test/
   - `src/server.ts`: mounts the admin plugin (`admin` option), `loadAdminConfig` at start-up.
   - `src/config/index.ts`: one export line. `tsconfig.json`, `vitest.config.ts`, `package.json`, `.gitignore`,
     `.prettierignore`: UI build, typecheck and test wiring.
-- **Known issue found, not fixed (chunk 3):** `bridge_info` calls `getProject` and `listMembers` with `{ path: … }`
-  parameters, which the registry rejects (`INVALID_PARAMS`), so it always reports an unknown role and no project name.
-  The dashboard's own health check calls them with `{}` and works.
+- **Known issue found, fixed in chunk 6:** `bridge_info` called `getProject` and `listMembers` with `{ path: … }`
+  parameters, which the registry rejects (`INVALID_PARAMS`), so it always reported an unknown role and no project name.
 
 ### Chunk 2b: identity, scopes and proposals
 

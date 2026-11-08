@@ -46,10 +46,12 @@ function projectLookup(deps: ToolDeps) {
       let note: string | undefined;
       try {
         const origin = mcpOrigin(ctx, 'bridge_info');
-        const p = await deps.engine.run('getProject', { path: { projectId: deps.projectId } }, { origin });
+        // The registry takes no projectId: the client supplies the configured project (as the dashboard's health
+        // check does). Passing `{ path: … }` is rejected by the registry's schema, which left role and name unknown.
+        const p = await deps.engine.run('getProject', {}, { origin });
         if (p.status === 'succeeded')
           name = ((p.result as { name?: unknown })?.name as string | undefined) ?? null;
-        const m = await deps.engine.run('listMembers', { path: {} }, { origin });
+        const m = await deps.engine.run('listMembers', {}, { origin });
         if (m.status === 'succeeded') {
           // LK shows member emails only to ADMIN keys: that is the cheapest honest probe of the key's role.
           const members = ((m.result as { data?: { email?: unknown }[] })?.data ?? []) as {

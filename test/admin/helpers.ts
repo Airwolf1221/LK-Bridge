@@ -15,8 +15,10 @@ import { loadAuthConfig } from '../../src/config/auth.js';
 import {
   DEFAULT_TOOLS_SETTINGS,
   defaultAdminSettings,
+  defaultMaintenanceSettings,
   loadConfig,
   type AdminSettings,
+  type MaintenanceSettings,
 } from '../../src/config/index.js';
 import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase, type Db } from '../../src/db/open.js';
@@ -35,6 +37,8 @@ export interface AdminStackOptions {
   readonly respond?: (req: MockRequest) => MockResponse | undefined;
   readonly env?: Record<string, string>;
   readonly admin?: Partial<AdminSettings>;
+  /** Maintenance settings. Default: the scheduler is off, so nothing runs on a timer behind a test's back. */
+  readonly maintenance?: Partial<MaintenanceSettings>;
   readonly dbPath?: string;
   /** Write a minimal built dashboard here (index.html and one asset) so /ui can be served. Default: yes. */
   readonly withUi?: boolean;
@@ -140,7 +144,6 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
   const adminSettings = defaultAdminSettings({
     streamHeartbeatMs: 200,
     budgetPushMs: 150,
-    budgetSampleMs: 0, // the sampler has its own test
     ...o.admin,
   });
   const logs: string[] = [];
@@ -164,6 +167,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
       : {}),
     pruneIntervalMs: 0,
     adminSettings,
+    maintenanceSettings: defaultMaintenanceSettings({ enabled: false, ...o.maintenance }),
     uiDir,
     lkTransport: async (input, init) => {
       const method = (init?.method ?? 'GET').toUpperCase();

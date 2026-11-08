@@ -38,6 +38,8 @@ export interface CreatePolicyOptions {
   /** Timers for the expiry sweep. */
   readonly clock?: Clock;
   readonly log?: { warn(o: Record<string, unknown>, m: string): void };
+  /** Chunk 6: the maintenance scheduler runs the expiry sweep, so the service starts no timer (see ProposalService). */
+  readonly externalExpirySweep?: boolean;
 }
 
 export interface Policy {
@@ -61,6 +63,7 @@ export function createPolicy(o: CreatePolicyOptions): Policy {
     allowMemberAdmin: o.allowMemberAdmin,
     ...(o.clock ? { clock: o.clock } : {}),
     ...(o.log ? { log: o.log } : {}),
+    ...(o.externalExpirySweep ? { externalExpirySweep: true } : {}),
   });
   const gate = createPolicyGate({
     store,

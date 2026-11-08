@@ -535,6 +535,8 @@ export class JobEngine {
     readonly origin: JobOrigin;
     readonly title?: string;
     readonly priority?: PriorityClass;
+    /** Chunk 6: records the work as a FAILED job (a maintenance run that threw) instead of a succeeded one. */
+    readonly failure?: { readonly code: string; readonly message: string };
   }): { readonly jobId: string; readonly artifactId: string; readonly bytes: number } {
     const origin = normaliseOrigin(args.origin);
     const job = this.createJob(
@@ -555,23 +557,33 @@ export class JobEngine {
           },
         },
       ],
-      'succeeded',
+      args.failure ? 'failed' : 'succeeded',
     );
     const text = JSON.stringify(args.value) ?? 'null';
     const artifactId = this.repo.createArtifact(job.id, 1, 'result', text);
     const bytes = Buffer.byteLength(text);
     const at = this.clock.now();
+    const failure = args.failure
+      ? { name: 'MaintenanceError', code: args.failure.code, message: args.failure.message.slice(0, 1000) }
+      : undefined;
     this.repo.updateStep(job.id, 1, {
-      status: 'succeeded',
+      status: failure ? 'failed' : 'succeeded',
       attempts: 1,
       resultSummary: { stored: true, bytes },
       resultArtifactId: artifactId,
+      ...(failure ? { error: failure } : {}),
       startedAt: at,
       finishedAt: at,
     });
     this.refreshProgress(job.id);
     this.repo.updateJob(job.id, {
-      result: { stepsSucceeded: 1, stepsFailed: 0, stepsNotRun: 0, resultArtifactId: artifactId },
+      result: {
+        stepsSucceeded: failure ? 0 : 1,
+        stepsFailed: failure ? 1 : 0,
+        stepsNotRun: 0,
+        resultArtifactId: artifactId,
+      },
+      ...(failure ? { lastError: failure } : {}),
       startedAt: at,
       finishedAt: at,
     });

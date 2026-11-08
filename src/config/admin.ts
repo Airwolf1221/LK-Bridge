@@ -11,11 +11,6 @@ export interface AdminSettings {
   readonly streamReplayEvents: number;
   /** How often a budget snapshot is pushed to connected dashboards. Default 2 s. */
   readonly budgetPushMs: number;
-  /**
-   * The interim budget sampler (every 10 s, `engine.recordBudgetSample`). Chunk 6's maintenance scheduler replaces it
-   * with the `budget-sampler` job; 0 disables it.
-   */
-  readonly budgetSampleMs: number;
 }
 
 export class AdminConfigError extends Error {
@@ -30,14 +25,11 @@ export function defaultAdminSettings(overrides: Partial<AdminSettings> = {}): Ad
     streamHeartbeatMs: overrides.streamHeartbeatMs ?? 15_000,
     streamReplayEvents: overrides.streamReplayEvents ?? 500,
     budgetPushMs: overrides.budgetPushMs ?? 2_000,
-    budgetSampleMs: overrides.budgetSampleMs ?? 10_000,
   };
   const issues: string[] = [];
   if (!(s.streamHeartbeatMs >= 10)) issues.push('streamHeartbeatMs must be at least 10');
   if (!(s.streamReplayEvents >= 0)) issues.push('streamReplayEvents must not be negative');
   if (!(s.budgetPushMs >= 10)) issues.push('budgetPushMs must be at least 10');
-  if (!(s.budgetSampleMs === 0 || s.budgetSampleMs >= 10))
-    issues.push('budgetSampleMs must be 0 or at least 10');
   if (issues.length > 0) throw new AdminConfigError(issues);
   return s;
 }
@@ -46,7 +38,6 @@ const schema = z.object({
   ADMIN_STREAM_HEARTBEAT_SECONDS: z.coerce.number().int().min(1).max(120).default(15),
   ADMIN_STREAM_REPLAY_EVENTS: z.coerce.number().int().min(0).max(10_000).default(500),
   ADMIN_BUDGET_PUSH_SECONDS: z.coerce.number().int().min(1).max(60).default(2),
-  ADMIN_BUDGET_SAMPLE_SECONDS: z.coerce.number().int().min(0).max(3600).default(10),
 });
 
 /** Reads ADMIN_* from the environment (names in .env.example). Never echoes values. */
@@ -60,6 +51,5 @@ export function loadAdminConfig(env: NodeJS.ProcessEnv = process.env): AdminSett
     streamHeartbeatMs: e.ADMIN_STREAM_HEARTBEAT_SECONDS * 1000,
     streamReplayEvents: e.ADMIN_STREAM_REPLAY_EVENTS,
     budgetPushMs: e.ADMIN_BUDGET_PUSH_SECONDS * 1000,
-    budgetSampleMs: e.ADMIN_BUDGET_SAMPLE_SECONDS * 1000,
   });
 }

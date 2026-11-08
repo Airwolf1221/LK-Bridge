@@ -19,3 +19,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0013](0013-dashboard-and-admin-api.md)            | Dashboard, admin API and live stream                            | Accepted |
 | [0014](0014-auth-pages-referrer-policy.md)         | Sign-in, consent and sign-out pages use `same-origin` referrers | Accepted |
 | [0015](0015-deployment-layout.md)                  | Deployment layout on the shared server                          | Accepted |
+| [0016](0016-maintenance-and-mappings-choices.md)   | Maintenance scheduler and mappings: interpretation choices      | Accepted |

@@ -10,6 +10,8 @@ import { createHealthCheck } from './health.js';
 import { describeError } from './http.js';
 import { registerBudgets } from './routes/budgets.js';
 import { registerJobs } from './routes/jobs.js';
+import { registerMaintenance } from './routes/maintenance.js';
+import { registerMappings } from './routes/mappings.js';
 import { registerOverview } from './routes/overview.js';
 import { registerPolicy } from './routes/policy.js';
 import { registerSettings } from './routes/settings.js';
@@ -57,6 +59,8 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerBudgets(api, ctx);
       registerPolicy(api, ctx);
       registerSettings(api, ctx);
+      registerMaintenance(api, ctx); // chunk 6
+      registerMappings(api, ctx); // chunk 6
 
       /** The one live stream (docs/dashboard.md › Stream). */
       api.get('/stream', (req, reply) => {

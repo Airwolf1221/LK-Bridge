@@ -72,6 +72,11 @@ export interface ProposalServiceOptions {
   /** Timers for the expiry sweep (tests pass a FakeClock). Time itself comes from the store's `now`. */
   readonly clock?: Clock;
   readonly log?: { warn(o: Record<string, unknown>, m: string): void };
+  /**
+   * Chunk 6: when true the service starts no expiry timer of its own; the maintenance scheduler's `proposal-expiry`
+   * job calls `expireDue()` instead. Expiry is also enforced lazily (approving an expired proposal expires it).
+   */
+  readonly externalExpirySweep?: boolean;
 }
 
 interface Snapshot {
@@ -250,6 +255,7 @@ export class ProposalService implements ProposalSink {
   }
 
   private scheduleSweep(): void {
+    if (this.o.externalExpirySweep) return; // the maintenance scheduler runs the sweep (chunk 6)
     this.sweepTimer = this.clock.setTimeout(() => {
       try {
         this.expireDue();
@@ -403,9 +409,11 @@ export class ProposalService implements ProposalSink {
   ): Promise<Snapshot> {
     let body: unknown;
     try {
+      // Chunk 6: a reader with no path parameters (listMembers, listInvites, listCalendars) must get `{}`: the registry
+      // rejects an empty `path` object as an unrecognised key, which made proposals for those targets fail at capture.
       const r = await engine.run(
         target.op,
-        { path: target.path },
+        Object.keys(target.path).length > 0 ? { path: target.path } : {},
         { origin, priority, title: 'proposal read' },
       );
       if (r.status !== 'succeeded') {

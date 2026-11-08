@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- parsed JSON replies and mock data in tests */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { startInterimBudgetSampler } from '../../src/admin/index.js';
 import { systemClock } from '../../src/lk/index.js';
 import { LkModel } from '../jobs/lk-model.js';
 import { startAdminStack, until, type AdminStack } from './helpers.js';
@@ -360,47 +359,7 @@ describe('budgets', () => {
   });
 });
 
-describe('the interim budget sampler', () => {
-  it('records samples on a timer and stops cleanly', async () => {
-    const count = () => engine().queries.listBudgetSamples({}).length;
-    const before = count();
-    const stop = startInterimBudgetSampler(engine(), stack.runtime.lk, 20);
-    await until(() => count() >= before + 3);
-    stop();
-    await new Promise((r) => setTimeout(r, 30));
-    const settled = count();
-    await new Promise((r) => setTimeout(r, 100));
-    expect(count()).toBe(settled);
-  });
-
-  it('does not start when disabled, and never throws out of the timer', async () => {
-    const stop = startInterimBudgetSampler(engine(), stack.runtime.lk, 0);
-    stop();
-    const errors: unknown[] = [];
-    const broken = {
-      recordBudgetSample: () => {
-        throw new Error('db closed');
-      },
-    } as unknown as typeof stack.runtime.engine;
-    const stop2 = startInterimBudgetSampler(broken, stack.runtime.lk, 10, (e) => errors.push(e));
-    await until(() => errors.length >= 2);
-    stop2();
-  });
-
-  it('runs inside the runtime and stops on shutdown', async () => {
-    const s = await startAdminStack({ admin: { budgetSampleMs: 30 } });
-    try {
-      const count = () => s.runtime.engine.queries.listBudgetSamples({}).length;
-      await until(() => count() >= 3);
-      await s.runtime.shutdown(200);
-      const settled = count();
-      await new Promise((r) => setTimeout(r, 120));
-      expect(count()).toBe(settled);
-    } finally {
-      await s.close();
-    }
-  });
-});
+// The interim sampler's tests moved with it: the budget-sampler job is tested in test/maintenance/jobs.test.ts.
 
 describe('clients and access view', () => {
   it('lists profiles with their kind and scope, grants and PATs with profile and last use, and the default scope', async () => {
