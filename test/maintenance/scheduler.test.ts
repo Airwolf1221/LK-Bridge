@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unsafe-member-access -- test code */
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   MaintenanceError,
@@ -263,7 +262,7 @@ describe('priority and the engine', () => {
     expect(out.error).toBeUndefined();
     expect(history('writer')[0]).toMatchObject({ outcome: 'succeeded' });
     expect(m.rig.h.model.count('updateResource')).toBe(1);
-    const all = m.rig.e.engine.queries.listJobs({} as never);
+    const all = m.rig.e.engine.queries.listJobs({});
     const update = all.find(
       (j) => j.title === 'Maintenance: Writer' && j.priority === 'P3' && j.origin.tool === 'writer',
     );

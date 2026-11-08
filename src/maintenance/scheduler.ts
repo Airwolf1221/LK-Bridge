@@ -371,7 +371,7 @@ export class MaintenanceScheduler {
     this.running.add(id);
     this.store.update(id, { runningSince: started }, started);
     let outcome: RunOutcome = 'succeeded';
-    let detail: string | null = null;
+    let detail: string;
     let changed = false;
     try {
       const ctx: MaintenanceContext = {

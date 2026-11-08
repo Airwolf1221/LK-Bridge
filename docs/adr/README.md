@@ -18,3 +18,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0012](0012-live-policy-evaluation.md)             | Policy attaches to profiles and is evaluated live               | Accepted |
 | [0013](0013-dashboard-and-admin-api.md)            | Dashboard, admin API and live stream                            | Accepted |
 | [0014](0014-auth-pages-referrer-policy.md)         | Sign-in, consent and sign-out pages use `same-origin` referrers | Accepted |
+| [0015](0015-maintenance-and-mappings-choices.md)   | Maintenance scheduler and mappings: interpretation choices      | Accepted |

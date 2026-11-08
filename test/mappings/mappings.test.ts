@@ -1,6 +1,7 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- test code */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- parsed JSON replies and loosely typed test data */
 import { afterEach, describe, expect, it } from 'vitest';
-import { MappingError, parseImport, EXPORT_SCHEMA } from '../../src/mappings/index.js';
+import type { MappingError } from '../../src/mappings/index.js';
+import { parseImport, EXPORT_SCHEMA } from '../../src/mappings/index.js';
 import { settle } from '../jobs/helpers.js';
 import {
   FIELD_BLOCK_ID,

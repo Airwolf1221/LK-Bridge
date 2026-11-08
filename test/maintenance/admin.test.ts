@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- parsed JSON replies and loosely typed test data */
 /**
  * The Maintenance Jobs admin routes keep chunk 5's rules (owner session only, Origin and CSRF on every change, every
  * change audited and evented). The route list comes from Fastify, so test/admin/auth.test.ts covers these routes too;
@@ -186,6 +186,14 @@ describe('changes', () => {
       origin: { kind: 'maintenance', tool: 'sqlite-optimise' },
     });
     expect(stack.audit('maintenance.run_now')).toHaveLength(1);
+  });
+
+  it('budget-sampler feeds the Request Budgets history that the sparklines draw', async () => {
+    const points = async () => (await stack.get('/api/admin/budgets')).json.samples.count as number;
+    const before = await points();
+    expect((await stack.post('/api/admin/maintenance/budget-sampler/run')).status).toBe(202);
+    await until(() => stack.runtime.maintenance.scheduler.get('budget-sampler').lastRun !== null);
+    expect(await points()).toBeGreaterThan(before);
   });
 
   it('the Jobs page can filter maintenance runs by origin', async () => {

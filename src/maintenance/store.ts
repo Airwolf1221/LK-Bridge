@@ -86,11 +86,15 @@ export class MaintenanceStore {
   ): void {
     const sets: string[] = ['updated_at = ?'];
     const vals: unknown[] = [now];
-    if (patch.enabled !== undefined) (sets.push('enabled = ?'), vals.push(patch.enabled ? 1 : 0));
+    const set = (column: string, value: unknown) => {
+      sets.push(`${column} = ?`);
+      vals.push(value);
+    };
+    if (patch.enabled !== undefined) set('enabled', patch.enabled ? 1 : 0);
     if (patch.schedule !== undefined)
-      (sets.push('schedule = ?'), vals.push(patch.schedule === null ? null : JSON.stringify(patch.schedule)));
-    if (patch.nextRunAt !== undefined) (sets.push('next_run_at = ?'), vals.push(patch.nextRunAt));
-    if (patch.runningSince !== undefined) (sets.push('running_since = ?'), vals.push(patch.runningSince));
+      set('schedule', patch.schedule === null ? null : JSON.stringify(patch.schedule));
+    if (patch.nextRunAt !== undefined) set('next_run_at', patch.nextRunAt);
+    if (patch.runningSince !== undefined) set('running_since', patch.runningSince);
     this.db.prepare(`UPDATE maintenance_jobs SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id);
   }
 

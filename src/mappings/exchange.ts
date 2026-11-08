@@ -77,7 +77,7 @@ export function parseImport(input: unknown): MappingDocument {
     }
   }
   if (typeof value === 'object' && value !== null && 'version' in value) {
-    const v = (value as { version: unknown }).version;
+    const v = value.version;
     if (typeof v === 'number' && v !== EXPORT_VERSION) {
       throw new MappingError(
         'INVALID_IMPORT',

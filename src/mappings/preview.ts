@@ -63,7 +63,7 @@ export async function previewResource(args: {
     const r = await engine.run('getResource', { path: { resourceId: id } }, { origin, priority: 'P0' });
     if (r.status !== 'succeeded')
       throw new JobsError('BRIDGE_ERROR', `Could not read resource ${id} now (${r.status})`);
-    return (r.result ?? {}) as Resource;
+    return r.result ?? {};
   };
 
   const self = await read(resourceId);

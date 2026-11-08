@@ -16,6 +16,7 @@ export type ExpectedKind = (typeof EXPECTED_KINDS)[number];
 /** Suggested semantic types for the forms. The names are free text: any type the repository needs is allowed. */
 export const SUGGESTED_TYPES = ['Character', 'Nation', 'Species', 'Institution', 'Place', 'Class'] as const;
 
+// eslint-disable-next-line no-control-regex -- rejecting control characters is the point of this pattern
 const noControl = /^[^\u0000-\u001f\u007f]*$/;
 const line = (max: number) =>
   z

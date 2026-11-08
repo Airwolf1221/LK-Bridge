@@ -188,7 +188,9 @@ export class MappingStore {
   listRules(setId: string): TypeRule[] {
     return (
       this.db
-        .prepare('SELECT * FROM mapping_type_rules WHERE set_id = ? ORDER BY priority DESC, created_at, rowid')
+        .prepare(
+          'SELECT * FROM mapping_type_rules WHERE set_id = ? ORDER BY priority DESC, created_at, rowid',
+        )
         .all(setId) as Row[]
     ).map(toRule);
   }

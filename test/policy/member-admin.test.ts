@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- thrown errors are inspected by code */
 /**
  * Member and invite operations at every scope (chunk 6, item 10). With LK_ALLOW_MEMBER_ADMIN=false the three
  * administrative operations are refused with the engine's own `MEMBER_ADMIN_DISABLED` at propose and write scope,

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-non-null-assertion -- test code */
 import { afterEach, describe, expect, it } from 'vitest';
 import { PLACEHOLDER_IDS } from '../../src/maintenance/index.js';
 import { makePat, mcpOriginFor } from '../policy/helpers.js';
