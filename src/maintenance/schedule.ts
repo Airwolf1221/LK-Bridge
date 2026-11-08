@@ -94,7 +94,9 @@ export function nextDailyRun(afterMs: number, time: string): number {
  * (so a restart never queues a backlog), a daily time from the next occurrence.
  */
 export function nextRun(schedule: Schedule, fromMs: number): number {
-  return schedule.kind === 'interval' ? fromMs + schedule.everySeconds * 1000 : nextDailyRun(fromMs, schedule.time);
+  return schedule.kind === 'interval'
+    ? fromMs + schedule.everySeconds * 1000
+    : nextDailyRun(fromMs, schedule.time);
 }
 
 export function describeSchedule(s: Schedule): string {

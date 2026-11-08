@@ -29,11 +29,7 @@ import type {
 } from './types.js';
 
 export type MaintenanceErrorCode =
-  | 'NOT_FOUND'
-  | 'NOT_IMPLEMENTED'
-  | 'ALREADY_RUNNING'
-  | 'INVALID_SCHEDULE'
-  | 'NOT_OWNER';
+  'NOT_FOUND' | 'NOT_IMPLEMENTED' | 'ALREADY_RUNNING' | 'INVALID_SCHEDULE' | 'NOT_OWNER';
 
 export class MaintenanceError extends Error {
   constructor(
@@ -75,6 +71,11 @@ export class MaintenanceScheduler {
   constructor(private readonly o: SchedulerOptions) {
     this.store = new MaintenanceStore(o.db);
     for (const d of o.jobs) this.defs.set(d.id, d);
+  }
+
+  /** False when MAINTENANCE_ENABLED=false: the registry and pages work, but nothing runs by itself. */
+  get enabled(): boolean {
+    return this.o.settings.enabled;
   }
 
   // ------------------------------------------------------------------------------------------- lifecycle
@@ -281,10 +282,13 @@ export class MaintenanceScheduler {
       at = Math.min(at, Math.max(s.nextRunAt, this.retryAt.get(def.id) ?? 0));
     }
     if (!Number.isFinite(at)) return;
-    this.timer = this.o.clock.setTimeout(() => {
-      this.timer = undefined;
-      void this.track(this.tick());
-    }, Math.max(0, at - now));
+    this.timer = this.o.clock.setTimeout(
+      () => {
+        this.timer = undefined;
+        void this.track(this.tick());
+      },
+      Math.max(0, at - now),
+    );
   }
 
   /** Runs every job that is due, one after another, then re-arms. Exposed for tests. */
@@ -315,7 +319,13 @@ export class MaintenanceScheduler {
   }
 
   private origin(def: MaintenanceJobDef): JobOrigin {
-    return { kind: 'maintenance', client: 'maintenance', tool: def.id, detail: def.name, principal: SYSTEM_PRINCIPAL };
+    return {
+      kind: 'maintenance',
+      client: 'maintenance',
+      tool: def.id,
+      detail: def.name,
+      principal: SYSTEM_PRINCIPAL,
+    };
   }
 
   /** Why a job that writes (or calls LegendKeeper) must not run now, or null. */
@@ -396,7 +406,9 @@ export class MaintenanceScheduler {
           origin: this.origin(def),
           title: `Maintenance: ${def.name}`,
           priority: 'P3',
-          ...(outcome === 'failed' ? { failure: { code: 'MAINTENANCE_FAILED', message: detail ?? 'failed' } } : {}),
+          ...(outcome === 'failed'
+            ? { failure: { code: 'MAINTENANCE_FAILED', message: detail ?? 'failed' } }
+            : {}),
         }).jobId;
       } catch (e) {
         this.o.log?.warn({ err: e, job: id }, 'could not record a maintenance run as a job');
@@ -417,7 +429,16 @@ export class MaintenanceScheduler {
     const finished = this.o.clock.now();
     const durationMs = Math.max(0, finished - started);
     this.store.recordRun(
-      { jobId: def.id, trigger, startedAt: started, finishedAt: finished, outcome, durationMs, engineJobId, detail },
+      {
+        jobId: def.id,
+        trigger,
+        startedAt: started,
+        finishedAt: finished,
+        outcome,
+        durationMs,
+        engineJobId,
+        detail,
+      },
       this.o.settings.historyPerJob,
     );
     const state = this.store.get(def.id)!;

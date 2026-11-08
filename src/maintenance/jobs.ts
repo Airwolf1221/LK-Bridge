@@ -96,7 +96,8 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       run: () => {
         const n = d.proposals.expireDue();
         return {
-          summary: n === 0 ? 'No proposals had expired.' : `Expired ${n} ${n === 1 ? 'proposal' : 'proposals'}.`,
+          summary:
+            n === 0 ? 'No proposals had expired.' : `Expired ${n} ${n === 1 ? 'proposal' : 'proposals'}.`,
           changed: n > 0,
         };
       },
@@ -104,7 +105,8 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
     {
       id: 'sqlite-optimise',
       name: 'SQLite optimise',
-      description: "Runs PRAGMA optimize and checkpoints the write-ahead log, so the database file stays in good shape.",
+      description:
+        'Runs PRAGMA optimize and checkpoints the write-ahead log, so the database file stays in good shape.',
       defaultSchedule: { kind: 'interval', everySeconds: 7 * 86_400 },
       defaultEnabled: true,
       implemented: true,
@@ -113,7 +115,11 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       record: 'always',
       run: () => {
         d.db.pragma('optimize');
-        const rows = d.db.pragma('wal_checkpoint(PASSIVE)') as { busy: number; log: number; checkpointed: number }[];
+        const rows = d.db.pragma('wal_checkpoint(PASSIVE)') as {
+          busy: number;
+          log: number;
+          checkpointed: number;
+        }[];
         const c = rows[0];
         return {
           summary: c

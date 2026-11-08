@@ -95,10 +95,7 @@ export class MaintenanceStore {
   }
 
   /** Records a finished (or skipped, or interrupted) run and makes it the job's last run. */
-  recordRun(
-    r: Omit<RunRecord, 'id'>,
-    keep: number,
-  ): void {
+  recordRun(r: Omit<RunRecord, 'id'>, keep: number): void {
     this.db.transaction(() => {
       this.db
         .prepare(

@@ -20,7 +20,9 @@ export class MaintenanceConfigError extends Error {
   }
 }
 
-export function defaultMaintenanceSettings(overrides: Partial<MaintenanceSettings> = {}): MaintenanceSettings {
+export function defaultMaintenanceSettings(
+  overrides: Partial<MaintenanceSettings> = {},
+): MaintenanceSettings {
   const s: MaintenanceSettings = {
     enabled: overrides.enabled ?? true,
     deferMs: overrides.deferMs ?? 15_000,

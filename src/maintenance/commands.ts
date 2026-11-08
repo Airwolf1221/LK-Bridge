@@ -5,17 +5,20 @@
  */
 import type { PolicyStore } from '../policy/store.js';
 import { MaintenanceError, type MaintenanceScheduler } from './scheduler.js';
-import type { MaintenanceJobView } from './types.js';
+import type { MaintenanceJobView, RunView } from './types.js';
 
 export interface MaintenanceCommands {
   list(actor: 'owner'): MaintenanceJobView[];
-  get(actor: 'owner', id: string): MaintenanceJobView & { history: ReturnType<MaintenanceScheduler['history']> };
+  get(
+    actor: 'owner',
+    id: string,
+  ): MaintenanceJobView & { history: ReturnType<MaintenanceScheduler['history']> };
   enable(actor: 'owner', id: string): MaintenanceJobView;
   disable(actor: 'owner', id: string): MaintenanceJobView;
   /** `null` restores the job's default schedule. */
   setSchedule(actor: 'owner', id: string, schedule: unknown): MaintenanceJobView;
   /** Starts a run and returns at once (the job is `running`); `done` settles when it has finished. */
-  runNow(actor: 'owner', id: string): { job: MaintenanceJobView; done: Promise<unknown> };
+  runNow(actor: 'owner', id: string): { job: MaintenanceJobView; done: Promise<RunView | null> };
 }
 
 function assertOwner(actor: unknown): asserts actor is 'owner' {

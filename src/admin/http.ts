@@ -1,5 +1,7 @@
 import type { FastifyReply } from 'fastify';
 import { JobsError } from '../jobs/index.js';
+import { MaintenanceError } from '../maintenance/scheduler.js';
+import { MappingError } from '../mappings/types.js';
 import { PolicyError } from '../policy/index.js';
 
 /** An error with an HTTP status, for admin routes. The body is always `{ error: { code, message } }`. */
@@ -31,6 +33,24 @@ const POLICY_STATUS: Readonly<Record<string, number>> = {
   REREAD_FAILED: 502,
 };
 
+// Chunk 6: maintenance and mapping errors.
+const MAINTENANCE_STATUS: Readonly<Record<string, number>> = {
+  NOT_FOUND: 404,
+  NOT_IMPLEMENTED: 409,
+  ALREADY_RUNNING: 409,
+  INVALID_SCHEDULE: 400,
+  NOT_OWNER: 403,
+};
+
+const MAPPING_STATUS: Readonly<Record<string, number>> = {
+  NOT_FOUND: 404,
+  INVALID_INPUT: 400,
+  INVALID_IMPORT: 400,
+  NAME_TAKEN: 409,
+  DUPLICATE_FIELD: 409,
+  NOT_OWNER: 403,
+};
+
 const JOBS_STATUS: Readonly<Record<string, number>> = {
   JOB_NOT_FOUND: 404,
   INVALID_CONTROL: 409,
@@ -48,6 +68,20 @@ export function describeError(err: unknown): { status: number; body: { error: Re
     return {
       status: POLICY_STATUS[err.code] ?? 400,
       body: { error: { code: err.code, message: err.message } },
+    };
+  }
+  if (err instanceof MaintenanceError) {
+    return {
+      status: MAINTENANCE_STATUS[err.code] ?? 400,
+      body: { error: { code: err.code, message: err.message } },
+    };
+  }
+  if (err instanceof MappingError) {
+    return {
+      status: MAPPING_STATUS[err.code] ?? 400,
+      body: {
+        error: { code: err.code, message: err.message, ...(err.issues.length ? { issues: err.issues } : {}) },
+      },
     };
   }
   if (err instanceof JobsError) {

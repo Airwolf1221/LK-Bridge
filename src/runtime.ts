@@ -23,6 +23,7 @@ import {
 } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
+import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, proposalTools, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 
@@ -39,6 +40,8 @@ export interface Runtime {
   readonly policy: Policy;
   /** The maintenance registry, scheduler and owner commands (chunk 6). */
   readonly maintenance: Maintenance;
+  /** Repository mappings: data model and owner commands (chunk 6). */
+  readonly mappings: Mappings;
   readonly tools: readonly McpToolProvider[];
   readonly instructions: string;
   /** The configuration the components were built from: the environment plus the dashboard's stored settings. */
@@ -130,6 +133,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   maintenance.start();
+  const mappings = createMappings({
+    db: o.db,
+    engine,
+    policyStore: policy.store,
+    now: () => (o.clock ?? systemClock).now(),
+  });
 
   const bridgeTools = createBridgeTools(
     {
@@ -151,6 +160,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine,
     policy,
     maintenance,
+    mappings,
     tools,
     instructions: BRIDGE_INSTRUCTIONS,
     config,
