@@ -71,6 +71,8 @@ type Recovery =
   | { readonly kind: 'partial'; readonly found: readonly unknown[]; readonly missing: readonly string[] };
 
 const RESOURCE_CREATES = new Set(['createResource', 'createManyResources', 'createResourceFromTemplate']);
+/** Operations that add an entity (journal target: the new entity, not its container). */
+const CREATES = /^(create|insert|invite|saveResourceAsTemplate)/;
 
 /** The lock a write step must hold (see locks.ts for the key scheme and ordering rules). */
 export function lockKeyFor(op: OperationDef, params: OpParams): string | null {
@@ -306,8 +308,11 @@ export class StepExecutor {
         assertNoUnsupportedLoss(op.operationId, existing, incoming, step.options, ref);
       }
 
+      // Chunk 8 (required change A): EVERY write gets a journal entry before it is sent (outcome `pending`, settled
+      // below), so agents can see each other's edits. Only destructive writes (`meta.journal`) keep a pre-image or ids.
       let journalId: number | undefined;
-      if (meta.journal && !journalled) {
+      if (!journalled) {
+        const created = meta.verify === 'client-id' ? step.clientIds : [];
         journalId = this.d.journal.record({
           jobId: job.id,
           stepNo: step.stepNo,
@@ -317,11 +322,15 @@ export class StepExecutor {
           approvedBy: job.approvedBy,
           risk: op.risk,
           targetKind: meta.reader ?? op.tag,
-          targetId: targetIdOf(op, params),
-          resourceId: params.path?.resourceId ?? null,
+          // A create's target is the new entity: its client-chosen id, or (set after success) the id LK gives it.
+          // The container stays visible in resourceId / documentId.
+          targetId: created[0] ?? (CREATES.test(op.operationId) ? null : targetIdOf(op, params)),
+          resourceId:
+            params.path?.resourceId ?? (RESOURCE_CREATES.has(op.operationId) ? (created[0] ?? null) : null),
           documentId: params.path?.documentId ?? null,
           version: ifMatch ?? current?.version ?? null,
           params,
+          ...(created.length > 1 ? { targets: created } : {}),
           ...(meta.journal === 'pre-image' && current ? { preImage: current.entity ?? current.body } : {}),
         });
       }
@@ -341,14 +350,17 @@ export class StepExecutor {
           ifMatch,
           verify: (ctx) => this.verifyHook(job, step, op, meta, params, ctx.error),
         });
-        if (journalId !== undefined) this.d.journal.setOutcome(journalId, 'applied');
-        else if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+        if (journalId !== undefined) {
+          this.d.journal.setOutcome(journalId, 'applied');
+          // An insert or create without a client-chosen id: note the id LegendKeeper gave it.
+          const createdId = op.method === 'POST' ? (value as { id?: unknown } | null)?.id : undefined;
+          if (typeof createdId === 'string' && createdId !== '')
+            this.d.journal.setCreatedTarget(journalId, createdId);
+        } else this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
         return this.succeed(job, step, stats, value, false, store);
       } catch (e) {
-        if (meta.journal) {
-          const outcome = stats.maybeSent && !(e instanceof BudgetWaitError) ? 'unknown' : 'not_applied';
-          this.d.journal.setOutcomeForStep(job.id, step.stepNo, outcome);
-        }
+        const outcome = stats.maybeSent && !(e instanceof BudgetWaitError) ? 'unknown' : 'not_applied';
+        this.d.journal.setOutcomeForStep(job.id, step.stepNo, outcome);
         if (e instanceof BridgeLkError && (e.status === 412 || e.code === 'VERSION_MISMATCH')) {
           // PLAN §4 rule 1: re-read, and return a clear conflict with the current version. Never retried.
           const now = meta.reader
@@ -526,12 +538,14 @@ export class StepExecutor {
       case 'park':
         return this.fail(job, step, stats, r.error, true);
       case 'applied':
-        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+        this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
         return this.succeed(job, step, stats, r.value, true);
       case 'uncertain':
-        if (meta.journal) this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'unknown');
+        this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'unknown');
         return this.fail(job, step, stats, new UncertainOutcomeError(op.operationId, r.reason, ref));
       case 'partial': {
+        // Some items were created: this step's journal entry is `applied`; the continuation gets its own entry.
+        this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
         // Re-submit only the missing items, with their same ids, as a new step that runs next.
         const body = (params.body ?? {}) as { resources?: Record<string, unknown>[] };
         const missing = new Set(r.missing);

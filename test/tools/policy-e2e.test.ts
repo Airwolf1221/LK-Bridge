@@ -207,6 +207,37 @@ describe('job, error and result visibility', () => {
     });
     expect((await stack.call(b.client, 'bridge_journal_lookup', { jobId })).body.count).toBe(0);
   });
+
+  it('a non-destructive write by one agent is in the journal for the other, with filters and paging (chunk 8, A)', async () => {
+    const a = await as('xcheck-a', 'write');
+    const b = await as('xcheck-b', 'read');
+    const created = await stack.call(a.client, 'lk_api_write', {
+      operationId: 'createResource',
+      params: { body: { name: 'Cross-checked' } },
+    });
+    expect(created.isError, created.text).toBe(false);
+    const seenByB = await stack.call(b.client, 'bridge_journal_lookup', { profile: 'xcheck-a' });
+    expect(seenByB.body.entries).toHaveLength(1);
+    expect(seenByB.body.entries[0]).toMatchObject({
+      op: 'createResource',
+      outcome: 'applied',
+      principalId: a.patId,
+      profile: 'xcheck-a',
+      approvedBy: null,
+      jobId: null,
+      mine: false,
+    });
+    expect(typeof seenByB.body.entries[0].target.id).toBe('string');
+    expect(
+      (await stack.call(b.client, 'bridge_journal_lookup', { principalId: a.patId, outcome: 'not_applied' }))
+        .body.count,
+    ).toBe(0);
+    // Paging: a page of one gives a cursor; the next page continues below it.
+    const p1 = await stack.call(b.client, 'bridge_journal_lookup', { limit: 1 });
+    expect(p1.body.nextBefore).toBe(p1.body.entries[0].id);
+    const p2 = await stack.call(b.client, 'bridge_journal_lookup', { limit: 1, before: p1.body.nextBefore });
+    expect(p2.body.entries[0].id).toBeLessThan(p1.body.entries[0].id);
+  });
 });
 
 describe('uploads under propose scope', () => {
@@ -284,7 +315,7 @@ describe('the full loop, end to end', () => {
     });
     expect(res.status).toBe(200);
     const text = await res.text();
-    const json = (text.startsWith('{') ? text : (/^data: (.*)$/m.exec(text)?.[1] ?? '{}'));
+    const json = text.startsWith('{') ? text : (/^data: (.*)$/m.exec(text)?.[1] ?? '{}');
     const listed = (JSON.parse(json) as { result?: { tools?: { name: string }[] } }).result?.tools?.map(
       (t) => t.name,
     );

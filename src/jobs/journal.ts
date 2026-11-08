@@ -1,11 +1,14 @@
 /**
- * The write journal (PLAN §6.4): a pre-image captured before each destructive write, so a person can see (and by
- * hand restore) what was there. View-only in v1: no automated rollback.
+ * The write journal (PLAN §6.4, extended by chunk 8). EVERY write the engine sends to LegendKeeper gets an entry
+ * (operation, targets, principal, profile, approver, job, time, the write's params capped at 16 KB, and its outcome), so
+ * that agents and the owner can see each other's edits. Destructive writes also keep a pre-image, so a person can see
+ * (and by hand restore) what was there. View-only in v1: no automated rollback.
  *
- * What is captured: the blocks JSON before `replaceDocumentBlocks` / `replaceBlock` / block deletes, the board before
- * `replaceBoardContent` / `deleteBoardShapes`, the resource before `updateResource` / `moveResource`, the document
- * before `updateDocument`, the property before `updateProperty`, rows and infobox properties before their deletes,
- * the calendar before `updateCalendar` / `deleteCalendar`, and only the ids for other deletes and member removals.
+ * Pre-images, as before chunk 8: the blocks JSON before `replaceDocumentBlocks` / `replaceBlock` / block deletes, the
+ * board before `replaceBoardContent` / `deleteBoardShapes`, the resource before `updateResource` / `moveResource`, the
+ * document before `updateDocument`, the property before `updateProperty`, rows and infobox properties before their
+ * deletes, the calendar before `updateCalendar` / `deleteCalendar`; only the ids for other deletes and member removals;
+ * none for every other write (inserts, creates, row and property additions, patches).
  */
 import type { Db } from '../db/open.js';
 
@@ -24,6 +27,8 @@ export interface JournalEntryInput {
   readonly version?: string | null | undefined;
   readonly params?: unknown;
   readonly preImage?: unknown;
+  /** Every entity the write creates or changes besides `targetId` (createManyResources: the ids it creates). */
+  readonly targets?: readonly string[];
 }
 
 export type JournalOutcome = 'pending' | 'applied' | 'not_applied' | 'unknown';
@@ -56,12 +61,18 @@ export interface JournalFilter {
   readonly jobId?: string;
   readonly resourceId?: string;
   readonly documentId?: string;
+  /** Matches the entry's own target, and any of the targets of a multi-target write. */
   readonly targetId?: string;
   readonly opId?: string;
   readonly principalId?: string;
   readonly profile?: string;
+  readonly outcome?: JournalOutcome;
+  /** Only entries that kept a pre-image (the destructive writes). */
+  readonly withPreImage?: boolean;
   readonly since?: number;
   readonly until?: number;
+  /** Paging cursor: only entries with an id below this one (pass the last id of the previous page). */
+  readonly before?: number;
   readonly limit?: number;
   /** Default true. False returns only the metadata (cheap listing). */
   readonly includePreImage?: boolean;
@@ -105,8 +116,25 @@ function parse(text: string | null | undefined): unknown {
   }
 }
 
-function capParams(params: unknown): string | null {
-  if (params === undefined) return null;
+/** Short-lived upload material that must not sit in the journal (it is also redacted again wherever it is shown). */
+const SECRET_PARAM_KEYS = new Set(['uploadKey', 'uploadUrl', 'headers']);
+
+function redactParams(v: unknown): unknown {
+  if (Array.isArray(v)) return v.map(redactParams);
+  if (v !== null && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [
+        k,
+        SECRET_PARAM_KEYS.has(k) ? '[redacted]' : redactParams(x),
+      ]),
+    );
+  }
+  return v;
+}
+
+function capParams(raw: unknown): string | null {
+  if (raw === undefined) return null;
+  const params = redactParams(raw);
   const text = JSON.stringify(params);
   if (Buffer.byteLength(text) <= PARAMS_CAP_BYTES) return text;
   const p = params as { path?: unknown; query?: unknown; ifMatch?: unknown };
@@ -148,11 +176,26 @@ export class WriteJournal {
         pre,
         bytes,
       );
-    return Number(info.lastInsertRowid);
+    const id = Number(info.lastInsertRowid);
+    const targets = [...new Set(e.targets ?? [])].filter((t) => t !== '' && t !== e.targetId).slice(0, 1000);
+    if (targets.length > 0) {
+      const add = this.db.prepare(
+        'INSERT OR IGNORE INTO write_journal_targets (target_id, journal_id) VALUES (?, ?)',
+      );
+      for (const t of targets) add.run(t, id);
+    }
+    return id;
   }
 
   setOutcome(id: number, outcome: JournalOutcome): void {
     this.db.prepare('UPDATE write_journal SET outcome = ? WHERE id = ?').run(outcome, id);
+  }
+
+  /** Records the id LegendKeeper gave a created entity (inserts and creates without a client-chosen id). */
+  setCreatedTarget(id: number, targetId: string): void {
+    this.db
+      .prepare('UPDATE write_journal SET target_id = ? WHERE id = ? AND target_id IS NULL')
+      .run(targetId.slice(0, 256), id);
   }
 
   /** Sets the outcome of the latest entry for a step (used after a restart, when the entry id is not in memory). */
@@ -195,17 +238,33 @@ export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[
   if (filter.jobId !== undefined) eq('job_id', filter.jobId);
   if (filter.resourceId !== undefined) eq('resource_id', filter.resourceId);
   if (filter.documentId !== undefined) eq('document_id', filter.documentId);
-  if (filter.targetId !== undefined) eq('target_id', filter.targetId);
+  if (filter.targetId !== undefined) {
+    where.push(
+      'id IN (SELECT id FROM write_journal WHERE target_id = ? UNION SELECT journal_id FROM write_journal_targets WHERE target_id = ?)',
+    );
+    vals.push(filter.targetId, filter.targetId);
+  }
   if (filter.opId !== undefined) eq('op_id', filter.opId);
   if (filter.principalId !== undefined) eq('principal_id', filter.principalId);
   if (filter.profile !== undefined) eq('profile', filter.profile);
+  if (filter.outcome !== undefined) eq('outcome', filter.outcome);
+  if (filter.withPreImage === true) where.push('pre_image IS NOT NULL');
   if (filter.since !== undefined) {
-    where.push('at >= ?');
-    vals.push(filter.since);
+    // Turned into an id bound through the `at` index, so a filtered page stays an index range scan on (column, id).
+    const first = db.prepare('SELECT MIN(id) AS id FROM write_journal WHERE at >= ?').get(filter.since) as {
+      id: number | null;
+    };
+    if (first.id === null) return [];
+    where.push('id >= ?');
+    vals.push(first.id);
   }
   if (filter.until !== undefined) {
     where.push('at <= ?');
     vals.push(filter.until);
+  }
+  if (filter.before !== undefined) {
+    where.push('id < ?');
+    vals.push(filter.before);
   }
   const withPre = filter.includePreImage !== false;
   const cols = `id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk, target_kind, target_id, resource_id, document_id, version,

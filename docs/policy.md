@@ -46,6 +46,11 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 - **Live evaluation.** The gate reads the principal's profile and scope from the database on every engine entry
   (cached for at most one second; any change made through the bridge clears the cache at once). Changing a profile's
   scope changes what every existing connection on it can do on its very next call, with no reconnection.
+- **Queued work follows too (chunk 8).** Before each new step of a job that acts for an agent, the engine asks the
+  gate again (`phase: 'execute'`). If the connection has been revoked, or its scope lowered to `read` or `propose`, that
+  step fails with `POLICY_DENIED` (recorded on the Errors page with the job), the rest of the job is cancelled, and the
+  job ends `failed`. A step already in flight is finished and verified. Jobs the owner approved (`approvedBy`) and
+  internal work are not asked again: the owner's approval wins, as below.
 
 ### Tool lists
 
@@ -88,6 +93,10 @@ Tool handlers get `ctx.principal` (and `ctx.scope`). Every engine-backed tool bu
    a client id have no target. Nothing but these reads reaches LegendKeeper.
 4. The ordered operations are stored as **one** proposal, however many there are. It expires after 14 days
    (`POLICY_PROPOSAL_EXPIRY_DAYS`); a timer (`POLICY_EXPIRY_SWEEP_SECONDS`, default 5 minutes) expires due proposals.
+5. **Limits (chunk 8).** A proposal keeps at most 4 MiB of pre-state in all (each operation at most 512 KB, cut by
+   bytes); past that an operation keeps its version and fingerprint, which conflict detection uses, but no pre-state
+   text, and its diff says it was truncated. One connection may hold at most 50 `pending` proposals; the 51st is refused
+   with `POLICY_DENIED` before anything is read, until the owner decides some.
 
 **Approve** (owner only):
 

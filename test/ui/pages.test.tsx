@@ -621,6 +621,43 @@ describe('Journal', () => {
     // View only: nothing on the page can change the journal.
     expect(screen.queryByRole('button', { name: /delete|restore|roll ?back|undo/i })).toBeNull();
   });
+
+  it('pages older entries with the before cursor and filters by outcome and destructive writes (chunk 8)', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /journal': (call: { query: string }) => {
+        const before = new URLSearchParams(call.query).get('before');
+        return before === '500'
+          ? {
+              entries: [{ ...entry, id: 499, opId: 'insertBlock', risk: 'safe' }],
+              hasMore: false,
+              nextBefore: null,
+            }
+          : {
+              entries: [{ ...entry, id: 500, opId: 'createResource', risk: 'safe' }],
+              hasMore: true,
+              nextBefore: 500,
+            };
+      },
+    });
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    renderApp('/ui/journal');
+    expect(await screen.findByText(/Every write the bridge sends/)).toBeInTheDocument();
+    await screen.findByRole('row', { name: /createResource/ });
+    await user.click(screen.getByRole('button', { name: 'Older' }));
+    await screen.findByRole('row', { name: /insertBlock/ });
+    expect(api.find('GET', '/journal').at(-1)?.query).toMatch(/before=500/);
+    expect(screen.getByRole('button', { name: 'Older' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Newest' }));
+    await screen.findByRole('row', { name: /createResource/ });
+    await user.selectOptions(screen.getByLabelText('Outcome'), 'not_applied');
+    await user.selectOptions(screen.getByLabelText('Writes'), 'true');
+    const last = api.find('GET', '/journal').at(-1)?.query ?? '';
+    expect(last).toMatch(/outcome=not_applied/);
+    expect(last).toMatch(/withPreImage=true/);
+    expect(last).not.toMatch(/before=/);
+  });
 });
 
 describe('Settings', () => {

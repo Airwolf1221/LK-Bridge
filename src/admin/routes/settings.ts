@@ -102,6 +102,9 @@ export const registerSettings: Register = (api, ctx) => {
     opId: idSchema.optional(),
     principalId: idSchema.optional(),
     profile: idSchema.optional(),
+    outcome: z.enum(['applied', 'pending', 'not_applied', 'unknown']).optional(),
+    withPreImage: z.enum(['true', 'false']).optional(),
+    before: z.coerce.number().int().min(1).optional(),
     sinceMinutes: z.coerce
       .number()
       .min(1)
@@ -121,11 +124,20 @@ export const registerSettings: Register = (api, ctx) => {
       ...(q.opId ? { opId: q.opId } : {}),
       ...(q.principalId ? { principalId: q.principalId } : {}),
       ...(q.profile ? { profile: q.profile } : {}),
+      ...(q.outcome ? { outcome: q.outcome } : {}),
+      ...(q.withPreImage === 'true' ? { withPreImage: true } : {}),
+      ...(q.before !== undefined ? { before: q.before } : {}),
       ...(q.sinceMinutes ? { since: ctx.now() - q.sinceMinutes * 60_000 } : {}),
       limit: q.limit,
       includePreImage: false,
     });
-    return { entries: redactDeep(entries), hasMore: entries.length === q.limit };
+    const hasMore = entries.length === q.limit;
+    return {
+      entries: redactDeep(entries),
+      hasMore,
+      // Paging (chunk 8): pass as `before` for the next, older page.
+      nextBefore: hasMore ? (entries.at(-1)?.id ?? null) : null,
+    };
   });
 
   api.get('/journal/:id', (req) => {

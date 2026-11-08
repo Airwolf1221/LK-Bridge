@@ -111,7 +111,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 **`bridge_errors_recent`** `{ grouped?, limit?, sinceMinutes?, jobId? }`: failures grouped by operation, code and path (default), or one row each, with LegendKeeper `requestId`s.
 
-**`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, sinceMinutes?, limit?, includePreImage? }`: the write journal (what a destructive write replaced), newest first.
+**`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, principalId?, profile?, outcome?, withPreImage?, before?, sinceMinutes?, limit?, includePreImage? }`: the write journal, newest first. Since chunk 8 it holds **every** write the bridge sends (creates, inserts, patches, deletes), each with operation, target, time, outcome (`applied`, `not_applied`, `unknown`, `pending`), principal, profile and approver; destructive writes also keep their pre-image. `targetId` also matches every resource a `createManyResources` created. Pages hold `limit` entries (default 10, at most 100); when a page is full, `nextBefore` is the cursor for the next, older page (`before`).
 
 **`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)).
 
@@ -125,7 +125,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 2. `upload_image.put`, a custom step: a `PUT` of the file to the signed `uploadUrl` with exactly the headers LK returned. This is **not** an LK API call and goes to another host, but it still runs inside `governor.execute`, on the reactive-only `upload` tier;
 3. `createImageAsset` with the `uploadKey` (an LK call, with an idempotency key).
 
-The source is **base64** (a `data:` URI is accepted) or a **public https URL** (switch off with `UPLOAD_ALLOW_URL_SOURCE=false`). The bytes are checked before any job exists: size at most `UPLOAD_MAX_BYTES` (10 MB by default), and the first bytes must be a PNG, JPEG, GIF or WebP image that agrees with any `contentType` given.
+The source is **base64** (a `data:` URI is accepted) or a **public https URL** (switch off with `UPLOAD_ALLOW_URL_SOURCE=false`). At scope `propose` the tool is refused before anything is fetched or sent. The bytes are checked before any job exists: size at most `UPLOAD_MAX_BYTES` (10 MB by default), and the first bytes must be a PNG, JPEG, GIF or WebP image that agrees with any `contentType` given.
 
 Network rules for both the URL fetch and the PUT (the address policy of chunk 4, `src/auth/ip.ts`, enforced inside the connection's DNS lookup as in `src/auth/safe-fetch.ts`):
 
@@ -146,9 +146,15 @@ Codes: `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`, `UPLO
 | ------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
 | `MCP_EXPOSE_PER_OP_TOOLS` | `false`            | Also register `lk_op_<operationId>` for all 89 operations                                                       |
 | `MCP_RESULT_MAX_CHARS`    | `40000`            | Results longer than this are stored and returned as a handle                                                    |
-| `UPLOAD_MAX_BYTES`        | `10485760` (10 MB) | Largest image `lk_upload_image` accepts                                                                         |
+| `UPLOAD_MAX_BYTES`        | `10485760` (10 MB) | Largest image `lk_upload_image` accepts. The `/mcp` request body limit is sized from it (below)                 |
 | `UPLOAD_ALLOW_URL_SOURCE` | `true`             | `false`: base64 only                                                                                            |
 | `UPLOAD_FETCH_TIMEOUT_MS` | `15000`            | Deadline for fetching an image from a URL                                                                       |
 | `UPLOAD_PUT_TIMEOUT_MS`   | `120000`           | Per-attempt deadline of the signed-URL PUT (5 s to 10 min), separate from the 30 s LegendKeeper request timeout |
 
 The governor's per-attempt timeout (30 s) also bounds the PUT.
+
+**Request size (chunk 8).** A base64 image is a third larger than the image, inside a JSON-RPC envelope. The `/mcp`
+request body limit is therefore `max(4 MiB, ceil(UPLOAD_MAX_BYTES / 3) × 4 + 256 KiB)`: about 13.6 MiB for the default
+10 MiB. (Fastify's own 1 MiB `bodyLimit` does not apply to `/mcp`: the body is left for the MCP SDK, which enforces this
+limit, with a `413`, only after the bearer token has been checked.) An image over `UPLOAD_MAX_BYTES` that still fits the
+request is refused by the tool with `UPLOAD_TOO_LARGE`. URL sources are not limited by the request size.

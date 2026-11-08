@@ -23,6 +23,9 @@ only. Code: `src/admin/` (API, stream, static files), `ui/` (the React app), `sr
 - **Unauthenticated `/ui`** requests are redirected (303) to `/oauth/login?return_to=…` and come back afterwards. No
   dashboard bytes are served first. A session that ends while the page is open sends the page to sign-in (a 401 from the
   API, or the `unauthenticated` stream event).
+- **Cross-site requests (chunk 8).** Any `/api/admin` request a browser labels `Sec-Fetch-Site: cross-site` or
+  `same-site` is refused (`403 CROSS_SITE`), reads included: the session cookie is `SameSite=Lax`, so a link on another
+  site would otherwise carry it to read routes that spend budget (overview refresh, mapping preview).
 - **CSRF.** Every state-changing request (anything but GET, HEAD, OPTIONS) needs the `Origin` header to equal the
   bridge's public URL (a missing or foreign one is refused: browsers always send it on `fetch` POSTs) **and**
   `X-CSRF-Token`, the HMAC bound to the session (`GET /api/admin/session` returns it). Neither is checked on reads.
@@ -52,7 +55,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Errors      | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                    |
 | Budgets     | `GET /budgets` (snapshot, 24 h history in at most 288 buckets, drift, floors), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                             |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                             |
-| Journal     | `GET /journal` (filters; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                              |
+| Journal     | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                |
 | Proposals   | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts`, `GET /proposals/:id` (diff data), `POST /proposals/:id/approve`, `POST /proposals/:id/reject`, `POST /proposals/bulk`                                                                                                                                                                          |
 | Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                          |
 | Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                                                                              |
@@ -68,6 +71,13 @@ CONFIRMATION_REQUIRED`, and every settings and reserve-floor change needs `confi
 `retry` on each step says whether it may be retried and whether it is _ambiguous_ (it may already have reached
 LegendKeeper). A normal retry re-checks first and cannot duplicate; `force: true` re-runs it as new work. The dashboard
 shows the warning and asks twice before forcing.
+
+## Journal page (chunk 8)
+
+The journal records **every** write the bridge sends, not only destructive ones, so the page lists what each agent
+changed, with outcome, principal, profile and approver. Filters: operation, document, resource, profile, principal,
+outcome, "destructive only" (writes that kept a pre-image) and time. Pages of 100, newest first; **Older** and **Newest**
+move through them with the `before` cursor. Retention is unchanged (30 days or 2 GB, the `journal-prune` job).
 
 ## Stream
 
