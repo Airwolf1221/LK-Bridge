@@ -3,6 +3,7 @@ import type { AuthConfig } from '../config/auth.js';
 import type { Db } from '../db/open.js';
 import { BearerGuard } from './bearer.js';
 import { CimdFetcher } from './cimd.js';
+import { ClientAssertionVerifier, JwksCache, createJwksFetcher } from './client-assertion.js';
 import { ClientService } from './clients.js';
 import { type KeyRing, deriveKeys, hashSecret, randomToken } from './crypto.js';
 import { type AuthEventLogger, createAuthEventLogger } from './events.js';
@@ -157,6 +158,8 @@ export interface CreateAuthServicesOptions {
   readonly now?: () => number;
   /** Replaces the SSRF-safe HTTPS fetcher used for Client ID Metadata Documents (tests only). */
   readonly fetchJson?: JsonFetcher;
+  /** Replaces the SSRF-safe HTTPS fetcher used for private_key_jwt clients' key sets (tests only). */
+  readonly fetchJwks?: JsonFetcher;
   readonly loginLimits?: LoginLimits;
   readonly registrationLimit?: { readonly limit: number; readonly windowMs: number };
   /** The policy layer's consent hooks (profiles and scopes). */
@@ -181,7 +184,19 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
     defaultCacheSeconds: config.cimd.defaultCacheSeconds,
     maxCacheSeconds: config.cimd.maxCacheSeconds,
   });
-  const clients = new ClientService({ store, config, cimd, event, now });
+  const fetchJwks =
+    o.fetchJwks ??
+    createJwksFetcher({
+      timeoutMs: config.cimd.timeoutMs,
+      ...(config.outboundExtraPorts ? { allowedPorts: config.outboundExtraPorts } : {}),
+    });
+  const assertions = new ClientAssertionVerifier({
+    config,
+    store,
+    jwks: new JwksCache({ fetchJson: fetchJwks, now, event }),
+    now,
+  });
+  const clients = new ClientService({ store, config, cimd, assertions, event, now });
   const tokens = new TokenService({ store, config, keys, event, now });
   const owner = new OwnerAuth({
     store,

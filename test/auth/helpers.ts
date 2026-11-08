@@ -80,6 +80,8 @@ export interface StartBridgeOptions {
   readonly env?: Readonly<Record<string, string>>;
   readonly tools?: readonly McpToolProvider[];
   readonly authOverrides?: BuildServerOptions['authOverrides'];
+  /** A database file to use instead of a fresh in-memory one (to simulate a restart on the same data). */
+  readonly dbPath?: string;
 }
 
 export async function startBridge(o: StartBridgeOptions = {}): Promise<TestBridge> {
@@ -93,7 +95,7 @@ export async function startBridge(o: StartBridgeOptions = {}): Promise<TestBridg
     ...(totpSecret ? { OWNER_TOTP_SECRET: totpSecret } : {}),
     ...o.env,
   });
-  const db = openDatabase(':memory:');
+  const db = openDatabase(o.dbPath ?? ':memory:');
   runMigrations(db);
   const logs: string[] = [];
   const logStream = new Writable({

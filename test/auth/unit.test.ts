@@ -241,7 +241,9 @@ describe('Client ID Metadata Document rules (requirement 4)', () => {
       validateCimdDocument(CLAUDE_CODE_CIMD, { ...CLAUDE_CODE_DOC, ...patch }, []);
     expect(bad({ client_secret: 'x' })).toThrow(/secret/);
     expect(bad({ token_endpoint_auth_method: 'client_secret_basic' })).toThrow(/none/);
-    expect(bad({ token_endpoint_auth_method: 'private_key_jwt' })).toThrow(/none/);
+    expect(bad({ token_endpoint_auth_method: 'client_secret_jwt' })).toThrow(/"none" or "private_key_jwt"/);
+    // private_key_jwt is accepted (ADR 0021), but only with a key set.
+    expect(bad({ token_endpoint_auth_method: 'private_key_jwt' })).toThrow(/no jwks_uri or jwks/);
     expect(bad({ grant_types: ['client_credentials'] })).toThrow(/authorization_code/);
     expect(bad({ grant_types: ['refresh_token', JWT_BEARER_GRANT] })).toThrow(/authorization_code/);
     expect(bad({ grant_types: [] })).toThrow(/authorization_code/);
@@ -272,9 +274,13 @@ describe('Client ID Metadata Document rules (requirement 4)', () => {
       value: `["refresh_token","${JWT_BEARER_GRANT}"]`,
     });
     expect(detail({ response_types: ['token'] })).toEqual({ field: 'response_types', value: '["token"]' });
-    expect(detail({ token_endpoint_auth_method: 'private_key_jwt' })).toEqual({
+    expect(detail({ token_endpoint_auth_method: 'client_secret_basic' })).toEqual({
       field: 'token_endpoint_auth_method',
-      value: 'private_key_jwt',
+      value: 'client_secret_basic',
+    });
+    expect(detail({ token_endpoint_auth_method: 'private_key_jwt' })).toEqual({
+      field: 'jwks_uri',
+      value: null,
     });
     expect(detail({ client_id: 'https://evil.example/meta' })).toEqual({
       field: 'client_id',
@@ -523,7 +529,9 @@ describe('migration runner', () => {
 
   it('applies the auth migration once and records it', () => {
     const db = openDatabase(':memory:');
-    expect(runMigrations(db).applied).toContain('0100_auth_init.sql');
+    expect(runMigrations(db).applied).toEqual(
+      expect.arrayContaining(['0100_auth_init.sql', '0101_client_assertion_jti.sql']),
+    );
     expect(runMigrations(db).applied).toEqual([]);
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'auth_%' ORDER BY name")
@@ -531,6 +539,7 @@ describe('migration runner', () => {
       .map((r) => (r as { name: string }).name);
     expect(tables).toEqual([
       'auth_access_tokens',
+      'auth_client_assertion_jtis',
       'auth_clients',
       'auth_codes',
       'auth_owner_sessions',

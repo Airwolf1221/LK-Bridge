@@ -1,8 +1,9 @@
 import type { Db } from '../db/open.js';
 
-/** Persistence for the auth tables (migration 0100_auth_init.sql). Times are Unix seconds. */
+/** Persistence for the auth tables (migrations 0100_auth_init.sql and 0101_client_assertion_jti.sql). Times are Unix seconds. */
 
-export type TokenEndpointAuthMethod = 'none' | 'client_secret_basic' | 'client_secret_post';
+export type TokenEndpointAuthMethod =
+  'none' | 'client_secret_basic' | 'client_secret_post' | 'private_key_jwt';
 
 export interface ClientRecord {
   readonly clientId: string;
@@ -513,6 +514,28 @@ export class AuthStore {
     });
   }
 
+  // --- Client assertion jtis (migration 0101) ---
+
+  /**
+   * Records a `private_key_jwt` assertion's `jti` for `clientId` until `expiresAt`. Returns false when the same jti is
+   * already recorded and not yet expired (a replay). An expired record of the same jti is replaced.
+   */
+  claimAssertionJti(clientId: string, jti: string, expiresAt: number, now: number): boolean {
+    return this.tx(() => {
+      this.db
+        .prepare('DELETE FROM auth_client_assertion_jtis WHERE client_id = ? AND jti = ? AND expires_at < ?')
+        .run(clientId, jti, now);
+      return (
+        this.db
+          .prepare(
+            `INSERT INTO auth_client_assertion_jtis (client_id, jti, expires_at, created_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT (client_id, jti) DO NOTHING`,
+          )
+          .run(clientId, jti, expiresAt, now).changes === 1
+      );
+    });
+  }
+
   // --- Housekeeping ---
 
   /**
@@ -541,6 +564,7 @@ export class AuthStore {
           'DELETE FROM auth_owner_sessions WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)',
         )
         .run(now, now - day).changes;
+      n += this.db.prepare('DELETE FROM auth_client_assertion_jtis WHERE expires_at < ?').run(now).changes;
       return n;
     });
   }

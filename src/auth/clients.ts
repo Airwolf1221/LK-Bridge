@@ -1,5 +1,11 @@
 import * as z from 'zod';
 import type { AuthConfig } from '../config/auth.js';
+import { decodeJwt } from 'jose';
+import {
+  CLIENT_ASSERTION_TYPE,
+  ClientAssertionError,
+  type ClientAssertionVerifier,
+} from './client-assertion.js';
 import {
   CimdError,
   type CimdFetcher,
@@ -54,7 +60,13 @@ export interface ClientCredentials {
   readonly clientId: string | undefined;
   readonly clientSecret: string | undefined;
   readonly usedBasic: boolean;
+  /** RFC 7521 §4.2 `client_assertion_type` and `client_assertion` (private_key_jwt), as sent. */
+  readonly assertionType?: string | undefined;
+  readonly assertion?: string | undefined;
 }
+
+/** Where a client authenticates; logged with every assertion failure. */
+export type ClientAuthEndpoint = 'token' | 'revocation';
 
 export class ClientService {
   constructor(
@@ -62,6 +74,7 @@ export class ClientService {
       readonly store: AuthStore;
       readonly config: AuthConfig;
       readonly cimd: CimdFetcher;
+      readonly assertions: ClientAssertionVerifier;
       readonly event: AuthEventLogger;
       readonly now: () => number;
     },
@@ -277,7 +290,7 @@ export class ClientService {
         redirectUris: metadata.redirectUris,
         grantTypes: metadata.grantTypes,
         responseTypes: metadata.responseTypes,
-        tokenEndpointAuthMethod: 'none',
+        tokenEndpointAuthMethod: metadata.tokenEndpointAuthMethod,
         clientSecretHash: null,
         scope: null,
         metadata: { ...metadata.document, declared_redirect_uris: metadata.declaredRedirectUris },
@@ -302,6 +315,13 @@ export class ClientService {
         client_id: clientId,
         cache_seconds: cacheSeconds,
         redirect_hosts: client.redirectUris.map((u) => safeHost(u)).join(' '),
+        auth_method: metadata.tokenEndpointAuthMethod,
+        ...(metadata.tokenEndpointAuthMethod === 'private_key_jwt'
+          ? {
+              jwks_uri: metadata.jwksUri === null ? '(inline jwks)' : metadata.jwksUri.slice(0, 300),
+              signing_alg: metadata.signingAlg,
+            }
+          : {}),
       });
       return client;
     } catch (err) {
@@ -318,14 +338,95 @@ export class ClientService {
   }
 
   /**
-   * Authenticates the client at the token or revocation endpoint (RFC 6749 §2.3).
+   * Authenticates the client at the token or revocation endpoint (RFC 6749 §2.3, RFC 7523 §2.2).
    * Unknown or deleted clients get `401 invalid_client`, which makes Claude re-register.
+   *
+   * The method is fixed by the client's registration: a `none` client must send neither a secret nor an assertion;
+   * a `private_key_jwt` client must send a valid assertion and nothing else; a secret client its secret. Every
+   * assertion failure is logged (`client.assertion_rejected`) with its specific reason, never the assertion.
    */
-  authenticate(creds: ClientCredentials): ClientRecord {
-    if (!creds.clientId) throw invalidClient('Client authentication is required', creds.usedBasic);
-    const client = this.deps.store.getClient(creds.clientId);
+  async authenticate(
+    creds: ClientCredentials,
+    endpoint: ClientAuthEndpoint = 'token',
+  ): Promise<ClientRecord> {
+    const sentAssertion = creds.assertion !== undefined || creds.assertionType !== undefined;
+    let clientId = creds.clientId;
+    if (!clientId && creds.assertion !== undefined) {
+      // RFC 7521 §4.2: client_id may be left out when the assertion identifies the client. Its unverified `sub` only
+      // picks the registration; verification then requires iss and sub to equal that client_id.
+      try {
+        const sub = decodeJwt(creds.assertion).sub;
+        if (typeof sub === 'string' && sub.length <= 2048) clientId = sub;
+      } catch {
+        // Not a JWT: treated as no client_id below.
+      }
+    }
+    if (!clientId) throw invalidClient('Client authentication is required', creds.usedBasic);
+    const client = this.deps.store.getClient(clientId);
     if (!client) throw invalidClient('Unknown client', creds.usedBasic);
-    if (client.tokenEndpointAuthMethod === 'none') {
+    const method = client.tokenEndpointAuthMethod;
+    const refuse = (
+      reason: string,
+      message: string,
+      fields: Record<string, string | number | boolean | null> = {},
+    ) => {
+      this.deps.event(
+        'client.assertion_rejected',
+        { client_id: client.clientId, endpoint, auth_method: method, reason, detail: message, ...fields },
+        'warn',
+      );
+      return invalidClient(`Client authentication failed: ${message}`, creds.usedBasic);
+    };
+
+    if (method === 'private_key_jwt') {
+      if (creds.assertion === undefined) {
+        // Said in one line, so a client that turns up without an assertion is obvious in the log.
+        const sent = creds.usedBasic
+          ? 'HTTP Basic credentials'
+          : creds.clientSecret !== undefined
+            ? 'a client_secret'
+            : creds.assertionType !== undefined
+              ? 'client_assertion_type without client_assertion'
+              : 'client_id only';
+        throw refuse(
+          'no_assertion',
+          'this client is registered for private_key_jwt (its metadata document says so) and must send client_assertion; it sent ' +
+            sent,
+          { sent },
+        );
+      }
+      if (creds.assertionType !== CLIENT_ASSERTION_TYPE) {
+        throw refuse('wrong_assertion_type', `client_assertion_type must be ${CLIENT_ASSERTION_TYPE}`, {
+          assertion_type: creds.assertionType === undefined ? null : loggableValue(creds.assertionType),
+        });
+      }
+      if (creds.clientSecret !== undefined || creds.usedBasic) {
+        throw refuse('secret_not_allowed', 'a private_key_jwt client must not also send a client secret');
+      }
+      try {
+        const verified = await this.deps.assertions.verify(client, creds.assertion);
+        this.deps.event('client.assertion_accepted', {
+          client_id: client.clientId,
+          endpoint,
+          alg: verified.alg,
+          kid: verified.kid === null ? null : loggableValue(verified.kid),
+          key_source: verified.keySource,
+        });
+      } catch (err) {
+        if (!(err instanceof ClientAssertionError)) throw err;
+        throw refuse(err.reason, err.message, { ...err.fields });
+      }
+      return client;
+    }
+
+    if (sentAssertion) {
+      // No method switching: a client registered for "none" (or a secret) cannot authenticate with an assertion.
+      throw refuse(
+        'assertion_not_allowed',
+        `this client is registered for token_endpoint_auth_method "${method}" and must not send client_assertion`,
+      );
+    }
+    if (method === 'none') {
       if (creds.clientSecret !== undefined) {
         throw invalidClient(
           'This client is registered as a public client and must not send a secret',
@@ -349,7 +450,12 @@ export function readClientCredentials(
   authorization: string | undefined,
   bodyClientId: string | undefined,
   bodySecret: string | undefined,
+  assertion: { readonly type: string | undefined; readonly value: string | undefined } = {
+    type: undefined,
+    value: undefined,
+  },
 ): ClientCredentials {
+  const assertionFields = { assertionType: assertion.type, assertion: assertion.value };
   if (authorization && /^basic\s/i.test(authorization)) {
     let decoded: string;
     try {
@@ -371,9 +477,9 @@ export function readClientCredentials(
     if (bodyClientId !== undefined && bodyClientId !== id) {
       throw invalidRequest('client_id does not match the Basic credentials');
     }
-    return { clientId: id, clientSecret: secret, usedBasic: true };
+    return { clientId: id, clientSecret: secret, usedBasic: true, ...assertionFields };
   }
-  return { clientId: bodyClientId, clientSecret: bodySecret, usedBasic: false };
+  return { clientId: bodyClientId, clientSecret: bodySecret, usedBasic: false, ...assertionFields };
 }
 
 function safeHost(uri: string): string {

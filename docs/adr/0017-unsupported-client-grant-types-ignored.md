@@ -1,6 +1,6 @@
 # ADR 0017: Grant types the bridge does not issue are ignored, not refused
 
-Status: Accepted (hotfix, 8 November 2026). Supersedes the grant-type and response-type checks for Client ID Metadata Documents and Dynamic Client Registration that ADR 0007 put in place with chunk 4. Recorded in PLAN amendment 5.
+Status: Accepted (hotfix, 8 November 2026). Supersedes the grant-type and response-type checks for Client ID Metadata Documents and Dynamic Client Registration that ADR 0007 put in place with chunk 4. Recorded in PLAN amendment 5. Decision 5's `token_endpoint_auth_method: "none"` for CIMD is superseded by [ADR 0021](0021-private-key-jwt-client-authentication.md) (`none` or `private_key_jwt`).
 
 ## Context
 

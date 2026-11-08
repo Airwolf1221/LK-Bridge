@@ -1,6 +1,6 @@
 # ADR 0008: ChatGPT as a supported client
 
-Status: Accepted (chunk 4 follow-up, 7 November 2026). Amends PLAN (amendment 1) and supersedes the redirect-URI and client-pruning parts of ADR 0007.
+Status: Accepted (chunk 4 follow-up, 7 November 2026). Amends PLAN (amendment 1) and supersedes the redirect-URI and client-pruning parts of ADR 0007. The context's assumption that ChatGPT authenticates as a public client (`none`) was wrong for its metadata document, which uses `private_key_jwt`: see [ADR 0021](0021-private-key-jwt-client-authentication.md).
 
 ## Context
 

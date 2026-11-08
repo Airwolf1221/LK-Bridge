@@ -17,6 +17,14 @@ function requireForm(req: FastifyRequest): FormBody {
   return req.body;
 }
 
+/** Client credentials from HTTP Basic, the form's secret, or the form's private_key_jwt assertion. */
+function credentials(req: FastifyRequest, form: FormBody) {
+  return readClientCredentials(req.headers.authorization, form.get('client_id'), form.get('client_secret'), {
+    type: form.get('client_assertion_type'),
+    value: form.get('client_assertion'),
+  });
+}
+
 export function registerOAuthRoutes(app: FastifyInstance, s: AuthServices): void {
   const token = async (req: FastifyRequest, reply: FastifyReply) => {
     cors(reply);
@@ -29,9 +37,7 @@ export function registerOAuthRoutes(app: FastifyInstance, s: AuthServices): void
       if (grantType !== 'authorization_code' && grantType !== 'refresh_token') {
         throw unsupportedGrantType('Supported grant types: authorization_code, refresh_token');
       }
-      const client = s.clients.authenticate(
-        readClientCredentials(req.headers.authorization, form.get('client_id'), form.get('client_secret')),
-      );
+      const client = await s.clients.authenticate(credentials(req, form), 'token');
       clientId = client.clientId;
       if (!client.grantTypes.includes(grantType)) {
         throw unauthorizedClient(`This client is not registered for the ${grantType} grant`);
@@ -73,9 +79,7 @@ export function registerOAuthRoutes(app: FastifyInstance, s: AuthServices): void
       const form = requireForm(req);
       const value = form.get('token');
       if (!value) throw invalidRequest('token is required');
-      const client = s.clients.authenticate(
-        readClientCredentials(req.headers.authorization, form.get('client_id'), form.get('client_secret')),
-      );
+      const client = await s.clients.authenticate(credentials(req, form), 'revocation');
       await s.tokens.revoke(client, value);
       return reply.code(200).header('cache-control', 'no-store').send();
     } catch (err) {
