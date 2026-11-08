@@ -51,6 +51,8 @@ export interface JournalEntry {
 }
 
 export interface JournalFilter {
+  /** One entry by its journal id (the dashboard's detail view). */
+  readonly id?: number;
   readonly jobId?: string;
   readonly resourceId?: string;
   readonly documentId?: string;
@@ -189,6 +191,7 @@ export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[
     where.push(`${col} = ?`);
     vals.push(v);
   };
+  if (filter.id !== undefined) eq('id', filter.id);
   if (filter.jobId !== undefined) eq('job_id', filter.jobId);
   if (filter.resourceId !== undefined) eq('resource_id', filter.resourceId);
   if (filter.documentId !== undefined) eq('document_id', filter.documentId);

@@ -1,0 +1,711 @@
+// @vitest-environment jsdom
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- parsed JSON replies and mock data in tests */
+import { screen, waitFor, within } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import {
+  baseRoutes,
+  connections,
+  controls,
+  installApi,
+  job,
+  profiles,
+  renderApp,
+  snapshot,
+  step,
+  useDom,
+} from './helpers';
+
+useDom();
+
+const h1 = (name: string | RegExp) => screen.findByRole('heading', { level: 1, name });
+
+describe('navigation', () => {
+  it('lists every page, with the two for chunk 6 marked as later', async () => {
+    installApi({ ...baseRoutes(), 'GET /overview': overview() });
+    renderApp('/ui');
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    for (const name of [
+      'Overview',
+      'Jobs',
+      'Errors',
+      'Request Budgets',
+      'Concurrent Writers',
+      'Proposals',
+      'Clients & Access',
+      'Journal',
+      'Settings',
+      'Maintenance Jobs',
+      'Repository Mappings',
+    ]) {
+      expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInTheDocument();
+    }
+    expect(within(nav).getByRole('link', { name: /^Proposals/ })).toHaveTextContent('2'); // pending count from the API
+    expect(within(nav).getByRole('link', { name: /^Overview/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText('Owner dashboard · v9.9.9')).toBeInTheDocument();
+  });
+
+  it('shows “Coming in a later chunk” on the maintenance and mappings pages and builds nothing behind them', async () => {
+    const api = installApi({ ...baseRoutes() });
+    for (const [path, title] of [
+      ['/ui/maintenance', 'Maintenance Jobs'],
+      ['/ui/mappings', 'Repository Mappings'],
+    ] as const) {
+      const view = renderApp(path);
+      expect(await h1(title)).toBeInTheDocument();
+      expect(screen.getByText('Coming in a later chunk.')).toBeInTheDocument();
+      view.unmount();
+    }
+    expect(api.calls.filter((c) => !['/proposals/counts'].includes(c.path))).toEqual([]);
+  });
+
+  it('says so for an unknown path', async () => {
+    installApi(baseRoutes());
+    renderApp('/ui/nope');
+    expect(await screen.findByText('Page not found')).toBeInTheDocument();
+  });
+
+  it('cycles the theme and remembers it', async () => {
+    installApi({ ...baseRoutes(), 'GET /overview': overview() });
+    renderApp('/ui');
+    const btn = await screen.findByRole('button', { name: /Theme: system/ });
+    btn.click();
+    await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('light'));
+    (await screen.findByRole('button', { name: /Theme: light/ })).click();
+    await waitFor(() => expect(document.documentElement.getAttribute('data-theme')).toBe('dark'));
+    expect(window.localStorage.getItem('lkb-theme')).toBe('dark');
+  });
+});
+
+function overview(over: Record<string, unknown> = {}) {
+  const snap = snapshot();
+  return {
+    health: {
+      checkedAt: Date.now(),
+      reachable: true,
+      projectName: 'Baisheng',
+      keyRole: 'ADMIN',
+      plan: 'ok',
+      note: null,
+    },
+    controls: controls({ readOnly: true }),
+    activeJobs: { total: 4, running: 2, queued: 1, waiting: 1, paused: 0, uncertain: 1 },
+    errorsLastHour: { count: 3, capped: false },
+    pendingProposals: 2,
+    writes: { state: 'running', perMinute: 12 },
+    budget: {
+      queues: snap.queues,
+      gauges: ['write-min', 'key-min', 'key-hour', 'project-hour'].map(
+        (t) => snap.tiers[t as keyof typeof snap.tiers],
+      ),
+    },
+    ...over,
+  };
+}
+
+describe('Overview', () => {
+  it('shows health, the read-only flag, writes state, headline gauges and the three counts', async () => {
+    installApi({ ...baseRoutes(), 'GET /overview': overview() });
+    renderApp('/ui');
+    expect(await h1('Overview')).toBeInTheDocument();
+    const health = screen.getByRole('region', { name: 'Health' });
+    expect(within(health).getByText('reachable')).toBeInTheDocument();
+    expect(within(health).getByText('ADMIN')).toBeInTheDocument();
+    expect(within(health).getByText('paid plan')).toBeInTheDocument();
+    expect(within(health).getByText('Project: Baisheng')).toBeInTheDocument();
+    const writing = screen.getByRole('region', { name: 'Writing' });
+    expect(within(writing).getByText('on: nothing is written')).toBeInTheDocument();
+    expect(within(writing).getByText('running')).toBeInTheDocument();
+    const activity = screen.getByRole('region', { name: 'Activity' });
+    const stat = (name: string) =>
+      within(activity).getByRole('link', { name }).closest('.stat') as HTMLElement;
+    expect(stat('active jobs')).toHaveTextContent(/^4/);
+    expect(stat('errors in the last hour')).toHaveTextContent(/^3/);
+    expect(stat('pending proposals')).toHaveTextContent(/^2/);
+    expect(within(activity).getByText('1 uncertain')).toBeInTheDocument();
+    const budget = screen.getByRole('region', { name: 'Request budget' });
+    expect(within(budget).getByText('Writes per minute')).toBeInTheDocument();
+    expect(within(budget).getByText('12 / 120')).toBeInTheDocument();
+    expect(within(budget).getAllByRole('img', { name: /per cent used/ })).toHaveLength(4);
+  });
+
+  it('flags an unreachable LegendKeeper and an unpaid plan', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /overview': overview({
+        health: {
+          checkedAt: Date.now(),
+          reachable: false,
+          projectName: null,
+          keyRole: 'unknown',
+          plan: 'unpaid',
+          note: 'LegendKeeper could not be reached.',
+        },
+        writes: { state: 'paused', perMinute: 0 },
+      }),
+    });
+    renderApp('/ui');
+    expect(await screen.findByText('unreachable')).toBeInTheDocument();
+    expect(screen.getByText('paid plan needed')).toBeInTheDocument();
+    expect(screen.getByText('LegendKeeper could not be reached.')).toBeInTheDocument();
+    expect(screen.getByText('paused')).toBeInTheDocument();
+  });
+
+  it('shows a plain error with a retry when the API fails', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /overview': {
+        status: 500,
+        body: { error: { code: 'INTERNAL', message: 'Something went wrong on the server.' } },
+      },
+    });
+    renderApp('/ui');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something went wrong on the server.');
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+});
+
+describe('Jobs', () => {
+  const list = [
+    job(),
+    job({
+      id: 'job_2',
+      title: 'Needs a look',
+      status: 'failed',
+      uncertain: true,
+      progress: { stepsDone: 3, stepsTotal: 4, stepsFailed: 1 },
+      principalId: 'pat_zzz',
+      profile: 'ChatGPT',
+      origin: { kind: 'mcp', tool: 'lk_api_write' },
+    }),
+    job({ id: 'job_3', title: 'Waiting job', status: 'waiting_budget', resumeAt: Date.now() + 90_000 }),
+  ];
+  const routes = () => ({
+    ...baseRoutes(),
+    'GET /jobs': (c: { query: string }) => ({
+      jobs: c.query.includes('view=history') ? [list[1]] : [list[0], list[2]],
+      hasMore: false,
+    }),
+  });
+
+  it('lists active jobs with progress, the current step, origin and principal, and the controls', async () => {
+    installApi(routes());
+    renderApp('/ui/jobs');
+    const row = await screen.findByRole('row', { name: /Rewrite the Kingdom page/ });
+    expect(within(row).getByText('Running')).toBeInTheDocument();
+    expect(within(row).getByText('2 / 10 steps')).toBeInTheDocument();
+    expect(within(row).getByText('Step 3')).toBeInTheDocument();
+    expect(within(row).getByText(/mcp/)).toBeInTheDocument();
+    expect(within(row).getByText('Claude Code')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Pause' })).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    const waiting = screen.getByRole('row', { name: /Waiting job/ });
+    expect(within(waiting).getByText('Waiting for budget')).toBeInTheDocument();
+    expect(within(waiting).getByText(/resumes in 1 min/)).toBeInTheDocument();
+  });
+
+  it('shows history with the uncertain flag clearly, and no controls on finished jobs', async () => {
+    installApi(routes());
+    renderApp('/ui/jobs?view=history');
+    const row = await screen.findByRole('row', { name: /Needs a look/ });
+    expect(within(row).getByText('Failed')).toBeInTheDocument();
+    expect(within(row).getByText('uncertain')).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: 'Cancel' })).toBeNull();
+  });
+
+  it('filters by status, origin, profile and principal through the API', async () => {
+    const api = installApi(routes());
+    renderApp('/ui/jobs?status=running&origin=mcp&profile=Claude%20Code&principal=pat_abc');
+    await screen.findByRole('row', { name: /Rewrite/ });
+    const q = new URLSearchParams(api.find('GET', '/jobs').at(-1)!.query);
+    expect(q.get('status')).toBe('running');
+    expect(q.get('origin')).toBe('mcp');
+    expect(q.get('profile')).toBe('Claude Code');
+    expect(q.get('principalId')).toBe('pat_abc');
+    expect(q.get('view')).toBe('active');
+  });
+
+  it('shows a job’s detail: steps, attempts, request ids with a copy button, errors, artefacts', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /jobs/job_2': {
+        job: {
+          ...list[1],
+          lastError: {
+            code: 'VALIDATION_ERROR',
+            message: 'The name is not allowed',
+            requestId: 'lkb.req-9',
+            stepNo: 2,
+          },
+          steps: [
+            step(),
+            step({
+              stepNo: 2,
+              status: 'failed',
+              attempts: 3,
+              requestIds: ['lkb.req-8', 'lkb.req-9'],
+              error: { code: 'VALIDATION_ERROR', message: 'The name is not allowed', requestId: 'lkb.req-9' },
+              retry: { allowed: true, ambiguous: false, warning: null },
+            }),
+          ],
+          artifacts: [
+            {
+              id: 'art_1',
+              jobId: 'job_2',
+              stepNo: null,
+              kind: 'result',
+              itemCount: 0,
+              bytes: 2048,
+              truncated: false,
+              truncatedReason: null,
+            },
+          ],
+        },
+      },
+    });
+    renderApp('/ui/jobs/job_2');
+    expect(await h1('Needs a look')).toBeInTheDocument();
+    expect(screen.getByText(/At least one step may or may not have been applied/)).toBeInTheDocument();
+    expect(screen.getAllByText('uncertain').length).toBeGreaterThan(0);
+    const failed = screen.getByRole('row', { name: /VALIDATION_ERROR/ });
+    expect(within(failed).getByText('3')).toBeInTheDocument();
+    expect(within(failed).getAllByRole('button', { name: 'Copy request id' })).toHaveLength(2); // one per request id
+    expect(within(failed).getByRole('button', { name: 'Retry step' })).toBeInTheDocument();
+    expect(screen.getByText('2.0 KB')).toBeInTheDocument();
+  });
+});
+
+describe('Errors', () => {
+  const group = {
+    fingerprint: 'createResource|VALIDATION_ERROR|name',
+    opId: 'createResource',
+    code: 'VALIDATION_ERROR',
+    path: 'name',
+    classification: 'user_fixable',
+    count: 14,
+    firstSeen: Date.now() - 3_600_000,
+    lastSeen: Date.now() - 60_000,
+    resolved: false,
+    lastMessage: 'The name is not allowed',
+    lastRequestId: 'lkb.req-5',
+    lastJobId: 'job_9',
+  };
+  const occurrence = {
+    id: 1,
+    at: Date.now() - 60_000,
+    opId: 'createResource',
+    jobId: 'job_9',
+    stepNo: 2,
+    principalId: 'pat_abc',
+    profile: 'Claude Code',
+    status: 400,
+    code: 'VALIDATION_ERROR',
+    message: 'The name is not allowed',
+    issues: [{ path: 'name', message: 'too long' }],
+    requestId: 'lkb.req-5',
+    retryable: false,
+    classification: 'user_fixable',
+    detail: { status: 400, body: { message: 'The name is not allowed', code: 'VALIDATION_ERROR' } },
+    resolvedAt: null,
+  };
+
+  it('lists groups with count, first and last seen', async () => {
+    installApi({ ...baseRoutes(), 'GET /errors': { groups: [group] } });
+    renderApp('/ui/errors');
+    const row = await screen.findByRole('row', { name: /createResource/ });
+    expect(within(row).getByText('VALIDATION_ERROR')).toBeInTheDocument();
+    expect(within(row).getByText('user fixable')).toBeInTheDocument();
+    expect(within(row).getByText('14')).toBeInTheDocument();
+    expect(within(row).getByText('The name is not allowed')).toBeInTheDocument();
+  });
+
+  it('shows the full LegendKeeper body, a copy button for the request id, the job link and marks resolved', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /errors/group': { group, occurrences: [occurrence] },
+      'POST /errors/resolve': { resolved: 14 },
+    });
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    renderApp(`/ui/errors?fp=${encodeURIComponent(group.fingerprint)}`);
+    expect(await screen.findByText('lkb.req-5')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Job job_9/ })).toHaveAttribute('href', '/ui/jobs/job_9');
+    expect(screen.getByText(/step 2/)).toBeInTheDocument();
+    expect(screen.getByText('name', { selector: 'span.mono' })).toBeInTheDocument();
+    await user.click(screen.getByText('Full LegendKeeper error body'));
+    expect(screen.getByLabelText('JSON')).toHaveTextContent('"code": "VALIDATION_ERROR"');
+    await user.click(screen.getByRole('button', { name: 'Copy request id' }));
+    await waitFor(async () => expect(await navigator.clipboard.readText()).toBe('lkb.req-5'));
+    expect(screen.getByText('Copied')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Mark resolved' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Mark resolved' }));
+    await waitFor(() => expect(api.find('POST', '/errors/resolve')).toHaveLength(1));
+    expect(api.find('POST', '/errors/resolve')[0]!.body).toEqual({ fingerprint: group.fingerprint });
+  });
+});
+
+describe('Request Budgets', () => {
+  const budgets = () => ({
+    snapshot: snapshot({
+      'project-hour': { drift: { atMs: Date.now(), observedUsed: 2600, modelledUsed: 2000, delta: 600 } },
+      'write-min': { blockedUntilMs: Date.now() + 20_000 },
+    }),
+    writesPerMinute: 12,
+    tierOrder: [
+      'write-min',
+      'write-hour',
+      'key-min',
+      'key-hour',
+      'key-day',
+      'project-hour',
+      'items-min',
+      'items-hour',
+      'upload',
+    ],
+    reserveFloors: {
+      current: { interactive: 0.1, job: 0.25, maintenance: 0.5 },
+      environment: { interactive: 0.1, job: 0.25, maintenance: 0.5 },
+      stored: null,
+    },
+    projectDrift: { atMs: Date.now(), observedUsed: 2600, modelledUsed: 2000, delta: 600 },
+    samples: {
+      since: Date.now() - 86_400_000,
+      until: Date.now(),
+      bucketMs: 300_000,
+      count: 3,
+      points: [0, 1, 2, 3].map((i) => ({
+        at: Date.now() - (4 - i) * 300_000,
+        tiers: { 'write-min': { used: i * 10, limit: 120 } },
+        queues: {},
+      })),
+    },
+  });
+
+  it('shows one gauge per tier, upload as “reactive only”, sparklines, drift, queue depth and floors', async () => {
+    installApi({ ...baseRoutes(), 'GET /budgets': budgets() });
+    renderApp('/ui/budgets');
+    expect(await h1('Request Budgets')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Writes per minute' })).toHaveTextContent('12 / 120');
+    expect(screen.getByRole('region', { name: 'Writes per minute' })).toHaveTextContent(/refused for 20 s/);
+    expect(screen.getByRole('region', { name: 'Writes per minute' })).toHaveTextContent(/resets in/);
+    expect(screen.getByRole('region', { name: 'Image uploads' })).toHaveTextContent('reactive only');
+    for (const name of [
+      'Writes per hour',
+      'All requests per minute',
+      'All requests per hour',
+      'All requests per day',
+      'Project, per hour (all keys)',
+      'Bulk-create items per minute',
+      'Bulk-create items per hour',
+    ]) {
+      expect(screen.getByRole('region', { name })).toBeInTheDocument();
+    }
+    expect(
+      screen.getByRole('img', { name: 'Writes per minute: usage over the last 24 hours' }),
+    ).toBeInTheDocument();
+    const drift = screen.getByRole('region', { name: /observed against modelled/ });
+    expect(drift).toHaveTextContent('2,600');
+    expect(drift).toHaveTextContent('2,000');
+    expect(drift).toHaveTextContent('+600');
+    const queues = screen.getByRole('region', { name: 'Waiting for budget' });
+    expect(queues).toHaveTextContent('P1 · interactive (agents)');
+    expect(within(queues).getByText('14')).toBeInTheDocument();
+    expect(screen.getByLabelText('Jobs (P2)')).toHaveValue('25');
+  });
+
+  it('edits the reserve floors with a confirmation, and refuses an invalid order', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /budgets': budgets(),
+      'PUT /budgets/reserve-floors': { reserveFloors: {} },
+    });
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    renderApp('/ui/budgets');
+    const job = await screen.findByLabelText('Jobs (P2)');
+    await user.clear(job);
+    await user.type(job, '5'); // below interactive (10): invalid
+    expect(screen.getByRole('alert')).toHaveTextContent(/interactive ≤ jobs ≤ maintenance/);
+    expect(screen.getByRole('button', { name: 'Save floors' })).toBeDisabled();
+    await user.clear(job);
+    await user.type(job, '30');
+    await user.click(screen.getByRole('button', { name: 'Save floors' }));
+    expect(api.find('PUT', '/budgets/reserve-floors')).toHaveLength(0); // asks first
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Save floors' }));
+    await waitFor(() => expect(api.find('PUT', '/budgets/reserve-floors')).toHaveLength(1));
+    expect(api.find('PUT', '/budgets/reserve-floors')[0]!.body).toEqual({
+      interactive: 0.1,
+      job: 0.3,
+      maintenance: 0.5,
+      confirm: true,
+    });
+  });
+});
+
+describe('Concurrent Writers', () => {
+  const writers = (over: Record<string, unknown> = {}) => ({
+    writers: {
+      max: 2,
+      busy: 1,
+      slots: [
+        {
+          slot: 1,
+          state: 'busy',
+          jobId: 'job_1',
+          stepNo: 4,
+          opId: 'replaceDocumentBlocks',
+          profile: 'Claude Code',
+          principalId: 'pat_abc',
+          documentId: 'doc_77',
+          since: Date.now() - 5000,
+        },
+        { slot: 2, state: 'idle' },
+      ],
+      waiting: [{ jobId: 'job_2', stepNo: 1, opId: 'updateResource' }],
+    },
+    locks: [
+      {
+        key: 'doc:doc_77',
+        holder: { jobId: 'job_1', stepNo: 4, since: Date.now() - 5000 },
+        waiting: [{ jobId: 'job_2', stepNo: 1, since: Date.now() - 2000 }],
+      },
+    ],
+    controls: controls(),
+    jobs: {
+      job_1: {
+        title: 'Rewrite the Kingdom page',
+        status: 'running',
+        profile: 'Claude Code',
+        principalId: 'pat_abc',
+      },
+      job_2: {
+        title: 'Rename the nations',
+        status: 'waiting_lock',
+        profile: 'ChatGPT',
+        principalId: 'pat_x',
+      },
+    },
+    writesPerMinute: 42,
+    writeMinuteLimit: 120,
+    writeSpacingMs: 500,
+    ...over,
+  });
+
+  it('shows slot cards (busy with job, op, document, principal; or idle), held locks, wait queues and the rate', async () => {
+    installApi({ ...baseRoutes(), 'GET /writers': writers() });
+    renderApp('/ui/writers');
+    expect(await h1('Concurrent Writers')).toBeInTheDocument();
+    const busy = document.querySelector('[data-slot="1"]') as HTMLElement;
+    expect(busy).toHaveAttribute('data-state', 'busy');
+    expect(within(busy).getByRole('link', { name: 'Rewrite the Kingdom page' })).toBeInTheDocument();
+    expect(within(busy).getByText('replaceDocumentBlocks')).toBeInTheDocument();
+    expect(within(busy).getByText('doc_77')).toBeInTheDocument();
+    expect(within(busy).getByText('Claude Code')).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="2"]')).toHaveTextContent('Idle');
+    expect(screen.getByText('Slots (1 of 2 busy)')).toBeInTheDocument();
+    expect(screen.getByTestId('writes-per-minute')).toHaveTextContent('42');
+    const locks = screen.getByRole('region', { name: /Held locks/ });
+    expect(locks).toHaveTextContent('doc:doc_77');
+    expect(within(locks).getByRole('link', { name: 'Rename the nations' })).toBeInTheDocument();
+    expect(within(locks).getByText('Waiting for a lock')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for a slot')).toBeInTheDocument();
+  });
+
+  it('pauses all writes after a confirmation, and drains', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /writers': writers(),
+      'POST /writes/pause': { controls: controls({ writesPaused: true }) },
+      'POST /writes/drain': { controls: controls({ draining: true }) },
+    });
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    renderApp('/ui/writers');
+    await user.click(await screen.findByRole('button', { name: 'Pause all writes' }));
+    expect(api.find('POST', '/writes/pause')).toHaveLength(0);
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Pause all writes' }),
+    );
+    await waitFor(() => expect(api.find('POST', '/writes/pause')).toHaveLength(1));
+    await user.click(screen.getByRole('button', { name: 'Drain' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Start draining' }));
+    await waitFor(() => expect(api.find('POST', '/writes/drain')).toHaveLength(1));
+  });
+
+  it('offers Resume when writes are paused and Stop draining when draining', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /writers': writers({ controls: controls({ writesPaused: true, draining: true }) }),
+    });
+    renderApp('/ui/writers');
+    expect(await screen.findByRole('button', { name: 'Resume writes' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop draining' })).toBeInTheDocument();
+    expect(screen.getByText('draining')).toBeInTheDocument();
+  });
+});
+
+describe('Clients & Access', () => {
+  it('shows profiles with kind and scope, the default scope, and connections grouped by profile with last use', async () => {
+    installApi(baseRoutes());
+    renderApp('/ui/clients');
+    expect(await h1('Clients & Access')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Default scope for new connections' })).toHaveValue('read');
+    const prof = screen.getByRole('region', { name: 'Profiles' });
+    const ccRow = within(prof).getByRole('row', { name: /claude-code/ });
+    expect(within(ccRow).getByLabelText('Scope for claude-code')).toHaveValue('write');
+    expect(ccRow).toHaveTextContent('claude-code');
+    const conns = screen.getByRole('region', { name: /Connections, by profile/ });
+    const grant = within(conns).getByRole('row', { name: /Claude \(untrusted name\)/ });
+    expect(within(grant).getByText('OAuth grant')).toBeInTheDocument();
+    expect(within(grant).getByText('2 min ago')).toBeInTheDocument();
+    const pat = within(conns).getByRole('row', { name: /Laptop/ });
+    expect(within(pat).getByText('Personal access token')).toBeInTheDocument();
+    expect(within(pat).getByText('never')).toBeInTheDocument(); // last used
+    expect(within(pat).getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
+    expect(connections).toHaveLength(2);
+    expect(profiles).toHaveLength(2);
+  });
+});
+
+describe('Journal', () => {
+  const entry = {
+    id: 7,
+    at: Date.now() - 5000,
+    jobId: 'job_1',
+    stepNo: 1,
+    opId: 'replaceDocumentBlocks',
+    principalId: 'pat_abc',
+    profile: 'Claude Code',
+    approvedBy: 'owner',
+    risk: 'destructive',
+    targetKind: 'document',
+    targetId: 'doc_77',
+    resourceId: 'res_1',
+    documentId: 'doc_77',
+    version: 'v3',
+    params: { path: { documentId: 'doc_77' } },
+    bytes: 4096,
+    outcome: 'applied',
+  };
+  it('lists entries with principal, profile and approvedBy, searches them, and views the pre-image as formatted JSON (view only)', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /journal': {
+        entries: [
+          entry,
+          {
+            ...entry,
+            id: 8,
+            opId: 'deleteResource',
+            approvedBy: null,
+            documentId: null,
+            targetId: 'res_9',
+            principalId: 'system',
+            profile: 'system',
+          },
+        ],
+        hasMore: false,
+      },
+      'GET /journal/7': {
+        entry: {
+          ...entry,
+          preImage: { blocks: [{ kind: 'paragraph', content: [{ text: 'The old text' }] }] },
+        },
+      },
+    });
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    renderApp('/ui/journal');
+    const row = await screen.findByRole('row', { name: /replaceDocumentBlocks/ });
+    expect(within(row).getByText('Claude Code')).toBeInTheDocument();
+    expect(within(row).getByText('owner')).toBeInTheDocument();
+    expect(within(row).getByText('applied')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Search these results'), 'deleteRes');
+    expect(screen.queryByRole('row', { name: /replaceDocumentBlocks/ })).toBeNull();
+    expect(screen.getByRole('row', { name: /deleteResource/ })).toBeInTheDocument();
+    await user.clear(screen.getByLabelText('Search these results'));
+    await user.click(
+      within(await screen.findByRole('row', { name: /replaceDocumentBlocks/ })).getByRole('button', {
+        name: 'View',
+      }),
+    );
+    const json = await screen
+      .findByLabelText('JSON', { selector: 'pre' }, { timeout: 3000 })
+      .catch(() => null);
+    expect(json ?? screen.getAllByLabelText('JSON')[0]).toHaveTextContent('"text": "The old text"');
+    // View only: nothing on the page can change the journal.
+    expect(screen.queryByRole('button', { name: /delete|restore|roll ?back|undo/i })).toBeNull();
+  });
+});
+
+describe('Settings', () => {
+  const settings = () => ({
+    readOnly: { effective: true, override: null, environment: true, appliesAt: 'immediately' },
+    exposePerOpTools: {
+      running: false,
+      stored: null,
+      environment: false,
+      pendingRestart: false,
+      appliesAt: 'restart',
+    },
+    memberAdmin: {
+      running: false,
+      stored: true,
+      environment: false,
+      pendingRestart: true,
+      appliesAt: 'restart',
+    },
+    journalRetention: {
+      running: { retentionDays: 30, maxBytes: 2 * 1024 ** 3 },
+      stored: null,
+      environment: { retentionDays: 30, maxBytes: 2 * 1024 ** 3 },
+      pendingRestart: false,
+      appliesAt: 'restart',
+    },
+    tierLimits: {
+      running: { 'write-min': 120 },
+      stored: null,
+      environment: { 'write-min': 120 },
+      pendingRestart: false,
+      tiers: ['write-min'],
+      appliesAt: 'restart',
+    },
+    writersMax: 2,
+  });
+  it('shows every setting, the pending-restart ones, and recent audited changes', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /settings': { settings: settings() },
+      'GET /audit': {
+        entries: [
+          {
+            id: 1,
+            at: Date.now(),
+            actor: 'owner',
+            action: 'settings.read_only',
+            target: null,
+            before: null,
+            after: null,
+          },
+        ],
+      },
+    });
+    renderApp('/ui/settings');
+    expect(await h1('Settings')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Read-only mode' })).toHaveTextContent('on now');
+    expect(screen.getByRole('region', { name: 'Per-operation tools' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Member administration' })).toHaveTextContent(
+      'pending restart',
+    );
+    expect(screen.getByRole('region', { name: 'Journal retention' })).toHaveTextContent('30 days');
+    expect(screen.getByRole('region', { name: 'Tier limit overrides' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Recent changes' })).toHaveTextContent('settings.read_only');
+  });
+});
+
+describe('Proposals page, empty states', () => {
+  it('says nothing is waiting', async () => {
+    installApi({ ...baseRoutes(), 'GET /proposals': { proposals: [], hasMore: false } });
+    renderApp('/ui/proposals');
+    expect(await screen.findByText('Nothing is waiting for you.')).toBeInTheDocument();
+  });
+});

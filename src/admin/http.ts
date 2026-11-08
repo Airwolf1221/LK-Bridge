@@ -1,0 +1,81 @@
+import type { FastifyReply } from 'fastify';
+import { JobsError } from '../jobs/index.js';
+import { PolicyError } from '../policy/index.js';
+
+/** An error with an HTTP status, for admin routes. The body is always `{ error: { code, message } }`. */
+export class AdminHttpError extends Error {
+  override readonly name = 'AdminHttpError';
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+    readonly extra: Record<string, unknown> = {},
+  ) {
+    super(message);
+  }
+}
+
+const POLICY_STATUS: Readonly<Record<string, number>> = {
+  NOT_OWNER: 403,
+  INVALID_INPUT: 400,
+  PROFILE_EXISTS: 409,
+  PROFILE_NOT_FOUND: 404,
+  CONNECTION_NOT_FOUND: 404,
+  PROPOSAL_NOT_FOUND: 404,
+  INVALID_TRANSITION: 409,
+  PROPOSAL_EXPIRED: 409,
+  BRIDGE_READ_ONLY: 409,
+  WRITES_PAUSED: 409,
+  DRAINING: 409,
+  NO_ENGINE: 503,
+  REREAD_FAILED: 502,
+};
+
+const JOBS_STATUS: Readonly<Record<string, number>> = {
+  JOB_NOT_FOUND: 404,
+  INVALID_CONTROL: 409,
+  INVALID_PARAMS: 400,
+  READ_ONLY: 409,
+  DRAINING: 409,
+};
+
+/** The status and body for anything a route throws. Unknown errors are a generic 500: no message, no stack. */
+export function describeError(err: unknown): { status: number; body: { error: Record<string, unknown> } } {
+  if (err instanceof AdminHttpError) {
+    return { status: err.status, body: { error: { code: err.code, message: err.message, ...err.extra } } };
+  }
+  if (err instanceof PolicyError) {
+    return {
+      status: POLICY_STATUS[err.code] ?? 400,
+      body: { error: { code: err.code, message: err.message } },
+    };
+  }
+  if (err instanceof JobsError) {
+    return {
+      status: JOBS_STATUS[err.code] ?? 400,
+      body: { error: { code: err.code, message: err.message } },
+    };
+  }
+  const e = err as { statusCode?: unknown; code?: unknown; message?: unknown; validation?: unknown };
+  // Fastify's own errors (bad JSON, body too large, unsupported media type) carry a 4xx status and a safe message.
+  if (typeof e.statusCode === 'number' && e.statusCode >= 400 && e.statusCode < 500) {
+    return {
+      status: e.statusCode,
+      body: {
+        error: {
+          code: typeof e.code === 'string' ? e.code : 'BAD_REQUEST',
+          message: typeof e.message === 'string' ? e.message : 'Bad request',
+        },
+      },
+    };
+  }
+  return {
+    status: 500,
+    body: { error: { code: 'INTERNAL', message: 'Something went wrong on the server.' } },
+  };
+}
+
+export function sendError(reply: FastifyReply, err: unknown): FastifyReply {
+  const { status, body } = describeError(err);
+  return reply.code(status).type('application/json; charset=utf-8').send(body);
+}

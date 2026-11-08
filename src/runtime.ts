@@ -1,8 +1,11 @@
 import { pino } from 'pino';
+import { applyStoredSettings, startInterimBudgetSampler } from './admin/index.js';
 import {
+  defaultAdminSettings,
   defaultPolicySettings,
   jobsSettingsFrom,
   lkSettingsFrom,
+  type AdminSettings,
   type Config,
   type PolicySettings,
   type ToolsSettings,
@@ -33,6 +36,10 @@ export interface Runtime {
   readonly policy: Policy;
   readonly tools: readonly McpToolProvider[];
   readonly instructions: string;
+  /** The configuration the components were built from: the environment plus the dashboard's stored settings. */
+  readonly config: Config;
+  /** The environment's values alone (what clearing a dashboard setting falls back to). */
+  readonly envConfig: Config;
   /** Drain (bounded), stop the engine, close the governor. Does not close the database. */
   shutdown(drainTimeoutMs?: number): Promise<void>;
 }
@@ -45,6 +52,8 @@ export interface RuntimeOptions {
   readonly version: string;
   /** POLICY_* settings (`loadPolicyConfig()`); defaults when omitted. */
   readonly policySettings?: PolicySettings;
+  /** ADMIN_* settings (`loadAdminConfig()`); defaults when omitted. */
+  readonly adminSettings?: AdminSettings;
   /** Test seams. */
   readonly clock?: Clock;
   readonly lkTransport?: Transport;
@@ -52,7 +61,10 @@ export interface RuntimeOptions {
 }
 
 export function createRuntime(o: RuntimeOptions): Runtime {
-  const { config } = o;
+  // Chunk 5: settings the owner saved in the dashboard (tool exposure, member admin, journal retention, tier limits,
+  // reserve floors) are applied here, on top of the environment. `envConfig` is kept for "reset to default".
+  const envConfig = o.config;
+  const config = applyStoredSettings(envConfig, o.db);
   const log = pino({ level: config.logLevel, base: { component: 'engine' } });
   // Signed upload URLs are on another host: the transport sends LegendKeeper's host through the platform fetch
   // and every other host through the SSRF guard. Both stay under the governor.
@@ -93,6 +105,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // Follows approved proposals' jobs, reconciles proposals left mid-approval by a crash, runs the expiry sweep.
   const detachPolicy = policy.attach(engine);
 
+  // INTERIM (chunk 5): store a budget sample every 10 s for the sparklines. Chunk 6's `budget-sampler` job replaces it.
+  const stopSampler = startInterimBudgetSampler(
+    engine,
+    lk,
+    (o.adminSettings ?? defaultAdminSettings()).budgetSampleMs,
+    (err) => log.warn({ err }, 'budget sample failed'),
+  );
+
   const bridgeTools = createBridgeTools(
     {
       engine,
@@ -114,7 +134,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     policy,
     tools,
     instructions: BRIDGE_INSTRUCTIONS,
+    config,
+    envConfig,
     async shutdown(drainTimeoutMs = 20_000) {
+      stopSampler(); // stops cleanly, before the engine and database wind down
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         engine.controls.drain(),
