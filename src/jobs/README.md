@@ -226,11 +226,20 @@ when every occurrence is resolved; a new occurrence reopens the group).
 
 ## Write journal
 
-Before each destructive write (and before `updateResource`, `moveResource`, `updateDocument`, `updateProperty`): the
+**Every write** gets an entry before it is sent (chunk 8): operation, target (for a create, the new entity: its client
+id, or the id LK returns), resource and document, principal, profile, approver, job and step, time, the write's params
+(capped at 16 KB; upload keys and signed-URL material are replaced by `[redacted]`), the version and an outcome
+(`pending`, then `applied`, `not_applied` or `unknown`). A `createManyResources` lists every created id in
+`write_journal_targets`, so a lookup by any of them finds it.
+
+Destructive writes (and `updateResource`, `moveResource`, `updateDocument`, `updateProperty`) also keep a pre-image: the
 blocks JSON for document and block replaces and block deletes, the board for board replaces and shape deletes, the
 resource / document / property metadata for updates and moves, rows and infobox properties before their deletes, the
-calendar before calendar writes, and only the ids for other deletes and member removals. Each entry records the write's
-params (capped at 16 KB), the version and an outcome (`pending`, `applied`, `not_applied`, `unknown`). View-only in v1.
+calendar before calendar writes, and only the ids for other deletes and member removals. Every other write keeps none.
+
+`journalLookup` pages newest first by id (`before` cursor; `since` becomes an id bound), with filters on job, resource,
+document, target, operation, principal, profile, outcome and `withPreImage`; each filter has a `(column, id)` index
+(migration `0201`). View-only in v1.
 
 ## Testing
 

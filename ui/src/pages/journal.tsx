@@ -14,7 +14,10 @@ const SINCE: [string, string][] = [
   ['43200', 'Last 30 days'],
 ];
 
-/** The write journal: what each destructive write replaced. View only: nothing here changes anything. */
+/**
+ * The write journal: every write the bridge has sent, newest first, and for destructive writes what they replaced.
+ * View only: nothing here changes anything. Pages of 100, older pages through the `before` cursor (chunk 8).
+ */
 export function JournalPage() {
   const [f, setF] = useState({
     opId: '',
@@ -24,15 +27,24 @@ export function JournalPage() {
     jobId: '',
     principalId: '',
     profile: '',
+    outcome: '',
+    withPreImage: '',
     sinceMinutes: '',
   });
+  /** Paging: the cursors of the pages above the one shown (empty: the newest page). */
+  const [cursors, setCursors] = useState<number[]>([]);
+  const before = cursors.at(-1);
   const [text, setText] = useState('');
   const [open, setOpen] = useState<number | null>(null);
   const clients = useApi<ClientsResponse>('/clients');
-  const list = useApi<{ entries: JournalEntry[]; hasMore: boolean }>(`/journal${qs({ ...f, limit: 100 })}`);
+  const list = useApi<{ entries: JournalEntry[]; hasMore: boolean; nextBefore: number | null }>(
+    `/journal${qs({ ...f, limit: 100, ...(before !== undefined ? { before } : {}) })}`,
+  );
   const detail = useApi<{ entry: JournalEntry }>(open === null ? null : `/journal/${open}`);
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) =>
+  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
+    setCursors([]);
     setF({ ...f, [k]: e.target.value.trim() });
+  };
 
   const shown = useMemo(() => {
     const t = text.trim().toLowerCase();
@@ -59,8 +71,10 @@ export function JournalPage() {
     <>
       <PageHeader title="Journal" />
       <p className="muted">
-        Before each destructive write the bridge keeps what it replaced. This page is view only: LegendKeeper
-        has no history of its own, so this is your undo insurance.
+        Every write the bridge sends to LegendKeeper is listed here, with who made it and whether it applied,
+        so you can see what each agent changed. Before a destructive write the bridge also keeps what it
+        replaced. This page is view only: LegendKeeper has no history of its own, so this is your undo
+        insurance.
       </p>
       <div className="filters">
         <div>
@@ -100,6 +114,23 @@ export function JournalPage() {
         <div>
           <label htmlFor="j-pid">Principal id</label>
           <input id="j-pid" value={f.principalId} onChange={set('principalId')} placeholder="pat_…" />
+        </div>
+        <div>
+          <label htmlFor="j-outcome">Outcome</label>
+          <select id="j-outcome" value={f.outcome} onChange={set('outcome')}>
+            <option value="">Any</option>
+            <option value="applied">applied</option>
+            <option value="not_applied">not applied</option>
+            <option value="unknown">unknown</option>
+            <option value="pending">pending</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="j-pre">Writes</label>
+          <select id="j-pre" value={f.withPreImage} onChange={set('withPreImage')}>
+            <option value="">All writes</option>
+            <option value="true">Destructive only (with a pre-image)</option>
+          </select>
         </div>
         <div>
           <label htmlFor="j-since">When</label>
@@ -182,8 +213,31 @@ export function JournalPage() {
           </table>
         </div>
       )}
-      {list.data?.hasMore && (
-        <p className="muted">Showing the newest 100. Narrow the filters to see others.</p>
+      {(cursors.length > 0 || list.data?.nextBefore) && (
+        <div className="actions" aria-label="Pages">
+          <button
+            type="button"
+            className="small"
+            disabled={cursors.length === 0}
+            onClick={() => setCursors([])}
+          >
+            Newest
+          </button>{' '}
+          <button
+            type="button"
+            className="small"
+            disabled={!list.data?.nextBefore}
+            onClick={() => {
+              const next = list.data?.nextBefore;
+              if (next) setCursors([...cursors, next]);
+            }}
+          >
+            Older
+          </button>{' '}
+          <span className="muted">
+            {cursors.length === 0 ? 'The newest 100.' : `Page ${cursors.length + 1}, 100 per page.`}
+          </span>
+        </div>
       )}
       {open !== null && (
         <section className="card" aria-label="Journal entry">

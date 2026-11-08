@@ -207,6 +207,37 @@ describe('job, error and result visibility', () => {
     });
     expect((await stack.call(b.client, 'bridge_journal_lookup', { jobId })).body.count).toBe(0);
   });
+
+  it('a non-destructive write by one agent is in the journal for the other, with filters and paging (chunk 8, A)', async () => {
+    const a = await as('xcheck-a', 'write');
+    const b = await as('xcheck-b', 'read');
+    const created = await stack.call(a.client, 'lk_api_write', {
+      operationId: 'createResource',
+      params: { body: { name: 'Cross-checked' } },
+    });
+    expect(created.isError, created.text).toBe(false);
+    const seenByB = await stack.call(b.client, 'bridge_journal_lookup', { profile: 'xcheck-a' });
+    expect(seenByB.body.entries).toHaveLength(1);
+    expect(seenByB.body.entries[0]).toMatchObject({
+      op: 'createResource',
+      outcome: 'applied',
+      principalId: a.patId,
+      profile: 'xcheck-a',
+      approvedBy: null,
+      jobId: null,
+      mine: false,
+    });
+    expect(typeof seenByB.body.entries[0].target.id).toBe('string');
+    expect(
+      (await stack.call(b.client, 'bridge_journal_lookup', { principalId: a.patId, outcome: 'not_applied' }))
+        .body.count,
+    ).toBe(0);
+    // Paging: a page of one gives a cursor; the next page continues below it.
+    const p1 = await stack.call(b.client, 'bridge_journal_lookup', { limit: 1 });
+    expect(p1.body.nextBefore).toBe(p1.body.entries[0].id);
+    const p2 = await stack.call(b.client, 'bridge_journal_lookup', { limit: 1, before: p1.body.nextBefore });
+    expect(p2.body.entries[0].id).toBeLessThan(p1.body.entries[0].id);
+  });
 });
 
 describe('uploads under propose scope', () => {
@@ -217,6 +248,15 @@ describe('uploads under propose scope', () => {
     expect(up.isError).toBe(true);
     expect(up.text).toContain('write');
     expect(up.text).toContain('owner can raise');
+    // Chunk 8 (F-07): a URL source is refused before it is fetched (it used to be downloaded first; here the host
+    // does not even resolve, so a fetch attempt would answer UPLOAD_URL_* instead of the policy refusal).
+    const fromUrl = await stack.call(p.client, 'lk_upload_image', {
+      name: 'remote.png',
+      url: 'https://images.invalid/remote.png',
+    });
+    expect(fromUrl.isError).toBe(true);
+    expect(fromUrl.body.error.code).toBe('POLICY_DENIED');
+    expect(fromUrl.text).toContain('owner can raise');
     const raw = await stack.call(p.client, 'lk_api_write', {
       operationId: 'createImageUpload',
       params: { body: { contentType: 'image/png', contentLength: 68 } },
@@ -259,6 +299,28 @@ describe('the full loop, end to end', () => {
     expect(w.text).toContain('read-only');
     expect(w.text).toContain('owner can change');
     expect(writesAtMock()).toBe(before);
+  });
+
+  it('read: the 2025-era (stateless legacy) tools/list hides write tools too (chunk 8, F-11)', async () => {
+    const r = await as('loop-read-legacy', 'read');
+    const res = await fetch(`${stack.base}/mcp`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${r.token}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2025-06-18',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/list', params: {} }),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    const json = text.startsWith('{') ? text : (/^data: (.*)$/m.exec(text)?.[1] ?? '{}');
+    const listed = (JSON.parse(json) as { result?: { tools?: { name: string }[] } }).result?.tools?.map(
+      (t) => t.name,
+    );
+    expect(listed).toContain('lk_api_read');
+    for (const t of WRITE_TOOLS) expect(listed).not.toContain(t);
   });
 
   it('propose → approve → executed once; lowering to read applies on the same token; write runs directly', async () => {

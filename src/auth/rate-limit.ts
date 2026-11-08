@@ -26,11 +26,23 @@ export class SlidingWindowLimiter {
     return Math.max(1, (list[list.length - this.limit] ?? 0) + this.windowMs - this.now());
   }
 
-  hit(key: string): void {
+  /** Counts one hit now and returns its timestamp, so that a reservation can be given back with {@link release}. */
+  hit(key: string): number {
     const list = this.recent(key);
-    list.push(this.now());
+    const at = this.now();
+    list.push(at);
     this.hits.set(key, list);
     if (this.hits.size > 10_000) this.sweep();
+    return at;
+  }
+
+  /** Gives back one hit counted at `at` (a reservation that turned out not to be a failure). */
+  release(key: string, at: number): void {
+    const list = this.hits.get(key);
+    if (!list) return;
+    const i = list.lastIndexOf(at);
+    if (i >= 0) list.splice(i, 1);
+    if (list.length === 0) this.hits.delete(key);
   }
 
   reset(key: string): void {

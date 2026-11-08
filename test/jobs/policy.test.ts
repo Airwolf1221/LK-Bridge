@@ -23,8 +23,17 @@ const asAda = { ...origin, principal: ada };
 /** A gate that records what it was asked and answers from a table (default allow). */
 function gate(answers: Record<string, ReturnType<PolicyGate['authorize']>> = {}) {
   const asked: { principal: Principal; op: string; kind: string; stepIndex?: number }[] = [];
+  /** Chunk 8: the engine also asks before each step of a queued job runs (`phase: 'execute'`). */
+  const executed: { op: string; stepIndex?: number }[] = [];
   const g: PolicyGate = {
     authorize(principal, opMeta, _params, ctx) {
+      if (ctx.phase === 'execute') {
+        executed.push({
+          op: opMeta.operationId,
+          ...(ctx.stepIndex !== undefined ? { stepIndex: ctx.stepIndex } : {}),
+        });
+        return answers[opMeta.operationId] ?? { decision: 'allow' };
+      }
       asked.push({
         principal,
         op: opMeta.operationId,
@@ -34,7 +43,7 @@ function gate(answers: Record<string, ReturnType<PolicyGate['authorize']>> = {})
       return answers[opMeta.operationId] ?? { decision: 'allow' };
     },
   };
-  return { g, asked };
+  return { g, asked, executed };
 }
 
 describe('default gate and principals', () => {
@@ -130,6 +139,26 @@ describe('policy gate', () => {
       { principal: ada, op: 'listResources', kind: 'read' },
       { principal: ada, op: 'getResource', kind: 'read', stepIndex: 0 },
       { principal: ada, op: 'updateResource', kind: 'write', stepIndex: 1 },
+    ]);
+  });
+
+  it('is asked again before each step of a queued job runs (chunk 8, F-02)', async () => {
+    h = await harness();
+    h.model.seedResource('r1');
+    const { g, executed } = gate();
+    const e = h.newEngine({ policyGate: g });
+    const { jobId } = await queue(e.engine, {
+      kind: 'batch_ops',
+      origin: asAda,
+      steps: [
+        { op: 'getResource', params: { path: { resourceId: 'r1' } } },
+        { op: 'updateResource', params: { path: { resourceId: 'r1' }, body: { name: 'z' } } },
+      ],
+    });
+    await h.drive(e, () => e.engine.queries.getJob(jobId)?.status === 'succeeded');
+    expect(executed).toEqual([
+      { op: 'getResource', stepIndex: 0 },
+      { op: 'updateResource', stepIndex: 1 },
     ]);
   });
 

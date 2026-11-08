@@ -175,7 +175,11 @@ export class UnsupportedBlockLossError extends JobsError {
       'UNSUPPORTED_BLOCK_LOSS',
       `${opId} would delete ${blockIds.length} unsupported block(s) (${blockIds.slice(0, 10).join(', ')}${
         blockIds.length > 10 ? ', …' : ''
-      }). Echo them back by id ({ kind: "unsupported", id }), or pass allowUnsupportedLoss: true to delete them.`,
+      }). Echo them back by id ({ kind: "unsupported", id }), or pass allowUnsupportedLoss: true to delete them.${
+        blockIds.some((id) => id.startsWith('(no id)'))
+          ? ' Blocks without an id cannot be echoed: run assignBlockIds on the document first.'
+          : ''
+      }`,
       ref,
     );
   }

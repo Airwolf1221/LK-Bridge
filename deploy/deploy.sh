@@ -9,8 +9,9 @@
 #   --local-health  health-check only 127.0.0.1:8787 (the public checks need the Caddy block and DNS).
 #
 # What it does, in order
-#   1. Pre-flight: private Node 24, the env file, a CLEAN checkout (any local change or untracked file stops it), the
-#      sudo rule, and that origin/main is a fast-forward of what is checked out. Nothing has changed yet.
+#   1. Pre-flight: private Node 24, the env file (and a warning, names only, if it has drifted from env.template), a
+#      CLEAN checkout (any local change or untracked file stops it), the sudo rule, and that origin/main is a
+#      fast-forward of what is checked out. Nothing has changed yet.
 #   2. Drains and stops the service: `systemctl stop lk-bridge`. SIGTERM makes the bridge stop taking new work, give
 #      running jobs up to 20 s to finish, then exit; unit TimeoutStopSec=45 covers that. Anything still running after the
 #      drain is picked up again by the engine's start-up recovery when the service starts.
@@ -95,6 +96,8 @@ step="pre-flight checks"
 [[ "$(id -un)" == "lkbridge" || -n "${DEPLOY_ANY_USER:-}" ]] || die "Run this as the lkbridge user (sudo -u lkbridge ...), not '$(id -un)'."
 use_private_node
 [[ -r "$LKB_ENV_FILE" ]] || die "Cannot read ${LKB_ENV_FILE}. Create it from deploy/env.template (runbook, 'The env file')."
+# Warn (names only, never values) when the env file and deploy/env.template have drifted apart. Never fails the deploy.
+env_drift_report "${here}/env.template" "$LKB_ENV_FILE"
 command -v git >/dev/null 2>&1 || die "git is not installed."
 cd "$app_dir"
 git rev-parse --git-dir >/dev/null 2>&1 || die "${app_dir} is not a git checkout."

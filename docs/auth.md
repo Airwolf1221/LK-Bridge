@@ -73,6 +73,16 @@ All optional; defaults in brackets. Names are also in `.env.example`.
 
 Client registrations (DCR and CIMD) never expire and are never cleaned up automatically: ChatGPT registers once per connection and reuses that client. Only an explicit delete removes one.
 
+## Sign-in limits and request logging (chunk 8)
+
+- **Sign-in limit.** At most 5 attempts per client address and 30 in all per 15 minutes. Each attempt is counted
+  **before** the password is checked and given back if it succeeds, so a burst of concurrent attempts cannot exceed the
+  limit (before chunk 8 every attempt in a burst passed the check while earlier ones were still being verified).
+- **Request log.** One line per request at info (`request completed`: method, path without the query string, status,
+  time, client address). Requests for paths the bridge does not serve (internet scanners probing `/info.php`,
+  `/actuator/env`, WordPress paths) get a plain JSON 404 and are logged at debug only, so they never bury the `auth …`
+  events, which keep their levels (`login.failed`, `mcp.rejected` and so on are warnings).
+
 ## Setting up the owner
 
 ```bash

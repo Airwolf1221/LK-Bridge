@@ -139,6 +139,8 @@ export class JobEngine {
   private readonly resumeTimers = new Map<string, TimerHandle>();
   private readonly waitingLock = new Set<string>();
   private readonly drainWaiters: (() => void)[] = [];
+  /** Pending `wait` calls; `stop()` answers them at once (chunk 8, F-13), so a shutdown never waits for a long poll. */
+  private readonly jobWaiters = new Set<() => void>();
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -220,6 +222,7 @@ export class JobEngine {
     this.resumeTimers.clear();
     for (const a of this.active.values()) a.current.abort(new CancelledError());
     await Promise.allSettled([...this.active.values()].map((a) => a.done));
+    for (const release of [...this.jobWaiters]) release();
     this.started = false;
   }
 
@@ -602,12 +605,15 @@ export class JobEngine {
       const off = this.events.on('job', (e) => {
         if (e.job.id === jobId && TERMINAL_JOB_STATUSES.has(e.job.status)) finish(e.job);
       });
+      const release = () => finish(this.repo.job(jobId) ?? job);
       const finish = (v: JobView) => {
         off();
+        this.jobWaiters.delete(release);
         if (timer) this.clock.clearTimeout(timer);
         resolve(v);
       };
-      timer = this.clock.setTimeout(() => finish(this.repo.job(jobId) ?? job), bounded);
+      this.jobWaiters.add(release);
+      timer = this.clock.setTimeout(release, bounded);
     });
   }
 
@@ -848,6 +854,14 @@ export class JobEngine {
         }
         if (this.stopped) {
           this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
+          return { last, values };
+        }
+        // Chunk 8 (F-02): the gate decided when the work was accepted; ask again before each new step, so a revoked
+        // connection or a lowered scope also stops work already queued. A step being recovered is still finished.
+        const denied = await this.recheckPolicy(job, step);
+        if (denied) {
+          last = { kind: 'failed', error: denied, uncertain: false };
+          this.stopForPolicy(job, step, denied);
           return { last, values };
         }
       }
@@ -1303,6 +1317,7 @@ export class JobEngine {
         decision = await this.policyGate.authorize(principal, policyOpMeta(def, options), params, {
           origin,
           jobKind,
+          phase: 'entry',
           ...(batch ? { stepIndex: i } : {}),
         });
       } catch (e) {
@@ -1350,6 +1365,76 @@ export class JobEngine {
         },
       );
     }
+  }
+
+  /**
+   * Chunk 8 (F-02): the live policy decision for the next step of a job that acts for an agent. Internal work (the
+   * `system` principal) and work the owner approved (`approvedBy`; the owner's approval wins over the proposer's scope,
+   * docs/policy.md) are not asked again. Anything but `allow` stops the job: `propose` too, because the work was
+   * accepted to run directly. A gate that throws counts as a deny.
+   */
+  private async recheckPolicy(job: JobView, step: StepView): Promise<PolicyDeniedError | null> {
+    if (job.principalId === SYSTEM_PRINCIPAL.principalId || job.approvedBy !== null) return null;
+    const def = getOperation(step.opId);
+    if (!def) return null; // a custom step (the upload PUT): the registry steps around it are checked
+    const principal: Principal = {
+      principalId: job.principalId,
+      profile: job.profile,
+      label: job.origin.principal?.label ?? job.principalId,
+    };
+    // The stored origin never carries a live approval token (it serialises to `{ proposalId }`): drop it.
+    const { approval: _approval, ...origin } = job.origin;
+    let decision: PolicyDecision;
+    try {
+      decision = await this.policyGate.authorize(
+        principal,
+        policyOpMeta(def, step.options),
+        this.repo.stepParams(step),
+        {
+          origin,
+          jobKind: job.kind,
+          phase: 'execute',
+          ...(job.kind === 'batch_ops' ? { stepIndex: step.stepNo - 1 } : {}),
+        },
+      );
+    } catch (e) {
+      decision = {
+        decision: 'deny',
+        reason: `the policy gate failed: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+    if (decision.decision === 'allow') return null;
+    const reason =
+      decision.decision === 'deny'
+        ? `${decision.reason} (checked again before step ${step.stepNo}; the rest of the job was not run)`
+        : `the connection's scope changed to "propose" after this job was accepted, so the rest of it was not run; ` +
+          'submit the remaining work again to make a proposal';
+    return new PolicyDeniedError(step.opId, reason, job.principalId);
+  }
+
+  /** Fails `step` with the policy refusal, cancels the steps after it, and finishes the job (failed). */
+  private stopForPolicy(job: JobView, step: StepView, error: PolicyDeniedError): void {
+    this.repo.updateStep(job.id, step.stepNo, {
+      status: 'failed',
+      error: errorToJson(error),
+      finishedAt: this.clock.now(),
+    });
+    this.recordError({
+      opId: step.opId,
+      jobId: job.id,
+      stepNo: step.stepNo,
+      code: error.code,
+      message: error.message,
+      retryable: false,
+      classification: 'policy',
+      detail: error.toJSON(),
+      principalId: job.principalId,
+      profile: job.profile,
+    });
+    this.repo.cancelOpenSteps(job.id);
+    this.repo.updateJob(job.id, { lastError: errorToJson(error) });
+    this.emitStep(job, step.stepNo);
+    this.finish(job.id);
   }
 
   private policyDenied(error: PolicyDeniedError, principal: Principal): PolicyDeniedError {

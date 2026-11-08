@@ -23,7 +23,8 @@ env file ✋ → `setup:owner` ✋ → systemd units and the sudo rule → start
 sandbox script ✋ → connect Claude and ChatGPT ✋ → go live ✋. These are sections 1 to 14 below, in that order.
 
 Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), [rollback](#rollback),
-[logs](#logs-and-useful-commands).
+[logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the browser smoke test](#browser-smoke-test),
+[memory](#memory).
 
 ## What is where
 
@@ -40,9 +41,9 @@ Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), 
 | `/etc/caddy/Caddyfile`                   | one block appended                                                                     | unchanged otherwise   |
 | `/home/lkbridge/.ssh`                    | the read-only GitHub deploy key                                                        | `lkbridge`, 0700      |
 
-The scripts, all in `deploy/`: `install-node.sh`, `deploy.sh`, `backup.sh`, `healthcheck.sh`, `lk-run.sh` (runs a command
-with the private Node and `DB_PATH` set), `sandbox-test.sh`, plus `lib.sh` (shared helpers) and the files the steps
-install: `lk-bridge.service`, `lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`,
+The scripts, all in `deploy/`: `install-node.sh`, `deploy.sh`, `backup.sh`, `restore.sh` (chunk 8), `healthcheck.sh`,
+`lk-run.sh` (runs a command with the private Node and `DB_PATH` set), `sandbox-test.sh`, `soak-sandbox.sh` (chunk 8), plus
+`lib.sh` (shared helpers) and the files the steps install: `lk-bridge.service`, `lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`,
 `sudoers.lk-bridge`, `env.template`.
 
 ---
@@ -267,7 +268,7 @@ in `/etc/sudoers.d` can lock you out of `sudo`.
 sudo systemctl enable --now lk-bridge
 sudo systemctl status lk-bridge --no-pager
 sudo journalctl -u lk-bridge -n 40 --no-pager
-curl -s http://127.0.0.1:8787/healthz           # {"ok":true,"version":"0.1.0"}
+curl -s http://127.0.0.1:8787/healthz           # {"ok":true,"version":"1.0.0"}
 sudo systemctl enable --now lk-bridge-backup.timer
 systemctl list-timers lk-bridge-backup.timer --no-pager
 ```
@@ -431,8 +432,9 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/deploy.sh          # 🔒 sudo
 
 What it does, in order (it stops at the first problem and says what to do):
 
-1. **Pre-flight, nothing changed yet:** it is not root, the private Node is present, the env file is readable, the
-   checkout has **no local changes or untracked files** (otherwise it refuses and lists them), the sudo rule works, and
+1. **Pre-flight, nothing changed yet:** it is not root, the private Node is present, the env file is readable (and, by
+   variable **name** only, whether it has drifted from `deploy/env.template`: see below), the checkout has **no local
+   changes or untracked files** (otherwise it refuses and lists them), the sudo rule works, and
    `origin/main` is a **fast-forward** of what is checked out (otherwise it refuses). If there is nothing new it says so and
    exits (`--force` redeploys anyway).
 2. **Drains and stops** the service: `sudo systemctl stop lk-bridge`. This is the drain. SIGTERM makes the bridge stop
@@ -451,6 +453,12 @@ rollback command.
 
 Options: `--current` (deploy the checked-out commit without fetching; used for rollback), `--force`, `--local-health`
 (skip the public checks).
+
+**Env drift warnings (chunk 8).** `deploy.sh` and `healthcheck.sh` compare the env file with `deploy/env.template` by
+name and print a `WARNING:` line (never a value; never a failure) for: a variable the template sets that your file does
+not; an optional setting a release added (the template shows it as `# NAME=…`; copy that commented line across to keep
+the file in step); and a variable your file still sets that the template no longer lists (the bridge ignores it; remove the
+line). When everything matches it says `Env file matches deploy/env.template`.
 
 The unit files, the sudoers file and the Caddy block are **not** updated by `deploy.sh`. If a release changes one, the
 script warns after a successful deploy ("installed unit differs from deploy/…"); an administrator then repeats step 8
@@ -483,20 +491,22 @@ script warns after a successful deploy ("installed unit differs from deploy/…"
   ```
 
 - **Restore** (the bridge must be stopped; this replaces the live database, and anything written since the backup is
-  lost):
+  lost). `restore.sh` (chunk 8) does the steps below in the safe order and is covered by a test
+  (`test/unit/backup-restore.test.ts` backs up a live WAL database, restores it, and checks it):
 
   ```bash
   sudo systemctl stop lk-bridge
-  sudo -u lkbridge mkdir -p /var/lib/lk-bridge/restore-aside
-  sudo -u lkbridge sh -c 'mv /var/lib/lk-bridge/bridge.db* /var/lib/lk-bridge/restore-aside/'   # the db AND its -wal/-shm files
-  sudo -u lkbridge sh -c 'gunzip -c /var/lib/lk-bridge/backups/<file>.db.gz > /var/lib/lk-bridge/bridge.db && chmod 600 /var/lib/lk-bridge/bridge.db'
-  sudo -u lkbridge sqlite3 /var/lib/lk-bridge/bridge.db 'PRAGMA integrity_check;'      # ok
+  sudo ls -l /var/lib/lk-bridge/backups/                                              # choose the file
+  sudo -u lkbridge /opt/lk-bridge/app/deploy/restore.sh /var/lib/lk-bridge/backups/<file>.db.gz
   sudo systemctl start lk-bridge
   sudo -u lkbridge /opt/lk-bridge/app/deploy/healthcheck.sh
   ```
 
-  Moving the old `-wal` and `-shm` files away matters: a stale one next to a restored database corrupts it. Delete
-  `restore-aside` when you are sure.
+  It refuses while the service is running; unpacks the backup and checks it (`integrity_check`, and that it is a bridge
+  database) **before** touching anything; moves the current `bridge.db` **and** its `-wal` and `-shm` files into
+  `/var/lib/lk-bridge/restore-aside-<UTC time>/` (a stale `-wal` next to a restored database would corrupt it); then puts
+  the backup in place with mode 0600. Nothing is deleted: remove the `restore-aside-…` directory when you are sure. A
+  backup from an older release is fine: the bridge applies the missing migrations when it starts.
 
 ## Rollback
 
@@ -515,6 +525,10 @@ detached commit, plain `deploy.sh` refuses and says why).
 **Migrations are not reversed.** If the release you are leaving changed the database schema, an older build may refuse to
 start on it. Then restore the `pre-deploy-…` backup taken just before that release (see "Restore"; changes made since
 are lost), and deploy the older commit.
+
+Release 1.0.0 (chunk 8) adds one migration, `0201_journal_every_write.sql`: new indexes and one new table, nothing
+removed or renamed. An older build runs on a 1.0.0 database unchanged (it ignores the table and indexes), so rolling
+back from 1.0.0 needs **no** restore; the journal entries 1.0.0 wrote for non-destructive writes simply stay.
 
 ## Logs and useful commands
 
@@ -539,7 +553,10 @@ systemctl show lk-bridge -p MainPID -p MemoryCurrent -p NRestarts
 sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run pat -- list
 ```
 
-Caddy's own log goes to its journal. The bridge's request log keeps paths only (no query strings, no headers).
+Caddy's own log goes to its journal. The bridge's request log keeps paths only (no query strings, no headers): one
+`request completed` line per request it serves, at info. Requests for paths it does not serve (the internet scanners
+probing `/info.php`, `/actuator/env`, `/wp-login.php`…) get a plain 404 and are logged at **debug** only, so they do not
+appear with the default `LOG_LEVEL=info` (chunk 8). Auth events keep their levels.
 
 | Symptom                                                   | Look at                                                                                              |
 | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
@@ -549,3 +566,71 @@ Caddy's own log goes to its journal. The bridge's request log keeps paths only (
 | Everyone locked out of sign-in at once                    | the log shows `127.0.0.1` as the client: `TRUST_PROXY` or Caddy's forwarding (checklist 1.7)         |
 | Dashboard live data stalls                                | something is buffering `/api/admin/stream`: the Caddy block must be exactly as shipped (no `encode`) |
 | `deploy.sh` says the checkout has local changes           | something edited files under `/opt/lk-bridge/app`; `git status`, then `git restore`/remove them      |
+
+## Soak test ✋
+
+PLAN §9.7 and §10: about 1,000 writes and a matching mix of reads against the **test world**, through the bridge's real
+engine and governor, to show that the pacing holds and LegendKeeper never answers 429. Run it before go-live and after any
+change to the governor. It takes about 20 to 25 minutes for 1,000 writes: the governor allows 120 writes a minute, but
+stretches to one every 1.2 s (50 a minute) while the hour is on course for more than 3,000 (PLAN §5.2), which a soak
+always is after its first minute.
+
+🔒 sudo (as `lkbridge`)
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh --writes 100      # a quick run first (about 3 minutes)
+sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh                   # the full soak, about 1,000 writes
+```
+
+- It needs `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID` in the env file (step 6), reads only those two, and prints
+  neither. It **refuses** unless the key's own project (from `listProjects`) is exactly `LK_SANDBOX_PROJECT_ID`.
+- **While the bridge itself serves the test world** (PLAN amendment 6), `LK_SANDBOX_PROJECT_ID` equals `LK_PROJECT_ID`,
+  and the wrapper refuses unless you add `--allow-bridge-project`. Use it only while that is still the test world, and run
+  the soak while nothing else is using the bridge: the soak and the bridge then share the key's rate budget, so a busy
+  bridge would slow the soak and could cost it the zero-429 result. Never pass the flag once the bridge serves Baisheng.
+- Everything is created under **one** throwaway root resource (`lk-bridge soak <time>`), which is deleted (cascade) at
+  the end, whatever happens; if that fails the report names the root to delete by hand in LegendKeeper. It uses its own
+  temporary database, never `bridge.db`, and does not need the service stopped.
+- The report: total time, the write phase and **writes per minute** achieved, HTTP responses by status, **429 responses
+  (target 0)**, retries, budget waits, job steps succeeded or failed, **peak memory** (RSS, V8 heap, buffers) and the
+  clean-up. Exit code 0 means PASS (no 429, no failed step, cleaned up). Keep the output for the next review.
+- Without the wrapper: `LK_SANDBOX_API_KEY=… LK_SANDBOX_PROJECT_ID=… npm run soak:sandbox -- --writes 100` (from a
+  checkout with dependencies installed; never on a shared screen).
+
+## Browser smoke test
+
+`npm run test:e2e` drives the real dashboard in Chromium against a real bridge on a **mock** LegendKeeper, with throwaway
+secrets (docs/dashboard.md). It does not use the live server or its database, so run it on your own computer, not on the
+server (which has no browser and should not get one):
+
+```bash
+git clone git@github.com:Airwolf1221/LK-Bridge.git && cd LK-Bridge && npm ci
+npx playwright install chromium        # once
+npm run test:e2e                       # four checks: sign-in under the CSP, live pages, a proposal diff, a phone layout
+```
+
+If Playwright cannot find its browser, point it at any Chromium with `CHROMIUM_PATH=/path/to/chrome npm run test:e2e`.
+Running these checks against the live dashboard is not practical: they sign in with a test password, create proposals
+and tokens, and start jobs, which must not happen on the real database. Check the live dashboard by hand instead (sign
+in, open each page, watch a job on the Jobs page).
+
+## Memory
+
+The unit sets `MemoryHigh=900M` (the kernel starts reclaiming), `MemoryMax=1G` (the hard ceiling) and
+`NODE_OPTIONS=--max-old-space-size=700` (the V8 heap ceiling, so a runaway fails inside Node with a clear "heap out of
+memory" error and a restart, before the kernel kills it). They are consistent: 700 MB of heap plus young generation, code
+and buffers outside the heap (image uploads) stays under 900 MB. The bridge needs far less (see the review report,
+docs/review/2026-11-hardening.md, item 15, for the soak measurement), so the ceilings are generous on purpose; leave them
+unless the measurements below say otherwise.
+
+Watch the real use:
+
+```bash
+systemctl show lk-bridge -p MemoryCurrent -p MemoryPeak -p MemoryHigh -p MemoryMax      # bytes; MemoryPeak since start
+sudo journalctl -u lk-bridge --since "7 days ago" | grep -iE 'heap out of memory|oom' # must print nothing
+ps -o rss=,vsz= -p "$(systemctl show lk-bridge -p MainPID --value)"                   # RSS in KiB, right now
+```
+
+If `MemoryPeak` over a busy week stays below about 300 MB, the values can be tightened to `MemoryHigh=500M`,
+`MemoryMax=640M` and `--max-old-space-size=400`; there is no need to. If it ever approaches 900 MB, look for a cause
+before raising anything.

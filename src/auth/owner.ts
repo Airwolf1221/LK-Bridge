@@ -82,6 +82,11 @@ export class OwnerAuth {
       this.deps.event('login.rate_limited', { ip: a.ip, retry_after_s: retryAfterSeconds }, 'warn');
       return { ok: false, reason: 'rate_limited', retryAfterSeconds };
     }
+    // Count the attempt BEFORE the expensive check (chunk 8, F-01). Counting only after a failure let any number of
+    // concurrent attempts pass the check above while earlier ones were still being verified. A success gives the
+    // reservation back below; a failure keeps it.
+    const reservedIp = this.perIp.hit(a.ip);
+    const reservedGlobal = this.global.hit('*');
     const { owner } = this.deps.config;
     // Always run the expensive check, so a wrong username takes as long as a wrong password.
     const passwordOk = await verifyPassword(owner.passwordHash, a.password);
@@ -93,8 +98,7 @@ export class OwnerAuth {
       totpOk = step !== undefined && usernameOk && passwordOk && this.deps.store.claimTotpStep(step, now);
     }
     if (!(passwordOk && usernameOk && totpOk)) {
-      this.perIp.hit(a.ip);
-      this.global.hit('*');
+      // The reservations made above stand as this failure's count.
       this.deps.event(
         'login.failed',
         { ip: a.ip, factor: !usernameOk || !passwordOk ? 'password' : 'totp' },
@@ -102,6 +106,8 @@ export class OwnerAuth {
       );
       return { ok: false, reason: 'invalid' };
     }
+    this.perIp.release(a.ip, reservedIp);
+    this.global.release('*', reservedGlobal);
     this.perIp.reset(a.ip);
     const sessionToken = this.createSession(a.ip, a.userAgent);
     this.deps.event('login.succeeded', { ip: a.ip, totp: this.totpRequired });

@@ -569,3 +569,4 @@ Effort levels are `low`, `medium`, `high`, `xhigh` and `max`. The default for Op
 3. Chunk 7: add a ChatGPT connection test.
 4. Chunk 4 added a refresh-token grace window and a TRUST_PROXY setting.
 5. (8 November 2026, hotfix) Clients that list grant types the bridge does not issue, such as claude.ai's JWT bearer grant, are accepted with those grants ignored, through CIMD and DCR alike; the token endpoint still refuses them ([ADR 0017](adr/0017-unsupported-client-grant-types-ignored.md)).
+6. 8 November 2026: The bridge stays on the test world while further features are built. ChatGPT continues on Baisheng through the old bridge until this bridge is feature-complete. There is no deadline; the move to Baisheng follows PLAN §9.7 when the owner decides.

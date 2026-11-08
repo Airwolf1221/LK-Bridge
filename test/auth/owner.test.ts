@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { verifyPassword } from '../../src/auth/password.js';
+import { DEFAULT_ARGON2_COST, hashPassword, verifyPassword } from '../../src/auth/password.js';
 import { totp } from '../../src/auth/totp.js';
 import {
   Browser,
@@ -8,6 +8,7 @@ import {
   authorizeUrl,
   consentDefaults,
   hiddenField,
+  ownerCredentials,
   pkcePair,
   reachConsent,
   registerPublicClient,
@@ -83,6 +84,49 @@ describe('owner login', () => {
       await browser.login('', { password: 'x' });
       await browser.login('', { password: 'y' });
       expect((await browser.login()).status).toBe(429);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('counts concurrent attempts before verifying them, so a burst cannot exceed the limit (chunk 8, F-01)', async () => {
+    // A production-cost hash: the verify must take long enough for the burst to overlap it, as it does on the server.
+    const { password } = await ownerCredentials();
+    const hash = await hashPassword(password, DEFAULT_ARGON2_COST);
+    const bridge = await startBridge({
+      env: { OWNER_PASSWORD_HASH: hash },
+      authOverrides: {
+        loginLimits: { perIp: { limit: 3, windowMs: 60_000 }, global: { limit: 4, windowMs: 60_000 } },
+      },
+    });
+    try {
+      const browser = new Browser(bridge);
+      const html = await (await browser.request(`${PUBLIC_URL}/oauth/login`)).text();
+      const csrf = hiddenField(html, 'csrf_token');
+      // 25 wrong passwords at once. The limit used to be checked before the Argon2 verify and counted after it, so
+      // every one of them was verified.
+      const burst = await Promise.all(
+        Array.from({ length: 25 }, (_, i) =>
+          browser.post(`${PUBLIC_URL}/oauth/login`, {
+            csrf_token: csrf,
+            username: 'owner',
+            password: `wrong-${i}`,
+          }),
+        ),
+      );
+      const statuses = burst.map((r) => r.status);
+      expect(statuses.filter((s) => s === 401)).toHaveLength(3);
+      expect(statuses.filter((s) => s === 429)).toHaveLength(22);
+      expect(bridge.logs.filter((l) => l.includes('"event":"login.failed"'))).toHaveLength(3);
+      // A success gives its reservation back: after the window the owner signs in, and that attempt does not count
+      // towards the global limit of 4 (three more failures from elsewhere still fit under it, the fourth does not).
+      bridge.clock.advance(61);
+      expect((await browser.login()).status).toBe(200);
+      for (const ip of ['203.0.113.10', '203.0.113.11', '203.0.113.12']) {
+        const other = new Browser(bridge);
+        other.headers['x-forwarded-for'] = ip;
+        expect((await other.login('', { password: 'wrong' })).status).toBe(401);
+      }
     } finally {
       await bridge.close();
     }

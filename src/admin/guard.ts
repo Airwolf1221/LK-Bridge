@@ -6,6 +6,7 @@
  * - Every state-changing request (anything but GET, HEAD, OPTIONS) also needs a matching `Origin` (the bridge's own
  *   public URL; a missing or foreign one is refused) and the CSRF token bound to the session, in `X-CSRF-Token`.
  * - Unauthenticated requests get a 401 JSON body with no `WWW-Authenticate` header (it would suggest a bearer token).
+ * - Requests a browser labels `Sec-Fetch-Site: cross-site` or `same-site` are refused (403 `CROSS_SITE`), reads too.
  */
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { AuthServices } from '../auth/services.js';
@@ -36,6 +37,17 @@ export function adminGuard(s: AuthServices) {
       return sendError(
         reply,
         new AdminHttpError(401, 'UNAUTHENTICATED', 'Sign in as the owner to use the dashboard.'),
+      );
+    }
+    // Chunk 8 (F-08): the session cookie is SameSite=Lax (for the consent page), so a top-level navigation from another
+    // site carries it, and admin reads need no CSRF token. Some reads spend budget (overview refresh, mapping preview,
+    // P0). Browsers label every request with Sec-Fetch-Site: the dashboard's own requests are `same-origin`, an address
+    // typed into the bar is `none`. Anything from another site is refused, reads included.
+    const site = req.headers['sec-fetch-site'];
+    if (site === 'cross-site' || site === 'same-site') {
+      return sendError(
+        reply,
+        new AdminHttpError(403, 'CROSS_SITE', 'The dashboard API answers only the dashboard itself.'),
       );
     }
     if (!SAFE_METHODS.has(req.method)) {

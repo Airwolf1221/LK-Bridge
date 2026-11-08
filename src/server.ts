@@ -2,7 +2,13 @@ import { createRequire } from 'node:module';
 import type { Writable } from 'node:stream';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyServerOptions } from 'fastify';
+import Fastify, {
+  LogController,
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+  type FastifyServerOptions,
+} from 'fastify';
 import { adminPlugin, type AdminRuntime } from './admin/index.js';
 import { authPlugin } from './auth/plugin.js';
 import { type AuthServices, type CreateAuthServicesOptions, createAuthServices } from './auth/services.js';
@@ -25,7 +31,7 @@ import {
 import { runMigrations } from './db/migrate.js';
 import { type Db, openDatabase } from './db/open.js';
 import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/server.js';
-import { mcpTransportPlugin } from './mcp/transport.js';
+import { mcpMaxBodyBytes, mcpTransportPlugin } from './mcp/transport.js';
 import { type Policy, createPolicy } from './policy/index.js';
 import { createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
 
@@ -48,6 +54,8 @@ export interface BuildServerOptions {
   readonly bridgeInfo?: () => BridgeInfo;
   /** MCP server `instructions` shown to connecting agents. */
   readonly instructions?: string;
+  /** Largest `/mcp` request body (chunk 8, F-05). Defaults to the SDK's 4 MiB; `createBridge` sizes it for uploads. */
+  readonly mcpMaxBodyBytes?: number;
   /** Overrides `TRUST_PROXY` (tests only). */
   readonly trustProxy?: FastifyServerOptions['trustProxy'];
   /** Test seams for the auth services (clock, CIMD fetcher, rate limits). */
@@ -81,6 +89,35 @@ function pathOnly(url: string): string {
   return url.split('?')[0] ?? '';
 }
 
+/**
+ * Chunk 8 (F-09): Fastify logged "incoming request" and "request completed" at info for every request, and "Route …
+ * not found" (with the query string) for every internet scanner's probe of /info.php, /actuator/env, WordPress paths
+ * and so on. Now: one compact line per matched request at info (method, path without query, status, time, address),
+ * unmatched paths at debug only, never a header or a body. Errors keep Fastify's own handling and levels, and auth
+ * events (src/auth/events.ts) are logged separately at theirs.
+ */
+class CompactRequestLog extends LogController {
+  override incomingRequest(): void {}
+
+  override requestCompleted(error: Error | null | undefined, req: FastifyRequest, reply: FastifyReply): void {
+    const line = {
+      method: req.method,
+      url: pathOnly(req.url),
+      status: reply.statusCode,
+      ms: Math.round(reply.elapsedTime),
+      ip: req.ip,
+    };
+    if (error) req.log.error({ ...line, err: error }, 'request errored');
+    else if (req.routeOptions.url === undefined && reply.statusCode === 404)
+      req.log.debug(line, 'no such route');
+    else req.log.info(line, 'request completed');
+  }
+
+  override routeNotFound(req: FastifyRequest): void {
+    req.log.debug({ method: req.method, url: pathOnly(req.url) }, 'no such route');
+  }
+}
+
 export async function buildServer(
   o: BuildServerOptions,
 ): Promise<{ app: FastifyInstance; services: AuthServices; policy: Policy }> {
@@ -112,7 +149,13 @@ export async function buildServer(
     routerOptions: { ignoreTrailingSlash: true },
     bodyLimit: 1024 * 1024,
     return503OnClosing: true,
+    // Chunk 8 (F-09): one compact line per request instead of Fastify's two, and scanner probes at debug only.
+    logController: new CompactRequestLog(),
   });
+
+  app.setNotFoundHandler((_req, reply) =>
+    reply.code(404).type('application/json; charset=utf-8').send({ error: 'not_found' }),
+  );
 
   const policy = o.policy ?? createPolicy({ db: o.db, allowMemberAdmin: false });
   const services = createAuthServices({
@@ -141,6 +184,7 @@ export async function buildServer(
     // The policy layer's proposal tools, unless the caller's list has them already (the runtime's does).
     tools: withPolicyTools(o.tools ?? [bridgeInfoStub(bridgeInfo)], policy.tools),
     access: policy.access,
+    ...(o.mcpMaxBodyBytes !== undefined ? { maxBodyBytes: o.mcpMaxBodyBytes } : {}),
   });
 
   // Chunk 5: the owner dashboard (/ui), its admin API and the live stream (/api/admin), behind the owner session.
@@ -207,6 +251,7 @@ export async function createBridge(
     ...(o.pruneIntervalMs !== undefined ? { pruneIntervalMs: o.pruneIntervalMs } : {}),
     tools: runtime.tools,
     instructions: runtime.instructions,
+    mcpMaxBodyBytes: mcpMaxBodyBytes(o.toolsSettings.upload.maxBytes),
     policy: runtime.policy,
     admin: {
       runtime,

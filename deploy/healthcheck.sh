@@ -9,7 +9,8 @@
 #                   Use it if the server cannot reach its own public address ("hairpin" NAT).
 #   --url           the public URL (default: BRIDGE_PUBLIC_URL from the env file, else https://lk.ottomoons.co.uk)
 #
-# It sends no credentials and prints no response bodies.
+# It sends no credentials and prints no response bodies. When it can read the env file it also warns, by variable NAME
+# only, if the file has drifted from deploy/env.template.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -143,6 +144,9 @@ elif [[ "$status" =~ ^3 && "$location" == *"/oauth/login"* ]]; then
 else
   fail "$name" "expected a redirect to /oauth/login, got HTTP ${status} ${location}"
 fi
+
+# 5. The env file against deploy/env.template, by name only (warnings; never a failure, never a value).
+if [[ -r "$LKB_ENV_FILE" ]]; then env_drift_report "${here}/env.template" "$LKB_ENV_FILE"; fi
 
 if ((failures == 0)); then
   echo "All checks passed."

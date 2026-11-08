@@ -21,3 +21,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0015](0015-deployment-layout.md)                      | Deployment layout on the shared server                          | Accepted |
 | [0016](0016-maintenance-and-mappings-choices.md)       | Maintenance scheduler and mappings: interpretation choices      | Accepted |
 | [0017](0017-unsupported-client-grant-types-ignored.md) | Grant types the bridge does not issue are ignored, not refused  | Accepted |
+| [0018](0018-chunk-8-hardening-decisions.md)            | Chunk 8 hardening decisions                                     | Accepted |

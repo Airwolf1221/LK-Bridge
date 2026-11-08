@@ -14,6 +14,9 @@ import type { Policy } from '../../src/policy/index.js';
 import { type TestBridge, startBridge } from '../auth/helpers.js';
 import { startStack, type Stack } from '../tools/helpers.js';
 import { specRespond } from '../tools/spec-mock.js';
+import { operations } from '../../src/lk/index.js';
+
+const operationIds = new Set(operations.map((o) => o.operationId));
 
 let bridge: TestBridge;
 let stack: Stack;
@@ -109,8 +112,16 @@ async function attack(t: Target): Promise<string[]> {
     expect(tools.length).toBeGreaterThan(0);
     for (const tool of tools) {
       names.push(tool.name);
-      // No tool even claims to administer policy.
-      expect(tool.name).not.toMatch(/approve|reject|revoke|scope|profile|token|grant|policy|consent|audit/i);
+      if (tool.name.startsWith('lk_op_')) {
+        // A per-operation tool is exactly one LegendKeeper operation (lk_op_revokeInvite revokes a LegendKeeper invite,
+        // refused unless LK_ALLOW_MEMBER_ADMIN=true; it touches no bridge policy).
+        expect(operationIds.has(tool.name.slice('lk_op_'.length)), tool.name).toBe(true);
+      } else {
+        // No bridge tool even claims to administer policy.
+        expect(tool.name).not.toMatch(
+          /approve|reject|revoke|scope|profile|token|grant|policy|consent|audit/i,
+        );
+      }
       for (const args of argumentSets(tool.inputSchema as never, ids)) {
         await client.callTool({ name: tool.name, arguments: args }).catch(() => undefined);
       }
@@ -143,6 +154,23 @@ describe('no MCP tool can change policy, tokens or proposal decisions', () => {
     expect(names).toEqual(expect.arrayContaining(stack.runtime.tools.map((t) => t.name)));
     expect(names).toHaveLength(stack.runtime.tools.length);
   });
+
+  it('the same with MCP_EXPOSE_PER_OP_TOOLS=true: every one of the 89 lk_op_* tools too (chunk 8, F-12)', async () => {
+    const perOp = await startStack({ respond: specRespond(), env: { MCP_EXPOSE_PER_OP_TOOLS: 'true' } });
+    try {
+      const names = await attack({
+        db: perOp.db,
+        policy: perOp.policy,
+        pats: perOp.services.pats,
+        mcpUrl: `${perOp.base}/mcp`,
+      });
+      expect(names.filter((n) => n.startsWith('lk_op_'))).toHaveLength(89);
+      expect(names).toEqual(expect.arrayContaining(perOp.runtime.tools.map((t) => t.name)));
+      expect(names).toHaveLength(perOp.runtime.tools.length);
+    } finally {
+      await perOp.close();
+    }
+  }, 120_000);
 
   it('no MCP module imports the owner command layer or mints approval tokens', () => {
     const files = [

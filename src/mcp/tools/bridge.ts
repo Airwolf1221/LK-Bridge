@@ -508,17 +508,45 @@ function otherTools(deps: ToolDeps) {
       title: 'Write journal',
       access: 'read',
       description:
-        'Looks up the write journal: before each destructive write the bridge stores the pre-image (previous blocks, board, metadata, ids). ' +
-        'Filter by resource, document, target id or operation, newest first. Use it to see what a write replaced. ' +
-        'Shows every connection’s writes (principal, profile and approver on each entry), so agents can cross-check each other; ' +
-        'job ids appear on your own entries only. ' +
+        'Looks up the write journal: EVERY write the bridge has sent (creates, inserts, updates and deletes), newest first, with ' +
+        'its operation, target, time, outcome, principal, profile and approver. Destructive writes also keep a pre-image ' +
+        '(previous blocks, board, metadata, or ids). Use it to see what changed and who changed it: it shows every connection’s ' +
+        'writes, so agents can cross-check each other; job ids appear on your own entries only. Filter by resource, document, ' +
+        'target id, operation, principal, profile or outcome; page older entries with before (the nextBefore of the previous page). ' +
         'Pre-images can be large (they are paged like other big results). Cost: none. Risk: none.',
       inputSchema: z.object({
         resourceId: z.string().max(256).optional(),
         documentId: z.string().max(256).optional(),
-        targetId: z.string().max(256).optional(),
+        targetId: z
+          .string()
+          .max(256)
+          .optional()
+          .describe('Also finds every resource a createManyResources created.'),
         operationId: z.string().max(100).optional(),
         jobId: z.string().max(100).optional(),
+        principalId: z
+          .string()
+          .max(100)
+          .optional()
+          .describe('Only this connection’s writes (grant_… or pat_…).'),
+        profile: z
+          .string()
+          .max(100)
+          .optional()
+          .describe('Only writes made under this profile, e.g. "chatgpt".'),
+        outcome: z
+          .enum(['applied', 'pending', 'not_applied', 'unknown'])
+          .optional()
+          .describe(
+            'applied: LegendKeeper made the change; not_applied: refused; unknown: could not be confirmed.',
+          ),
+        withPreImage: z.boolean().optional().describe('Only destructive writes, which keep a pre-image.'),
+        before: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe('Paging: entries older than this journal id (nextBefore of the previous page).'),
         sinceMinutes: z
           .number()
           .min(1)
@@ -532,7 +560,21 @@ function otherTools(deps: ToolDeps) {
       }),
       annotations: READ_ANNOTATIONS,
       handler: (
-        { resourceId, documentId, targetId, operationId, jobId, sinceMinutes, limit, includePreImage },
+        {
+          resourceId,
+          documentId,
+          targetId,
+          operationId,
+          jobId,
+          principalId,
+          profile,
+          outcome,
+          withPreImage,
+          before,
+          sinceMinutes,
+          limit,
+          includePreImage,
+        },
         ctx,
       ) => {
         // Every principal's entries are shown (agents cross-check each other's edits), each with its principal and
@@ -547,12 +589,20 @@ function otherTools(deps: ToolDeps) {
               ...(targetId ? { targetId } : {}),
               ...(operationId ? { opId: operationId } : {}),
               ...(jobId ? { jobId } : {}),
+              ...(principalId ? { principalId } : {}),
+              ...(profile ? { profile } : {}),
+              ...(outcome ? { outcome } : {}),
+              ...(withPreImage === true ? { withPreImage: true } : {}),
+              ...(before !== undefined ? { before } : {}),
               ...(sinceMinutes ? { since: (deps.now ?? Date.now)() - sinceMinutes * 60_000 } : {}),
               limit: limit ?? 10,
               includePreImage: includePreImage === true,
             });
+        const pageSize = limit ?? 10;
         const body = {
           count: entries.length,
+          // Paging (chunk 8): the journal records every write, so there are many entries; ask again with before.
+          nextBefore: entries.length === pageSize ? (entries.at(-1)?.id ?? null) : null,
           entries: entries.map((e) => ({
             id: e.id,
             at: iso(e.at),

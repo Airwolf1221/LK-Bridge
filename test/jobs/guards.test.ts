@@ -107,6 +107,63 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
     expect(seen(h.mock, 'PUT', /\/blocks\/c1$/)).toHaveLength(0);
   });
 
+  it('refuses a deleteBlock whose subtree holds an unsupported block, and allows it with allowUnsupportedLoss (chunk 8, F-03)', async () => {
+    h = await harness();
+    const { resourceId, documentId } = h.model.seedResource('r1', { blocks: page });
+    const e = h.newEngine();
+    const path = { resourceId, documentId, blockId: 'c1' };
+    const refused = await settle(h, e, e.engine.run('deleteBlock', { path }, { origin }));
+    expect(refused.error).toBeInstanceOf(UnsupportedBlockLossError);
+    expect((refused.error as UnsupportedBlockLossError).blockIds).toEqual(['u2']);
+    expect(seen(h.mock, 'DELETE', /\/blocks\/c1$/)).toHaveLength(0);
+    // Deleting the unsupported block itself is refused too.
+    const self = await settle(
+      h,
+      e,
+      e.engine.run('deleteBlock', { path: { ...path, blockId: 'u1' } }, { origin }),
+    );
+    expect((self.error as UnsupportedBlockLossError).blockIds).toEqual(['u1']);
+    // A block with nothing unsupported under it is deleted as before.
+    const plain = await settle(
+      h,
+      e,
+      e.engine.run('deleteBlock', { path: { ...path, blockId: 'p1' } }, { origin }),
+    );
+    expect(plain.error).toBeUndefined();
+    // The owner of the intent can allow the loss explicitly.
+    const allowed = await settle(
+      h,
+      e,
+      e.engine.run('deleteBlock', { path }, { origin, allowUnsupportedLoss: true }),
+    );
+    expect(allowed.error).toBeUndefined();
+    expect(seen(h.mock, 'DELETE', /\/blocks\/c1$/)).toHaveLength(1);
+  });
+
+  it('counts an unsupported block without an id as lost: it can never be echoed (chunk 8, F-06)', () => {
+    const legacy = [
+      { kind: 'paragraph', content: [] },
+      { kind: 'unsupported' },
+      {
+        kind: 'callout',
+        children: [
+          { kind: 'unsupported', id: '' },
+          { kind: 'unsupported', id: 'u9' },
+        ],
+      },
+    ];
+    expect(unsupportedLoss(legacy, [{ kind: 'unsupported', id: 'u9' }])).toEqual([
+      '(no id) #1',
+      '(no id) #2',
+    ]);
+    // An id-less block in the incoming tree keeps nothing.
+    expect(
+      unsupportedLoss(legacy, [{ kind: 'unsupported' }, { kind: 'unsupported', id: 'u9' }]),
+    ).toHaveLength(2);
+    const err = new UnsupportedBlockLossError('replaceDocumentBlocks', ['(no id) #1']);
+    expect(err.message).toMatch(/assignBlockIds/);
+  });
+
   it('lets an echoing replace through, and allowUnsupportedLoss lets a lossy one through; the journal holds the pre-image', async () => {
     h = await harness();
     const { resourceId, documentId } = h.model.seedResource('r1', { blocks: page });
