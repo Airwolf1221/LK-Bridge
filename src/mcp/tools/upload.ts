@@ -4,7 +4,8 @@
  * the PUT to the signed URL (NOT an LK call; src/mcp/tools/upload-step.ts) and createImageAsset (an LK call).
  */
 import * as z from 'zod';
-import type { JobView } from '../../jobs/index.js';
+import { PolicyDeniedError, type JobView } from '../../jobs/index.js';
+import { UPLOAD_PROPOSE_REASON } from '../../policy/gate.js';
 import { defineTool } from './define.js';
 import { submitBody } from './lk-api.js';
 import { errorFromThrown, errorResult, mcpOrigin, render, type ToolDeps } from './shape.js';
@@ -52,6 +53,18 @@ export function uploadTools(deps: ToolDeps) {
         openWorldHint: true,
       },
       handler: async (input, ctx) => {
+        // Chunk 8 (F-07): at scope `propose` the engine refuses uploads, but only after the image has been resolved,
+        // which for a URL source means downloading it. Refuse first, so nothing is fetched for a refused upload.
+        if (ctx.scope === 'propose') {
+          return errorFromThrown(
+            new PolicyDeniedError(
+              'createImageUpload',
+              UPLOAD_PROPOSE_REASON,
+              ctx.principal?.principalId ?? 'unknown',
+            ),
+            deps,
+          );
+        }
         let image;
         try {
           image = await resolveImage(

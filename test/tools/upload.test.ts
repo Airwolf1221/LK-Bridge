@@ -513,3 +513,76 @@ describe('mid-job crash and resume', () => {
     expect(mock.calls.filter((c) => /assets\/images/.test(c.path))).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------------------------- request size (chunk 8)
+
+describe('the /mcp body limit fits UPLOAD_MAX_BYTES as base64 (chunk 8, F-05)', () => {
+  /** A PNG signature followed by padding: the tool checks the first bytes, the storage host accepts anything. */
+  const pngOfSize = (n: number) => Buffer.concat([PNG_BYTES.subarray(0, 16), Buffer.alloc(n - 16, 7)]);
+
+  it('an image just under the maximum, sent as base64, reaches the tool and is uploaded', async () => {
+    puts.length = 0;
+    const { stack, client } = await uploadStack();
+    try {
+      const max = DEFAULT_TOOLS_SETTINGS.upload.maxBytes;
+      const image = pngOfSize(max - 1024);
+      const r = await stack.call(client, 'lk_upload_image', {
+        name: 'large',
+        base64: image.toString('base64'),
+        waitSeconds: 25,
+      });
+      expect(r.isError, r.text.slice(0, 300)).toBe(false);
+      expect(r.body.status).toBe('succeeded');
+      expect(puts.at(-1)?.body.length).toBe(image.length);
+    } finally {
+      await client.close();
+      await stack.close();
+    }
+  }, 60_000);
+
+  it('just over the maximum is refused by the tool itself (UPLOAD_TOO_LARGE), not by the transport', async () => {
+    const { stack, client } = await uploadStack();
+    try {
+      const image = pngOfSize(DEFAULT_TOOLS_SETTINGS.upload.maxBytes + 4096);
+      const r = await stack.call(client, 'lk_upload_image', {
+        name: 'too big',
+        base64: image.toString('base64'),
+      });
+      expect(r.isError).toBe(true);
+      expect(r.body.error.code).toBe('UPLOAD_TOO_LARGE');
+    } finally {
+      await client.close();
+      await stack.close();
+    }
+  }, 60_000);
+
+  it('a body over the transport limit gets 413 after authentication, and an unauthenticated one gets 401 first', async () => {
+    const { stack, client } = await uploadStack();
+    await client.close();
+    try {
+      const body = JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'lk_upload_image', arguments: { name: 'x', base64: 'A'.repeat(15 * 1024 * 1024) } },
+      });
+      const headers = {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2025-06-18',
+      };
+      const anonymous = await fetch(`${stack.base}/mcp`, { method: 'POST', headers, body });
+      expect(anonymous.status).toBe(401);
+      await anonymous.text();
+      const authed = await fetch(`${stack.base}/mcp`, {
+        method: 'POST',
+        headers: { ...headers, authorization: `Bearer ${stack.token}` },
+        body,
+      });
+      expect(authed.status).toBe(413);
+      await authed.text();
+    } finally {
+      await stack.close();
+    }
+  }, 60_000);
+});

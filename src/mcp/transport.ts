@@ -26,6 +26,19 @@ import {
 
 export const MCP_PATH = '/mcp';
 
+/** The MCP SDK's own default request body limit, kept as the floor. */
+export const MCP_DEFAULT_MAX_BODY_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Chunk 8 (F-05): the request body limit at `/mcp`, sized so that `lk_upload_image` can receive an image of
+ * `uploadMaxBytes` as base64 (4 characters per 3 bytes) inside its JSON-RPC envelope (256 KiB of headroom). Never below
+ * the SDK's 4 MiB. Fastify's own `bodyLimit` does not apply here: the body is left unread for the SDK, which enforces
+ * this limit (413) only after the bearer token has been checked.
+ */
+export function mcpMaxBodyBytes(uploadMaxBytes: number): number {
+  return Math.max(MCP_DEFAULT_MAX_BODY_BYTES, Math.ceil(uploadMaxBytes / 3) * 4 + 256 * 1024);
+}
+
 export interface McpTransportOptions {
   readonly config: AuthConfig;
   readonly bearer: BearerGuard;
@@ -34,6 +47,8 @@ export interface McpTransportOptions {
   readonly tools: readonly McpToolProvider[];
   /** Per-principal tool lists and the principal in each tool's context (src/policy). */
   readonly access?: McpAccessControl;
+  /** Largest request body accepted (default: the SDK's 4 MiB). See {@link mcpMaxBodyBytes}. */
+  readonly maxBodyBytes?: number;
 }
 
 const LOOPBACK_ORIGIN = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d{1,5})?$/;
@@ -49,14 +64,15 @@ export function mcpTransportPlugin(app: FastifyInstance, opts: McpTransportOptio
   const { config, bearer, event } = opts;
   const factory = createMcpServerFactory(opts.serverInfo, opts.tools, app.log, opts.access);
   const onerror = (err: Error) => app.log.warn({ err }, 'MCP transport error');
-  const handler = createMcpHandler(factory, { legacy: 'stateless', onerror });
-  const serve = toNodeHandler(handler, { onerror });
+  const maxRequestBodySize = opts.maxBodyBytes ?? MCP_DEFAULT_MAX_BODY_BYTES;
+  const handler = createMcpHandler(factory, { legacy: 'stateless', onerror, maxRequestBodySize });
+  const serve = toNodeHandler(handler, { onerror, maxRequestBodySize });
   app.addHook('onClose', async () => {
     await handler.close();
   });
 
   // Leave the request body unread: the SDK reads and validates it itself (JSON-RPC parse errors,
-  // 415 for non-JSON, 413 over 4 MiB), after authentication has passed.
+  // 415 for non-JSON, 413 over `maxRequestBodySize`), after authentication has passed.
   app.removeAllContentTypeParsers();
   app.addContentTypeParser('*', (_req, _payload, done) => {
     done(null, undefined);

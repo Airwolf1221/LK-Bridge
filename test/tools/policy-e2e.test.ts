@@ -217,6 +217,15 @@ describe('uploads under propose scope', () => {
     expect(up.isError).toBe(true);
     expect(up.text).toContain('write');
     expect(up.text).toContain('owner can raise');
+    // Chunk 8 (F-07): a URL source is refused before it is fetched (it used to be downloaded first; here the host
+    // does not even resolve, so a fetch attempt would answer UPLOAD_URL_* instead of the policy refusal).
+    const fromUrl = await stack.call(p.client, 'lk_upload_image', {
+      name: 'remote.png',
+      url: 'https://images.invalid/remote.png',
+    });
+    expect(fromUrl.isError).toBe(true);
+    expect(fromUrl.body.error.code).toBe('POLICY_DENIED');
+    expect(fromUrl.text).toContain('owner can raise');
     const raw = await stack.call(p.client, 'lk_api_write', {
       operationId: 'createImageUpload',
       params: { body: { contentType: 'image/png', contentLength: 68 } },

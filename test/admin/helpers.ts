@@ -62,6 +62,8 @@ export interface CallOptions {
   /** Defaults to the bridge's public URL. `null`: send none. */
   readonly origin?: string | null;
   readonly authorization?: string;
+  /** Extra request headers (for example `sec-fetch-site`). */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 export interface AdminStack {
@@ -211,6 +213,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     if (c.csrf !== null && method !== 'GET') headers['x-csrf-token'] = c.csrf ?? csrf;
     if (c.origin !== null) headers.origin = c.origin ?? PUBLIC_URL;
     if (c.authorization) headers.authorization = c.authorization;
+    Object.assign(headers, c.headers);
     let body: string | undefined;
     if (method !== 'GET') {
       headers['content-type'] = 'application/json';

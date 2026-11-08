@@ -127,6 +127,25 @@ describe('every admin route accepts only the owner session', () => {
     rejected(await stack.get('/api/admin/overview', { cookie }));
   });
 
+  it('refuses requests a browser marks as coming from another site, reads included (chunk 8, F-08)', async () => {
+    for (const site of ['cross-site', 'same-site']) {
+      for (const [method, path] of [
+        ['GET', '/api/admin/overview?refresh=true'],
+        ['GET', '/api/admin/session'],
+        ['POST', '/api/admin/writes/pause'],
+      ] as const) {
+        const r = await stack.call(method, path, { headers: { 'sec-fetch-site': site } });
+        expect(r.status, `${method} ${path} ${site}`).toBe(403);
+        expect(r.json.error.code).toBe('CROSS_SITE');
+      }
+    }
+    expect(stack.runtime.engine.queries.controls().writesPaused).toBe(false);
+    // The dashboard's own requests, an address typed into the bar, and clients that send no such header still work.
+    for (const headers of [{ 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }, {}]) {
+      expect((await stack.call('GET', '/api/admin/session', { headers })).status).toBe(200);
+    }
+  });
+
   it('serves the owner session', async () => {
     const r = await stack.get('/api/admin/session');
     expect(r.status).toBe(200);

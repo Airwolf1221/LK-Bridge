@@ -25,7 +25,7 @@ import {
 import { runMigrations } from './db/migrate.js';
 import { type Db, openDatabase } from './db/open.js';
 import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/server.js';
-import { mcpTransportPlugin } from './mcp/transport.js';
+import { mcpMaxBodyBytes, mcpTransportPlugin } from './mcp/transport.js';
 import { type Policy, createPolicy } from './policy/index.js';
 import { createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
 
@@ -48,6 +48,8 @@ export interface BuildServerOptions {
   readonly bridgeInfo?: () => BridgeInfo;
   /** MCP server `instructions` shown to connecting agents. */
   readonly instructions?: string;
+  /** Largest `/mcp` request body (chunk 8, F-05). Defaults to the SDK's 4 MiB; `createBridge` sizes it for uploads. */
+  readonly mcpMaxBodyBytes?: number;
   /** Overrides `TRUST_PROXY` (tests only). */
   readonly trustProxy?: FastifyServerOptions['trustProxy'];
   /** Test seams for the auth services (clock, CIMD fetcher, rate limits). */
@@ -112,7 +114,29 @@ export async function buildServer(
     routerOptions: { ignoreTrailingSlash: true },
     bodyLimit: 1024 * 1024,
     return503OnClosing: true,
+    // Chunk 8 (F-09): Fastify's own request logging wrote two info lines per request, plus a third ("Route … not
+    // found") for every internet scanner's probe. One compact line per request is written below instead.
+    disableRequestLogging: true,
   });
+
+  // One line per request: matched routes at info; unmatched paths (scanners probing /info.php, /actuator/env,
+  // WordPress paths…) at debug only. Path without the query string, never a header or a body. Auth events
+  // (src/auth/events.ts) are logged separately and keep their levels.
+  app.addHook('onResponse', (req, reply, done) => {
+    const line = {
+      method: req.method,
+      url: pathOnly(req.url),
+      status: reply.statusCode,
+      ms: Math.round(reply.elapsedTime),
+      ip: req.ip,
+    };
+    if (req.routeOptions.url === undefined && reply.statusCode === 404) req.log.debug(line, 'no such route');
+    else req.log.info(line, 'request completed');
+    done();
+  });
+  app.setNotFoundHandler((_req, reply) =>
+    reply.code(404).type('application/json; charset=utf-8').send({ error: 'not_found' }),
+  );
 
   const policy = o.policy ?? createPolicy({ db: o.db, allowMemberAdmin: false });
   const services = createAuthServices({
@@ -141,6 +165,7 @@ export async function buildServer(
     // The policy layer's proposal tools, unless the caller's list has them already (the runtime's does).
     tools: withPolicyTools(o.tools ?? [bridgeInfoStub(bridgeInfo)], policy.tools),
     access: policy.access,
+    ...(o.mcpMaxBodyBytes !== undefined ? { maxBodyBytes: o.mcpMaxBodyBytes } : {}),
   });
 
   // Chunk 5: the owner dashboard (/ui), its admin API and the live stream (/api/admin), behind the owner session.
@@ -207,6 +232,7 @@ export async function createBridge(
     ...(o.pruneIntervalMs !== undefined ? { pruneIntervalMs: o.pruneIntervalMs } : {}),
     tools: runtime.tools,
     instructions: runtime.instructions,
+    mcpMaxBodyBytes: mcpMaxBodyBytes(o.toolsSettings.upload.maxBytes),
     policy: runtime.policy,
     admin: {
       runtime,
