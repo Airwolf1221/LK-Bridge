@@ -88,7 +88,7 @@ each with a recommendation below; none is a vulnerability reachable by an intern
 | F-14 | Low      | Governor            | `src/lk/governor/governor.ts`                             | Tier counters are in memory only; right after a restart the bridge believes the minute and hour are empty                                         | Fixed    |
 | F-15 | Low      | Consent             | `src/policy/consent.ts:3`                                 | Re-approving a connection with the preselected `read` lowers an existing profile for every connection on it                                       | Fixed    |
 | F-16 | Low      | Retention           | `src/policy/proposals.ts`                                 | Finished proposals (and their pre-states) are never pruned                                                                                        | Fixed    |
-| F-17 | Low      | Supply chain        | `deploy/deploy.sh:161`                                    | `npm ci` and the build run as `lkbridge`, which can read the env file                                                                             | Open     |
+| F-17 | Low      | Supply chain        | `deploy/deploy.sh:161`                                    | `npm ci` and the build run as `lkbridge`, which can read the env file                                                                             | Fixed    |
 | F-26 | Low      | Logging             | `src/server.ts` (Fastify default `routeNotFound`)         | Fastify's not-found log line carried the raw URL, query string included                                                                           | Fixed    |
 | F-18 | Info     | systemd             | `deploy/lk-bridge.service:20-23`                          | The comment on `NODE_OPTIONS` misstates systemd's precedence; memory values reviewed                                                              | Fixed    |
 | F-19 | Info     | SSRF                | `src/auth/safe-fetch.ts`, `src/mcp/tools/upload-http.ts`  | Outbound fetches allow any port on a public host                                                                                                  | Fixed    |
@@ -326,6 +326,18 @@ kept; never the open states; the configured retention).
 prebuilds), but build-time code (TypeScript, Vite and their plugins) still runs with access to the LegendKeeper key.
 **Recommendation:** build as a separate user without read access to `/etc/lk-bridge`, or in CI, and deploy the built
 artefacts; at least keep `package-lock.json` reviewed on every dependency change.
+
+**Status: fixed in v1.0.1** ([ADR 0020](../adr/0020-separate-build-user.md); `deploy/deploy.sh`, `deploy/lib.sh`,
+`deploy/healthcheck.sh`, `deploy/migrate-to-build-user.sh`, runbook). A new system user `lkbuild` owns the checkout and the
+deploy key and cannot read `/etc/lk-bridge` or `/var/lib/lk-bridge`; `lkbridge` can read and run the app but not write it.
+The deploy runs as root from a root-owned copy (`sudo /opt/lk-bridge/bin/deploy.sh`; a copy in the checkout would let
+build-time code become root) and drops, with `runuser` and `env -i`, to `lkbuild` for git, `npm ci` and the build, and
+to `lkbridge` for the backup, migrations, health check and the service restart (its existing sudoers rule). The health
+check gains six permission checks; an existing install is moved by an idempotent migration script with a `--check` mode.
+Runtime dependencies still run with the secrets, as they must; `sandbox-test.sh` and `soak-sandbox.sh` still run test
+tooling as `lkbridge` (opt-in; a follow-up). Tests: `test/unit/deploy-files.test.ts` (static rules for both scripts, the
+permission helpers checked against the kernel); shellcheck; a rehearsal of the deploy flow under a scratch prefix. The
+migration itself has not run against real accounts (no server here).
 
 ### F-18 (Info): systemd memory settings
 

@@ -11,6 +11,10 @@
 #
 # It sends no credentials and prints no response bodies. When it can read the env file it also warns, by variable NAME
 # only, if the file has drifted from deploy/env.template.
+#
+# Permission checks (v1.0.1, ADR 0020), run in every mode: the build user (lkbuild) cannot read the env file or the data
+# directory and is not in the lkbridge group; the service user (lkbridge) cannot write anything in the app; the private
+# Node is root's and writable by neither. Run it as lkbridge (deploy.sh does), which makes the write check exact.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -85,6 +89,55 @@ if [[ "$code" == "200" ]] && printf '%s' "$body" | grep -q '"ok":true'; then
 else
   fail "$name" "got HTTP ${code:-none}"
 fi
+
+# 1b. Permissions (v1.0.1, ADR 0020). Judged from owners, groups and modes, so no privilege is needed; exact for the
+# write check when run as the service user (find -writable asks the kernel). An ACL anywhere on the way is a FAIL:
+# mode bits cannot show what it allows, so check it by hand.
+check_permissions() {
+  local b="$LKB_BUILD_USER" s="$LKB_SERVICE_USER" name db hit p
+  db="$(env_file_get DB_PATH)"
+  db="${db:-${LKB_DATA_DIR}/bridge.db}"
+
+  name="${b} exists and is not in group ${s}"
+  if ! id -u "$b" >/dev/null 2>&1; then
+    fail "$name" "no user ${b}: this install has not been migrated (deploy/migrate-to-build-user.sh)"
+    return 0
+  elif lkb_in_group "$b" "$s"; then
+    fail "$name" "${b} is in group ${s}, so it can read the env file"
+  else
+    pass "$name"
+  fi
+
+  for p in "$(dirname "$LKB_ENV_FILE")" "$LKB_ENV_FILE" "$LKB_DATA_DIR"; do
+    if lkb_has_acl "$p"; then fail "no ACL on ${p}" "it has an ACL; mode bits cannot show what it allows (getfacl ${p})"; fi
+  done
+
+  name="${b} cannot read the secrets (${LKB_ENV_FILE})"
+  if lkb_user_can "$b" r "$LKB_ENV_FILE"; then fail "$name" "it can; the file must be root:${s} 0640 in a root:${s} 0750 directory"; else pass "$name"; fi
+
+  name="${b} cannot read the database (${LKB_DATA_DIR})"
+  if lkb_user_can "$b" x "$LKB_DATA_DIR" || lkb_user_can "$b" r "$LKB_DATA_DIR" || lkb_user_can "$b" r "$db"; then
+    fail "$name" "it can; ${LKB_DATA_DIR} must be ${s}:${s} 0700"
+  else
+    pass "$name"
+  fi
+
+  name="${s} cannot write the app (${LKB_APP_DIR})"
+  if [[ "$(id -un)" == "$s" ]]; then
+    hit="$(find "$LKB_APP_DIR" -writable -print -quit 2>/dev/null || true)"
+  else
+    hit="$(lkb_writable_by "$s" "$LKB_APP_DIR")"
+  fi
+  if [[ -n "$hit" ]]; then fail "$name" "it can write ${hit}; fix: sudo chown -R ${b}:${b} ${LKB_APP_DIR} && sudo chmod -R go-w ${LKB_APP_DIR}"; else pass "$name"; fi
+
+  name="${s} can read the app and the env file"
+  if lkb_user_can "$s" r "${LKB_APP_DIR}/dist/server.js" && lkb_user_can "$s" r "$LKB_ENV_FILE"; then pass "$name"; else fail "$name" "the service could not start; check the modes of ${LKB_APP_DIR} and ${LKB_ENV_FILE}"; fi
+
+  name="the private Node (${LKB_RUNTIME_DIR}) is root's and writable by neither user"
+  hit="$(find "$LKB_RUNTIME_DIR" ! -type l \( ! -uid 0 -o -perm /022 \) -print -quit 2>/dev/null || true)"
+  if [[ -n "$hit" ]]; then fail "$name" "${hit} is not root's or is writable by others; reinstall with deploy/install-node.sh"; else pass "$name"; fi
+}
+check_permissions
 
 if ((local_only)); then
   ((failures == 0)) && echo "Local checks passed." || echo "Some checks FAILED."

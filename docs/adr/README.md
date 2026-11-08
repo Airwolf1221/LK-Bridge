@@ -23,3 +23,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0017](0017-unsupported-client-grant-types-ignored.md) | Grant types the bridge does not issue are ignored, not refused  | Accepted |
 | [0018](0018-chunk-8-hardening-decisions.md)            | Chunk 8 hardening decisions                                     | Accepted |
 | [0019](0019-consent-keeps-existing-scope.md)           | Consent keeps an existing profile's scope                       | Accepted |
+| [0020](0020-separate-build-user.md)                    | A separate build user; deploy as root, one user per step        | Accepted |
