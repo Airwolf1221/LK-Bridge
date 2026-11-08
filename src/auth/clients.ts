@@ -1,6 +1,13 @@
 import * as z from 'zod';
 import type { AuthConfig } from '../config/auth.js';
-import { CimdError, type CimdFetcher, isCimdClientId } from './cimd.js';
+import {
+  CimdError,
+  type CimdFetcher,
+  SUPPORTED_GRANT_TYPES,
+  isCimdClientId,
+  loggableValue,
+  partitionSupported,
+} from './cimd.js';
 import { hashSecret, randomToken, safeEqual } from './crypto.js';
 import { OAuthError, invalidClient, invalidRequest } from './errors.js';
 import type { AuthEventLogger } from './events.js';
@@ -11,7 +18,6 @@ import type { AuthStore, ClientRecord, TokenEndpointAuthMethod } from './store.j
 /** Client registration (RFC 7591) and client resolution (DCR ids and CIMD URLs). */
 
 const AUTH_METHODS = ['none', 'client_secret_basic', 'client_secret_post'] as const;
-const GRANT_TYPES = ['authorization_code', 'refresh_token'] as const;
 
 const registrationSchema = z
   .object({
@@ -65,12 +71,26 @@ export class ClientService {
   register(body: unknown): RegistrationResult {
     const parsed = registrationSchema.safeParse(body);
     if (!parsed.success) {
-      const redirectIssue = parsed.error.issues.some((i) => i.path[0] === 'redirect_uris');
+      const redirectIssue = parsed.error.issues.find((i) => i.path[0] === 'redirect_uris');
+      const issue = redirectIssue ?? parsed.error.issues[0];
+      const top = issue?.path[0];
+      const record = typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+      const name = typeof record.client_name === 'string' ? record.client_name : null;
+      const field = issue && issue.path.length > 0 ? issue.path.map(String).join('.') : '(body)';
+      // Never log anything that might be a secret, or contact addresses, whatever a client sends.
+      const value = typeof top === 'string' && !/secret|contacts/i.test(top) ? record[top] : undefined;
       throw redirectIssue
-        ? registrationError('invalid_redirect_uri', 'redirect_uris must be a non-empty array of URIs')
-        : registrationError('invalid_client_metadata', 'Client metadata is malformed');
+        ? this.refuse(
+            'invalid_redirect_uri',
+            'redirect_uris must be a non-empty array of URIs',
+            field,
+            value,
+            name,
+          )
+        : this.refuse('invalid_client_metadata', 'Client metadata is malformed', field, value, name);
     }
     const m = parsed.data;
+    const name = m.client_name ?? null;
     const redirectUris = [...new Set(m.redirect_uris)];
     for (const uri of redirectUris) {
       if (!isAllowedRedirectUri(uri, this.deps.config.extraRedirectUris)) {
@@ -80,8 +100,9 @@ export class ClientService {
           'client.registration_rejected',
           {
             error: 'invalid_redirect_uri',
+            field: 'redirect_uris',
             redirect_uri: uri.slice(0, 300),
-            client_name: m.client_name ?? null,
+            client_name: name,
           },
           'warn',
         );
@@ -97,25 +118,41 @@ export class ClientService {
     // RFC 7591 §2: the default is client_secret_basic.
     const method = (m.token_endpoint_auth_method ?? 'client_secret_basic') as TokenEndpointAuthMethod;
     if (!(AUTH_METHODS as readonly string[]).includes(method)) {
-      throw registrationError(
+      throw this.refuse(
         'invalid_client_metadata',
         `token_endpoint_auth_method must be one of: ${AUTH_METHODS.join(', ')}`,
+        'token_endpoint_auth_method',
+        method,
+        name,
       );
     }
-    // The server provisions both grants when none are requested (RFC 7591 §3.2.1 lets it).
-    const grantTypes = [...new Set(m.grant_types ?? [...GRANT_TYPES])];
-    if (grantTypes.some((g) => !(GRANT_TYPES as readonly string[]).includes(g))) {
-      throw registrationError(
-        'invalid_client_metadata',
-        `grant_types may only contain: ${GRANT_TYPES.join(', ')}`,
-      );
-    }
+    // The server provisions both grants when none are requested, and registers only the
+    // supported ones among those requested (RFC 7591 §3.2.1 lets it replace requested values).
+    // Unsupported grants, such as the JWT bearer grant claude.ai asks for, are dropped, and the
+    // response says what was registered. Only a request without authorization_code is refused.
+    const requestedGrants = m.grant_types ?? [...SUPPORTED_GRANT_TYPES];
+    const { kept: grantTypes, ignored: ignoredGrantTypes } = partitionSupported(
+      requestedGrants,
+      SUPPORTED_GRANT_TYPES,
+    );
     if (!grantTypes.includes('authorization_code')) {
-      throw registrationError('invalid_client_metadata', 'grant_types must include authorization_code');
+      throw this.refuse(
+        'invalid_client_metadata',
+        'grant_types must include authorization_code',
+        'grant_types',
+        requestedGrants,
+        name,
+      );
     }
     const responseTypes = [...new Set(m.response_types ?? ['code'])];
     if (responseTypes.length !== 1 || responseTypes[0] !== 'code') {
-      throw registrationError('invalid_client_metadata', 'response_types must be ["code"]');
+      throw this.refuse(
+        'invalid_client_metadata',
+        'response_types must be ["code"]',
+        'response_types',
+        m.response_types,
+        name,
+      );
     }
     let scope: string | null = null;
     if (m.scope !== undefined) {
@@ -124,7 +161,7 @@ export class ClientService {
           .filter((s) => SUPPORTED_SCOPES.includes(s))
           .join(' ');
       } catch {
-        throw registrationError('invalid_client_metadata', 'scope is malformed');
+        throw this.refuse('invalid_client_metadata', 'scope is malformed', 'scope', m.scope, name);
       }
     }
 
@@ -166,6 +203,14 @@ export class ClientService {
       lastUsedAt: null,
     };
     this.deps.store.saveClient(client);
+    if (ignoredGrantTypes.length > 0) {
+      this.deps.event('client.grant_types_ignored', {
+        client_id: clientId,
+        kind: 'dcr',
+        ignored_grant_types: ignoredGrantTypes.map((g) => loggableValue(g)).join(' '),
+        grant_types: grantTypes.join(' '),
+      });
+    }
     this.deps.event('client.registered', {
       client_id: clientId,
       client_name: clientName,
@@ -177,6 +222,31 @@ export class ClientService {
       client,
       response: secret ? { ...registered, client_secret: secret, client_secret_expires_at: 0 } : registered,
     };
+  }
+
+  /**
+   * Logs a refused registration with the field and offending value, so that one log line says
+   * what to fix, and returns the RFC 7591 error to throw.
+   */
+  private refuse(
+    error: 'invalid_redirect_uri' | 'invalid_client_metadata',
+    description: string,
+    field: string,
+    value: unknown,
+    clientName: string | null,
+  ): OAuthError {
+    this.deps.event(
+      'client.registration_rejected',
+      {
+        error,
+        field,
+        value: value === undefined ? null : loggableValue(value),
+        reason: description,
+        client_name: clientName,
+      },
+      'warn',
+    );
+    return registrationError(error, description);
   }
 
   /** The stored registration for a CIMD client, if its document is still fresh. */
@@ -217,6 +287,17 @@ export class ClientService {
         lastUsedAt: cached?.lastUsedAt ?? null,
       };
       this.deps.store.saveClient(client);
+      if (metadata.ignoredGrantTypes.length > 0 || metadata.ignoredResponseTypes.length > 0) {
+        this.deps.event('client.grant_types_ignored', {
+          client_id: clientId,
+          kind: 'cimd',
+          ignored_grant_types: metadata.ignoredGrantTypes.map((g) => loggableValue(g)).join(' '),
+          grant_types: metadata.grantTypes.join(' '),
+          ...(metadata.ignoredResponseTypes.length > 0
+            ? { ignored_response_types: metadata.ignoredResponseTypes.map((r) => loggableValue(r)).join(' ') }
+            : {}),
+        });
+      }
       this.deps.event('client.metadata_fetched', {
         client_id: clientId,
         cache_seconds: cacheSeconds,
@@ -224,9 +305,15 @@ export class ClientService {
       });
       return client;
     } catch (err) {
-      const message = err instanceof CimdError ? err.message : 'client metadata document could not be used';
-      this.deps.event('client.metadata_rejected', { client_id: clientId, reason: message }, 'warn');
-      throw err instanceof CimdError ? err : new CimdError(message);
+      const refusal =
+        err instanceof CimdError ? err : new CimdError('client metadata document could not be used');
+      // One line says which client, why, and which field and value were at fault.
+      this.deps.event(
+        'client.metadata_rejected',
+        { client_id: clientId, reason: refusal.message, field: refusal.field, value: refusal.value },
+        'warn',
+      );
+      throw refusal;
     }
   }
 

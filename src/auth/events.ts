@@ -9,6 +9,7 @@ export type AuthEventName =
   | 'client.registration_rejected'
   | 'client.metadata_fetched'
   | 'client.metadata_rejected'
+  | 'client.grant_types_ignored'
   | 'authorize.rejected'
   | 'consent.shown'
   | 'consent.granted'

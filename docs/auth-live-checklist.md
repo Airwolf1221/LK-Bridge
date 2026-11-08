@@ -34,7 +34,7 @@ Chunk 4 could not reach claude.ai or ChatGPT, and they could not reach the sandb
 2. Log: `auth client.metadata_fetched` with Claude's `client_id` URL and `cache_seconds`. **Write the URL down**: the docs give Claude Code's (`https://claude.ai/oauth/claude-code-client-metadata`) but not the one the hosted apps use.
 3. The consent page names the host serving that document, then "It calls itself …", and shows **claude.ai** as the destination.
 4. Approve, then call `bridge_info` as before.
-5. If instead you see `auth client.metadata_rejected`, the `reason` field says why (for example a fetch timeout from the server, or a redirect URI outside the allowlist). Note it and fall back to DCR.
+5. If instead you see `auth client.metadata_rejected`, the `reason` field says why (for example a fetch timeout from the server, or a redirect URI outside the allowlist), and `field` and `value` name the part of the document at fault. Note them and fall back to DCR. A `client.grant_types_ignored` line for claude.ai's document is expected: it lists the JWT bearer grant, which the bridge ignores ([ADR 0017](adr/0017-unsupported-client-grant-types-ignored.md)).
 
 ## 4. Desktop and mobile
 

@@ -21,19 +21,14 @@ import { canonicaliseResource } from '../../src/auth/url.js';
 import { AuthConfigError, loadAuthConfig } from '../../src/config/auth.js';
 import { MigrationError, runMigrations } from '../../src/db/migrate.js';
 import { openDatabase } from '../../src/db/open.js';
+import {
+  CLAUDE_AI_CIMD,
+  CLAUDE_AI_DOC,
+  CLAUDE_CODE_CIMD,
+  CLAUDE_CODE_DOC,
+  JWT_BEARER_GRANT,
+} from './fixtures/claude-client-metadata.js';
 import { ownerCredentials, throwawaySecret } from './helpers.js';
-
-const CLAUDE_CODE_CIMD = 'https://claude.ai/oauth/claude-code-client-metadata';
-/** Claude Code's published document, verbatim (fetched 7 November 2026). */
-const CLAUDE_CODE_DOC = {
-  client_id: CLAUDE_CODE_CIMD,
-  client_name: 'Claude Code',
-  client_uri: 'https://claude.ai',
-  redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
-  grant_types: ['authorization_code', 'refresh_token'],
-  response_types: ['code'],
-  token_endpoint_auth_method: 'none',
-};
 
 describe('canonical resource URI (requirement 6)', () => {
   it.each([
@@ -184,6 +179,38 @@ describe('Client ID Metadata Document rules (requirement 4)', () => {
     expect(m.clientName).toBe('Claude Code');
     expect(m.redirectUris).toEqual(['http://localhost/callback', 'http://127.0.0.1/callback']);
     expect(m.tokenEndpointAuthMethod).toBe('none');
+    expect(m.ignoredGrantTypes).toEqual([]);
+  });
+
+  it('accepts claude.ai’s published document, ignoring the JWT bearer grant it lists', () => {
+    const m = validateCimdDocument(CLAUDE_AI_CIMD, CLAUDE_AI_DOC, []);
+    expect(m.clientName).toBe('Claude');
+    expect(m.redirectUris).toEqual(['https://claude.ai/api/mcp/auth_callback']);
+    expect(m.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+    expect(m.ignoredGrantTypes).toEqual([JWT_BEARER_GRANT]);
+    expect(m.responseTypes).toEqual(['code']);
+    expect(m.ignoredResponseTypes).toEqual([]);
+  });
+
+  it('ignores any grant or response type it does not support, as long as the needed ones are listed', () => {
+    const m = validateCimdDocument(
+      CLAUDE_CODE_CIMD,
+      {
+        ...CLAUDE_CODE_DOC,
+        grant_types: ['implicit', 'authorization_code', 'client_credentials', 'authorization_code'],
+        response_types: ['code', 'token'],
+      },
+      [],
+    );
+    expect(m.grantTypes).toEqual(['authorization_code']);
+    expect(m.ignoredGrantTypes).toEqual(['implicit', 'client_credentials']);
+    expect(m.responseTypes).toEqual(['code']);
+    expect(m.ignoredResponseTypes).toEqual(['token']);
+    // Omitted grant and response types default to what the bridge supports.
+    const { grant_types: _g, response_types: _r, ...bare } = CLAUDE_CODE_DOC;
+    const d = validateCimdDocument(CLAUDE_CODE_CIMD, bare, []);
+    expect(d.grantTypes).toEqual(['authorization_code', 'refresh_token']);
+    expect(d.responseTypes).toEqual(['code']);
   });
 
   it.each([
@@ -215,13 +242,64 @@ describe('Client ID Metadata Document rules (requirement 4)', () => {
     expect(bad({ client_secret: 'x' })).toThrow(/secret/);
     expect(bad({ token_endpoint_auth_method: 'client_secret_basic' })).toThrow(/none/);
     expect(bad({ token_endpoint_auth_method: 'private_key_jwt' })).toThrow(/none/);
-    expect(bad({ grant_types: ['client_credentials'] })).toThrow();
-    expect(bad({ grant_types: ['authorization_code', 'implicit'] })).toThrow();
-    expect(bad({ response_types: ['token'] })).toThrow();
+    expect(bad({ grant_types: ['client_credentials'] })).toThrow(/authorization_code/);
+    expect(bad({ grant_types: ['refresh_token', JWT_BEARER_GRANT] })).toThrow(/authorization_code/);
+    expect(bad({ grant_types: [] })).toThrow(/authorization_code/);
+    expect(bad({ response_types: ['token'] })).toThrow(/"code"/);
+    expect(bad({ response_types: [] })).toThrow(/"code"/);
     expect(bad({ redirect_uris: ['https://evil.example/cb'] })).toThrow(/redirect/);
     expect(bad({ redirect_uris: [] })).toThrow();
     expect(() => validateCimdDocument(CLAUDE_CODE_CIMD, [], [])).toThrow();
     expect(() => validateCimdDocument(CLAUDE_CODE_CIMD, 'x', [])).toThrow();
+  });
+
+  it('names the offending field and value in every refusal, but never a secret’s value', () => {
+    const refusal = (clientId: string, body: unknown): CimdError => {
+      try {
+        validateCimdDocument(clientId, body, []);
+      } catch (e) {
+        if (e instanceof CimdError) return e;
+        throw e;
+      }
+      throw new Error('expected a refusal');
+    };
+    const detail = (patch: Record<string, unknown>) => {
+      const e = refusal(CLAUDE_AI_CIMD, { ...CLAUDE_AI_DOC, ...patch });
+      return { field: e.field, value: e.value };
+    };
+    expect(detail({ grant_types: ['refresh_token', JWT_BEARER_GRANT] })).toEqual({
+      field: 'grant_types',
+      value: `["refresh_token","${JWT_BEARER_GRANT}"]`,
+    });
+    expect(detail({ response_types: ['token'] })).toEqual({ field: 'response_types', value: '["token"]' });
+    expect(detail({ token_endpoint_auth_method: 'private_key_jwt' })).toEqual({
+      field: 'token_endpoint_auth_method',
+      value: 'private_key_jwt',
+    });
+    expect(detail({ client_id: 'https://evil.example/meta' })).toEqual({
+      field: 'client_id',
+      value: 'https://evil.example/meta',
+    });
+    expect(detail({ redirect_uris: ['https://evil.example/cb'] })).toEqual({
+      field: 'redirect_uris',
+      value: '["https://evil.example/cb"]',
+    });
+    expect(detail({ grant_types: 'authorization_code' })).toEqual({
+      field: 'grant_types',
+      value: 'authorization_code',
+    });
+    expect(detail({ redirect_uris: [`https://claude.ai/${'x'.repeat(400)}`] }).value).toHaveLength(301);
+    const secret = refusal(CLAUDE_AI_CIMD, { ...CLAUDE_AI_DOC, client_secret: 'do-not-log-me' });
+    expect(secret.field).toBe('client_secret');
+    expect(secret.value).toBeNull();
+    expect(JSON.stringify(secret)).not.toContain('do-not-log-me');
+    let urlRefusal: unknown;
+    try {
+      validateCimdUrl('https://claude.ai/oauth/meta?x=1');
+    } catch (e) {
+      urlRefusal = e;
+    }
+    expect(urlRefusal).toMatchObject({ field: 'client_id', value: 'https://claude.ai/oauth/meta?x=1' });
   });
 
   it('keeps only the redirect URIs the bridge allows', () => {

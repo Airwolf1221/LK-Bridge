@@ -12,12 +12,20 @@ import {
   authorizeAndApprove,
   authorizeUrl,
   consentDefaults,
+  logEvents,
   mcpPost,
   pkcePair,
   reachConsent,
   startBridge,
   tokenRequest,
 } from './helpers.js';
+import {
+  CLAUDE_AI_CIMD,
+  CLAUDE_AI_DOC,
+  CLAUDE_CODE_CIMD,
+  CLAUDE_CODE_DOC,
+  JWT_BEARER_GRANT,
+} from './fixtures/claude-client-metadata.js';
 
 /**
  * Requirement 4 (Client ID Metadata Documents): a real HTTPS document server on loopback with a
@@ -31,22 +39,12 @@ let docServer: Server;
 let port: number;
 const hits = new Map<string, number>();
 
-const CLAUDE_CODE_CIMD = 'https://claude.ai/oauth/claude-code-client-metadata';
-
 function cimdUrl(path: string): string {
   return `https://cimd.test:${port}${path}`;
 }
 
 function claudeCodeDoc(clientId: string) {
-  return {
-    client_id: clientId,
-    client_name: 'Claude Code',
-    client_uri: 'https://claude.ai',
-    redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
-    grant_types: ['authorization_code', 'refresh_token'],
-    response_types: ['code'],
-    token_endpoint_auth_method: 'none',
-  };
+  return { ...CLAUDE_CODE_DOC, client_id: clientId };
 }
 
 beforeAll(async () => {
@@ -97,6 +95,13 @@ beforeAll(async () => {
           ...claudeCodeDoc(cimdUrl('/confidential')),
           token_endpoint_auth_method: 'client_secret_basic',
         });
+      case '/no-auth-code':
+        return json({
+          ...claudeCodeDoc(cimdUrl('/no-auth-code')),
+          grant_types: ['refresh_token', JWT_BEARER_GRANT],
+        });
+      case '/token-response':
+        return json({ ...claudeCodeDoc(cimdUrl('/token-response')), response_types: ['token'] });
       case '/evil-redirects':
         return json({
           ...claudeCodeDoc(cimdUrl('/evil-redirects')),
@@ -290,6 +295,8 @@ describe('CIMD end to end', () => {
     ['/mismatch', /does not match/],
     ['/secret', /secret/],
     ['/confidential', /none/],
+    ['/no-auth-code', /must allow the authorization_code grant/],
+    ['/token-response', /must allow response type/],
     ['/evil-redirects', /redirect URI/],
     ['/redirect', /could not be fetched/],
     ['/html', /could not be fetched/],
@@ -310,6 +317,47 @@ describe('CIMD end to end', () => {
     expect(res.status).toBe(400);
     expect(res.headers.get('location')).toBeNull();
     expect(await res.text()).toMatch(message);
+  });
+
+  it('logs the refused field and offending value with the client_id in one line', async () => {
+    const clientId = cimdUrl('/no-auth-code');
+    const res = await (
+      await signedIn()
+    ).request(
+      authorizeUrl({
+        clientId,
+        redirectUri: 'http://127.0.0.1:4/callback',
+        challenge: pkcePair().challenge,
+        method: 'S256',
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(logEvents(bridge, 'client.metadata_rejected')).toContainEqual(
+      expect.objectContaining({
+        level: 40,
+        client_id: clientId,
+        reason: 'client metadata document must allow the authorization_code grant',
+        field: 'grant_types',
+        value: `["refresh_token","${JWT_BEARER_GRANT}"]`,
+      }),
+    );
+    expect(logEvents(bridge, 'authorize.rejected')).toContainEqual(
+      expect.objectContaining({ client_id: clientId, reason: 'client_metadata', field: 'grant_types' }),
+    );
+    // Fetch failures name the fetcher's reason.
+    await (
+      await signedIn()
+    ).request(
+      authorizeUrl({
+        clientId: cimdUrl('/html'),
+        redirectUri: 'http://127.0.0.1:4/callback',
+        challenge: pkcePair().challenge,
+        method: 'S256',
+      }),
+    );
+    expect(logEvents(bridge, 'client.metadata_rejected')).toContainEqual(
+      expect.objectContaining({ client_id: cimdUrl('/html'), field: '(fetch)', value: 'bad_content_type' }),
+    );
   });
 
   it('gives up on a slow document server quickly, well inside the 10-second budget', async () => {
@@ -416,6 +464,130 @@ describe('Claude Code’s published client_id', () => {
       expect(t.body.refresh_token).toBeTypeOf('string');
       expect((await mcpPost(bridge, t.body.access_token as string)).status).toBe(200);
       expect(fetched).toBe(1);
+    } finally {
+      await bridge.close();
+    }
+  });
+});
+
+describe('claude.ai’s published client_id (custom connectors, “Use Claude’s published identity”)', () => {
+  it('accepts the real document, which also lists the JWT bearer grant, through consent and token issuance', async () => {
+    let fetched = 0;
+    const stub: JsonFetcher = (url) => {
+      fetched++;
+      expect(url).toBe(CLAUDE_AI_CIMD);
+      return Promise.resolve({
+        body: structuredClone(CLAUDE_AI_DOC),
+        headers: { 'cache-control': 'max-age=300' },
+      });
+    };
+    const bridge = await startBridge({ authOverrides: { fetchJson: stub } });
+    try {
+      const redirectUri = 'https://claude.ai/api/mcp/auth_callback';
+      const { verifier, challenge } = pkcePair();
+      const browser = new Browser(bridge);
+      const page = await reachConsent(
+        browser,
+        authorizeUrl({
+          clientId: CLAUDE_AI_CIMD,
+          redirectUri,
+          challenge,
+          method: 'S256',
+          scope: 'mcp offline_access',
+          resource: bridge.mcpUrl,
+          state: 'claude-state',
+        }),
+      );
+      if (page instanceof Response) throw new Error(`no consent: ${page.status} ${await page.text()}`);
+      expect(page.html).toContain('<p class="host">claude.ai</p>');
+      expect(page.html).toContain('It calls itself “Claude”');
+      const res = await browser.post(`${bridge.publicUrl}/oauth/consent`, {
+        request_id: page.requestId,
+        csrf_token: page.csrf,
+        decision: 'approve',
+        ...consentDefaults(page.html),
+      });
+      const cb = new URL(res.headers.get('location') as string);
+      expect(`${cb.origin}${cb.pathname}`).toBe(redirectUri);
+      expect(cb.searchParams.get('state')).toBe('claude-state');
+
+      // Only the supported grants are registered, and the ignored one is logged at info level.
+      expect(bridge.services.store.getClient(CLAUDE_AI_CIMD)?.grantTypes).toEqual([
+        'authorization_code',
+        'refresh_token',
+      ]);
+      expect(logEvents(bridge, 'client.grant_types_ignored')).toEqual([
+        expect.objectContaining({
+          level: 30,
+          client_id: CLAUDE_AI_CIMD,
+          kind: 'cimd',
+          ignored_grant_types: JWT_BEARER_GRANT,
+          grant_types: 'authorization_code refresh_token',
+        }),
+      ]);
+      expect(logEvents(bridge, 'client.metadata_rejected')).toEqual([]);
+
+      const t = await tokenRequest(bridge, {
+        grant_type: 'authorization_code',
+        code: cb.searchParams.get('code') ?? undefined,
+        redirect_uri: redirectUri,
+        code_verifier: verifier,
+        client_id: CLAUDE_AI_CIMD,
+        resource: bridge.mcpUrl,
+      });
+      expect(t.res.status).toBe(200);
+      expect(t.body.refresh_token).toBeTypeOf('string');
+      expect((await mcpPost(bridge, t.body.access_token as string)).status).toBe(200);
+      const r = await tokenRequest(bridge, {
+        grant_type: 'refresh_token',
+        refresh_token: t.body.refresh_token as string,
+        client_id: CLAUDE_AI_CIMD,
+      });
+      expect(r.res.status).toBe(200);
+
+      // The JWT bearer grant the document lists is still refused at the token endpoint.
+      const jwt = await tokenRequest(bridge, {
+        grant_type: JWT_BEARER_GRANT,
+        assertion: 'eyJhbGciOiJub25lIn0.e30.',
+        client_id: CLAUDE_AI_CIMD,
+      });
+      expect(jwt.res.status).toBe(400);
+      expect(jwt.body.error).toBe('unsupported_grant_type');
+      expect(fetched).toBe(1);
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('still refuses the document if authorization_code is missing, naming the field in the log', async () => {
+    const stub: JsonFetcher = () =>
+      Promise.resolve({
+        body: { ...structuredClone(CLAUDE_AI_DOC), grant_types: ['refresh_token', JWT_BEARER_GRANT] },
+        headers: {},
+      });
+    const bridge = await startBridge({ authOverrides: { fetchJson: stub } });
+    try {
+      const browser = new Browser(bridge);
+      expect((await browser.login()).status).toBe(200);
+      const res = await browser.request(
+        authorizeUrl({
+          clientId: CLAUDE_AI_CIMD,
+          redirectUri: 'https://claude.ai/api/mcp/auth_callback',
+          challenge: pkcePair().challenge,
+          method: 'S256',
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(res.headers.get('location')).toBeNull();
+      expect(await res.text()).toMatch(/must allow the authorization_code grant/);
+      expect(logEvents(bridge, 'client.metadata_rejected')).toEqual([
+        expect.objectContaining({
+          client_id: CLAUDE_AI_CIMD,
+          field: 'grant_types',
+          value: `["refresh_token","${JWT_BEARER_GRANT}"]`,
+        }),
+      ]);
+      expect(bridge.services.store.getClient(CLAUDE_AI_CIMD)).toBeUndefined();
     } finally {
       await bridge.close();
     }

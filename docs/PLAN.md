@@ -568,3 +568,4 @@ Effort levels are `low`, `medium`, `high`, `xhigh` and `max`. The default for Op
 2. Chunk 3: split `lk_api_call` into `lk_api_read` and `lk_api_write` (batch and paginate_all follow the same split), and set tool annotations, so users can auto-approve reads and keep confirmations on writes in both Claude and ChatGPT.
 3. Chunk 7: add a ChatGPT connection test.
 4. Chunk 4 added a refresh-token grace window and a TRUST_PROXY setting.
+5. (8 November 2026, hotfix) Clients that list grant types the bridge does not issue, such as claude.ai's JWT bearer grant, are accepted with those grants ignored, through CIMD and DCR alike; the token endpoint still refuses them ([ADR 0017](adr/0017-unsupported-client-grant-types-ignored.md)).
