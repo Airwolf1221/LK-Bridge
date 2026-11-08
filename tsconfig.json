@@ -18,5 +18,6 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["src", "scripts", "test", "vitest.config.ts", "vitest.sandbox.config.ts"]
+  "include": ["src", "scripts", "test", "vitest.config.ts", "vitest.sandbox.config.ts"],
+  "exclude": ["ui", "test/ui"]
 }

@@ -137,7 +137,7 @@ async function readErrorBody(response: Response): Promise<LkErrorBody | undefine
 }
 
 export class Governor {
-  readonly settings: GovernorSettings;
+  private current: GovernorSettings;
   private readonly clock: Clock;
   private readonly transport: Transport;
   private readonly random: () => number;
@@ -160,7 +160,7 @@ export class Governor {
   private closed = false;
 
   constructor(options: GovernorOptions) {
-    this.settings = options.settings;
+    this.current = options.settings;
     this.clock = options.clock ?? systemClock;
     this.transport = options.transport ?? defaultTransport;
     this.random = options.random ?? Math.random;
@@ -183,6 +183,29 @@ export class Governor {
         return [id, state];
       }),
     ) as Record<TierId, TierState>;
+  }
+
+  /** The effective settings. Only the reserve floors can change while running (`setReserveFloors`). */
+  get settings(): GovernorSettings {
+    return this.current;
+  }
+
+  /**
+   * Chunk 5 (dashboard, "Request Budgets" page): changes the reserve floors live. Floors are read at every admission
+   * and by `estimate`, so the next call sees the new values. P0 is always 0; the rest are fractions 0-1 and must keep
+   * the order P1 <= P2 <= P3 (as the configuration requires at start-up). Throws `RangeError` otherwise.
+   */
+  setReserveFloors(floors: Readonly<Record<'P1' | 'P2' | 'P3', number>>): void {
+    const { P1, P2, P3 } = floors;
+    for (const v of [P1, P2, P3]) {
+      if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 1) {
+        throw new RangeError('Reserve floors must be fractions between 0 and 1');
+      }
+    }
+    if (!(P1 <= P2 && P2 <= P3))
+      throw new RangeError('Reserve floors must satisfy interactive <= job <= maintenance');
+    this.current = { ...this.current, reserveFloors: { P0: 0, P1, P2, P3 } };
+    this.pump(); // queued calls are re-evaluated against the new floors
   }
 
   // ---------------------------------------------------------------------------------------------- public API

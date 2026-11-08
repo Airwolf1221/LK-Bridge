@@ -9,17 +9,21 @@ export function htmlHeaders(reply: FastifyReply, formTargets: readonly string[] 
   // Chrome applies form-action to the redirect that follows a form POST, so the consent page must
   // also allow the client's redirect origin, or the final redirect to Claude would be blocked.
   const formAction = ["'self'", ...formTargets].join(' ');
-  return reply
-    .header('content-type', 'text/html; charset=utf-8')
-    .header('cache-control', 'no-store')
-    .header('pragma', 'no-cache')
-    .header('x-frame-options', 'DENY')
-    .header('x-content-type-options', 'nosniff')
-    .header('referrer-policy', 'no-referrer')
-    .header(
-      'content-security-policy',
-      `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
-    );
+  return (
+    reply
+      .header('content-type', 'text/html; charset=utf-8')
+      .header('cache-control', 'no-store')
+      .header('pragma', 'no-cache')
+      .header('x-frame-options', 'DENY')
+      .header('x-content-type-options', 'nosniff')
+      // `same-origin`, not `no-referrer`: a browser serialises the Origin of a FORM POST as "null" under no-referrer, and the
+      // sign-in, consent and sign-out forms are checked against the bridge's own Origin. Nothing is sent to other sites either way.
+      .header('referrer-policy', 'same-origin')
+      .header(
+        'content-security-policy',
+        `default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; form-action ${formAction}; frame-ancestors 'none'; base-uri 'none'`,
+      )
+  );
 }
 
 export function sendHtml(

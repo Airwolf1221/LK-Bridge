@@ -35,7 +35,7 @@ label.choice input{width:auto;margin-top:.3rem}
 function layout(title: string, body: string): string {
   return `<!doctype html>
 <html lang="en-GB"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="no-referrer"><title>${escapeHtml(title)} · LK-Bridge</title><style>${STYLE}</style></head>
+<meta name="referrer" content="same-origin"><title>${escapeHtml(title)} · LK-Bridge</title><style>${STYLE}</style></head>
 <body><main><div class="card">${body}</div><p class="muted">LK-Bridge</p></main></body></html>`;
 }
 

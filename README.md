@@ -17,6 +17,8 @@ npm run build && npm run setup:owner   # owner password hash (and optional TOTP)
 npm start             # runs dist/server.js; needs the variables in .env.example
 ```
 
+The owner dashboard (`/ui`), its admin API and live stream are described in [`docs/dashboard.md`](docs/dashboard.md). `npm run build` builds the UI as well; `npm run test:e2e` runs the opt-in browser smoke test.
+
 Connecting Claude, the OAuth endpoints and personal access tokens are described in [`docs/auth.md`](docs/auth.md).
 
 Never commit secrets. Copy `.env.example` for local values; `.env` is git-ignored.

@@ -1,13 +1,19 @@
 import { createRequire } from 'node:module';
 import type { Writable } from 'node:stream';
-import { pathToFileURL } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import Fastify, { type FastifyInstance, type FastifyRequest, type FastifyServerOptions } from 'fastify';
+import { adminPlugin, type AdminRuntime } from './admin/index.js';
 import { authPlugin } from './auth/plugin.js';
 import { type AuthServices, type CreateAuthServicesOptions, createAuthServices } from './auth/services.js';
 import { type AuthConfig, AuthConfigError, loadAuthConfig } from './config/auth.js';
 import {
+  AdminConfigError,
+  type AdminSettings,
   type Config,
   ConfigError,
+  defaultAdminSettings,
+  loadAdminConfig,
   loadConfig,
   loadPolicyConfig,
   loadToolsConfig,
@@ -47,7 +53,18 @@ export interface BuildServerOptions {
   readonly pruneIntervalMs?: number;
   /** The policy layer (profiles, scopes, proposals). Defaults to one on `db`, without a job engine attached. */
   readonly policy?: Policy;
+  /** The dashboard and its admin API (chunk 5). Without it, `/ui` and `/api/admin` do not exist. */
+  readonly admin?: {
+    readonly runtime: AdminRuntime;
+    readonly settings?: AdminSettings;
+    /** Where the built dashboard is (default: `ui/dist` next to `src` or `dist`). */
+    readonly uiDir?: string;
+    readonly version?: string;
+  };
 }
+
+/** `ui/dist`, whether running from `src/` (tsx) or `dist/` (built): both sit next to `ui/`. */
+const DEFAULT_UI_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../ui/dist');
 
 function withPolicyTools(
   tools: readonly McpToolProvider[],
@@ -124,6 +141,17 @@ export async function buildServer(
     access: policy.access,
   });
 
+  // Chunk 5: the owner dashboard (/ui), its admin API and the live stream (/api/admin), behind the owner session.
+  if (o.admin) {
+    await app.register(adminPlugin, {
+      runtime: o.admin.runtime,
+      services,
+      settings: o.admin.settings ?? defaultAdminSettings(),
+      version: o.admin.version ?? BRIDGE_VERSION,
+      uiDir: o.admin.uiDir ?? DEFAULT_UI_DIR,
+    });
+  }
+
   app.get('/healthz', () => ({ ok: true, version: BRIDGE_VERSION }));
   return { app, services, policy };
 }
@@ -135,6 +163,9 @@ export interface CreateBridgeOptions {
   /** Opened and migrated. */
   readonly db: Db;
   readonly policySettings?: RuntimeOptions['policySettings'];
+  readonly adminSettings?: AdminSettings;
+  /** Overrides the dashboard's static directory (tests). */
+  readonly uiDir?: string;
   /** Reported by bridge_info (defaults to package.json's version). */
   readonly version?: string;
   readonly logLevel?: string;
@@ -159,6 +190,7 @@ export async function createBridge(
     db: o.db,
     version: o.version ?? BRIDGE_VERSION,
     ...(o.policySettings ? { policySettings: o.policySettings } : {}),
+    ...(o.adminSettings ? { adminSettings: o.adminSettings } : {}),
     ...(o.clock ? { clock: o.clock } : {}),
     ...(o.lkTransport ? { lkTransport: o.lkTransport } : {}),
     ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
@@ -172,6 +204,12 @@ export async function createBridge(
     tools: runtime.tools,
     instructions: runtime.instructions,
     policy: runtime.policy,
+    admin: {
+      runtime,
+      ...(o.adminSettings ? { settings: o.adminSettings } : {}),
+      ...(o.uiDir ? { uiDir: o.uiDir } : {}),
+      version: o.version ?? BRIDGE_VERSION,
+    },
   });
   return { app, services, runtime };
 }
@@ -181,14 +219,21 @@ async function main(): Promise<void> {
   let authConfig;
   let policySettings;
   let toolsSettings;
+  let adminSettings;
   try {
     // Every setting is validated here, at start-up, before anything is built.
     config = loadConfig();
     authConfig = loadAuthConfig();
     policySettings = loadPolicyConfig();
     toolsSettings = loadToolsConfig();
+    adminSettings = loadAdminConfig();
   } catch (err) {
-    if (err instanceof ConfigError || err instanceof AuthConfigError || err instanceof PolicyConfigError) {
+    if (
+      err instanceof ConfigError ||
+      err instanceof AuthConfigError ||
+      err instanceof PolicyConfigError ||
+      err instanceof AdminConfigError
+    ) {
       process.stderr.write(`${err.message}\n`);
       process.exit(1);
     }
@@ -203,6 +248,7 @@ async function main(): Promise<void> {
     authConfig,
     toolsSettings,
     policySettings,
+    adminSettings,
     db,
   });
   // SIGTERM: stop new work and let running jobs finish (drain), then stop HTTP, then close the database.

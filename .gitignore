@@ -10,3 +10,4 @@ data/
 !.env.example
 ui/dist/
 *.log
+test-results/

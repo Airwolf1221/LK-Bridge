@@ -57,7 +57,7 @@ It asks for the password twice (hidden), offers TOTP enrolment (scan the `otpaut
 
 ## Personal access tokens
 
-Until the dashboard (chunk 5) has a page for them:
+The dashboard's **Clients & Access** page creates, lists and revokes them (shown once). The command line does the same:
 
 ```bash
 DB_PATH=/var/lib/lk-bridge/bridge.db npm run pat -- create --name "Claude Code on my laptop" --profile claude-code --expires-days 365

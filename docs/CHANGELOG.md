@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Chunk 5: dashboard, admin API and live stream
+
+- **Dashboard** at `/ui` (`ui/`, Vite + React, TypeScript strict, light and dark, bundled with no external fonts or
+  scripts): Overview, Jobs (live progress, history, filters by status, origin, profile and principal, detail with steps,
+  attempts, request ids, artefacts and the `uncertain` flag, controls), Errors (grouped, detail with the full LegendKeeper
+  body and a request-id copy button, mark resolved), Request Budgets (a gauge per tier, upload as "reactive only", 24 h
+  sparklines, observed-against-modelled drift, queue depth, editable reserve floors), Concurrent Writers (slots, locks,
+  waits, `WRITERS_MAX`, pause, drain, writes per minute), Proposals (readable diffs, approve, reject with a reason, bulk,
+  conflicted proposals reject-only), Clients & Access (profiles, scopes with a confirmation when raising, default scope,
+  grants and PATs by profile with last use and revoke, PAT creation shown once), Journal (view only), Settings (every
+  change confirmed and audited), and placeholder pages for Maintenance and Repository Mappings ("Coming in a later chunk").
+- **Admin API** `/api/admin/*` and the **live stream** `/api/admin/stream` (`src/admin/`,
+  [docs/dashboard.md](dashboard.md), [ADR 0013](adr/0013-dashboard-and-admin-api.md)). Owner session only (OAuth tokens
+  and PATs are never accepted), Origin and CSRF on every state-changing request, strict CSP and security headers on `/ui`,
+  every change through the owner commands, engine controls or runtime settings functions (audited, evented), secrets
+  redacted. The stream has heartbeats, `Last-Event-ID` replay and `resync`.
+- `npm run build` now builds the UI too (`ui/dist`, served at `/ui` with an SPA fallback); `npm run test:e2e` is an opt-in
+  Chromium smoke test; `typecheck` also covers `ui/` and `test/ui/`. React, Vite and the test tooling are dev
+  dependencies.
+- **Interim budget sampler** (`src/admin/sampler.ts`): every 10 s `engine.recordBudgetSample(governor.snapshot())`,
+  stopped on shutdown. Chunk 6 replaces it with the `budget-sampler` job.
+- New settings `ADMIN_STREAM_HEARTBEAT_SECONDS`, `ADMIN_STREAM_REPLAY_EVENTS`, `ADMIN_BUDGET_PUSH_SECONDS`,
+  `ADMIN_BUDGET_SAMPLE_SECONDS` (`src/config/admin.ts`).
+- **Changes outside chunk 5's own files** (all small and additive unless noted):
+  - `src/auth/http.ts`, `src/auth/pages.ts`: `Referrer-Policy: same-origin` on the sign-in, consent and sign-out pages.
+    **Bug fix:** under `no-referrer` a browser sends `Origin: null` on form POSTs, so owner sign-in was refused in a real
+    browser ([ADR 0014](adr/0014-auth-pages-referrer-policy.md)).
+  - `src/lk/governor/governor.ts`: `setReserveFloors()` (floors change live; `settings` is now a getter).
+  - `src/jobs/journal.ts`: an optional `id` filter on `journalLookup` (the journal detail view).
+  - `src/runtime.ts`: applies stored dashboard settings, starts and stops the sampler, exposes `config` and `envConfig`.
+  - `src/server.ts`: mounts the admin plugin (`admin` option), `loadAdminConfig` at start-up.
+  - `src/config/index.ts`: one export line. `tsconfig.json`, `vitest.config.ts`, `package.json`, `.gitignore`,
+    `.prettierignore`: UI build, typecheck and test wiring.
+- **Known issue found, not fixed (chunk 3):** `bridge_info` calls `getProject` and `listMembers` with `{ path: … }`
+  parameters, which the registry rejects (`INVALID_PARAMS`), so it always reports an unknown role and no project name.
+  The dashboard's own health check calls them with `{}` and works.
+
 ### Chunk 2b: identity, scopes and proposals
 
 - **Integration with chunk 3** (merged from `main`):
