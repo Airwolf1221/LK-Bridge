@@ -95,7 +95,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 ### Bridge awareness
 
-**`bridge_info`**: version; project id and name; the key's role (`ADMIN`, `MEMBER` or `unknown`; inferred from `listMembers`, because LK shows member emails to ADMIN keys only); read-only flag (effective, configured, overridden); whether writes are paused or draining, and `canWrite`; writer pool; the calling connection, its profile and its live scope (`read`, `propose` or `write`), and `canWriteAs` (`direct`, `proposal (the owner approves)` or `no (read-only)`).
+**`bridge_info`**: version; project id and name; the key's role (`ADMIN`, `MEMBER` or `unknown`; inferred from `listMembers`, because LK shows member emails to ADMIN keys only); read-only flag (effective, configured, overridden); whether writes are paused or draining, and `canWrite`; writer pool; the calling connection, its profile and its live scope (`read`, `propose` or `write`), and `canWriteAs` (`direct`, `proposal (the owner approves)` or `no (read-only)`). The project name and role come from one lookup shared by every caller and cached for 10 minutes; it runs as the bridge's own work (`system` principal, v1.0.1), so a failure there shows on the dashboard's Errors page under `system`, not in a caller's `bridge_errors_recent`.
 
 **`bridge_budget`**: every tier (used, limit, remaining, seconds to reset, any block after a 429, drift), queue depth per priority, write pacing.
 

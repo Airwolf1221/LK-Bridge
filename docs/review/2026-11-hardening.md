@@ -93,7 +93,7 @@ each with a recommendation below; none is a vulnerability reachable by an intern
 | F-18 | Info     | systemd             | `deploy/lk-bridge.service:20-23`                          | The comment on `NODE_OPTIONS` misstates systemd's precedence; memory values reviewed                                                              | Fixed    |
 | F-19 | Info     | SSRF                | `src/auth/safe-fetch.ts`, `src/mcp/tools/upload-http.ts`  | Outbound fetches allow any port on a public host                                                                                                  | Open     |
 | F-20 | Info     | Durability          | `src/db/open.ts:17`                                       | `synchronous=NORMAL` under WAL can lose the last commits on power loss                                                                            | Accepted |
-| F-21 | Info     | Tools               | `src/mcp/tools/bridge.ts:37-73`                           | `bridge_info`'s shared lookup records its errors against whichever caller triggered it                                                            | Open     |
+| F-21 | Info     | Tools               | `src/mcp/tools/bridge.ts:37-73`                           | `bridge_info`'s shared lookup records its errors against whichever caller triggered it                                                            | Fixed    |
 | F-22 | Info     | Secrets             | git history                                               | Whole-history scan: no real secret found                                                                                                          | Pass     |
 | F-23 | Info     | Dependencies        | `package-lock.json`                                       | `npm audit --omit=dev`: 0; dev: 10 moderate (one `minimatch` advisory, no fix published)                                                          | Open     |
 | F-24 | Info     | Auth                | `src/auth/tokens.ts`, `bearer.ts`, `pats.ts`, `crypto.ts` | Access-token and PAT checks reviewed in full                                                                                                      | Pass     |
@@ -337,6 +337,11 @@ lost "running" marker means a step is sent again with the same idempotency key a
 
 The 10-minute project lookup is shared; if it fails, the error is recorded against the principal whose call triggered it.
 Cosmetic.
+
+**Status: fixed in v1.0.1** (`src/mcp/tools/bridge.ts`, `BRIDGE_INFO_LOOKUP_ORIGIN`). The lookup's `getProject` and
+`listMembers` reads run as the bridge's own work (origin kind `system`, no principal, P1), so their errors are recorded
+against `system`; the tool still checks that the caller has a principal and still reports the caller's profile and scope.
+Test: `test/tools/info.test.ts` › records the lookup's errors against the system principal (fails without the fix).
 
 ### F-22 (Info, pass): secrets in the git history
 

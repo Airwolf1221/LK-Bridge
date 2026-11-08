@@ -33,25 +33,41 @@ interface ProjectLookup {
 
 const LOOKUP_TTL_MS = 10 * 60_000;
 
+/**
+ * The shared lookup's own origin (v1.0.1, F-21). The lookup is the bridge's work, cached for every caller, so its reads
+ * and any error they record belong to the `system` principal (the origin carries no principal), not to whichever
+ * connection happened to trigger the refresh. P1, as an interactive call would be: it runs while an agent waits.
+ */
+export const BRIDGE_INFO_LOOKUP_ORIGIN = {
+  kind: 'system',
+  client: 'bridge',
+  tool: 'bridge_info',
+  detail: 'shared project lookup (cached 10 minutes)',
+} as const;
+
 /** Project name and the key's role, from LK, cached: bridge_info must stay cheap and must never fail on budget. */
 function projectLookup(deps: ToolDeps) {
   let cached: ProjectLookup | undefined;
   let inFlight: Promise<ProjectLookup> | undefined;
   const now = deps.now ?? Date.now;
   return async (ctx: Parameters<typeof mcpOrigin>[0]): Promise<ProjectLookup> => {
+    // Only a caller with a principal gets here at all (mcpOrigin refuses one without), but the lookup itself runs
+    // as the bridge's own work.
+    mcpOrigin(ctx, 'bridge_info');
     if (cached && now() - cached.at < LOOKUP_TTL_MS) return cached;
     inFlight ??= (async () => {
       let name: string | null = null;
       let role: ProjectLookup['role'] = 'unknown';
       let note: string | undefined;
       try {
-        const origin = mcpOrigin(ctx, 'bridge_info');
+        const origin = BRIDGE_INFO_LOOKUP_ORIGIN;
+        const priority = 'P1';
         // The registry takes no projectId: the client supplies the configured project (as the dashboard's health
         // check does). Passing `{ path: … }` is rejected by the registry's schema, which left role and name unknown.
-        const p = await deps.engine.run('getProject', {}, { origin });
+        const p = await deps.engine.run('getProject', {}, { origin, priority });
         if (p.status === 'succeeded')
           name = ((p.result as { name?: unknown })?.name as string | undefined) ?? null;
-        const m = await deps.engine.run('listMembers', {}, { origin });
+        const m = await deps.engine.run('listMembers', {}, { origin, priority });
         if (m.status === 'succeeded') {
           // LK shows member emails only to ADMIN keys: that is the cheapest honest probe of the key's role.
           const members = ((m.result as { data?: { email?: unknown }[] })?.data ?? []) as {

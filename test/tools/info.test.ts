@@ -59,3 +59,41 @@ describe('bridge_info', () => {
     }
   });
 });
+
+describe('bridge_info: the shared lookup is the bridge’s own work (v1.0.1, F-21)', () => {
+  it('records the lookup’s errors against the system principal, not the caller that triggered the refresh', async () => {
+    const s3 = await startStack({
+      respond: (req) =>
+        isProject(req.path)
+          ? { status: 200, body: { id: PROJECT, name: 'Sandbox' } }
+          : isMembers(req.path)
+            ? {
+                status: 500,
+                body: { message: 'Something broke', code: 'INTERNAL', requestId: 'req_info_fail' },
+              }
+            : undefined,
+    });
+    try {
+      const caller = s3.newToken('info-caller', 'read');
+      const c3 = await s3.connect(caller.token);
+      const info = await s3.call(c3, 'bridge_info');
+      expect(info.isError).toBe(false);
+      expect(info.body.project.name).toBe('Sandbox');
+      expect(info.body.key.role).toBe('unknown');
+      expect(info.body.principalId).toBe(caller.patId); // the caller is still reported as the caller
+
+      const errors = s3.runtime.engine.queries.listErrors({ limit: 50 });
+      const lookupErrors = errors.filter((e) => e.opId === 'listMembers');
+      expect(lookupErrors.length).toBeGreaterThan(0);
+      for (const e of lookupErrors) expect(e.principalId).toBe('system');
+      expect(s3.runtime.engine.queries.listErrors({ principalId: caller.patId })).toEqual([]);
+      // The caller's own view of its errors does not show the bridge's lookup failure.
+      const mine = await s3.call(c3, 'bridge_errors_recent');
+      expect(JSON.stringify(mine.body)).not.toContain('listMembers');
+      // The lookup's reads ran as internal work, not as the caller's jobs.
+      expect(s3.runtime.engine.queries.listJobs({ principalId: caller.patId })).toEqual([]);
+    } finally {
+      await s3.close();
+    }
+  });
+});
