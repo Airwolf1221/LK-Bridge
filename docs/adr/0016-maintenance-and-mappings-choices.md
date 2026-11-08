@@ -1,4 +1,4 @@
-# ADR 0015: Maintenance scheduler and mappings: interpretation choices
+# ADR 0016: Maintenance scheduler and mappings: interpretation choices
 
 Status: Accepted (chunk 6, 8 November 2026). No decision in PLAN.md is changed. The choices below fill gaps the plan and the
 chunk 6 brief left open; each is flagged so it can be overturned.

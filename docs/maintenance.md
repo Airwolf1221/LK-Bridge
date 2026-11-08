@@ -3,7 +3,7 @@
 A registry of scheduled housekeeping jobs, a scheduler that keeps its state in SQLite, and the Maintenance Jobs page
 (PLAN §8 page 6). Code: `src/maintenance/`, routes in `src/admin/routes/maintenance.ts`, page in
 `ui/src/pages/maintenance.tsx`, migration `src/db/migrations/0400_maintenance_mappings.sql`. Tests: `test/maintenance/`,
-`test/ui/maintenance.test.tsx`. Interpretation choices are in [ADR 0015](adr/0015-maintenance-and-mappings-choices.md).
+`test/ui/maintenance.test.tsx`. Interpretation choices are in [ADR 0016](adr/0016-maintenance-and-mappings-choices.md).
 
 ## The registry
 

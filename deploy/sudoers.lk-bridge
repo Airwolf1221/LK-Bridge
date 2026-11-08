@@ -1,0 +1,15 @@
+# Lets the service user restart its own service without a password, and nothing else.
+# Install (as root), validating BEFORE it goes live:
+#   sudo install -m 0440 -o root -g root deploy/sudoers.lk-bridge /etc/sudoers.d/lk-bridge.new
+#   sudo visudo -cf /etc/sudoers.d/lk-bridge.new && sudo mv /etc/sudoers.d/lk-bridge.new /etc/sudoers.d/lk-bridge
+# The installed name must have no dot in it: sudo ignores files in /etc/sudoers.d whose names contain a "." or end in "~".
+#
+# sudo matches the arguments exactly, so `systemctl restart lk-bridge --now`, `systemctl restart lk-bridge.service`
+# and `systemctl restart other-service` are all refused. The deploy scripts use exactly these four commands.
+
+Cmnd_Alias LKBRIDGE_SERVICE = /usr/bin/systemctl restart lk-bridge, \
+                              /usr/bin/systemctl stop lk-bridge, \
+                              /usr/bin/systemctl start lk-bridge, \
+                              /usr/bin/systemctl status lk-bridge
+
+lkbridge ALL=(root) NOPASSWD: LKBRIDGE_SERVICE
