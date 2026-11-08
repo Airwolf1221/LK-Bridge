@@ -169,9 +169,13 @@ Confirm it against <https://docs.github.com/en/authentication/keeping-your-accou
 ```bash
 sudo -u lkbuild mv /home/lkbuild/.ssh/known_hosts.candidate /home/lkbuild/.ssh/known_hosts
 sudo -u lkbuild ssh -T git@github.com       # "Hi Airwolf1221/LK-Bridge! You've successfully authenticated, but GitHub does not provide shell access."
+sudo -u lkbuild git -C / ls-remote git@github.com:Airwolf1221/LK-Bridge.git HEAD && echo "good: lkbuild can read the repository"
 sudo -u lkbuild sh -c 'umask 022 && git clone git@github.com:Airwolf1221/LK-Bridge.git /opt/lk-bridge/app'
 sudo -u lkbuild git -C /opt/lk-bridge/app log --oneline -3
 ```
+
+Judge `ssh -T` by its **message** only: GitHub ends it with exit status 1 even when the key is accepted. For a yes/no
+answer (exit status 0 when the key works) use the `git ls-remote` line, which is also what the migration script checks.
 
 The checkout is on `main`. (To deploy another branch, clone with `--branch <name>` and prefix `DEPLOY_BRANCH=<name>` to
 the `deploy.sh` commands.)
@@ -766,8 +770,11 @@ anything in the app or the Node, and can read the env file and write the data di
 deploy** with `--force`, so `lkbuild` rebuilds the app from scratch and the bridge restarts. It ends with
 `DEPLOY SUCCEEDED` and `MIGRATION FINISHED`.
 
-If the key check fails ("lkbuild cannot authenticate to GitHub"), nothing has been removed from `lkbridge`; check with
-`sudo -u lkbuild ssh -T git@github.com` and run the script again. If it says there is no key to move, follow
+If the key check fails ("lkbuild cannot read the repository"; git's own message is printed above it), nothing has been
+removed from `lkbridge`. Run the command the message gives (`git ls-remote … HEAD` as `lkbuild`, in the deploy's
+environment): it must print one line ending in `HEAD` and exit 0. Fix what git says (usually the key or `known_hosts`),
+then run the script again. (1.0.1's first version checked with `ssh -T`, which GitHub ends with exit status 1 even on
+success, so that check always failed; fixed by the v1.0.1 hotfix.) If it says there is no key to move, follow
 [A new deploy key](#a-new-deploy-key) below and run it again.
 
 **7. Check by hand** (🔒 sudo; the script has done this, but see it yourself):
@@ -778,7 +785,7 @@ sudo -u lkbuild test -r /etc/lk-bridge/lk-bridge.env && echo WRONG || echo "good
 sudo -u lkbridge touch /opt/lk-bridge/app/x 2>/dev/null && echo WRONG || echo "good: lkbridge cannot write the app"
 ls -ld /opt/lk-bridge/app /opt/lk-bridge/bin                  # lkbuild lkbuild … app; root root … bin
 sudo ls -l /home/lkbridge/.ssh/ /home/lkbuild/.ssh/            # the key is only in lkbuild's
-sudo -u lkbuild ssh -T git@github.com                         # "Hi Airwolf1221/LK-Bridge! You've successfully authenticated …"
+sudo -u lkbuild git -C / ls-remote git@github.com:Airwolf1221/LK-Bridge.git HEAD   # one line: <commit id>  HEAD (exit 0)
 curl -s http://127.0.0.1:8787/healthz                         # {"ok":true,"version":"1.0.1"}
 ```
 
@@ -804,7 +811,8 @@ sudo cat /home/lkbuild/.ssh/lk_bridge_deploy.pub              # the PUBLIC half
 
 **✋ Owner:** add it on GitHub as in [step 3](#3-the-deploy-key-and-the-clone) (read-only), then create
 `/home/lkbuild/.ssh/config` and pin `known_hosts` exactly as step 3 does, with `lkbuild` in place of `lkbridge`. Check
-with `sudo -u lkbuild ssh -T git@github.com`, then run the migration again.
+with `sudo -u lkbuild git -C / ls-remote git@github.com:Airwolf1221/LK-Bridge.git HEAD` (it must print one line and exit
+0), then run the migration again.
 
 ### Going back to the 1.0.0 layout
 

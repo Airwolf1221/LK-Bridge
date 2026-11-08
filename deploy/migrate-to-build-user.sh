@@ -20,7 +20,8 @@
 #      checkout at v1.0.1 or later and clean, the env file, the data directory, the private Node).
 #   1. Creates the system user lkbuild (no login shell, no sudo, not in group lkbridge), home /home/lkbuild (0750).
 #   2. Moves the read-only GitHub deploy key, its SSH config and the pinned known_hosts from /home/lkbridge/.ssh to
-#      /home/lkbuild/.ssh; checks that lkbuild can reach GitHub with it BEFORE removing lkbridge's copy. With no key to
+#      /home/lkbuild/.ssh; checks that lkbuild can read the repository with it (git ls-remote, in the deploy's own
+#      environment) BEFORE removing lkbridge's copy. With no key to
 #      move, it stops and says how to add a new one (an owner step on GitHub).
 #   3. Ownership and modes: /opt/lk-bridge root 0755; the checkout lkbuild:lkbuild, nothing group- or world-writable;
 #      the private Node root's and writable by nobody else; /opt/lk-bridge/bin (root) with the deploy script and its
@@ -167,20 +168,53 @@ needs_key=0
 [[ "$remote" =~ ^(git@github\.com:|ssh://) ]] && needs_key=1
 src="${S_HOME}/.ssh"
 dst="${B_HOME}/.ssh"
-github_ok() { as "$B" ssh -o BatchMode=yes -o ConnectTimeout=15 -T git@github.com 2>&1 | grep -q 'successfully authenticated'; }
+# >>> github check (test/unit/deploy-files.test.ts runs this block on its own, against a stub GitHub)
+# Can the build user read the repository? Asked with `git ls-remote <origin> HEAD`, run exactly as deploy.sh's as_build
+# runs git (the same clean environment, PATH, GIT_SSH_COMMAND and so the same key and SSH options; the test keeps the
+# two in step). Not `ssh -T git@github.com`: GitHub answers that with exit status 1 even when the key works, which an
+# earlier version of this check (under `set -o pipefail`) took for a failure. Exit 0 passes; otherwise git's own
+# stderr is printed, so the cause (no key, a wrong host key, no network) is visible.
+build_user="$B"
+build_home="$B_HOME"
+node_path="${LKB_NODE_DIR}/bin:/usr/local/bin:/usr/bin:/bin"
+git_ssh_command='ssh -o BatchMode=yes -o ConnectTimeout=15'
+as_build_home() {
+  # shellcheck disable=SC2016 # the inner script's $1 and $@ belong to the inner bash
+  runuser -u "$build_user" -- env -i HOME="$build_home" USER="$build_user" LOGNAME="$build_user" \
+    PATH="$node_path" LANG=C.UTF-8 GIT_SSH_COMMAND="$git_ssh_command" \
+    bash -c 'umask 022 && cd "$1" && shift && exec "$@"' lkb-build "$build_home" "$@"
+}
+github_ok() {
+  local err
+  if err="$(as_build_home git ls-remote "$remote" HEAD 2>&1 >/dev/null)"; then
+    return 0
+  fi
+  printf '  git ls-remote %s HEAD, run as %s, failed:\n' "$remote" "$build_user" >&2
+  printf '%s\n' "${err:-(no message)}" | sed 's/^/    /' >&2
+  return 1
+}
+# <<< github check
+github_check_hint="sudo runuser -u ${B} -- env -i HOME=${B_HOME} PATH=/usr/bin:/bin GIT_SSH_COMMAND='${git_ssh_command}' git -C ${B_HOME} ls-remote ${remote} HEAD"
 if ((needs_key == 0)); then
   log "  origin is not an SSH URL (${remote}); no deploy key is needed."
 elif [[ -f "${dst}/${KEY_NAME}" ]]; then
   log "  ${B} already has the key (${dst}/${KEY_NAME})."
   [[ "$(owner_of "${dst}/${KEY_NAME}")" == "$B" && "$(mode_of "${dst}/${KEY_NAME}")" == 600 ]] \
     || act "fix owner and mode of ${dst}/${KEY_NAME}" sh -c "chown ${B}:${B} '${dst}/${KEY_NAME}' && chmod 0600 '${dst}/${KEY_NAME}'"
+  # An earlier run may have stopped part-way through copying: complete the SSH set-up from lkbridge's copy.
+  for f in config known_hosts; do
+    if [[ ! -f "${dst}/${f}" && -f "${src}/${f}" ]]; then
+      act "copy ${src}/${f} to ${dst}/${f}" install -o "$B" -g "$B" -m 0600 "${src}/${f}" "${dst}/${f}"
+    fi
+  done
   if [[ -e "${src}/${KEY_NAME}" ]]; then
     # An earlier run copied it but stopped before removing lkbridge's copy.
     if ((check)); then
-      log "  would: check ${B} reaches GitHub, then remove ${S}'s copy of the key"
+      log "  would: check ${B} can read the repository (git ls-remote), then remove ${S}'s copy of the key"
     else
-      github_ok || die "${B} cannot authenticate to GitHub with ${dst}/${KEY_NAME}; ${S}'s copy was left in place. Check: sudo runuser -u ${B} -- ssh -T git@github.com"
-      act "remove ${S}'s copy of the key" rm -f -- "${src}/${KEY_NAME}" "${src}/${KEY_NAME}.pub"
+      github_ok || die "${B} cannot read the repository with ${dst}/${KEY_NAME} (git's message is above); ${S}'s copy was left in place. Check by hand: ${github_check_hint}"
+      act "remove the key, its config and known_hosts from ${src}" \
+        rm -f -- "${src}/${KEY_NAME}" "${src}/${KEY_NAME}.pub" "${src}/config" "${src}/known_hosts"
     fi
   fi
 elif [[ -f "${src}/${KEY_NAME}" ]]; then
@@ -196,10 +230,10 @@ elif [[ -f "${src}/${KEY_NAME}" ]]; then
   act "copy the SSH config (github.com uses the key)" install -o "$B" -g "$B" -m 0600 "${src}/config" "${dst}/config"
   act "copy the pinned known_hosts" install -o "$B" -g "$B" -m 0644 "${src}/known_hosts" "${dst}/known_hosts"
   if ((check)); then
-    log "  would: check ${B} reaches GitHub with it, then remove ${S}'s copies"
+    log "  would: check ${B} can read the repository with it (git ls-remote), then remove ${S}'s copies"
   else
-    github_ok || die "${B} cannot authenticate to GitHub with the copied key; ${S}'s copy was left in place. Check: sudo runuser -u ${B} -- ssh -T git@github.com"
-    log "  ${B} reaches GitHub with the key."
+    github_ok || die "${B} cannot read the repository with the copied key (git's message is above); ${S}'s copy was left in place. Check by hand: ${github_check_hint}"
+    log "  ${B} can read the repository with the key (git ls-remote)."
     act "remove the key, its config and known_hosts from ${src}" \
       rm -f -- "${src}/${KEY_NAME}" "${src}/${KEY_NAME}.pub" "${src}/config" "${src}/known_hosts"
   fi
