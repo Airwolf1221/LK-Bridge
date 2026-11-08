@@ -48,7 +48,8 @@
     `test/policy/defaults.test.ts` (migration 0400 is applied too), `test/ui/pages.test.tsx` and `test/e2e/dashboard.spec.ts`
     (the placeholder expectations), `test/e2e/server.ts`.
   - `ui/src/app.tsx` (routes, nav), `ui/src/pages/placeholder.tsx` deleted, `ui/src/styles.css` (one rule).
-  - Docs: `docs/dashboard.md`, `.env.example`.
+  - Docs: `docs/dashboard.md`, `.env.example`, and `deploy/env.template` (chunk 7a's test requires it to list every
+    `.env.example` variable: `ADMIN_BUDGET_SAMPLE_SECONDS` out, the three `MAINTENANCE_*` in).
 
 ### Chunk 7a: deployment files and the runbook
 
