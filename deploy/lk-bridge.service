@@ -1,0 +1,70 @@
+# LK-Bridge: the LegendKeeper bridge and MCP server.
+# Install: sudo install -m 0644 deploy/lk-bridge.service /etc/systemd/system/lk-bridge.service
+# (docs/runbook-deploy.md, "systemd")
+
+[Unit]
+Description=LK-Bridge (LegendKeeper API bridge and MCP server)
+Documentation=https://github.com/Airwolf1221/LK-Bridge/blob/main/docs/runbook-deploy.md
+After=network-online.target
+Wants=network-online.target
+# Give up after 5 failed starts in 5 minutes instead of looping for ever; `systemctl reset-failed lk-bridge` clears it.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=lkbridge
+Group=lkbridge
+WorkingDirectory=/opt/lk-bridge/app
+# Secrets and settings. systemd strips one pair of single or double quotes, so the owner hash can stay in 'single quotes'.
+EnvironmentFile=/etc/lk-bridge/lk-bridge.env
+# V8 heap ceiling a little under MemoryMax, so a runaway fails inside Node with a clear error before the kernel's OOM
+# killer steps in. The env file is read after this line, so NODE_OPTIONS there would replace it.
+Environment=NODE_OPTIONS=--max-old-space-size=700
+# The PRIVATE Node 24 (deploy/install-node.sh). The system Node is never used.
+ExecStart=/opt/lk-bridge/runtime/node/bin/node dist/server.js
+
+Restart=on-failure
+RestartSec=5
+# SIGTERM makes the bridge stop taking new work, wait up to 20 s for running jobs (the engine's drain), close HTTP and
+# the database, and exit 0. 45 s leaves room for that and for a slow database close; only then does systemd send SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+TimeoutStartSec=60
+
+# Resource limits. The bridge is one Node process plus SQLite; 1 GiB is generous.
+MemoryHigh=900M
+MemoryMax=1G
+TasksMax=256
+LimitNOFILE=8192
+
+# Hardening. The service needs the network, its own checkout (read-only) and /var/lib/lk-bridge (read-write), nothing else.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/var/lib/lk-bridge
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Files the bridge creates (the database, its WAL) are private to lkbridge.
+UMask=0077
+# Deliberately NOT set: MemoryDenyWriteExecute (V8's JIT needs writable+executable memory) and SystemCallFilter (not
+# tested against Node 24 and the native modules here; a wrong filter would only show up as a crash at first start).
+
+SyslogIdentifier=lk-bridge
+
+[Install]
+WantedBy=multi-user.target
