@@ -56,17 +56,47 @@ export function unsupportedBlockIds(tree: unknown): Set<string> {
       for (const x of v) stack.push(x);
     } else if (typeof v === 'object' && v !== null) {
       const o = v as Record<string, unknown>;
-      if (o.kind === 'unsupported' && typeof o.id === 'string') out.add(o.id);
+      if (o.kind === 'unsupported' && typeof o.id === 'string' && o.id !== '') out.add(o.id);
       for (const x of Object.values(o)) if (typeof x === 'object' && x !== null) stack.push(x);
     }
   }
   return out;
 }
 
-/** Ids of `unsupported` blocks in `current` that `incoming` would drop. */
+/**
+ * How many `unsupported` blocks in a tree have no string `id` (chunk 8, F-06). LegendKeeper's schema requires the id,
+ * but legacy documents are described as having blocks without ids until `assignBlockIds`; such a block cannot be
+ * echoed by id, so a replace can never keep it.
+ */
+export function idlessUnsupportedCount(tree: unknown): number {
+  let n = 0;
+  const stack: unknown[] = [tree];
+  let guard = 0;
+  while (stack.length > 0) {
+    const v = stack.pop();
+    if (++guard > 5_000_000) break;
+    if (Array.isArray(v)) {
+      for (const x of v) stack.push(x);
+    } else if (typeof v === 'object' && v !== null) {
+      const o = v as Record<string, unknown>;
+      if (o.kind === 'unsupported' && (typeof o.id !== 'string' || o.id === '')) n++;
+      for (const x of Object.values(o)) if (typeof x === 'object' && x !== null) stack.push(x);
+    }
+  }
+  return n;
+}
+
+/**
+ * Ids of `unsupported` blocks in `current` that `incoming` would drop, then one `(no id) #n` entry for each
+ * `unsupported` block in `current` that has no id (it cannot be echoed, so it is always lost).
+ * For a delete (`incoming` undefined) every `unsupported` block in `current`, the target and its subtree, is lost.
+ */
 export function unsupportedLoss(current: unknown, incoming: unknown): string[] {
   const keep = unsupportedBlockIds(incoming);
-  return [...unsupportedBlockIds(current)].filter((id) => !keep.has(id)).sort();
+  const lost = [...unsupportedBlockIds(current)].filter((id) => !keep.has(id)).sort();
+  const idless = idlessUnsupportedCount(current);
+  for (let i = 1; i <= idless; i++) lost.push(`(no id) #${i}`);
+  return lost;
 }
 
 /** Throws `UnsupportedBlockLossError` unless nothing is lost or the caller allowed the loss. */

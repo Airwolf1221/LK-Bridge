@@ -279,7 +279,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
       `Risk: varies per operation; destructive or admin: ${DESTRUCTIVE_LIST}. ` +
       'Refuses read operations (use lk_api_read) without spending budget. ' +
       'Read first and pass the version you read as params.ifMatch; the bridge refuses a stale version. ' +
-      'It also refuses a replace that would delete "unsupported" blocks (allowUnsupportedLoss overrides), and deleteResource ' +
+      'It also refuses a replace or block delete that would remove "unsupported" blocks (allowUnsupportedLoss overrides), and deleteResource ' +
       'with cascade unless confirm is "cascade". If the result is waiting_budget, queued or proposal_captured, ' +
       'the write is NOT lost and must NOT be retried: follow it with bridge_job_status.',
     inputSchema: z.object({
@@ -289,7 +289,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         .boolean()
         .optional()
         .describe(
-          'Only on replaceDocumentBlocks / replaceBlock: allow the write to delete unsupported blocks.',
+          'Only on replaceDocumentBlocks, replaceBlock and deleteBlock: allow the write to remove unsupported blocks.',
         ),
       confirm: z
         .literal('cascade')
@@ -450,8 +450,8 @@ function guardsFor(op: OperationDef): string[] {
   if (op.versioned) g.push('versioned: If-Match is always sent; a stale version is refused');
   if (op.risk === 'admin') g.push('member/invite administration: disabled unless LK_ALLOW_MEMBER_ADMIN=true');
   if (op.operationId === 'deleteResource') g.push('cascade=true needs confirm: "cascade"');
-  if (['replaceDocumentBlocks', 'replaceBlock'].includes(op.operationId)) {
-    g.push('refused if it would delete "unsupported" blocks, unless allowUnsupportedLoss: true');
+  if (['replaceDocumentBlocks', 'replaceBlock', 'deleteBlock'].includes(op.operationId)) {
+    g.push('refused if it would remove "unsupported" blocks, unless allowUnsupportedLoss: true');
   }
   if (op.risk === 'destructive') g.push('a pre-image is journalled first (bridge_journal_lookup)');
   return g;

@@ -59,6 +59,14 @@ import {
 
 /** Pre-state kept for the diff, per operation. Larger states keep only a prefix (the fingerprint is always whole). */
 const PRE_STATE_MAX_BYTES = 512 * 1024;
+/**
+ * Chunk 8 (F-04): pre-state kept for ONE proposal, all operations together. Capture reads each target once, but used to
+ * store its pre-state in every operation row, so 500 operations on one large page stored about 256 MB. Past the budget an
+ * operation keeps its version and fingerprint (conflict detection uses only those) but no pre-state text.
+ */
+export const PROPOSAL_PRE_STATE_BUDGET_BYTES = 4 * 1024 * 1024;
+/** Chunk 8 (F-04): pending proposals one principal may hold; more are refused until the owner decides some. */
+export const MAX_PENDING_PROPOSALS_PER_PRINCIPAL = 50;
 const SUMMARY_MAX = 500;
 const REASON_MAX = 1000;
 
@@ -283,6 +291,21 @@ export class ProposalService implements ProposalSink {
     }
     if (ops.length === 0) throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
     const batch = meta.kind === 'batch_ops';
+    // Checked before any read is spent on capture.
+    const pending = (
+      this.store.db
+        .prepare(`SELECT COUNT(*) AS n FROM proposals WHERE principal_id = ? AND state = 'pending'`)
+        .get(principal.principalId) as { n: number }
+    ).n;
+    if (pending >= MAX_PENDING_PROPOSALS_PER_PRINCIPAL) {
+      throw new PolicyDeniedError(
+        ops[0]?.op ?? 'operation',
+        `this connection already has ${pending} proposals waiting for the owner (the limit is ` +
+          `${MAX_PENDING_PROPOSALS_PER_PRINCIPAL}); wait until the owner has approved or rejected some, ` +
+          'and follow them with bridge_proposals_mine',
+        principal.principalId,
+      );
+    }
 
     // 1. Validate, and dry-run the guards that do not write.
     const defs: OperationDef[] = ops.map((o, i) => {
@@ -369,9 +392,13 @@ export class ProposalService implements ProposalSink {
            target_exists, version, fingerprint, pre_state, pre_state_truncated)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      let budget = PROPOSAL_PRE_STATE_BUDGET_BYTES;
       ops.forEach((o, i) => {
         const c = captured[i]!;
-        const pre = c.snap ? capJson(c.snap.state) : { text: null, truncated: false };
+        const pre = c.snap
+          ? capJson(c.snap.state, Math.min(PRE_STATE_MAX_BYTES, budget))
+          : { text: null, truncated: false };
+        budget -= pre.text === null ? 0 : Buffer.byteLength(pre.text);
         insert.run(
           id,
           i,
@@ -958,10 +985,20 @@ function sanitiseOrigin(o: JobOrigin): JobOrigin {
   };
 }
 
-function capJson(v: unknown): { text: string | null; truncated: boolean } {
+/** The JSON of `v` if it fits in `maxBytes`; otherwise a prefix of at most `maxBytes` bytes (none when 0). */
+function capJson(v: unknown, maxBytes: number): { text: string | null; truncated: boolean } {
   const text = JSON.stringify(v ?? null);
-  if (Buffer.byteLength(text) <= PRE_STATE_MAX_BYTES) return { text, truncated: false };
-  return { text: text.slice(0, PRE_STATE_MAX_BYTES), truncated: true };
+  const bytes = Buffer.from(text, 'utf8');
+  if (bytes.length <= maxBytes) return { text, truncated: false };
+  if (maxBytes <= 0) return { text: null, truncated: true };
+  // Cut by bytes, not characters (multi-byte text could otherwise exceed the cap), dropping a split last character.
+  return {
+    text: bytes
+      .subarray(0, maxBytes)
+      .toString('utf8')
+      .replace(/\uFFFD$/, ''),
+    truncated: true,
+  };
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {

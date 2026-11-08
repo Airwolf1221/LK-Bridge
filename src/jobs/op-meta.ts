@@ -170,7 +170,9 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
     guard: 'block',
   },
   updateBlock: patch('block'),
-  deleteBlock: gone('block', 'pre-image'),
+  // Chunk 8 (F-03): deleting a block removes its whole subtree, and block deletes cannot be restored; the guard refuses
+  // a delete that would remove an `unsupported` block (the target or a descendant) unless allowUnsupportedLoss is set.
+  deleteBlock: { ...gone('block', 'pre-image'), guard: 'block' },
   moveBlock: key('block'),
   listBlockRows: read,
   createBlockRow: key('blockRows'),

@@ -146,6 +146,82 @@ describe('capture', () => {
     expect(writesAtMock(r)).toEqual([]);
   });
 
+  it('keeps at most 4 MiB of pre-state per proposal, however many operations target one big page (chunk 8, F-04)', async () => {
+    const { r, origin } = await setup();
+    const big = r.h.model.seedResource('rbigbigb', {
+      blocks: Array.from({ length: 300 }, (_, i) => ({
+        id: `b${i}`,
+        kind: 'paragraph' as const,
+        content: [{ text: `é${'x'.repeat(2000)}` }],
+      })),
+    });
+    const path = { resourceId: big.resourceId, documentId: big.documentId };
+    const readsBefore = r.h.mock.calls.length;
+    const res = await propose(
+      r,
+      r.e.engine.submit({
+        kind: 'batch_ops',
+        origin,
+        steps: Array.from({ length: 20 }, () => ({
+          op: 'replaceDocumentBlocks',
+          params: { path, body: { blocks: [{ kind: 'paragraph', content: [{ text: 'short' }] }] } },
+          allowUnsupportedLoss: true,
+        })),
+      }),
+    );
+    // One read for the one target, as before.
+    expect(r.h.mock.calls.length - readsBefore).toBe(1);
+    const rows = r.db
+      .prepare('SELECT pre_state, pre_state_truncated, fingerprint FROM proposal_ops WHERE proposal_id = ?')
+      .all(res.proposalId) as {
+      pre_state: string | null;
+      pre_state_truncated: number;
+      fingerprint: string;
+    }[];
+    const stored = rows.reduce((n, x) => n + Buffer.byteLength(x.pre_state ?? ''), 0);
+    expect(stored).toBeLessThanOrEqual(4 * 1024 * 1024);
+    expect(rows.every((x) => Buffer.byteLength(x.pre_state ?? '') <= 512 * 1024)).toBe(true);
+    // Conflict detection still has what it needs on every operation.
+    expect(rows.every((x) => typeof x.fingerprint === 'string' && x.fingerprint.length > 0)).toBe(true);
+    expect(rows.at(-1)?.pre_state).toBeNull();
+    expect(rows.at(-1)?.pre_state_truncated).toBe(1);
+  });
+
+  it('refuses a 51st pending proposal from one connection before reading anything (chunk 8, F-04)', async () => {
+    const { r, doc, agent, origin } = await setup();
+    const now = r.h.clock.now();
+    const insert = r.db.prepare(
+      `INSERT INTO proposals (id, principal_id, principal_label, profile, origin, job_kind, title, priority, summary,
+         state, created_at, updated_at, expires_at)
+       VALUES (?, ?, 'x', 'chatgpt', '{"kind":"mcp"}', 'single_op', 't', 'P1', 's', 'pending', ?, ?, ?)`,
+    );
+    for (let i = 0; i < 50; i++)
+      insert.run(`prop_seed${i}`, agent.principal.principalId, now, now, now + 86_400_000);
+    const before = r.h.mock.calls.length;
+    const out = await settle(
+      r.h,
+      r.e,
+      r.e.engine.run(
+        'replaceDocumentBlocks',
+        { path: { resourceId: doc.resourceId, documentId: doc.documentId }, body: { blocks: keepU1 } },
+        { origin },
+      ),
+    );
+    expect(out.error).toBeInstanceOf(PolicyDeniedError);
+    expect((out.error as PolicyDeniedError).message).toMatch(/50 proposals waiting/);
+    expect(r.h.mock.calls.length).toBe(before);
+    // Another connection is not affected.
+    const other = makePat(r.db, r.policy, 'claude', 'propose', () => r.h.clock.now(), 'claude');
+    await propose(
+      r,
+      r.e.engine.run(
+        'replaceDocumentBlocks',
+        { path: { resourceId: doc.resourceId, documentId: doc.documentId }, body: { blocks: keepU1 } },
+        { origin: mcpOriginFor(other.principal) },
+      ),
+    );
+  });
+
   it('read scope is refused with a clear message; reads still work', async () => {
     const { r, origin } = await setup('read');
     const w = await settle(

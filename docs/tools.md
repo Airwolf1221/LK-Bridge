@@ -69,7 +69,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 **`lk_api_write`** `{ operationId, params?, allowUnsupportedLoss?, confirm?, detail? }`: runs ONE operation whose kind is not `read`, including the raw `createImageUpload` and `createImageAsset`. A read operation is refused with `useTool: "lk_api_read"`. Every engine guard applies:
 
 - versioned writes always send `If-Match`: your `params.ifMatch` if you give it (a stale one is refused with the current version), otherwise the version the bridge reads just before writing;
-- a replace that would delete `unsupported` blocks is refused unless `allowUnsupportedLoss: true`;
+- a replace that would delete `unsupported` blocks, or a `deleteBlock` whose block or subtree holds one, is refused unless `allowUnsupportedLoss: true` (an `unsupported` block without an id can never be kept: run `assignBlockIds` first);
 - `deleteResource` with `query.cascade = true` needs `confirm: "cascade"`;
 - `inviteMember`, `removeMember`, `revokeInvite` are refused unless `LK_ALLOW_MEMBER_ADMIN=true`;
 - everything is refused while the bridge is read-only.

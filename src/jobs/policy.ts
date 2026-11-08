@@ -40,6 +40,12 @@ export interface PolicyContext {
   readonly jobKind: JobKind;
   /** Position of the step in a batch, from 0. */
   readonly stepIndex?: number;
+  /**
+   * `entry` (default): the work is being accepted (`run` / `submit`). `execute` (chunk 8): a queued job is about to run
+   * its next step, and the engine asks again so that a revoked connection or a lowered scope stops it; anything but
+   * `allow` then stops the job.
+   */
+  readonly phase?: 'entry' | 'execute';
 }
 
 export type PolicyDecision =
