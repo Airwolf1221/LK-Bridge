@@ -102,6 +102,17 @@ export class SlidingWindow {
     return null;
   }
 
+  /** The live events (units still counting at `now`), oldest first, as copies. For persisting the counters. */
+  liveEvents(now: number): WindowEvent[] {
+    this.prune(now);
+    const out: WindowEvent[] = [];
+    for (let i = this.head; i < this.events.length; i++) {
+      const e = this.events[i]!;
+      if (e.n > 0) out.push({ t: e.t, n: e.n });
+    }
+    return out;
+  }
+
   /** When the window will be completely empty, or null if it already is. */
   clearsAt(now: number): number | null {
     this.prune(now);

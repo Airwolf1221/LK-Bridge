@@ -13,7 +13,14 @@ import {
 } from './config/index.js';
 import type { Db } from './db/open.js';
 import { createJobEngine, UPLOAD_PUT_STEP, type JobEngine } from './jobs/index.js';
-import { createLkClient, defaultTransport, type Clock, type LkClient, type Transport } from './lk/index.js';
+import {
+  createLkClient,
+  createSqliteCounterStore,
+  defaultTransport,
+  type Clock,
+  type LkClient,
+  type Transport,
+} from './lk/index.js';
 import type { McpToolProvider } from './mcp/server.js';
 import {
   BRIDGE_INSTRUCTIONS,
@@ -92,6 +99,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const lk = createLkClient({
     ...lkSettingsFrom(config),
     transport,
+    // v1.0.1 (F-14): the governor's recent per-tier counts survive a restart (table governor_counters).
+    persistence: {
+      store: createSqliteCounterStore(o.db),
+      warn: (message, err) => log.warn({ err }, message),
+    },
     ...(o.clock ? { clock: o.clock } : {}),
   });
   const maintenanceSettings = o.maintenanceSettings ?? defaultMaintenanceSettings();

@@ -26,6 +26,10 @@ export {
   type SampleEvent,
   type ThrottledEvent,
   type BudgetWaitEvent,
+  createSqliteCounterStore,
+  type CounterStore,
+  type GovernorPersistence,
+  type PersistedCounters,
 } from './governor/index.js';
 export {
   BridgeLkError,

@@ -51,11 +51,13 @@ describe('migration 0300', () => {
     db.prepare(
       `INSERT INTO auth_pats (id, name, token_hash, token_hint, scope, created_at) VALUES ('pat_old', 'laptop', 'h', 'abcd', 'mcp', 1)`,
     ).run();
-    // Chunk 6 added migration 0400 and chunk 8 0201; the point here is that 0300 is applied on top of an older database.
+    // Chunk 6 added migration 0400, chunk 8 0201 and v1.0.1 0500; the point here is that 0300 is applied on top of an
+    // older database.
     expect(runMigrations(db).applied).toEqual([
       '0201_journal_every_write.sql',
       '0300_policy_init.sql',
       '0400_maintenance_mappings.sql',
+      '0500_governor_counters.sql',
     ]);
     const policy = createPolicy({ db, allowMemberAdmin: false });
     expect(policy.store.listProfiles()).toMatchObject([

@@ -7,6 +7,7 @@ import type { LkSettings } from '../config/lk.js';
 import { costSpecFor } from './costs.js';
 import { formatBudgetFooter } from './governor/footer.js';
 import { Governor, type Transport } from './governor/governor.js';
+import type { GovernorPersistence } from './governor/persist.js';
 import type { Clock } from './governor/clock.js';
 import type { PriorityClass, VerifyResult } from './governor/types.js';
 import type { BridgeLkError } from './errors.js';
@@ -19,6 +20,8 @@ export interface LkClientConfig extends LkSettings {
   readonly random?: () => number;
   /** Share an existing governor instead of building one from `governor` settings. */
   readonly governorInstance?: Governor;
+  /** v1.0.1 (F-14): keep the governor's recent counts across restarts (the bridge passes its SQLite store). */
+  readonly persistence?: GovernorPersistence;
 }
 
 export interface LkCallRequest<T> {
@@ -62,6 +65,7 @@ export function createLkClient(config: LkClientConfig): LkClient {
       ...(config.clock ? { clock: config.clock } : {}),
       ...(config.transport ? { transport: config.transport } : {}),
       ...(config.random ? { random: config.random } : {}),
+      ...(config.persistence ? { persistence: config.persistence } : {}),
     });
   const sdk = new LegendKeeper({
     apiKey: config.apiKey,

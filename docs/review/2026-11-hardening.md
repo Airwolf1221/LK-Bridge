@@ -85,7 +85,7 @@ each with a recommendation below; none is a vulnerability reachable by an intern
 | F-11 | Low      | MCP surface         | `src/mcp/server.ts:236-247`                               | The hidden-tools wrapper uses SDK internals; its fallback is silent, and the legacy protocol era is untested                                      | Fixed    |
 | F-12 | Low      | Tests               | `test/policy/no-agent-escalation.test.ts:144`             | The tool-enumeration test does not cover the 89 `lk_op_*` tools (`MCP_EXPOSE_PER_OP_TOOLS=true`)                                                  | Fixed    |
 | F-13 | Low      | Shutdown            | `src/jobs/engine.ts:217`, `:595`                          | `engine.stop()` does not release `bridge_job_wait` callers, which can hold `app.close()` up to 25 s                                               | Fixed    |
-| F-14 | Low      | Governor            | `src/lk/governor/governor.ts`                             | Tier counters are in memory only; right after a restart the bridge believes the minute and hour are empty                                         | Open     |
+| F-14 | Low      | Governor            | `src/lk/governor/governor.ts`                             | Tier counters are in memory only; right after a restart the bridge believes the minute and hour are empty                                         | Fixed    |
 | F-15 | Low      | Consent             | `src/policy/consent.ts:3`                                 | Re-approving a connection with the preselected `read` lowers an existing profile for every connection on it                                       | Fixed    |
 | F-16 | Low      | Retention           | `src/policy/proposals.ts`                                 | Finished proposals (and their pre-states) are never pruned                                                                                        | Fixed    |
 | F-17 | Low      | Supply chain        | `deploy/deploy.sh:161`                                    | `npm ci` and the build run as `lkbridge`, which can read the env file                                                                             | Open     |
@@ -282,6 +282,14 @@ hour; the first responses correct only the tightest tier. A restart in the middl
 governor then honours). **Recommendation:** persist a compact snapshot of the write tiers on shutdown (or from the 10-second
 budget samples) and seed the windows from it at start, conservatively. Not done here: the governor is chunk 1's core and the
 gain is small.
+
+**Status: fixed in v1.0.1** (`src/lk/governor/persist.ts`, `governor.ts`; migration `0500_governor_counters.sql`). Every
+tier's recent counts (not only the write tiers) are saved as compact buckets stamped with the latest time in each, so the
+restored model can only over-count; at most every 10 s while they change and on shutdown; restored at start with stale
+buckets dropped, future ones clamped, totals capped at the limit and an active 429 block kept. A missing, corrupt or
+unreadable record starts empty with a warning. The governor's public interface is unchanged (one optional constructor
+option). Tests: `test/unit/governor-persist.test.ts` (a full write-minute across a restart makes the next write wait until
+the minute has passed; stale data ignored; corrupt and missing records; save timing; the SQLite store).
 
 ### F-15 (Low, open): re-consent lowers an existing profile
 
@@ -542,7 +550,6 @@ Noted for later chunks; none was started here.
 
 - **Undo from the journal.** Now that every write is journalled with its target and pre-images are kept for destructive
   writes, a "restore this pre-image" owner action (a proposal the owner approves) is a small step.
-- **Persisted governor windows** (F-14).
 - **Stored-result retention** alongside `journal-prune` (proposal retention is done: `proposal-prune`, v1.0.1, F-16).
 - **A per-agent activity view** on the dashboard, built on the journal's principal and profile filters: what Claude and
   ChatGPT each changed today.
