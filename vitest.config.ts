@@ -10,6 +10,8 @@ export default defineConfig({
       'test/policy/**/*.test.ts',
       'test/tools/**/*.test.ts',
       'test/admin/**/*.test.ts',
+      'test/maintenance/**/*.test.ts', // chunk 6 (its UI component tests are in test/ui)
+      'test/mappings/**/*.test.ts',
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

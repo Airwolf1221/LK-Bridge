@@ -1,12 +1,13 @@
 import { pino } from 'pino';
-import { applyStoredSettings, startInterimBudgetSampler } from './admin/index.js';
+import { applyStoredSettings } from './admin/index.js';
 import {
-  defaultAdminSettings,
+  defaultMaintenanceSettings,
   defaultPolicySettings,
   jobsSettingsFrom,
   lkSettingsFrom,
   type AdminSettings,
   type Config,
+  type MaintenanceSettings,
   type PolicySettings,
   type ToolsSettings,
 } from './config/index.js';
@@ -21,7 +22,9 @@ import {
   createUploadTransport,
 } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
+import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createPolicy, proposalTools, type Policy } from './policy/index.js';
+import { systemClock } from './lk/index.js';
 
 /**
  * The bridge's working parts, in the order they depend on each other: governor-backed LK client, then the job
@@ -34,6 +37,8 @@ export interface Runtime {
   readonly engine: JobEngine;
   /** Profiles, the live policy gate, proposals and owner commands; pass it to `buildServer({ policy })`. */
   readonly policy: Policy;
+  /** The maintenance registry, scheduler and owner commands (chunk 6). */
+  readonly maintenance: Maintenance;
   readonly tools: readonly McpToolProvider[];
   readonly instructions: string;
   /** The configuration the components were built from: the environment plus the dashboard's stored settings. */
@@ -54,6 +59,8 @@ export interface RuntimeOptions {
   readonly policySettings?: PolicySettings;
   /** ADMIN_* settings (`loadAdminConfig()`); defaults when omitted. */
   readonly adminSettings?: AdminSettings;
+  /** MAINTENANCE_* settings (`loadMaintenanceConfig()`); defaults when omitted. */
+  readonly maintenanceSettings?: MaintenanceSettings;
   /** Test seams. */
   readonly clock?: Clock;
   readonly lkTransport?: Transport;
@@ -78,9 +85,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     transport,
     ...(o.clock ? { clock: o.clock } : {}),
   });
+  const maintenanceSettings = o.maintenanceSettings ?? defaultMaintenanceSettings();
+  const policySettings = o.policySettings ?? defaultPolicySettings();
   const policy = createPolicy({
     db: o.db,
-    settings: o.policySettings ?? defaultPolicySettings(),
+    settings: policySettings,
+    // The maintenance scheduler's `proposal-expiry` job runs the sweep (chunk 6). With the scheduler switched off the
+    // service keeps its own timer, so proposals still expire.
+    externalExpirySweep: maintenanceSettings.enabled,
     allowMemberAdmin: config.lk.allowMemberAdmin,
     log,
     ...(o.clock ? { clock: o.clock } : {}),
@@ -105,13 +117,19 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // Follows approved proposals' jobs, reconciles proposals left mid-approval by a crash, runs the expiry sweep.
   const detachPolicy = policy.attach(engine);
 
-  // INTERIM (chunk 5): store a budget sample every 10 s for the sparklines. Chunk 6's `budget-sampler` job replaces it.
-  const stopSampler = startInterimBudgetSampler(
+  // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
+  // in SQLite; at most one overdue run per job happens now, before any timer fires.
+  const maintenance = createMaintenance({
+    db: o.db,
     engine,
     lk,
-    (o.adminSettings ?? defaultAdminSettings()).budgetSampleMs,
-    (err) => log.warn({ err }, 'budget sample failed'),
-  );
+    policy,
+    clock: o.clock ?? systemClock,
+    settings: maintenanceSettings,
+    expirySweepMs: policySettings.expirySweepMs,
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  maintenance.start();
 
   const bridgeTools = createBridgeTools(
     {
@@ -132,12 +150,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     lk,
     engine,
     policy,
+    maintenance,
     tools,
     instructions: BRIDGE_INSTRUCTIONS,
     config,
     envConfig,
     async shutdown(drainTimeoutMs = 20_000) {
-      stopSampler(); // stops cleanly, before the engine and database wind down
+      await maintenance.stop(); // stops cleanly, before the engine and database wind down
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         engine.controls.drain(),

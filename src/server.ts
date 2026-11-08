@@ -9,11 +9,13 @@ import { type AuthServices, type CreateAuthServicesOptions, createAuthServices }
 import { type AuthConfig, AuthConfigError, loadAuthConfig } from './config/auth.js';
 import {
   AdminConfigError,
+  MaintenanceConfigError,
   type AdminSettings,
   type Config,
   ConfigError,
   defaultAdminSettings,
   loadAdminConfig,
+  loadMaintenanceConfig,
   loadConfig,
   loadPolicyConfig,
   loadToolsConfig,
@@ -164,6 +166,7 @@ export interface CreateBridgeOptions {
   readonly db: Db;
   readonly policySettings?: RuntimeOptions['policySettings'];
   readonly adminSettings?: AdminSettings;
+  readonly maintenanceSettings?: RuntimeOptions['maintenanceSettings'];
   /** Overrides the dashboard's static directory (tests). */
   readonly uiDir?: string;
   /** Reported by bridge_info (defaults to package.json's version). */
@@ -191,6 +194,7 @@ export async function createBridge(
     version: o.version ?? BRIDGE_VERSION,
     ...(o.policySettings ? { policySettings: o.policySettings } : {}),
     ...(o.adminSettings ? { adminSettings: o.adminSettings } : {}),
+    ...(o.maintenanceSettings ? { maintenanceSettings: o.maintenanceSettings } : {}),
     ...(o.clock ? { clock: o.clock } : {}),
     ...(o.lkTransport ? { lkTransport: o.lkTransport } : {}),
     ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
@@ -220,6 +224,7 @@ async function main(): Promise<void> {
   let policySettings;
   let toolsSettings;
   let adminSettings;
+  let maintenanceSettings;
   try {
     // Every setting is validated here, at start-up, before anything is built.
     config = loadConfig();
@@ -227,12 +232,14 @@ async function main(): Promise<void> {
     policySettings = loadPolicyConfig();
     toolsSettings = loadToolsConfig();
     adminSettings = loadAdminConfig();
+    maintenanceSettings = loadMaintenanceConfig();
   } catch (err) {
     if (
       err instanceof ConfigError ||
       err instanceof AuthConfigError ||
       err instanceof PolicyConfigError ||
-      err instanceof AdminConfigError
+      err instanceof AdminConfigError ||
+      err instanceof MaintenanceConfigError
     ) {
       process.stderr.write(`${err.message}\n`);
       process.exit(1);
@@ -249,6 +256,7 @@ async function main(): Promise<void> {
     toolsSettings,
     policySettings,
     adminSettings,
+    maintenanceSettings,
     db,
   });
   // SIGTERM: stop new work and let running jobs finish (drain), then stop HTTP, then close the database.
