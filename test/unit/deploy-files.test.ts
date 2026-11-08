@@ -35,6 +35,8 @@ describe('deploy scripts', () => {
       'lib.sh',
       'lk-run.sh',
       'sandbox-test.sh',
+      'soak-sandbox.sh', // chunk 8
+      'restore.sh', // chunk 8
     ]) {
       expect(scripts, s).toContain(s);
     }

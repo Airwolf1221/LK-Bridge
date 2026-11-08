@@ -1,6 +1,6 @@
 {
   "name": "lk-bridge",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "LegendKeeper v3 API bridge with rate governor, job engine and MCP surface",
@@ -15,6 +15,7 @@
     "format:write": "prettier --write .",
     "test": "vitest run",
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts --passWithNoTests",
+    "soak:sandbox": "tsx scripts/soak-sandbox.ts",
     "gen:registry": "tsx scripts/gen-registry.ts",
     "check:drift": "tsx scripts/check-spec-drift.ts",
     "ci": "npm run typecheck && npm run lint && npm run format && npm run gen:registry -- --check && npm run check:drift && npm test",

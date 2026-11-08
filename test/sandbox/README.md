@@ -18,3 +18,11 @@ The report (printed at the end) states each item as PASS, FAIL, INCONCLUSIVE or 
 - **(f)** a template round trip.
 
 (a) and (b) are assumptions: a FAIL is reported but does not fail the run; a failing family (d, e, f) or leftover does. The script's logic is dry-run against a mock in `test/tools/sandbox-dryrun.test.ts`.
+
+## The soak (chunk 8)
+
+`npm run soak:sandbox [-- --writes N]` (on the server: `deploy/soak-sandbox.sh`) runs about 1,000 writes and a matching
+mix of reads through the real engine and governor against the same sandbox project, under one throwaway root resource
+that it deletes at the end, and reports the time taken, writes per minute, 429 responses (target zero), retries, budget
+waits and peak memory. Same guard as above. Code: `soak.ts`; dry run against the mock: `test/tools/soak-dryrun.test.ts`.
+How to run it, and why it takes about 20 minutes: docs/runbook-deploy.md, "Soak test".

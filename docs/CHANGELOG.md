@@ -1,6 +1,67 @@
 # Changelog
 
-## Unreleased
+## 1.0.0 (8 November 2026)
+
+The first versioned release: everything below, from chunk 0 to the hotfix, plus chunk 8's review. The owner creates the
+release and its tag on GitHub; no tag is pushed from here.
+
+### Chunk 8: independent hardening review
+
+Findings, threat model and statuses: [docs/review/2026-11-hardening.md](review/2026-11-hardening.md). Decisions that
+extend earlier ones: [ADR 0018](adr/0018-chunk-8-hardening-decisions.md). PLAN amendment 6 (the bridge stays on the test
+world).
+
+**Security and data safety**
+
+- **F-01 (High): owner sign-in limit.** Each attempt is counted before the Argon2 check and given back on success; a burst
+  of concurrent wrong passwords used to be verified in full before the limit noticed.
+- **F-02: queued work follows the live scope.** Before each new step of a job acting for an agent the policy gate is asked
+  again (`phase: 'execute'`); a revoked connection or a lowered scope stops the job (`POLICY_DENIED`, rest cancelled).
+  Owner-approved and internal work is not asked again.
+- **F-03: `deleteBlock` is guarded** against removing `unsupported` blocks in its subtree (`allowUnsupportedLoss` overrides).
+  **F-06:** an `unsupported` block without an id always counts as lost (run `assignBlockIds`).
+- **F-04: proposal limits.** At most 4 MiB of pre-state per proposal (cut by bytes) and 50 pending proposals per principal.
+- **F-05: the `/mcp` body limit fits `UPLOAD_MAX_BYTES` as base64** (about 13.6 MiB for the default 10 MiB; it was the MCP
+  SDK's 4 MiB, so base64 images over about 3 MiB never reached the tool). Fastify's 1 MiB limit never applied to `/mcp`.
+- **F-07:** at scope `propose`, `lk_upload_image` is refused before a URL source is downloaded.
+- **F-08:** `/api/admin` refuses requests a browser marks `Sec-Fetch-Site: cross-site` or `same-site`, reads included.
+- **F-13:** `engine.stop()` releases pending `bridge_job_wait` calls, so a shutdown never waits for a long poll.
+
+**Required changes**
+
+- **A: the journal records every write**, not only destructive ones: operation, target (a create's new entity), resource
+  and document, principal, profile, approver, job, time, capped params (upload keys redacted) and outcome. Pre-images stay
+  with the destructive writes. Migration `0201_journal_every_write.sql` (indexes on `(column, id)`, and
+  `write_journal_targets` for `createManyResources`). `bridge_journal_lookup` gains `principalId`, `profile`, `outcome`,
+  `withPreImage` and the `before` cursor (`nextBefore`); so does `GET /api/admin/journal`; the Journal page pages with
+  **Older** / **Newest** and filters by outcome and destructive writes.
+- **B: the sandbox soak**, `npm run soak:sandbox [-- --writes N]` and `deploy/soak-sandbox.sh`: about 1,000 writes and a
+  matching mix of reads through the real engine and governor under one throwaway root (deleted at the end), with a report
+  of time, writes per minute, 429s (target zero), retries, budget waits and peak memory. Refuses unless the key's project
+  is `LK_SANDBOX_PROJECT_ID`; the wrapper also refuses the bridge's own project without `--allow-bridge-project`.
+- **C: the browser smoke test** runs again (`npm run test:e2e`, all four checks pass); how to run it is in the runbook.
+- **D: version 1.0.0.**
+
+**Operations**
+
+- **F-09: request logging.** One compact `request completed` line per served request (method, path without query, status,
+  time, address) through a `LogController` subclass; unmatched paths (scanner probes) get a plain JSON 404 and are logged at
+  debug only. Auth events keep their levels; Fastify's error logging is unchanged.
+- **F-10: env drift.** `deploy.sh` and `healthcheck.sh` warn, by variable name only, when the env file lacks a template
+  variable, misses a new optional one, or keeps a removed one.
+- **Restore is a script:** `deploy/restore.sh` checks the backup first, moves the live database and its WAL files aside
+  (never deletes), and puts the backup in place; `test/unit/backup-restore.test.ts` backs up a live WAL database and
+  restores it. The runbook gains "Soak test", "Browser smoke test" and "Memory" sections and a rollback note for 1.0.0.
+- **F-18:** the systemd comment on `EnvironmentFile=` precedence is corrected (values unchanged).
+
+**Tests changed, and why** (none weakened)
+
+- `test/jobs/policy.test.ts` recorded every gate call; the gate is now also asked at execution, so the recorder separates
+  the two phases, and a new test pins the execution calls.
+- `test/policy/defaults.test.ts` lists every migration applied after 0200; it now includes 0201.
+- `test/policy/no-agent-escalation.test.ts` also runs with all 89 `lk_op_*` tools (F-12). Its "no tool administers policy"
+  name check matched `lk_op_revokeInvite` (a LegendKeeper invite operation, refused unless `LK_ALLOW_MEMBER_ADMIN=true`);
+  per-operation tools must instead be exactly `lk_op_<registry operation id>`.
 
 ### Hotfix: claude.ai's grant types (CIMD and DCR)
 
