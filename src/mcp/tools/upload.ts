@@ -8,7 +8,16 @@ import { PolicyDeniedError, type JobView } from '../../jobs/index.js';
 import { UPLOAD_PROPOSE_REASON } from '../../policy/gate.js';
 import { defineTool } from './define.js';
 import { submitBody } from './lk-api.js';
-import { errorFromThrown, errorResult, mcpOrigin, render, type ToolDeps } from './shape.js';
+import {
+  errorFromThrown,
+  errorResult,
+  mcpOrigin,
+  projectArg,
+  render,
+  withProject,
+  type ProjectDeps,
+  type ToolDeps,
+} from './shape.js';
 import { resolveImage, UploadSourceError } from './upload-source.js';
 
 export function uploadTools(deps: ToolDeps) {
@@ -45,6 +54,7 @@ export function uploadTools(deps: ToolDeps) {
           .max(25)
           .optional()
           .describe('How long to wait for the result. Default 10.'),
+        project: projectArg,
       }),
       annotations: {
         readOnlyHint: false,
@@ -52,51 +62,54 @@ export function uploadTools(deps: ToolDeps) {
         idempotentHint: false,
         openWorldHint: true,
       },
-      handler: async (input, ctx) => {
-        // Chunk 8 (F-07): at scope `propose` the engine refuses uploads, but only after the image has been resolved,
-        // which for a URL source means downloading it. Refuse first, so nothing is fetched for a refused upload.
-        if (ctx.scope === 'propose') {
-          return errorFromThrown(
-            new PolicyDeniedError(
-              'createImageUpload',
-              UPLOAD_PROPOSE_REASON,
-              ctx.principal?.principalId ?? 'unknown',
-            ),
-            deps,
-          );
-        }
-        let image;
-        try {
-          image = await resolveImage(
-            { base64: input.base64, url: input.url, contentType: input.contentType },
-            deps.settings.upload,
-            deps.uploadGuard,
-            ctx.signal,
-          );
-        } catch (e) {
-          if (e instanceof UploadSourceError) return errorResult({ code: e.code, message: e.message }, deps);
-          return errorFromThrown(e, deps);
-        }
-        try {
-          const r = await deps.engine.submit({
-            kind: 'upload_image',
-            contentType: image.contentType,
-            contentLength: image.contentLength,
-            contentHash: image.sha256,
-            dataBase64: image.dataBase64,
-            name: input.name,
-            ...(input.description !== undefined ? { description: input.description } : {}),
-            ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
-            origin: mcpOrigin(ctx, 'lk_upload_image'),
-            priority: 'P1',
-          });
-          if (!('jobId' in r)) return render(submitBody(r, 3), deps);
-          const job = await deps.engine.wait(r.jobId, (input.waitSeconds ?? 10) * 1000);
-          return render(...uploadOutcome(job, image, deps, submitBody(r, 3)));
-        } catch (e) {
-          return errorFromThrown(e, deps);
-        }
-      },
+      // The project is settled first (v2 A1): a refused `project` fetches and sends nothing.
+      handler: (input, ctx) =>
+        withProject(deps, input.project, 'write', async (pd) => {
+          // Chunk 8 (F-07): at scope `propose` the engine refuses uploads, but only after the image has been resolved,
+          // which for a URL source means downloading it. Refuse first, so nothing is fetched for a refused upload.
+          if (ctx.scope === 'propose') {
+            return errorFromThrown(
+              new PolicyDeniedError(
+                'createImageUpload',
+                UPLOAD_PROPOSE_REASON,
+                ctx.principal?.principalId ?? 'unknown',
+              ),
+              pd,
+            );
+          }
+          let image;
+          try {
+            image = await resolveImage(
+              { base64: input.base64, url: input.url, contentType: input.contentType },
+              deps.settings.upload,
+              deps.uploadGuard,
+              ctx.signal,
+            );
+          } catch (e) {
+            if (e instanceof UploadSourceError) return errorResult({ code: e.code, message: e.message }, pd);
+            return errorFromThrown(e, pd);
+          }
+          try {
+            const r = await deps.engine.submit({
+              kind: 'upload_image',
+              project: pd.project.id,
+              contentType: image.contentType,
+              contentLength: image.contentLength,
+              contentHash: image.sha256,
+              dataBase64: image.dataBase64,
+              name: input.name,
+              ...(input.description !== undefined ? { description: input.description } : {}),
+              ...(input.folderId !== undefined ? { folderId: input.folderId } : {}),
+              origin: mcpOrigin(ctx, 'lk_upload_image'),
+              priority: 'P1',
+            });
+            if (!('jobId' in r)) return render(submitBody(r, 3), pd);
+            const job = await deps.engine.wait(pd.project.id, r.jobId, (input.waitSeconds ?? 10) * 1000);
+            return render(...uploadOutcome(job, image, pd, submitBody(r, 3)));
+          } catch (e) {
+            return errorFromThrown(e, pd);
+          }
+        }),
     }),
   ];
 }
@@ -104,9 +117,9 @@ export function uploadTools(deps: ToolDeps) {
 function uploadOutcome(
   job: JobView,
   image: { contentType: string; contentLength: number },
-  deps: ToolDeps,
+  deps: ProjectDeps,
   submitted: Record<string, unknown>,
-): [unknown, ToolDeps, boolean] {
+): [unknown, ProjectDeps, boolean] {
   const info = { contentType: image.contentType, bytes: image.contentLength };
   if (job.status === 'succeeded') {
     return [

@@ -59,13 +59,27 @@ export function useDebounced(fn: () => void, ms: number): () => void {
   }, [ms]);
 }
 
-/** Reloads `reload` (debounced) when any of `events` arrives on the stream. */
-export function useReloadOn(events: readonly string[], reload: () => void, ms = 250): void {
+/**
+ * Reloads `reload` (debounced) when any of `events` arrives on the stream. `accept`, when given, sees each event's data
+ * and decides whether it concerns this page (for example, only the selected project's events).
+ */
+export function useReloadOn(
+  events: readonly string[],
+  reload: () => void,
+  ms = 250,
+  accept?: (data: unknown) => boolean,
+): void {
   const { subscribe } = useStream();
   const debounced = useDebounced(reload, ms);
+  const acceptRef = useRef(accept);
+  acceptRef.current = accept;
   const key = events.join('|');
   useEffect(() => {
-    const offs = key.split('|').map((e) => subscribe(e, debounced));
+    const offs = key.split('|').map((e) =>
+      subscribe(e, (data: unknown) => {
+        if (!acceptRef.current || acceptRef.current(data)) debounced();
+      }),
+    );
     return () => offs.forEach((off) => off());
   }, [subscribe, debounced, key]);
 }

@@ -3,9 +3,10 @@
  * assumptions against the LegendKeeper TEST WORLD, through the real engine and governor at priority P3. Only check 1
  * writes, and only under one throwaway root resource that is deleted (cascade) at the end, even after a failure.
  *
- * Needs LK_SANDBOX_API_KEY and LK_SANDBOX_PROJECT_ID in the environment (on the server, deploy/spike-v2.sh reads them
- * from the env file, and refuses when the sandbox project is the bridge's own unless told otherwise). It refuses to run
- * unless the key's own project is exactly LK_SANDBOX_PROJECT_ID, uses a temporary database, and never prints a secret.
+ * v2 A1: `--project NAME` names a project registered in the bridge's database (DB_PATH) and marked as a sandbox there;
+ * any other project is refused (test/sandbox/target.ts). Its key is the bridge's own variable for it,
+ * LK_PROJECT_<NAME>_API_KEY (on the server, deploy/spike-v2.sh reads just that one from the env file). It also refuses
+ * unless the key's own project is exactly the registered one, uses a temporary database, and never prints a secret.
  *
  * Output: the Markdown report on stdout (progress goes to stderr), and the same report written to
  * <out-dir>/spike-v2-<timestamp>.md, with the calendar oracle beside it as spike-v2-<timestamp>-oracle.json.
@@ -17,8 +18,10 @@ import { formatReport, writeReportFiles } from '../test/sandbox/spike-report.js'
 import { DEFAULT_SPIKE_IDS, runSpike, type SpikeIds } from '../test/sandbox/spike-v2.js';
 import { SandboxGuardError } from '../test/sandbox/smoke.js';
 import { createSoakRuntime } from '../test/sandbox/soak.js';
+import { resolveSandboxTarget } from '../test/sandbox/target.js';
 
-const USAGE = `usage: npm run spike:v2 -- [flags]
+const USAGE = `usage: npm run spike:v2 -- --project NAME [flags]
+  --project NAME          the sandbox project (registered by the bridge and marked as a sandbox)
   --root ID               AI REPOSITORY root resource        (default ${DEFAULT_SPIKE_IDS.root})
   --chronology ID         Universal Chronology resource      (default ${DEFAULT_SPIKE_IDS.chronology})
   --main-doc ID           its Main page document             (default ${DEFAULT_SPIKE_IDS.mainDoc})
@@ -36,6 +39,7 @@ const USAGE = `usage: npm run spike:v2 -- [flags]
 `;
 
 const VALUE_FLAGS = new Set([
+  '--project',
   '--root',
   '--chronology',
   '--main-doc',
@@ -84,13 +88,14 @@ async function main(): Promise<void> {
     return;
   }
   const flags = parseArgs(process.argv.slice(2));
-  const key = process.env.LK_SANDBOX_API_KEY;
-  const project = process.env.LK_SANDBOX_PROJECT_ID;
-  if (!key || !project) {
-    fail(
-      'LK_SANDBOX_API_KEY and LK_SANDBOX_PROJECT_ID must be set (test world only). On the server use deploy/spike-v2.sh.',
-    );
+  let target;
+  try {
+    target = resolveSandboxTarget(flags.get('--project'));
+  } catch (e) {
+    if (e instanceof SandboxGuardError) fail(e.message);
+    throw e;
   }
+  const project = target.projectId;
   const skip = new Set<number>();
   for (const part of (flags.get('--skip') ?? '').split(',').filter(Boolean)) {
     const n = Number(part);
@@ -128,7 +133,13 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => onSignal('SIGINT'));
   process.on('SIGTERM', () => onSignal('SIGTERM'));
 
-  const spike = createSoakRuntime({ apiKey: key, projectId: project, writersMax: 1 });
+  let spike;
+  try {
+    spike = await createSoakRuntime({ apiKey: target.apiKey, project: target.name, writersMax: 1 });
+  } catch (e) {
+    if (e instanceof SandboxGuardError) fail(e.message);
+    throw e;
+  }
   let code = 0;
   try {
     process.stderr.write(
@@ -136,7 +147,7 @@ async function main(): Promise<void> {
     );
     const started = new Date();
     const outcome = await runSpike(
-      { engine: spike.runtime.engine, lk: spike.runtime.lk, projectId: project, counters: spike.counters },
+      { engine: spike.runtime.engine, lk: spike.lk, projectId: spike.projectId, counters: spike.counters },
       project,
       {
         ids,
@@ -170,7 +181,7 @@ async function main(): Promise<void> {
           downloads: outcome.downloads,
         },
         cleanup: outcome.cleanup,
-        budgetFooter: spike.runtime.lk.budgetFooter(),
+        budgetFooter: spike.lk.budgetFooter(target.name),
       },
       outcome.checks,
     );

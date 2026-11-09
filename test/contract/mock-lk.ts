@@ -15,7 +15,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from 'fastify';
 import type { Clock } from '../../src/lk/governor/clock.js';
 import type { TierId } from '../../src/lk/registry-types.js';
 
-type CountedTier = Exclude<TierId, 'upload'>;
+export type CountedTier = Exclude<TierId, 'upload'>;
 const ORDER: readonly CountedTier[] = [
   'write-min',
   'write-hour',
@@ -115,6 +115,12 @@ export interface MockResponse {
 export interface MockLkOptions {
   readonly clock: Clock;
   readonly apiKey: string;
+  /**
+   * v2 A1: the project the key belongs to. `GET /api/v3/projects` (listProjects, the bridge's start-up key check)
+   * answers with exactly this project unless the state model answers it. Default `proj_mock`.
+   */
+  readonly projectId?: string;
+  readonly projectName?: string;
   readonly limits?: Partial<Record<CountedTier, number>>;
   /**
    * Optional state model (chunk 2's job tests): answers each request that passed rate limiting, faults and
@@ -355,9 +361,17 @@ export class MockLk {
         ? modelled.status >= 400 && modelled.body === undefined
           ? { message: 'mock error', code: 'INTERNAL' }
           : modelled.body
-        : method === 'GET' && /\/resources\/?$/.test(path)
-          ? { data: [{ id: 'r1' }], hasMore: false, nextCursor: null }
-          : { id: `id${call.n}`, name: 'mock', ok: true };
+        : method === 'GET' && /^\/api\/v3\/projects\/?$/.test(path)
+          ? {
+              data: [
+                { id: this.opts.projectId ?? 'proj_mock', name: this.opts.projectName ?? 'Mock project' },
+              ],
+              hasMore: false,
+              nextCursor: null,
+            }
+          : method === 'GET' && /\/resources\/?$/.test(path)
+            ? { data: [{ id: 'r1' }], hasMore: false, nextCursor: null }
+            : { id: `id${call.n}`, name: 'mock', ok: true };
     if (modelled && modelled.status >= 400) call.outcome = `status-${modelled.status}`;
     // LK does not store 400/401/403/404 or 5xx responses for idempotency replay.
     const storable = status < 500 && ![400, 401, 403, 404].includes(status);

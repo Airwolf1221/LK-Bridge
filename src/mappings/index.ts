@@ -8,9 +8,15 @@ import type { PolicyStore } from '../policy/store.js';
 import { createMappingCommands, type MappingCommands } from './commands.js';
 import { MappingStore } from './store.js';
 
-export interface Mappings {
+/** One project's mappings (v2 A1): mapping sets, rules and field maps belong to a project. */
+export interface ProjectMappings {
   readonly store: MappingStore;
   readonly commands: MappingCommands;
+}
+
+export interface Mappings {
+  /** The store and owner commands of ONE project (its LegendKeeper id); nothing of another project is reachable. */
+  forProject(projectId: string): ProjectMappings;
 }
 
 export function createMappings(o: {
@@ -20,8 +26,21 @@ export function createMappings(o: {
   now?: () => number;
 }): Mappings {
   const now = o.now ?? (() => Date.now());
-  const store = new MappingStore(o.db, now);
-  return { store, commands: createMappingCommands({ store, audit: o.policyStore, engine: o.engine, now }) };
+  const cache = new Map<string, ProjectMappings>();
+  return {
+    forProject(projectId) {
+      let m = cache.get(projectId);
+      if (!m) {
+        const store = new MappingStore(o.db, now, projectId);
+        m = {
+          store,
+          commands: createMappingCommands({ store, audit: o.policyStore, engine: o.engine, now }),
+        };
+        cache.set(projectId, m);
+      }
+      return m;
+    },
+  };
 }
 
 export { MappingStore } from './store.js';

@@ -5,28 +5,38 @@ locks, data-loss guards and the write journal (PLAN §4, §6). Chunks 3 and 5 im
 interface below is meant to stay stable; change it only with a note in `docs/CHANGELOG.md`. Design choices the plan
 left open are recorded in [ADR 0010](../../docs/adr/0010-job-engine-verification-and-holds.md).
 
+## Projects (v2 A1)
+
+The engine serves every project the bridge serves (ADR 0023). It takes `projects` (a `ProjectsRuntime`: each project's
+`LkClient`, whether it is known and served now, and its read-only flag) instead of one `lk`. **Every** call names its
+project: `run(op, params, { project, … })`, `submit({ project, … })`, each control that names a job
+(`cancel(projectId, jobId)`, …) and each query (`listJobs(projectId, filter)`, `getJob(projectId, id)`, …). Queries
+also accept `ALL_PROJECTS` (`src/projects`), which must be passed explicitly. An unknown project is `UnknownProjectError`
+(`UNKNOWN_PROJECT`); one not served now is `ProjectUnavailableError` (`PROJECT_UNAVAILABLE`), and its queued writes are
+held (`waitReason.held: 'project_unavailable'`). Every row the engine writes (jobs, steps, artefacts, errors, budget
+samples, journal entries) carries the project. Lock keys start with the project id (`{projectId}:doc:{id}`); the writer
+pool is shared by every project, with turns across projects.
+
 ## Quick start
 
 ```ts
-import { jobsSettingsFrom, lkSettingsFrom, loadConfig } from '../config/index.js';
+import { jobsSettingsFrom, loadConfig } from '../config/index.js';
 import { runMigrations } from '../db/migrate.js';
 import { openDatabase } from '../db/open.js';
-import { createLkClient } from '../lk/index.js';
 import { createJobEngine } from '../jobs/index.js';
+import { createProjectRegistry } from '../projects/index.js';
 
 const config = loadConfig();
 const db = openDatabase(config.server.dbPath);
-runMigrations(db); // applies 0200_jobs_init.sql
-const engine = createJobEngine({
-  db,
-  lk: createLkClient(lkSettingsFrom(config)),
-  settings: jobsSettingsFrom(config),
-});
+runMigrations(db);
+const projects = createProjectRegistry({ db, config }); // one governor per project; checks each key
+await projects.verifyAll();
+const engine = createJobEngine({ db, projects, settings: jobsSettingsFrom(config) });
 
 const r = await engine.run(
   'getDocumentBlocks',
   { path: { resourceId, documentId } },
-  { origin: { kind: 'mcp', client: 'claude', tool: 'lk_api_read' } },
+  { project: projects.defaultProject().id!, origin: { kind: 'mcp', client: 'claude', tool: 'lk_api_read' } },
 );
 // { status: 'succeeded', jobId: null, result, requestIds }
 ```
@@ -36,22 +46,22 @@ restart-resume; `await engine.stop()` is the clean shutdown (in-flight calls fin
 
 ## Exported interface
 
-| Export                                                                                          | What it is                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createJobEngine({ db, lk, settings, clock?, log?, policyGate?, proposalSink?, customSteps? })` | Builds the engine on a migrated database, an `LkClient` and `JobsSettings` (`jobsSettingsFrom(config)` in `src/config/jobs.ts`). `clock` defaults to the system clock (tests pass chunk 1's `FakeClock`, the same one the `LkClient` uses). `policyGate` / `proposalSink`: see _Principals and policy hooks_.                                                                                                     |
-| `engine.run(op, params, opts)`                                                                  | One registry operation. `params` is the registry's caller-facing input `{ path?, query?, ifMatch?, body? }`; `opts` is `{ origin, priority? = 'P1', title?, signal?, allowUnsupportedLoss?, confirm? }`. Returns `RunResult` (below). Throws only `JobsError` subclasses.                                                                                                                                         |
-| `engine.submit(req)`                                                                            | **Async.** Queues a multi-step job and resolves with `{ jobId, status, eta }` at once (or `{ status: 'proposal_captured', proposalId }`). `req` is `{ kind: 'batch_ops', steps: [{ op, params, allowUnsupportedLoss?, confirm? }], onError?: 'stop' \| 'continue', priority? = 'P2', origin, title? }` or `{ kind: 'paginate_all', op, params?, maxItems?, maxPages?, priority?, origin, title? }`.               |
-| `engine.wait(jobId, ms)`                                                                        | Bounded wait (at most 25 s, `maxWaitMs`) for the job to finish. Resolves with the `JobView` as it stands then (finished or not).                                                                                                                                                                                                                                                                                  |
-| `engine.controls`                                                                               | `pauseWrites(by?)`, `resumeWrites(by?)`, `drain()` (resolves when nothing runs), `undrain()`, `setWritersMax(1–8, by?)`, `setReadOnly(true \| false \| null, by?)`, `cancel(jobId)`, `pauseJob(jobId)`, `resumeJob(jobId)`, `retryStep(jobId, stepNo, { force? })`. Each returns the new `ControlsView` or `JobView`.                                                                                             |
-| `engine.queries`                                                                                | `listJobs(filter)` (status, origin kind, `principalId`, `profile`, kind, before), `getJob(id)` (with steps and artefacts), `readArtifact(id, { offset, limit })`, `listErrorGroups(filter)`, `listErrors(filter)` (both filter by `principalId`), `resolveErrorGroup(fingerprint)`, `journalLookup(filter)`, `listBudgetSamples(range)`, `runtimeSettings()`, and in-memory `writers()`, `locks()`, `controls()`. |
-| `createJobQueries(db)`                                                                          | The database half of `engine.queries`, for code that has only the `db`.                                                                                                                                                                                                                                                                                                                                           |
-| `engine.events.on(name, cb)`                                                                    | Typed events for the SSE stream; returns an unsubscribe function. `job` (`{ type: 'created' \| 'updated', job }`), `step` (`{ jobId, principalId, profile, step }`: a step reached a final state), `lock` (`acquired` / `waiting` / `released`), `writers` (`WritersView`), `error` (`ErrorRecordView`), `controls` (`ControlsView`).                                                                             |
-| `engine.recordBudgetSample(snapshot?)`                                                          | Stores one budget sample (defaults to `lk.governor.snapshot()`). The `budget-sampler` maintenance job (chunk 6) calls it every 10 s.                                                                                                                                                                                                                                                                              |
-| `engine.pruneJournal()`, `pruneJournal(db, retention)`                                          | Journal retention (default 30 days or 2 GB). The `journal-prune` maintenance job (chunk 6) calls it.                                                                                                                                                                                                                                                                                                              |
-| `journalLookup(db, filter)`                                                                     | `{ jobId?, resourceId?, documentId?, targetId?, opId?, principalId?, profile?, since?, until?, limit?, includePreImage? }`, newest first. Backs `bridge_journal_lookup`.                                                                                                                                                                                                                                          |
-| Guard helpers                                                                                   | `checkSubmitGuards(op, params, options, { readOnly, allowMemberAdmin })`, `cascadeRequested(params)`, `unsupportedBlockIds(tree)`, `unsupportedLoss(current, incoming)`, `assertNoUnsupportedLoss(...)`.                                                                                                                                                                                                          |
-| Other helpers                                                                                   | `lockKeyFor(op, params)`, `matchesIntent(intended, actual, mode)`, `mintClientId()`, `isClientId()`, `OP_META` / `opMeta(op)` (per-operation verify, reader, journal and guard metadata), `LockManager`, `WriterPool`.                                                                                                                                                                                            |
-| Typed errors (`JobsError` and subclasses)                                                       | See below.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Export                                                                                                | What it is                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createJobEngine({ db, projects, settings, clock?, log?, policyGate?, proposalSink?, customSteps? })` | Builds the engine on a migrated database, an `LkClient` and `JobsSettings` (`jobsSettingsFrom(config)` in `src/config/jobs.ts`). `clock` defaults to the system clock (tests pass chunk 1's `FakeClock`, the same one the `LkClient` uses). `policyGate` / `proposalSink`: see _Principals and policy hooks_.                                                                                                     |
+| `engine.run(op, params, opts)`                                                                        | One registry operation. `params` is the registry's caller-facing input `{ path?, query?, ifMatch?, body? }`; `opts` is `{ origin, priority? = 'P1', title?, signal?, allowUnsupportedLoss?, confirm? }`. Returns `RunResult` (below). Throws only `JobsError` subclasses.                                                                                                                                         |
+| `engine.submit(req)`                                                                                  | **Async.** Queues a multi-step job and resolves with `{ jobId, status, eta }` at once (or `{ status: 'proposal_captured', proposalId }`). `req` is `{ kind: 'batch_ops', steps: [{ op, params, allowUnsupportedLoss?, confirm? }], onError?: 'stop' \| 'continue', priority? = 'P2', origin, title? }` or `{ kind: 'paginate_all', op, params?, maxItems?, maxPages?, priority?, origin, title? }`.               |
+| `engine.wait(jobId, ms)`                                                                              | Bounded wait (at most 25 s, `maxWaitMs`) for the job to finish. Resolves with the `JobView` as it stands then (finished or not).                                                                                                                                                                                                                                                                                  |
+| `engine.controls`                                                                                     | `pauseWrites(by?)`, `resumeWrites(by?)`, `drain()` (resolves when nothing runs), `undrain()`, `setWritersMax(1–8, by?)`, `setReadOnly(true \| false \| null, by?)`, `cancel(jobId)`, `pauseJob(jobId)`, `resumeJob(jobId)`, `retryStep(jobId, stepNo, { force? })`. Each returns the new `ControlsView` or `JobView`.                                                                                             |
+| `engine.queries`                                                                                      | `listJobs(filter)` (status, origin kind, `principalId`, `profile`, kind, before), `getJob(id)` (with steps and artefacts), `readArtifact(id, { offset, limit })`, `listErrorGroups(filter)`, `listErrors(filter)` (both filter by `principalId`), `resolveErrorGroup(fingerprint)`, `journalLookup(filter)`, `listBudgetSamples(range)`, `runtimeSettings()`, and in-memory `writers()`, `locks()`, `controls()`. |
+| `createJobQueries(db)`                                                                                | The database half of `engine.queries`, for code that has only the `db`.                                                                                                                                                                                                                                                                                                                                           |
+| `engine.events.on(name, cb)`                                                                          | Typed events for the SSE stream; returns an unsubscribe function. `job` (`{ type: 'created' \| 'updated', job }`), `step` (`{ jobId, principalId, profile, step }`: a step reached a final state), `lock` (`acquired` / `waiting` / `released`), `writers` (`WritersView`), `error` (`ErrorRecordView`), `controls` (`ControlsView`).                                                                             |
+| `engine.recordBudgetSample(projectId, snapshot?)`                                                     | Stores one budget sample of a project (defaults to its governor's snapshot). The `budget-sampler` maintenance job (chunk 6) calls it every 10 s.                                                                                                                                                                                                                                                                  |
+| `engine.pruneJournal()`, `pruneJournal(db, retention)`                                                | Journal retention (default 30 days or 2 GB). The `journal-prune` maintenance job (chunk 6) calls it.                                                                                                                                                                                                                                                                                                              |
+| `journalLookup(db, project, filter)`                                                                  | `{ jobId?, resourceId?, documentId?, targetId?, opId?, principalId?, profile?, since?, until?, limit?, includePreImage? }`, newest first. Backs `bridge_journal_lookup`.                                                                                                                                                                                                                                          |
+| Guard helpers                                                                                         | `checkSubmitGuards(op, params, options, { readOnly, allowMemberAdmin })`, `cascadeRequested(params)`, `unsupportedBlockIds(tree)`, `unsupportedLoss(current, incoming)`, `assertNoUnsupportedLoss(...)`.                                                                                                                                                                                                          |
+| Other helpers                                                                                         | `lockKeyFor(op, params)`, `matchesIntent(intended, actual, mode)`, `mintClientId()`, `isClientId()`, `OP_META` / `opMeta(op)` (per-operation verify, reader, journal and guard metadata), `LockManager`, `WriterPool`.                                                                                                                                                                                            |
+| Typed errors (`JobsError` and subclasses)                                                             | See below.                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 ### `RunResult`
 
@@ -188,12 +198,15 @@ resource. The step is `uncertain` only if the verification itself cannot complet
 
 In-process mutexes with FIFO wait queues (`LockManager`). Keys:
 
-| Key                      | Taken by                                                                                                            |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `doc:{documentId}`       | registry `concurrency: document` (blocks, rows, infoboxes, boards, lanes, events, features, document content)       |
-| `res:{resourceId}`       | registry `concurrency: resource` (update, move, delete, restore, save-as-template, properties, tags, new documents) |
-| `res:{parentId}`         | `createResource`, `createResourceFromTemplate`, `createManyResources` (the parent; `res:@root` at the root)         |
-| `cal:{id}`, `asset:{id}` | calendar and asset updates and deletes                                                                              |
+| Key                            | Taken by                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `{projectId}:doc:{documentId}` | registry `concurrency: document` (blocks, rows, infoboxes, boards, lanes, events, features, document content)       |
+| `res:{resourceId}`             | registry `concurrency: resource` (update, move, delete, restore, save-as-template, properties, tags, new documents) |
+| `res:{parentId}`               | `createResource`, `createResourceFromTemplate`, `createManyResources` (the parent; `res:@root` at the root)         |
+| `cal:{id}`, `asset:{id}`       | calendar and asset updates and deletes                                                                              |
+
+Since v2 A1 every key is prefixed with the project id (shown above for `doc:` only), so two projects never contend for
+a lock.
 
 **Ordering rules** (why deadlock is impossible): a step holds at most one lock, only for its own duration; it takes the
 lock _before_ its writer slot, and a slot holder never waits for a lock; waiters are served in arrival order. While a
@@ -202,7 +215,8 @@ step waits for a lock its job shows `waiting_lock`.
 ## Writers
 
 `WriterPool`: `WRITERS_MAX` slots (default 2, 1–8, changed live with `controls.setWritersMax`, persisted in
-`runtime_settings`). Only write steps take a slot; reads never do. `queries.writers()` shows each slot (idle, or busy
+`runtime_settings`), shared by every project. When a slot frees, projects with waiting writes take turns (round-robin);
+within a project, writes keep their order. Only write steps take a slot; reads never do. `queries.writers()` shows each slot (idle, or busy
 with job, step, op, lock key, resource and document) and the wait queue.
 
 ## Controls

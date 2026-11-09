@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BatchSubmit } from '../../src/jobs/index.js';
-import { queue } from '../jobs/helpers.js';
+import { PROJECT, queue } from '../jobs/helpers.js';
 import { makePat, mcpOriginFor, policyRig, type PolicyRig } from './helpers.js';
 
 let rig: PolicyRig | undefined;
@@ -23,6 +23,7 @@ async function setup() {
   const agent = makePat(r.db, r.policy, 'claude', 'write', () => r.h.clock.now(), 'claude');
   const batch: BatchSubmit = {
     kind: 'batch_ops',
+    project: PROJECT,
     steps: ['raaaaaaa', 'rbbbbbbb', 'rccccccc'].map((resourceId, i) => ({
       op: 'updateResource',
       params: { path: { resourceId }, body: { name: `Renamed ${i}` } },
@@ -37,14 +38,14 @@ async function setup() {
 async function queueThenChange(r: PolicyRig, batch: BatchSubmit, change: () => void) {
   r.e.engine.controls.pauseWrites('owner');
   const { jobId } = await queue(r.e.engine, batch);
-  await r.h.drive(r.e, () => r.e.engine.queries.getJob(jobId)?.waitReason?.held === 'writes_paused');
+  await r.h.drive(r.e, () => r.e.engine.queries.getJob(PROJECT, jobId)?.waitReason?.held === 'writes_paused');
   change();
   r.e.engine.controls.resumeWrites('owner');
   await r.h.drive(r.e, () => {
-    const s = r.e.engine.queries.getJob(jobId)?.status;
+    const s = r.e.engine.queries.getJob(PROJECT, jobId)?.status;
     return s === 'succeeded' || s === 'failed' || s === 'cancelled';
   });
-  return r.e.engine.queries.getJob(jobId)!;
+  return r.e.engine.queries.getJob(PROJECT, jobId)!;
 }
 
 describe('a queued job follows the live scope of its connection', () => {
@@ -58,7 +59,7 @@ describe('a queued job follows the live scope of its connection', () => {
     expect(job.lastError?.message).toMatch(/revoked/);
     expect(job.steps.map((s) => s.status)).toEqual(['failed', 'cancelled', 'cancelled']);
     expect(writesAtMock(r)).toHaveLength(0);
-    const errors = r.e.engine.queries.listErrors({ principalId: agent.principal.principalId });
+    const errors = r.e.engine.queries.listErrors(PROJECT, { principalId: agent.principal.principalId });
     expect(errors.some((e) => e.classification === 'policy' && e.jobId === job.id && e.stepNo === 1)).toBe(
       true,
     );
@@ -102,11 +103,11 @@ describe('a queued job follows the live scope of its connection', () => {
       }
     });
     await r.h.drive(r.e, () => {
-      const s = r.e.engine.queries.getJob(jobId)?.status;
+      const s = r.e.engine.queries.getJob(PROJECT, jobId)?.status;
       return s === 'succeeded' || s === 'failed';
     });
     off();
-    const job = r.e.engine.queries.getJob(jobId)!;
+    const job = r.e.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.steps.map((s) => s.status)).toEqual(['succeeded', 'failed', 'cancelled']);
     expect(writesAtMock(r)).toHaveLength(1);
   });

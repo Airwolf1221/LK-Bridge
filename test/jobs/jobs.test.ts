@@ -11,7 +11,7 @@ import {
   type JobView,
 } from '../../src/jobs/index.js';
 import { getOperation, operations } from '../../src/lk/registry.js';
-import { harness, origin, settle, type Harness, queue } from './helpers.js';
+import { harness, origin, settle, type Harness, queue, PROJECT } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -59,11 +59,12 @@ describe('batch_ops', () => {
     h = await harness();
     h.model.seedResource('r1');
     const e = h.newEngine();
-    await expect(e.engine.submit({ kind: 'batch_ops', origin, steps: [{ op: 'nope' }] })).rejects.toThrow(
-      UnknownOperationError,
-    );
+    await expect(
+      e.engine.submit({ project: PROJECT, kind: 'batch_ops', origin, steps: [{ op: 'nope' }] }),
+    ).rejects.toThrow(UnknownOperationError);
     await expect(
       e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         origin,
         steps: [
@@ -72,9 +73,10 @@ describe('batch_ops', () => {
         ],
       }),
     ).rejects.toThrow(InvalidParamsError);
-    expect(e.engine.queries.listJobs()).toHaveLength(0);
+    expect(e.engine.queries.listJobs(PROJECT)).toHaveLength(0);
 
     const { jobId, eta } = await queue(e.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin: { kind: 'mcp', client: 'claude', tool: 'lk_api_batch' },
       title: 'three things',
@@ -85,16 +87,16 @@ describe('batch_ops', () => {
       ],
     });
     expect(eta).toBeGreaterThanOrEqual(h.clock.now());
-    await h.drive(e, () => status(e.engine.queries.getJob(jobId)) === 'succeeded');
-    const job = e.engine.queries.getJob(jobId)!;
+    await h.drive(e, () => status(e.engine.queries.getJob(PROJECT, jobId)) === 'succeeded');
+    const job = e.engine.queries.getJob(PROJECT, jobId)!;
     expect(job).toMatchObject({
       title: 'three things',
       priority: 'P2',
       origin: { kind: 'mcp', tool: 'lk_api_batch' },
     });
     expect((job.steps[2]!.resultSummary as { data: unknown[] }).data).toHaveLength(1);
-    expect(e.engine.queries.listJobs({ originKind: 'mcp' })).toHaveLength(1);
-    expect(e.engine.queries.listJobs({ status: ['failed'] })).toHaveLength(0);
+    expect(e.engine.queries.listJobs(PROJECT, { originKind: 'mcp' })).toHaveLength(1);
+    expect(e.engine.queries.listJobs(PROJECT, { status: ['failed'] })).toHaveLength(0);
   });
 
   it('stores large params as an artefact', async () => {
@@ -106,16 +108,17 @@ describe('batch_ops', () => {
       content: [{ text: `line ${i} `.repeat(5) }],
     }));
     const { jobId } = await queue(e.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin,
       steps: [
         { op: 'replaceDocumentBlocks', params: { path: { resourceId, documentId }, body: { blocks } } },
       ],
     });
-    await h.drive(e, () => status(e.engine.queries.getJob(jobId)) === 'succeeded');
-    const job = e.engine.queries.getJob(jobId)!;
+    await h.drive(e, () => status(e.engine.queries.getJob(PROJECT, jobId)) === 'succeeded');
+    const job = e.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.steps[0]!.params).toBeNull();
-    const art = e.engine.queries.readArtifact(job.steps[0]!.paramsArtifactId!)!;
+    const art = e.engine.queries.readArtifact(PROJECT, job.steps[0]!.paramsArtifactId!)!;
     expect(art.artifact.kind).toBe('params');
     expect((art.data as { body: { blocks: unknown[] } }).body.blocks).toHaveLength(50);
     expect(h.model.docs.get(documentId)!.blocks).toHaveLength(50);
@@ -129,17 +132,22 @@ describe('paginate_all', () => {
     h = await harness();
     for (let i = 0; i < 250; i++) h.model.seedResource(`r${String(i).padStart(3, '0')}`);
     const e = h.newEngine();
-    const { jobId } = await queue(e.engine, { kind: 'paginate_all', origin, op: 'listResources' });
-    await h.drive(e, () => status(e.engine.queries.getJob(jobId)) === 'succeeded');
-    const job = e.engine.queries.getJob(jobId)!;
+    const { jobId } = await queue(e.engine, {
+      project: PROJECT,
+      kind: 'paginate_all',
+      origin,
+      op: 'listResources',
+    });
+    await h.drive(e, () => status(e.engine.queries.getJob(PROJECT, jobId)) === 'succeeded');
+    const job = e.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.steps).toHaveLength(3);
     expect(job.result).toMatchObject({ items: 250, pages: 3, truncated: false });
     expect(h.mock.calls.filter((c) => c.method === 'GET')).toHaveLength(3);
     const artifactId = job.result!.artifactId as string;
-    const p1 = e.engine.queries.readArtifact(artifactId, { offset: 0, limit: 100 })!;
+    const p1 = e.engine.queries.readArtifact(PROJECT, artifactId, { offset: 0, limit: 100 })!;
     expect(p1.items).toHaveLength(100);
     expect(p1.nextOffset).toBe(100);
-    const p3 = e.engine.queries.readArtifact(artifactId, { offset: 200, limit: 100 })!;
+    const p3 = e.engine.queries.readArtifact(PROJECT, artifactId, { offset: 200, limit: 100 })!;
     expect(p3.items).toHaveLength(50);
     expect(p3.nextOffset).toBeNull();
     expect((p3.items![49] as { id: string }).id).toBe('r249');
@@ -150,15 +158,16 @@ describe('paginate_all', () => {
     for (let i = 0; i < 250; i++) h.model.seedResource(`r${String(i).padStart(3, '0')}`);
     const e = h.newEngine();
     const { jobId } = await queue(e.engine, {
+      project: PROJECT,
       kind: 'paginate_all',
       origin,
       op: 'listResources',
       maxItems: 120,
     });
-    await h.drive(e, () => status(e.engine.queries.getJob(jobId)) === 'succeeded');
-    const job = e.engine.queries.getJob(jobId)!;
+    await h.drive(e, () => status(e.engine.queries.getJob(PROJECT, jobId)) === 'succeeded');
+    const job = e.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.result).toMatchObject({ items: 120, pages: 2, truncated: true });
-    expect(e.engine.queries.readArtifact(job.result!.artifactId as string)!.artifact).toMatchObject({
+    expect(e.engine.queries.readArtifact(PROJECT, job.result!.artifactId as string)!.artifact).toMatchObject({
       truncated: true,
       itemCount: 120,
     });
@@ -169,6 +178,7 @@ describe('paginate_all', () => {
     const e = h.newEngine();
     await expect(
       e.engine.submit({
+        project: PROJECT,
         kind: 'paginate_all',
         origin,
         op: 'getResource',
@@ -194,10 +204,14 @@ describe('events, queries and budget samples', () => {
       e.engine.run(
         'updateBlock',
         { path: { resourceId, documentId, blockId: 'p1' }, body: { content: [] } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
-    await settle(h, e, e.engine.run('getResource', { path: { resourceId: 'missing' } }, { origin }));
+    await settle(
+      h,
+      e,
+      e.engine.run('getResource', { path: { resourceId: 'missing' } }, { project: PROJECT, origin }),
+    );
     e.engine.controls.pauseWrites();
     e.engine.controls.resumeWrites();
     for (const k of kinds) expect(seenEvents[k], k).toBeGreaterThan(0);
@@ -207,11 +221,11 @@ describe('events, queries and budget samples', () => {
   it('records budget samples for the sparklines', async () => {
     h = await harness();
     const e = h.newEngine();
-    await settle(h, e, e.engine.run('listResources', {}, { origin }));
-    e.engine.recordBudgetSample();
+    await settle(h, e, e.engine.run('listResources', {}, { project: PROJECT, origin }));
+    e.engine.recordBudgetSample(PROJECT);
     await h.clock.advance(10_000);
-    e.engine.recordBudgetSample();
-    const samples = e.engine.queries.listBudgetSamples();
+    e.engine.recordBudgetSample(PROJECT);
+    const samples = e.engine.queries.listBudgetSamples(PROJECT);
     expect(samples).toHaveLength(2);
     expect(samples[0]!.tiers['key-min']).toMatchObject({ used: 1, limit: 300 });
     expect(samples[1]!.at - samples[0]!.at).toBe(10_000);

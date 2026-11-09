@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- parsed JSON replies and loosely typed test data */
+import { ALL_PROJECTS } from '../../src/projects/index.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { MappingError } from '../../src/mappings/index.js';
 import { parseImport, EXPORT_SCHEMA } from '../../src/mappings/index.js';
@@ -464,7 +465,7 @@ describe('preview (read-only)', () => {
     expect(r!.rig.h.mock.calls.filter((x) => x.method !== 'GET')).toEqual([]);
     expect(r!.rig.h.model.mutations).toEqual([]);
     expect(audits().length).toBe(auditBefore);
-    expect(r!.rig.e.engine.queries.listJobs({}).length).toBe(0);
+    expect(r!.rig.e.engine.queries.listJobs(ALL_PROJECTS, {}).length).toBe(0);
   });
 
   it('the resource itself beats an ancestor at equal priority; "without descendants" matches only the resource', async () => {

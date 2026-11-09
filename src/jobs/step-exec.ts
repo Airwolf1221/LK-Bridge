@@ -32,11 +32,18 @@ export type StepOutcome =
   | { readonly kind: 'failed'; readonly error: JobsError; readonly uncertain: boolean }
   | { readonly kind: 'budget'; readonly retryAtMs: number; readonly error: BudgetWaitError }
   | { readonly kind: 'aborted' }
-  /** Writes were paused (or read-only switched on) while the step waited for its lock or slot; nothing was sent. */
-  | { readonly kind: 'held'; readonly reason: 'writes_paused' | 'read_only' };
+  /**
+   * Writes were paused (or read-only switched on, or the project taken out of service) while the step waited for its
+   * lock or slot, or before it started; nothing was sent.
+   */
+  | { readonly kind: 'held'; readonly reason: WriteHold };
+
+/** Why a write may not start now (v2 A1 adds `project_unavailable`). */
+export type WriteHold = 'writes_paused' | 'read_only' | 'project_unavailable';
 
 export interface StepExecDeps {
-  readonly lk: LkClient;
+  /** The LK client of the job's project while it is served; undefined otherwise (v2 A1: one governor per project). */
+  readonly lkFor: (projectId: string) => LkClient | undefined;
   readonly repo: JobsRepo;
   readonly journal: WriteJournal;
   readonly locks: LockManager;
@@ -45,11 +52,18 @@ export interface StepExecDeps {
   readonly now: () => number;
   readonly recordLkError: (
     error: BridgeLkError,
-    ref: { opId: string; jobId?: string; stepNo?: number; principalId?: string; profile?: string },
+    ref: {
+      projectId: string;
+      opId: string;
+      jobId?: string;
+      stepNo?: number;
+      principalId?: string;
+      profile?: string;
+    },
   ) => void;
   readonly setJobWaiting: (jobId: string, waiting: 'lock' | null, detail?: Record<string, unknown>) => void;
-  /** Null when a new write may start now; otherwise why not. */
-  readonly writeHold: () => 'writes_paused' | 'read_only' | null;
+  /** Null when a new write to this project may start now; otherwise why not. */
+  readonly writeHold: (projectId: string) => WriteHold | null;
   /** Non-registry step types (the upload_image PUT), by step id. */
   readonly customSteps?: CustomStepHandlers | undefined;
 }
@@ -74,7 +88,10 @@ const RESOURCE_CREATES = new Set(['createResource', 'createManyResources', 'crea
 /** Operations that add an entity (journal target: the new entity, not its container). */
 const CREATES = /^(create|insert|invite|saveResourceAsTemplate)/;
 
-/** The lock a write step must hold (see locks.ts for the key scheme and ordering rules). */
+/**
+ * The lock a write step must hold, within its project (see locks.ts for the key scheme and ordering rules). The engine
+ * prefixes it with the project id (`projectLockKey`): entity ids are only unique within a LegendKeeper project.
+ */
 export function lockKeyFor(op: OperationDef, params: OpParams): string | null {
   if (op.kind === 'read') return null;
   const path = params.path ?? {};
@@ -87,6 +104,11 @@ export function lockKeyFor(op: OperationDef, params: OpParams): string | null {
   if (path.calendarId) return `cal:${path.calendarId}`;
   if (path.assetId) return `asset:${path.assetId}`;
   return null;
+}
+
+/** The lock key as the lock manager sees it: `<projectId>:<key>` (v2 A1). */
+export function projectLockKey(projectId: string, key: string | null): string | null {
+  return key === null ? null : `${projectId}:${key}`;
 }
 
 /** Parent of a resource create: `@root` when none; for a batch, the one outside parent (null if several). */
@@ -122,6 +144,17 @@ function isDeleted(entity: unknown): boolean {
 export class StepExecutor {
   constructor(private readonly d: StepExecDeps) {}
 
+  /** The job's project client, or a typed refusal when the project is not served now (the step is not sent). */
+  private lk(job: JobView): LkClient {
+    const lk = this.d.lkFor(job.projectId);
+    if (!lk) {
+      throw new JobsError('PROJECT_UNAVAILABLE', `Project ${job.projectId} is not available now`, {
+        jobId: job.id,
+      });
+    }
+    return lk;
+  }
+
   /** Runs a step to an outcome and persists it. `signal` aborts only lock/slot waits, never an in-flight call. */
   async execute(
     job: JobView,
@@ -129,6 +162,11 @@ export class StepExecutor {
     signal: AbortSignal,
     opts: { readonly storeResult?: boolean } = {},
   ): Promise<StepOutcome> {
+    // A project taken out of service (its key failed a check) runs nothing more until it is back: the job is held. A
+    // step being recovered waits too: verifying it needs the project's client.
+    if (!this.d.lkFor(job.projectId)) {
+      return { kind: 'held', reason: 'project_unavailable' };
+    }
     const custom = this.d.customSteps?.[step.opId];
     if (custom) return this.runCustom(job, step, custom);
     const op = requireOperation(step.opId);
@@ -137,7 +175,7 @@ export class StepExecutor {
     const store = opts.storeResult !== false;
     if (op.kind === 'read') return this.runRead(job, step, op, params, store);
 
-    const lockKey = lockKeyFor(op, params);
+    const lockKey = projectLockKey(job.projectId, lockKeyFor(op, params));
     let releaseLock: (() => void) | undefined;
     let releaseSlot: () => void;
     try {
@@ -152,6 +190,7 @@ export class StepExecutor {
       }
       releaseSlot = await this.d.writers.acquire(
         {
+          projectId: job.projectId,
           jobId: job.id,
           stepNo: step.stepNo,
           opId: op.operationId,
@@ -170,7 +209,7 @@ export class StepExecutor {
       throw e;
     }
     try {
-      const hold = step.status === 'running' ? null : this.d.writeHold();
+      const hold = step.status === 'running' ? null : this.d.writeHold(job.projectId);
       if (hold) return { kind: 'held', reason: hold };
       return await this.runWrite(job, step, op, params, ref, store);
     } finally {
@@ -188,7 +227,7 @@ export class StepExecutor {
    * the step is never "maybe sent": a restart simply runs it again.
    */
   private async runCustom(job: JobView, step: StepView, handler: CustomStepHandler): Promise<StepOutcome> {
-    const hold = step.status === 'running' ? null : this.d.writeHold();
+    const hold = step.status === 'running' ? null : this.d.writeHold(job.projectId);
     if (hold) return { kind: 'held', reason: hold };
     const stats = newCallStats();
     const now = this.d.now();
@@ -202,7 +241,7 @@ export class StepExecutor {
         jobId: job.id,
         stepNo: step.stepNo,
         priority: job.priority,
-        lk: this.d.lk,
+        lk: this.lk(job),
         params: this.d.repo.stepParams(step),
         resultOf: (n) => {
           const s = this.d.repo.step(job.id, n);
@@ -214,6 +253,7 @@ export class StepExecutor {
     } catch (e) {
       if (e instanceof BridgeLkError && !(e instanceof BudgetWaitError && e.status === undefined)) {
         this.d.recordLkError(e, {
+          projectId: job.projectId,
           opId: step.opId,
           jobId: job.id,
           stepNo: step.stepNo,
@@ -240,7 +280,7 @@ export class StepExecutor {
       startedAt: step.startedAt ?? this.d.now(),
     });
     try {
-      const value = await callOp(this.d.lk, op, params, this.callOptions(job, step, stats));
+      const value = await callOp(this.lk(job), op, params, this.callOptions(job, step, stats));
       return this.succeed(job, step, stats, value, false, store);
     } catch (e) {
       return this.fail(job, step, stats, e);
@@ -314,6 +354,7 @@ export class StepExecutor {
       if (!journalled) {
         const created = meta.verify === 'client-id' ? step.clientIds : [];
         journalId = this.d.journal.record({
+          projectId: job.projectId,
           jobId: job.id,
           stepNo: step.stepNo,
           opId: op.operationId,
@@ -345,7 +386,7 @@ export class StepExecutor {
       });
 
       try {
-        const value = await callOp(this.d.lk, op, params, {
+        const value = await callOp(this.lk(job), op, params, {
           ...this.callOptions(job, step, stats),
           ifMatch,
           verify: (ctx) => this.verifyHook(job, step, op, meta, params, ctx.error),
@@ -603,7 +644,7 @@ export class StepExecutor {
     try {
       // A 404 here is an answer ("not there"), not a failure: it is not recorded in the errors table.
       body = await callOp(
-        this.d.lk,
+        this.lk(job),
         readOp,
         { path },
         {
@@ -643,6 +684,7 @@ export class StepExecutor {
       stats,
       onError: (err: BridgeLkError) =>
         this.d.recordLkError(err, {
+          projectId: job.projectId,
           opId: err.opId ?? step.opId,
           jobId: job.id,
           stepNo: step.stepNo,

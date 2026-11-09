@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+import { ALL_PROJECTS } from '../../src/projects/index.js';
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:https';
@@ -179,7 +180,7 @@ describe('lk_upload_image', () => {
       expect(r.isError, r.text).toBe(false);
       expect(r.body.status).toBe('succeeded');
       expect(r.body.asset).toMatchObject({ id: 'asset1', name: 'Map of the realm', type: 'IMAGE' });
-      expect(r.footer).toMatch(/^budget:/);
+      expect(r.footer).toMatch(/^budget \(test\):/);
       // LK: one createImageUpload with size, type and hash; one createImageAsset with the key LK returned.
       expect(wireOf(stack, /assets\/uploads/)).toHaveLength(1);
       expect(wireOf(stack, /assets\/images/)).toHaveLength(1);
@@ -195,7 +196,7 @@ describe('lk_upload_image', () => {
       // The mock LK never saw the storage request.
       expect(stack.mock.calls.every((c) => !c.path.includes('/put/'))).toBe(true);
       // The job is a three-step upload_image job, and the image bytes were discarded after the PUT.
-      const job = stack.runtime.engine.queries.getJob(r.body.jobId)!;
+      const job = stack.runtime.engine.queries.getJob(PROJECT, r.body.jobId)!;
       expect(job.kind).toBe('upload_image');
       expect(job.steps.map((s) => s.opId)).toEqual([
         'createImageUpload',
@@ -238,7 +239,7 @@ describe('lk_upload_image', () => {
       });
       expect(ok.body.status, ok.text).toBe('succeeded');
       expect(puts[0]!.body.equals(PNG_BYTES)).toBe(true);
-      const jobsBefore = stack.runtime.engine.queries.listJobs({}).length;
+      const jobsBefore = stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length;
       const cases: [string, string][] = [
         [`https://images.test:${port}/lie.png`, 'UPLOAD_NOT_AN_IMAGE'],
         [`https://images.test:${port}/text`, 'UPLOAD_NOT_AN_IMAGE'],
@@ -272,7 +273,7 @@ describe('lk_upload_image', () => {
         url: 'https://x.test/a.png',
       });
       expect(both.body.error.code).toBe('UPLOAD_SOURCE_INVALID');
-      expect(stack.runtime.engine.queries.listJobs({}).length).toBe(jobsBefore);
+      expect(stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length).toBe(jobsBefore);
     } finally {
       await stack.close();
     }
@@ -322,7 +323,7 @@ describe('SSRF refusals', () => {
         expect(r.isError, url).toBe(true);
         expect(r.body.error.code, url).toBe('UPLOAD_URL_REFUSED');
       }
-      expect(stack.runtime.engine.queries.listJobs({}).length).toBe(0);
+      expect(stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length).toBe(0);
     } finally {
       await stack.close();
     }
@@ -351,7 +352,7 @@ describe('SSRF refusals', () => {
         );
         expect(r.text, t).not.toContain(SECRET_SIG);
         expect(r.text, t).not.toContain('127.0.0.1');
-        const job = stack.runtime.engine.queries.listJobs({ kind: 'upload_image', limit: 1 })[0]!;
+        const job = stack.runtime.engine.queries.listJobs(PROJECT, { kind: 'upload_image', limit: 1 })[0]!;
         expect(job.status).toBe('failed');
         expect(job.lastError?.code).toBe('LK_ERROR');
         expect(JSON.stringify(job.lastError)).toContain('UPLOAD_TARGET_REFUSED');
@@ -393,7 +394,7 @@ describe('outbound ports: 443 only unless OUTBOUND_EXTRA_PORTS_ALLOWLIST lists h
       expect(r.body.error.message).toMatch(/Only port 443/);
       expect(lookups).toBe(0);
       expect(gets).toEqual([]);
-      expect(refused.stack.runtime.engine.queries.listJobs({}).length).toBe(0);
+      expect(refused.stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length).toBe(0);
     } finally {
       await refused.stack.close();
     }
@@ -447,7 +448,7 @@ describe('outbound ports: 443 only unless OUTBOUND_EXTRA_PORTS_ALLOWLIST lists h
       const r = await stack.call(client, 'lk_upload_image', { name: 'x', base64: PNG_1PX });
       expect(r.isError).toBe(true);
       expect(r.text).not.toContain(SECRET_SIG);
-      const job = stack.runtime.engine.queries.listJobs({ kind: 'upload_image', limit: 1 })[0]!;
+      const job = stack.runtime.engine.queries.listJobs(PROJECT, { kind: 'upload_image', limit: 1 })[0]!;
       expect(job.status).toBe('failed');
       expect(JSON.stringify(job.lastError)).toContain('UPLOAD_TARGET_REFUSED');
       expect(JSON.stringify(job.lastError)).toContain('Only port 443');
@@ -485,7 +486,9 @@ describe('the PUT step under the governor', () => {
     script.push({ status: 429, retryAfter: '1' });
     const { stack, client } = await uploadStack();
     const throttled: { tiers: readonly string[]; opId: string }[] = [];
-    stack.runtime.lk.governor.on('throttled', (e) => throttled.push({ tiers: e.tiers, opId: e.opId }));
+    stack.runtime.projects
+      .client(PROJECT)!
+      .governor.on('throttled', (e) => throttled.push({ tiers: e.tiers, opId: e.opId }));
     try {
       const r = await stack.call(client, 'lk_upload_image', {
         name: 'slow',
@@ -556,10 +559,12 @@ describe('mid-job crash and resume', () => {
       return { db, runtime };
     };
     const a = boot();
+    await a.runtime.ready; // v2 A1: the project is served once its key has been checked
     if (hang === 'asset')
       mock.inject((c) => c.method === 'POST' && /assets\/images/.test(c.path), { kind: 'hang' });
     else script.push('hang');
     const submitted = await a.runtime.engine.submit({
+      project: PROJECT,
       kind: 'upload_image',
       contentType: 'image/png',
       contentLength: PNG_BYTES.length,
@@ -582,12 +587,13 @@ describe('mid-job crash and resume', () => {
     a.db.close();
     // The next process starts on the same database file.
     const b = boot();
+    await b.runtime.ready;
     for (let i = 0; i < 800; i++) {
-      const j = b.runtime.engine.queries.getJob(submitted.jobId)!;
+      const j = b.runtime.engine.queries.getJob(PROJECT, submitted.jobId)!;
       if (['succeeded', 'failed'].includes(j.status)) break;
       await new Promise((r) => setTimeout(r, 10));
     }
-    const job = b.runtime.engine.queries.getJob(submitted.jobId)!;
+    const job = b.runtime.engine.queries.getJob(PROJECT, submitted.jobId)!;
     const out = { job, mock, assetBodies: [...assetBodies], puts: puts.length };
     await b.runtime.shutdown(200);
     b.db.close();

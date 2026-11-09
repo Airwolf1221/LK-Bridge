@@ -6,13 +6,29 @@ import type { StreamHub } from '../stream.js';
 import type { AdminDeps } from '../types.js';
 import type { Health } from '../health.js';
 
+/** The project a dashboard request is about (v2 A1). */
+export interface RouteProject {
+  /** The LegendKeeper project id. */
+  readonly id: string;
+  readonly name: string;
+}
+
 export interface RouteContext {
   readonly deps: AdminDeps;
   readonly actions: AdminActions;
   readonly hub: StreamHub;
-  readonly health: (refresh: boolean) => Promise<Health>;
+  /** The health of one project's LegendKeeper connection (cached a minute per project). */
+  readonly health: (project: RouteProject, refresh: boolean) => Promise<Health>;
   readonly now: () => number;
+  /**
+   * The `project` query parameter (a name or id; default: the default project), as a project with stored data. Unknown:
+   * 400 UNKNOWN_PROJECT. Configured but never verified (so it has no id and no data yet): 409 PROJECT_UNAVAILABLE.
+   */
+  readonly project: (ref: string | undefined) => RouteProject;
 }
+
+/** The optional `project` query parameter of every project-scoped route. */
+export const projectParam = z.string().min(1).max(64).optional();
 
 export type Register = (api: FastifyInstance, ctx: RouteContext) => void;
 

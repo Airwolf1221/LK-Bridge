@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { PLACEHOLDER_IDS } from '../../src/maintenance/index.js';
 import { makePat, mcpOriginFor } from '../policy/helpers.js';
 import { settle } from '../jobs/helpers.js';
-import { maintenanceRig, sampleCount, type MaintenanceRig } from './helpers.js';
+import { ALL_PROJECTS } from '../../src/projects/index.js';
+import { PROJECT, maintenanceRig, sampleCount, type MaintenanceRig } from './helpers.js';
 
 let m: MaintenanceRig | undefined;
 afterEach(async () => {
@@ -20,7 +21,7 @@ describe('budget-sampler', () => {
     expect(sampleCount(m.rig)).toBe(0);
     await m.rig.h.clock.advance(30_000);
     expect(sampleCount(m.rig)).toBe(3);
-    const samples = m.rig.e.engine.queries.listBudgetSamples({});
+    const samples = m.rig.e.engine.queries.listBudgetSamples(PROJECT, {});
     expect(samples.at(-1)!.at).toBe(m.rig.h.clock.now());
     expect(Object.keys(samples[0]!.tiers)).toContain('write-min');
     expect(m.rig.h.mock.calls).toEqual([]); // no LegendKeeper call at all
@@ -29,7 +30,9 @@ describe('budget-sampler', () => {
   it('is quiet on the Jobs page when it succeeds (a job record only on failure), but is on the run history', async () => {
     m = await maintenanceRig();
     await m.rig.h.clock.advance(30_000);
-    expect(m.rig.e.engine.queries.listJobs({}).filter((j) => j.origin.kind === 'maintenance')).toEqual([]);
+    expect(
+      m.rig.e.engine.queries.listJobs(ALL_PROJECTS, {}).filter((j) => j.origin.kind === 'maintenance'),
+    ).toEqual([]);
     expect(m.maintenance.scheduler.history('budget-sampler')).toHaveLength(3);
   });
 
@@ -53,11 +56,11 @@ describe('journal-prune', () => {
       r.e.engine.run(
         'updateResource',
         { path: { resourceId: 'raaaaaaa' }, body: { name: 'One' } },
-        { origin: mcpOriginFor(agent.principal) },
+        { project: PROJECT, origin: mcpOriginFor(agent.principal) },
       ),
     );
     expect(out.error).toBeUndefined();
-    const journal = () => r.e.engine.queries.journalLookup({ limit: 100 }).length;
+    const journal = () => r.e.engine.queries.journalLookup(PROJECT, { limit: 100 }).length;
     expect(journal()).toBeGreaterThan(0);
     // Disabled, so that the explicit runs below are the ones that do the work (Run now works on a disabled job).
     for (const id of ['budget-sampler', 'proposal-expiry', 'sqlite-optimise', 'journal-prune']) {
@@ -73,12 +76,14 @@ describe('journal-prune', () => {
     expect(result).toMatchObject({ outcome: 'succeeded' });
     expect(result.detail).toMatch(/Removed [1-9]\d* journal entr(y|ies)/);
     expect(journal()).toBe(0);
-    const job = r.e.engine.queries.getJob(result.jobId!)!;
-    expect(job).toMatchObject({
-      status: 'succeeded',
-      priority: 'P3',
-      origin: { kind: 'maintenance', tool: 'journal-prune' },
-    });
+    // v2 A1: journal-prune covers every project, so it is a bridge-wide run: recorded in the run history (project
+    // `*`), and NOT as a job in any one project's job list (that would show one project another's housekeeping).
+    expect(result).toMatchObject({ projectId: '*', jobId: null });
+    expect(
+      r.e.engine.queries
+        .listJobs(ALL_PROJECTS, { limit: 500 })
+        .filter((j) => j.origin.kind === 'maintenance' && j.origin.tool === 'journal-prune'),
+    ).toEqual([]);
   });
 
   it('prunes by the configured retention (the engine’s own setting)', async () => {
@@ -101,7 +106,7 @@ describe('proposal-expiry', () => {
       r.e.engine.run(
         'updateResource',
         { path: { resourceId: 'raaaaaaa' }, body: { name: 'Proposed' } },
-        { origin: mcpOriginFor(agent.principal) },
+        { project: PROJECT, origin: mcpOriginFor(agent.principal) },
       ),
     );
     const { proposalId } = out.value as { proposalId: string };
@@ -118,13 +123,14 @@ describe('proposal-expiry', () => {
     });
     expect(r.policy.proposals.state(proposalId)).toBe('pending');
 
-    // Past the hour: the next scheduled run expires it, and (since it changed something) is recorded as a job.
+    // Past the hour: the next scheduled run expires it. v2 A1: expiry covers every project, so the run is bridge-wide:
+    // it is in the run history (project `*`) and is not a job of any one project.
     await r.h.clock.advance(60 * 60_000);
     expect(r.policy.proposals.state(proposalId)).toBe('expired');
     const expiring = m.maintenance.scheduler
       .history('proposal-expiry')
       .find((h) => h.detail === 'Expired 1 proposal.');
-    expect(expiring?.engineJobId).toMatch(/^j/);
+    expect(expiring).toMatchObject({ outcome: 'succeeded', projectId: '*', engineJobId: null });
     expect(r.policy.commands.listAudit('owner').some((a) => a.action === 'proposal.expired')).toBe(true);
     expect(writesAtMock()).toEqual([]);
   });
@@ -169,15 +175,19 @@ describe('sqlite-optimise', () => {
     expect(wal[0]!.log).toBe(wal[0]!.checkpointed);
   });
 
-  it('is weekly, and records a job each time', async () => {
+  it('is weekly, and records each run in its history (bridge-wide, v2 A1)', async () => {
     m = await maintenanceRig();
     expect(m.maintenance.scheduler.get('sqlite-optimise').scheduleText).toBe('Weekly');
     for (const id of ['budget-sampler', 'proposal-expiry', 'journal-prune'])
       m.maintenance.commands.disable('owner', id);
     await m.rig.h.clock.advance(7 * D);
     const [last] = m.maintenance.scheduler.history('sqlite-optimise');
-    expect(last).toMatchObject({ outcome: 'succeeded', trigger: 'schedule' });
-    expect(last!.engineJobId).toMatch(/^j/);
+    expect(last).toMatchObject({
+      outcome: 'succeeded',
+      trigger: 'schedule',
+      projectId: '*',
+      engineJobId: null,
+    });
   });
 });
 
@@ -208,7 +218,7 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       r.e.engine.run(
         'updateResource',
         { path: { resourceId }, body: { name } },
-        { origin: mcpOriginFor(agent.principal) },
+        { project: PROJECT, origin: mcpOriginFor(agent.principal) },
       ),
     );
     return (out.value as { proposalId: string }).proposalId;
@@ -253,7 +263,9 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
         executed,
       ),
     ).toBe(1);
-    const journalBefore = r.e.engine.queries.journalLookup({ limit: 100 }).filter((j) => j.jobId === jobId);
+    const journalBefore = r.e.engine.queries
+      .journalLookup(PROJECT, { limit: 100 })
+      .filter((j) => j.jobId === jobId);
     expect(journalBefore.length).toBeGreaterThan(0);
 
     // One of each other state, all captured for real.
@@ -283,17 +295,20 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       expect(ops(ids[state]!), state).toBe(1);
     }
     // The job that executed it, and its journal entries, are kept; the job still names the proposal as text.
-    const job = r.e.engine.queries.getJob(jobId)!;
+    const job = r.e.engine.queries.getJob(PROJECT, jobId)!;
     expect(job).toMatchObject({ status: 'succeeded' });
     expect(job.origin.detail).toBe(`proposal:${executed}`);
-    expect(r.e.engine.queries.journalLookup({ limit: 100 }).filter((j) => j.jobId === jobId)).toEqual(
-      journalBefore,
-    );
-    // Recorded as a P3 maintenance job, and one system audit row says what went.
-    expect(r.e.engine.queries.getJob(result.jobId!)).toMatchObject({
-      priority: 'P3',
-      origin: { kind: 'maintenance', tool: 'proposal-prune' },
-    });
+    expect(
+      r.e.engine.queries.journalLookup(PROJECT, { limit: 100 }).filter((j) => j.jobId === jobId),
+    ).toEqual(journalBefore);
+    // v2 A1: a bridge-wide run (it covers every project): in the run history, not a job of one project; and one
+    // system audit row says what went.
+    expect(result).toMatchObject({ projectId: '*', jobId: null });
+    expect(
+      r.e.engine.queries
+        .listJobs(ALL_PROJECTS, { limit: 500 })
+        .filter((j) => j.origin.kind === 'maintenance' && j.origin.tool === 'proposal-prune'),
+    ).toEqual([]);
     const audit = r.policy.commands.listAudit('owner').filter((a) => a.action === 'proposal.pruned');
     expect(audit).toHaveLength(1);
     expect(audit[0]).toMatchObject({ actor: 'system', after: { removed: 4 } });

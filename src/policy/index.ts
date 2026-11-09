@@ -24,7 +24,7 @@ import type { McpAccessControl, McpToolProvider } from '../mcp/server.js';
 import { createOwnerCommands, type OwnerCommands } from './commands.js';
 import { createConsentProfiles } from './consent.js';
 import { createPolicyGate, type LivePolicyGate } from './gate.js';
-import { createMcpAccessControl, proposalTools } from './mcp.js';
+import { createMcpAccessControl, proposalTools, type ProposalToolsOptions } from './mcp.js';
 import { ProposalService } from './proposals.js';
 import { PolicyStore } from './store.js';
 
@@ -40,6 +40,8 @@ export interface CreatePolicyOptions {
   readonly log?: { warn(o: Record<string, unknown>, m: string): void };
   /** Chunk 6: the maintenance scheduler runs the expiry sweep, so the service starts no timer (see ProposalService). */
   readonly externalExpirySweep?: boolean;
+  /** v2 A1: the `project` argument of the proposal tools, and each project's budget line. */
+  readonly proposalTools?: ProposalToolsOptions;
 }
 
 export interface Policy {
@@ -77,7 +79,7 @@ export function createPolicy(o: CreatePolicyOptions): Policy {
     proposals,
     consent: createConsentProfiles(store),
     access: createMcpAccessControl(gate),
-    tools: proposalTools(proposals),
+    tools: proposalTools(proposals, o.proposalTools ?? {}),
     commands: createOwnerCommands({ store, proposals, authStore: new AuthStore(o.db) }),
     attach: (engine) => proposals.attach(engine),
   };
@@ -96,7 +98,7 @@ export { ProposalService, readerTarget, proposalSummary } from './proposals.js';
 export type { ProposalDetail, ProposalOpDetail, AgentProposalView } from './proposals.js';
 export { createOwnerCommands, type OwnerCommands, type BulkResult, type ProfileSummary } from './commands.js';
 export { createConsentProfiles, ensureProfile, suggestKind, DEFAULT_PAT_PROFILE } from './consent.js';
-export { createMcpAccessControl, mcpOrigin, proposalTools } from './mcp.js';
+export { createMcpAccessControl, mcpOrigin, proposalTools, type ProposalToolsOptions } from './mcp.js';
 export { PolicyError, type PolicyErrorCode } from './errors.js';
 export { canonicalJson, hashJson, isLiveApprovalToken } from './approval.js';
 export * from './types.js';

@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Client } from '@modelcontextprotocol/client';
 import { LkModel } from '../jobs/lk-model.js';
-import { startStack, type Stack } from './helpers.js';
+import { PROJECT, startStack, type Stack } from './helpers.js';
 import { systemClock } from '../../src/lk/index.js';
 
 let stack: Stack;
@@ -36,6 +36,7 @@ describe('the MCP surface with the official client', () => {
         'bridge_proposal_status',
         'bridge_proposals_mine',
         'bridge_result_page',
+        'list_projects', // v2 A1
         'lk_api_batch',
         'lk_api_describe_operation',
         'lk_api_list_operations',
@@ -58,6 +59,7 @@ describe('the MCP surface with the official client', () => {
       expect(t.description, t.name).toMatch(/Cost|cost|Costs/);
     }
     for (const n of [
+      'list_projects',
       'bridge_info',
       'bridge_budget',
       'bridge_estimate',
@@ -85,7 +87,7 @@ describe('the MCP surface with the official client', () => {
       params: { path: { resourceId: 'res1', documentId: 'd_res1' } },
     });
     expect(r.isError).toBe(false);
-    expect(r.footer).toMatch(/^budget: writes /);
+    expect(r.footer).toMatch(/^budget \(test\): writes /); // v2 A1: the footer names the project
     expect(r.body.status).toBe('succeeded');
     expect(r.body.result).toMatchObject({ blockCount: 1, version: 'v1' });
     expect(r.body.result.outline[0]).toMatchObject({ kind: 'paragraph', text: 'Hello' });
@@ -108,7 +110,7 @@ describe('the MCP surface with the official client', () => {
     });
     expect(w.isError, w.text).toBe(false);
     expect(w.body.status).toBe('succeeded');
-    const job = stack.runtime.engine.queries.getJob(w.body.jobId)!;
+    const job = stack.runtime.engine.queries.getJob(PROJECT, w.body.jobId)!;
     expect(job.origin.tool).toBe('lk_api_write');
     expect(job.origin.kind).toBe('mcp');
     expect(job.principalId).toMatch(/^pat_/);
@@ -134,7 +136,7 @@ describe('the MCP surface with the official client', () => {
     expect(b.body.jobId).toBeTypeOf('string');
     const w = await stack.call(client, 'bridge_job_wait', { jobId: b.body.jobId, seconds: 10 });
     expect(w.body).toMatchObject({ status: 'succeeded', done: true, progress: { stepsDone: 2 } });
-    expect(w.footer).toMatch(/^budget:/);
+    expect(w.footer).toMatch(/^budget \(test\):/);
   });
 
   it('paginates every page into a handle and pages it', async () => {
@@ -197,7 +199,8 @@ describe('the MCP surface with the official client', () => {
     expect(info.body).toMatchObject({
       bridge: 'LK-Bridge',
       version: '0.0.0-test',
-      project: { id: 'proj_mock' },
+      project: 'test',
+      projectInfo: { id: 'proj_mock', name: 'test', default: true, available: true },
       profile: 'tools-test',
       scope: 'write',
       canWriteAs: 'direct',

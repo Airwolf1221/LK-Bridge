@@ -23,6 +23,13 @@ its last run (time, outcome, duration, engine job id) and next run. The schedule
 | `orphan-and-link-audit`  | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
 | `tag-audit`              | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
 
+**Projects (v2 A1).** Each job has a _scope_. A **bridge-wide** job runs once for the whole bridge: all five implemented
+jobs are bridge-wide (`budget-sampler` stores one snapshot per project, from each project's own governor;
+`journal-prune`, `proposal-expiry`, `proposal-prune` and `sqlite-optimise` cover every project's rows). Their runs are
+recorded with project `*` and are **not** engine jobs (an engine job belongs to one project). A **per-project** job (the
+later LegendKeeper jobs) runs once for each project served now, through that project's governor, and each run is
+recorded with its project. The Maintenance page is bridge-wide.
+
 A **placeholder** is registered so the page is complete, but it cannot be enabled, run or rescheduled: the toggle is
 disabled and says "Not implemented yet", and the API answers `409 NOT_IMPLEMENTED`. Its real logic is a later chunk's work.
 A placeholder found enabled in the database is switched off at start-up.
@@ -53,10 +60,10 @@ detail: <name> }`, so the governor's P3 floor (default: keep 50% of each tier) a
   None of the five implemented jobs writes to LegendKeeper (`journal-prune`, `proposal-prune` and `sqlite-optimise` write only the bridge's
   own database, so they keep running under read-only mode); the rule is exercised by a test job and applies to
   `assign-block-ids-sweep` when it is built.
-- **Runs are jobs.** A run is recorded as an engine job (origin `maintenance`, priority P3, visible on the Jobs page and
-  linked from the last-run column) when its record policy says so: always for `journal-prune`, `proposal-prune` and `sqlite-optimise`;
-  for the high-frequency `budget-sampler` and `proposal-expiry` only when the run **failed** or **changed something**
-  (an expiry). Every run, recorded as a job or not, is in the run history.
+- **Runs are jobs** (per-project jobs only, since v2 A1). A per-project run is recorded as an engine job in its project
+  (origin `maintenance`, priority P3, visible on the Jobs page and linked from the last-run column) when its record
+  policy says so. Bridge-wide runs (all five implemented jobs) are in the run history only. Every run, recorded as a job
+  or not, is in the run history.
 - **One timer.** The scheduler arms a single timer for the earliest due job, on the engine's clock.
 
 ## `proposal-prune` (v1.0.1)

@@ -13,7 +13,8 @@ export type PolicyErrorCode =
   | 'DRAINING'
   | 'NO_ENGINE'
   | 'CAPTURE_FAILED'
-  | 'REREAD_FAILED';
+  | 'REREAD_FAILED'
+  | 'PROJECT_UNAVAILABLE';
 
 export class PolicyError extends Error {
   override readonly name = 'PolicyError';

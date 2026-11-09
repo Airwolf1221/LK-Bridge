@@ -1,7 +1,7 @@
 import type { AuthServices } from '../auth/services.js';
 import type { AdminSettings, Config } from '../config/index.js';
 import type { JobEngine } from '../jobs/index.js';
-import type { LkClient } from '../lk/index.js';
+import type { ProjectRegistry } from '../projects/index.js';
 import type { Maintenance } from '../maintenance/index.js';
 import type { Mappings } from '../mappings/index.js';
 import type { Policy } from '../policy/index.js';
@@ -11,7 +11,8 @@ import type { Policy } from '../policy/index.js';
  */
 export interface AdminRuntime {
   readonly engine: JobEngine;
-  readonly lk: LkClient;
+  /** The projects this bridge serves (v2 A1): each one's governor, flags and whether it is served now. */
+  readonly projects: ProjectRegistry;
   readonly policy: Policy;
   /** Maintenance registry, scheduler and owner commands (chunk 6). */
   readonly maintenance: Maintenance;

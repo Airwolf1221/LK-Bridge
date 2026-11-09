@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { api, qs } from '../api';
+import { qs } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtTime } from '../format';
-import { useApi, useReloadOn } from '../hooks';
+import { useReloadOn } from '../hooks';
+import { useProject, useProjectApi, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
 
 /**
@@ -100,7 +101,9 @@ export function MappingsPage() {
 // ------------------------------------------------------------------------------------------------- the list
 
 function SetsPage() {
-  const list = useApi<ListResponse>('/mappings');
+  const api = useProjectApi();
+  const { selected } = useProject();
+  const list = useScopedApi<ListResponse>('/mappings');
   useReloadOn(['policy'], list.reload, 300);
   const { run, busy } = useAction();
   const confirm = useConfirm();
@@ -110,7 +113,7 @@ function SetsPage() {
 
   return (
     <>
-      <PageHeader title="Repository Mappings" />
+      <PageHeader title="Repository Mappings" project={selected} />
       <p className="muted">
         A <strong>mapping set</strong> describes how a repository is organised: which pages are which semantic
         type (<strong>type rules</strong>), and where each type keeps its facts (<strong>field maps</strong>).
@@ -209,6 +212,7 @@ function SetsPage() {
 }
 
 function NewSetCard({ onCreated }: { onCreated: () => void }) {
+  const api = useProjectApi();
   const { run, busy } = useAction();
   const { navigate } = useRoute();
   const [name, setName] = useState('');
@@ -256,6 +260,7 @@ function NewSetCard({ onCreated }: { onCreated: () => void }) {
 }
 
 function ImportCard({ onImported }: { onImported: () => void }) {
+  const api = useProjectApi();
   const [busy, setBusy] = useState(false);
   const { navigate } = useRoute();
   const [text, setText] = useState('');
@@ -328,6 +333,7 @@ function ImportCard({ onImported }: { onImported: () => void }) {
 }
 
 function ExportButton({ id, name }: { id: string; name: string }) {
+  const api = useProjectApi();
   const { run, busy } = useAction();
   return (
     <Button
@@ -356,8 +362,9 @@ function ExportButton({ id, name }: { id: string; name: string }) {
 // -------------------------------------------------------------------------------------------------- one set
 
 function SetPage({ id }: { id: string }) {
-  const list = useApi<ListResponse>('/mappings'); // the kinds and suggested types for the forms
-  const d = useApi<SetDetail>(`/mappings/sets/${encodeURIComponent(id)}`);
+  const { selected } = useProject();
+  const list = useScopedApi<ListResponse>('/mappings'); // the kinds and suggested types for the forms
+  const d = useScopedApi<SetDetail>(`/mappings/sets/${encodeURIComponent(id)}`);
   useReloadOn(['policy'], d.reload, 300);
   if (d.error) return <ErrorNote error={d.error} onRetry={d.reload} />;
   if (!d.data || !list.data) return <Loading />;
@@ -372,7 +379,7 @@ function SetPage({ id }: { id: string }) {
 
   return (
     <>
-      <PageHeader title="Repository Mappings">
+      <PageHeader title="Repository Mappings" project={selected}>
         <Link to="/mappings">All sets</Link>
       </PageHeader>
       <h2>
@@ -442,6 +449,7 @@ function SummaryCard({ summary }: { summary: SummaryText }) {
 }
 
 function SetForm({ set, onSaved }: { set: MappingSet; onSaved: () => void }) {
+  const api = useProjectApi();
   const { run, busy } = useAction();
   const [name, setName] = useState(set.name);
   const [description, setDescription] = useState(set.description);
@@ -494,6 +502,7 @@ function RulesCard({
   types: string[];
   onChanged: () => void;
 }) {
+  const api = useProjectApi();
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<TypeRule | 'new' | null>(null);
@@ -602,6 +611,7 @@ function RuleForm({
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const api = useProjectApi();
   const { run, busy } = useAction();
   const s = rule?.selector;
   const [kind, setKind] = useState<Selector['kind']>(s?.kind ?? 'subtree');
@@ -737,6 +747,7 @@ function FieldsCard({
   kinds: string[];
   onChanged: () => void;
 }) {
+  const api = useProjectApi();
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<FieldMap | 'new' | null>(null);
@@ -849,6 +860,7 @@ function FieldForm({
   onDone: () => void;
   onCancel: () => void;
 }) {
+  const api = useProjectApi();
   const { run, busy } = useAction();
   const l = field?.location;
   const [semanticType, setSemanticType] = useState(field?.semanticType ?? '');
@@ -995,6 +1007,7 @@ function FieldForm({
 // ------------------------------------------------------------------------------------------------- preview
 
 function PreviewCard({ setId }: { setId: string }) {
+  const api = useProjectApi();
   const [resourceId, setResourceId] = useState('');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Preview | null>(null);

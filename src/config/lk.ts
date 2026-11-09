@@ -89,18 +89,26 @@ export function defaultGovernorSettings(overrides: Partial<GovernorSettings> = {
   };
 }
 
-/** Builds the `src/lk` settings from the validated application config. */
-export function lkSettingsFrom(config: Config): LkSettings {
+/** The governor settings every project's governor is built with (each project has its own governor, v2 A1). */
+export function governorSettingsFrom(config: Config): GovernorSettings {
   const floors = config.governor.reserveFloors;
+  return defaultGovernorSettings({
+    tierLimits: config.lk.tierLimits,
+    reserveFloors: { P0: 0, P1: floors.interactive, P2: floors.job, P3: floors.maintenance },
+    writeSpacingMs: config.governor.writeSpacingMs,
+    writeSpacingStretchedMs: config.governor.writeSpacingStretchedMs,
+  });
+}
+
+/**
+ * Builds the `src/lk` settings for ONE project from the validated application config: that project's key and its
+ * LegendKeeper id (discovered from the key at start-up), and the shared governor settings.
+ */
+export function lkSettingsFor(config: Config, project: { apiKey: string; projectId: string }): LkSettings {
   return {
-    apiKey: config.lk.apiKey,
-    projectId: config.lk.projectId,
+    apiKey: project.apiKey,
+    projectId: project.projectId,
     baseUrl: config.lk.baseUrl,
-    governor: defaultGovernorSettings({
-      tierLimits: config.lk.tierLimits,
-      reserveFloors: { P0: 0, P1: floors.interactive, P2: floors.job, P3: floors.maintenance },
-      writeSpacingMs: config.governor.writeSpacingMs,
-      writeSpacingStretchedMs: config.governor.writeSpacingStretchedMs,
-    }),
+    governor: governorSettingsFrom(config),
   };
 }

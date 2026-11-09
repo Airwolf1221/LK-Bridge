@@ -272,6 +272,7 @@ export class Ctx {
     for (let attempt = 0; ; attempt++) {
       try {
         const r = await this.t.engine.run(op, params, {
+          project: this.t.projectId,
           origin: this.origin,
           priority: 'P3',
           title: `spike-v2: ${op}`,
@@ -282,7 +283,7 @@ export class Ctx {
         // Queued by the engine (a slow estimate, or the budget): reads are cancelled and tried again later; a write is
         // waited for, because it is already recorded as a job and must not be sent twice.
         if (isRead) {
-          this.t.engine.controls.cancel(r.jobId);
+          this.t.engine.controls.cancel(this.t.projectId, r.jobId);
           if (attempt >= 20) throw new Error(`${op} stayed queued (${r.reason})`);
           await sleep(Math.min(60_000, Math.max(2_000, (r.eta ?? Date.now()) - Date.now())));
           continue;
@@ -302,7 +303,7 @@ export class Ctx {
   private async waitForJob(jobId: string): Promise<void> {
     let job: JobView;
     for (;;) {
-      job = await this.t.engine.wait(jobId, 25_000);
+      job = await this.t.engine.wait(this.t.projectId, jobId, 25_000);
       if (TERMINAL_JOB_STATUSES.has(job.status)) break;
       this.o.log(`  waiting for job ${jobId}: ${job.status}`);
     }

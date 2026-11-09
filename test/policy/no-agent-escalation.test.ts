@@ -85,15 +85,21 @@ async function attack(t: Target): Promise<string[]> {
   const { token, pat } = t.pats.create({ name: 'agent', profileId: profile.id });
   const other = t.pats.create({ name: 'other', profileId: victim.id });
   const now = Date.now();
+  // v2 A1: proposals belong to a registered project (the runtime has registered the mock's; the auth harness has none).
+  t.db
+    .prepare(
+      `INSERT OR IGNORE INTO projects (id, name, created_at, updated_at) VALUES ('proj_mock', 'mock', ?, ?)`,
+    )
+    .run(now, now);
   for (const [id, who] of [
     ['prop_mine', pat.id],
     ['prop_theirs', other.pat.id],
   ] as const) {
     t.db
       .prepare(
-        `INSERT INTO proposals (id, principal_id, principal_label, profile, origin, job_kind, title, priority,
-           summary, state, created_at, updated_at, expires_at)
-         VALUES (?, ?, 'x', 'agent', '{"kind":"mcp"}', 'single_op', 't', 'P1', 's', 'pending', ?, ?, ?)`,
+        `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
+           priority, summary, state, created_at, updated_at, expires_at)
+         VALUES (?, 'proj_mock', ?, 'x', 'agent', '{"kind":"mcp"}', 'single_op', 't', 'P1', 's', 'pending', ?, ?, ?)`,
       )
       .run(id, who, now, now, now + 86_400_000);
   }

@@ -15,6 +15,7 @@ import { randomBytes } from 'node:crypto';
 import type { AdminSettings } from '../config/index.js';
 import type { JobEngine } from '../jobs/index.js';
 import type { LkClient } from '../lk/index.js';
+import type { ProjectRegistry } from '../projects/index.js';
 import { redactDeep } from './redact.js';
 
 export interface StreamClient {
@@ -35,6 +36,13 @@ export function budgetPayload(lk: LkClient) {
   return { snapshot, writesPerMinute: snapshot.tiers['write-min'].used };
 }
 
+/** Every project's budget, by LegendKeeper id (each project has its own governor, v2 A1). */
+export function allBudgets(projects: Pick<ProjectRegistry, 'clients'>) {
+  const out: Record<string, ReturnType<typeof budgetPayload> & { name: string }> = {};
+  for (const c of projects.clients()) out[c.id] = { name: c.name, ...budgetPayload(c.client) };
+  return { projects: out };
+}
+
 export class StreamHub {
   readonly bootId = randomBytes(4).toString('hex');
   private nextId = 1;
@@ -45,9 +53,12 @@ export class StreamHub {
   private budgetTimer: NodeJS.Timeout | undefined;
   private closed = false;
 
+  /** Governors whose events are relayed (a project's governor appears when its key is first verified). */
+  private readonly governors = new Map<string, () => void>();
+
   constructor(
     private readonly engine: JobEngine,
-    private readonly lk: LkClient,
+    private readonly projects: ProjectRegistry,
     private readonly settings: AdminSettings,
     private readonly now: () => number = Date.now,
   ) {
@@ -61,9 +72,27 @@ export class StreamHub {
       e.on('controls', (x) => this.publish('controls', x)),
       e.on('policy', (x) => this.publish('policy', x)),
       e.on('proposal', (x) => this.publish('proposal', x)),
-      lk.governor.on('throttled', (x) => this.publish('throttled', x)),
-      lk.governor.on('budget-wait', (x) => this.publish('budget-wait', x)),
+      // v2 A1: a project's status or flags changed (verified, stopped, read-only).
+      projects.onChange((v) => {
+        this.watchGovernors();
+        this.publish('project', v);
+      }),
     );
+    this.watchGovernors();
+  }
+
+  /** Relays every project's governor events, each tagged with its project. */
+  private watchGovernors(): void {
+    for (const c of this.projects.clients()) {
+      if (this.governors.has(c.id)) continue;
+      const g = c.client.governor;
+      const a = g.on('throttled', (x) => this.publish('throttled', { projectId: c.id, ...x }));
+      const b = g.on('budget-wait', (x) => this.publish('budget-wait', { projectId: c.id, ...x }));
+      this.governors.set(c.id, () => {
+        a();
+        b();
+      });
+    }
   }
 
   get lastId(): number {
@@ -135,7 +164,7 @@ export class StreamHub {
       );
       if (resume !== null) for (const b of this.buffer) if (b.id > resume) this.send(c, b.frame);
     }
-    this.send(c, this.frame('budget', budgetPayload(this.lk)));
+    this.send(c, this.frame('budget', allBudgets(this.projects)));
     this.clients.add(c);
     this.startTimers();
   }
@@ -167,7 +196,7 @@ export class StreamHub {
   private startTimers(): void {
     this.heartbeat ??= setInterval(() => this.tick(), this.settings.streamHeartbeatMs);
     this.budgetTimer ??= setInterval(
-      () => this.ephemeral('budget', budgetPayload(this.lk)),
+      () => this.ephemeral('budget', allBudgets(this.projects)),
       this.settings.budgetPushMs,
     );
     this.heartbeat.unref();
@@ -204,6 +233,8 @@ export class StreamHub {
     this.closed = true;
     for (const off of this.offs) off();
     this.offs.length = 0;
+    for (const off of this.governors.values()) off();
+    this.governors.clear();
     for (const c of [...this.clients]) this.detach(c, true);
     this.stopTimers();
   }

@@ -42,6 +42,7 @@ import {
 } from '../jobs/types.js';
 import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
 import { getOperation, operationInputSchema, requireOperation } from '../lk/registry.js';
+import { projectWhere } from '../jobs/repo.js';
 import type { OperationDef } from '../lk/registry-types.js';
 import { canonicalJson, hashJson, issueApprovalToken } from './approval.js';
 import { PolicyError } from './errors.js';
@@ -149,6 +150,7 @@ const iso = (t: number | null) => (t === null ? null : new Date(t).toISOString()
 function toView(r: Row, opCount: number): ProposalView {
   return {
     id: String(r.id),
+    projectId: String(r.project_id),
     principalId: String(r.principal_id),
     principalLabel: String(r.principal_label),
     profile: String(r.profile),
@@ -351,7 +353,7 @@ export class ProposalService implements ProposalSink {
       const key = canonicalJson(target);
       let snap = seen.get(key);
       if (!snap) {
-        snap = await this.snapshot(engine, target, readOrigin, meta.priority);
+        snap = await this.snapshot(engine, meta.project, target, readOrigin, meta.priority);
         seen.set(key, snap);
       }
       const om = opMeta(o.op);
@@ -372,12 +374,13 @@ export class ProposalService implements ProposalSink {
     this.store.tx(() => {
       this.store.db
         .prepare(
-          `INSERT INTO proposals (id, principal_id, principal_label, profile, origin, job_kind, title, priority,
-             on_error, summary, state, created_at, updated_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+          `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
+             priority, on_error, summary, state, created_at, updated_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
         )
         .run(
           id,
+          meta.project,
           principal.principalId,
           principal.label.slice(0, 200),
           principal.profile,
@@ -392,9 +395,9 @@ export class ProposalService implements ProposalSink {
           now + this.o.settings.proposalExpiryMs,
         );
       const insert = this.store.db.prepare(
-        `INSERT INTO proposal_ops (proposal_id, idx, op_id, op_kind, params, params_hash, options, target,
-           target_exists, version, fingerprint, pre_state, pre_state_truncated)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO proposal_ops (proposal_id, project_id, idx, op_id, op_kind, params, params_hash, options,
+           target, target_exists, version, fingerprint, pre_state, pre_state_truncated)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       let budget = PROPOSAL_PRE_STATE_BUDGET_BYTES;
       ops.forEach((o, i) => {
@@ -405,6 +408,7 @@ export class ProposalService implements ProposalSink {
         budget -= pre.text === null ? 0 : Buffer.byteLength(pre.text);
         insert.run(
           id,
+          meta.project,
           i,
           o.op,
           defs[i]!.kind,
@@ -423,6 +427,7 @@ export class ProposalService implements ProposalSink {
     this.store.emit('proposal', {
       type: 'captured',
       proposalId: id,
+      projectId: meta.project,
       state: 'pending',
       principalId: principal.principalId,
       profile: principal.profile,
@@ -434,6 +439,7 @@ export class ProposalService implements ProposalSink {
   /** Reads one target through the engine and fingerprints what the operation would act on. */
   private async snapshot(
     engine: JobEngine,
+    project: string,
     target: CapturedTarget,
     origin: JobOrigin,
     priority: ProposalMeta['priority'],
@@ -445,7 +451,7 @@ export class ProposalService implements ProposalSink {
       const r = await engine.run(
         target.op,
         Object.keys(target.path).length > 0 ? { path: target.path } : {},
-        { origin, priority, title: 'proposal read' },
+        { origin, priority, title: 'proposal read', project },
       );
       if (r.status !== 'succeeded') {
         throw new JobsError(
@@ -499,11 +505,20 @@ export class ProposalService implements ProposalSink {
     if (p.state !== 'pending') {
       throw new PolicyError('INVALID_TRANSITION', `Proposal ${id} is ${p.state}, not pending`);
     }
-    const controls = engine.queries.controls();
+    // v2 A1: the proposal's own project, and only that one: its read-only flag, its availability, its data.
+    const controls = engine.queries.controls(p.projectId);
+    if (controls.project && !controls.project.available) {
+      throw new PolicyError(
+        'PROJECT_UNAVAILABLE',
+        `Project "${controls.project.name}" is not available now; the proposal stays pending`,
+      );
+    }
     if (controls.readOnly) {
       throw new PolicyError(
         'BRIDGE_READ_ONLY',
-        'The bridge is in read-only mode; the proposal stays pending',
+        controls.project?.readOnly && !engine.queries.controls().readOnly
+          ? `Project "${controls.project.name}" is read-only; the proposal stays pending`
+          : 'The bridge is in read-only mode; the proposal stays pending',
       );
     }
     if (controls.writesPaused) {
@@ -533,7 +548,7 @@ export class ProposalService implements ProposalSink {
         const key = canonicalJson(op.target);
         let snap = current.get(key);
         if (!snap) {
-          snap = await this.snapshot(engine, op.target, systemOrigin, 'P0');
+          snap = await this.snapshot(engine, p.projectId, op.target, systemOrigin, 'P0');
           current.set(key, snap);
         }
         const changed =
@@ -585,6 +600,7 @@ export class ProposalService implements ProposalSink {
     const token = issueApprovalToken(
       id,
       p.principalId,
+      p.projectId,
       steps.map((s) => ({ op: s.op, paramsHash: hashJson(s.params ?? {}) })),
       this.now(),
     );
@@ -593,6 +609,7 @@ export class ProposalService implements ProposalSink {
     try {
       result = await engine.submit({
         kind: 'batch_ops',
+        project: p.projectId,
         steps,
         onError: 'stop',
         priority: p.priority as ProposalMeta['priority'],
@@ -633,7 +650,7 @@ export class ProposalService implements ProposalSink {
       return this.require(id);
     }
     this.transition(id, ['approved'], 'executing', { job_id: result.jobId });
-    const job = engine.queries.getJob(result.jobId);
+    const job = engine.queries.getJob(p.projectId, result.jobId);
     if (job && TERMINAL_JOB_STATUSES.has(job.status)) this.onJobFinished(job);
     return this.require(id);
   }
@@ -736,8 +753,8 @@ export class ProposalService implements ProposalSink {
 
   private onJobFinished(job: JobView): void {
     const row = this.store.db
-      .prepare(`SELECT id FROM proposals WHERE job_id = ? AND state = 'executing'`)
-      .get(job.id) as { id: string } | undefined;
+      .prepare(`SELECT id FROM proposals WHERE job_id = ? AND project_id = ? AND state = 'executing'`)
+      .get(job.id, job.projectId) as { id: string } | undefined;
     if (!row) return;
     if (job.status === 'succeeded') {
       if (this.transition(row.id, ['executing'], 'executed', { finished_at: this.now() })) {
@@ -783,18 +800,24 @@ export class ProposalService implements ProposalSink {
     const engine = this.requireEngine();
     const rows = this.store.db
       .prepare(
-        `SELECT id, state, principal_id, job_id FROM proposals WHERE state IN ('approved', 'executing')`,
+        `SELECT id, project_id, state, principal_id, job_id FROM proposals WHERE state IN ('approved', 'executing')`,
       )
-      .all() as { id: string; state: string; principal_id: string; job_id: string | null }[];
+      .all() as {
+      id: string;
+      project_id: string;
+      state: string;
+      principal_id: string;
+      job_id: string | null;
+    }[];
     for (const r of rows) {
       let jobId = r.job_id;
       if (r.state === 'approved') {
         const found = this.store.db
           .prepare(
-            `SELECT id FROM jobs WHERE approved_by IS NOT NULL AND principal_id = ?
+            `SELECT id FROM jobs WHERE approved_by IS NOT NULL AND principal_id = ? AND project_id = ?
                AND json_extract(origin, '$.detail') = ? ORDER BY created_at LIMIT 1`,
           )
-          .get(r.principal_id, `proposal:${r.id}`) as { id: string } | undefined;
+          .get(r.principal_id, r.project_id, `proposal:${r.id}`) as { id: string } | undefined;
         if (!found) {
           if (this.transition(r.id, ['approved'], 'pending', { decided_at: null, decided_by: null })) {
             this.store.audit(
@@ -810,7 +833,7 @@ export class ProposalService implements ProposalSink {
         jobId = found.id;
         this.transition(r.id, ['approved'], 'executing', { job_id: jobId });
       }
-      const job = jobId ? engine.queries.getJob(jobId) : undefined;
+      const job = jobId ? engine.queries.getJob(r.project_id, jobId) : undefined;
       if (!job) {
         const error = { code: 'JOB_MISSING', message: `Job ${jobId ?? '(none)'} was not found` };
         this.transition(r.id, ['executing'], 'failed', {
@@ -836,9 +859,15 @@ export class ProposalService implements ProposalSink {
     return r ? toView(r, this.opCount(id)) : undefined;
   }
 
-  list(filter: ProposalFilter = {}): ProposalView[] {
+  /** Proposals of one project (or, explicitly, `ALL_PROJECTS`), newest first. */
+  list(filter: ProposalFilter): ProposalView[] {
     const where: string[] = [];
     const vals: unknown[] = [];
+    const scope = projectWhere(filter.project, 'p.project_id');
+    if (scope.sql) {
+      where.push(scope.sql);
+      vals.push(...scope.vals);
+    }
     if (filter.state !== undefined) {
       const states = typeof filter.state === 'string' ? [filter.state] : [...filter.state];
       if (states.length === 0) return [];
@@ -964,6 +993,7 @@ export class ProposalService implements ProposalSink {
     this.store.emit('proposal', {
       type: 'updated',
       proposalId: id,
+      projectId: p.projectId,
       state: to,
       principalId: p.principalId,
       profile: p.profile,

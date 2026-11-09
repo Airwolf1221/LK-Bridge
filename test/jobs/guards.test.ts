@@ -10,7 +10,7 @@ import {
   unsupportedLoss,
 } from '../../src/jobs/index.js';
 import type { Block } from './lk-model.js';
-import { harness, origin, seen, settle, type Harness, queue } from './helpers.js';
+import { harness, origin, seen, settle, type Harness, queue, PROJECT } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -69,7 +69,7 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
             ],
           },
         },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(r.error).toBeInstanceOf(UnsupportedBlockLossError);
@@ -77,10 +77,10 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
     expect(seen(h.mock, 'PUT', /\/blocks$/)).toHaveLength(0);
     expect(seen(h.mock, 'GET', /\/blocks$/)).toHaveLength(1); // one read: version, guard and pre-image together
     expect(h.model.docs.get(documentId)!.blocks).toEqual(page);
-    const job = e.engine.queries.getJob((r.error as UnsupportedBlockLossError).jobId!)!;
+    const job = e.engine.queries.getJob(PROJECT, (r.error as UnsupportedBlockLossError).jobId!)!;
     expect(job.status).toBe('failed');
     expect(job.lastError).toMatchObject({ code: 'UNSUPPORTED_BLOCK_LOSS', blockIds: ['u2'] });
-    expect(e.engine.queries.listErrorGroups()[0]).toMatchObject({
+    expect(e.engine.queries.listErrorGroups(PROJECT)[0]).toMatchObject({
       code: 'UNSUPPORTED_BLOCK_LOSS',
       classification: 'user_fixable',
     });
@@ -99,7 +99,7 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
           path: { resourceId, documentId, blockId: 'c1' },
           body: { kind: 'callout', tone: 'info', children: [{ kind: 'paragraph', content: [] }] },
         },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(r.error).toBeInstanceOf(UnsupportedBlockLossError);
@@ -112,7 +112,7 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
     const { resourceId, documentId } = h.model.seedResource('r1', { blocks: page });
     const e = h.newEngine();
     const path = { resourceId, documentId, blockId: 'c1' };
-    const refused = await settle(h, e, e.engine.run('deleteBlock', { path }, { origin }));
+    const refused = await settle(h, e, e.engine.run('deleteBlock', { path }, { project: PROJECT, origin }));
     expect(refused.error).toBeInstanceOf(UnsupportedBlockLossError);
     expect((refused.error as UnsupportedBlockLossError).blockIds).toEqual(['u2']);
     expect(seen(h.mock, 'DELETE', /\/blocks\/c1$/)).toHaveLength(0);
@@ -120,21 +120,21 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
     const self = await settle(
       h,
       e,
-      e.engine.run('deleteBlock', { path: { ...path, blockId: 'u1' } }, { origin }),
+      e.engine.run('deleteBlock', { path: { ...path, blockId: 'u1' } }, { project: PROJECT, origin }),
     );
     expect((self.error as UnsupportedBlockLossError).blockIds).toEqual(['u1']);
     // A block with nothing unsupported under it is deleted as before.
     const plain = await settle(
       h,
       e,
-      e.engine.run('deleteBlock', { path: { ...path, blockId: 'p1' } }, { origin }),
+      e.engine.run('deleteBlock', { path: { ...path, blockId: 'p1' } }, { project: PROJECT, origin }),
     );
     expect(plain.error).toBeUndefined();
     // The owner of the intent can allow the loss explicitly.
     const allowed = await settle(
       h,
       e,
-      e.engine.run('deleteBlock', { path }, { origin, allowUnsupportedLoss: true }),
+      e.engine.run('deleteBlock', { path }, { project: PROJECT, origin, allowUnsupportedLoss: true }),
     );
     expect(allowed.error).toBeUndefined();
     expect(seen(h.mock, 'DELETE', /\/blocks\/c1$/)).toHaveLength(1);
@@ -182,7 +182,7 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
             ],
           },
         },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(ok.error).toBeUndefined();
@@ -196,14 +196,14 @@ describe('unsupported-block guard (PLAN §4 rule 2)', () => {
           path: { resourceId, documentId },
           body: { blocks: [{ kind: 'paragraph', content: [{ text: 'only this' }] }] },
         },
-        { origin, allowUnsupportedLoss: true },
+        { project: PROJECT, origin, allowUnsupportedLoss: true },
       ),
     );
     expect(lossy.error).toBeUndefined();
     expect(unsupportedBlockIds(h.model.docs.get(documentId)!.blocks).size).toBe(0);
     expect(seen(h.mock, 'GET', /\/blocks$/)).toHaveLength(2); // one read per destructive write
 
-    const entries = e.engine.queries.journalLookup({ documentId });
+    const entries = e.engine.queries.journalLookup(PROJECT, { documentId });
     expect(entries).toHaveLength(2);
     const latest = entries[0]!;
     expect(latest).toMatchObject({
@@ -230,11 +230,12 @@ describe('other guards', () => {
       e.engine.run(
         'deleteResource',
         { path: { resourceId: 'rparent1' }, query: { cascade: true } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     ).rejects.toBeInstanceOf(CascadeConfirmationRequiredError);
     await expect(
       e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         origin,
         steps: [
@@ -242,19 +243,19 @@ describe('other guards', () => {
         ],
       }),
     ).rejects.toThrow(CascadeConfirmationRequiredError);
-    expect(e.engine.queries.listJobs()).toHaveLength(0);
+    expect(e.engine.queries.listJobs(PROJECT)).toHaveLength(0);
     const r = await settle(
       h,
       e,
       e.engine.run(
         'deleteResource',
         { path: { resourceId: 'rparent1' }, query: { cascade: true } },
-        { origin, confirm: 'cascade' },
+        { project: PROJECT, origin, confirm: 'cascade' },
       ),
     );
     expect(r.error).toBeUndefined();
     expect(h.model.resources.get('rchild01')!.deletedAt).toBeDefined();
-    expect(e.engine.queries.journalLookup({ resourceId: 'rparent1' })[0]).toMatchObject({
+    expect(e.engine.queries.journalLookup(PROJECT, { resourceId: 'rparent1' })[0]).toMatchObject({
       opId: 'deleteResource',
       params: { query: { cascade: true } },
       preImage: null,
@@ -265,24 +266,24 @@ describe('other guards', () => {
     h = await harness();
     const e = h.newEngine();
     await expect(
-      e.engine.run('inviteMember', { body: { email: 'a@example.invalid' } }, { origin }),
+      e.engine.run('inviteMember', { body: { email: 'a@example.invalid' } }, { project: PROJECT, origin }),
     ).rejects.toBeInstanceOf(MemberAdminDisabledError);
-    await expect(e.engine.run('removeMember', { path: { userId: 'u1' } }, { origin })).rejects.toBeInstanceOf(
-      MemberAdminDisabledError,
-    );
     await expect(
-      e.engine.run('revokeInvite', { path: { inviteId: 'i1' } }, { origin }),
+      e.engine.run('removeMember', { path: { userId: 'u1' } }, { project: PROJECT, origin }),
+    ).rejects.toBeInstanceOf(MemberAdminDisabledError);
+    await expect(
+      e.engine.run('revokeInvite', { path: { inviteId: 'i1' } }, { project: PROJECT, origin }),
     ).rejects.toBeInstanceOf(MemberAdminDisabledError);
     expect(h.mock.calls).toHaveLength(0);
     // Reading members is not an admin write.
-    const list = await settle(h, e, e.engine.run('listMembers', {}, { origin }));
+    const list = await settle(h, e, e.engine.run('listMembers', {}, { project: PROJECT, origin }));
     expect(list.error).toBeUndefined();
 
     const e2 = h.newEngine({ settings: { allowMemberAdmin: true } });
     const ok = await settle(
       h,
       e2,
-      e2.engine.run('inviteMember', { body: { email: 'a@example.invalid' } }, { origin }),
+      e2.engine.run('inviteMember', { body: { email: 'a@example.invalid' } }, { project: PROJECT, origin }),
     );
     expect(ok.error).toBeUndefined();
     expect(h.model.count('inviteMember')).toBe(1);
@@ -293,10 +294,15 @@ describe('other guards', () => {
     h.model.seedResource('r1');
     const e = h.newEngine({ settings: { readOnly: true } });
     await expect(
-      e.engine.run('updateResource', { path: { resourceId: 'r1' }, body: { name: 'x' } }, { origin }),
+      e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'r1' }, body: { name: 'x' } },
+        { project: PROJECT, origin },
+      ),
     ).rejects.toBeInstanceOf(ReadOnlyError);
     await expect(
       e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         origin,
         steps: [
@@ -305,10 +311,16 @@ describe('other guards', () => {
         ],
       }),
     ).rejects.toThrow(ReadOnlyError);
-    expect(e.engine.queries.listJobs()).toHaveLength(0);
+    expect(e.engine.queries.listJobs(PROJECT)).toHaveLength(0);
     // Reads still work.
     expect(
-      (await settle(h, e, e.engine.run('getResource', { path: { resourceId: 'r1' } }, { origin }))).error,
+      (
+        await settle(
+          h,
+          e,
+          e.engine.run('getResource', { path: { resourceId: 'r1' } }, { project: PROJECT, origin }),
+        )
+      ).error,
     ).toBeUndefined();
 
     // Runtime override: off, persisted across a restart.
@@ -320,13 +332,21 @@ describe('other guards', () => {
     const w = await settle(
       h,
       e2,
-      e2.engine.run('updateResource', { path: { resourceId: 'r1' }, body: { name: 'x' } }, { origin }),
+      e2.engine.run(
+        'updateResource',
+        { path: { resourceId: 'r1' }, body: { name: 'x' } },
+        { project: PROJECT, origin },
+      ),
     );
     expect(w.error).toBeUndefined();
     // Override back on: refuses again.
     e2.engine.controls.setReadOnly(true);
     await expect(
-      e2.engine.run('updateResource', { path: { resourceId: 'r1' }, body: { name: 'y' } }, { origin }),
+      e2.engine.run(
+        'updateResource',
+        { path: { resourceId: 'r1' }, body: { name: 'y' } },
+        { project: PROJECT, origin },
+      ),
     ).rejects.toBeInstanceOf(ReadOnlyError);
     expect(e2.engine.queries.runtimeSettings().find((s) => s.key === 'jobs.read_only_override')?.value).toBe(
       true,
@@ -340,16 +360,17 @@ describe('other guards', () => {
     // Accepted while writes are paused (so it stays queued), then read-only is switched on and writes resumed.
     e.engine.controls.pauseWrites();
     const { jobId } = await queue(e.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin,
       steps: [{ op: 'updateResource', params: { path: { resourceId: 'r1' }, body: { name: 'x' } } }],
     });
     e.engine.controls.setReadOnly(true);
     e.engine.controls.resumeWrites();
-    await h.drive(e, () => e.engine.queries.getJob(jobId)?.waitReason?.held === 'read_only');
+    await h.drive(e, () => e.engine.queries.getJob(PROJECT, jobId)?.waitReason?.held === 'read_only');
     expect(seen(h.mock, 'PATCH', /\/resources\/r1$/)).toHaveLength(0);
     e.engine.controls.setReadOnly(false);
-    await h.drive(e, () => e.engine.queries.getJob(jobId)?.status === 'succeeded');
+    await h.drive(e, () => e.engine.queries.getJob(PROJECT, jobId)?.status === 'succeeded');
     expect(h.model.count('updateResource')).toBe(1);
   });
 });
@@ -362,6 +383,7 @@ describe('write journal', () => {
     h.model.seedResource('r3');
     const e = h.newEngine();
     const { jobId } = await queue(e.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin,
       steps: [
@@ -370,8 +392,8 @@ describe('write journal', () => {
         { op: 'deleteResource', params: { path: { resourceId: 'r3' } } },
       ],
     });
-    await h.drive(e, () => e.engine.queries.getJob(jobId)?.status === 'succeeded');
-    const entries = e.engine.queries.journalLookup({ jobId });
+    await h.drive(e, () => e.engine.queries.getJob(PROJECT, jobId)?.status === 'succeeded');
+    const entries = e.engine.queries.journalLookup(PROJECT, { jobId });
     expect(entries.map((x) => [x.opId, x.outcome])).toEqual([
       ['deleteResource', 'applied'],
       ['moveResource', 'applied'],
@@ -381,7 +403,7 @@ describe('write journal', () => {
     expect(entries[1]!.preImage).toMatchObject({ id: 'r1', name: 'After' });
     expect(entries[0]).toMatchObject({ targetId: 'r3', preImage: null });
     expect(
-      e.engine.queries.journalLookup({ resourceId: 'r1', includePreImage: false })[0],
+      e.engine.queries.journalLookup(PROJECT, { resourceId: 'r1', includePreImage: false })[0],
     ).not.toHaveProperty('preImage');
 
     // Size cap: keep only what fits in ~the newest entry.
@@ -395,6 +417,6 @@ describe('write journal', () => {
       h.clock.now() + 31 * 86_400_000,
     );
     expect(byAge.removedByAge).toBe(1);
-    expect(e.engine.queries.journalLookup()).toHaveLength(0);
+    expect(e.engine.queries.journalLookup(PROJECT)).toHaveLength(0);
   });
 });

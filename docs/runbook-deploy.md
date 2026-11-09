@@ -35,7 +35,8 @@ in that order.
 Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), [rollback](#rollback),
 [logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the v2 phase 0 spike](#v2-phase-0-spike-),
 [the browser smoke test](#browser-smoke-test),
-[memory](#memory), [migrating an existing install to v1.0.1](#migrating-an-existing-install-to-v101).
+[memory](#memory), [moving to several projects (v2 A1)](#moving-to-several-projects-v2-a1),
+[migrating an existing install to v1.0.1](#migrating-an-existing-install-to-v101).
 
 ## What is where
 
@@ -72,8 +73,10 @@ The scripts, all in `deploy/`: `install-node.sh`, `deploy.sh`, `backup.sh`, `res
 - **DNS.** An `A` record `lk.ottomoons.co.uk` → this server's public IPv4 address. Claude's connectors are IPv4-only and
   reject names that resolve to private or CGNAT addresses. Do **not** add an `AAAA` record unless this server's IPv6 is
   fully working. Check from your own computer: `dig +short A lk.ottomoons.co.uk`.
-- **LegendKeeper.** The production API key (ADMIN role) and project id, and the **sandbox** project's own key and id.
-  Keep them somewhere you can copy from in step 6; do not email or message them.
+- **LegendKeeper.** An API key (ADMIN role) for each project the bridge will serve: the test world's to start with
+  (v2 A1: one bridge serves several projects, each with its own key; [projects.md](projects.md)). Project ids are not
+  needed: the bridge learns each project's id from its key. Keep the keys somewhere you can copy from in step 6; do not
+  email or message them.
 - **GitHub.** You will add a deploy key to the repository in step 3 (repository _Settings → Deploy keys_).
 
 **🔒 sudo, on the server**
@@ -229,12 +232,17 @@ sudoedit /etc/lk-bridge/lk-bridge.env
 
 Fill in:
 
-| Variable                                      | Value                                                                                                               |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `LK_API_KEY`, `LK_PROJECT_ID`                 | the production key and project id from LegendKeeper                                                                 |
-| `SESSION_SECRET`, `JWT_SIGNING_KEY`           | two **different** random values: run `openssl rand -base64 48` twice in another terminal and copy each output       |
-| `LK_SANDBOX_API_KEY`, `LK_SANDBOX_PROJECT_ID` | the **sandbox** project's key and id (used only by the sandbox script, step 12). Leave blank until then if you wish |
-| `OWNER_PASSWORD_HASH`                         | step 7 gives you this line                                                                                          |
+| Variable                            | Value                                                                                                                           |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `LK_PROJECTS`                       | the projects, comma-separated; the template has `test` (the test world). Add a name, and its key line, for each further project |
+| `LK_PROJECT_TEST_API_KEY`           | the test world's key from LegendKeeper; one `LK_PROJECT_<NAME>_API_KEY` per listed project, the name upper-cased                |
+| `LK_DEFAULT_PROJECT`                | where reads go when an agent names no project (`test`); required once there are two projects                                    |
+| `SESSION_SECRET`, `JWT_SIGNING_KEY` | two **different** random values: run `openssl rand -base64 48` twice in another terminal and copy each output                   |
+| `OWNER_PASSWORD_HASH`               | step 7 gives you this line                                                                                                      |
+
+`LK_API_KEY`, `LK_PROJECT_ID` (the v1 single-project form) and `LK_SANDBOX_API_KEY`, `LK_SANDBOX_PROJECT_ID` are no longer
+used in a new file ([projects.md](projects.md)). An existing file moves to the new form as in
+[Moving to several projects (v2 A1)](#moving-to-several-projects-v2-a1).
 
 Already set for production: `BRIDGE_PUBLIC_URL=https://lk.ottomoons.co.uk`, `TRUST_PROXY=loopback`,
 `LK_READ_ONLY=true` (the first boot is read-only), `WRITERS_MAX=1`, `HOST=127.0.0.1`, `PORT=8787`,
@@ -244,7 +252,7 @@ around `=`; a value containing `$` (the owner hash) stays inside single quotes.
 Check that nothing required is still blank, **without printing any value**:
 
 ```bash
-sudo grep -E '^(LK_API_KEY|LK_PROJECT_ID|SESSION_SECRET|JWT_SIGNING_KEY|OWNER_PASSWORD_HASH)=$' /etc/lk-bridge/lk-bridge.env
+sudo grep -E '^(LK_PROJECT_[A-Z0-9_]+_API_KEY|SESSION_SECRET|JWT_SIGNING_KEY|OWNER_PASSWORD_HASH)=$' /etc/lk-bridge/lk-bridge.env
 # prints only the names still empty (OWNER_PASSWORD_HASH is expected until step 7); prints nothing when all are set
 sudo -u lkbridge test -r /etc/lk-bridge/lk-bridge.env && echo "lkbridge can read it"
 sudo -u lkbuild test -r /etc/lk-bridge/lk-bridge.env && echo "WRONG: lkbuild must not read it" || echo "good: lkbuild cannot read it"
@@ -321,14 +329,16 @@ systemctl list-timers lk-bridge-backup.timer --no-pager
 What you should see in the journal: `LK-Bridge listening` with the MCP URL `https://lk.ottomoons.co.uk/mcp`. If it
 fails instead:
 
-| Journal shows                            | Cause                                                                                  |
-| ---------------------------------------- | -------------------------------------------------------------------------------------- |
-| `Invalid configuration: - LK_API_KEY: …` | a variable is blank or malformed; the message names the **variable**, never the value  |
-| `status=226/NAMESPACE`                   | `/var/lib/lk-bridge` does not exist (step 2)                                           |
-| `status=203/EXEC`                        | the private Node is missing or not executable (step 4)                                 |
-| `EADDRINUSE`                             | something else is on port 8787; find it with `sudo ss -ltnp \| grep 8787`              |
-| `Cannot find module …/dist/server.js`    | the build did not run (step 5)                                                         |
-| `unable to open database file`           | `/var/lib/lk-bridge` is not owned by `lkbridge` or `DB_PATH` was changed to outside it |
+| Journal shows                                         | Cause                                                                                                                         |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `Invalid configuration: - LK_PROJECT_TEST_API_KEY: …` | a variable is blank or malformed; the message names the **variable**, never the value                                         |
+| `Another LK-Bridge process (pid … on …) is serving`   | a second bridge process on the same database (exactly one may serve it, ADR 0023); stop the other one                         |
+| `project stopped` (the bridge keeps running)          | that project's key was refused or belongs to another project; the Overview and Projects pages show why. The others are served |
+| `status=226/NAMESPACE`                                | `/var/lib/lk-bridge` does not exist (step 2)                                                                                  |
+| `status=203/EXEC`                                     | the private Node is missing or not executable (step 4)                                                                        |
+| `EADDRINUSE`                                          | something else is on port 8787; find it with `sudo ss -ltnp \| grep 8787`                                                     |
+| `Cannot find module …/dist/server.js`                 | the build did not run (step 5)                                                                                                |
+| `unable to open database file`                        | `/var/lib/lk-bridge` is not owned by `lkbridge` or `DB_PATH` was changed to outside it                                        |
 
 After editing the env file, apply it with `sudo systemctl restart lk-bridge`.
 
@@ -406,15 +416,23 @@ must **fail**, the firewall, the clock) and sign in at <https://lk.ottomoons.co.
 
 ## 12. The sandbox script ✋
 
-Needs `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID` in the env file (step 6; **sandbox project only**). The script
-reads just those two from the file, exports only them, prints neither, and refuses to run if either equals the
-production key or project id.
+The sandbox script writes to LegendKeeper, so it runs only against a project **marked as a sandbox** in the bridge's
+database: the test world, never Arkona or Baisheng. Mark it once, after the bridge has started and checked its key (step 9;
+the Projects page then shows it). The flag can only be set here, from the server's shell, and the change is audited:
 
 🔒 sudo (as `lkbridge`)
 
 ```bash
-sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh
+sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- sandbox test on
 ```
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
+```
+
+The wrapper reads just that project's key variable (`LK_PROJECT_TEST_API_KEY`) and `DB_PATH` from the env file, exports
+only those, and prints neither. The suite refuses a project that is not marked as a sandbox, and a key whose own project
+(from `listProjects`) is not that project's stored id.
 
 It uses its own temporary database, not the production one, and does not need the service stopped. Read the report at the
 end (PASS / FAIL / INCONCLUSIVE / SKIPPED per item; see `test/sandbox/README.md`). Keep the output for chunk 8's review.
@@ -461,13 +479,14 @@ of the checklist walks through it against the sandbox project.
 
 Follows PLAN §9.7. The bridge starts read-only (`LK_READ_ONLY=true`, `WRITERS_MAX=1`).
 
-1. Run the sandbox script and the checklist sections against the **sandbox** project first (set `LK_API_KEY` and
-   `LK_PROJECT_ID` to the sandbox's temporarily if you want to exercise writes through the connectors; put the real ones
-   back afterwards and restart).
-2. Point the bridge at the real project in **read-only** mode while ChatGPT finishes its maintenance on the repository.
-   Two writers on one project would contend for versions and for the shared project rate tier.
+1. Run the sandbox script and the checklist sections against the **test** project first (agents pass
+   `project: "test"`; with one project they may leave it out).
+2. Add the real project as a further project ([Adding a project](#adding-a-project)) and switch on its **Read-only** flag
+   on the Projects page while ChatGPT finishes its maintenance on the repository. Two writers on one project would contend
+   for versions and for the shared project rate tier; and never give one project's key to two bridges (ADR 0023).
 3. When that maintenance is over, revoke the old bridge's LegendKeeper key, then set `LK_READ_ONLY=false` in the env file
-   and `sudo systemctl restart lk-bridge`. Keep `WRITERS_MAX=1` for the first week.
+   and `sudo systemctl restart lk-bridge`, and switch the project's own Read-only flag off. Keep `WRITERS_MAX=1` for the
+   first week.
 
 ---
 
@@ -513,7 +532,10 @@ Options: `--current` (deploy the checked-out commit without fetching; used for r
 name and print a `WARNING:` line (never a value; never a failure) for: a variable the template sets that your file does
 not; an optional setting a release added (the template shows it as `# NAME=…`; copy that commented line across to keep
 the file in step); and a variable your file still sets that the template no longer lists (the bridge ignores it; remove the
-line). When everything matches it says `Env file matches deploy/env.template`.
+line). When everything matches it says `Env file matches deploy/env.template`. Since v2 A1 the project variables follow
+their own rules (by name only): each project in `LK_PROJECTS` needs its `LK_PROJECT_<NAME>_API_KEY`, a key line for an
+unlisted project is ignored, the single-project form (`LK_API_KEY`, `LK_PROJECT_ID`) still works but should be moved
+off, and `LK_SANDBOX_API_KEY` / `LK_SANDBOX_PROJECT_ID` are retired.
 
 The unit files, the sudoers file, the Caddy block and the installed deploy script are **not** updated by `deploy.sh`. If
 a release changes one, the script warns after a successful deploy ("… differs from deploy/…"); an administrator then
@@ -599,6 +621,11 @@ Release 1.0.1 adds one migration, `0500_governor_counters.sql`: one new table (t
 removed or renamed. 1.0.0 ignores it, so rolling back from 1.0.1 needs **no** restore either. (1.0.1's
 `proposal-prune` job deletes old finished proposals; a rollback does not bring them back.)
 
+v2 A1 adds `0600_projects.sql`, which **rebuilds** every table holding LegendKeeper data with a required `project_id`.
+Releases before it cannot run on the result, so rolling back from v2 A1 **needs the restore** of the `pre-deploy` backup
+taken just before it (put the env file's single-project lines back first: [Moving to several projects
+(v2 A1)](#moving-to-several-projects-v2-a1), "Going back").
+
 ## Logs and useful commands
 
 The bridge logs JSON lines (pino) to the journal. Reading the journal needs `sudo` or membership of the
@@ -649,25 +676,28 @@ always is after its first minute.
 🔒 sudo (as `lkbridge`)
 
 ```bash
-sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh --writes 100      # a quick run first (about 3 minutes)
-sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh                   # the full soak, about 1,000 writes
+sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh --project test --writes 100   # a quick run first (about 3 minutes)
+sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh --project test                # the full soak, about 1,000 writes
 ```
 
-- It needs `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID` in the env file (step 6), reads only those two, and prints
-  neither. Note (ADR 0020): this and `sandbox-test.sh` still run Vitest and tsx (development tools) as `lkbridge`, which
-  can read the whole env file; run them only when you mean to. It **refuses** unless the key's own project (from `listProjects`) is exactly `LK_SANDBOX_PROJECT_ID`.
-- **While the bridge itself serves the test world** (PLAN amendment 6), `LK_SANDBOX_PROJECT_ID` equals `LK_PROJECT_ID`,
-  and the wrapper refuses unless you add `--allow-bridge-project`. Use it only while that is still the test world, and run
-  the soak while nothing else is using the bridge: the soak and the bridge then share the key's rate budget, so a busy
-  bridge would slow the soak and could cost it the zero-429 result. Never pass the flag once the bridge serves Baisheng.
+- `--project` names a project the bridge serves **and that is marked as a sandbox** (step 12: `npm run projects -- sandbox
+test on`); the soak refuses any other, and any key whose own project (from `listProjects`) is not that project's stored
+  id. The wrapper reads only that project's key variable and `DB_PATH`, and prints neither. Note (ADR 0020): this and
+  `sandbox-test.sh` still run Vitest and tsx (development tools) as `lkbridge`, which can read the whole env file; run them
+  only when you mean to.
+- The bridge serves the same project with the same key, so the soak and the bridge share that project's rate budget: run
+  the soak while nothing else is using the test project, or a busy bridge would slow the soak and could cost it the
+  zero-429 result. Other projects' budgets are not touched. (`--allow-bridge-project`, `LK_SANDBOX_API_KEY` and
+  `LK_SANDBOX_PROJECT_ID` are gone since v2 A1.)
 - Everything is created under **one** throwaway root resource (`lk-bridge soak <time>`), which is deleted (cascade) at
   the end, whatever happens; if that fails the report names the root to delete by hand in LegendKeeper. It uses its own
   temporary database, never `bridge.db`, and does not need the service stopped.
 - The report: total time, the write phase and **writes per minute** achieved, HTTP responses by status, **429 responses
   (target 0)**, retries, budget waits, job steps succeeded or failed, **peak memory** (RSS, V8 heap, buffers) and the
   clean-up. Exit code 0 means PASS (no 429, no failed step, cleaned up). Keep the output for the next review.
-- Without the wrapper: `LK_SANDBOX_API_KEY=… LK_SANDBOX_PROJECT_ID=… npm run soak:sandbox -- --writes 100` (from a
-  checkout with dependencies installed; never on a shared screen).
+- Without the wrapper: `DB_PATH=… LK_PROJECT_TEST_API_KEY=… npm run soak:sandbox -- --project test --writes 100` (from a
+  checkout with dependencies installed and a database that has the project marked as a sandbox; never on a shared
+  screen).
 
 ## v2 phase 0 spike ✋
 
@@ -681,14 +711,13 @@ deleted at the end.
 🔒 sudo (as `lkbridge`)
 
 ```bash
-sudo -u lkbridge /opt/lk-bridge/app/deploy/spike-v2.sh --allow-bridge-project
+sudo -u lkbridge /opt/lk-bridge/app/deploy/spike-v2.sh --project test
 ```
 
-- Needs `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID` in the env file, as for the soak; reads only those two and
-  prints neither. It **refuses** unless the key's own project is exactly `LK_SANDBOX_PROJECT_ID`, and, like the soak, needs
-  `--allow-bridge-project` while the bridge itself serves the test world (then it shares the bridge's rate budget: its
-  reads run at the lowest priority, but run it while the bridge is quiet). Never pass the flag once the bridge serves
-  Baisheng or Arkona.
+- `--project` names a project marked as a sandbox, as for the soak (step 12); it **refuses** any other, and any key whose
+  own project is not that project's stored id. The wrapper reads only that project's key variable and `DB_PATH`, and
+  prints neither. It shares that project's rate budget with the bridge (its reads run at the lowest priority, but run it
+  while the bridge is quiet).
 - **What it writes:** the report on screen (stdout; progress is on stderr), and the same report to
   `/var/lib/lk-bridge/spike/spike-v2-<timestamp>.md`, with the calendar oracle beside it as
   `spike-v2-<timestamp>-oracle.json`. Send back the `.md` file (and the `.json`). Nothing goes to `bridge.db`; the script uses a temporary
@@ -740,6 +769,118 @@ ps -o rss=,vsz= -p "$(systemctl show lk-bridge -p MainPID --value)"             
 If `MemoryPeak` over a busy week stays below about 300 MB, the values can be tightened to `MemoryHigh=500M`,
 `MemoryMax=640M` and `--max-old-space-size=400`; there is no need to. If it ever approaches 900 MB, look for a cause
 before raising anything.
+
+## Moving to several projects (v2 A1)
+
+Since v2 A1 one bridge serves several LegendKeeper projects, each with its own key ([projects.md](projects.md),
+[ADR 0023](adr/0023-project-model.md)). The release adds migration **`0600_projects.sql`**, which gives every stored row a
+project and assigns all existing rows (jobs, journal, proposals, errors, budget history, mappings, maintenance runs, the
+governor's saved counts) to the project the bridge serves today: the one in `LK_PROJECT_ID`, named `test` (or
+`LK_PROJECT_NAME` if your file sets it). So **deploy first, with the env file as it is, then change the file.**
+
+The live file today has the single-project form: `LK_API_KEY` and `LK_PROJECT_ID` (the test world, PLAN amendment 6), and
+`LK_SANDBOX_API_KEY` / `LK_SANDBOX_PROJECT_ID`. Nothing below prints a key.
+
+1. **Deploy** as usual (🔒 sudo). `deploy.sh` takes its `pre-deploy` backup, then migrates.
+
+   ```bash
+   sudo /opt/lk-bridge/bin/deploy.sh
+   ```
+
+   The deploy script installed in `/opt/lk-bridge/bin` comes from an earlier release and gives the migration `DB_PATH`
+   only; the migration then reads `LK_PROJECT_ID` and `LK_PROJECT_NAME` (those two names only) from
+   `/etc/lk-bridge/lk-bridge.env` itself, and says so (`LK_PROJECT_ID was read from …`). The bridge starts in the
+   single-project form and logs a warning that names the variables to move to. The deploy ends with a warning that the
+   installed deploy script differs: step 2.
+
+2. **Update the installed deploy script** (it runs as root, so read the difference first; 🔒 sudo):
+
+   ```bash
+   diff /opt/lk-bridge/bin/deploy.sh /opt/lk-bridge/app/deploy/deploy.sh
+   ```
+
+   ```bash
+   diff /opt/lk-bridge/bin/lib.sh /opt/lk-bridge/app/deploy/lib.sh
+   ```
+
+   ```bash
+   sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/deploy.sh /opt/lk-bridge/bin/deploy.sh
+   ```
+
+   ```bash
+   sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/lib.sh /opt/lk-bridge/bin/lib.sh
+   ```
+
+   The differences: the migration step passes `LK_PROJECT_ID` and `LK_PROJECT_NAME` (ids and names, never a key), and the
+   env drift check knows the project variables.
+
+3. **Edit the env file** ✋ (`sudoedit /etc/lk-bridge/lk-bridge.env`). Rename and remove lines; never copy a key into a
+   message or a terminal:
+
+   | Change                                                             | Line(s)                                               |
+   | ------------------------------------------------------------------ | ----------------------------------------------------- |
+   | **rename** the key's line, keeping its value exactly               | `LK_API_KEY=…` becomes `LK_PROJECT_TEST_API_KEY=…`    |
+   | **add**                                                            | `LK_PROJECTS=test`                                    |
+   | **add**                                                            | `LK_DEFAULT_PROJECT=test`                             |
+   | **add** (optional; the default, shown as in `deploy/env.template`) | `# REQUIRE_PROJECT_FOR_WRITES=true`                   |
+   | **remove** (the id is now learned from the key and stored)         | `LK_PROJECT_ID=…`, and `LK_PROJECT_NAME=…` if present |
+   | **remove** (retired: the scripts now use the project's own key)    | `LK_SANDBOX_API_KEY=…`, `LK_SANDBOX_PROJECT_ID=…`     |
+
+   If your file set `LK_PROJECT_NAME`, use that name (lowercase) instead of `test` in all three new names. Check by name
+   only (🔒 sudo):
+
+   ```bash
+   sudo grep -oE '^LK_[A-Z0-9_]+=' /etc/lk-bridge/lk-bridge.env
+   ```
+
+   It should list `LK_PROJECTS=`, `LK_PROJECT_TEST_API_KEY=`, `LK_DEFAULT_PROJECT=`, `LK_READ_ONLY=` and
+   `LK_ALLOW_MEMBER_ADMIN=`, and none of `LK_API_KEY=`, `LK_PROJECT_ID=`, `LK_SANDBOX_…`. This must print nothing (an
+   empty key line):
+
+   ```bash
+   sudo grep -E '^LK_PROJECT_TEST_API_KEY=$' /etc/lk-bridge/lk-bridge.env
+   ```
+
+4. **Restart and check** (🔒 sudo):
+
+   ```bash
+   sudo systemctl restart lk-bridge
+   ```
+
+   ```bash
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/healthcheck.sh
+   ```
+
+   The journal no longer shows the single-project warning, and the health check's drift check is quiet about project
+   variables. On the dashboard, **Projects** shows `test` as default, key valid, active, with the same LegendKeeper id as
+   before (the key proved it); its jobs, journal and proposals are all there under the project switcher's `test`. If the
+   project shows **stopped**, the reason says why (for example a key pasted wrongly); the bridge keeps running.
+
+5. **Mark the test world as the sandbox** (once; the sandbox, soak and spike scripts refuse every other project;
+   🔒 sudo):
+
+   ```bash
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- sandbox test on
+   ```
+
+   From now on the scripts take `--project test` (sections 12, [Soak test](#soak-test-), [v2 phase 0
+   spike](#v2-phase-0-spike-)); `--allow-bridge-project` is gone.
+
+6. In Claude or ChatGPT, `list_projects` shows `test`. With one project, agents may leave `project` out; once a second
+   project is added, every write must name its project.
+
+**Going back.** Until step 3 nothing in the env file has changed. After it, putting the old lines back (the single-project
+form still works) and restarting returns to step 1's state. Going back to a release before this one needs the
+`pre-deploy` backup of step 1 (see [Rollback](#rollback)).
+
+### Adding a project
+
+1. Choose a name (a lowercase letter, then lowercase letters, digits or `_`), for example `arkona`.
+2. In the env file add the name to `LK_PROJECTS` (`LK_PROJECTS=test,arkona`) and a line `LK_PROJECT_ARKONA_API_KEY=` with
+   its key. With two projects `LK_DEFAULT_PROJECT` is required: reads without `project` go there.
+3. `sudo systemctl restart lk-bridge`. The bridge checks the new key, learns and stores the project's id, and shows it on
+   the Projects page. Switch its **Read-only** flag on there first if it should not be written to yet.
+4. Never mark a live world as a sandbox, and never put one project's key in two bridges' env files (ADR 0023).
 
 ## Migrating an existing install to v1.0.1
 

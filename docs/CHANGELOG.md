@@ -45,6 +45,54 @@ only: no MCP tools, no database tables, no LegendKeeper calls. No existing behav
   into or out of a quote, callout, secret or expand block now keeps its id and settings.
 - `docs/PLAN-v2.md` is left out of the Prettier check, as `docs/PLAN.md` already was.
 
+## Unreleased: v2 A1, several LegendKeeper projects in one bridge (9 November 2026)
+
+One bridge now serves several LegendKeeper projects at once (PLAN-v2 4.1; [ADR 0023](adr/0023-project-model.md),
+[projects.md](projects.md)). Moving the live env file: [runbook](runbook-deploy.md#moving-to-several-projects-v2-a1).
+
+- **Configuration.** Keys stay in the env file: `LK_PROJECTS` (names), `LK_PROJECT_<NAME>_API_KEY` (one key each),
+  `LK_DEFAULT_PROJECT`, and `REQUIRE_PROJECT_FOR_WRITES` (default `true`). Everything else is in the new `projects`
+  table: name, LegendKeeper id (learned from the key and checked at every start), display name, default, sandbox and
+  read-only flags, and JSON settings with a typed accessor. The single-project form (`LK_API_KEY`, `LK_PROJECT_ID`,
+  `LK_PROJECT_NAME`, default name `test`) still works, with a start-up warning.
+- **Start-up checks per project.** Each key must authenticate and prove its project. A refused key, an unpaid plan, or a
+  key that now belongs to another project stops **that project only** (shown on the Overview and the new Projects page,
+  logged by variable name, never the key); an unreachable LegendKeeper is retried. The bridge listens at once and serves
+  each project from the moment its check passes.
+- **One governor per project** (its own key tiers and project tier, its own saved counts); the writer pool stays global
+  (`WRITERS_MAX`) with turns across projects. Locks are keyed by project and entity.
+- **Data.** Migration **0600** (`0600_projects.sql`) adds a required `project_id` to every table holding LegendKeeper
+  data (jobs, steps, artefacts and their items, errors, budget samples, the journal and its targets, proposals and their
+  operations, governor counters, maintenance runs, mapping sets, rules and field maps), with foreign keys that keep a
+  child in its parent's project, project-first indexes, and the `bridge_instance` table. Existing rows go to the project
+  in `LK_PROJECT_ID`; ids and sequences carry on. `npm run db:migrate` reads `LK_PROJECT_ID` from the bridge's env file
+  when its environment lacks it (an older installed deploy script), and `deploy.sh` now passes it.
+- **One bridge process per project** (ADR 0023): a second process on the same database is refused at start-up
+  (`INSTANCE_LOCKED`), with a heartbeat and a safe take-over of a holder that is gone.
+- **Tools.** Every tool takes an optional `project` (name or id): unknown projects are refused with the registered
+  names (`UNKNOWN_PROJECT`); reads default to the default project; writes without `project` are refused when several
+  projects are registered (`PROJECT_REQUIRED`); a project not served now is `PROJECT_UNAVAILABLE`. Every result names its
+  project and ends with that project's budget line (`budget (test): …`). New **`list_projects`**. `bridge_info` and
+  `bridge_budget` are per project (`allProjects: true` shows every budget). Proposals record their project and execute
+  there only. The server instructions describe projects.
+- **Policy** is unchanged (profiles and scopes are per connection); listings are filtered by project.
+- **Maintenance.** The budget sampler samples every governor; journal and proposal pruning, proposal expiry and the
+  SQLite optimise cover every project and are recorded as bridge-wide runs (`*`).
+- **Dashboard.** A project switcher scopes Overview, Jobs, Errors, Budgets, Journal, Proposals and Mappings; Budgets
+  shows every project side by side; the Overview lists every project's status; a new **Projects** page shows flags,
+  ids, whether each key is configured and valid, and the settings (read-only), with an audited per-project **Read-only**
+  switch and **Check again**.
+- **Sandbox settings retired.** `LK_SANDBOX_API_KEY`, `LK_SANDBOX_PROJECT_ID` and `--allow-bridge-project` are gone. The
+  sandbox, soak and spike scripts and their wrappers take `--project <name>` and refuse any project not marked as a
+  sandbox; `npm run projects -- sandbox <name> on|off` (audited) is the only way to mark one. `deploy/env.template`,
+  `.env.example` and the env drift check follow the new form.
+- **Tests.** `test/projects/`: two mock projects with different keys behind one URL (`test/contract/multi-mock.ts`)
+  checked for isolation on every surface (queries, tools, dashboard) for jobs, journal, proposals, budget counters and
+  samples, errors and mappings; independent governors; writer fairness; `REQUIRE_PROJECT_FOR_WRITES`; the per-project
+  read-only flag; start-up checks (wrong key, mismatched id, single-project form); the instance guard; migration 0600 on
+  a v1.0.2 database built from this repository's own migrations; configuration parsing and the projects CLI. Existing
+  suites now name their project.
+
 ## Unreleased: v2 phase 0 spike (9 November 2026)
 
 A server script that checks the assumptions in [docs/PLAN-v2.md](PLAN-v2.md) against the real test world before any v2

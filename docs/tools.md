@@ -2,27 +2,49 @@
 
 LK-Bridge exposes LegendKeeper to Claude, Claude Code and ChatGPT as a small set of MCP tools. The 89 LegendKeeper operations sit behind a few **meta-tools**, so the tool list stays short; per-operation tools are optional. Every call goes through the job engine and the rate governor, and every result ends with a one-line budget footer.
 
+Since v2 A1 one bridge serves **several LegendKeeper projects** (each with its own key, so its own rate budget). Every tool takes an optional `project` argument, and every result names the project it used: see [Projects](#projects) and [projects.md](projects.md).
+
 Source: `src/mcp/tools/`. Design notes: [ADR 0011](adr/0011-tool-layer.md). Authentication: [auth.md](auth.md).
 
 ## Agent guidance (the MCP server `instructions`)
 
-> LK-Bridge gives governed access to one LegendKeeper project. Rate budget is shared and finite: every result ends with a budget line. Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. Read before you write, and pass the version you read as params.ifMatch. Never loop on budget errors: wait until the stated retry time. Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost: follow a job with bridge_job_status and a proposal with bridge_proposal_status. Results are summaries; ask for detail "full" only when you need the whole payload, and page oversized results with bridge_result_page.
+> LK-Bridge gives governed access to one or more LegendKeeper projects: list_projects names them, and every tool takes an optional project. Reads without project use the default project; a write must name its project when the bridge serves several. Each project has its own rate budget, shared and finite: every result names its project and ends with that project's budget line. Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. Read before you write, and pass the version you read as params.ifMatch. Never loop on budget errors: wait until the stated retry time. Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost: follow a job with bridge_job_status and a proposal with bridge_proposal_status. Results are summaries; ask for detail "full" only when you need the whole payload, and page oversized results with bridge_result_page.
 
 The text is `BRIDGE_INSTRUCTIONS` in `src/mcp/tools/index.ts`; a test checks it covers each point.
 
 ## How results look
 
-Every result is one text block: compact JSON, then the budget footer on the last line.
+Every result is one text block: compact JSON naming the project, then that project's budget footer on the last line.
 
 ```
-{"status":"succeeded","operationId":"getDocumentBlocks","result":{"id":"d1","version":"v3","blockCount":12,"outline":[…]},"requestIds":["lkb.r….1"]}
-budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/60k·d | project 9.8k/12k·h | queue P1:0 P2:14
+{"project":"arkona","status":"succeeded","operationId":"getDocumentBlocks","result":{"id":"d1","version":"v3","blockCount":12,"outline":[…]},"requestIds":["lkb.r….1"]}
+budget (arkona): writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/60k·d | project 9.8k/12k·h | queue P1:0 P2:14
 ```
+
+A refused `project` argument (below) carries the default project's footer, since that is where a read would have gone.
 
 - **Summaries by default.** Lists become `{ count, hasMore, nextCursor, items }` with scalar fields only (ids, names, versions; nested values become counts). A block tree becomes `{ version, blockCount, outline[…], unsupportedBlockIds }`. Pass `detail: "full"` for whole payloads.
 - **Handles for big results.** A result over `MCP_RESULT_MAX_CHARS` (default 40,000 characters, far below Claude Code's 25,000-token cut-off) is stored as a job artefact (a succeeded one-step job) and comes back as `{ "status": "stored", "handle": "art_…", "preview": … }`. Page it with `bridge_result_page`.
-- **Typed errors.** A failure is `{ "error": { "code", "message", … } }` with `isError: true`. Codes include `WRONG_TOOL_FOR_OPERATION`, `UNKNOWN_OPERATION`, `INVALID_PARAMS`, `VERSION_CONFLICT` (with `currentVersion`), `UNSUPPORTED_BLOCK_LOSS` (with `blockIds`), `CASCADE_CONFIRM_REQUIRED`, `READ_ONLY`, `MEMBER_ADMIN_DISABLED`, `POLICY_DENIED`, `BUDGET_EXHAUSTED` (with `retryAt`), `LK_ERROR` (with `lkCode`, `status`, `requestId`) and the upload codes below.
+- **Typed errors.** A failure is `{ "error": { "code", "message", … } }` with `isError: true`. Codes include `WRONG_TOOL_FOR_OPERATION`, `UNKNOWN_OPERATION`, `INVALID_PARAMS`, `VERSION_CONFLICT` (with `currentVersion`), `UNSUPPORTED_BLOCK_LOSS` (with `blockIds`), `CASCADE_CONFIRM_REQUIRED`, `READ_ONLY`, `MEMBER_ADMIN_DISABLED`, `POLICY_DENIED`, `BUDGET_EXHAUSTED` (with `retryAt`), `LK_ERROR` (with `lkCode`, `status`, `requestId`), the project codes `UNKNOWN_PROJECT`, `PROJECT_REQUIRED` and `PROJECT_UNAVAILABLE` (each with `registered`, the project names), and the upload codes below.
 - **Not errors:** `queued`, `waiting_budget` and `proposal_captured` mean the write is accepted or waiting. Never retry it; follow it with `bridge_job_status`.
+
+## Projects
+
+The bridge serves the projects listed in `LK_PROJECTS` (one key each; [projects.md](projects.md)). Every tool takes an optional **`project`**: a project name (any case) or its LegendKeeper id.
+
+- **Unknown project:** refused with `UNKNOWN_PROJECT` and `registered`, the names you may use. Nothing is sent or recorded.
+- **Reads without `project`** use the default project (`LK_DEFAULT_PROJECT`).
+- **Writes without `project`** are refused with `PROJECT_REQUIRED` while the bridge serves more than one project (`REQUIRE_PROJECT_FOR_WRITES=true`, the default), so a forgotten argument can never land in the wrong project. With one project, or with the setting off, they go to the default project. This covers every write tool (`lk_api_write`, `lk_api_batch`, `lk_upload_image`, `bridge_job_cancel` and the write `lk_op_*` tools), and writes at scope `propose` too.
+- **A project that is not served now** (its key was refused, it belongs to another project than the one stored, or LegendKeeper could not be reached at start-up) is refused with `PROJECT_UNAVAILABLE` and the reason. The other projects carry on.
+- **Each project has its own budget.** The footer names the project: `budget (arkona): …`. Exhausting one project's tier never slows another (the writer pool, `WRITERS_MAX`, is shared, with turns across projects).
+- **Records belong to a project.** Jobs, stored results, errors, journal entries and proposals are those of the asked project only: a job id of another project answers like one that does not exist.
+
+**`list_projects`** `{}`: the projects this bridge serves: `name` (pass it as `project`), LegendKeeper `id`, `displayName`, `default`, `readOnly`, `available` (with `reason` when not), and `writesNeedProject`. Never a key, and not whether a project is a sandbox.
+
+```json
+{"project":"arkona","count":2,"default":"arkona","writesNeedProject":true,"projects":[{"name":"arkona","id":"lkp_…","displayName":"Arkona","default":true,"readOnly":false,"available":true},{"name":"test","id":"lkp_…","displayName":"Test","default":false,"readOnly":false,"available":true}]}
+budget (arkona): writes 0/120·min …
+```
 
 ## Tool reference
 
@@ -30,6 +52,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 | Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                              |
 | --------------------------- | ------ | --------------------------------------------------------------- | --------------------------------- |
+| `list_projects`             | read   | true / false / true / false                                     | none                              |
 | `lk_api_list_operations`    | read   | true / false / true / false                                     | none                              |
 | `lk_api_describe_operation` | read   | true / false / true / false                                     | none                              |
 | `lk_api_read`               | read   | true / false / true / false                                     | 1 read                            |
@@ -64,7 +87,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 { "operationId": "getDocumentBlocks", "params": { "path": { "resourceId": "r1", "documentId": "d1" } } }
 ```
 
-`params` is `{ path?, query?, ifMatch?, body? }`; `projectId` is supplied by the bridge.
+`params` is `{ path?, query?, ifMatch?, body? }`; `projectId` is supplied by the bridge, from the `project` argument (every tool below also takes `project`, which these signatures leave out).
 
 **`lk_api_write`** `{ operationId, params?, allowUnsupportedLoss?, confirm?, detail? }`: runs ONE operation whose kind is not `read`, including the raw `createImageUpload` and `createImageAsset`. A read operation is refused with `useTool: "lk_api_read"`. Every engine guard applies:
 
@@ -91,15 +114,15 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (105 tools in all, 107 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (106 tools in all, 108 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
-**`bridge_info`**: version; project id and name; the key's role (`ADMIN`, `MEMBER` or `unknown`; inferred from `listMembers`, because LK shows member emails to ADMIN keys only); read-only flag (effective, configured, overridden); whether writes are paused or draining, and `canWrite`; writer pool; the calling connection, its profile and its live scope (`read`, `propose` or `write`), and `canWriteAs` (`direct`, `proposal (the owner approves)` or `no (read-only)`). The project name and role come from one lookup shared by every caller and cached for 10 minutes; it runs as the bridge's own work (`system` principal, v1.0.1), so a failure there shows on the dashboard's Errors page under `system`, not in a caller's `bridge_errors_recent`.
+**`bridge_info`** `{ project? }`: version; the asked project (`projectInfo`: name, id, display name, default, read-only, available) and every project (`projects`); the project's LegendKeeper name and the key's role (`ADMIN`, `MEMBER` or `unknown`; inferred from `listMembers`, because LK shows member emails to ADMIN keys only); read-only flag (`effective`; `bridge`, the bridge-wide flag; `project`, the project's own flag; configured, overridden); whether writes are paused or draining, and `canWrite`; writer pool; the calling connection, its profile and its live scope (`read`, `propose` or `write`), and `canWriteAs` (`direct`, `proposal (the owner approves)` or `no (read-only)`). The project name and role come from one lookup per project shared by every caller and cached for 10 minutes; it runs as the bridge's own work (`system` principal, v1.0.1), so a failure there shows on the dashboard's Errors page under `system`, not in a caller's `bridge_errors_recent`.
 
-**`bridge_budget`**: every tier (used, limit, remaining, seconds to reset, any block after a 429, drift), queue depth per priority, write pacing.
+**`bridge_budget`** `{ project?, allProjects? }`: one project's tiers (used, limit, remaining, seconds to reset, any block after a 429, drift), queue depth per priority, write pacing. `allProjects: true` lists every project's budget side by side.
 
-**`bridge_estimate`** `{ reads?, writes?, createManyItems?, priority? }`: projected wall-clock time, the tightest tier, whether it fits today's request budget, with advice. Call it before large workloads.
+**`bridge_estimate`** `{ reads?, writes?, createManyItems?, priority? }`: against the asked project's budget, projected wall-clock time, the tightest tier, whether it fits today's request budget, with advice. Call it before large workloads.
 
 **Your own work only.** `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_result_page` and `bridge_errors_recent` show only the calling connection's jobs, stored results and errors; another connection's job id or handle answers exactly like one that does not exist. `bridge_journal_lookup` shows every connection's writes (so agents can cross-check each other), each with its principal, profile and approver; job ids appear only on your own entries, and a `jobId` filter matches only your own jobs.
 
@@ -113,7 +136,7 @@ budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/
 
 **`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, principalId?, profile?, outcome?, withPreImage?, before?, sinceMinutes?, limit?, includePreImage? }`: the write journal, newest first. Since chunk 8 it holds **every** write the bridge sends (creates, inserts, patches, deletes), each with operation, target, time, outcome (`applied`, `not_applied`, `unknown`, `pending`), principal, profile and approver; destructive writes also keep their pre-image. `targetId` also matches every resource a `createManyResources` created. Pages hold `limit` entries (default 10, at most 100); when a page is full, `nextBefore` is the cursor for the next, older page (`before`).
 
-**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)).
+**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)).
 
 **`bridge_result_page`** `{ handle, offset?, limit?, detail? }`: for a paginate handle `offset` and `limit` count items (the page is trimmed to the output budget; use `nextOffset`); for a stored oversized result `offset` counts characters of the JSON text and slices must be concatenated in order.
 
@@ -147,6 +170,7 @@ Codes: `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`, `UPLO
 
 | Variable                         | Default            | Meaning                                                                                                                                                                                                                |
 | -------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REQUIRE_PROJECT_FOR_WRITES`     | `true`             | A write tool called without `project` is refused while the bridge serves more than one project (v2 A1)                                                                                                                 |
 | `MCP_EXPOSE_PER_OP_TOOLS`        | `false`            | Also register `lk_op_<operationId>` for all 89 operations                                                                                                                                                              |
 | `MCP_RESULT_MAX_CHARS`           | `40000`            | Results longer than this are stored and returned as a handle                                                                                                                                                           |
 | `UPLOAD_MAX_BYTES`               | `10485760` (10 MB) | Largest image `lk_upload_image` accepts. The `/mcp` request body limit is sized from it (below)                                                                                                                        |

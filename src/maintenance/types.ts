@@ -1,7 +1,7 @@
 /** Shared types of the maintenance framework (docs/maintenance.md). */
 import type { Db } from '../db/open.js';
 import type { JobEngine, OpParams, RunResult } from '../jobs/index.js';
-import type { LkClient } from '../lk/index.js';
+import type { ProjectsRuntime } from '../projects/registry.js';
 import type { Schedule } from './schedule.js';
 
 export type RunOutcome = 'succeeded' | 'failed' | 'skipped' | 'interrupted';
@@ -19,7 +19,15 @@ export interface MaintenanceContext {
   readonly trigger: RunTrigger;
   readonly now: number;
   readonly db: Db;
-  /** One registry operation through the job engine: priority P3, the `system` principal, an origin naming this job. */
+  /**
+   * The project this run works on (v2 A1): a per-project job (`scope: 'project'`) runs once per served project; a
+   * bridge-wide job (`scope: 'bridge'`) runs once and gets null.
+   */
+  readonly project: { readonly id: string; readonly name: string } | null;
+  /**
+   * One registry operation, in `project`, through the job engine: priority P3, the `system` principal, an origin
+   * naming this job. A bridge-wide run has no project and cannot call LegendKeeper (it throws).
+   */
   run(op: string, params?: OpParams): Promise<RunResult>;
 }
 
@@ -41,6 +49,12 @@ export interface MaintenanceJobDef {
   readonly writes: boolean;
   /** Calls LegendKeeper: held back while P1 or P2 work is queued, and subject to the governor's P3 floor. */
   readonly usesLk: boolean;
+  /**
+   * v2 A1. `project`: runs once per served project (anything that touches LegendKeeper or one project's data), each
+   * run recorded under its project. `bridge` (the default): one run for the whole bridge (pruning, the budget sampler,
+   * SQLite upkeep), recorded as bridge-wide.
+   */
+  readonly scope?: 'project' | 'bridge';
   readonly record: RecordPolicy;
   readonly run?: (ctx: MaintenanceContext) => Promise<MaintenanceResult> | MaintenanceResult;
 }
@@ -48,10 +62,12 @@ export interface MaintenanceJobDef {
 export interface MaintenanceDeps {
   readonly db: Db;
   readonly engine: JobEngine;
-  readonly lk: LkClient;
+  readonly projects: ProjectsRuntime;
 }
 
 export interface RunView {
+  /** The project's LegendKeeper id, or `*` for a bridge-wide run (v2 A1). */
+  readonly projectId?: string;
   readonly at: number;
   readonly outcome: RunOutcome;
   readonly durationMs: number;
@@ -66,6 +82,8 @@ export interface MaintenanceJobView {
   readonly description: string;
   readonly implemented: boolean;
   readonly writes: boolean;
+  /** `project`: one run per served project; `bridge`: one run for the bridge (v2 A1). */
+  readonly scope: 'project' | 'bridge';
   readonly enabled: boolean;
   readonly schedule: Schedule;
   readonly scheduleText: string;

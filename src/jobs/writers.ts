@@ -1,12 +1,18 @@
 /**
  * The writer pool (PLAN §6.2): `max` slots; only write steps need one. `setMax` takes effect at once: raising it
  * admits waiters immediately, lowering it lets busy slots finish and admits nobody new until the count fits.
- * Waiters are served in arrival order.
+ *
+ * The pool is shared by every project (WRITERS_MAX is bridge-wide, v2 A1). Fairness across projects: when a slot
+ * frees, the projects with waiters take turns (round-robin, in the order their oldest waiter arrived), and within a
+ * project waiters are served in arrival order. So a project with a long queue of writes cannot keep another project's
+ * write waiting for more than one turn per slot.
  */
 import { WRITERS_LIMIT, WRITERS_MIN } from '../config/jobs.js';
 import type { WriterSlotView, WritersView } from './types.js';
 
 export interface SlotInfo {
+  /** The LegendKeeper project the write goes to (v2 A1). */
+  readonly projectId: string;
   readonly jobId: string;
   readonly stepNo: number;
   readonly opId: string;
@@ -33,6 +39,8 @@ export class WriterPool {
   private maxSlots: number;
   private readonly busy = new Map<number, Busy>();
   private readonly queue: Waiter[] = [];
+  /** The project the last slot went to (round-robin across projects). */
+  private lastProject: string | null = null;
 
   constructor(
     max: number,
@@ -78,13 +86,30 @@ export class WriterPool {
     return null;
   }
 
+  /** The next waiter: the project after the last one served (round-robin), then that project's oldest waiter. */
+  private next(): number {
+    const projects: string[] = [];
+    for (const w of this.queue) if (!projects.includes(w.info.projectId)) projects.push(w.info.projectId);
+    if (projects.length === 0) return -1;
+    let pick = projects[0]!;
+    if (this.lastProject !== null && projects.length > 1) {
+      // Projects in a stable order (by name) so "after the last one" is well defined.
+      const order = [...projects].sort();
+      const after = order.find((p) => p > this.lastProject!);
+      pick = after ?? order[0]!;
+    }
+    return this.queue.findIndex((w) => w.info.projectId === pick);
+  }
+
   private admit(): void {
     for (;;) {
-      const head = this.queue[0];
-      if (!head) return;
+      if (this.queue.length === 0) return;
       const slot = this.freeSlot();
       if (slot === null) return;
-      this.queue.shift();
+      const i = this.next();
+      const head = this.queue[i]!;
+      this.queue.splice(i, 1);
+      this.lastProject = head.info.projectId;
       head.cleanup();
       this.busy.set(slot, { ...head.info, slot, since: this.now() });
       let released = false;
@@ -108,6 +133,7 @@ export class WriterPool {
           ? {
               slot: i,
               state: 'busy',
+              projectId: b.projectId,
               jobId: b.jobId,
               stepNo: b.stepNo,
               opId: b.opId,
@@ -125,7 +151,12 @@ export class WriterPool {
       max: this.maxSlots,
       busy: this.busy.size,
       slots,
-      waiting: this.queue.map((w) => ({ jobId: w.info.jobId, stepNo: w.info.stepNo, opId: w.info.opId })),
+      waiting: this.queue.map((w) => ({
+        projectId: w.info.projectId,
+        jobId: w.info.jobId,
+        stepNo: w.info.stepNo,
+        opId: w.info.opId,
+      })),
     };
   }
 }

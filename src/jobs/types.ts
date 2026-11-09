@@ -85,6 +85,8 @@ export interface StepSpec extends StepOptions {
 }
 
 export interface RunOptions extends StepOptions {
+  /** v2 A1: the LegendKeeper id of the project the operation is for. Required: there is no default in the engine. */
+  readonly project: string;
   readonly priority?: PriorityClass;
   readonly origin: JobOrigin;
   readonly title?: string;
@@ -94,6 +96,8 @@ export interface RunOptions extends StepOptions {
 
 export interface BatchSubmit {
   readonly kind: 'batch_ops';
+  /** v2 A1: the project every step runs against. */
+  readonly project: string;
   readonly steps: readonly StepSpec[];
   readonly onError?: OnError;
   readonly priority?: PriorityClass;
@@ -103,6 +107,7 @@ export interface BatchSubmit {
 
 export interface PaginateSubmit {
   readonly kind: 'paginate_all';
+  readonly project: string;
   readonly op: string;
   readonly params?: OpParams;
   /** Lower caps than the engine's (never higher). */
@@ -120,6 +125,7 @@ export interface PaginateSubmit {
  */
 export interface UploadImageSubmit {
   readonly kind: 'upload_image';
+  readonly project: string;
   readonly contentType: string;
   /** Exactly the number of bytes in `dataBase64`. */
   readonly contentLength: number;
@@ -155,7 +161,7 @@ export type RunResult =
       readonly status: 'queued' | 'waiting_budget';
       readonly jobId: string;
       readonly eta: number | null;
-      readonly reason: 'estimate' | 'budget' | 'writes_paused' | 'read_only';
+      readonly reason: 'estimate' | 'budget' | 'writes_paused' | 'read_only' | 'project_unavailable';
     }
   | ProposalCaptured;
 
@@ -180,6 +186,8 @@ export interface JobError {
 
 export interface JobView {
   readonly id: string;
+  /** v2 A1: the LegendKeeper id of the project the job works on. */
+  readonly projectId: string;
   readonly kind: JobKind;
   readonly title: string;
   readonly origin: JobOrigin;
@@ -212,6 +220,7 @@ export interface JobView {
 
 export interface StepView {
   readonly jobId: string;
+  readonly projectId: string;
   readonly stepNo: number;
   readonly opId: string;
   readonly opKind: OperationKind;
@@ -243,6 +252,7 @@ export interface JobWithSteps extends JobView {
 export interface ArtifactView {
   readonly id: string;
   readonly jobId: string;
+  readonly projectId: string;
   readonly stepNo: number | null;
   readonly kind: 'params' | 'result' | 'items';
   readonly itemCount: number;
@@ -256,6 +266,7 @@ export interface ArtifactView {
 export interface WriterSlotView {
   readonly slot: number;
   readonly state: 'idle' | 'busy';
+  readonly projectId?: string;
   readonly jobId?: string;
   readonly stepNo?: number;
   readonly opId?: string;
@@ -271,11 +282,17 @@ export interface WritersView {
   readonly max: number;
   readonly busy: number;
   readonly slots: readonly WriterSlotView[];
-  /** Steps waiting for a slot, oldest first. */
-  readonly waiting: readonly { readonly jobId: string; readonly stepNo: number; readonly opId: string }[];
+  /** Steps waiting for a slot, oldest first. They are served round-robin across projects, then oldest first (v2 A1). */
+  readonly waiting: readonly {
+    readonly projectId: string;
+    readonly jobId: string;
+    readonly stepNo: number;
+    readonly opId: string;
+  }[];
 }
 
 export interface LockView {
+  /** `<projectId>:doc:<id>` and so on: locks are per project and per entity (v2 A1). */
   readonly key: string;
   readonly holder: { readonly jobId: string; readonly stepNo: number; readonly since: number };
   readonly waiting: readonly { readonly jobId: string; readonly stepNo: number; readonly since: number }[];
@@ -284,11 +301,21 @@ export interface LockView {
 export interface ControlsView {
   readonly writesPaused: boolean;
   readonly draining: boolean;
-  /** Effective read-only flag: the runtime override if set, else LK_READ_ONLY. */
+  /**
+   * Effective read-only flag: the runtime override if set, else LK_READ_ONLY. Asked for one project
+   * (`controls(projectId)`), it is also true when that project's own read-only flag is on (v2 A1).
+   */
   readonly readOnly: boolean;
   readonly readOnlyOverride: boolean | null;
   readonly writersMax: number;
   readonly allowMemberAdmin: boolean;
+  /** Present when asked for one project: its own flag and whether it is served now (v2 A1). */
+  readonly project?: {
+    readonly id: string;
+    readonly name: string;
+    readonly readOnly: boolean;
+    readonly available: boolean;
+  };
 }
 
 export interface JobFilter {

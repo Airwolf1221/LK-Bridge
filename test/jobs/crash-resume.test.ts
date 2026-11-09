@@ -13,6 +13,7 @@ import {
   type Harness,
   type Wire,
   queue,
+  PROJECT,
 } from './helpers.js';
 
 let h: Harness | undefined;
@@ -30,6 +31,7 @@ function setup(hh: Harness) {
   hh.model.seedResource('rccccccc', { parentId: 'raaaaaaa' });
   const batch: BatchSubmit = {
     kind: 'batch_ops',
+    project: PROJECT,
     origin,
     steps: [
       { op: 'createResource', params: { body: { name: 'New one', parentId: 'raaaaaaa' } } },
@@ -97,8 +99,8 @@ describe('crash-resume', () => {
       expect(sentBefore).toBe(1);
 
       const e2 = h.newEngine();
-      await h.drive(e2, () => terminal(e2.engine.queries.getJob(jobId)));
-      const job = e2.engine.queries.getJob(jobId)!;
+      await h.drive(e2, () => terminal(e2.engine.queries.getJob(PROJECT, jobId)));
+      const job = e2.engine.queries.getJob(PROJECT, jobId)!;
       expect(job.status).toBe('succeeded');
       expect(job.steps.map((s) => s.status)).toEqual(Array(6).fill('succeeded'));
       // Exactly one of every write reached LK's state.
@@ -113,7 +115,7 @@ describe('crash-resume', () => {
       const crashed = job.steps.find((s) => s.opId === op)!;
       if (!resent) expect(crashed.resultSummary).toMatchObject({ verified: true });
       // Journalled writes end "applied", with one pre-image per step even though the step ran twice.
-      const journal = e2.engine.queries.journalLookup({ jobId });
+      const journal = e2.engine.queries.journalLookup(PROJECT, { jobId });
       for (const entry of journal) expect(entry.outcome, entry.opId).toBe('applied');
       expect(journal.filter((x) => x.opId === op).length).toBeLessThanOrEqual(1);
     },
@@ -123,8 +125,8 @@ describe('crash-resume', () => {
     h = await harness();
     const { jobId } = await crashDuring(h, 'POST', /\/resources$/);
     const e2 = h.newEngine();
-    await h.drive(e2, () => terminal(e2.engine.queries.getJob(jobId)));
-    const step = e2.engine.queries.getJob(jobId)!.steps[0]!;
+    await h.drive(e2, () => terminal(e2.engine.queries.getJob(PROJECT, jobId)));
+    const step = e2.engine.queries.getJob(PROJECT, jobId)!.steps[0]!;
     expect(step.clientIds).toHaveLength(1);
     expect(h.model.resources.has(step.clientIds[0]!)).toBe(true);
     expect(seen(h.mock, 'GET', new RegExp(`/resources/${step.clientIds[0]}$`))).toHaveLength(1); // the verify read
@@ -135,8 +137,8 @@ describe('crash-resume', () => {
     const { jobId } = await crashDuring(h, 'POST', /\/docs$/);
     await h.clock.advance(25 * 3_600_000);
     const e2 = h.newEngine();
-    await h.drive(e2, () => terminal(e2.engine.queries.getJob(jobId)));
-    const job = e2.engine.queries.getJob(jobId)!;
+    await h.drive(e2, () => terminal(e2.engine.queries.getJob(PROJECT, jobId)));
+    const job = e2.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.status).toBe('failed');
     expect(job.uncertain).toBe(true);
     expect(job.lastError).toMatchObject({ code: 'UNCERTAIN_OUTCOME' });
@@ -152,8 +154,8 @@ describe('crash-resume', () => {
     // After our replace applied, someone edits the page in the LK app.
     h.model.outsideEdit('d_raaaaaaa', (b) => b.push({ id: 'z', kind: 'paragraph', content: [] }));
     const e2 = h.newEngine();
-    await h.drive(e2, () => terminal(e2.engine.queries.getJob(jobId)));
-    const job = e2.engine.queries.getJob(jobId)!;
+    await h.drive(e2, () => terminal(e2.engine.queries.getJob(PROJECT, jobId)));
+    const job = e2.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.steps[2]!.status).toBe('uncertain');
     expect(job.uncertain).toBe(true);
     expect(seen(h.mock, 'PUT', /\/blocks$/)).toHaveLength(1);
@@ -171,8 +173,8 @@ describe('crash-resume', () => {
     e1.crash();
     expect(seen(h.mock, 'PUT', /\/blocks$/)).toHaveLength(0);
     const e2 = h.newEngine();
-    await h.drive(e2, () => terminal(e2.engine.queries.getJob(jobId)));
-    expect(e2.engine.queries.getJob(jobId)!.status).toBe('succeeded');
+    await h.drive(e2, () => terminal(e2.engine.queries.getJob(PROJECT, jobId)));
+    expect(e2.engine.queries.getJob(PROJECT, jobId)!.status).toBe('succeeded');
     expect(seen(h.mock, 'PUT', /\/blocks$/)).toHaveLength(1);
     expect(h.model.count('replaceDocumentBlocks')).toBe(1);
   });
@@ -195,7 +197,7 @@ describe('verify after an ambiguous retry (PLAN §5.3, governor verify hooks)', 
           path: { resourceId, documentId },
           body: { blocks: [{ kind: 'paragraph', content: [{ text: 'new' }] }] },
         },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(r.error).toBeUndefined();
@@ -216,11 +218,11 @@ describe('verify after an ambiguous retry (PLAN §5.3, governor verify hooks)', 
     const p = e.engine.run(
       'createLane',
       { path: { resourceId, documentId }, body: { name: 'L', rank: 'a', size: 'sm' } },
-      { origin },
+      { project: PROJECT, origin },
     );
     await h.until(() => h!.mock.calls.some((c) => c.outcome === 'dropped'));
-    const job = e.engine.queries.listJobs()[0]!;
-    const laneId = e.engine.queries.getJob(job.id)!.steps[0]!.clientIds[0]!;
+    const job = e.engine.queries.listJobs(PROJECT)[0]!;
+    const laneId = e.engine.queries.getJob(PROJECT, job.id)!.steps[0]!.clientIds[0]!;
     h.model.docs.get(documentId)!.lanes.set(laneId, { id: laneId, name: 'L', rank: 'a', size: 'sm' });
     const r = await settle(h, e, p);
     expect(r.error).toBeUndefined();
@@ -242,20 +244,21 @@ describe('retrying a step that may have applied', () => {
     h.mock.inject((c) => c.method === 'POST', { kind: 'drop-after-commit' }, 1);
     h.mock.inject((c) => c.method === 'POST', { kind: 'drop' }, 3);
     const { jobId } = await queue(e.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin,
       steps: [
         { op: 'createDocument', params: { path: { resourceId: 'r1' }, body: { name: 'N', type: 'page' } } },
       ],
     });
-    await h.drive(e, () => terminal(e.engine.queries.getJob(jobId)));
-    let step = e.engine.queries.getJob(jobId)!.steps[0]!;
+    await h.drive(e, () => terminal(e.engine.queries.getJob(PROJECT, jobId)));
+    let step = e.engine.queries.getJob(PROJECT, jobId)!.steps[0]!;
     expect(step).toMatchObject({ status: 'failed', maybeSent: true });
     expect(h.model.count('createDocument')).toBe(1);
 
-    e.engine.controls.retryStep(jobId, 1);
-    await h.drive(e, () => e.engine.queries.getJob(jobId)?.status === 'succeeded');
-    step = e.engine.queries.getJob(jobId)!.steps[0]!;
+    e.engine.controls.retryStep(PROJECT, jobId, 1);
+    await h.drive(e, () => e.engine.queries.getJob(PROJECT, jobId)?.status === 'succeeded');
+    step = e.engine.queries.getJob(PROJECT, jobId)!.steps[0]!;
     expect(step).toMatchObject({ status: 'succeeded', attempt0: 0, idempotencyKey: `lkb.${jobId}.1.0` });
     expect(h.mock.stats.replays).toBe(1);
     expect(h.model.count('createDocument')).toBe(1);

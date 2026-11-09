@@ -37,6 +37,8 @@ export interface PolicyOpMeta {
 /** Extra context, for gates that care (the origin carries `approvedBy` when the work was approved). */
 export interface PolicyContext {
   readonly origin: JobOrigin;
+  /** v2 A1: the LegendKeeper id of the project the work is for. An approval is valid for its own project only. */
+  readonly project: string;
   readonly jobKind: JobKind;
   /** Position of the step in a batch, from 0. */
   readonly stepIndex?: number;
@@ -69,6 +71,8 @@ export interface ProposedOp extends StepOptions {
 
 export interface ProposalMeta {
   readonly kind: JobKind;
+  /** v2 A1: the project the work is for; the proposal records it and approval executes against it only. */
+  readonly project: string;
   readonly title: string;
   readonly origin: JobOrigin;
   readonly priority: PriorityClass;

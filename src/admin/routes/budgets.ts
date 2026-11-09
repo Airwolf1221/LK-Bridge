@@ -1,10 +1,12 @@
 import * as z from 'zod';
 import type { BudgetSampleView } from '../../jobs/index.js';
 import { TIER_IDS } from '../../lk/registry-types.js';
+import { ALL_PROJECTS } from '../../projects/index.js';
 import { redactDeep } from '../redact.js';
+import { AdminHttpError } from '../http.js';
 import { budgetPayload } from '../stream.js';
 import { reserveFloorsSchema } from '../runtime-settings.js';
-import { confirmBody, limitSchema, parseInput, type Register } from './util.js';
+import { confirmBody, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 interface Point {
   at: number;
@@ -35,24 +37,39 @@ export function bucketSamples(
 }
 
 export const registerBudgets: Register = (api, ctx) => {
-  const { engine, lk, envConfig } = ctx.deps.runtime;
+  const { engine, projects, envConfig } = ctx.deps.runtime;
   const { actions, now } = ctx;
+  const clientOf = (project: { id: string; name: string }) => {
+    const lk = projects.anyClient(project.id);
+    if (!lk) {
+      throw new AdminHttpError(409, 'PROJECT_UNAVAILABLE', `Project "${project.name}" has no governor now`);
+    }
+    return lk;
+  };
+  // Reserve floors are bridge-wide (every governor has the same); the default project's governor reports them.
   const floorsNow = () => {
-    const f = lk.governor.settings.reserveFloors;
+    const g = projects.clients()[0]?.client.governor;
+    if (!g) return envConfig.governor.reserveFloors;
+    const f = g.settings.reserveFloors;
     return { interactive: f.P1, job: f.P2, maintenance: f.P3 };
   };
+  const budgetQuery = z.object({
+    hours: z.coerce.number().min(1).max(48).default(24),
+    points: limitSchema(288, 1000),
+    project: projectParam,
+  });
 
+  /** One project's budgets (each project has its own key, so its own governor and tiers; v2 A1). */
   api.get('/budgets', (req) => {
-    const q = parseInput(
-      z.object({ hours: z.coerce.number().min(1).max(48).default(24), points: limitSchema(288, 1000) }),
-      req.query,
-    );
+    const q = parseInput(budgetQuery, req.query);
+    const p = ctx.project(q.project);
     const until = now();
     const since = until - q.hours * 3_600_000;
-    const samples = engine.queries.listBudgetSamples({ since, until, limit: 50_000 });
-    const live = budgetPayload(lk);
+    const samples = engine.queries.listBudgetSamples(p.id, { since, until, limit: 50_000 });
+    const live = budgetPayload(clientOf(p));
     const project = live.snapshot.tiers['project-hour'];
     return {
+      project: p,
       ...(redactDeep(live) as object),
       tierOrder: TIER_IDS,
       reserveFloors: {
@@ -63,6 +80,27 @@ export const registerBudgets: Register = (api, ctx) => {
       // Observed (LegendKeeper's own count) against modelled (ours) for the tier other keys also draw on.
       projectDrift: project.drift,
       samples: { since, until, ...bucketSamples(samples, since, until, q.points), count: samples.length },
+    };
+  });
+
+  /** Every project's budgets side by side: the live tiers and the 24 h history of each. */
+  api.get('/budgets/all', (req) => {
+    const q = parseInput(budgetQuery, req.query);
+    const until = now();
+    const since = until - q.hours * 3_600_000;
+    return {
+      tierOrder: TIER_IDS,
+      projects: projects.clients().map((c) => {
+        const samples = engine.queries.listBudgetSamples(c.id, { since, until, limit: 50_000 });
+        const live = budgetPayload(c.client);
+        return {
+          project: { id: c.id, name: c.name },
+          status: projects.find(c.id)?.status ?? 'unknown',
+          ...(redactDeep(live) as object),
+          projectDrift: live.snapshot.tiers['project-hour'].drift,
+          samples: { since, until, ...bucketSamples(samples, since, until, q.points), count: samples.length },
+        };
+      }),
     };
   });
 
@@ -81,7 +119,7 @@ export const registerBudgets: Register = (api, ctx) => {
 
   // ---------------------------------------------------------------------------------------------- writers
 
-  api.get('/writers', () => {
+  api.get('/writers', (req) => {
     const writers = engine.queries.writers();
     const locks = engine.queries.locks();
     const ids = new Set<string>();
@@ -91,20 +129,37 @@ export const registerBudgets: Register = (api, ctx) => {
       ids.add(l.holder.jobId);
       for (const w of l.waiting) ids.add(w.jobId);
     }
-    const jobs: Record<string, { title: string; status: string; profile: string; principalId: string }> = {};
+    // The writer pool and the locks are bridge-wide (shared by every project), so this view spans projects on purpose,
+    // naming each job's project.
+    const jobs: Record<
+      string,
+      { title: string; status: string; profile: string; principalId: string; project: string }
+    > = {};
     for (const id of ids) {
-      const j = engine.queries.getJob(id);
-      if (j) jobs[id] = { title: j.title, status: j.status, profile: j.profile, principalId: j.principalId };
+      const j = engine.queries.getJob(ALL_PROJECTS, id);
+      if (j) {
+        jobs[id] = {
+          title: j.title,
+          status: j.status,
+          profile: j.profile,
+          principalId: j.principalId,
+          project: projects.nameOf(j.projectId),
+        };
+      }
     }
-    const live = budgetPayload(lk);
+    const q = parseInput(z.object({ project: projectParam }), req.query);
+    const p = ctx.project(q.project);
+    const lk = projects.anyClient(p.id);
+    const live = lk ? budgetPayload(lk) : null;
     return {
+      project: p,
       writers,
       locks,
       controls: engine.queries.controls(),
       jobs: redactDeep(jobs),
-      writesPerMinute: live.writesPerMinute,
-      writeMinuteLimit: live.snapshot.tiers['write-min'].limit,
-      writeSpacingMs: live.snapshot.writeSpacingMs,
+      writesPerMinute: live?.writesPerMinute ?? 0,
+      writeMinuteLimit: live?.snapshot.tiers['write-min'].limit ?? null,
+      writeSpacingMs: live?.snapshot.writeSpacingMs ?? 0,
     };
   });
 

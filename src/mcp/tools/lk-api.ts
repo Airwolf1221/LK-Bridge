@@ -21,9 +21,12 @@ import {
   errorFromThrown,
   errorResult,
   mcpOrigin,
+  projectArg,
   render,
   runResultBody,
   shapeRead,
+  withProject,
+  type ProjectDeps,
   type ToolDeps,
 } from './shape.js';
 
@@ -50,7 +53,7 @@ export interface ExecuteInput {
  * engine is called, so it spends no budget and records nothing.
  */
 export async function executeOne(
-  deps: ToolDeps,
+  deps: ProjectDeps,
   tool: string,
   expected: OperationTool | 'any',
   input: ExecuteInput,
@@ -90,6 +93,7 @@ export async function executeOne(
   try {
     const origin = mcpOrigin(ctx, tool);
     const r = await deps.engine.run(op.operationId, input.params, {
+      project: deps.project.id,
       origin,
       priority: 'P1',
       signal: ctx.signal,
@@ -148,34 +152,36 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         .optional()
         .describe('read = lk_api_read; write and upload = lk_api_write.'),
       risk: z.enum(['safe', 'destructive', 'admin']).optional(),
+      project: projectArg,
     }),
     annotations: READ_ANNOTATIONS,
-    handler: ({ tag, kind, risk }) => {
-      const list = operations.filter(
-        (o) =>
-          (tag === undefined || o.tag.toLowerCase() === tag.toLowerCase()) &&
-          (kind === undefined || o.kind === kind) &&
-          (risk === undefined || o.risk === risk),
-      );
-      return render(
-        {
-          count: list.length,
-          tags: TAGS,
-          operations: list.map((o) => ({
-            operationId: o.operationId,
-            tag: o.tag,
-            kind: o.kind,
-            risk: o.risk,
-            cost: costClass(o),
-            summary: o.summary,
-            ...(o.versioned ? { versioned: true } : {}),
-            ...(o.paged ? { paged: true } : {}),
-          })),
-          next: 'lk_api_describe_operation({ operationId }) for the input schema.',
-        },
-        deps,
-      );
-    },
+    handler: ({ tag, kind, risk, project }) =>
+      withProject(deps, project, 'read', (pd) => {
+        const list = operations.filter(
+          (o) =>
+            (tag === undefined || o.tag.toLowerCase() === tag.toLowerCase()) &&
+            (kind === undefined || o.kind === kind) &&
+            (risk === undefined || o.risk === risk),
+        );
+        return render(
+          {
+            count: list.length,
+            tags: TAGS,
+            operations: list.map((o) => ({
+              operationId: o.operationId,
+              tag: o.tag,
+              kind: o.kind,
+              risk: o.risk,
+              cost: costClass(o),
+              summary: o.summary,
+              ...(o.versioned ? { versioned: true } : {}),
+              ...(o.paged ? { paged: true } : {}),
+            })),
+            next: 'lk_api_describe_operation({ operationId }) for the input schema.',
+          },
+          pd,
+        );
+      }),
   });
 
   const describeOperation = defineTool({
@@ -185,62 +191,67 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     description:
       'Shows one operation in full: its input JSON Schema, risk, whether it is versioned (and which read gives the version), ' +
       'and its rate costs. Call it before an unfamiliar write. Cost: none (no LegendKeeper call). Risk: none.',
-    inputSchema: z.object({ operationId: z.string().describe('For example "replaceDocumentBlocks".') }),
+    inputSchema: z.object({
+      operationId: z.string().describe('For example "replaceDocumentBlocks".'),
+      project: projectArg,
+    }),
     annotations: READ_ANNOTATIONS,
-    handler: ({ operationId }, ctx) => {
-      const op = getOperation(operationId);
-      if (!op) {
-        return errorResult(
-          {
-            code: 'UNKNOWN_OPERATION',
-            message: `Unknown LegendKeeper operation: ${operationId}`,
-            didYouMean: suggestOperations(
-              operationId,
-              operations.map((o) => o.operationId),
-            ),
-          },
-          deps,
-        );
-      }
-      const reader = versionReader(op);
-      const body = {
-        operationId: op.operationId,
-        summary: op.summary,
-        tag: op.tag,
-        http: `${op.method} ${op.pathTemplate.replace('/projects/{projectId}', '')}`,
-        kind: op.kind,
-        runWith: toolFor(op),
-        risk: op.risk,
-        concurrency: op.concurrency,
-        versioned: op.versioned,
-        ...(reader ? { versionFrom: `${reader} (pass its version as params.ifMatch)` } : {}),
-        paged: op.paged,
-        rateCost: { class: costClass(op), tiers: op.costs, text: rateCostText(op) },
-        guards: guardsFor(op),
-        inputSchema: { ...op.inputJsonSchema, $defs: referencedDefs(op.inputJsonSchema) },
-      };
-      const text = JSON.stringify(body);
-      if (text.length <= deps.settings.resultMaxChars) return render(body, deps);
-      // A schema as large as the block model: stored, and paged with bridge_result_page.
-      const stored = deps.engine.recordResult({
-        opId: 'lk_api_describe_operation',
-        params: { path: { operationId } },
-        value: body,
-        origin: mcpOrigin(ctx, 'lk_api_describe_operation'),
-        title: `describe ${op.operationId}`,
-      });
-      return render(
-        {
+    handler: ({ operationId, project }, ctx) =>
+      withProject(deps, project, 'read', (pd) => {
+        const op = getOperation(operationId);
+        if (!op) {
+          return errorResult(
+            {
+              code: 'UNKNOWN_OPERATION',
+              message: `Unknown LegendKeeper operation: ${operationId}`,
+              didYouMean: suggestOperations(
+                operationId,
+                operations.map((o) => o.operationId),
+              ),
+            },
+            pd,
+          );
+        }
+        const reader = versionReader(op);
+        const body = {
           operationId: op.operationId,
-          status: 'stored',
-          handle: stored.artifactId,
-          chars: text.length,
-          overview: { ...body, inputSchema: undefined },
-          hint: 'The input schema is large. Page it with bridge_result_page({ handle, offset }).',
-        },
-        deps,
-      );
-    },
+          summary: op.summary,
+          tag: op.tag,
+          http: `${op.method} ${op.pathTemplate.replace('/projects/{projectId}', '')}`,
+          kind: op.kind,
+          runWith: toolFor(op),
+          risk: op.risk,
+          concurrency: op.concurrency,
+          versioned: op.versioned,
+          ...(reader ? { versionFrom: `${reader} (pass its version as params.ifMatch)` } : {}),
+          paged: op.paged,
+          rateCost: { class: costClass(op), tiers: op.costs, text: rateCostText(op) },
+          guards: guardsFor(op),
+          inputSchema: { ...op.inputJsonSchema, $defs: referencedDefs(op.inputJsonSchema) },
+        };
+        const text = JSON.stringify(body);
+        if (text.length <= deps.settings.resultMaxChars) return render(body, pd);
+        // A schema as large as the block model: stored, and paged with bridge_result_page.
+        const stored = deps.engine.recordResult({
+          project: pd.project.id,
+          opId: 'lk_api_describe_operation',
+          params: { path: { operationId } },
+          value: body,
+          origin: mcpOrigin(ctx, 'lk_api_describe_operation'),
+          title: `describe ${op.operationId}`,
+        });
+        return render(
+          {
+            operationId: op.operationId,
+            status: 'stored',
+            handle: stored.artifactId,
+            chars: text.length,
+            overview: { ...body, inputSchema: undefined },
+            hint: 'The input schema is large. Page it with bridge_result_page({ handle, offset }).',
+          },
+          pd,
+        );
+      }),
   });
 
   const read = defineTool({
@@ -257,15 +268,18 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
       operationId: z.string().describe('For example "getDocumentBlocks".'),
       params: paramsSchema.optional(),
       detail: detailSchema,
+      project: projectArg,
     }),
     annotations: READ_ANNOTATIONS,
-    handler: ({ operationId, params, detail }, ctx) =>
-      executeOne(
-        deps,
-        'lk_api_read',
-        'lk_api_read',
-        { operationId, params: (params ?? {}) as OpParams, detail: detail ?? 'summary' },
-        ctx,
+    handler: ({ operationId, params, detail, project }, ctx) =>
+      withProject(deps, project, 'read', (pd) =>
+        executeOne(
+          pd,
+          'lk_api_read',
+          'lk_api_read',
+          { operationId, params: (params ?? {}) as OpParams, detail: detail ?? 'summary' },
+          ctx,
+        ),
       ),
   });
 
@@ -296,21 +310,24 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         .optional()
         .describe('Required on deleteResource with query.cascade = true.'),
       detail: detailSchema,
+      project: projectArg,
     }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-    handler: ({ operationId, params, allowUnsupportedLoss, confirm, detail }, ctx) =>
-      executeOne(
-        deps,
-        'lk_api_write',
-        'lk_api_write',
-        {
-          operationId,
-          params: (params ?? {}) as OpParams,
-          detail: detail ?? 'summary',
-          allowUnsupportedLoss,
-          confirm,
-        },
-        ctx,
+    handler: ({ operationId, params, allowUnsupportedLoss, confirm, detail, project }, ctx) =>
+      withProject(deps, project, 'write', (pd) =>
+        executeOne(
+          pd,
+          'lk_api_write',
+          'lk_api_write',
+          {
+            operationId,
+            params: (params ?? {}) as OpParams,
+            detail: detail ?? 'summary',
+            allowUnsupportedLoss,
+            confirm,
+          },
+          ctx,
+        ),
       ),
   });
 
@@ -338,28 +355,31 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         .max(500),
       onError: z.enum(['stop', 'stopOnError', 'continue']).optional().describe('Default "stop".'),
       title: z.string().max(200).optional(),
+      project: projectArg,
     }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-    handler: async ({ calls, onError, title }, ctx) => {
-      try {
-        const r = await deps.engine.submit({
-          kind: 'batch_ops',
-          steps: calls.map((c) => ({
-            op: c.operationId,
-            params: (c.params ?? {}) as OpParams,
-            ...(c.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
-            ...(c.confirm ? { confirm: c.confirm } : {}),
-          })),
-          onError: onError === 'continue' ? 'continue' : 'stop',
-          origin: mcpOrigin(ctx, 'lk_api_batch'),
-          priority: 'P2',
-          ...(title ? { title } : {}),
-        });
-        return render(submitBody(r, calls.length), deps);
-      } catch (e) {
-        return errorFromThrown(e, deps);
-      }
-    },
+    handler: ({ calls, onError, title, project }, ctx) =>
+      withProject(deps, project, 'write', async (pd) => {
+        try {
+          const r = await deps.engine.submit({
+            kind: 'batch_ops',
+            project: pd.project.id,
+            steps: calls.map((c) => ({
+              op: c.operationId,
+              params: (c.params ?? {}) as OpParams,
+              ...(c.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
+              ...(c.confirm ? { confirm: c.confirm } : {}),
+            })),
+            onError: onError === 'continue' ? 'continue' : 'stop',
+            origin: mcpOrigin(ctx, 'lk_api_batch'),
+            priority: 'P2',
+            ...(title ? { title } : {}),
+          });
+          return render(submitBody(r, calls.length), pd);
+        } catch (e) {
+          return errorFromThrown(e, pd);
+        }
+      }),
   });
 
   const paginate = defineTool({
@@ -376,47 +396,52 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
       params: paramsSchema.optional(),
       maxItems: z.number().int().min(1).optional(),
       maxPages: z.number().int().min(1).optional(),
+      project: projectArg,
     }),
     annotations: READ_ANNOTATIONS,
-    handler: async ({ operationId, params, maxItems, maxPages }, ctx) => {
-      const op = getOperation(operationId);
-      if (!op || op.kind !== 'read' || !op.paged) {
-        return errorResult(
-          {
-            code: op ? 'NOT_PAGED' : 'UNKNOWN_OPERATION',
-            message: op
-              ? `${op.operationId} is not a paged read operation, so it cannot be paginated. (No budget was spent.)`
-              : `Unknown LegendKeeper operation: ${operationId}`,
-            pagedOperations: operations.filter((o) => o.paged && o.kind === 'read').map((o) => o.operationId),
-          },
-          deps,
-        );
-      }
-      try {
-        const r = await deps.engine.submit({
-          kind: 'paginate_all',
-          op: operationId,
-          params: (params ?? {}) as OpParams,
-          ...(maxItems !== undefined ? { maxItems } : {}),
-          ...(maxPages !== undefined ? { maxPages } : {}),
-          origin: mcpOrigin(ctx, 'lk_api_paginate_all'),
-          priority: 'P2',
-        });
-        if (!('jobId' in r)) return render(submitBody(r, 1), deps);
-        const job = deps.engine.queries.getJob(r.jobId);
-        const handle = (job?.result as { artifactId?: string } | null)?.artifactId;
-        return render(
-          {
-            ...submitBody(r, 1),
-            handle,
-            hint: 'Wait with bridge_job_wait, then bridge_result_page({ handle }).',
-          },
-          deps,
-        );
-      } catch (e) {
-        return errorFromThrown(e, deps);
-      }
-    },
+    handler: ({ operationId, params, maxItems, maxPages, project }, ctx) =>
+      withProject(deps, project, 'read', async (pd) => {
+        const op = getOperation(operationId);
+        if (!op || op.kind !== 'read' || !op.paged) {
+          return errorResult(
+            {
+              code: op ? 'NOT_PAGED' : 'UNKNOWN_OPERATION',
+              message: op
+                ? `${op.operationId} is not a paged read operation, so it cannot be paginated. (No budget was spent.)`
+                : `Unknown LegendKeeper operation: ${operationId}`,
+              pagedOperations: operations
+                .filter((o) => o.paged && o.kind === 'read')
+                .map((o) => o.operationId),
+            },
+            pd,
+          );
+        }
+        try {
+          const r = await deps.engine.submit({
+            kind: 'paginate_all',
+            project: pd.project.id,
+            op: operationId,
+            params: (params ?? {}) as OpParams,
+            ...(maxItems !== undefined ? { maxItems } : {}),
+            ...(maxPages !== undefined ? { maxPages } : {}),
+            origin: mcpOrigin(ctx, 'lk_api_paginate_all'),
+            priority: 'P2',
+          });
+          if (!('jobId' in r)) return render(submitBody(r, 1), pd);
+          const job = deps.engine.queries.getJob(pd.project.id, r.jobId);
+          const handle = (job?.result as { artifactId?: string } | null)?.artifactId;
+          return render(
+            {
+              ...submitBody(r, 1),
+              handle,
+              hint: 'Wait with bridge_job_wait, then bridge_result_page({ handle }).',
+            },
+            pd,
+          );
+        } catch (e) {
+          return errorFromThrown(e, pd);
+        }
+      }),
   });
 
   return [listOperations, describeOperation, read, write, batch, paginate];
@@ -446,7 +471,9 @@ export function submitBody(
 
 function guardsFor(op: OperationDef): string[] {
   const g: string[] = [];
-  if (op.kind !== 'read') g.push('refused while the bridge is read-only (LK_READ_ONLY)');
+  if (op.kind !== 'read') {
+    g.push('refused while the bridge is read-only (LK_READ_ONLY), or while the project itself is read-only');
+  }
   if (op.versioned) g.push('versioned: If-Match is always sent; a stale version is refused');
   if (op.risk === 'admin') g.push('member/invite administration: disabled unless LK_ALLOW_MEMBER_ADMIN=true');
   if (op.operationId === 'deleteResource') g.push('cascade=true needs confirm: "cascade"');

@@ -8,7 +8,8 @@ import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase } from '../../src/db/open.js';
 import { WriteJournal, journalLookup, pruneJournal } from '../../src/jobs/journal.js';
 import type { JobOrigin } from '../../src/jobs/index.js';
-import { harness, origin, settle, type Harness } from './helpers.js';
+import { ProjectStore } from '../../src/projects/index.js';
+import { PROJECT, harness, origin, settle, type Harness } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -33,7 +34,7 @@ describe('every write is journalled', () => {
     const created = await settle(
       h,
       e,
-      e.engine.run('createResource', { body: { name: 'New page' } }, { origin: asAgent }),
+      e.engine.run('createResource', { body: { name: 'New page' } }, { project: PROJECT, origin: asAgent }),
     );
     expect(created.error).toBeUndefined();
     const inserted = await settle(
@@ -45,7 +46,7 @@ describe('every write is journalled', () => {
           path: { resourceId, documentId },
           body: { block: { kind: 'paragraph', content: [{ text: 'b' }] } },
         },
-        { origin: asAgent },
+        { project: PROJECT, origin: asAgent },
       ),
     );
     expect(inserted.error).toBeUndefined();
@@ -55,12 +56,15 @@ describe('every write is journalled', () => {
       e.engine.run(
         'updateBlock',
         { path: { resourceId, documentId, blockId: 'p1' }, body: { content: [{ text: 'c' }] } },
-        { origin: asAgent },
+        { project: PROJECT, origin: asAgent },
       ),
     );
     expect(patched.error).toBeUndefined();
 
-    const entries = e.engine.queries.journalLookup({ principalId: 'pat_agent', includePreImage: true });
+    const entries = e.engine.queries.journalLookup(PROJECT, {
+      principalId: 'pat_agent',
+      includePreImage: true,
+    });
     expect(entries.map((x) => x.opId)).toEqual(['updateBlock', 'insertBlock', 'createResource']);
     for (const x of entries) {
       expect(x).toMatchObject({
@@ -98,7 +102,7 @@ describe('every write is journalled', () => {
       e.engine.run(
         'replaceDocumentBlocks',
         { path: { resourceId, documentId }, body: { blocks: [{ kind: 'paragraph', content: [] }] } },
-        { origin: asAgent },
+        { project: PROJECT, origin: asAgent },
       ),
     );
     // LegendKeeper refuses the next write outright.
@@ -106,15 +110,19 @@ describe('every write is journalled', () => {
     await settle(
       h,
       e,
-      e.engine.run('updateResource', { path: { resourceId }, body: { name: 'x' } }, { origin: asAgent }),
+      e.engine.run(
+        'updateResource',
+        { path: { resourceId }, body: { name: 'x' } },
+        { project: PROJECT, origin: asAgent },
+      ),
     );
-    const all = e.engine.queries.journalLookup({ includePreImage: true });
+    const all = e.engine.queries.journalLookup(PROJECT, { includePreImage: true });
     const replace = all.find((x) => x.opId === 'replaceDocumentBlocks')!;
     expect(replace.preImage).not.toBeNull();
-    expect(e.engine.queries.journalLookup({ withPreImage: true }).map((x) => x.opId)).toContain(
+    expect(e.engine.queries.journalLookup(PROJECT, { withPreImage: true }).map((x) => x.opId)).toContain(
       'replaceDocumentBlocks',
     );
-    expect(e.engine.queries.journalLookup({ outcome: 'not_applied' }).map((x) => x.opId)).toEqual([
+    expect(e.engine.queries.journalLookup(PROJECT, { outcome: 'not_applied' }).map((x) => x.opId)).toEqual([
       'updateResource',
     ]);
   });
@@ -124,6 +132,8 @@ describe('the journal at volume', () => {
   const fresh = () => {
     const db = openDatabase(':memory:');
     runMigrations(db);
+    // v2 A1: journal entries belong to a registered project.
+    new ProjectStore(db).insert({ id: PROJECT, name: 'mock', displayName: null, verifiedAt: null });
     let t = 1_000_000;
     const j = new WriteJournal(db, () => (t += 1000));
     return { db, j };
@@ -133,6 +143,7 @@ describe('the journal at volume', () => {
     const { db, j } = fresh();
     for (let i = 0; i < 250; i++) {
       j.record({
+        projectId: PROJECT,
         opId: i % 2 ? 'updateBlock' : 'createBlockRow',
         risk: 'safe',
         targetKind: 'block',
@@ -143,6 +154,7 @@ describe('the journal at volume', () => {
       });
     }
     const batch = j.record({
+      projectId: PROJECT,
       opId: 'createManyResources',
       risk: 'safe',
       targetKind: 'resource',
@@ -152,7 +164,7 @@ describe('the journal at volume', () => {
     const pages: number[][] = [];
     let before: number | undefined;
     for (;;) {
-      const page = journalLookup(db, { limit: 100, ...(before !== undefined ? { before } : {}) });
+      const page = journalLookup(db, PROJECT, { limit: 100, ...(before !== undefined ? { before } : {}) });
       if (page.length === 0) break;
       pages.push(page.map((x) => x.id));
       before = page.at(-1)!.id;
@@ -162,17 +174,19 @@ describe('the journal at volume', () => {
     expect(new Set(ids).size).toBe(251);
     expect(ids).toEqual([...ids].sort((a, b) => b - a));
     // Filters combine with the cursor.
-    const five = journalLookup(db, { documentId: 'd-five', limit: 20 });
+    const five = journalLookup(db, PROJECT, { documentId: 'd-five', limit: 20 });
     expect(five).toHaveLength(20);
-    expect(journalLookup(db, { documentId: 'd-five', before: five.at(-1)!.id, limit: 100 })).toHaveLength(30);
-    expect(journalLookup(db, { profile: 'claude', limit: 1000 })).toHaveLength(84);
+    expect(
+      journalLookup(db, PROJECT, { documentId: 'd-five', before: five.at(-1)!.id, limit: 100 }),
+    ).toHaveLength(30);
+    expect(journalLookup(db, PROJECT, { profile: 'claude', limit: 1000 })).toHaveLength(84);
     // Every created id finds the batch entry.
     for (const t of ['rnew0000', 'rnew1111', 'rnew2222']) {
-      expect(journalLookup(db, { targetId: t }).map((x) => x.id)).toEqual([batch]);
+      expect(journalLookup(db, PROJECT, { targetId: t }).map((x) => x.id)).toEqual([batch]);
     }
     // `since` becomes an id bound: the newest 10 entries were written in the last 10 seconds of the fake clock.
-    const newest = journalLookup(db, { limit: 1 })[0]!;
-    expect(journalLookup(db, { since: newest.at - 9_500, limit: 100 })).toHaveLength(10);
+    const newest = journalLookup(db, PROJECT, { limit: 1 })[0]!;
+    expect(journalLookup(db, PROJECT, { since: newest.at - 9_500, limit: 100 })).toHaveLength(10);
   });
 
   it('uses an index for filtered pages: no full scan, no sort', () => {
@@ -191,7 +205,9 @@ describe('the journal at volume', () => {
       'job_id',
     ]) {
       const p = plan(
-        `SELECT id FROM write_journal WHERE ${col} = ? AND id < ? ORDER BY id DESC LIMIT 100`,
+        // v2 A1: every lookup is scoped to one project, so the filtered page is `project_id = ? AND <col> = ?`.
+        `SELECT id FROM write_journal WHERE project_id = ? AND ${col} = ? AND id < ? ORDER BY id DESC LIMIT 100`,
+        PROJECT,
         'x',
         1000,
       );
@@ -203,6 +219,7 @@ describe('the journal at volume', () => {
   it('prunes by age and size, and the targets of pruned entries go with them; upload keys are never stored', () => {
     const { db, j } = fresh();
     j.record({
+      projectId: PROJECT,
       opId: 'createManyResources',
       risk: 'safe',
       targetKind: 'resource',
@@ -210,6 +227,7 @@ describe('the journal at volume', () => {
       targets: ['r0', 'r1'],
     });
     j.record({
+      projectId: PROJECT,
       opId: 'createImageAsset',
       risk: 'safe',
       targetKind: 'Assets',

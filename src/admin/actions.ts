@@ -28,7 +28,7 @@ const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write
 export type AdminActions = ReturnType<typeof createAdminActions>;
 
 export function createAdminActions(d: AdminDeps) {
-  const { engine, lk, policy } = d.runtime;
+  const { engine, projects, policy } = d.runtime;
   const store = policy.store;
   const cmd = policy.commands;
   const audit = (action: string, target: string | null, before?: unknown, after?: unknown) =>
@@ -38,49 +38,81 @@ export function createAdminActions(d: AdminDeps) {
     pauseRequested: j.pauseRequested,
     cancelRequested: j.cancelRequested,
   });
-  const job = (id: string) => engine.queries.getJob(id);
+  const job = (projectId: string, id: string) => engine.queries.getJob(projectId, id);
+  /** A proposal of `projectId`, or 404: the dashboard acts on the project it shows, never on another by id. */
+  const proposalIn = (projectId: string, id: string) => {
+    const p = policy.proposals.get(id);
+    if (!p || p.projectId !== projectId) {
+      throw new AdminHttpError(404, 'PROPOSAL_NOT_FOUND', `No proposal ${id} in this project`);
+    }
+    return p;
+  };
 
   const controlsAudit = (action: string, before: ControlsView, after: ControlsView) =>
     audit(action, null, before, after);
 
   return {
     // ---------------------------------------------------------------------------------------------- jobs
-    cancelJob(id: string): JobView {
-      const before = job(id);
-      const after = engine.controls.cancel(id);
-      audit('job.cancel', id, before ? brief(before) : undefined, brief(after));
+    // Every job and error action names its project (v2 A1); a job of another project is "not found".
+    cancelJob(projectId: string, id: string): JobView {
+      const before = job(projectId, id);
+      const after = engine.controls.cancel(projectId, id);
+      audit('job.cancel', id, before ? brief(before) : undefined, { project: projectId, ...brief(after) });
       return after;
     },
-    pauseJob(id: string): JobView {
-      const before = job(id);
-      const after = engine.controls.pauseJob(id);
-      audit('job.pause', id, before ? brief(before) : undefined, brief(after));
+    pauseJob(projectId: string, id: string): JobView {
+      const before = job(projectId, id);
+      const after = engine.controls.pauseJob(projectId, id);
+      audit('job.pause', id, before ? brief(before) : undefined, { project: projectId, ...brief(after) });
       return after;
     },
-    resumeJob(id: string): JobView {
-      const before = job(id);
-      const after = engine.controls.resumeJob(id);
-      audit('job.resume', id, before ? brief(before) : undefined, brief(after));
+    resumeJob(projectId: string, id: string): JobView {
+      const before = job(projectId, id);
+      const after = engine.controls.resumeJob(projectId, id);
+      audit('job.resume', id, before ? brief(before) : undefined, { project: projectId, ...brief(after) });
       return after;
     },
     /** `force` re-runs a step that may already have applied as new work (a person checked LegendKeeper). */
-    retryStep(id: string, stepNo: number, force: boolean): JobView {
-      const before = job(id)?.steps.find((s) => s.stepNo === stepNo);
-      const after = engine.controls.retryStep(id, stepNo, { force });
+    retryStep(projectId: string, id: string, stepNo: number, force: boolean): JobView {
+      const before = job(projectId, id)?.steps.find((s) => s.stepNo === stepNo);
+      const after = engine.controls.retryStep(projectId, id, stepNo, { force });
       audit(
         'job.retry_step',
         `${id}#${stepNo}`,
         before ? { status: before.status, maybeSent: before.maybeSent } : undefined,
-        { force, status: after.status },
+        { project: projectId, force, status: after.status },
       );
       return after;
     },
 
     // --------------------------------------------------------------------------------------------- errors
-    resolveErrorGroup(fingerprint: string): number {
-      const changed = engine.queries.resolveErrorGroup(fingerprint);
-      audit('error.resolve', fingerprint, undefined, { occurrencesResolved: changed });
+    resolveErrorGroup(projectId: string, fingerprint: string): number {
+      const changed = engine.queries.resolveErrorGroup(projectId, fingerprint);
+      audit('error.resolve', fingerprint, undefined, { project: projectId, occurrencesResolved: changed });
       return changed;
+    },
+
+    // ------------------------------------------------------------------------------------------- projects
+    /** v2 A1: a project's own read-only flag (true overrides the bridge-wide flag for that project). Audited. */
+    setProjectReadOnly(projectId: string, value: boolean) {
+      const before = projects.find(projectId);
+      if (!before?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${projectId}`);
+      const after = projects.setReadOnly(before.id, value);
+      audit(
+        'project.set_read_only',
+        before.name,
+        { readOnly: before.readOnly },
+        { readOnly: after?.readOnly ?? value },
+      );
+      return after;
+    },
+    /** v2 A1: checks a configured project's key again now (after the owner fixed the env file and restarted, or LK). */
+    async verifyProject(name: string) {
+      const before = projects.byConfiguredName(name);
+      if (!before) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No configured project ${name}`);
+      const after = await projects.verify(before.name);
+      audit('project.verify', before.name, { status: before.status }, { status: after?.status ?? null });
+      return after;
     },
 
     // -------------------------------------------------------------------------------------------- writers
@@ -131,12 +163,17 @@ export function createAdminActions(d: AdminDeps) {
       controlsAudit('settings.read_only', before, after);
       return after;
     },
+    /** Reserve floors are bridge-wide: every project's governor gets the same (v2 A1). */
     setReserveFloors(value: ReserveFloors | null): ReserveFloors {
       const next =
         value === null ? d.runtime.envConfig.governor.reserveFloors : reserveFloorsSchema.parse(value);
-      const before = lk.governor.settings.reserveFloors;
+      const governors = projects.clients().map((c) => c.client.governor);
+      const before = governors[0]?.settings.reserveFloors ?? null;
       try {
-        lk.governor.setReserveFloors({ P1: next.interactive, P2: next.job, P3: next.maintenance });
+        // Validated once (the same floors for all), then applied to each.
+        reserveFloorsSchema.parse(next);
+        for (const g of governors)
+          g.setReserveFloors({ P1: next.interactive, P2: next.job, P3: next.maintenance });
       } catch (e) {
         throw new AdminHttpError(
           400,
@@ -145,7 +182,7 @@ export function createAdminActions(d: AdminDeps) {
         );
       }
       writeStoredSetting(store.db, SETTING_KEYS.reserveFloors, value, OWNER, store.now());
-      audit('budget.set_reserve_floors', null, before, lk.governor.settings.reserveFloors);
+      audit('budget.set_reserve_floors', null, before, governors[0]?.settings.reserveFloors ?? next);
       return next;
     },
     setExposePerOpTools(value: boolean | null): void {
@@ -245,9 +282,26 @@ export function createAdminActions(d: AdminDeps) {
     },
 
     // ---------------------------------------------------------------------------------------- proposals
-    approve: (id: string) => cmd.approve(OWNER, id),
-    reject: (id: string, reason?: string) => cmd.reject(OWNER, id, reason),
-    bulkApprove: (ids: readonly string[]) => cmd.bulkApprove(OWNER, ids),
-    bulkReject: (ids: readonly string[], reason?: string) => cmd.bulkReject(OWNER, ids, reason),
+    // The dashboard approves or rejects within the project it shows; approval executes against the proposal's project.
+    approve: (projectId: string, id: string) => {
+      proposalIn(projectId, id);
+      return cmd.approve(OWNER, id);
+    },
+    reject: (projectId: string, id: string, reason?: string) => {
+      proposalIn(projectId, id);
+      return cmd.reject(OWNER, id, reason);
+    },
+    bulkApprove: (projectId: string, ids: readonly string[]) => {
+      for (const id of ids) if (policy.proposals.get(id)) proposalIn(projectId, id);
+      return cmd.bulkApprove(OWNER, ids);
+    },
+    bulkReject: (projectId: string, ids: readonly string[], reason?: string) => {
+      for (const id of ids) if (policy.proposals.get(id)) proposalIn(projectId, id);
+      return cmd.bulkReject(OWNER, ids, reason);
+    },
+    getProposal: (projectId: string, id: string) => {
+      proposalIn(projectId, id);
+      return cmd.getProposal(OWNER, id);
+    },
   };
 }

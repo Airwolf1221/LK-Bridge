@@ -18,6 +18,9 @@ import { issueApprovalToken } from '../../src/policy/approval.js';
 import { SCOPES, UPLOAD_OPERATIONS, createPolicy, type Policy, type Scope } from '../../src/policy/index.js';
 import { makePat, mcpOriginFor } from './helpers.js';
 
+/** v2 A1: every policy decision is for one project (an approval only covers its own). */
+const PROJECT = 'proj_mock';
+
 let db: Db;
 let now = Date.UTC(2026, 10, 7, 12);
 const clock = () => now;
@@ -47,6 +50,7 @@ const ask = (
     {},
     {
       origin,
+      project: PROJECT,
       jobKind,
       ...(stepIndex !== undefined ? { stepIndex } : {}),
     },
@@ -174,6 +178,7 @@ describe('system principal and approval look-alikes', () => {
     const token = issueApprovalToken(
       'prop_missing',
       principal.principalId,
+      PROJECT,
       [{ op: 'deleteResource', paramsHash: 'x' }],
       now,
     );

@@ -1,16 +1,20 @@
 # `src/lk`: LegendKeeper client and Rate Governor
 
-Everything that talks to LegendKeeper lives here, and every request goes through **one governor**
-(PLAN §5, ADR 0003). Chunks 2 and 3 import from `src/lk/index.ts` only. The interface below is meant to stay
+Everything that talks to LegendKeeper lives here, and every request goes through **a governor** (PLAN §5, ADR 0003).
+Since v2 A1 there is **one governor per project**: each project has its own key, so its own key tiers and project tier
+(ADR 0023). `src/projects/registry.ts` builds one `LkClient` per configured project; nothing else creates clients. Chunks 2 and 3 import from `src/lk/index.ts` only. The interface below is meant to stay
 stable; change it only with a note in `docs/CHANGELOG.md`.
 
 ## Quick start
 
 ```ts
-import { loadConfig, lkSettingsFrom } from '../config/index.js';
+import { loadConfig } from '../config/index.js';
+import { lkSettingsFor } from '../config/lk.js';
 import { createLkClient, BudgetWaitError } from '../lk/index.js';
 
-const lk = createLkClient(lkSettingsFrom(loadConfig()));
+// One client per project: its key, and the LegendKeeper id that key proved (the registry does this for the bridge).
+const config = loadConfig();
+const lk = createLkClient(lkSettingsFor(config, { apiKey: config.lk.projects[0]!.apiKey, projectId }));
 
 // Registry-aware: kind and tier costs come from the operation registry.
 const doc = await lk.call({
@@ -19,26 +23,26 @@ const doc = await lk.call({
   run: (sdk, signal) => sdk.documents.get({ projectId: lk.projectId, resourceId, documentId }, { signal }),
 });
 
-lk.budgetFooter(); // 'budget: writes 0/120·min 0/3,000·h | all 1/300·min ...'
+lk.budgetFooter('test'); // 'budget (test): writes 0/120·min 0/3,000·h | all 1/300·min ...'
 ```
 
 ## Exported interface
 
-| Export                                                                | What it is                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createLkClient(config: LkClientConfig): LkClient`                    | Builds the `@legendkeeper/sdk` 4.1 client with `fetch: governor.fetch`, `maxRetries: 0`, `idempotencyKeys: false`. `config` is `LkSettings` (from `lkSettingsFrom(config)` in `src/config/lk.ts`) plus optional `clock`, `transport`, `random`, `governorInstance` and (v1.0.1) `persistence`. |
-| `LkClient`                                                            | `{ sdk, governor, projectId, fetch, call(req), budgetFooter() }`. `call` is `governor.execute` with `kind`/`costs` looked up from the registry (`createManyResources` items are read from `input.body.resources`).                                                                             |
-| `governor.execute<T>(req): Promise<T>`                                | The one way to reach LK. See below.                                                                                                                                                                                                                                                            |
-| `governor.snapshot(): BudgetSnapshot`                                 | Every tier: `used`, `limit` (effective), `configuredLimit`, `remaining`, `windowMs`, `resetAtMs`, `blockedUntilMs`, `inFlight`, `reactiveOnly`, `drift` (observed vs modelled at the last server correction). Plus `queues` per class, `inFlight`, `writeSpacingMs`, `nextWriteAtMs`.          |
-| `governor.estimate({ reads, writes, createManyItems, priority? })`    | Projected wall-clock time, tightest tier (or `'pacing'`), whether it fits today's remaining day budget, and a per-tier breakdown. Pure maths in `estimateFrom(snapshot, settings, input)`.                                                                                                     |
-| `formatBudgetFooter(snapshot)`                                        | The one-line footer from PLAN §5.4.                                                                                                                                                                                                                                                            |
-| `governor.on('sample' \| 'throttled' \| 'budget-wait', cb)`           | Events for the UI (chunk 5). Returns an unsubscribe function. `sample`: rate headers seen, the tier they matched and the modelled count they replaced. `throttled`: tiers LK refused (429) and until when. `budget-wait`: a call surfaced `BudgetWaitError`.                                   |
-| `BridgeLkError`                                                       | Every failure: `status`, LK `code` (or a bridge code), `requestId`, `errors[]`, `retryable`, `classification` (`user_fixable` · `conflict` · `auth` · `budget` · `upstream` · `bridge`), `opId`, `ambiguous`, `retryAfterMs`, `attempts`. `toJSON()` is safe to log.                           |
-| `BudgetWaitError extends BridgeLkError`                               | `{ tier, retryAtMs }`. The job engine parks the step (`waiting_budget`) until `retryAtMs`; MCP turns it into "budget exhausted, retry at T".                                                                                                                                                   |
-| `idempotencyKeyFor(jobId, stepNo, attempt0?)`                         | `lkb.{jobId}.{stepNo}.{attempt0}` (PLAN §5.3).                                                                                                                                                                                                                                                 |
-| `defaultTransport`                                                    | The transport under the governor when none is given (the platform `fetch`). Chunk 3 wraps it in a host router so the signed upload URL (another host) goes through an SSRF guard, still inside `execute`.                                                                                      |
-| `createSqliteCounterStore(db)`, `GovernorPersistence`, `CounterStore` | v1.0.1: keeps the tiers' recent counts across restarts (below). Pass `{ store, intervalMs?, warn? }` as `persistence` to `createLkClient` or `new Governor`; `src/runtime.ts` passes the SQLite store. Additive: every method above is unchanged.                                              |
-| `costSpecFor(op, input)`, `FakeClock`, `systemClock`, `Clock`         | Helpers. Use `FakeClock` in tests: nothing ever really sleeps.                                                                                                                                                                                                                                 |
+| Export                                                                           | What it is                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createLkClient(config: LkClientConfig): LkClient`                               | Builds the `@legendkeeper/sdk` 4.1 client with `fetch: governor.fetch`, `maxRetries: 0`, `idempotencyKeys: false`. `config` is `LkSettings` (from `lkSettingsFor(config, { apiKey, projectId })` in `src/config/lk.ts`, v2 A1) plus optional `clock`, `transport`, `random`, `governorInstance` and (v1.0.1) `persistence`. |
+| `LkClient`                                                                       | `{ sdk, governor, projectId, fetch, call(req), budgetFooter(project?) }` (the footer names the project when given, v2 A1). `call` is `governor.execute` with `kind`/`costs` looked up from the registry (`createManyResources` items are read from `input.body.resources`).                                                 |
+| `governor.execute<T>(req): Promise<T>`                                           | The one way to reach LK. See below.                                                                                                                                                                                                                                                                                         |
+| `governor.snapshot(): BudgetSnapshot`                                            | Every tier: `used`, `limit` (effective), `configuredLimit`, `remaining`, `windowMs`, `resetAtMs`, `blockedUntilMs`, `inFlight`, `reactiveOnly`, `drift` (observed vs modelled at the last server correction). Plus `queues` per class, `inFlight`, `writeSpacingMs`, `nextWriteAtMs`.                                       |
+| `governor.estimate({ reads, writes, createManyItems, priority? })`               | Projected wall-clock time, tightest tier (or `'pacing'`), whether it fits today's remaining day budget, and a per-tier breakdown. Pure maths in `estimateFrom(snapshot, settings, input)`.                                                                                                                                  |
+| `formatBudgetFooter(snapshot, project?)`                                         | The one-line footer from PLAN §5.4; `budget (<project>): …` when a project name is given (v2 A1).                                                                                                                                                                                                                           |
+| `governor.on('sample' \| 'throttled' \| 'budget-wait', cb)`                      | Events for the UI (chunk 5). Returns an unsubscribe function. `sample`: rate headers seen, the tier they matched and the modelled count they replaced. `throttled`: tiers LK refused (429) and until when. `budget-wait`: a call surfaced `BudgetWaitError`.                                                                |
+| `BridgeLkError`                                                                  | Every failure: `status`, LK `code` (or a bridge code), `requestId`, `errors[]`, `retryable`, `classification` (`user_fixable` · `conflict` · `auth` · `budget` · `upstream` · `bridge`), `opId`, `ambiguous`, `retryAfterMs`, `attempts`. `toJSON()` is safe to log.                                                        |
+| `BudgetWaitError extends BridgeLkError`                                          | `{ tier, retryAtMs }`. The job engine parks the step (`waiting_budget`) until `retryAtMs`; MCP turns it into "budget exhausted, retry at T".                                                                                                                                                                                |
+| `idempotencyKeyFor(jobId, stepNo, attempt0?)`                                    | `lkb.{jobId}.{stepNo}.{attempt0}` (PLAN §5.3).                                                                                                                                                                                                                                                                              |
+| `defaultTransport`                                                               | The transport under the governor when none is given (the platform `fetch`). Chunk 3 wraps it in a host router so the signed upload URL (another host) goes through an SSRF guard, still inside `execute`.                                                                                                                   |
+| `createSqliteCounterStore(db, projectId)`, `GovernorPersistence`, `CounterStore` | v1.0.1: keeps the tiers' recent counts across restarts (below); one row per project since v2 A1. Pass `{ store, intervalMs?, warn? }` as `persistence` to `createLkClient` or `new Governor`; `src/runtime.ts` passes the SQLite store. Additive: every method above is unchanged.                                          |
+| `costSpecFor(op, input)`, `FakeClock`, `systemClock`, `Clock`                    | Helpers. Use `FakeClock` in tests: nothing ever really sleeps.                                                                                                                                                                                                                                                              |
 
 ### `execute` request
 

@@ -8,8 +8,12 @@ The data model, owner CRUD, import and export, a read-only preview, and the Repo
 
 ## Model
 
-- **Mapping set**: id, name (unique, any case), description, notes, `active`, created and updated times. **At most one set
-  is active**, enforced by the command and by a partial unique index in SQLite.
+**Mappings belong to a project (v2 A1).** Every set, rule and field map carries its project; the page and every
+`/api/admin/mappings…` route work in the dashboard's selected project (`?project=`), and another project's ids are "not
+found". Names are unique within a project, and each project has at most one active set.
+
+- **Mapping set**: id, name (unique, any case, within its project), description, notes, `active`, created and updated
+  times. **At most one set per project is active**, enforced by the command and by a partial unique index in SQLite.
 - **Type rule**: a _selector_ → a _semantic type_, with a _priority_ (−1000 to 1000, higher wins an overlap), notes and times.
   Selectors:
   - `subtree`: a resource id, with or without its descendants;

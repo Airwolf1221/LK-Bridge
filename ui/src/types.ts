@@ -29,10 +29,77 @@ export interface SessionInfo {
 export interface Controls {
   writesPaused: boolean;
   draining: boolean;
+  /** Effective read-only flag. Asked for one project, it is also on when that project's own flag is on (v2 A1). */
   readOnly: boolean;
   readOnlyOverride: boolean | null;
   writersMax: number;
   allowMemberAdmin: boolean;
+  /** Present when the controls were read for one project: its own flag and whether it is served now. */
+  project?: { id: string; name: string; readOnly: boolean; available: boolean };
+}
+
+// ------------------------------------------------------------------------------------------- projects (v2 A1)
+
+export type ProjectStatus = 'verifying' | 'active' | 'unverified' | 'stopped' | 'not_configured';
+
+/** The project a scoped response is about. */
+export interface ProjectRef {
+  /** The LegendKeeper project id. */
+  id: string;
+  name: string;
+}
+
+/** One row of `GET /projects`. A key is never sent: only the name of the variable that holds it. */
+export interface ProjectInfo {
+  name: string;
+  /** Null until a key has proved which LegendKeeper project it is. */
+  id: string | null;
+  displayName: string | null;
+  isDefault: boolean;
+  isSandbox: boolean;
+  /** The project's own read-only flag (the bridge-wide flag on the Settings page applies as well). */
+  readOnly: boolean;
+  /** Listed in the env file with a key. */
+  configured: boolean;
+  /** Stored in the database (it has, or had, data). */
+  registered: boolean;
+  status: ProjectStatus;
+  /** Plain-language reason for any status but `active`. */
+  reason: string | null;
+  /** The env variable that holds the key (its name only), when configured. */
+  keyVariable: string | null;
+  keyPresent: boolean;
+  /** Whether the key authenticated at the last check (null: not checked yet, or not configured). */
+  keyValid: boolean | null;
+  verifiedAt: number | null;
+  checkedAt: number | null;
+  settings: Record<string, unknown>;
+  settingsProblem: string | null;
+}
+
+export interface ProjectSettingKey {
+  key: string;
+  label: string;
+  kind: string;
+}
+
+export interface ProjectsResponse {
+  /** The default project's name. */
+  default: string;
+  requireProjectForWrites: boolean;
+  singleProjectForm: boolean;
+  settingKeys: ProjectSettingKey[];
+  projects: ProjectInfo[];
+}
+
+/** Every project's status, as the Overview lists it. */
+export interface ProjectStatusSummary {
+  name: string;
+  id: string | null;
+  status: ProjectStatus;
+  reason: string | null;
+  isDefault: boolean;
+  readOnly: boolean;
 }
 
 export interface TierSnapshot {
@@ -63,6 +130,11 @@ export interface BudgetPayload {
   writesPerMinute: number;
 }
 
+/** The live stream's `budget` event: every project's budget, by LegendKeeper project id (one governor each). */
+export interface BudgetStreamPayload {
+  projects: Record<string, BudgetPayload & { name: string }>;
+}
+
 export interface Health {
   checkedAt: number;
   reachable: boolean | null;
@@ -73,6 +145,9 @@ export interface Health {
 }
 
 export interface Overview {
+  project?: ProjectRef;
+  /** Every project's status, so a stopped one shows on the Overview whichever project is selected. */
+  projects?: ProjectStatusSummary[];
   health: Health;
   controls: Controls;
   activeJobs: {
@@ -86,7 +161,8 @@ export interface Overview {
   errorsLastHour: { count: number; capped: boolean };
   pendingProposals: number;
   writes: { state: 'running' | 'paused' | 'draining'; perMinute: number };
-  budget: { queues: Record<PriorityClass, number>; gauges: TierSnapshot[] };
+  /** Null when the project has no governor now (its key is not in use). */
+  budget: { queues: Record<PriorityClass, number>; gauges: TierSnapshot[] } | null;
 }
 
 export interface JobOrigin {
@@ -98,6 +174,8 @@ export interface JobOrigin {
 
 export interface Job {
   id: string;
+  /** The LegendKeeper id of the project the job works on. */
+  projectId?: string;
   kind: string;
   title: string;
   origin: JobOrigin;
@@ -123,6 +201,7 @@ export interface Job {
 
 export interface Step {
   jobId: string;
+  projectId?: string;
   stepNo: number;
   opId: string;
   opKind: string;
@@ -175,6 +254,7 @@ export interface ErrorGroup {
 
 export interface ErrorRecord {
   id: number;
+  projectId?: string;
   at: number;
   opId: string;
   jobId: string | null;
@@ -192,7 +272,20 @@ export interface ErrorRecord {
   resolvedAt: number | null;
 }
 
+export interface BudgetSamples {
+  since: number;
+  until: number;
+  bucketMs: number;
+  count: number;
+  points: {
+    at: number;
+    tiers: Partial<Record<TierId, { used: number; limit: number | null }>>;
+    queues: Partial<Record<PriorityClass, number>>;
+  }[];
+}
+
 export interface BudgetsResponse extends BudgetPayload {
+  project?: ProjectRef;
   tierOrder: TierId[];
   reserveFloors: {
     current: { interactive: number; job: number; maintenance: number };
@@ -200,22 +293,25 @@ export interface BudgetsResponse extends BudgetPayload {
     stored: { interactive: number; job: number; maintenance: number } | null;
   };
   projectDrift: TierSnapshot['drift'];
-  samples: {
-    since: number;
-    until: number;
-    bucketMs: number;
-    count: number;
-    points: {
-      at: number;
-      tiers: Partial<Record<TierId, { used: number; limit: number | null }>>;
-      queues: Partial<Record<PriorityClass, number>>;
-    }[];
-  };
+  samples: BudgetSamples;
+}
+
+/** `GET /budgets/all`: every project with a governor, side by side. */
+export interface BudgetsAllResponse {
+  tierOrder: TierId[];
+  projects: (BudgetPayload & {
+    project: ProjectRef;
+    status: ProjectStatus | 'unknown';
+    projectDrift: TierSnapshot['drift'];
+    samples: BudgetSamples;
+  })[];
 }
 
 export interface WriterSlot {
   slot: number;
   state: 'idle' | 'busy';
+  /** The LegendKeeper id of the busy step's project (the pool is shared by every project). */
+  projectId?: string;
   jobId?: string;
   stepNo?: number;
   opId?: string;
@@ -228,19 +324,25 @@ export interface WriterSlot {
 }
 
 export interface WritersResponse {
+  /** The project whose budget figures (writes per minute) are shown; slots and locks span every project. */
+  project?: ProjectRef;
   writers: {
     max: number;
     busy: number;
     slots: WriterSlot[];
-    waiting: { jobId: string; stepNo: number; opId: string }[];
+    waiting: { projectId?: string; jobId: string; stepNo: number; opId: string }[];
   };
   locks: {
+    /** `<projectId>:doc:<id>` and so on. */
     key: string;
     holder: { jobId: string; stepNo: number; since: number };
     waiting: { jobId: string; stepNo: number; since: number }[];
   }[];
   controls: Controls;
-  jobs: Record<string, { title: string; status: string; profile: string; principalId: string }>;
+  jobs: Record<
+    string,
+    { title: string; status: string; profile: string; principalId: string; project?: string }
+  >;
   writesPerMinute: number;
   writeMinuteLimit: number | null;
   writeSpacingMs: number;
@@ -290,6 +392,14 @@ export interface ProposalOp {
 
 export interface ProposalDetail extends Proposal {
   ops: ProposalOp[];
+}
+
+export interface ProposalCounts {
+  project?: ProjectRef;
+  /** Counts by state, for the selected project. */
+  counts: Record<string, number>;
+  /** Every project's pending count, by project name. */
+  byProject?: Record<string, number>;
 }
 
 export interface Profile {

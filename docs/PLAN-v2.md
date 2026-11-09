@@ -1,20 +1,21 @@
 # LK-Bridge v2: Development Plan
- 
+
 **Status:** v1.0.2 is deployed at `https://lk.ottomoons.co.uk`, serving the test world. Claude and ChatGPT are connected, the propose → approve → execute loop works, and the hardening review is done.
 **Goal of v2:** an agent-facing layer that lets Claude and ChatGPT work across the Arkona repository through simple, safe, Markdown-based tools. It is backed by the bridge's own model of the repository, so most questions cost no LegendKeeper requests at all.
 **Source:** the "Bridge Requirements" Google Doc, our discussion on 8 and 9 November 2026, and the behaviour of the old bridge (`Airwolf1221/legendkeeper-bridge`, Linux 0.15.0).
 **Plan date:** 9 November 2026
- 
+
 How claims are marked in this plan:
- 
+
 - **Decided:** the owner has agreed it.
 - **Verified:** checked against LegendKeeper's API or the test world.
 - **Proposal:** my recommendation, not yet agreed.
 - **To verify:** must be tested on the test world before it is relied on.
+
 ---
- 
+
 ## 1. Decisions already made
- 
+
 | Topic              | Decision                                                                                                                                                                                                                                               |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Setting name       | Arkona (formerly Baisheng)                                                                                                                                                                                                                             |
@@ -35,11 +36,11 @@ How claims are marked in this plan:
 | Images             | Three ways in: inline base64, a single-use binary upload endpoint, and a URL. Images are converted to WebP at quality 90, as the old bridge does.                                                                                                      |
 | Backups            | Snapshots in the bridge, **including images**, with an encrypted off-server copy on **Google Drive** and restore tools. Retention: 8 weekly snapshots plus 30 days of change snapshots.                                                                |
 | Character creation | Kept from the old bridge (Core / Compact / unknown race). Filling pages with content automatically ("automatic page work") is **later**, not v2.                                                                                                       |
- 
+
 ---
- 
+
 ## 2. Verified facts that shape the design
- 
+
 - **What a cheap tree pass returns:** `listResources` gives `id, name, parentId, rank, tags, aliases, documents, updatedAt`. The structure of a project the size of Arkona (about 3,500 resources) costs **about 35 reads**.
 - **Where the catalogue fields live:** Scope, Index Scope and Reference Type are **sidebar properties**, so they need `getResource`: **1 read per resource** (about 3,500 for a full pass).
 - **Placing pages costs nothing extra:** `createResource`, `createResourceFromTemplate` (with `parentId`, `after`, `before`, `name` and `id`) and `moveResource` all accept `after` or `before`, so alphabetical placement happens inside the same write.
@@ -80,10 +81,11 @@ How claims are marked in this plan:
   - The table is the authority; the timeline events are secondary views.
 - **Ids differ between projects** (a copied project gets new ids). Everything the bridge knows by id is configured and seeded **per project**.
 - **Example sidebar (Asagiri Miyabi):** a key-value property `PROPERTIES` (facts), the link collections `Dependencies` and `Related Sources`, and `TAGS`, which the API can't represent (`unsupported`).
+
 ---
- 
+
 ## 3. Architecture: the building blocks
- 
+
 ```
 Agent tools (Discover · Read · Pages · Resources · Documents · Facts · Maps · Timelines · Assets · api_read/api_write)
         │
@@ -97,28 +99,29 @@ Agent tools (Discover · Read · Pages · Resources · Documents · Facts · Map
         ▼
 Policy gate and proposals → Job engine, writers and locks → Journal → Governor (one per project) → LegendKeeper
 ```
- 
+
 Every high-level write runs as a **job**, through the same guards as v1: policy, version checks, the unsupported-block guard, the journal and proposals. High-level tools never call LegendKeeper directly.
- 
+
 ---
- 
+
 ## 4. Component specifications
- 
+
 ### 4.1 Project registry (multiple projects)
- 
+
 - **Projects:** each has a `name` (for example `arkona`, `test`), an API key, a project id (checked against the key at start-up), a role, and these settings:
   - the AI REPOSITORY root id;
   - the Characters root;
   - the chronology resource;
   - template ids.
-  Keys live in the env file; everything else lives in the database and is edited on the dashboard.
+    Keys live in the env file; everything else lives in the database and is edited on the dashboard.
 - **One governor per project.** Each project has its own key budget and per-project tier, and the dashboard shows each project's budgets.
 - **The `project` argument.** Every tool takes an optional `project` (a name, or an id the bridge maps back). Every result names the project it used.
 - **Decided: explicit project for writes** (`REQUIRE_PROJECT_FOR_WRITES=true`). A write with no `project` is refused when more than one project is registered, so a forgotten argument can't land in Arkona by accident. Reads may use the default project.
 - **Data:** every stored row (jobs, journal, proposals, tree, assets, snapshots, mappings) carries a `project_id`, added by migration. Existing rows belong to the test world.
 - **Sandbox:** the sandbox settings are retired. The sandbox and soak scripts target a registered project marked `sandbox: true`, and refuse any project not marked that way.
+
 ### 4.2 Repository tree
- 
+
 - **Each node holds:**
   - id, raw name, display name (prefix removed), kind (`index`, `bsrc` or `unclassified`);
   - parentId, rank, path (ids and display names), depth;
@@ -134,8 +137,9 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 - **Structural sweep (decided: hourly by default, can be switched off):** about 35 reads. It catches new pages, moves, renames, tag changes and deletions made in the app, without re-reading properties.
 - **Daily consistency check:** a full pass at night at P3. It corrects the tree and records **what it corrected**, shown on the dashboard. It also feeds the audits (4.12) and the taxonomy drift report (4.3).
 - **Estimated standing cost on Arkona:** hourly sweeps about 840 reads a day, the daily check about 3,550, snapshots about 500 a day averaged (4.11). Roughly **5,000 a day against 60,000** allowed.
+
 ### 4.3 Type registry and taxonomy
- 
+
 - **Index types:** for each type (for example `Character`, `Equipment`):
   - its singular and plural names;
   - its root index (`[INDEX] Characters`);
@@ -152,30 +156,34 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
   - an index with no entry;
   - an entry whose source has been renamed, moved or deleted;
   - an entry whose parent no longer matches the tree.
-  An "add missing" action creates entries for new indexes without touching existing ones.
+    An "add missing" action creates entries for new indexes without touching existing ones.
 - **Facts are never rewritten by placement.** `race: "Human"` stays `Human` in the facts and places the page under `[INDEX] Humans`.
+
 ### 4.4 Name resolution
- 
+
 - **One shared resolver**, used by every tool that accepts "name or id":
   - ids are always accepted;
   - names match the display name, the raw name (with prefix), aliases or the Canonical Display Name;
   - the search can be scoped (within a type root, under an index, or by kind).
 - **Exactly one match** is used. **Several matches** are refused, with the candidates and their paths. **No fuzzy matching.**
 - **Prefixes:** a name passed with a stray `[INDEX]` or `[BSRC]` is cleaned up (the doc's "escapes … in case an agent decides to be funny").
+
 ### 4.5 Ordering
- 
+
 - **Siblings:** `[INDEX]` pages come first, then `[BSRC]` pages, then unclassified ones. Each group is alphabetical, comparing display names in a case-insensitive, locale-aware way.
 - **Placement:** the bridge works out the right `after` or `before` neighbour from the tree and passes it in the create or move call, so ordering costs no extra writes. Renames are re-placed the same way.
 - **Existing pages that are out of order are reported, not moved** (audits).
+
 ### 4.6 Asset tree
- 
+
 - **Building it:** walk every folder with `listAssets` (paged). Store folders and assets: id, name, folderId, type, size and SHA-256 once known.
 - **Keeping it current:** updates after the bridge's own uploads and folder creation, a regular refresh (as the old bridge did: every 6 hours, paced and giving way to other work), and the daily check.
 - **Placement:** follows the old bridge's rules (section 9), plus the type registry for other types (for example `Equipment / Sacred Blades`).
+
 ### 4.7 Markdown converter
- 
+
 **The owner's schema:**
- 
+
 | Markdown                                                                                                    | LegendKeeper                                                                                                                      |
 | ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `#`–`######`, paragraphs, `-` lists, `1.` lists, `>` quotes, fenced code, `---`, GFM tables                 | The matching blocks                                                                                                               |
@@ -188,37 +196,38 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 | `![alt](asset-url)`                                                                                         | Image (same-project asset only)                                                                                                   |
 | fenced `lk-block` + JSON                                                                                    | Any raw block                                                                                                                     |
 | `<!-- lk:keep id="…" kind="…" --> … <!-- /lk:keep -->`                                                      | A block Markdown can't express, preserved exactly                                                                                 |
- 
+
 **Additions (decided):**
- 
+
 - **Line breaks:** written as `<br>`.
 - **Inline icons:** become keep regions. There's no Markdown syntax for them in v2.
 - **Tables:** tables with merged cells, or with lists or several paragraphs inside a cell, become keep regions.
-**Rules the converter must keep:**
- 
+  **Rules the converter must keep:**
+
 1. **Round trip:** converting blocks to Markdown and back gives the original tree exactly. Block ids are kept for every block that didn't change.
 2. **Writing back an unchanged page sends nothing.** The diff is empty, so no write is made.
 3. **A missing keep region in replace mode is refused** (with the block ids listed), unless the call names those blocks to drop. Unsupported blocks also keep their existing guard.
 4. **Mentions** are always rendered as `[label](lk://resources/<id>)`. `[[Name]]` on a write must resolve to exactly one page.
 5. **Editor limits** (for example a list inside an expand inside a table cell) are checked **before** sending, with a clear error rather than LegendKeeper's `INVALID_CONTENT`.
 6. **Sections** run from a heading to the next heading of the same or a higher level. They are addressed by heading path (`Biography > Early Life`), and a duplicate heading is refused with the options listed.
-**Reading maps, timelines and boards:**
- 
+   **Reading maps, timelines and boards:**
+
 - **Maps:** features listed with their type, name, position and link.
 - **Timelines:** lanes, then events in calendar order, with formatted dates.
 - **Boards:** shape text and connections.
-**Tests:** fuzz and property-based tests (punctuation, nested marks, escaping), a fixture corpus of real test-world pages, and a **server script** that round-trips **every page** in a project and reports any page that doesn't come back identical.
- 
+  **Tests:** fuzz and property-based tests (punctuation, nested marks, escaping), a fixture corpus of real test-world pages, and a **server script** that round-trips **every page** in a project and reports any page that doesn't come back identical.
+
 ### 4.8 Calendar engine
- 
+
 - **Built from the project's LegendKeeper calendar definition:** months, lengths, leap days, eras and their numbering rules, and format templates. Nothing is hard-coded for Arkona.
 - **Parsing:** the five decided forms (section 1), using the calendar's own month names and era abbreviations. It also accepts a **year range** (for example `4A 881 - 4A 900`), which appears once in the Fourth Age table. It refuses unknown months, dates outside an era (for example before Azah 18th in 4A 1), and impossible days. `Unknown, <year>` becomes a year-only event. `Unknown` alone is refused.
 - **Output:** LegendKeeper's minute values for events, formatted text in the calendar's own format, and **KCY** (single or a range).
 - **Two independent tests:**
   - every row of every age table in the test world (date ↔ KCY);
   - LegendKeeper's own formatted start text on real events.
+
 ### 4.9 Chronology sync
- 
+
 - **Per-project settings:** the chronology resource, plus the mapping from era to its table page and timeline document. These are found by naming convention ("<Era name> - Table" / "- Timeline") and confirmed by the owner.
 - **`create_timeline_event`, as one job:**
   1. parse the date;
@@ -227,20 +236,22 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
   4. insert the table row in calendar order (ties go after existing rows with the same date; year-only rows after the dated rows of their year; ranges by their start);
   5. create the timeline event, with exact minutes and `detail`, in the age timeline's lane (each has one, "Historical Events"), and with its `uri` linking to the age's table page, as every existing event does;
   6. increase the Main page's event count for that age.
-  The job is journalled and recoverable, and never applies anything twice.
+     The job is journalled and recoverable, and never applies anything twice.
 - **Update and delete** keep the table, the timeline and the count in step.
 - **The timeline-only tools** (lanes) touch only the timeline.
 - **Audits** report table rows without an event, events without a row, rows out of order, and wrong KCY values.
+
 ### 4.10 Image pipeline
- 
+
 - **Three ways in:**
   1. **Inline `data_base64`**, up to the configured cap.
   2. **A single-use binary endpoint:** it lasts 5 minutes and is tied to one upload, one project, the file's SHA-256, its length and its type. The capability goes in a header, never a URL. The bridge supplies a ready-made script for agents with a sandbox or shell.
   3. **A URL source**, which goes through the existing address and port checks.
 - **Processing:** WebP at quality 90, keeping dimensions, orientation and transparency; already-WebP files left byte for byte; display names without extensions; the stored bytes checked; and the same original sent again returns the existing asset.
 - **Destination:** from the asset tree and the type registry, creating missing folders with the old bridge's rules (section 9).
+
 ### 4.11 Snapshots, backup and restore
- 
+
 - **Snapshots:** everything under AI REPOSITORY (resources, sidebars, all documents' content, maps, timelines, boards), plus **images**.
   - **Full content:** weekly, at night, at P3.
   - **Change snapshots:** after any write the bridge makes, of the page it changed.
@@ -250,22 +261,25 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 - **Restore tools** (owner and agent, made as **proposals**): restore a page, a sidebar or a document to a chosen snapshot, or restore a deleted resource with its content.
 - **Rehearsal:** restoring a whole project's snapshot into the **test** project, to prove the backups work.
 - **Dashboard:** a snapshot list, sizes, the last off-server copy, and restore rehearsal results.
+
 ### 4.12 Audits
- 
+
 - **Kept from the old bridge:** rules by Reference Type, name prefix and ancestry; sidebar-structure checks; a tag-definition document; internal-reference checks.
 - **New checks:** unclassified pages, ordering, taxonomy drift, chronology consistency, and keep-region health.
 - **Findings only.** Proposed fixes are shown but never applied automatically.
+
 ### 4.13 Request coordination
- 
+
 - **Optional `operation_id` on every create.** A repeat returns the earlier result rather than duplicating.
 - **Two requests for the same character at once** (exact name, case-insensitive) are recognised as duplicates.
 - **Never replay failed work.** Look at its journal, then submit only what's left.
+
 ---
- 
+
 ## 5. Tool surface (v2)
- 
+
 `access` R = read, W = write. Every tool takes `project`. Every W tool works under `propose` scope by producing a proposal, which the dashboard shows as a **Markdown diff**.
- 
+
 | Category  | Tool                                                                                                                                                                                                                                     | Access | Notes                                                                                                                                                               |
 | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Discover  | `list_projects`                                                                                                                                                                                                                          | R      | Name, id, default flag                                                                                                                                              |
@@ -298,13 +312,13 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 | Guides    | `get_markdown_guide`, `get_bridge_guide`                                                                                                                                                                                                 | R      | Also published as MCP resources, with a summary in the server instructions                                                                                          |
 | Fallback  | `api_read`, `api_write`                                                                                                                                                                                                                  | R / W  | The doc's `api_request`, kept split so reads can be auto-approved                                                                                                   |
 | Low-level | `lk_api_*`, `lk_op_*`                                                                                                                                                                                                                    |        | **Hidden by default** (a per-profile `showLowLevelTools` setting). Final list decided in phase E                                                                    |
- 
+
 **Note for ChatGPT:** after the tools change, open ChatGPT's **Plugins** page, open the bridge, and use **Refresh**. ChatGPT keeps its own copy of the tool list.
- 
+
 ---
- 
+
 ## 6. Phases and sessions
- 
+
 ```
 Phase 0 ── spike (verify assumptions on the test world)
 Phase A ── A1 multi-project ──► A2 repository tree ──► A3 registry, resolution, ordering
@@ -314,7 +328,7 @@ Phase C ── C1 write_page ──► C2 resources, documents, facts and links,
 Phase D ── D1 calendar and chronology   D2 maps   D3 image pipeline   (in parallel, after CR)
 Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool review and guides ─► E4 independent hardening ─► E5 Arkona go-live
 ```
- 
+
 | #      | Session                                                                                                                                                                                                                                                                                                                                                                  | Model · effort       | Depends on              | Why this level                                                                                                                             |
 | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | **0**  | **Spike:** a server script that checks on the test world: whether a `createMany` parent created in the same batch works; LegendKeeper's search cap; whether assets can be downloaded (for backups); formatted start text on events; whether pixel and lat/lng map coordinates match the map bounds; and a dump of one age table's blocks and the Main page's index table | Sonnet 5.5 · medium  | —                       | Small and exploratory; its results settle the "to verify" items                                                                            |
@@ -335,15 +349,15 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 | **E3** | **Tool review (with you):** final visible tool list, descriptions, both guides, the server instructions, a check that ChatGPT and Claude each pick the right tool                                                                                                                                                                                                        | Sonnet 5.5 · high    | All of the above        | Mostly wording and judgement; you take part                                                                                                |
 | **E4** | **Independent hardening review:** a fresh session that trusts no earlier report                                                                                                                                                                                                                                                                                          | **Opus 5.5 · xhigh** | E3                      | Same reasoning as v1's chunk 8                                                                                                             |
 | **E5** | **Moving to Arkona:** a runbook and a Claude Code session on the server (section 7)                                                                                                                                                                                                                                                                                      | Sonnet 5.5 · medium  | E4                      | Operational                                                                                                                                |
- 
+
 **Parallel sessions:** A1 and B1; A3 and A4; D1, D2 and D3. Each pair or group has its own branch and a clear split of which files it owns, as in v1. **Ground rules carried over from v1:** never force-push; merge `main` in rather than rebasing; squash merge; I write each handoff when its turn comes, from the previous session's report.
- 
+
 **Rough effort:** 18 sessions, 11 of them on Opus (6 at xhigh), sized for the Max plan: the sessions that protect your data (A1, B1, C1, C2, the mid-point review and E4) get the most depth. That's a few weeks of steady work at your pace; there's no deadline. The four parallel groups (A1 with B1, A3 with A4, D1 with D2 and D3) are where Max's extra quota saves the most time.
- 
+
 ---
- 
+
 ## 7. Moving to Arkona (E5)
- 
+
 1. Register `arkona` with its own key and **read-only** settings.
 2. Build its tree and asset tree, and review the daily check's first report (unclassified pages, ordering, taxonomy drift).
 3. Seed and review its taxonomy and type registry on the dashboard.
@@ -353,21 +367,22 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 7. Move ChatGPT's work from the old bridge to this one, and **retire the old bridge and revoke its key**. Anything that edits Arkona outside this bridge is only picked up by the daily check.
 8. Lift read-only on Arkona with `WRITERS_MAX=1`, and agents at `propose`, for the first weeks.
 9. Raise scopes when you're confident.
+
 ---
- 
+
 ## 8. Settled items (decided 9 November 2026)
- 
+
 | #   | Item                                    | Decision                                                                                                                                 |
 | --- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | Require an explicit `project` on writes | **Yes.** `REQUIRE_PROJECT_FOR_WRITES=true` by default; a write with no `project` is refused when more than one project is registered     |
 | 2   | Hourly structural sweep                 | **On** by default (about 840 reads a day on Arkona), and it can be switched off                                                          |
 | 3   | Syntax for inline icons                 | **None for now.** Inline icons are preserved in keep regions                                                                             |
 | 4   | The Drive backup's encryption password  | Set up in **E1** and kept somewhere other than the server (for example a password manager). Without it, the Drive copy can't be restored |
- 
+
 ---
- 
+
 ## 9. Old-bridge behaviours carried into v2 (checklist for C2, D3 and E2)
- 
+
 - **Character Core:** `[INDEX] <Character>` from the Index template under the race index, then the Core template beneath it. An existing unique index is reused, and an existing core is returned rather than duplicated.
 - **Compact Character Reference:** created directly under the race index, with no index of its own.
 - **Reference Type** is set to exactly `Character Core` or `Compact Character Reference`.
@@ -386,22 +401,24 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 - **Duplicate requests** for the same character are recognised. Failed work is never replayed.
 - **Audits** produce findings only, never automatic repairs.
 - **Inventory refresh** is paced and gives way to agents' work.
+
 ---
- 
+
 ## 10. Design constraints for future setting packs (not v2 scope)
- 
+
 **Why this section exists:** after v2, the plan is a **setting-aware layer** above the general bridge. For Arkona that means tools such as `arkona_create_character`, `arkona_create_outfit`, `arkona_create_species`, `arkona_create_institution`, `arkona_create_magic_tradition` and `arkona_create_nation`. Each takes a whole package (a name, a race, several Markdown owners, art) and builds the complete set of linked pages, through preview, then execute, then verify. Nothing in this section is built in v2. These are constraints on **how** v2 is built, so the setting packs can sit on top of it without rework. The source is the "Further Goals" tab of the Bridge Requirements doc.
- 
+
 ### 10.1 The two layers
- 
+
 - **The general bridge** (v1 and v2) handles everything technical: reading, writing, resources, templates, hierarchy, assets, references, version checks, recovery and verification.
 - **A setting pack** holds one setting's rules: its taxonomy, page types, owner rules, required facts, canonical rules, naming and templates.
   - A pack is attached to one or more projects (Arkona and the test world share the Arkona pack).
   - Its rules are **data** where possible (recipes and rules on the dashboard), with small code hooks only where data can't express a rule.
   - Pack tools carry the pack's prefix (for example `arkona_`).
   - Another setting gets its own pack without changes to the general bridge.
+
 ### 10.2 Constraints on v2 sessions
- 
+
 | Session                                                       | Constraint                                                                                                                                                                                                                                                                                                                                             |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **A3** (type registry and taxonomy)                           | Store the registry so it can grow into **recipes**: page types with their template, required facts, default facts and child pages. It should be keyed by project, and able to belong to a pack later. Don't hard-code Arkona's types in code.                                                                                                          |
@@ -410,34 +427,36 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 | **C2**                                                        | Add a **page-level summary** of each proposal (for example "Character Core: Create · Biography: Create · Racial index: navigation updated"), alongside the existing per-operation diff. The dashboard groups operations by the page they affect.                                                                                                       |
 | **C2**                                                        | Add an optional **verify** step to multi-page jobs. After execution, re-read what was created or changed and compare it with the plan. Record any difference on the job (and, for proposals, on the proposal).                                                                                                                                         |
 | **D3** (images)                                               | Uploads can go to a **staging area**: the image is uploaded and verified, but not yet placed in its final folder. A later package or proposal can then **refer to staged uploads by id**, and they're placed on approval. Image bytes never travel inside a package.                                                                                   |
- 
+
 ### 10.3 Protected canonical facts (a guard, and a candidate for C2)
- 
+
 Arkona records each page's standing in its sidebar facts:
- 
+
 - `Status` is the page's working state (for example `Authoritative`, `Working`, `Archived`).
 - `Continuity Type` is `CANON` (with `Continuity` = `Main`) or `AU` (with `Continuity` = the name of that alternate universe).
-**The rule (decided in principle):** an agent can never make something canonical on its own authority. Setting `Continuity Type` to `CANON`, `Continuity` to `Main`, or `Status` to `Authoritative`, through any tool, always needs the owner's **explicit canonical approval**. That's a separate choice on a proposal ("accept as canon"), distinct from approving the write itself. Without it, the bridge refuses those values, or turns the write into a proposal even at `write` scope.
- 
+  **The rule (decided in principle):** an agent can never make something canonical on its own authority. Setting `Continuity Type` to `CANON`, `Continuity` to `Main`, or `Status` to `Authoritative`, through any tool, always needs the owner's **explicit canonical approval**. That's a separate choice on a proposal ("accept as canon"), distinct from approving the write itself. Without it, the bridge refuses those values, or turns the write into a proposal even at `write` scope.
+
 - The protected facts and values are **configuration** (per project, later per pack), not hard-coded.
 - The rule covers `set_facts`, template defaults copied into new pages, and every future pack tool.
 - **Candidate for C2:** C2 builds `set_facts`, so the guard can be built there in its general form ("protected fact values"). That protects canon from v2 onwards, before any setting pack exists. The owner confirms when C2's handoff is written.
+
 ### 10.4 Owner planning is explicit
- 
+
 Which pages a package creates ("intelligent owner planning") follows **rules the owner sets**, never the agent's or the bridge's own inference. Examples:
- 
+
 - a minor character becomes one Compact Character Reference with no index;
 - a developed character gets an index, a Core page and only the specialist pages that have content.
-The rules are applied the same way every time and shown in the preview. An agent may request a specific structure, but it's checked against the rules. Existing characters are detected first (name resolution), so a package **extends** an existing set of pages rather than duplicating it.
- 
+  The rules are applied the same way every time and shown in the preview. An agent may request a specific structure, but it's checked against the rules. Existing characters are detected first (name resolution), so a package **extends** an existing set of pages rather than duplicating it.
+
 ### 10.5 Later, after the first setting tools
- 
+
 - **Selective approval:** approve parts of a package and reject others. The bridge removes what depends on the rejected parts (for example links to a rejected page) and produces a revised diff for approval.
 - **Continuing a part-built package** after an interruption, without duplicate creations. The v1 job engine's ids and recovery already provide the basis.
+
 ### 10.6 Concurrency: don't rely on LegendKeeper's version check alone (applies to v2)
- 
+
 **From real testing (reported via ChatGPT, 9 November 2026):** LegendKeeper can accept **overlapping** writes that carry the same expected version. Its `If-Match` check works for writes that happen one after another, but it is **not a guaranteed atomic compare-and-swap**. Consequences for v2:
- 
+
 - **The bridge's own per-document and per-resource locks stay mandatory** (they already exist: chunk 2). Two writes from the bridge to the same target never overlap.
 - **The bridge checks versions itself (C1, C2).** Inside the lock, just before a versioned write, the bridge re-reads the current version and compares it with the expected one. A mismatch is a conflict, whatever LegendKeeper would do. The high-level tools usually read anyway, so the cost is rarely an extra request.
 - **One bridge process per project** is a rule, recorded in an ADR by A1. The locks are in-process. Running two bridge processes against the same project would bypass them, so that would need database-held locks first.

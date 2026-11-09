@@ -14,7 +14,7 @@ import type { SourceFactory, SourceLike } from '../../ui/src/stream';
 import type { SessionInfo } from '../../ui/src/types';
 import { systemClock } from '../../src/lk/index.js';
 import { LkModel } from '../jobs/lk-model.js';
-import { PUBLIC_URL, startAdminStack, type AdminStack } from '../admin/helpers.js';
+import { PROJECT, PUBLIC_URL, startAdminStack, type AdminStack } from '../admin/helpers.js';
 
 // Node environment on purpose: the bridge's own start-up code resolves file URLs with Node's `URL`, which a jsdom
 // environment replaces. The bridge starts first; a jsdom window is installed afterwards for React and Testing Library.
@@ -156,6 +156,7 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
     );
 
     const { jobId } = (await stack.runtime.engine.submit({
+      project: PROJECT,
       kind: 'batch_ops',
       title: 'Live end-to-end job',
       origin: { kind: 'ui', tool: 'e2e' },
@@ -181,7 +182,7 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
     expect(busy).toHaveTextContent('replaceDocumentBlocks');
     expect(busy).toHaveTextContent('d_res1');
     expect(within(busy).getByRole('link', { name: 'Live end-to-end job' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: /Held locks/ })).toHaveTextContent('doc:d_res1');
+    expect(screen.getByRole('region', { name: /Held locks/ })).toHaveTextContent(`${PROJECT}:doc:d_res1`); // v2 A1: locks are per project
 
     // WRITERS_MAX changes with no restart: the real pool and the page both follow.
     expect(stack.runtime.engine.writers.max).toBe(2);
@@ -196,8 +197,8 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
     await waitFor(
       () =>
         expect(
-          stack.runtime.engine.queries.getJob(jobId)?.status,
-          JSON.stringify(stack.runtime.engine.queries.getJob(jobId)?.lastError),
+          stack.runtime.engine.queries.getJob(PROJECT, jobId)?.status,
+          JSON.stringify(stack.runtime.engine.queries.getJob(PROJECT, jobId)?.lastError),
         ).toBe('succeeded'),
       { timeout: 10_000 },
     );
@@ -233,6 +234,7 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
       { timeout: 5000 },
     );
     const { jobId } = (await stack.runtime.engine.submit({
+      project: PROJECT,
       kind: 'batch_ops',
       title: 'Step by step',
       origin: { kind: 'ui', tool: 'e2e' },
@@ -254,9 +256,12 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
       expect(within(row()).getByText('Running')).toBeInTheDocument();
       gate.releaseOne();
     }
-    await waitFor(() => expect(stack.runtime.engine.queries.getJob(jobId)?.status).toBe('succeeded'), {
-      timeout: 10_000,
-    });
+    await waitFor(
+      () => expect(stack.runtime.engine.queries.getJob(PROJECT, jobId)?.status).toBe('succeeded'),
+      {
+        timeout: 10_000,
+      },
+    );
     // It leaves the active list on its own.
     await waitFor(() => expect(screen.queryByRole('row', { name: /Step by step/ })).toBeNull(), {
       timeout: 5000,

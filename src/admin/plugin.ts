@@ -7,13 +7,14 @@ import type { FastifyInstance } from 'fastify';
 import { createAdminActions } from './actions.js';
 import { adminGuard, sessionTokenOf } from './guard.js';
 import { createHealthCheck } from './health.js';
-import { describeError } from './http.js';
+import { AdminHttpError, describeError } from './http.js';
 import { registerBudgets } from './routes/budgets.js';
 import { registerJobs } from './routes/jobs.js';
 import { registerMaintenance } from './routes/maintenance.js';
 import { registerMappings } from './routes/mappings.js';
 import { registerOverview } from './routes/overview.js';
 import { registerPolicy } from './routes/policy.js';
+import { registerProjects } from './routes/projects.js';
 import { registerSettings } from './routes/settings.js';
 import type { RouteContext } from './routes/util.js';
 import { StreamHub } from './stream.js';
@@ -21,18 +22,41 @@ import { registerUi } from './ui.js';
 import type { AdminDeps } from './types.js';
 
 export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promise<void> {
-  const { engine, lk } = deps.runtime;
+  const { engine, projects } = deps.runtime;
   const now = deps.now ?? Date.now;
   if (!app.hasDecorator('parseCookie')) await app.register(fastifyCookie);
 
-  const hub = new StreamHub(engine, lk, deps.settings, now);
+  const hub = new StreamHub(engine, projects, deps.settings, now);
   const actions = createAdminActions(deps);
+  const health = createHealthCheck(engine, now);
   const ctx: RouteContext = {
     deps,
     actions,
     hub,
     now,
-    health: createHealthCheck(engine, now),
+    health: (project, refresh) => health(project.id, refresh),
+    // v2 A1: the `project` query parameter of every project-scoped route; default: the default project.
+    project: (ref) => {
+      const p = ref ? projects.find(ref) : projects.defaultProject();
+      if (!p) {
+        throw new AdminHttpError(
+          400,
+          'UNKNOWN_PROJECT',
+          `No project "${String(ref).slice(0, 64)}". Known: ${projects
+            .list()
+            .map((x) => x.name)
+            .join(', ')}`,
+        );
+      }
+      if (!p.id) {
+        throw new AdminHttpError(
+          409,
+          'PROJECT_UNAVAILABLE',
+          `Project "${p.name}" has no data yet: its key has not been verified (${p.reason ?? 'not checked'}).`,
+        );
+      }
+      return { id: p.id, name: p.name };
+    },
   };
   // Open streams would keep `app.close()` waiting: end them first.
   app.addHook('preClose', () => {
@@ -61,6 +85,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerSettings(api, ctx);
       registerMaintenance(api, ctx); // chunk 6
       registerMappings(api, ctx); // chunk 6
+      registerProjects(api, ctx); // v2 A1
 
       /** The one live stream (docs/dashboard.md › Stream). */
       api.get('/stream', (req, reply) => {

@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
 import { LkModel } from '../jobs/lk-model.js';
-import { startAdminStack, until, type AdminStack } from './helpers.js';
+import { PROJECT, startAdminStack, until, type AdminStack } from './helpers.js';
 import { systemClock } from '../../src/lk/index.js';
 
 const model = new LkModel(() => systemClock.now());
@@ -36,6 +36,7 @@ const engine = () => stack.runtime.engine;
 const origin = { kind: 'ui', tool: 'test' } as const;
 const batch = (n = 1, title = 'test batch') =>
   engine().submit({
+    project: PROJECT,
     kind: 'batch_ops',
     title,
     origin,
@@ -68,15 +69,15 @@ describe('jobs', () => {
       stack.post(`/api/admin/jobs/${jobId}/cancel`),
     );
     expect(result.status).toBe(200);
-    expect(engine().queries.getJob(jobId)?.status).toBe('cancelled');
+    expect(engine().queries.getJob(PROJECT, jobId)?.status).toBe('cancelled');
   });
 
   it('pauses and resumes a job', async () => {
     const { jobId } = (await batch(2)) as { jobId: string };
     await audited('job.pause', jobId, () => stack.post(`/api/admin/jobs/${jobId}/pause`));
-    expect(engine().queries.getJob(jobId)?.status).toBe('paused');
+    expect(engine().queries.getJob(PROJECT, jobId)?.status).toBe('paused');
     await audited('job.resume', jobId, () => stack.post(`/api/admin/jobs/${jobId}/resume`));
-    expect(engine().queries.getJob(jobId)?.status).toBe('queued');
+    expect(engine().queries.getJob(PROJECT, jobId)?.status).toBe('queued');
     await stack.post(`/api/admin/jobs/${jobId}/cancel`);
   });
 
@@ -92,7 +93,7 @@ describe('jobs', () => {
     failCreates = true;
     engine().controls.resumeWrites('test');
     const { jobId } = (await batch(1, 'will fail')) as { jobId: string };
-    await until(() => engine().queries.getJob(jobId)?.status === 'failed');
+    await until(() => engine().queries.getJob(PROJECT, jobId)?.status === 'failed');
     const detail = await stack.get(`/api/admin/jobs/${jobId}`);
     expect(detail.json.job.steps[0]).toMatchObject({
       status: 'failed',
@@ -107,8 +108,8 @@ describe('jobs', () => {
     expect(r1.row.after).toMatchObject({ force: false });
     await until(
       () =>
-        engine().queries.getJob(jobId)?.status === 'failed' &&
-        engine().queries.getJob(jobId)!.steps[0]!.attempt0 === 1,
+        engine().queries.getJob(PROJECT, jobId)?.status === 'failed' &&
+        engine().queries.getJob(PROJECT, jobId)!.steps[0]!.attempt0 === 1,
     );
 
     const r2 = await audited('job.retry_step', `${jobId}#${stepNo}`, () =>
@@ -117,20 +118,20 @@ describe('jobs', () => {
     expect(r2.row.after).toMatchObject({ force: true });
     await until(
       () =>
-        engine().queries.getJob(jobId)?.steps[0]?.attempt0 === 2 &&
-        engine().queries.getJob(jobId)?.status === 'failed',
+        engine().queries.getJob(PROJECT, jobId)?.steps[0]?.attempt0 === 2 &&
+        engine().queries.getJob(PROJECT, jobId)?.status === 'failed',
     );
 
     // Once the cause is fixed a retry succeeds.
     failCreates = false;
     await stack.post(`/api/admin/jobs/${jobId}/steps/${stepNo}/retry`, { force: false });
-    await until(() => engine().queries.getJob(jobId)?.status === 'succeeded');
+    await until(() => engine().queries.getJob(PROJECT, jobId)?.status === 'succeeded');
   });
 
   it('refuses to retry a step that has not failed', async () => {
     const { jobId } = (await batch(1, 'ok job')) as { jobId: string };
-    await until(() => engine().queries.getJob(jobId)?.status === 'succeeded');
-    const stepNo = engine().queries.getJob(jobId)!.steps[0]!.stepNo;
+    await until(() => engine().queries.getJob(PROJECT, jobId)?.status === 'succeeded');
+    const stepNo = engine().queries.getJob(PROJECT, jobId)!.steps[0]!.stepNo;
     const r = await stack.post(`/api/admin/jobs/${jobId}/steps/${stepNo}/retry`, { force: false });
     expect(r.status).toBe(409);
     expect(r.json.error.code).toBe('INVALID_CONTROL');
@@ -192,7 +193,7 @@ describe('writers and controls', () => {
 
 describe('budgets', () => {
   it('changes reserve floors live and can reset them', async () => {
-    const gov = stack.runtime.lk.governor;
+    const gov = stack.runtime.projects.client(PROJECT)!.governor;
     expect(gov.settings.reserveFloors.P2).toBe(0.25);
     await audited('budget.set_reserve_floors', null, () =>
       stack.put('/api/admin/budgets/reserve-floors', {
@@ -422,6 +423,7 @@ describe('proposals', () => {
         body: { blocks: [{ kind: 'paragraph', content: [{ text: `By ${label}` }] }] },
       },
       {
+        project: PROJECT,
         origin: {
           kind: 'mcp',
           tool: 'lk_api_write',

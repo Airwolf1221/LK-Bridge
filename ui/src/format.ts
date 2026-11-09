@@ -83,3 +83,12 @@ export const STATUS_LABELS: Record<string, string> = {
   executing: 'Executing',
   executed: 'Executed',
 };
+
+/** A project's status (v2 A1), in words. */
+export const PROJECT_STATUS_LABELS: Record<string, string> = {
+  active: 'active',
+  verifying: 'checking its key',
+  unverified: 'not verified',
+  stopped: 'stopped',
+  not_configured: 'no key configured',
+};

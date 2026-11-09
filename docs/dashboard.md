@@ -43,24 +43,40 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   fields are replaced by `[redacted]` in every job, step, artefact, error, journal, proposal and stream payload
   (`src/admin/redact.ts`); very long values are shortened. Request logging keeps the path only (no query string).
 
+## Projects (v2 A1)
+
+The bridge serves several LegendKeeper projects ([projects.md](projects.md)). A **project switcher** in the top bar
+chooses the project that Overview, Jobs, Errors, Budgets, Journal, Proposals and Mappings show; the choice is kept per
+browser (`lkb-project` in local storage), and without one the default project is shown. Every project-scoped route below
+takes `?project=<name or id>` (default: the default project); an unknown one is a `400 UNKNOWN_PROJECT`, and another
+project's job, proposal, error group, journal entry or mapping set id is "not found". Actions (cancel a job, approve a
+proposal, resolve errors, edit a mapping) act within the page's project. Clients & Access, Settings, Maintenance and
+Writers are bridge-wide (the writer pool is shared; each busy slot names its project). The **Projects** page lists every
+project with its flags, LegendKeeper id and name, whether its key is configured (the variable's name, never the key) and
+valid, its status and reason, and its settings (read-only); it can switch a project's **Read-only** flag (with a
+confirmation, audited) and **Check again** a project's key. The sandbox flag is shown but only set from the server's
+shell (`npm run projects`).
+
 ## Admin API
 
-All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`.
+All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take
+`?project=` (v2 A1).
 
 | Area        | Routes                                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Session     | `GET /session` (user, CSRF token, version)                                                                                                                                                                                                                                                                                                                                               |
-| Overview    | `GET /overview` (health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                                                      |
-| Jobs        | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                              |
-| Errors      | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                    |
-| Budgets     | `GET /budgets` (snapshot, 24 h history in at most 288 buckets, drift, floors), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                             |
+| Overview †  | `GET /overview` (every project's status, health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                              |
+| Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                              |
+| Errors †    | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                    |
+| Budgets †   | `GET /budgets` (one project's snapshot, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                              |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                             |
-| Journal     | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                |
-| Proposals   | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts`, `GET /proposals/:id` (diff data), `POST /proposals/:id/approve`, `POST /proposals/:id/reject`, `POST /proposals/bulk`                                                                                                                                                                          |
+| Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                |
+| Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data), `POST /proposals/:id/approve`, `POST /proposals/:id/reject`, `POST /proposals/bulk`                                                                                                                                     |
 | Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                          |
 | Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                                                                              |
 | Maintenance | `GET /maintenance`, `GET /maintenance/:id` (with history), `POST /maintenance/:id/enable\|disable\|run`, `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md))                                                                                                                                                                                                |
-| Mappings    | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md)) |
+| Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md)) |
+| Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1)                                                                                                                                                                                                                                                                     |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                       |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409
@@ -82,8 +98,10 @@ move through them with the `before` cursor. Retention is unchanged (30 days or 2
 ## Stream
 
 `GET /api/admin/stream` carries the engine's events (`job`, `step`, `lock`, `writers`, `error`, `controls`), the policy
-layer's (`policy`, `proposal`), the governor's (`throttled`, `budget-wait`) and a `budget` snapshot every 2 seconds. Each
-frame's data is `{ "at": <ms>, "data": … }`.
+layer's (`policy`, `proposal`), the governor's (`throttled`, `budget-wait`), the registry's (`project`: a project's
+status or flags changed) and a `budget` snapshot every 2 seconds, holding every project's (`projects`, by LegendKeeper
+id). Events about one project carry its id, and the project-scoped pages ignore other projects' events. Each frame's
+data is `{ "at": <ms>, "data": … }`.
 
 - **Heartbeats** are real `heartbeat` events every 15 s (`ADMIN_STREAM_HEARTBEAT_SECONDS`), so a page can tell a dead
   connection from a quiet one. Each tick also re-checks the session: a signed-out dashboard gets `unauthenticated` and the
@@ -109,7 +127,8 @@ environment's. A stored value that no longer validates is ignored.
 
 ## The budget sampler
 
-The Request Budgets sparklines are drawn from `budget_samples`, one row every 10 seconds. Since chunk 6 the maintenance
+The Request Budgets sparklines are drawn from `budget_samples`, one row per project every 10 seconds (each project has
+its own governor). Since chunk 6 the maintenance
 scheduler's `budget-sampler` job writes them ([docs/maintenance.md](maintenance.md)); the interim sampler of chunk 5 is
 gone, and `ADMIN_BUDGET_SAMPLE_SECONDS` with it. Switch the job off or change its interval on the Maintenance Jobs page.
 

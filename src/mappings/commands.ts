@@ -62,8 +62,15 @@ export function createMappingCommands(d: {
   now: () => number;
 }): MappingCommands {
   const { store } = d;
+  // v2 A1: every audit row says which project's mappings changed.
   const audit = (action: string, target: string, before?: unknown, after?: unknown) =>
-    d.audit.audit('owner', action, target, before, after);
+    d.audit.audit(
+      'owner',
+      action,
+      target,
+      before === undefined ? undefined : { project: store.projectId, ...(before as object) },
+      after === undefined ? undefined : { project: store.projectId, ...(after as object) },
+    );
   const detail = (id: string): SetDetail => {
     const set = store.requireSet(id);
     const rules = store.listRules(id);
@@ -189,6 +196,7 @@ export function createMappingCommands(d: {
       store.requireSet(setId);
       return previewResource({
         engine: d.engine,
+        project: store.projectId,
         rules: store.listRules(setId),
         fields: store.listFields(setId),
         resourceId: id,

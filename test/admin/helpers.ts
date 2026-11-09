@@ -44,6 +44,10 @@ export interface AdminStackOptions {
   readonly withUi?: boolean;
   /** Collect the server's log lines (at info level) into `AdminStack.logs`. */
   readonly captureLogs?: boolean;
+  /** v2 A1: point the bridge at another LegendKeeper (for example several mock projects behind one URL). */
+  readonly lkBaseUrl?: string;
+  /** v2 A1: how soon a project whose key could not be checked is checked again. */
+  readonly projectRetryMs?: { readonly first: number; readonly max: number };
 }
 
 export interface Reply {
@@ -126,7 +130,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     BRIDGE_PUBLIC_URL: PUBLIC_URL,
     LK_API_KEY: API_KEY,
     LK_PROJECT_ID: PROJECT,
-    LK_BASE_URL: lkUrl,
+    LK_BASE_URL: o.lkBaseUrl ?? lkUrl,
     LK_READ_ONLY: 'false',
     WRITE_SPACING_MS: '0',
     WRITE_SPACING_STRETCHED_MS: '0',
@@ -168,6 +172,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
         }
       : {}),
     pruneIntervalMs: 0,
+    ...(o.projectRetryMs ? { projectRetryMs: o.projectRetryMs } : {}),
     adminSettings,
     maintenanceSettings: defaultMaintenanceSettings({ enabled: false, ...o.maintenance }),
     uiDir,
