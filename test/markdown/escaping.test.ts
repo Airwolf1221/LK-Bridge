@@ -318,6 +318,21 @@ describe('escaping: marks, whitespace and scripts', () => {
     for (const shape of Object.values(RUN_SHAPES))
       for (const build of Object.values(CONTEXTS)) assertExact(samples.flatMap((s) => build(shape(s))));
   });
+  it('text colours and highlights (not in the API yet): rendered, read back, and restored from the page', () => {
+    const page = assignIds([
+      para([
+        { text: 'red', color: '#ff0000' },
+        { text: ' both', color: '#ff0000', highlight: '#FFFF00' },
+        { text: ' marked', highlight: '#FFFF00', bold: true },
+      ]),
+    ]);
+    const r = toMarkdown(page);
+    expect(r.markdown).toBe(
+      '<span style="color:#ff0000">red<span style="background-color:#FFFF00"> both</span></span><span style="background-color:#FFFF00"><strong> marked</strong></span>\n',
+    );
+    expect(parsedProjection(r.markdown)).toEqual(projectDocument(page));
+    expect(fromMarkdown(r.markdown, page).plan.empty).toBe(true);
+  });
   it('very long paragraphs (100,000 characters with syntax all through)', () => {
     const chunk = 'Lorem *ipsum* _dolor_ [sit] `amet` <consectetur> #adipiscing & elit | 1. ~sed~ \\ do! ';
     const long = chunk.repeat(Math.ceil(100_000 / chunk.length)).slice(0, 100_000);

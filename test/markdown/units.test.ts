@@ -328,7 +328,12 @@ describe('sections and page edits', () => {
     });
     expect(whole.plan.changed.map((c) => c.id)).toEqual(['h0000004']);
   });
-  it('a heading kept as a region still opens a section', () => {
+  it('a page that already repeats an id (a legacy page) still writes back to an empty plan', () => {
+    const legacy: LkBlock[] = [p('one', 'dupl0001'), p('two', 'dupl0001')];
+    const r = fromMarkdown(toMarkdown(legacy).markdown, legacy);
+    expect(r.plan.empty).toBe(true);
+  });
+  it('a heading kept as a region still opens a section, and its section can be replaced as getSection returns it', () => {
     const iconHeading: LkBlock = {
       id: 'hicon001',
       kind: 'heading',
@@ -341,6 +346,14 @@ describe('sections and page edits', () => {
     expect(getSection(m, 'Shrines (icon)').markdown).toContain('shrine text');
     const r = applyEdit(withIcon, { mode: 'append_to_section', section: 'Shrines', markdown: 'more' });
     expect(r.plan.added[0]!.afterId).toBe('p0000005');
+    const section = getSection(m, 'Shrines (icon)').markdown;
+    const e = applyEdit(withIcon, {
+      mode: 'replace_section',
+      section: 'Shrines',
+      markdown: section.replace('shrine text', 'shrine text, revised'),
+    });
+    expect(e.plan.changed.map((c) => c.id)).toEqual(['p0000005']);
+    expect(e.plan.removed).toEqual([]);
   });
 });
 

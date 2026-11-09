@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased: v2 session B1, the Markdown converter (9 November 2026)
+
+The library every v2 Markdown read and write goes through ([docs/PLAN-v2.md](PLAN-v2.md) 4.7; decisions in
+[ADR 0022](adr/0022-markdown-converter.md); the agent-facing guide is [docs/markdown.md](markdown.md)). It is a library
+only: no MCP tools, no database tables, no LegendKeeper calls. No existing behaviour changes.
+
+- **`src/markdown`.** `toMarkdown(document)` writes a page in the owner's schema (headings, paragraphs, lists, task
+  lists, quotes, callouts, secret and expand blocks, code with its language, rules, simple GFM tables, images, every
+  text mark, `<br>`, mentions as `[label](lk://resources/<id>)` or `…/docs/<documentId>`), and everything else as keep
+  regions with a readable rendering, listed in `regions`. `fromMarkdown(markdown, base)` reads it back against the
+  current page: unchanged blocks are restored verbatim (ids and every attribute), moved ones keep their ids, edited ones
+  keep their ids and the settings Markdown cannot show, keep regions restore their block exactly, fenced `lk-block` JSON
+  is taken as given, and `[[Name]]` goes through a resolver interface (`resolveMention`, for A3). The result is the new
+  tree, a write plan (kept, changed, added, removed, moved, keep regions dropped) and warnings; an unchanged page gives
+  an empty plan. `applyEdit` adds `append`, `prepend`, `replace`, `replace_section` and `append_to_section`, with
+  sections addressed by heading path (`Biography > Early Life`, `Notes [2]`); `outline` and `getSection` work on
+  Markdown. `renderMap`, `renderTimeline` and `renderBoard` give read-only Markdown for the other document types.
+- **Refusals, never silent loss.** Typed errors (`MarkdownError`) for a missing keep region in a replace (unless named
+  in `dropRegions`), the job engine's unsupported-block guard (`allowUnsupportedLoss`), unknown or repeated regions,
+  unresolved or ambiguous mentions, invalid `lk-block` JSON, duplicate ids, editor limits (a documented, extensible
+  list), the spec's field limits and nesting depth of 64, image URLs that are not project assets, images inside text,
+  unknown HTML, and section paths that match nothing or several headings.
+- **Exactness checked at run time.** Lines whose marks CommonMark would misread are written with HTML tags, and the
+  whole page is parsed back before it is returned; a block that would not survive is shown as a keep region instead.
+- **Parser:** micromark through `mdast-util-from-markdown`, with the GFM table, strikethrough and task-list
+  extensions, plus the converter's own `[[…]]` construct (new dependencies; `fast-check` for the tests).
+- **`npm run roundtrip`, with `deploy/markdown-roundtrip.sh`.** Reads every page of a project (or a subtree,
+  `--root`) through the real engine at P3, read-only, about one read per page, and checks each: blocks → Markdown →
+  blocks identical, and an empty plan for the unchanged write-back. It reports totals, keep regions and self-check
+  fallbacks, and for each failing page the resource, the first difference and a minimal reproduction in
+  `/var/lib/lk-bridge/roundtrip/`. Project selection as for the phase 0 spike (`LK_SANDBOX_*`,
+  `--allow-bridge-project`).
+- **Tests** (`test/markdown`): property-based tests (fast-check) that generate pages within the spec's schema and prove
+  blocks → Markdown → blocks is the identity with an empty plan, that the parser reads every expressible page back as
+  exactly what it shows, and that the Markdown is stable; an escaping fuzz over every Markdown-significant character in
+  every position and place, nested marks, whitespace at run edges, CJK, right-to-left text, combining characters, emoji
+  and 100,000-character paragraphs; fixtures modelled on the test world (a `[BSRC]` article, the Fourth Arkonan Age table
+  page at about 3,000 blocks, the Main chronology page with document mentions, a page with an infobox, a collection and
+  an unsupported block); a test for every error and warning; the round-trip script's dry run against the mock and its
+  wrapper.
+- `docs/PLAN-v2.md` is left out of the Prettier check, as `docs/PLAN.md` already was.
+
 ## Unreleased: v2 phase 0 spike (9 November 2026)
 
 A server script that checks the assumptions in [docs/PLAN-v2.md](PLAN-v2.md) against the real test world before any v2

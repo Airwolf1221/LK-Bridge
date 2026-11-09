@@ -5,6 +5,7 @@
  * CJK, right-to-left scripts, combining characters and emoji.
  */
 import fc from 'fast-check';
+import { hasBadText } from '../../src/markdown/model.js';
 import type { LkBlock, LkRun } from '../../src/markdown/types.js';
 
 /** Text units: single characters and short tokens that matter to Markdown. */
@@ -111,8 +112,22 @@ export const TEXT_UNITS: readonly string[] = [
   '¿',
 ];
 
+/** Any Unicode text a run can hold (Markdown cannot carry line breaks, control characters or lone surrogates). */
+const anyUnicode = fc.string({ unit: 'binary', minLength: 1, maxLength: 6 }).filter((t) => !hasBadText(t));
+
 export const textArb = (maxLength = 12): fc.Arbitrary<string> =>
-  fc.array(fc.constantFrom(...TEXT_UNITS), { minLength: 1, maxLength }).map((a) => a.join(''));
+  fc
+    .array(
+      fc.oneof(
+        { weight: 9, arbitrary: fc.constantFrom(...TEXT_UNITS) },
+        { weight: 1, arbitrary: anyUnicode },
+      ),
+      {
+        minLength: 1,
+        maxLength,
+      },
+    )
+    .map((a) => a.join(''));
 
 const LINKS: readonly string[] = [
   'https://example.com',

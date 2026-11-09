@@ -105,12 +105,16 @@ export function applyEdit(
       const h = findSection(headings, edit.section!);
       const [a, b] = sectionRange(headings, h, n);
       if (edit.mode === 'append_to_section') return run(b, b);
+      // The heading is replaced too when the Markdown starts with a heading of the section's level or higher, or with
+      // the section's own heading kept as a region (as getSection returns it).
       const first = drafts[0];
+      const headingNode = page.page.nodes[a]!;
       const withHeading =
-        first?.t === 'block' &&
-        first.own.kind === 'heading' &&
-        typeof first.own.level === 'number' &&
-        first.own.level <= h.level;
+        (first?.t === 'block' &&
+          first.own.kind === 'heading' &&
+          typeof first.own.level === 'number' &&
+          first.own.level <= h.level) ||
+        (first?.t === 'keep' && first.id === headingNode.keepId);
       return run(withHeading ? a : a + 1, b);
     }
   }

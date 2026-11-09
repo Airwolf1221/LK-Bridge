@@ -311,7 +311,7 @@ function merge(n: ANode, d: DraftBlock, st: State): LkBlock {
     out[k] = k === 'content' ? reuseMentions(d.own[k], st) : d.own[k];
   }
   if (CONTAINER_KINDS.has(b.kind)) out.children = alignLevel(projectedChildren(n), d.children ?? [], st);
-  if (typeof b.id !== 'string') st.origin.set(out, b);
+  st.origin.set(out, b);
   return out;
 }
 
@@ -376,13 +376,21 @@ export function computePlan(
 ): PlanResult {
   const before = index(base.blocks);
   const after = index(result);
-  const keyOf = (b: LkBlock): unknown => (typeof b.id === 'string' ? b.id : b);
+  // A block is known by its id when the page holds that id once; otherwise (no id, or a legacy page repeating an id)
+  // by the object it was restored or edited from.
+  const idCount = new Map<string, number>();
+  for (const e of before)
+    if (typeof e.block.id === 'string') idCount.set(e.block.id, (idCount.get(e.block.id) ?? 0) + 1);
+  const uniqueId = (b: LkBlock): string | null =>
+    typeof b.id === 'string' && idCount.get(b.id) === 1 ? b.id : null;
+  const keyOf = (b: LkBlock): unknown => uniqueId(b) ?? b;
   const beforeByKey = new Map<unknown, Entry>();
   for (const e of before) if (!beforeByKey.has(keyOf(e.block))) beforeByKey.set(keyOf(e.block), e);
   const afterKey = (b: LkBlock): unknown => {
-    if (typeof b.id === 'string') return b.id;
     const o = origin.get(b);
-    return o ? keyOf(o) : b;
+    if (o) return keyOf(o);
+    if (typeof b.id === 'string' && !idCount.has(b.id)) return b.id; // a new id
+    return keyOf(b);
   };
   const afterKeys = new Set<unknown>();
   const changed: (PlanBlockRef & { before: LkBlock; after: LkBlock })[] = [];
@@ -500,14 +508,17 @@ function checkResult(
   st: State,
   opts: FromMarkdownOptions,
 ): void {
-  // Duplicate ids anywhere in the result.
-  const ids = new Map<string, number>();
-  for (const e of index(result)) {
-    const id = e.block.id;
-    if (typeof id !== 'string') continue;
-    ids.set(id, (ids.get(id) ?? 0) + 1);
-  }
-  const dups = [...ids].filter(([, n]) => n > 1).map(([id]) => id);
+  // Duplicate ids anywhere in the result (ids the page itself already repeats, as legacy pages can, are its own).
+  const count = (blocks: readonly LkBlock[]) => {
+    const ids = new Map<string, number>();
+    for (const e of index(blocks)) {
+      const id = e.block.id;
+      if (typeof id === 'string') ids.set(id, (ids.get(id) ?? 0) + 1);
+    }
+    return ids;
+  };
+  const before = count(base.blocks);
+  const dups = [...count(result)].filter(([id, n]) => n > 1 && n > (before.get(id) ?? 0)).map(([id]) => id);
   if (dups.length > 0)
     throw new MarkdownError(
       'DUPLICATE_BLOCK_ID',
