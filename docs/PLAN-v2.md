@@ -6,6 +6,7 @@
 **Plan date:** 9 November 2026
 
 How claims are marked in this plan:
+
 - **Decided:** the owner has agreed it.
 - **Verified:** checked against LegendKeeper's API or the test world.
 - **Proposal:** my recommendation, not yet agreed.
@@ -15,26 +16,26 @@ How claims are marked in this plan:
 
 ## 1. Decisions already made
 
-| Topic | Decision |
-|---|---|
-| Setting name | Arkona (formerly Baisheng) |
-| Repository scope | Only content under the **AI REPOSITORY** page. Everything else is completely ignored by the high-level tools. |
-| Page kinds | `[INDEX]` = index, `[BSRC]` = article (Baisheng Source). Anything else under AI REPOSITORY is *unclassified* and reported. |
-| Projects | Several projects, each with a unique name and key, plus a default project. Agent scopes are **global**, not per project. The test world becomes a registered project, which replaces the sandbox settings. |
-| Tree freshness | No reliance on `updatedAt`, which LegendKeeper doesn't maintain properly. The tree updates after each of the bridge's own writes, and a **daily** consistency check catches everything else. |
-| Taxonomy | Seeded once from the race indexes. After that it belongs to the owner, who edits it on the dashboard. Each entry holds plural, singular, parent, aliases and asset folder. |
-| Markdown | The owner's schema (section 6). Styling on edited blocks may be lost, because AI pages don't use styling. |
-| Low-level tools | Hidden from agents by default once the high-level tools exist. Which ones stay visible is decided in a review at the end (phase E). |
-| Test fixtures | Sample pages from the test world may be committed to the private repo. |
-| `update_document` | Changes a document's own settings (name, hidden, full width, calendar, map image), never its content. |
-| New facts | Template facts follow the template's order. Any other new fact goes at the bottom. |
-| Dates | Forms used: `Kumikas 1st, 1A 159` · `4A 881` · `Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102` · `Kumikas - Azaakh, 4A 180` · `Unknown, 4A 101` (stored as year-only) · `Unknown` (**refused**). |
-| Chronology | Each timeline event also gets a row in its age's table, in the right place, and the age's event count on the Main page goes up. One table per age page. Each event has a short **name** (for the timeline) and a full **description** (for the table). |
-| Old bridge | Every behaviour of the old bridge is kept (section 9). |
-| Links | Relationship links (link collections such as Dependencies and Related Sources) are edited through `set_facts`, as optional `links`. |
-| Images | Three ways in: inline base64, a single-use binary upload endpoint, and a URL. Images are converted to WebP at quality 90, as the old bridge does. |
-| Backups | Snapshots in the bridge, **including images**, with an encrypted off-server copy on **Google Drive** and restore tools. Retention: 8 weekly snapshots plus 30 days of change snapshots. |
-| Character creation | Kept from the old bridge (Core / Compact / unknown race). Filling pages with content automatically ("automatic page work") is **later**, not v2. |
+| Topic              | Decision                                                                                                                                                                                                                                               |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Setting name       | Arkona (formerly Baisheng)                                                                                                                                                                                                                             |
+| Repository scope   | Only content under the **AI REPOSITORY** page. Everything else is completely ignored by the high-level tools.                                                                                                                                          |
+| Page kinds         | `[INDEX]` = index, `[BSRC]` = article (Baisheng Source). Anything else under AI REPOSITORY is _unclassified_ and reported.                                                                                                                             |
+| Projects           | Several projects, each with a unique name and key, plus a default project. Agent scopes are **global**, not per project. The test world becomes a registered project, which replaces the sandbox settings.                                             |
+| Tree freshness     | No reliance on `updatedAt`, which LegendKeeper doesn't maintain properly. The tree updates after each of the bridge's own writes, and a **daily** consistency check catches everything else.                                                           |
+| Taxonomy           | Seeded once from the race indexes. After that it belongs to the owner, who edits it on the dashboard. Each entry holds plural, singular, parent, aliases and asset folder.                                                                             |
+| Markdown           | The owner's schema (section 6). Styling on edited blocks may be lost, because AI pages don't use styling.                                                                                                                                              |
+| Low-level tools    | Hidden from agents by default once the high-level tools exist. Which ones stay visible is decided in a review at the end (phase E).                                                                                                                    |
+| Test fixtures      | Sample pages from the test world may be committed to the private repo.                                                                                                                                                                                 |
+| `update_document`  | Changes a document's own settings (name, hidden, full width, calendar, map image), never its content.                                                                                                                                                  |
+| New facts          | Template facts follow the template's order. Any other new fact goes at the bottom.                                                                                                                                                                     |
+| Dates              | Forms used: `Kumikas 1st, 1A 159` · `4A 881` · `Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102` · `Kumikas - Azaakh, 4A 180` · `Unknown, 4A 101` (stored as year-only) · `Unknown` (**refused**).                                                         |
+| Chronology         | Each timeline event also gets a row in its age's table, in the right place, and the age's event count on the Main page goes up. One table per age page. Each event has a short **name** (for the timeline) and a full **description** (for the table). |
+| Old bridge         | Every behaviour of the old bridge is kept (section 9).                                                                                                                                                                                                 |
+| Links              | Relationship links (link collections such as Dependencies and Related Sources) are edited through `set_facts`, as optional `links`.                                                                                                                    |
+| Images             | Three ways in: inline base64, a single-use binary upload endpoint, and a URL. Images are converted to WebP at quality 90, as the old bridge does.                                                                                                      |
+| Backups            | Snapshots in the bridge, **including images**, with an encrypted off-server copy on **Google Drive** and restore tools. Retention: 8 weekly snapshots plus 30 days of change snapshots.                                                                |
+| Character creation | Kept from the old bridge (Core / Compact / unknown race). Filling pages with content automatically ("automatic page work") is **later**, not v2.                                                                                                       |
 
 ---
 
@@ -44,7 +45,7 @@ How claims are marked in this plan:
 - **Where the catalogue fields live:** Scope, Index Scope and Reference Type are **sidebar properties**, so they need `getResource`: **1 read per resource** (about 3,500 for a full pass).
 - **Placing pages costs nothing extra:** `createResource`, `createResourceFromTemplate` (with `parentId`, `after`, `before`, `name` and `id`) and `moveResource` all accept `after` or `before`, so alphabetical placement happens inside the same write.
 - **Templates:** LegendKeeper does not record which template a page came from. The bridge works it out from **Reference Type** and records the template itself for pages it creates.
-- **Search:** LegendKeeper's search returns one page (up to 100 results), with no operators. The old bridge found that crowded queries reach a cap. *To verify:* the exact cap.
+- **Search:** LegendKeeper's search returns one page (up to 100 results), with no operators. The old bridge found that crowded queries reach a cap. _To verify:_ the exact cap.
 - **The calendar (`Kumikan Epochal`, test world id `rp86pkdr`):**
   - 21 months in this order: Kumikas, Isar, Selaphos, Azah, Selyros, Sarias, Highsun, Surion, Azaakh, Malakh, Zahras, Camue, Pahan, Redfall, Meshaph, Kusha, Jehet, Attina, Umbaeos, Zarzakh, Frostmoot.
   - 716 days a year, 30-hour days, no leap days.
@@ -93,6 +94,7 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
   - template ids.
 
   Keys live in the env file; everything else lives in the database and is edited on the dashboard.
+
 - **One governor per project.** Each project has its own key budget and per-project tier, and the dashboard shows each project's budgets.
 - **The `project` argument.** Every tool takes an optional `project` (a name, or an id the bridge maps back). Every result names the project it used.
 - **Decided: explicit project for writes** (`REQUIRE_PROJECT_FOR_WRITES=true`). A write with no `project` is refused when more than one project is registered, so a forgotten argument can't land in Arkona by accident. Reads may use the default project.
@@ -137,6 +139,7 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
   - an entry whose parent no longer matches the tree.
 
   An "add missing" action creates entries for new indexes without touching existing ones.
+
 - **Facts are never rewritten by placement.** `race: "Human"` stays `Human` in the facts and places the page under `[INDEX] Humans`.
 
 ### 4.4 Name resolution
@@ -164,25 +167,27 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 
 **The owner's schema:**
 
-| Markdown | LegendKeeper |
-|---|---|
-| `#`–`######`, paragraphs, `-` lists, `1.` lists, `>` quotes, fenced code, `---`, GFM tables | The matching blocks |
-| `- [ ]` / `- [x]` | Task list |
-| `> [!info]`, `[!note]`, `[!success]`/`[!tip]`, `[!warning]`, `[!error]`/`[!caution]` | Callout |
-| `> [!secret]` | Secret block |
-| `> [!expand] Title` | Collapsible section |
-| `**b**`, `*i*`, `~~s~~`, `` `c` ``, `<u>`, `<sub>`, `<sup>`, `<span style="color:#…; background-color:#…">` | Text marks and colours |
-| `[[Name]]`, `[[Name\|label]]`, `[label](lk://resources/<id>)` | Mention |
-| `![alt](asset-url)` | Image (same-project asset only) |
-| fenced `lk-block` + JSON | Any raw block |
-| `<!-- lk:keep id="…" kind="…" --> … <!-- /lk:keep -->` | A block Markdown can't express, preserved exactly |
+| Markdown                                                                                                    | LegendKeeper                                      |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `#`–`######`, paragraphs, `-` lists, `1.` lists, `>` quotes, fenced code, `---`, GFM tables                 | The matching blocks                               |
+| `- [ ]` / `- [x]`                                                                                           | Task list                                         |
+| `> [!info]`, `[!note]`, `[!success]`/`[!tip]`, `[!warning]`, `[!error]`/`[!caution]`                        | Callout                                           |
+| `> [!secret]`                                                                                               | Secret block                                      |
+| `> [!expand] Title`                                                                                         | Collapsible section                               |
+| `**b**`, `*i*`, `~~s~~`, `` `c` ``, `<u>`, `<sub>`, `<sup>`, `<span style="color:#…; background-color:#…">` | Text marks and colours                            |
+| `[[Name]]`, `[[Name\|label]]`, `[label](lk://resources/<id>)`                                               | Mention                                           |
+| `![alt](asset-url)`                                                                                         | Image (same-project asset only)                   |
+| fenced `lk-block` + JSON                                                                                    | Any raw block                                     |
+| `<!-- lk:keep id="…" kind="…" --> … <!-- /lk:keep -->`                                                      | A block Markdown can't express, preserved exactly |
 
 **Additions (decided):**
+
 - **Line breaks:** written as `<br>`.
 - **Inline icons:** become keep regions. There's no Markdown syntax for them in v2.
 - **Tables:** tables with merged cells, or with lists or several paragraphs inside a cell, become keep regions.
 
 **Rules the converter must keep:**
+
 1. **Round trip:** converting blocks to Markdown and back gives the original tree exactly. Block ids are kept for every block that didn't change.
 2. **Writing back an unchanged page sends nothing.** The diff is empty, so no write is made.
 3. **A missing keep region in replace mode is refused** (with the block ids listed), unless the call names those blocks to drop. Unsupported blocks also keep their existing guard.
@@ -191,6 +196,7 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 6. **Sections** run from a heading to the next heading of the same or a higher level. They are addressed by heading path (`Biography > Early Life`), and a duplicate heading is refused with the options listed.
 
 **Reading maps, timelines and boards:**
+
 - **Maps:** features listed with their type, name, position and link.
 - **Timelines:** lanes, then events in calendar order, with formatted dates.
 - **Boards:** shape text and connections.
@@ -218,6 +224,7 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
   6. increase the Main page's event count for that age.
 
   The job is journalled and recoverable, and never applies anything twice.
+
 - **Update and delete** keep the table, the timeline and the count in step.
 - **The timeline-only tools** (lanes) touch only the timeline.
 - **Audits** report table rows without an event, events without a row, rows out of order, and wrong KCY values.
@@ -261,38 +268,38 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 
 `access` R = read, W = write. Every tool takes `project`. Every W tool works under `propose` scope by producing a proposal, which the dashboard shows as a **Markdown diff**.
 
-| Category | Tool | Access | Notes |
-|---|---|---|---|
-| Discover | `list_projects` | R | Name, id, default flag |
-| | `browse_repository_tree` | R | Subtree by path or id, depth limit, kinds, with Scope / Reference Type / tags |
-| | `browse_asset_tree` | R | Folders and assets |
-| | `search` | R | `AND`/`OR`/`NOT`, quoted phrases, `tag:`, `type:` (Reference Type), `kind:`, `under:`. Runs on the tree by default; `content: true` also uses LegendKeeper's search |
-| | `get_resource` / `get_resources` | R | By name or id. Unchanged data is served from the tree |
-| | `list_tags`, `list_templates`, `list_calendars`, `list_assets` | R | |
-| Read | `read_document` | R | Markdown by default; `format: "json"`; `outline`; `section` |
-| Pages | `write_page` | W | `append`, `prepend`, `replace`, `replace_section`, `append_to_section` |
-| Resources | `create_index` | W | Type plus category, using the type registry and taxonomy, alphabetical placement |
-| | `create_resource` | W | `[BSRC]`, required template, under an index |
-| | `create_bare_resource` | W | No template |
-| | `create_many_resources` | W | ≤100, nested with `key`/`parent_key` (*to verify:* parents created in the same batch) |
-| | `create_character` | W | `core` or `compact`, with the old bridge's rules (section 9) |
-| | `update_resource` | W | Name (keeps the prefix and re-places the page), tags add/remove, aliases, icon, banner, hidden, locked |
-| | `move_resource` | W | Re-placed alphabetically |
-| | `delete_resource` | W | `confirm: true`, plus a separate `cascade: true` for children |
-| | `restore_resource` | W | Adds it back to the tree |
-| Documents | `create_document` | W | Map, timeline or board |
-| | `update_document` | W | Settings only; blank documents and pages are refused (use `write_page`) |
-| | `delete_document` | W | |
-| Facts | `set_facts` | W | `facts` (`null` removes; template order) plus optional `links` (add/remove per collection) |
-| Maps | `create_map_feature`, `update_map_feature`, `delete_map_feature` | W | Pin, label, region, path or folder; lat/lng **or pixel** coordinates (converted using the map image bounds); link by name or id |
-| Timelines | `create_timeline_event`, `update_timeline_event`, `delete_timeline_event` | W | The calendar engine and chronology sync |
-| | `create_timeline_lane` | W | |
-| Assets | `upload_image` | W | Three ways in, the WebP pipeline, destination from the trees |
-| Restore | `restore_snapshot` | W | Page, sidebar or document |
-| Bridge | `bridge_info`, `bridge_budget`, `bridge_estimate`, `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_errors_recent`, `bridge_journal_lookup`, `bridge_proposal_status`, `bridge_proposals_mine`, `bridge_result_page` | R/W | Kept from v1 |
-| Guides | `get_markdown_guide`, `get_bridge_guide` | R | Also published as MCP resources, with a summary in the server instructions |
-| Fallback | `api_read`, `api_write` | R / W | The doc's `api_request`, kept split so reads can be auto-approved |
-| Low-level | `lk_api_*`, `lk_op_*` | | **Hidden by default** (a per-profile `showLowLevelTools` setting). Final list decided in phase E |
+| Category  | Tool                                                                                                                                                                                                                                     | Access | Notes                                                                                                                                                               |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discover  | `list_projects`                                                                                                                                                                                                                          | R      | Name, id, default flag                                                                                                                                              |
+|           | `browse_repository_tree`                                                                                                                                                                                                                 | R      | Subtree by path or id, depth limit, kinds, with Scope / Reference Type / tags                                                                                       |
+|           | `browse_asset_tree`                                                                                                                                                                                                                      | R      | Folders and assets                                                                                                                                                  |
+|           | `search`                                                                                                                                                                                                                                 | R      | `AND`/`OR`/`NOT`, quoted phrases, `tag:`, `type:` (Reference Type), `kind:`, `under:`. Runs on the tree by default; `content: true` also uses LegendKeeper's search |
+|           | `get_resource` / `get_resources`                                                                                                                                                                                                         | R      | By name or id. Unchanged data is served from the tree                                                                                                               |
+|           | `list_tags`, `list_templates`, `list_calendars`, `list_assets`                                                                                                                                                                           | R      |                                                                                                                                                                     |
+| Read      | `read_document`                                                                                                                                                                                                                          | R      | Markdown by default; `format: "json"`; `outline`; `section`                                                                                                         |
+| Pages     | `write_page`                                                                                                                                                                                                                             | W      | `append`, `prepend`, `replace`, `replace_section`, `append_to_section`                                                                                              |
+| Resources | `create_index`                                                                                                                                                                                                                           | W      | Type plus category, using the type registry and taxonomy, alphabetical placement                                                                                    |
+|           | `create_resource`                                                                                                                                                                                                                        | W      | `[BSRC]`, required template, under an index                                                                                                                         |
+|           | `create_bare_resource`                                                                                                                                                                                                                   | W      | No template                                                                                                                                                         |
+|           | `create_many_resources`                                                                                                                                                                                                                  | W      | ≤100, nested with `key`/`parent_key` (_to verify:_ parents created in the same batch)                                                                               |
+|           | `create_character`                                                                                                                                                                                                                       | W      | `core` or `compact`, with the old bridge's rules (section 9)                                                                                                        |
+|           | `update_resource`                                                                                                                                                                                                                        | W      | Name (keeps the prefix and re-places the page), tags add/remove, aliases, icon, banner, hidden, locked                                                              |
+|           | `move_resource`                                                                                                                                                                                                                          | W      | Re-placed alphabetically                                                                                                                                            |
+|           | `delete_resource`                                                                                                                                                                                                                        | W      | `confirm: true`, plus a separate `cascade: true` for children                                                                                                       |
+|           | `restore_resource`                                                                                                                                                                                                                       | W      | Adds it back to the tree                                                                                                                                            |
+| Documents | `create_document`                                                                                                                                                                                                                        | W      | Map, timeline or board                                                                                                                                              |
+|           | `update_document`                                                                                                                                                                                                                        | W      | Settings only; blank documents and pages are refused (use `write_page`)                                                                                             |
+|           | `delete_document`                                                                                                                                                                                                                        | W      |                                                                                                                                                                     |
+| Facts     | `set_facts`                                                                                                                                                                                                                              | W      | `facts` (`null` removes; template order) plus optional `links` (add/remove per collection)                                                                          |
+| Maps      | `create_map_feature`, `update_map_feature`, `delete_map_feature`                                                                                                                                                                         | W      | Pin, label, region, path or folder; lat/lng **or pixel** coordinates (converted using the map image bounds); link by name or id                                     |
+| Timelines | `create_timeline_event`, `update_timeline_event`, `delete_timeline_event`                                                                                                                                                                | W      | The calendar engine and chronology sync                                                                                                                             |
+|           | `create_timeline_lane`                                                                                                                                                                                                                   | W      |                                                                                                                                                                     |
+| Assets    | `upload_image`                                                                                                                                                                                                                           | W      | Three ways in, the WebP pipeline, destination from the trees                                                                                                        |
+| Restore   | `restore_snapshot`                                                                                                                                                                                                                       | W      | Page, sidebar or document                                                                                                                                           |
+| Bridge    | `bridge_info`, `bridge_budget`, `bridge_estimate`, `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_errors_recent`, `bridge_journal_lookup`, `bridge_proposal_status`, `bridge_proposals_mine`, `bridge_result_page` | R/W    | Kept from v1                                                                                                                                                        |
+| Guides    | `get_markdown_guide`, `get_bridge_guide`                                                                                                                                                                                                 | R      | Also published as MCP resources, with a summary in the server instructions                                                                                          |
+| Fallback  | `api_read`, `api_write`                                                                                                                                                                                                                  | R / W  | The doc's `api_request`, kept split so reads can be auto-approved                                                                                                   |
+| Low-level | `lk_api_*`, `lk_op_*`                                                                                                                                                                                                                    |        | **Hidden by default** (a per-profile `showLowLevelTools` setting). Final list decided in phase E                                                                    |
 
 **Note for ChatGPT:** after the tools change, open ChatGPT's **Plugins** page, open the bridge, and use **Refresh**. ChatGPT keeps its own copy of the tool list.
 
@@ -310,25 +317,25 @@ Phase D ── D1 calendar and chronology   D2 maps   D3 image pipeline   (in pa
 Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool review and guides ─► E4 independent hardening ─► E5 Arkona go-live
 ```
 
-| # | Session | Model · effort | Depends on | Why this level |
-|---|---|---|---|---|
-| **0** | **Spike:** a server script that checks on the test world: whether a `createMany` parent created in the same batch works; LegendKeeper's search cap; whether assets can be downloaded (for backups); formatted start text on events; whether pixel and lat/lng map coordinates match the map bounds; and a dump of one age table's blocks and the Main page's index table | Sonnet 5.5 · medium | — | Small and exploratory; its results settle the "to verify" items |
-| **A1** | **Multiple projects:** registry, a governor per project, the `project` argument on all tools, `project_id` migrations, dashboard project switcher, sandbox retirement, the explicit-project rule for writes | Opus 5.5 · high | 0 | Touches every layer and every table; a mistake here mixes up projects |
-| **A2** | **Repository tree:** build, updates after writes, hourly sweep, daily check and its report, dashboard page | Opus 5.5 · high | A1 | The foundation every tool trusts; correctness under concurrent writes matters |
-| **A3** | **Type registry, taxonomy seeding, name resolution and ordering**, extending the Repository Mappings page | Sonnet 5.5 · high | A2 | Clear rules, many cases; needs thoroughness more than depth |
-| **A4** | **Asset tree:** inventory, refresh, placement rules | Sonnet 5.5 · medium | A2 (alongside A3) | A smaller version of A2 |
-| **B1** | **Markdown converter library:** both directions, keep regions, block matching, sections, editor-limit checks, fuzz tests, real-page fixtures, round-trip server script | **Opus 5.5 · xhigh** | — (starts alongside A1) | The riskiest piece for your data; exact round trips are hard |
-| **B2** | **Discover and Read tools,** guides, hiding low-level tools by default | Sonnet 5.5 · high | A3, A4, B1 | Mostly assembly on top of the services |
-| **C1** | **`write_page`:** modes, sections, keep-region refusals, version conflicts with retry when the section is unchanged, Markdown-diff proposals | **Opus 5.5 · xhigh** | B2 | The main way agents will change your pages |
-| **C2** | **Resource, document, facts and links, and character tools,** including `operation_id` and duplicate detection | Opus 5.5 · high | C1 | Many writes with placement, taxonomy and guards |
-| **D1** | **Calendar engine and chronology sync,** plus the timeline tools | Opus 5.5 · high | C2 | Date arithmetic, plus a three-part write that must stay consistent |
-| **D2** | **Map tools,** including pixel coordinates | Sonnet 5.5 · medium | C2 | Straightforward |
-| **D3** | **Image pipeline:** three ways in, the single-use endpoint, WebP, destinations | Opus 5.5 · high | C2, A4 | A new public endpoint that must be secure |
-| **E1** | **Snapshots, Google Drive copy with rclone, restore tools, rehearsal** | Sonnet 5.5 · high | C2, D3 | Careful but well understood |
-| **E2** | **Audits:** rules, the new checks, findings view | Sonnet 5.5 · medium | A3, D1 | Read-only, rule-driven |
-| **E3** | **Tool review (with you):** final visible tool list, descriptions, both guides, the server instructions, a check that ChatGPT and Claude each pick the right tool | Sonnet 5.5 · high | All of the above | Mostly wording and judgement; you take part |
-| **E4** | **Independent hardening review:** a fresh session that trusts no earlier report | **Opus 5.5 · xhigh** | E3 | Same reasoning as v1's chunk 8 |
-| **E5** | **Moving to Arkona:** a runbook and a Claude Code session on the server (section 7) | Sonnet 5.5 · medium | E4 | Operational |
+| #      | Session                                                                                                                                                                                                                                                                                                                                                                  | Model · effort       | Depends on              | Why this level                                                                |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------- | ----------------------- | ----------------------------------------------------------------------------- |
+| **0**  | **Spike:** a server script that checks on the test world: whether a `createMany` parent created in the same batch works; LegendKeeper's search cap; whether assets can be downloaded (for backups); formatted start text on events; whether pixel and lat/lng map coordinates match the map bounds; and a dump of one age table's blocks and the Main page's index table | Sonnet 5.5 · medium  | —                       | Small and exploratory; its results settle the "to verify" items               |
+| **A1** | **Multiple projects:** registry, a governor per project, the `project` argument on all tools, `project_id` migrations, dashboard project switcher, sandbox retirement, the explicit-project rule for writes                                                                                                                                                              | Opus 5.5 · high      | 0                       | Touches every layer and every table; a mistake here mixes up projects         |
+| **A2** | **Repository tree:** build, updates after writes, hourly sweep, daily check and its report, dashboard page                                                                                                                                                                                                                                                               | Opus 5.5 · high      | A1                      | The foundation every tool trusts; correctness under concurrent writes matters |
+| **A3** | **Type registry, taxonomy seeding, name resolution and ordering**, extending the Repository Mappings page                                                                                                                                                                                                                                                                | Sonnet 5.5 · high    | A2                      | Clear rules, many cases; needs thoroughness more than depth                   |
+| **A4** | **Asset tree:** inventory, refresh, placement rules                                                                                                                                                                                                                                                                                                                      | Sonnet 5.5 · medium  | A2 (alongside A3)       | A smaller version of A2                                                       |
+| **B1** | **Markdown converter library:** both directions, keep regions, block matching, sections, editor-limit checks, fuzz tests, real-page fixtures, round-trip server script                                                                                                                                                                                                   | **Opus 5.5 · xhigh** | — (starts alongside A1) | The riskiest piece for your data; exact round trips are hard                  |
+| **B2** | **Discover and Read tools,** guides, hiding low-level tools by default                                                                                                                                                                                                                                                                                                   | Sonnet 5.5 · high    | A3, A4, B1              | Mostly assembly on top of the services                                        |
+| **C1** | **`write_page`:** modes, sections, keep-region refusals, version conflicts with retry when the section is unchanged, Markdown-diff proposals                                                                                                                                                                                                                             | **Opus 5.5 · xhigh** | B2                      | The main way agents will change your pages                                    |
+| **C2** | **Resource, document, facts and links, and character tools,** including `operation_id` and duplicate detection                                                                                                                                                                                                                                                           | Opus 5.5 · high      | C1                      | Many writes with placement, taxonomy and guards                               |
+| **D1** | **Calendar engine and chronology sync,** plus the timeline tools                                                                                                                                                                                                                                                                                                         | Opus 5.5 · high      | C2                      | Date arithmetic, plus a three-part write that must stay consistent            |
+| **D2** | **Map tools,** including pixel coordinates                                                                                                                                                                                                                                                                                                                               | Sonnet 5.5 · medium  | C2                      | Straightforward                                                               |
+| **D3** | **Image pipeline:** three ways in, the single-use endpoint, WebP, destinations                                                                                                                                                                                                                                                                                           | Opus 5.5 · high      | C2, A4                  | A new public endpoint that must be secure                                     |
+| **E1** | **Snapshots, Google Drive copy with rclone, restore tools, rehearsal**                                                                                                                                                                                                                                                                                                   | Sonnet 5.5 · high    | C2, D3                  | Careful but well understood                                                   |
+| **E2** | **Audits:** rules, the new checks, findings view                                                                                                                                                                                                                                                                                                                         | Sonnet 5.5 · medium  | A3, D1                  | Read-only, rule-driven                                                        |
+| **E3** | **Tool review (with you):** final visible tool list, descriptions, both guides, the server instructions, a check that ChatGPT and Claude each pick the right tool                                                                                                                                                                                                        | Sonnet 5.5 · high    | All of the above        | Mostly wording and judgement; you take part                                   |
+| **E4** | **Independent hardening review:** a fresh session that trusts no earlier report                                                                                                                                                                                                                                                                                          | **Opus 5.5 · xhigh** | E3                      | Same reasoning as v1's chunk 8                                                |
+| **E5** | **Moving to Arkona:** a runbook and a Claude Code session on the server (section 7)                                                                                                                                                                                                                                                                                      | Sonnet 5.5 · medium  | E4                      | Operational                                                                   |
 
 **Parallel sessions:** A1 and B1; A3 and A4; D1, D2 and D3. Each pair or group has its own branch and a clear split of which files it owns, as in v1. **Ground rules carried over from v1:** never force-push; merge `main` in rather than rebasing; squash merge; I write each handoff when its turn comes, from the previous session's report.
 
@@ -352,12 +359,12 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 
 ## 8. Settled items (decided 9 November 2026)
 
-| # | Item | Decision |
-|---|---|---|
-| 1 | Require an explicit `project` on writes | **Yes.** `REQUIRE_PROJECT_FOR_WRITES=true` by default; a write with no `project` is refused when more than one project is registered |
-| 2 | Hourly structural sweep | **On** by default (about 840 reads a day on Arkona), and it can be switched off |
-| 3 | Syntax for inline icons | **None for now.** Inline icons are preserved in keep regions |
-| 4 | The Drive backup's encryption password | Set up in **E1** and kept somewhere other than the server (for example a password manager). Without it, the Drive copy can't be restored |
+| #   | Item                                    | Decision                                                                                                                                 |
+| --- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Require an explicit `project` on writes | **Yes.** `REQUIRE_PROJECT_FOR_WRITES=true` by default; a write with no `project` is refused when more than one project is registered     |
+| 2   | Hourly structural sweep                 | **On** by default (about 840 reads a day on Arkona), and it can be switched off                                                          |
+| 3   | Syntax for inline icons                 | **None for now.** Inline icons are preserved in keep regions                                                                             |
+| 4   | The Drive backup's encryption password  | Set up in **E1** and kept somewhere other than the server (for example a password manager). Without it, the Drive copy can't be restored |
 
 ---
 
