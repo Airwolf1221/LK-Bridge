@@ -5,8 +5,8 @@
  * micromark's character escapes before this construct is ever tried, and stays literal text. The construct is tried
  * before CommonMark's link opener for `[`; anything that is not `[[…]]` on one line falls back to normal parsing.
  *
- * Inside the brackets, `\|`, `\]` and `\\` stand for `|`, `]` and `\` (a `|` must be escaped inside a GFM table cell,
- * where an unescaped one would end the cell). The first unescaped `|` separates the name from the label.
+ * Inside the brackets the first `|` separates the name from the label; inside a GFM table cell it must be written `\|`
+ * (an unescaped one would end the cell). `\]` and `\\` stand for `]` and `\`.
  */
 import type { Literal } from 'mdast';
 import type {
@@ -98,14 +98,17 @@ export function lkWikiSyntax(): Extension {
   return { text: { [LEFT]: wikiConstruct } };
 }
 
-/** Splits the raw inside of `[[…]]` into name and label, undoing `\|`, `\]` and `\\`. */
+/**
+ * Splits the raw inside of `[[…]]` into name and label. The first `|` separates them, escaped or not (in a GFM table
+ * cell the separator must be written `\\|`); `\\]` and `\\\\` stand for `]` and `\\`.
+ */
 export function splitWiki(inner: string): { name: string; label: string | null } {
   let name = '';
   let label: string | null = null;
   for (let i = 0; i < inner.length; i++) {
     let c = inner[i]!;
-    if (c === '\\' && i + 1 < inner.length && '|]\\['.includes(inner[i + 1]!)) {
-      c = inner[++i]!;
+    if (c === '\\' && i + 1 < inner.length && '|]\\['.includes(inner[i + 1]!)) c = inner[++i]!;
+    else if (c !== '|') {
       if (label === null) name += c;
       else label += c;
       continue;

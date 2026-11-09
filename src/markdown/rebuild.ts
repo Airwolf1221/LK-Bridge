@@ -224,29 +224,47 @@ function alignLevel(baseNodes: readonly ANode[], drafts: readonly Draft[], st: S
   const fb = drafts.map((d) => (d.t === 'block' ? draftFingerprint(d, st.interner) : st.interner.fresh()));
   const matches = lcsPairs(fa, fb);
   const result = new Array<LkBlock | null>(drafts.length).fill(null);
+  const usedA = new Set<number>();
+  for (const [i, j] of matches) {
+    result[j] = baseNodes[i]!.block; // verbatim: the same object
+    usedA.add(i);
+  }
+  // Moves: an unchanged block written elsewhere at the same level is still that block (same object, same id).
+  const pool = new Map<number, number[]>();
+  baseNodes.forEach((_, i) => {
+    if (usedA.has(i) || fa[i]! < 0) return;
+    pool.set(fa[i]!, [...(pool.get(fa[i]!) ?? []), i]);
+  });
+  drafts.forEach((d, j) => {
+    if (result[j] || d.t !== 'block') return;
+    const i = pool.get(fb[j]!)?.shift();
+    if (i === undefined) return;
+    result[j] = baseNodes[i]!.block;
+    usedA.add(i);
+  });
+  // Edits: in each gap between matches, pair the rest by kind and similarity.
   const pairOf = new Map<number, ANode>();
   let pa = 0;
   let pb = 0;
   const gap = (a1: number, b1: number) => {
-    const as = baseNodes.slice(pa, a1);
-    const bs = drafts.slice(pb, b1);
+    const ai: number[] = [];
+    for (let i = pa; i < a1; i++) if (!usedA.has(i)) ai.push(i);
+    const bj: number[] = [];
+    for (let j = pb; j < b1; j++) if (!result[j]) bj.push(j);
     const pairs = pairGap(
-      as.map((n) => ({
-        kind: n.block.kind,
-        text: nodeText(n),
-        pairable: !isRegion(n, st) && !claimedNode(n, st),
-      })),
-      bs.map((d) => ({
-        kind: d.t === 'block' ? d.own.kind : '',
-        text: draftText(d),
-        pairable: d.t === 'block',
-      })),
+      ai.map((i) => {
+        const n = baseNodes[i]!;
+        return { kind: n.block.kind, text: nodeText(n), pairable: !isRegion(n, st) && !claimedNode(n, st) };
+      }),
+      bj.map((j) => {
+        const d = drafts[j]!;
+        return { kind: d.t === 'block' ? d.own.kind : '', text: draftText(d), pairable: d.t === 'block' };
+      }),
     );
-    for (const [i, j] of pairs) pairOf.set(pb + j, as[i]!);
+    for (const [x, y] of pairs) pairOf.set(bj[y]!, baseNodes[ai[x]!]!);
   };
   for (const [i, j] of matches) {
     gap(i, j);
-    result[j] = baseNodes[i]!.block; // verbatim: the same object
     pa = i + 1;
     pb = j + 1;
   }
@@ -347,6 +365,8 @@ export interface PlanResult {
   readonly plan: WritePlan;
   /** Result blocks that are new or whose own fields changed, or that moved, with their place in the result. */
   readonly touched: readonly Entry[];
+  /** The current page's entry for a result block that derives from one (to tell old problems from new ones). */
+  readonly baseEntryOf: (b: LkBlock) => Entry | undefined;
 }
 
 export function computePlan(
@@ -464,7 +484,11 @@ export function computePlan(
   const touchedSet = new Set(touched);
   for (const e of after) if (touchedParents.has(e.parent) && !touchedSet.has(e)) touched.push(e);
   const empty = changed.length === 0 && added.length === 0 && removed.length === 0 && moved.length === 0;
-  return { plan: { empty, kept, changed, added, removed, moved, droppedRegions }, touched };
+  return {
+    plan: { empty, kept, changed, added, removed, moved, droppedRegions },
+    touched,
+    baseEntryOf: (b) => beforeByKey.get(afterKey(b)),
+  };
 }
 
 // ------------------------------------------------------------------------------------------------ checks
@@ -535,7 +559,14 @@ function checkResult(
   for (const e of planRes.touched) {
     if (seen.has(e.block)) continue;
     seen.add(e.block);
-    problems.push(...editorProblems(e.block, { ancestors: e.ancestors, index: e.index }));
+    // A rule the block already broke in the same place on the current page is LegendKeeper's own content: not refused.
+    const was = planRes.baseEntryOf(e.block);
+    const old = was
+      ? new Set(editorProblems(was.block, { ancestors: was.ancestors, index: was.index }).map((x) => x.rule))
+      : null;
+    problems.push(
+      ...editorProblems(e.block, { ancestors: e.ancestors, index: e.index }).filter((x) => !old?.has(x.rule)),
+    );
     if (addedOrChanged.has(e.block)) {
       problems.push(...fieldProblems(e.block, e.depth));
       imageProblems(e.block, base, st, problems);

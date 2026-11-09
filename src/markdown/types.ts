@@ -108,8 +108,7 @@ export type MarkdownWarningCode =
   | 'TASK_LIST_NUMBERING'
   | 'IMAGE_URL_UNCHECKED'
   | 'LK_BLOCK_VERSION_STRIPPED'
-  | 'DROP_REGION_NOT_MISSING'
-  | 'FIELD_LIMIT_KEPT_BLOCK';
+  | 'DROP_REGION_NOT_MISSING';
 
 /** One block in a plan, with where it sits. */
 export interface PlanBlockRef {

@@ -145,7 +145,9 @@ class Validator {
             if (!record) return false;
           }
         } else if (s.additionalProperties === false) {
-          fail('additionalProperties', `${join(path, k)} is not a field LegendKeeper accepts here`);
+          ok = false;
+          if (record)
+            this.add(join(path, k), 'additionalProperties', 'is not a field LegendKeeper accepts here');
         } else if (s.additionalProperties && typeof s.additionalProperties === 'object') {
           if (!this.check(s.additionalProperties as Schema, o[k], join(path, k), record)) ok = false;
         }

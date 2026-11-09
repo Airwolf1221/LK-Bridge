@@ -341,13 +341,17 @@ function topLevelOf(nodes: readonly ANode[], target: ANode): ANode {
   return nodes.find(contains) ?? target;
 }
 
-function parsesBack(md: string, nodes: readonly ANode[], s: RenderState): boolean {
+function parsesBack(md: string, nodes: readonly ANode[], s: RenderState, parse: CheckParser): boolean {
   try {
-    return sameTopLevel(nodes, parseDrafts(md).drafts, s);
+    return sameTopLevel(nodes, parse(md), s);
   } catch {
     return false;
   }
 }
+
+/** How the self-check parses Markdown (replaceable in tests, to prove a failed check is refused). */
+export type CheckParser = (md: string) => readonly Draft[];
+const defaultCheckParser: CheckParser = (md) => parseDrafts(md).drafts;
 
 export interface RenderedPage {
   readonly markdown: string;
@@ -357,21 +361,26 @@ export interface RenderedPage {
 }
 
 /** Renders a page, with the self-check. Shared by toMarkdown and fromMarkdown (which must see the same regions). */
-export function renderPage(blocks: readonly LkBlock[], selfCheck: boolean): RenderedPage {
+export function renderPage(
+  blocks: readonly LkBlock[],
+  selfCheck: boolean,
+  parse: CheckParser = defaultCheckParser,
+): RenderedPage {
   const nodes = analyse(blocks);
   const s: RenderState = { forced: new Map() };
   const warnings: MarkdownWarning[] = [];
   const f = new Forcer(s, warnings);
   let md = renderAll(nodes, f);
-  if (!selfCheck || parsesBack(md, nodes, s)) return { markdown: md, nodes, forced: s.forced, warnings };
+  if (!selfCheck || parsesBack(md, nodes, s, parse))
+    return { markdown: md, nodes, forced: s.forced, warnings };
   // Find the top-level blocks that do not come back, and keep them.
   for (const n of nodes) {
     if (isKeep(n, s)) continue;
-    if (!parsesBack(renderAll([n], f), [n], s))
+    if (!parsesBack(renderAll([n], f), [n], s, parse))
       f.force(n, 'its Markdown would not convert back to exactly the same block');
   }
   md = renderAll(nodes, f);
-  if (parsesBack(md, nodes, s)) return { markdown: md, nodes, forced: s.forced, warnings };
+  if (parsesBack(md, nodes, s, parse)) return { markdown: md, nodes, forced: s.forced, warnings };
   throw new MarkdownError(
     'RENDER_SELF_CHECK_FAILED',
     'The page could not be written as Markdown that converts back exactly. This is a converter bug: run the round-trip script on this page and report it.',
