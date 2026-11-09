@@ -433,3 +433,15 @@ The rules are applied the same way every time and shown in the preview. An agent
  
 - **Selective approval:** approve parts of a package and reject others. The bridge removes what depends on the rejected parts (for example links to a rejected page) and produces a revised diff for approval.
 - **Continuing a part-built package** after an interruption, without duplicate creations. The v1 job engine's ids and recovery already provide the basis.
+### 10.6 Concurrency: don't rely on LegendKeeper's version check alone (applies to v2)
+ 
+**From real testing (reported via ChatGPT, 9 November 2026):** LegendKeeper can accept **overlapping** writes that carry the same expected version. Its `If-Match` check works for writes that happen one after another, but it is **not a guaranteed atomic compare-and-swap**. Consequences for v2:
+ 
+- **The bridge's own per-document and per-resource locks stay mandatory** (they already exist: chunk 2). Two writes from the bridge to the same target never overlap.
+- **The bridge checks versions itself (C1, C2).** Inside the lock, just before a versioned write, the bridge re-reads the current version and compares it with the expected one. A mismatch is a conflict, whatever LegendKeeper would do. The high-level tools usually read anyway, so the cost is rarely an extra request.
+- **One bridge process per project** is a rule, recorded in an ADR by A1. The locks are in-process. Running two bridge processes against the same project would bypass them, so that would need database-held locks first.
+- **The verify step (10.2) reads back writes** and compares them with the plan. That catches a write lost to an overlapping outside edit (the LegendKeeper app, another tool) straight away. The journal's previous state then allows recovery.
+- **E4 adds a concurrency acceptance test:**
+  1. many simultaneous bridge writes to the same page, which must be fully serialised, with nothing lost and every conflict reported;
+  2. simultaneous same-version writes sent straight to LegendKeeper on the test world, to record its real behaviour;
+  3. an outside write landing between the bridge's read and its write, which the verify step must catch.
