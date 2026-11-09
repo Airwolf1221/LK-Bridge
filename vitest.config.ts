@@ -12,6 +12,7 @@ export default defineConfig({
       'test/admin/**/*.test.ts',
       'test/maintenance/**/*.test.ts', // chunk 6 (its UI component tests are in test/ui)
       'test/mappings/**/*.test.ts',
+      'test/markdown/**/*.test.ts', // v2 B1: the Markdown converter
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',
