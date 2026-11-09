@@ -40,6 +40,9 @@ only: no MCP tools, no database tables, no LegendKeeper calls. No existing behav
   page at about 3,000 blocks, the Main chronology page with document mentions, a page with an infobox, a collection and
   an unsupported block); a test for every error and warning; the round-trip script's dry run against the mock and its
   wrapper.
+- **Independent review.** A fresh agent tried to break the converter; the seven ways it found for an edit or a legacy
+  page to change data without a refusal are fixed, with regression tests (ADR 0022, "Review"). Notably, a block moved
+  into or out of a quote, callout, secret or expand block now keeps its id and settings.
 - `docs/PLAN-v2.md` is left out of the Prettier check, as `docs/PLAN.md` already was.
 
 ## Unreleased: v2 phase 0 spike (9 November 2026)

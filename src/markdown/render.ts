@@ -13,6 +13,7 @@ import { MarkdownError } from './errors.js';
 import { destination, escapeLineStart, escapeText, needsCheck, protectEdges, renderRuns } from './inline.js';
 import {
   analyse,
+  blockIdCounts,
   canon,
   fingerprint,
   fullProjection,
@@ -21,6 +22,7 @@ import {
   projectedChildren,
   SAFE_ID_RE,
   toLkRuns,
+  usableKeepId,
   type ANode,
   type NRun,
 } from './model.js';
@@ -307,14 +309,14 @@ class Forcer {
   constructor(
     readonly s: RenderState,
     readonly warnings: MarkdownWarning[],
+    readonly ids: ReadonlyMap<string, number>,
   ) {}
   /** Turns a top-level node into a keep region (with a synthetic id when its own cannot be written in a marker). */
   force(n: ANode, why: string): void {
     if (this.s.forced.has(n)) return;
     this.s.forced.set(n, why);
     const id = n.block.id;
-    (n as { keepId: string | null }).keepId =
-      typeof id === 'string' && SAFE_ID_RE.test(id) ? id : `anon-x${++this.n}`;
+    (n as { keepId: string | null }).keepId = usableKeepId(id, this.ids) ?? `anon-x${++this.n}`;
     this.warnings.push({
       code: 'RENDERED_AS_KEEP_REGION',
       message: `A ${n.block.kind} block is shown as a keep region because ${why}.`,
@@ -369,7 +371,7 @@ export function renderPage(
   const nodes = analyse(blocks);
   const s: RenderState = { forced: new Map() };
   const warnings: MarkdownWarning[] = [];
-  const f = new Forcer(s, warnings);
+  const f = new Forcer(s, warnings, blockIdCounts(blocks));
   let md = renderAll(nodes, f);
   if (!selfCheck || parsesBack(md, nodes, s, parse))
     return { markdown: md, nodes, forced: s.forced, warnings };

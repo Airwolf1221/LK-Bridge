@@ -383,16 +383,46 @@ function tableReason(rows: unknown[]): string | null {
 
 export const CODE_PIPE_REASON = 'inline code with a backslash before "|" in a table cell';
 
-/** Analyses a block list. `anon` numbers keep regions of blocks LegendKeeper returned without an id. */
-export function analyse(blocks: readonly unknown[], parentKind = 'root', anon = { n: 0 }): ANode[] {
-  return blocks.map((b) => analyseOne(b, parentKind, anon, 0));
+interface AnalyseState {
+  n: number;
+  /** How many blocks of the page carry each id. */
+  readonly ids: ReadonlyMap<string, number>;
 }
 
-function analyseOne(b: unknown, parentKind: string, anon: { n: number }, row: number): ANode {
+/** How many blocks of a tree carry each id (a legacy page can repeat one). */
+export function blockIdCounts(blocks: readonly unknown[]): Map<string, number> {
+  const ids = new Map<string, number>();
+  const walk = (list: readonly unknown[], depth: number) => {
+    if (depth > 200) return;
+    for (const b of list) {
+      if (!isObj(b)) continue;
+      if (typeof b.id === 'string') ids.set(b.id, (ids.get(b.id) ?? 0) + 1);
+      if (Array.isArray(b.children)) walk(b.children, depth + 1);
+    }
+  };
+  walk(blocks, 0);
+  return ids;
+}
+
+/** The id a keep region can be written with: the block's own when it is safe in a marker and unique on the page. */
+export function usableKeepId(id: unknown, ids: ReadonlyMap<string, number>): string | null {
+  return typeof id === 'string' && SAFE_ID_RE.test(id) && ids.get(id) === 1 ? id : null;
+}
+
+/**
+ * Analyses a page's blocks. A keep region whose block has no usable id (none, one that cannot be written in a marker,
+ * or one the page repeats) is numbered `anon-<n>` in document order.
+ */
+export function analyse(blocks: readonly unknown[]): ANode[] {
+  const st: AnalyseState = { n: 0, ids: blockIdCounts(blocks) };
+  return blocks.map((b) => analyseOne(b, 'root', st, 0));
+}
+
+function analyseOne(b: unknown, parentKind: string, anon: AnalyseState, row: number): ANode {
   const block = (isObj(b) ? b : { kind: '(invalid)' }) as LkBlock;
   const reason = keepReason(b, parentKind);
   if (reason !== null) {
-    const keepId = typeof block.id === 'string' && SAFE_ID_RE.test(block.id) ? block.id : `anon-${++anon.n}`;
+    const keepId = usableKeepId(block.id, anon.ids) ?? `anon-${++anon.n}`;
     return { block, keep: reason, keepId, parentKind, children: [], row, runs: null };
   }
   let children: ANode[] = [];

@@ -104,7 +104,7 @@ The marker (`[!warning]`, `[!expand] Title`…) must be the first thing in the q
 ```
 
 Each cell holds one line of text (marks, links, mentions and `<br>` are fine). Write a `|` inside a cell as `\|`,
-including in `[[Page\|label]]`. Column alignment (`:---:`) is ignored. Tables with merged cells, or with lists or
+including in `[[Page\|label]]`: a row with more cells than the header row is refused, and a shorter row gets empty cells at its end. Column alignment (`:---:`) is ignored. Tables with merged cells, or with lists or
 several paragraphs in a cell, are shown as keep regions.
 
 ### Images
@@ -217,7 +217,8 @@ Blocks outside the section are never touched.
 - A block whose Markdown you did not change keeps its id, its styling and every setting Markdown cannot show (an
   image's size, position and title, a callout's icon, header cells in the first column of a table…).
 - A block you edited keeps its id and those settings; only what Markdown shows (its text, marks, level, URL…) changes.
-- A block you moved keeps its id.
+- A block you moved keeps its id, also into or out of a quote, callout, secret or expand block, as long as its
+  Markdown is unchanged.
 - A new block gets LegendKeeper's defaults.
 
 ## Limits
@@ -251,29 +252,29 @@ checked.
 
 Every refusal has a code. Fix what the message says and try again.
 
-| Code                       | Meaning and what to do                                                                        |
-| -------------------------- | --------------------------------------------------------------------------------------------- |
-| `KEEP_REGIONS_MISSING`     | Keep regions are missing from a replace. Put them back, or pass `dropRegions`.                |
-| `KEEP_REGION_UNKNOWN`      | A region names a block the page does not hold (the page changed?). Read the page again.       |
-| `KEEP_REGION_DUPLICATE`    | A region appears twice, or in an append, or belongs to another section.                       |
-| `KEEP_REGION_MALFORMED`    | A region's markers are broken (no closing marker at the same level, a stray one, nesting).    |
-| `UNSUPPORTED_BLOCK_LOSS`   | The write would delete content the API cannot show. Keep it, or pass `allowUnsupportedLoss`.  |
-| `MENTION_NOT_FOUND`        | `[[Name]]` matched no page. Check the name, or link by id.                                    |
-| `MENTION_AMBIGUOUS`        | `[[Name]]` matched several pages (listed). Use a more exact name, or link by id.              |
-| `MENTION_RESOLVER_MISSING` | `[[Name]]` cannot be looked up here. Link by id.                                              |
-| `INVALID_LK_BLOCK`         | An `lk-block` is not JSON, or not a block LegendKeeper accepts (the problems are listed).     |
-| `UNSUPPORTED_KIND`         | An `lk-block` tries to create an `unsupported` block.                                         |
-| `DUPLICATE_BLOCK_ID`       | Two blocks would share an id.                                                                 |
-| `EDITOR_LIMIT`             | The content breaks an editor limit (the rule is named).                                       |
-| `FIELD_LIMIT`              | Text, a list or the nesting is past a limit.                                                  |
-| `SCHEMA_VIOLATION`         | Something LegendKeeper's schema refuses, such as a text colour.                               |
-| `IMAGE_URL_REFUSED`        | The image URL is not an image asset of this project. Upload the image first.                  |
-| `INLINE_IMAGE`             | An image inside a line of text. Put it on its own line.                                       |
-| `UNSUPPORTED_HTML`         | HTML the bridge does not understand. Write Markdown, or escape the `<` as `\<`.               |
-| `UNSUPPORTED_MARKDOWN`     | Markdown with no LegendKeeper equivalent (for example an `lk://` link that is not a mention). |
-| `SECTION_NOT_FOUND`        | No heading matches the path. The page's headings are listed.                                  |
-| `SECTION_AMBIGUOUS`        | Several headings match. Use a longer path or `[n]`.                                           |
-| `INVALID_EDIT`             | The edit is malformed: an unknown mode, or a section missing or not allowed.                  |
+| Code                       | Meaning and what to do                                                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KEEP_REGIONS_MISSING`     | Keep regions are missing from a replace. Put them back, or pass `dropRegions`.                                                                                                                          |
+| `KEEP_REGION_UNKNOWN`      | A region names a block the page does not hold (the page changed?). Read the page again.                                                                                                                 |
+| `KEEP_REGION_DUPLICATE`    | A region appears twice, or in an append, or belongs to another section.                                                                                                                                 |
+| `KEEP_REGION_MALFORMED`    | A region's markers are broken (no closing marker at the same level, a stray one, nesting).                                                                                                              |
+| `UNSUPPORTED_BLOCK_LOSS`   | The write would delete content the API cannot show. Keep it, or pass `allowUnsupportedLoss`.                                                                                                            |
+| `MENTION_NOT_FOUND`        | `[[Name]]` matched no page. Check the name, or link by id.                                                                                                                                              |
+| `MENTION_AMBIGUOUS`        | `[[Name]]` matched several pages (listed). Use a more exact name, or link by id.                                                                                                                        |
+| `MENTION_RESOLVER_MISSING` | `[[Name]]` cannot be looked up here. Link by id.                                                                                                                                                        |
+| `INVALID_LK_BLOCK`         | An `lk-block` is not JSON, or not a block LegendKeeper accepts (the problems are listed).                                                                                                               |
+| `UNSUPPORTED_KIND`         | An `lk-block` tries to create an `unsupported` block.                                                                                                                                                   |
+| `DUPLICATE_BLOCK_ID`       | Two blocks would share an id.                                                                                                                                                                           |
+| `EDITOR_LIMIT`             | The content breaks an editor limit (the rule is named).                                                                                                                                                 |
+| `FIELD_LIMIT`              | Text, a list or the nesting is past a limit.                                                                                                                                                            |
+| `SCHEMA_VIOLATION`         | Something LegendKeeper's schema refuses, such as a text colour.                                                                                                                                         |
+| `IMAGE_URL_REFUSED`        | The image URL is not an image asset of this project. Upload the image first.                                                                                                                            |
+| `INLINE_IMAGE`             | An image inside a line of text. Put it on its own line.                                                                                                                                                 |
+| `UNSUPPORTED_HTML`         | HTML the bridge does not understand. Write Markdown, or escape the `<` as `\<`.                                                                                                                         |
+| `UNSUPPORTED_MARKDOWN`     | Markdown with no LegendKeeper equivalent or that would vanish: an `lk://` link that is not a mention, a table row with more cells than its header, a link reference definition (`[x]: …`) no link uses. |
+| `SECTION_NOT_FOUND`        | No heading matches the path. The page's headings are listed.                                                                                                                                            |
+| `SECTION_AMBIGUOUS`        | Several headings match. Use a longer path or `[n]`.                                                                                                                                                     |
+| `INVALID_EDIT`             | The edit is malformed: an unknown mode, or a section missing or not allowed.                                                                                                                            |
 
 Warnings do not stop the write: `KEEP_REGION_EDITED`, `KEEP_REGION_KIND`, `HTML_COMMENT_IGNORED`,
 `HTML_TAG_UNBALANCED`, `TITLE_IGNORED` (link and image titles), `ALIGNMENT_IGNORED`, `CALLOUT_TYPE_UNKNOWN` (kept as a

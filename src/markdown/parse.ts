@@ -131,6 +131,7 @@ interface HtmlOpen {
 class Parser {
   readonly warnings: MarkdownWarning[] = [];
   private readonly definitions = new Map<string, Definition>();
+  private readonly usedDefinitions = new Set<string>();
   private htmlStack: HtmlOpen[] = [];
   private readonly wikiProblems: { name: string; result: 'not_found' | 'ambiguous'; candidates?: unknown }[] =
     [];
@@ -147,6 +148,18 @@ class Parser {
   run(root: Root): Draft[] {
     this.collectDefinitions(root);
     const drafts = this.flow(root.children);
+    const unused = [...this.definitions.values()].filter((d) => !this.usedDefinitions.has(d.identifier));
+    if (unused.length > 0 && !this.opts.collectNames) {
+      const d = unused[0]!;
+      throw new MarkdownError(
+        'UNSUPPORTED_MARKDOWN',
+        `Line ${lineOf(d)} reads as a link reference definition ([${d.label ?? d.identifier}]: ${d.url}), which no link uses and which would vanish from the page. To write it as text, escape the bracket: \\[${d.label ?? d.identifier}]: …`,
+        {
+          line: lineOf(d),
+          definitions: unused.map((x) => ({ label: x.label ?? x.identifier, line: lineOf(x) })),
+        },
+      );
+    }
     if (this.wikiProblems.length > 0) {
       const first = this.wikiProblems[0]!;
       const list = this.wikiProblems.map(
@@ -316,6 +329,7 @@ class Parser {
         title = img.title;
       } else {
         const d = this.definitions.get(img.identifier);
+        this.usedDefinitions.add(img.identifier);
         url = d?.url ?? '';
         title = d?.title;
       }
@@ -545,19 +559,28 @@ class Parser {
         'ALIGNMENT_IGNORED',
         `Line ${lineOf(n)}: column alignment is not something LegendKeeper tables hold; it was ignored.`,
       );
-    const rows = n.children.map((r, ri) =>
-      this.block(
-        { kind: 'tableRow' },
-        r.children.map((c) =>
-          this.block(
-            { kind: 'tableCell', ...(ri === 0 ? { header: true } : {}) },
-            [this.block({ kind: 'paragraph', content: this.inline(c.children) }, null, c)],
-            c,
-          ),
+    const width = n.children[0]?.children.length ?? 0;
+    const rows = n.children.map((r, ri) => {
+      if (r.children.length > width)
+        throw new MarkdownError(
+          'UNSUPPORTED_MARKDOWN',
+          `Line ${lineOf(r)}: this table row has ${r.children.length} cells but the header has ${width}; the extra cells would be lost. Write a | inside a cell as \\| (also in [[Name\\|label]]).`,
+          { line: lineOf(r), cells: r.children.length, header: width },
+        );
+      const cells = r.children.map((c) =>
+        this.block(
+          { kind: 'tableCell', ...(ri === 0 ? { header: true } : {}) },
+          [this.block({ kind: 'paragraph', content: this.inline(c.children) }, null, c)],
+          c,
         ),
-        r,
-      ),
-    );
+      );
+      // A short row has empty cells at its end, as GFM shows it.
+      while (cells.length < width)
+        cells.push(
+          this.block({ kind: 'tableCell' }, [this.block({ kind: 'paragraph', content: [] }, null, r)], r),
+        );
+      return this.block({ kind: 'tableRow' }, cells, r);
+    });
     return this.block({ kind: 'table' }, rows, n);
   }
 
@@ -614,6 +637,7 @@ class Parser {
           break;
         case 'linkReference': {
           const d = this.definitions.get(n.identifier);
+          this.usedDefinitions.add(n.identifier);
           this.link(d?.url ?? '', d?.title, n.children, marks, out, n);
           break;
         }
@@ -781,6 +805,7 @@ export function plainText(n: PhrasingContent | Nodes): string {
   if (n.type === 'text' || n.type === 'inlineCode') return n.value;
   if (n.type === 'lkWiki') return n.label ?? n.name;
   if (n.type === 'break') return ' ';
+  if (n.type === 'html') return BR_ONLY_RE.test(n.value.trim()) ? ' ' : '';
   if (n.type === 'image') return n.alt ?? '';
   if ('children' in n) return (n.children as Nodes[]).map(plainText).join('');
   return '';

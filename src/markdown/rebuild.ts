@@ -101,6 +101,10 @@ interface State {
   readonly claimed: Set<string>;
   /** result block → the base block it derives from (for blocks without an id). */
   readonly origin: Map<LkBlock, LkBlock>;
+  /** Current blocks already placed in the result (restored, moved or edited). */
+  readonly used: Set<ANode>;
+  /** New blocks waiting for the second pass: their place in the result and their draft. */
+  readonly pending: { readonly into: LkBlock[]; readonly at: number; readonly draft: DraftBlock }[];
 }
 
 // ------------------------------------------------------------------------------------------------ pre-checks
@@ -167,15 +171,21 @@ function preCheck(drafts: readonly Draft[], st: State, scope: ReadonlySet<string
               { id, line: d.line },
             );
         }
-        if (d.block.kind === 'unsupported') {
-          const b = typeof id === 'string' ? st.base.byId.get(id) : undefined;
-          if (!b || b.kind !== 'unsupported')
-            throw new MarkdownError(
-              'UNSUPPORTED_KIND',
-              `Line ${d.line}: an unsupported block can only be kept (echoed by the id of one the page holds), never created.`,
-              { line: d.line },
-            );
-        }
+        // Every unsupported block in it, at any depth, must echo one the page holds.
+        const check = (b: unknown, depth: number): void => {
+          if (!isObj(b) || depth > 200) return;
+          if (b.kind === 'unsupported') {
+            const held = typeof b.id === 'string' ? st.base.byId.get(b.id) : undefined;
+            if (!held || held.kind !== 'unsupported')
+              throw new MarkdownError(
+                'UNSUPPORTED_KIND',
+                `Line ${d.line}: an unsupported block can only be kept (echoed by the id of one the page holds), never created.`,
+                { line: d.line },
+              );
+          }
+          if (Array.isArray(b.children)) for (const c of b.children as unknown[]) check(c, depth + 1);
+        };
+        check(d.block, 0);
       } else if (d.children) walk(d.children);
     }
   };
@@ -219,6 +229,13 @@ function nodeText(n: ANode): string {
 }
 
 /** Aligns the drafts of one container level with its current blocks and builds the new children. */
+/** Marks a node and everything under it as placed (a verbatim block brings its whole subtree). */
+function useSubtree(n: ANode, st: State): void {
+  st.used.add(n);
+  for (const c of n.children) useSubtree(c, st);
+}
+
+/** Aligns the drafts of one container level with its current blocks and builds the new children. */
 function alignLevel(baseNodes: readonly ANode[], drafts: readonly Draft[], st: State): LkBlock[] {
   const fa = baseNodes.map((n) => nodeFp(n, st));
   const fb = drafts.map((d) => (d.t === 'block' ? draftFingerprint(d, st.interner) : st.interner.fresh()));
@@ -228,8 +245,9 @@ function alignLevel(baseNodes: readonly ANode[], drafts: readonly Draft[], st: S
   for (const [i, j] of matches) {
     result[j] = baseNodes[i]!.block; // verbatim: the same object
     usedA.add(i);
+    useSubtree(baseNodes[i]!, st);
   }
-  // Moves: an unchanged block written elsewhere at the same level is still that block (same object, same id).
+  // Moves within the level: an unchanged block written elsewhere among its siblings is still that block.
   const pool = new Map<number, number[]>();
   baseNodes.forEach((_, i) => {
     if (usedA.has(i) || fa[i]! < 0) return;
@@ -241,6 +259,7 @@ function alignLevel(baseNodes: readonly ANode[], drafts: readonly Draft[], st: S
     if (i === undefined) return;
     result[j] = baseNodes[i]!.block;
     usedA.add(i);
+    useSubtree(baseNodes[i]!, st);
   });
   // Edits: in each gap between matches, pair the rest by kind and similarity.
   const pairOf = new Map<number, ANode>();
@@ -269,29 +288,80 @@ function alignLevel(baseNodes: readonly ANode[], drafts: readonly Draft[], st: S
     pb = j + 1;
   }
   gap(baseNodes.length, drafts.length);
-  return drafts.map((d, j) => {
+  for (const n of pairOf.values()) st.used.add(n);
+  const out: LkBlock[] = [];
+  drafts.forEach((d, j) => {
     const done = result[j];
-    if (done) return done;
-    if (d.t === 'keep') return restoreKeep(d, st);
-    if (d.t === 'raw') return d.block;
-    const paired = pairOf.get(j);
-    return paired ? merge(paired, d, st) : fresh(d, st);
+    if (done) out.push(done);
+    else if (d.t === 'keep') out.push(restoreKeep(d, st));
+    else if (d.t === 'raw') out.push(d.block);
+    else {
+      const paired = pairOf.get(j);
+      if (paired) out.push(merge(paired, d, st));
+      else {
+        // New here: decided in the second pass, once every level has taken what it matches.
+        st.pending.push({ into: out, at: out.length, draft: d });
+        out.push(PENDING);
+      }
+    }
   });
+  return out;
+}
+
+const PENDING: LkBlock = { kind: '(pending)' };
+
+/**
+ * The second pass: a block that is new where it stands may be an unchanged block of the page written somewhere else
+ * (wrapped in a quote or secret, taken out of one, moved into another container). It is restored verbatim, keeping its
+ * id and every attribute; anything else is new.
+ */
+function placePending(st: State): void {
+  const pool = new Map<number, ANode[]>();
+  const walk = (list: readonly ANode[]) => {
+    for (const n of list) {
+      if (!st.used.has(n) && !isRegion(n, st) && !claimedNode(n, st)) {
+        const fp = nodeFp(n, st);
+        if (fp >= 0) pool.set(fp, [...(pool.get(fp) ?? []), n]);
+      }
+      if (!isRegion(n, st)) walk(n.children);
+    }
+  };
+  walk(st.base.page.nodes);
+  const free = (n: ANode): boolean => !st.used.has(n) && n.children.every(free);
+  const resolve = (d: DraftBlock): LkBlock => {
+    const candidates = pool.get(draftFingerprint(d, st.interner)) ?? [];
+    const n = candidates.find(free);
+    if (n) {
+      useSubtree(n, st);
+      return n.block;
+    }
+    return fresh(d, st, resolve);
+  };
+  for (const p of st.pending) p.into[p.at] = resolve(p.draft);
 }
 
 function restoreKeep(d: DraftKeep, st: State): LkBlock {
   return st.base.regions.get(d.id)!.block;
 }
 
-/** Runs from the Markdown, reusing the page's own mention objects where the label is unchanged. */
-function reuseMentions(content: unknown, st: State): unknown {
+/**
+ * Runs from the Markdown, reusing the page's own mention objects where the label is unchanged: first those of the block
+ * being edited (in order), then any on the page.
+ */
+function reuseMentions(content: unknown, st: State, own?: unknown): unknown {
   if (!Array.isArray(content)) return content;
+  const local = Array.isArray(own)
+    ? own.filter((r): r is Obj => isObj(r) && isObj(r.mention)).map((r) => r.mention as Obj)
+    : [];
   return content.map((r: unknown) => {
     if (!isObj(r) || !isObj(r.mention)) return r;
     const m = r.mention;
     const label = typeof m.text === 'string' ? m.text : '';
     if (label === '') return r;
-    const orig = st.base.mentions.get(mentionKey(m.resourceId, m.documentId, label));
+    const key = mentionKey(m.resourceId, m.documentId, label);
+    const i = local.findIndex((x) => mentionKey(x.resourceId, x.documentId, mentionLabel(x)) === key);
+    if (i >= 0) return { mention: local.splice(i, 1)[0] };
+    const orig = st.base.mentions.get(key);
     return orig ? { mention: orig } : r;
   });
 }
@@ -299,28 +369,29 @@ function reuseMentions(content: unknown, st: State): unknown {
 function merge(n: ANode, d: DraftBlock, st: State): LkBlock {
   const b = n.block;
   const shown = SHOWN_FIELDS[b.kind] ?? [];
+  const take = (k: string) => (k === 'content' ? reuseMentions(d.own[k], st, b.content) : d.own[k]);
   // The current block's fields, in their order, with the shown ones taken from the Markdown.
   const out = {} as LkBlock;
   for (const [k, v] of Object.entries(b)) {
     if (k === 'children') continue;
     if (!shown.includes(k)) out[k] = v;
-    else if (d.own[k] !== undefined) out[k] = k === 'content' ? reuseMentions(d.own[k], st) : d.own[k];
+    else if (d.own[k] !== undefined) out[k] = take(k);
   }
   for (const k of shown) {
     if (k in out || d.own[k] === undefined) continue;
-    out[k] = k === 'content' ? reuseMentions(d.own[k], st) : d.own[k];
+    out[k] = take(k);
   }
   if (CONTAINER_KINDS.has(b.kind)) out.children = alignLevel(projectedChildren(n), d.children ?? [], st);
   st.origin.set(out, b);
   return out;
 }
 
-function fresh(d: DraftBlock, st: State): LkBlock {
+function fresh(d: DraftBlock, st: State, child: (d: DraftBlock) => LkBlock): LkBlock {
   const out: LkBlock = { ...(st.ctx.mintBlockId ? { id: st.ctx.mintBlockId() } : {}), ...d.own };
   if (Array.isArray(out.content)) out.content = reuseMentions(out.content, st);
   if (d.children)
     out.children = d.children.map((c) =>
-      c.t === 'keep' ? restoreKeep(c, st) : c.t === 'raw' ? c.block : fresh(c, st),
+      c.t === 'keep' ? restoreKeep(c, st) : c.t === 'raw' ? c.block : child(c),
     );
   return out;
 }
@@ -657,6 +728,8 @@ export function rebuild(input: RebuildInput): RebuildOutput {
     interner: new Interner(),
     claimed: new Set(),
     origin: new Map(),
+    used: new Set(),
+    pending: [],
   };
   const fullRange = start === 0 && end === base.page.nodes.length;
   let scope: Set<string> | null = null;
@@ -673,6 +746,9 @@ export function rebuild(input: RebuildInput): RebuildOutput {
   }
   preCheck(drafts, st, scope);
   const middle = alignLevel(base.page.nodes.slice(start, end), drafts, st);
+  // Blocks outside the edited range stay where they are: they cannot be taken by a move.
+  for (const n of [...base.page.nodes.slice(0, start), ...base.page.nodes.slice(end)]) useSubtree(n, st);
+  placePending(st);
   const blocks = [...base.blocks.slice(0, start), ...middle, ...base.blocks.slice(end)];
   const planRes = computePlan(base, blocks, st.origin);
   checkResult(base, blocks, planRes, st, input.opts);

@@ -7,7 +7,7 @@
  */
 import type { Heading, RootContent } from 'mdast';
 import { MarkdownError } from './errors.js';
-import { isObj, runsPlainText } from './model.js';
+import { isObj, mentionLabel } from './model.js';
 import { KEEP_CLOSE_RE, KEEP_OPEN_RE, parseMdast, plainText } from './parse.js';
 import type { LkBlock, OutlineEntry, Section } from './types.js';
 
@@ -22,6 +22,20 @@ export interface HeadingRef {
 }
 
 const clean = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
+/** A heading's text as its Markdown reads: text, mention labels, a space for a line break, "(icon)" for an inline icon. */
+function headingText(runs: unknown): string {
+  if (!Array.isArray(runs)) return '';
+  return runs
+    .map((r: unknown) => {
+      if (!isObj(r)) return '';
+      if (typeof r.text === 'string') return r.text;
+      if (isObj(r.mention)) return mentionLabel(r.mention);
+      if (r.break === true) return ' ';
+      return '(icon)';
+    })
+    .join('');
+}
 
 /** Assigns heading paths from levels. */
 function withPaths(raw: readonly Omit<HeadingRef, 'path'>[]): HeadingRef[] {
@@ -40,7 +54,7 @@ export function blockHeadings(blocks: readonly LkBlock[]): HeadingRef[] {
     if (!isObj(b) || b.kind !== 'heading' || !Number.isInteger(b.level)) return;
     raw.push({
       level: b.level as number,
-      text: clean(runsPlainText(b.content)),
+      text: clean(headingText(b.content)),
       index: i,
       line: 0,
       ...(typeof b.id === 'string' ? { blockId: b.id } : {}),

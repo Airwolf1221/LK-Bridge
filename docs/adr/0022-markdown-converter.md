@@ -32,7 +32,10 @@ lose anything. It is a library (`src/markdown`) that later sessions wrap in tool
    at each container level they are aligned with the current blocks' projections (prefix and suffix, exact LCS up to
    4 million cells, patience anchors beyond). A match restores the current block **verbatim** (same object, id and
    attributes); a block written elsewhere at the same level is a move and keeps its id; remaining blocks of the same kind
-   in the same gap are paired as edits by similarity (a lone one of its kind on both sides always pairs). An edited
+   in the same gap are paired as edits by similarity (a lone one of its kind on both sides always pairs). Once every
+   level is aligned, a second pass looks across the whole page (outside an edited section's range excepted) for an
+   unused block with the same projection as each block still new, so a block wrapped in a quote or secret, taken out of
+   one, or under a container that changed kind keeps its id and settings. An edited
    block keeps its id and every field Markdown does not show (`SHOWN_FIELDS`: an image keeps its title, layout and
    width, a callout its icon, a table cell its header flag). PLAN-v2 section 1 allows styling on edited blocks to be
    lost; this keeps it where it can.
@@ -49,14 +52,18 @@ lose anything. It is a library (`src/markdown`) that later sessions wrap in tool
    - in a table cell, `\|` separates `[[Name\|label]]` (an unescaped `|` would end the cell), so a page name cannot
      contain `|` in a wiki mention;
    - `[[Name]]` gives a mention without a label (it follows renames); `[[Name|label]]` and `[label](lk://…)` fix the
-     label. An edited paragraph reuses the page's own mention object when the label did not change.
+     label. An edited paragraph reuses its own mention object when the label did not change (then one elsewhere on the
+     page with the same target and label).
+   - a table row with more cells than its header is refused (an unescaped `|` in a cell would otherwise lose text),
+     and a shorter row gets empty cells, as GFM shows it; a link reference definition no link uses is refused rather
+     than dropped.
    - neighbouring lists alternate `-`/`*` and `.`/`)` so they stay separate lists.
 6. **Text colours.** The API's run schema (spec 3.0.0) has no colour or highlight. The converter reads and writes
    `<span style="color:#…; background-color:#…">` as run fields `color` and `highlight`, so the owner's schema works
    the day the API adds them under those names (any other name is an unknown run field, hence a keep region). Today
    a write carrying one is refused by the schema check (`SCHEMA_VIOLATION`, with an explanation).
 7. **Keep regions** are top-most blocks Markdown cannot express, marked with the block's id (`anon-<n>` for a block
-   LegendKeeper returned without a usable one). The readable text inside is for reading; edits there are ignored with a
+   LegendKeeper returned without a usable one: none, one a marker cannot hold, or one a legacy page repeats). The readable text inside is for reading; edits there are ignored with a
    warning; a region may be moved; it may not appear twice or in an append; a missing one is refused unless named in
    `dropRegions`. An `lk-block` with a region's id replaces that block. The job engine's own `unsupportedLoss` guard
    is applied to the whole result, so dropping an unsupported block also needs `allowUnsupportedLoss`.
@@ -80,6 +87,16 @@ lose anything. It is a library (`src/markdown`) that later sessions wrap in tool
     Switching it to A1's project selection is a small change in the CLI and wrapper.
 13. **One known limit of GFM:** inline code cannot end a backslash right before `|` inside a table cell (GFM reads
     `\|` as an escaped pipe even in code), so such a table is a keep region.
+
+## Review
+
+An independent review (a fresh agent given only the code and the promises above) tried 1,500 generated pages, 3,000
+random agent edits, section edits and keep-region tricks. It found no failure of the round trip or of an unchanged
+write-back, and seven ways an edit or a legacy page could change data without a refusal: blocks moved across containers
+losing their ids and settings, a legacy page repeating a keep region's id, a mention object swapped with an equal-looking
+one, an unescaped `|` splitting a cell, unused link definitions vanishing, a nested `unsupported` block inside an
+`lk-block`, and heading paths read differently in Markdown and on the page. All seven are fixed, each with a regression
+test (`test/markdown/review.test.ts`).
 
 ## Consequences
 

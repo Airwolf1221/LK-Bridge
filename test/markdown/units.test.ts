@@ -344,12 +344,12 @@ describe('sections and page edits', () => {
     const m = toMarkdown(withIcon).markdown;
     expect(outline(m).map((o) => o.text)).toContain('Shrines (icon)');
     expect(getSection(m, 'Shrines (icon)').markdown).toContain('shrine text');
-    const r = applyEdit(withIcon, { mode: 'append_to_section', section: 'Shrines', markdown: 'more' });
+    const r = applyEdit(withIcon, { mode: 'append_to_section', section: 'Shrines (icon)', markdown: 'more' });
     expect(r.plan.added[0]!.afterId).toBe('p0000005');
     const section = getSection(m, 'Shrines (icon)').markdown;
     const e = applyEdit(withIcon, {
       mode: 'replace_section',
-      section: 'Shrines',
+      section: 'Shrines (icon)',
       markdown: section.replace('shrine text', 'shrine text, revised'),
     });
     expect(e.plan.changed.map((c) => c.id)).toEqual(['p0000005']);
