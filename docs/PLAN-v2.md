@@ -29,7 +29,7 @@ How claims are marked in this plan:
 | Test fixtures      | Sample pages from the test world may be committed to the private repo.                                                                                                                                                                                 |
 | `update_document`  | Changes a document's own settings (name, hidden, full width, calendar, map image), never its content.                                                                                                                                                  |
 | New facts          | Template facts follow the template's order. Any other new fact goes at the bottom.                                                                                                                                                                     |
-| Dates              | Forms used: `Kumikas 1st, 1A 159` · `4A 881` · `Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102` · `Kumikas - Azaakh, 4A 180` · `Unknown, 4A 101` (stored as year-only) · `Unknown` (**refused**).                                                         |
+| Dates              | Forms used: `Kumikas 1st, 1A 159` · `4A 881` · `Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102` · `Kumikas - Azaakh, 4A 180` · `Unknown, 4A 101` (stored as year-only) · a year range such as `4A 881 - 4A 900` · `Unknown` (**refused**).                |
 | Chronology         | Each timeline event also gets a row in its age's table, in the right place, and the age's event count on the Main page goes up. One table per age page. Each event has a short **name** (for the timeline) and a full **description** (for the table). |
 | Old bridge         | Every behaviour of the old bridge is kept (section 9).                                                                                                                                                                                                 |
 | Links              | Relationship links (link collections such as Dependencies and Related Sources) are edited through `set_facts`, as optional `links`.                                                                                                                    |
@@ -45,13 +45,34 @@ How claims are marked in this plan:
 - **Where the catalogue fields live:** Scope, Index Scope and Reference Type are **sidebar properties**, so they need `getResource`: **1 read per resource** (about 3,500 for a full pass).
 - **Placing pages costs nothing extra:** `createResource`, `createResourceFromTemplate` (with `parentId`, `after`, `before`, `name` and `id`) and `moveResource` all accept `after` or `before`, so alphabetical placement happens inside the same write.
 - **Templates:** LegendKeeper does not record which template a page came from. The bridge works it out from **Reference Type** and records the template itself for pages it creates.
-- **Search:** LegendKeeper's search returns one page (up to 100 results), with no operators. The old bridge found that crowded queries reach a cap. _To verify:_ the exact cap.
+- **Search (verified by the phase 0 spike):** LegendKeeper's search returns one page (up to 100 results), with no operators and no hidden cap. But it is **ranked and incomplete**: for "the", 15 of the 62 pages with it in their name were missing from the top 100. Results at limit 50 are not the first 50 of limit 100, and a resource appears once per matching document. Tree-based search is the default; LegendKeeper's search is only an add-on for page text.
+- **Nested batch creation (verified):** `createManyResources` accepts a parent created **in the same batch**. A, then B under A, then C under B works in one call.
+- **Images (verified):** asset images download from `assets.legendkeeper.com` **without authentication**, through the bridge's existing address and port checks.
+- **Timeline events (verified):**
+  - each event stores `start` and `end` in minutes, `detail` (1 = year, 2 = month, 3 = day) and LegendKeeper's own `formattedStart`/`formattedEnd`;
+  - a month range ends at the first minute of its end month;
+  - `createEvent` also accepts `formattedStart`, which LegendKeeper parses loosely. The bridge sends exact minutes instead;
+  - each age timeline has **one lane** ("Historical Events"), and every event's `uri` links to its age's **table page** (for example `lk://resources/h0gczxh7/docs/bt0bm3pc`).
+- **The date engine is proven possible:** a prototype built only from the calendar definition reproduced LegendKeeper's formatted dates for **all 330 sampled events, start and end, with 0 mismatches**. KCY (the year count with no era resets) matches the tables. The spike's oracle file of the calendar and those events is kept as test data for D1.
+- **The test world's tree (verified):**
+  - 1,452 resources under AI REPOSITORY: 376 `[INDEX]`, 1,076 `[BSRC]`, **0 unclassified**, up to 9 levels deep;
+  - outside the root are only the 14 templates;
+  - sampled sibling order already follows the `[INDEX]` first, then `[BSRC]`, alphabetical rule;
+  - every sampled `[BSRC]` sidebar has the same layout: `PROPERTIES` (key-value), `Dependencies` and `Related Sources` (link collections), and `TAGS` (unsupported).
+- **Characters (verified):**
+  - nine groups under `[INDEX] Characters`;
+  - **both** layouts occur: `Beastkin / Foxians` (group, then race) and `Dwarves` (race directly under Characters, with characters beneath it);
+  - Humans mixes character indexes, subraces (`High Humans`) and compact references directly beneath it;
+  - exactly one `[INDEX] Undetermined / Unknown` exists.
+- **Templates (verified):** 14, including `[INDEX] AI Index`, `[BSRC] AI Character Core`, `[BSRC] AI Compact Character Reference`, `[BSRC] AI Character Art`, `[BSRC] AI Relationship` and `[BSRC] AI General Source`.
+- **Asset folders (verified):** `Characters / Group / Race / Character` (for example `Characters / Beastkin / Qishen / Mehrana al-Khalid`). LegendKeeper's asset listing returns one folder level at a time, so folders must be walked.
+- **Maps:** the test world has **no maps** under AI REPOSITORY, so D2 creates its own test map.
 - **The calendar (`Kumikan Epochal`, test world id `rp86pkdr`):**
   - 21 months in this order: Kumikas, Isar, Selaphos, Azah, Selyros, Sarias, Highsun, Surion, Azaakh, Malakh, Zahras, Camue, Pahan, Redfall, Meshaph, Kusha, Jehet, Attina, Umbaeos, Zarzakh, Frostmoot.
   - 716 days a year, 30-hour days, no leap days.
   - Eras: AA (before the epoch), 1A, then 2A to 5A, which restart their year numbering.
   - Formats: day `MMMM D^, E YYYY`, year `E YYYY`.
-- **Ages start mid-year.** For example, 4A begins on **Azah 17th**, so "Kumikas 1st, 4A 1" doesn't exist.
+- **Ages start mid-year.** For example, 4A begins on **Azah 18th** (the era's first minute), so "Kumikas 1st, 4A 1" doesn't exist. The Fourth Age table's first row is Azah 18th, 4A 1.
 - **KCY** is the continuous year count: for the Fourth Age, KCY = year + 1,250,307. It can be calculated from the calendar.
 - **The chronology's layout:**
   - **Universal Chronology** has a Main page (an index table: Age | Event count | Complete dated table | Interactive timeline), then a "– Table" page and a "– Timeline" document for each age.
@@ -167,18 +188,18 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 
 **The owner's schema:**
 
-| Markdown                                                                                                    | LegendKeeper                                      |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `#`–`######`, paragraphs, `-` lists, `1.` lists, `>` quotes, fenced code, `---`, GFM tables                 | The matching blocks                               |
-| `- [ ]` / `- [x]`                                                                                           | Task list                                         |
-| `> [!info]`, `[!note]`, `[!success]`/`[!tip]`, `[!warning]`, `[!error]`/`[!caution]`                        | Callout                                           |
-| `> [!secret]`                                                                                               | Secret block                                      |
-| `> [!expand] Title`                                                                                         | Collapsible section                               |
-| `**b**`, `*i*`, `~~s~~`, `` `c` ``, `<u>`, `<sub>`, `<sup>`, `<span style="color:#…; background-color:#…">` | Text marks and colours                            |
-| `[[Name]]`, `[[Name\|label]]`, `[label](lk://resources/<id>)`                                               | Mention                                           |
-| `![alt](asset-url)`                                                                                         | Image (same-project asset only)                   |
-| fenced `lk-block` + JSON                                                                                    | Any raw block                                     |
-| `<!-- lk:keep id="…" kind="…" --> … <!-- /lk:keep -->`                                                      | A block Markdown can't express, preserved exactly |
+| Markdown                                                                                                    | LegendKeeper                                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `#`–`######`, paragraphs, `-` lists, `1.` lists, `>` quotes, fenced code, `---`, GFM tables                 | The matching blocks                                                                                                               |
+| `- [ ]` / `- [x]`                                                                                           | Task list                                                                                                                         |
+| `> [!info]`, `[!note]`, `[!success]`/`[!tip]`, `[!warning]`, `[!error]`/`[!caution]`                        | Callout                                                                                                                           |
+| `> [!secret]`                                                                                               | Secret block                                                                                                                      |
+| `> [!expand] Title`                                                                                         | Collapsible section                                                                                                               |
+| `**b**`, `*i*`, `~~s~~`, `` `c` ``, `<u>`, `<sub>`, `<sup>`, `<span style="color:#…; background-color:#…">` | Text marks and colours                                                                                                            |
+| `[[Name]]`, `[[Name\|label]]`, `[label](lk://resources/<id>)`, `[label](lk://resources/<id>/docs/<docId>)`  | Mention of a page, or of one document on it (the Main chronology table links to each age's table and timeline documents this way) |
+| `![alt](asset-url)`                                                                                         | Image (same-project asset only)                                                                                                   |
+| fenced `lk-block` + JSON                                                                                    | Any raw block                                                                                                                     |
+| `<!-- lk:keep id="…" kind="…" --> … <!-- /lk:keep -->`                                                      | A block Markdown can't express, preserved exactly                                                                                 |
 
 **Additions (decided):**
 
@@ -206,7 +227,7 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 ### 4.8 Calendar engine
 
 - **Built from the project's LegendKeeper calendar definition:** months, lengths, leap days, eras and their numbering rules, and format templates. Nothing is hard-coded for Arkona.
-- **Parsing:** the five decided forms (section 1), using the calendar's own month names and era abbreviations. It refuses unknown months, dates outside an era (for example before Azah 17th in 4A 1), and impossible days. `Unknown, <year>` becomes a year-only event. `Unknown` alone is refused.
+- **Parsing:** the five decided forms (section 1), using the calendar's own month names and era abbreviations. It also accepts a **year range** (for example `4A 881 - 4A 900`), which appears once in the Fourth Age table. It refuses unknown months, dates outside an era (for example before Azah 18th in 4A 1), and impossible days. `Unknown, <year>` becomes a year-only event. `Unknown` alone is refused.
 - **Output:** LegendKeeper's minute values for events, formatted text in the calendar's own format, and **KCY** (single or a range).
 - **Two independent tests:**
   - every row of every age table in the test world (date ↔ KCY);
@@ -220,7 +241,7 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
   2. pick the age;
   3. calculate the KCY;
   4. insert the table row in calendar order (ties go after existing rows with the same date; year-only rows after the dated rows of their year; ranges by their start);
-  5. create the timeline event;
+  5. create the timeline event, with exact minutes and `detail`, in the age timeline's lane (each has one, "Historical Events"), and with its `uri` linking to the age's table page, as every existing event does;
   6. increase the Main page's event count for that age.
 
   The job is journalled and recoverable, and never applies anything twice.
@@ -281,7 +302,7 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 | Resources | `create_index`                                                                                                                                                                                                                           | W      | Type plus category, using the type registry and taxonomy, alphabetical placement                                                                                    |
 |           | `create_resource`                                                                                                                                                                                                                        | W      | `[BSRC]`, required template, under an index                                                                                                                         |
 |           | `create_bare_resource`                                                                                                                                                                                                                   | W      | No template                                                                                                                                                         |
-|           | `create_many_resources`                                                                                                                                                                                                                  | W      | ≤100, nested with `key`/`parent_key` (_to verify:_ parents created in the same batch)                                                                               |
+|           | `create_many_resources`                                                                                                                                                                                                                  | W      | ≤100, nested with `key`/`parent_key`, in **one call** (verified: a parent created in the same batch works)                                                          |
 |           | `create_character`                                                                                                                                                                                                                       | W      | `core` or `compact`, with the old bridge's rules (section 9)                                                                                                        |
 |           | `update_resource`                                                                                                                                                                                                                        | W      | Name (keeps the prefix and re-places the page), tags add/remove, aliases, icon, banner, hidden, locked                                                              |
 |           | `move_resource`                                                                                                                                                                                                                          | W      | Re-placed alphabetically                                                                                                                                            |
