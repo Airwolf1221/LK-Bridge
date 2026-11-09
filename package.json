@@ -17,6 +17,7 @@
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts --passWithNoTests",
     "soak:sandbox": "tsx scripts/soak-sandbox.ts",
     "spike:v2": "tsx scripts/spike-v2.ts",
+    "roundtrip": "tsx scripts/markdown-roundtrip.ts",
     "gen:registry": "tsx scripts/gen-registry.ts",
     "check:drift": "tsx scripts/check-spec-drift.ts",
     "ci": "npm run typecheck && npm run lint && npm run format && npm run gen:registry -- --check && npm run check:drift && npm test",

@@ -1,0 +1,135 @@
+/**
+ * `npm run roundtrip [-- flags]`: the Markdown round trip over every page of a project (docs/PLAN-v2.md 4.7, and the
+ * go-live gate in section 7, step 4). READ-ONLY: it sends only listProjects, listResources and getDocumentBlocks, through
+ * the real job engine and governor at priority P3, so it gives way to agents and jobs.
+ *
+ * Project selection works as for the phase 0 spike: the key and project come from LK_SANDBOX_API_KEY and
+ * LK_SANDBOX_PROJECT_ID (on the server, deploy/markdown-roundtrip.sh reads them from the env file and refuses the
+ * project the bridge serves unless told otherwise). It refuses to run unless the key's own project is exactly that
+ * project, uses a temporary database, and never prints a secret.
+ *
+ * Output: the Markdown report on stdout (progress on stderr) and in <out-dir>/roundtrip-<timestamp>.md; for every
+ * failing page, a minimal reproduction in <out-dir>/roundtrip-<timestamp>/<resourceId>-<documentId>.json.
+ * Exit code: 0 when every page passed, 1 when a page failed or could not be read (or the report could not be written),
+ * 2 when the script refused to run.
+ */
+import { mkdirSync } from 'node:fs';
+import { fileStamp } from '../test/sandbox/spike-report.js';
+import { SandboxGuardError } from '../test/sandbox/smoke.js';
+import { createSoakRuntime } from '../test/sandbox/soak.js';
+import { formatRoundTripReport, runRoundTrip, writeRoundTripReport } from './markdown-roundtrip-core.js';
+
+const USAGE = `usage: npm run roundtrip -- [flags]
+  --root ID        only pages of this resource and everything under it (default: the whole project)
+  --max-pages N    stop after N pages (a quick trial)
+  --out-dir DIR    where the report and reproductions go (default /var/lib/lk-bridge/roundtrip)
+`;
+
+const VALUE_FLAGS = new Set(['--root', '--max-pages', '--out-dir']);
+
+function fail(message: string): never {
+  process.stderr.write(`${message}\n`);
+  process.exit(2);
+}
+
+function parseArgs(argv: readonly string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    const eq = a.indexOf('=');
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    if (!VALUE_FLAGS.has(name)) fail(`unknown flag ${name}\n${USAGE}`);
+    const value = eq > 0 ? a.slice(eq + 1) : argv[++i];
+    if (value === undefined || value === '') fail(`${name} needs a value`);
+    out.set(name, value);
+  }
+  return out;
+}
+
+async function main(): Promise<void> {
+  if (process.argv.includes('--help') || process.argv.includes('-h')) {
+    process.stdout.write(USAGE);
+    return;
+  }
+  const flags = parseArgs(process.argv.slice(2));
+  const key = process.env.LK_SANDBOX_API_KEY;
+  const project = process.env.LK_SANDBOX_PROJECT_ID;
+  if (!key || !project)
+    fail(
+      'LK_SANDBOX_API_KEY and LK_SANDBOX_PROJECT_ID must be set. On the server use deploy/markdown-roundtrip.sh.',
+    );
+  let maxPages: number | undefined;
+  if (flags.has('--max-pages')) {
+    maxPages = Number(flags.get('--max-pages'));
+    if (!Number.isInteger(maxPages) || maxPages < 1) fail('--max-pages must be a whole number of 1 or more');
+  }
+  const root = flags.get('--root');
+  const outDir = flags.get('--out-dir') ?? '/var/lib/lk-bridge/roundtrip';
+  try {
+    mkdirSync(outDir, { recursive: true, mode: 0o750 });
+  } catch (e) {
+    fail(`Cannot create the output directory ${outDir}: ${(e as Error).message}. Use --out-dir.`);
+  }
+
+  const abort = new AbortController();
+  let interrupts = 0;
+  const onSignal = (name: string) => {
+    if (++interrupts > 1) process.exit(130);
+    process.stderr.write(
+      `\n${name}: stopping after the current page; the report covers what was checked. Press again to quit at once.\n`,
+    );
+    abort.abort();
+  };
+  process.on('SIGINT', () => onSignal('SIGINT'));
+  process.on('SIGTERM', () => onSignal('SIGTERM'));
+
+  const rt = createSoakRuntime({ apiKey: key, projectId: project, writersMax: 1 });
+  let code = 0;
+  try {
+    const started = new Date();
+    const stamp = fileStamp(started);
+    process.stderr.write('Markdown round trip: read-only, every read at P3.\n');
+    const out = await runRoundTrip(
+      { engine: rt.runtime.engine, lk: rt.runtime.lk, projectId: project, counters: rt.counters },
+      project,
+      {
+        ...(root !== undefined ? { root } : {}),
+        ...(maxPages !== undefined ? { maxPages } : {}),
+        outDir,
+        stamp,
+        signal: abort.signal,
+        log: (line) => process.stderr.write(`${new Date().toISOString()} ${line}\n`),
+      },
+    );
+    const report = formatRoundTripReport(out, {
+      generatedAt: started.toISOString(),
+      projectId: project,
+      ...(root !== undefined ? { root } : {}),
+      requests: { total: rt.counters.requests, reads: rt.counters.reads, writes: rt.counters.writes },
+      budgetFooter: rt.runtime.lk.budgetFooter(),
+    });
+    process.stdout.write(report);
+    try {
+      process.stderr.write(`Written: ${writeRoundTripReport(outDir, stamp, report)}\n`);
+    } catch (e) {
+      process.stderr.write(
+        `Could not write the report file: ${(e as Error).message}. The report above is complete.\n`,
+      );
+      code = 1;
+    }
+    if (out.pages.some((p) => p.readError || (p.result && !p.result.ok)) || out.interrupted) code = 1;
+  } catch (e) {
+    if (e instanceof SandboxGuardError) {
+      process.stderr.write(`${e.message}\n`);
+      code = 2;
+    } else throw e;
+  } finally {
+    await rt.close();
+  }
+  process.exit(code);
+}
+
+main().catch((e: unknown) => {
+  process.stderr.write(`${(e as Error).stack ?? String(e)}\n`);
+  process.exit(1);
+});

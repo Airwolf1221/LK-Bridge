@@ -23,6 +23,13 @@ export { toMarkdown, projectDocument } from './render.js';
 export { outline, getSection } from './sections.js';
 export { renderMap, renderTimeline, renderBoard, type MapInput, type TimelineInput } from './documents.js';
 export { collectMentionNames } from './parse.js';
+export {
+  checkRoundTrip,
+  firstDifference,
+  minimalRepro,
+  type RoundTripResult,
+  type RoundTripFailure,
+} from './check.js';
 export { MarkdownError, type MarkdownErrorCode } from './errors.js';
 export { EDITOR_RULES, type EditorRule } from './limits.js';
 export { validateAgainstSpec, MAX_BLOCK_DEPTH, MAX_DOCUMENT_BLOCKS, type SchemaIssue } from './schema.js';
