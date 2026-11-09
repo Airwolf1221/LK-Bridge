@@ -22,7 +22,7 @@ lose anything. It is a library (`src/markdown`) that later sessions wrap in tool
    - **Rejected:** a hand-written parser (a second, private Markdown dialect; CommonMark's inline rules are where bugs
      hide), markdown-it (a token stream with HTML handled as opaque strings, and no positions inside inlines), marked
      (not CommonMark-strict), the full unified/remark pipeline (not needed: we only read mdast). The renderer is our own:
-     no serializer can promise the exact Markdown the round trip needs.
+     no serialiser can promise the exact Markdown the round trip needs.
 2. **Exactness is checked, not assumed.** A line with marks is parsed back after rendering; if CommonMark would read it
    differently (bold text ending in a space, `***` between two marks), it is written with `<strong>`, `<em>`, `<s>`
    instead, which have no flanking rules. Then the whole page is parsed back and compared with the blocks' projections;
