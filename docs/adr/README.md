@@ -25,4 +25,5 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0019](0019-consent-keeps-existing-scope.md)           | Consent keeps an existing profile's scope                                           | Accepted |
 | [0020](0020-separate-build-user.md)                    | A separate build user; deploy as root, one user per step                            | Accepted |
 | [0021](0021-private-key-jwt-client-authentication.md)  | private_key_jwt client authentication for metadata-document clients                 | Accepted |
+| [0022](0022-markdown-converter.md)                     | The Markdown converter (v2 session B1)                                              | Accepted |
 | [0023](0023-project-model.md)                          | Several LegendKeeper projects in one bridge; exactly one bridge process per project | Accepted |

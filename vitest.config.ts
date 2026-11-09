@@ -12,6 +12,7 @@ export default defineConfig({
       'test/admin/**/*.test.ts',
       'test/maintenance/**/*.test.ts', // chunk 6 (its UI component tests are in test/ui)
       'test/mappings/**/*.test.ts',
+      'test/markdown/**/*.test.ts', // v2 B1: the Markdown converter
       'test/projects/**/*.test.ts', // v2 A1: several LegendKeeper projects in one bridge
       'test/ui/**/*.test.{ts,tsx}',
     ],
