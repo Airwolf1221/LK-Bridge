@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased: v2 phase 0 spike (9 November 2026)
+
+A server script that checks the assumptions in [docs/PLAN-v2.md](PLAN-v2.md) against the real test world before any v2
+code is built on them (PLAN-v2, section 6, session 0). It changes no application behaviour: no file under `src/` is
+touched, and nothing is deployed to the running bridge.
+
+- **`npm run spike:v2`**, with the wrapper `deploy/spike-v2.sh`. Ten checks, each reported PASS, FAIL or INFO with its
+  evidence: (1) whether `createManyResources` accepts a parent minted in the same batch (and, if not, whether three
+  ordered calls work); (2) search with limit 100 and 50 on a rare, a broad and a very common query, repeats per matching
+  document and any hidden cap; (3) downloading three image assets through the bridge's outbound fetch guard (host,
+  authentication, status, content type, length, SHA-256); (4) the Fourth Arkonan Age timeline's lanes, the first 30
+  events, the raw fields of five samples and how year-only, month-range and date-range events are stored, plus the event
+  schema's field list from the vendored OpenAPI spec; (5) the calendar (months, eras, formats) and LegendKeeper's own
+  minute values and formatted text for sampled events, the date engine's test data; (6) the structure of the age table
+  page and the Main page's index table (block kinds, header cells, run structure of a row, multi-paragraph cells, rows
+  around a year-only and a range row); (7) map images and features, and whether the documented pixel formula reproduces
+  the reported bounds; (8) a preview of the AI REPOSITORY tree (kinds, depth, outside count, sidebar properties of five
+  articles, sibling order); (9) the Characters index, its children and grandchildren, the templates, and whether exactly
+  one `[INDEX] Undetermined / Unknown` exists; (10) the asset folder tree under `Characters`.
+- **Same safety rules as the soak.** It reads only `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID`, refuses unless the
+  key's own project is exactly the sandbox project, needs `--allow-bridge-project` while the bridge serves the test
+  world, uses a temporary database, and prints no secret. Every LegendKeeper call goes through the real job engine and
+  governor at priority P3. **Only check 1 writes**, under one throwaway root resource that is deleted (cascade) at the
+  end of the check, with a second attempt as a last safety net; the rule is enforced in code (no write outside check 1,
+  only `createResource`, `createManyResources` and `deleteResource`, only under the throwaway tree), and `--skip 1` makes
+  the whole run read-only.
+- **Output.** The Markdown report on stdout (progress goes to stderr) and in
+  `/var/lib/lk-bridge/spike/spike-v2-<timestamp>.md`, with the calendar oracle beside it as
+  `spike-v2-<timestamp>-oracle.json`. Every sample is capped at 40 lines (`--sample-lines`).
+- **Tests.** `test/tools/spike-v2-dryrun.test.ts` runs the whole script against the mock LegendKeeper with a stateful
+  test world (`test/tools/spike-world.ts`): the guard, all ten checks and the report, the write rules, a refused nested
+  batch, the clean-up after a forced failure (check 1 stopping with an error, and a failing fallback), a hidden search
+  cap, and the outbound guard refusing a port or an address. `test/tools/spike-wrapper.test.ts` runs the wrapper against
+  a temporary env file. CI runs both (an explicit step, as well as `npm test`), and shellchecks the wrapper with the
+  other deploy scripts.
+
 ## 1.0.2 (8 November 2026): ChatGPT's `private_key_jwt` client authentication
 
 ChatGPT's custom connector was refused at the consent page ("The application could not be verified: client metadata

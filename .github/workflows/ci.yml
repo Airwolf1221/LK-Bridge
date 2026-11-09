@@ -22,6 +22,8 @@ jobs:
       - run: npm run format
       - name: Registry is current and matches the SDK spec
         run: npm run gen:registry -- --check && npm run check:drift
+      - name: Phase 0 spike dry run (mock LegendKeeper, including check 1's clean-up after a forced failure)
+        run: npx vitest run test/tools/spike-v2-dryrun.test.ts test/tools/spike-wrapper.test.ts
       - name: Unit and contract tests (sandbox tests are opt-in and never run here)
         run: npm test
       - run: npm run build
