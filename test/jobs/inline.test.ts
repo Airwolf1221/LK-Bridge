@@ -1,7 +1,7 @@
 /** engine.run: inline reads and writes, versioned writes, typed conflicts, request ids, errors table. */
 import { afterEach, describe, expect, it } from 'vitest';
 import { LkOperationError, VersionConflictError, isClientId } from '../../src/jobs/index.js';
-import { harness, origin, seen, settle, type Harness } from './helpers.js';
+import { harness, origin, seen, settle, type Harness, PROJECT } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -14,22 +14,30 @@ describe('engine.run inline path', () => {
     h = await harness();
     h.model.seedResource('r1');
     const e = h.newEngine();
-    const r = await settle(h, e, e.engine.run('getResource', { path: { resourceId: 'r1' } }, { origin }));
+    const r = await settle(
+      h,
+      e,
+      e.engine.run('getResource', { path: { resourceId: 'r1' } }, { project: PROJECT, origin }),
+    );
     expect(r.error).toBeUndefined();
     expect(r.value).toMatchObject({ status: 'succeeded', jobId: null, result: { id: 'r1' } });
-    expect(e.engine.queries.listJobs()).toHaveLength(0);
+    expect(e.engine.queries.listJobs(PROJECT)).toHaveLength(0);
   });
 
   it('runs a single write inline, recorded as a one-step job, with a minted client id sent', async () => {
     h = await harness();
     const e = h.newEngine();
-    const r = await settle(h, e, e.engine.run('createResource', { body: { name: 'Aster' } }, { origin }));
+    const r = await settle(
+      h,
+      e,
+      e.engine.run('createResource', { body: { name: 'Aster' } }, { project: PROJECT, origin }),
+    );
     expect(r.error).toBeUndefined();
     const v = r.value as { status: string; jobId: string; result: { id: string } };
     expect(v.status).toBe('succeeded');
     expect(isClientId(v.result.id)).toBe(true);
     expect(h.model.resources.get(v.result.id)?.name).toBe('Aster');
-    const job = e.engine.queries.getJob(v.jobId)!;
+    const job = e.engine.queries.getJob(PROJECT, v.jobId)!;
     expect(job).toMatchObject({
       kind: 'single_op',
       status: 'succeeded',
@@ -61,7 +69,7 @@ describe('engine.run inline path', () => {
           path: { resourceId, documentId },
           body: { blocks: [{ kind: 'paragraph', content: [{ text: 'hi' }] }] },
         },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(r.error).toBeUndefined();
@@ -85,7 +93,7 @@ describe('engine.run inline path', () => {
       e.engine.run(
         'replaceDocumentBlocks',
         { path: { resourceId, documentId }, ifMatch: 'v1', body: { blocks: [] } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(r.error).toBeInstanceOf(VersionConflictError);
@@ -101,7 +109,7 @@ describe('engine.run inline path', () => {
       e.engine.run(
         'updateBlock',
         { path: { resourceId, documentId, blockId: 'x' }, ifMatch: 'v2', body: { content: [] } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(r2.error).toBeInstanceOf(VersionConflictError);
@@ -113,23 +121,31 @@ describe('engine.run inline path', () => {
     h = await harness();
     const e = h.newEngine();
     for (let i = 0; i < 3; i++) {
-      const r = await settle(h, e, e.engine.run('getResource', { path: { resourceId: 'nope' } }, { origin }));
+      const r = await settle(
+        h,
+        e,
+        e.engine.run('getResource', { path: { resourceId: 'nope' } }, { project: PROJECT, origin }),
+      );
       expect(r.error).toBeInstanceOf(LkOperationError);
       expect((r.error as LkOperationError).status).toBe(404);
     }
-    const groups = e.engine.queries.listErrorGroups();
+    const groups = e.engine.queries.listErrorGroups(PROJECT);
     expect(groups).toHaveLength(1);
     expect(groups[0]).toMatchObject({ opId: 'getResource', code: 'NOT_FOUND', count: 3, resolved: false });
-    const one = e.engine.queries.listErrors({ fingerprint: groups[0]!.fingerprint })[0]!;
+    const one = e.engine.queries.listErrors(PROJECT, { fingerprint: groups[0]!.fingerprint })[0]!;
     expect(one).toMatchObject({
       status: 404,
       classification: 'user_fixable',
       retryable: false,
     });
     expect(typeof one.requestId).toBe('string');
-    expect(e.engine.queries.resolveErrorGroup(groups[0]!.fingerprint)).toBe(3);
-    expect(e.engine.queries.listErrorGroups({ resolved: false })).toHaveLength(0);
-    await settle(h, e, e.engine.run('getResource', { path: { resourceId: 'nope' } }, { origin }));
-    expect(e.engine.queries.listErrorGroups({ resolved: false })[0]?.count).toBe(4);
+    expect(e.engine.queries.resolveErrorGroup(PROJECT, groups[0]!.fingerprint)).toBe(3);
+    expect(e.engine.queries.listErrorGroups(PROJECT, { resolved: false })).toHaveLength(0);
+    await settle(
+      h,
+      e,
+      e.engine.run('getResource', { path: { resourceId: 'nope' } }, { project: PROJECT, origin }),
+    );
+    expect(e.engine.queries.listErrorGroups(PROJECT, { resolved: false })[0]?.count).toBe(4);
   });
 });

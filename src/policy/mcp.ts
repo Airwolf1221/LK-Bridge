@@ -8,6 +8,7 @@ import type { CallerIdentity } from '../auth/bearer.js';
 import { PolicyDeniedError } from '../jobs/errors.js';
 import type { JobOrigin } from '../jobs/types.js';
 import type { McpAccessControl, McpToolContext, McpToolProvider, McpToolResult } from '../mcp/server.js';
+import type { ProjectSelector, SelectedProject } from '../projects/selection.js';
 import type { LivePolicyGate } from './gate.js';
 import type { ProposalService } from './proposals.js';
 import { PROPOSAL_STATES } from './types.js';
@@ -48,34 +49,87 @@ export function mcpOrigin(ctx: McpToolContext, tool: string): JobOrigin {
 
 const NO_PRINCIPAL = { error: 'This connection is not known to the bridge.' };
 
+export interface ProposalToolsOptions {
+  /**
+   * Resolves the `project` argument (v2 A1): proposals belong to a project, and these tools show the asked project's
+   * only (default: the default project). Without a selector (no projects configured) they refuse.
+   */
+  readonly selector?: ProjectSelector;
+  /**
+   * The budget line of a project, naming it (the runtime passes the project's governor footer). A refused `project`
+   * gets the default project's line (where a read would go), whose id may not be known yet.
+   */
+  readonly footer?: (project: { readonly id: string | null; readonly name: string }) => string;
+}
+
+const projectArg = z
+  .string()
+  .min(1)
+  .max(64)
+  .optional()
+  .describe('The LegendKeeper project (name or id); default: the default project. See list_projects.');
+
 /**
- * The two agent-facing proposal tools. Results follow the tool layer's shape (src/mcp/tools/shape.ts): compact JSON,
- * then the budget footer on its own last line when `footer` is given (the runtime passes `lk.budgetFooter`).
+ * The two agent-facing proposal tools. Results follow the tool layer's shape (src/mcp/tools/shape.ts): compact JSON
+ * naming the project, then the project's budget footer on its own last line when `footer` is given.
  */
-export function proposalTools(proposals: ProposalService, footer?: () => string): McpToolProvider[] {
-  const text = (body: unknown, isError = false): McpToolResult => ({
-    content: [{ type: 'text', text: `${JSON.stringify(body)}${footer ? `\n${footer()}` : ''}` }],
-    ...(isError ? { isError: true } : {}),
-  });
-  const status: McpToolProvider<z.ZodObject<{ proposalId: z.ZodString }>> = {
+export function proposalTools(proposals: ProposalService, o: ProposalToolsOptions = {}): McpToolProvider[] {
+  const text = (body: unknown, project: SelectedProject | null, isError = false): McpToolResult => {
+    const named =
+      project && body !== null && typeof body === 'object' ? { project: project.name, ...body } : body;
+    // Every result ends with a budget line, like every other tool's: a refused `project` shows the default project's.
+    const fallback = !project && o.selector ? o.selector.projects.defaultProject() : null;
+    const footerOf = project ?? fallback;
+    const footer = footerOf && o.footer ? `\n${o.footer(footerOf)}` : '';
+    return {
+      content: [{ type: 'text', text: `${JSON.stringify(named)}${footer}` }],
+      ...(isError ? { isError: true } : {}),
+    };
+  };
+  /** Both tools are reads: the default project applies when none is named. */
+  const pick = (asked: string | undefined): SelectedProject | McpToolResult => {
+    if (!o.selector)
+      return text({ error: 'No LegendKeeper project is configured on this bridge.' }, null, true);
+    const sel = o.selector.select(asked, 'read');
+    if (!sel.ok) {
+      const hint =
+        sel.error.code === 'PROJECT_REQUIRED'
+          ? 'Pass project with one of the names in registered (list_projects shows them all).'
+          : 'Call list_projects to see the projects this bridge serves.';
+      return text({ error: { ...sel.error, hint } }, null, true);
+    }
+    return sel.project;
+  };
+  const isResult = (v: SelectedProject | McpToolResult): v is McpToolResult => 'content' in v;
+
+  const status: McpToolProvider<
+    z.ZodObject<{ proposalId: z.ZodString; project: z.ZodOptional<z.ZodString> }>
+  > = {
     name: 'bridge_proposal_status',
     title: 'Proposal status',
     description:
       'Shows the state of one of YOUR proposals (writes held for the bridge owner to approve): pending, approved, ' +
       'executing, executed, rejected (with the owner’s reason), conflicted, expired or failed, and the job id once ' +
-      'it runs. Only the owner can approve or reject, in the LK-Bridge dashboard. ' +
+      'it runs. Proposals belong to a project: pass the project the write was for (default: the default project). ' +
+      'Only the owner can approve or reject, in the LK-Bridge dashboard. ' +
       'Costs no LegendKeeper rate budget. Risk: none (read-only).',
-    inputSchema: z.object({ proposalId: z.string().min(1).max(64) }),
+    inputSchema: z.object({ proposalId: z.string().min(1).max(64), project: projectArg }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     access: 'read',
-    handler: ({ proposalId }, ctx) => {
-      if (!ctx.principal) return text(NO_PRINCIPAL, true);
+    handler: ({ proposalId, project: asked }, ctx) => {
+      if (!ctx.principal) return text(NO_PRINCIPAL, null, true);
+      const project = pick(asked);
+      if (isResult(project)) return project;
       const p = proposals.get(proposalId);
-      // Someone else's proposal looks exactly like one that does not exist.
-      if (!p || p.principalId !== ctx.principal.principalId) {
-        return text({ error: `No proposal ${proposalId} for this connection.` }, true);
+      // Someone else's proposal, or one in another project, looks exactly like one that does not exist.
+      if (!p || p.principalId !== ctx.principal.principalId || p.projectId !== project.id) {
+        return text(
+          { error: `No proposal ${proposalId} for this connection in project "${project.name}".` },
+          project,
+          true,
+        );
       }
-      return text(proposals.agentView(p));
+      return text(proposals.agentView(p), project);
     },
   };
 
@@ -83,27 +137,32 @@ export function proposalTools(proposals: ProposalService, footer?: () => string)
     z.ZodObject<{
       state: z.ZodOptional<z.ZodEnum<{ [K in (typeof PROPOSAL_STATES)[number]]: K }>>;
       limit: z.ZodOptional<z.ZodNumber>;
+      project: z.ZodOptional<z.ZodString>;
     }>
   > = {
     name: 'bridge_proposals_mine',
     title: 'My proposals',
     description:
-      'Lists YOUR proposals, newest first (optionally only one state). Other connections’ proposals are never ' +
-      'shown. Costs no LegendKeeper rate budget. Risk: none (read-only).',
+      'Lists YOUR proposals in one project (default: the default project), newest first (optionally only one state). ' +
+      'Other connections’ proposals are never shown. Costs no LegendKeeper rate budget. Risk: none (read-only).',
     inputSchema: z.object({
       state: z.enum(PROPOSAL_STATES).optional(),
       limit: z.number().int().min(1).max(50).optional(),
+      project: projectArg,
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     access: 'read',
-    handler: ({ state, limit }, ctx) => {
-      if (!ctx.principal) return text(NO_PRINCIPAL, true);
+    handler: ({ state, limit, project: asked }, ctx) => {
+      if (!ctx.principal) return text(NO_PRINCIPAL, null, true);
+      const project = pick(asked);
+      if (isResult(project)) return project;
       const list = proposals.list({
+        project: project.id,
         principalId: ctx.principal.principalId,
         ...(state ? { state } : {}),
         limit: limit ?? 20,
       });
-      return text({ proposals: list.map((p) => proposals.agentView(p)) });
+      return text({ proposals: list.map((p) => proposals.agentView(p)) }, project);
     },
   };
   return [status, mine];

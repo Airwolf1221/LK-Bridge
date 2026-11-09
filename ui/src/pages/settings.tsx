@@ -1,8 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import { Badge, Button, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtTime, fmtBytes } from '../format';
 import { useApi, useReloadOn } from '../hooks';
+import { Link } from '../router';
 import type { AuditEntry, SettingsView } from '../types';
 
 type Tri = 'env' | 'on' | 'off';
@@ -124,7 +125,8 @@ function ReadOnlyCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) 
       </div>
       <p className="muted small-text">
         While on, every write is refused and queued writes are held. Applies at once. The environment’s value
-        is <strong>{v.readOnly.environment ? 'on' : 'off'}</strong>.
+        is <strong>{v.readOnly.environment ? 'on' : 'off'}</strong>. This covers every project; each project
+        can also be made read-only on its own on the <Link to="/projects">Projects</Link> page.
       </p>
       <fieldset className="plain">
         <legend className="offscreen">Read-only mode</legend>
@@ -247,7 +249,12 @@ function JournalCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
   const gb = (b: number) => String(Math.round((b / 1024 ** 3) * 100) / 100);
   const [days, setDays] = useState(String(cur.retentionDays));
   const [size, setSize] = useState(gb(cur.maxBytes));
+  // Follow the saved values when they change (after a save, or another tab's), but not on the first render: the state
+  // already holds them, and a late first sync would overwrite whatever the owner typed before effects ran.
+  const synced = useRef({ days: cur.retentionDays, bytes: cur.maxBytes });
   useEffect(() => {
+    if (synced.current.days === cur.retentionDays && synced.current.bytes === cur.maxBytes) return;
+    synced.current = { days: cur.retentionDays, bytes: cur.maxBytes };
     setDays(String(cur.retentionDays));
     setSize(gb(cur.maxBytes));
   }, [cur.retentionDays, cur.maxBytes]);
@@ -346,14 +353,18 @@ function JournalCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
 
 function TierCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
   const t = v.tierLimits;
-  const [vals, setVals] = useState<Record<string, string>>({});
-  useEffect(
-    () =>
-      setVals(
-        Object.fromEntries(t.tiers.map((k) => [k, t.stored?.[k] !== undefined ? String(t.stored[k]) : ''])),
-      ),
-    [t.stored, t.tiers],
-  );
+  const fromStored = () =>
+    Object.fromEntries(t.tiers.map((k) => [k, t.stored?.[k] !== undefined ? String(t.stored[k]) : '']));
+  const [vals, setVals] = useState<Record<string, string>>(fromStored);
+  // Follow the saved overrides when their content changes, not on the first render or a reload with the same values
+  // (either would overwrite what the owner is typing).
+  const storedKey = JSON.stringify([t.tiers, t.stored]);
+  const synced = useRef(storedKey);
+  useEffect(() => {
+    if (synced.current === storedKey) return;
+    synced.current = storedKey;
+    setVals(fromStored());
+  }, [storedKey]); // storedKey stands for t.tiers and t.stored
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const overrides = Object.fromEntries(

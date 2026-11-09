@@ -3,7 +3,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { baseRoutes, installApi, renderApp, useDom } from './helpers';
+import { baseRoutes, installApi, projectOf, renderApp, useDom } from './helpers';
 
 useDom();
 
@@ -118,6 +118,7 @@ describe('Repository Mappings: the list of sets', () => {
       name: 'Baisheng taxonomy',
       description: 'The main repository',
     });
+    expect(projectOf(api.find('POST', '/mappings/sets')[0]!)).toBe('baisheng'); // in the selected project
     expect(await screen.findByText('About this set')).toBeInTheDocument(); // navigated to the set
   });
 
@@ -472,7 +473,10 @@ describe('Repository Mappings: the read-only preview', () => {
     expect(result).toHaveTextContent('does not record which template');
     expect(result).toHaveTextContent('Born: Infobox “Vitals”, row “Born” (Date)');
     expect(result).toHaveTextContent('2 reads from LegendKeeper; nothing was written.');
-    expect(api.find('GET', '/mappings/sets/ms_1/preview')[0]!.query).toBe('?resourceId=rduke');
+    // Exactly the resource id, in the selected project (v2 A1: mappings belong to a project).
+    expect(api.find('GET', '/mappings/sets/ms_1/preview')[0]!.query).toBe(
+      '?resourceId=rduke&project=baisheng',
+    );
     // Reads only: nothing but GETs for the preview, and no write was sent by anything on this page.
     expect(api.calls.filter((c) => c.method !== 'GET')).toEqual([]);
   });

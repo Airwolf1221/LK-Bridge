@@ -8,6 +8,7 @@
  * - the full read / propose / approve / lower / write loop.
  */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
+import { ALL_PROJECTS } from '../../src/projects/index.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Client } from '@modelcontextprotocol/client';
@@ -17,7 +18,7 @@ import { LivePolicyGate, UPLOAD_PROPOSE_REASON } from '../../src/policy/index.js
 import { LkModel } from '../jobs/lk-model.js';
 import { systemClock } from '../../src/lk/index.js';
 import { BRIDGE_INFO_LOOKUP_ORIGIN } from '../../src/mcp/tools/bridge.js';
-import { startStack, type Stack } from './helpers.js';
+import { PROJECT, startStack, type Stack } from './helpers.js';
 
 const PNG_1PX =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
@@ -55,7 +56,7 @@ describe('boot: the live gate is in use', () => {
       stack.runtime.engine.run(
         'updateResource',
         { path: { resourceId: 'res2' }, body: { name: 'x' } },
-        { origin },
+        { project: PROJECT, origin },
       );
     const ghost = { principalId: 'pat_ghost', profile: 'tools-test', label: 'Ghost' };
     await expect(run({ kind: 'mcp', tool: 't', principal: ghost })).rejects.toBeInstanceOf(PolicyDeniedError);
@@ -202,7 +203,7 @@ describe('job, error and result visibility', () => {
       (await stack.call(b.client, 'bridge_errors_recent', { grouped: false, jobId })).body.errors,
     ).toEqual([]);
     // B's cancel did nothing.
-    expect(stack.runtime.engine.queries.getJob(jobId)!.status).toBe('succeeded');
+    expect(stack.runtime.engine.queries.getJob(PROJECT, jobId)!.status).toBe('succeeded');
 
     // The journal: everyone's entries, with principal and profile; job ids only on your own.
     const forB = await stack.call(b.client, 'bridge_journal_lookup', { resourceId: 'res1' });
@@ -277,7 +278,9 @@ describe('uploads under propose scope', () => {
     expect(batch.isError).toBe(true);
     expect(batch.text).toContain('owner can raise');
     expect(stack.mock.calls.length).toBe(before);
-    expect(stack.runtime.policy.commands.listProposals('owner', { principalId: p.patId })).toEqual([]);
+    expect(
+      stack.runtime.policy.commands.listProposals('owner', { project: ALL_PROJECTS, principalId: p.patId }),
+    ).toEqual([]);
     expect(UPLOAD_PROPOSE_REASON).toContain('scope "write"');
   });
 });
@@ -363,7 +366,9 @@ describe('the full loop, end to end', () => {
       code: 'INVALID_TRANSITION',
     });
     expect(res2Writes() - writesBefore).toBe(1);
-    expect(stack.runtime.policy.commands.listProposals('owner', { principalId: p.patId })).toHaveLength(1);
+    expect(
+      stack.runtime.policy.commands.listProposals('owner', { project: ALL_PROJECTS, principalId: p.patId }),
+    ).toHaveLength(1);
     const journal = await stack.call(p.client, 'bridge_journal_lookup', {
       resourceId: 'res2',
       operationId: 'updateResource',
@@ -384,7 +389,9 @@ describe('the full loop, end to end', () => {
     });
     expect(refused.isError).toBe(true);
     expect(refused.text).toContain('read-only');
-    expect(stack.runtime.policy.commands.listProposals('owner', { principalId: p.patId })).toHaveLength(1);
+    expect(
+      stack.runtime.policy.commands.listProposals('owner', { project: ALL_PROJECTS, principalId: p.patId }),
+    ).toHaveLength(1);
 
     // Write scope: runs at once.
     const w = await as('loop-write', 'write');
@@ -395,7 +402,7 @@ describe('the full loop, end to end', () => {
     expect(direct.isError, direct.text).toBe(false);
     expect(direct.body.status).toBe('succeeded');
     expect(model.resources.get('res1')!.name).toBe('Written directly');
-    expect(stack.runtime.engine.queries.getJob(direct.body.jobId)).toMatchObject({
+    expect(stack.runtime.engine.queries.getJob(PROJECT, direct.body.jobId)).toMatchObject({
       principalId: w.patId,
       profile: 'loop-write',
       approvedBy: null,

@@ -3,7 +3,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { baseRoutes, installApi, renderApp, useDom } from './helpers';
+import { baseRoutes, installApi, projectOf, renderApp, useDom } from './helpers';
 
 useDom();
 
@@ -148,6 +148,8 @@ describe('Proposals', () => {
     expect(api.find('POST', '/proposals/prop_1/approve')[0]!.headers['x-csrf-token']).toBe(
       'csrf-token-for-tests',
     );
+    // v2 A1: approved within the project the page shows (the default one here).
+    expect(projectOf(api.find('POST', '/proposals/prop_1/approve')[0]!)).toBe('baisheng');
     expect(await screen.findByText('Approved.')).toBeInTheDocument();
   });
 

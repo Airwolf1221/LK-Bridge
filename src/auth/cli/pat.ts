@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { type DestinationStream, pino } from 'pino';
-import { runMigrations } from '../../db/migrate.js';
+import { defaultMigrationsDir, migrationContextFromEnv, runMigrations } from '../../db/migrate.js';
 import { openDatabase } from '../../db/open.js';
 import { ensureProfile, DEFAULT_PAT_PROFILE } from '../../policy/consent.js';
 import { PolicyStore } from '../../policy/store.js';
@@ -36,7 +36,7 @@ export function runPatCommand(
 ): number {
   const db = openDatabase(dbPath);
   try {
-    runMigrations(db);
+    runMigrations(db, defaultMigrationsDir(), { context: migrationContextFromEnv() });
     const log = pino({ level: 'info' }, logDestination);
     const policy = new PolicyStore(db);
     const pats = new PatService({

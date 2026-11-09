@@ -8,7 +8,7 @@ import {
   tierLimitsSchema,
   type StoredSettings,
 } from '../runtime-settings.js';
-import { idSchema, limitSchema, parseInput, type Register } from './util.js';
+import { idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const confirm = z.literal(true);
 const nullableBool = z.object({ value: z.boolean().nullable(), confirm });
@@ -111,12 +111,14 @@ export const registerSettings: Register = (api, ctx) => {
       .max(60 * 24 * 365)
       .optional(),
     limit: limitSchema(50, 200),
+    project: projectParam,
   });
 
-  /** Listing: metadata only (cheap). A pre-image is fetched for one entry at a time. */
+  /** Listing: metadata only (cheap), of one project. A pre-image is fetched for one entry at a time. */
   api.get('/journal', (req) => {
     const q = parseInput(journalQuery, req.query);
-    const entries = engine.queries.journalLookup({
+    const project = ctx.project(q.project);
+    const entries = engine.queries.journalLookup(project.id, {
       ...(q.jobId ? { jobId: q.jobId } : {}),
       ...(q.resourceId ? { resourceId: q.resourceId } : {}),
       ...(q.documentId ? { documentId: q.documentId } : {}),
@@ -133,6 +135,7 @@ export const registerSettings: Register = (api, ctx) => {
     });
     const hasMore = entries.length === q.limit;
     return {
+      project,
       entries: redactDeep(entries),
       hasMore,
       // Paging (chunk 8): pass as `before` for the next, older page.
@@ -142,7 +145,8 @@ export const registerSettings: Register = (api, ctx) => {
 
   api.get('/journal/:id', (req) => {
     const { id } = parseInput(z.object({ id: z.coerce.number().int().min(1) }), req.params);
-    const [entry] = engine.queries.journalLookup({ id, limit: 1, includePreImage: true });
+    const project = ctx.project(parseInput(z.object({ project: projectParam }), req.query).project);
+    const [entry] = engine.queries.journalLookup(project.id, { id, limit: 1, includePreImage: true });
     if (!entry) throw new AdminHttpError(404, 'JOURNAL_ENTRY_NOT_FOUND', `No journal entry ${id}`);
     // View only. A pre-image is the owner's own LegendKeeper content, so it is shown whole (secrets still removed).
     return {

@@ -6,7 +6,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { apiConfig, signInUrl } from '../../ui/src/api';
 import {
   FakeSource,
+  OTHER_PROJECT_ID,
+  PROJECT_ID,
   baseRoutes,
+  budgetEvent,
   controls,
   installApi,
   job,
@@ -266,8 +269,24 @@ describe('budgets and writers update live', () => {
     expect(await screen.findByRole('region', { name: 'Writes per minute' })).toHaveTextContent('12 / 120');
     const stream = await openStream();
     const calls = api.find('GET', '/budgets').length;
+    // v2 A1: the event carries every project's budget, by LegendKeeper id. Another project's figures move nothing.
     act(() =>
-      stream.emit('budget', { snapshot: snapshot({ 'write-min': { used: 96 } }), writesPerMinute: 96 }),
+      stream.emit(
+        'budget',
+        budgetEvent({
+          [OTHER_PROJECT_ID]: { snapshot: snapshot({ 'write-min': { used: 30 } }), writesPerMinute: 30 },
+        }),
+      ),
+    );
+    expect(screen.getByRole('region', { name: 'Writes per minute' })).toHaveTextContent('12 / 120');
+    act(() =>
+      stream.emit(
+        'budget',
+        budgetEvent({
+          [PROJECT_ID]: { snapshot: snapshot({ 'write-min': { used: 96 } }), writesPerMinute: 96 },
+          [OTHER_PROJECT_ID]: { snapshot: snapshot({ 'write-min': { used: 30 } }), writesPerMinute: 30 },
+        }),
+      ),
     );
     await waitFor(() =>
       expect(screen.getByRole('region', { name: 'Writes per minute' })).toHaveTextContent('96 / 120'),
@@ -351,8 +370,15 @@ describe('budgets and writers update live', () => {
     await waitFor(() => expect(screen.getByText('Slots (1 of 2 busy)')).toBeInTheDocument(), {
       timeout: 2000,
     });
+    // The rate is the selected project's (each project has its own governor), picked from the event by its id.
     act(() =>
-      stream.emit('budget', { snapshot: snapshot({ 'write-min': { used: 61 } }), writesPerMinute: 61 }),
+      stream.emit(
+        'budget',
+        budgetEvent({
+          [OTHER_PROJECT_ID]: { snapshot: snapshot({ 'write-min': { used: 7 } }), writesPerMinute: 7 },
+          [PROJECT_ID]: { snapshot: snapshot({ 'write-min': { used: 61 } }), writesPerMinute: 61 },
+        }),
+      ),
     );
     await waitFor(() => expect(screen.getByTestId('writes-per-minute')).toHaveTextContent('61'));
     expect(api.find('GET', '/writers').length).toBeGreaterThanOrEqual(2);

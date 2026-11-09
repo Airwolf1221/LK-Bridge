@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { systemClock } from '../../src/lk/index.js';
 import { LkModel } from '../jobs/lk-model.js';
-import { startAdminStack, until, type AdminStack } from './helpers.js';
+import { PROJECT, startAdminStack, until, type AdminStack } from './helpers.js';
 
 const model = new LkModel(() => systemClock.now());
 model.seedResource('res1', {
@@ -94,6 +94,7 @@ describe('jobs', () => {
   it('lists active and history separately and filters by status, origin and principal', async () => {
     await engine()
       .submit({
+        project: PROJECT,
         kind: 'batch_ops',
         title: 'By Alice',
         origin: mcpOrigin('pat_alice', 'Alice'),
@@ -102,12 +103,13 @@ describe('jobs', () => {
       .catch(() => undefined);
     // Alice's profile does not exist, so the gate refuses her: use the owner's own work instead.
     const mine = (await engine().submit({
+      project: PROJECT,
       kind: 'batch_ops',
       title: 'By the dashboard',
       origin: { kind: 'ui', tool: 'x' },
       steps: [{ op: 'createResource', params: { body: { name: 'B' } } }],
     })) as { jobId: string };
-    await until(() => engine().queries.getJob(mine.jobId)?.status === 'succeeded');
+    await until(() => engine().queries.getJob(PROJECT, mine.jobId)?.status === 'succeeded');
 
     const history = await stack.get('/api/admin/jobs?view=history');
     expect(history.json.jobs.some((j: any) => j.id === mine.jobId)).toBe(true);
@@ -134,12 +136,13 @@ describe('jobs', () => {
     });
     const pat = stack.services.pats.create({ name: 'bot', profileId: profile.id });
     const r = (await engine().submit({
+      project: PROJECT,
       kind: 'batch_ops',
       title: 'Bot batch',
       origin: mcpOrigin(pat.pat.id, 'Writer bot'),
       steps: [{ op: 'createResource', params: { body: { name: 'C' } } }],
     })) as { jobId: string };
-    await until(() => engine().queries.getJob(r.jobId)?.status === 'succeeded');
+    await until(() => engine().queries.getJob(PROJECT, r.jobId)?.status === 'succeeded');
     const byPrincipal = (await stack.get(`/api/admin/jobs?principalId=${pat.pat.id}`)).json.jobs;
     expect(byPrincipal.map((j: any) => j.id)).toEqual([r.jobId]);
     expect(byPrincipal[0]).toMatchObject({
@@ -151,12 +154,13 @@ describe('jobs', () => {
 
   it('shows a job with its steps, attempts, request ids, the uncertain flag and artefacts', async () => {
     const r = (await engine().submit({
+      project: PROJECT,
       kind: 'batch_ops',
       title: 'Detail',
       origin: { kind: 'ui', tool: 'x' },
       steps: [{ op: 'createResource', params: { body: { name: 'D' } } }],
     })) as { jobId: string };
-    await until(() => engine().queries.getJob(r.jobId)?.status === 'succeeded');
+    await until(() => engine().queries.getJob(PROJECT, r.jobId)?.status === 'succeeded');
     const job = (await stack.get(`/api/admin/jobs/${r.jobId}`)).json.job;
     expect(job).toMatchObject({
       id: r.jobId,
@@ -172,12 +176,13 @@ describe('jobs', () => {
 
   it('flags an uncertain job and warns before a forced retry', async () => {
     const r = (await engine().submit({
+      project: PROJECT,
       kind: 'batch_ops',
       title: 'Uncertain',
       origin: { kind: 'ui', tool: 'x' },
       steps: [{ op: 'createResource', params: { body: { name: 'U' } } }],
     })) as { jobId: string };
-    await until(() => engine().queries.getJob(r.jobId)?.status === 'succeeded');
+    await until(() => engine().queries.getJob(PROJECT, r.jobId)?.status === 'succeeded');
     // Make the stored state look like a step that may have applied (what a crash leaves behind).
     stack.db.prepare("UPDATE steps SET status = 'uncertain' WHERE job_id = ?").run(r.jobId);
     stack.db.prepare("UPDATE jobs SET status = 'failed', uncertain = 1 WHERE id = ?").run(r.jobId);
@@ -193,6 +198,7 @@ describe('jobs', () => {
 
   it('never shows signed-URL material or image bytes, in job views, artefacts or lists', async () => {
     const rec = engine().recordResult({
+      project: PROJECT,
       opId: 'createImageUpload',
       params: { body: { name: 'x.png' } },
       value: {
@@ -217,6 +223,7 @@ describe('jobs', () => {
 
   it('shortens very long values instead of flooding the page', async () => {
     const rec = engine().recordResult({
+      project: PROJECT,
       opId: 'getDocumentBlocks',
       params: {},
       value: { text: 'x'.repeat(50_000) },
@@ -233,6 +240,7 @@ describe('writers', () => {
     const release = stack.hold((m, u) => m === 'PUT' && /\/docs\/d_res1\/blocks/.test(u));
     const write = (title: string) =>
       engine().submit({
+        project: PROJECT,
         kind: 'batch_ops',
         title,
         origin: { kind: 'ui', tool: 'x' },
@@ -264,14 +272,15 @@ describe('writers', () => {
       jobId: first.jobId,
     });
     expect(w.writers.slots.some((s: any) => s.state === 'idle')).toBe(true);
-    expect(w.locks[0]).toMatchObject({ key: 'doc:d_res1' });
+    // v2 A1: locks are per project and per entity.
+    expect(w.locks[0]).toMatchObject({ key: `${PROJECT}:doc:d_res1` });
     expect(w.locks[0].holder.jobId).toBe(first.jobId);
     expect(w.locks[0].waiting[0].jobId).toBe(second.jobId);
     expect(w.jobs[first.jobId].title).toBe('First writer');
     expect(w.jobs[second.jobId].status).toBe('waiting_lock');
     expect(w.writesPerMinute).toBeTypeOf('number');
     release();
-    await until(() => engine().queries.getJob(second.jobId)?.status === 'succeeded');
+    await until(() => engine().queries.getJob(PROJECT, second.jobId)?.status === 'succeeded');
     const idle = (await stack.get('/api/admin/writers')).json;
     expect(idle.writers.busy).toBe(0);
     expect(idle.locks).toEqual([]);
@@ -286,7 +295,7 @@ describe('journal', () => {
         path: { resourceId: 'res1', documentId: 'd_res1' },
         body: { blocks: [{ kind: 'paragraph', content: [{ text: 'Journal me' }] }] },
       },
-      { origin: { kind: 'ui', tool: 'x' } },
+      { project: PROJECT, origin: { kind: 'ui', tool: 'x' } },
     );
     expect(r.status).toBe('succeeded');
     const list = (await stack.get('/api/admin/journal?opId=replaceDocumentBlocks&limit=5')).json;
@@ -319,7 +328,8 @@ describe('journal', () => {
 
 describe('budgets', () => {
   it('shows every tier, the queues, reserve floors, drift and a 24 hour history in buckets', async () => {
-    for (let i = 0; i < 3; i++) engine().recordBudgetSample(stack.runtime.lk.governor.snapshot());
+    for (let i = 0; i < 3; i++)
+      engine().recordBudgetSample(PROJECT, stack.runtime.projects.client(PROJECT)!.governor.snapshot());
     const b = (await stack.get('/api/admin/budgets')).json;
     expect(Object.keys(b.snapshot.tiers)).toEqual(
       expect.arrayContaining([

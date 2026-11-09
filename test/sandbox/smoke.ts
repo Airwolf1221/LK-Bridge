@@ -40,7 +40,7 @@ export async function runSmoke(t: SmokeTarget, expectedProjectId: string): Promi
     findings.push({ id, title, verdict, detail });
 
   const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> => {
-    const r = await t.engine.run(op, params, { origin, priority: 'P1', ...extra });
+    const r = await t.engine.run(op, params, { origin, priority: 'P1', project: t.projectId, ...extra });
     if (r.status !== 'succeeded') throw new Error(`${op} did not complete: ${r.status}`);
     return r.result;
   };
@@ -356,6 +356,7 @@ export async function runSmoke(t: SmokeTarget, expectedProjectId: string): Promi
     await family('e', 'image upload end to end (createImageUpload, PUT, createImageAsset)', async () => {
       const bytes = Buffer.from(PNG_1PX, 'base64');
       const r = await t.engine.submit({
+        project: t.projectId,
         kind: 'upload_image',
         contentType: 'image/png',
         contentLength: bytes.length,
@@ -365,9 +366,9 @@ export async function runSmoke(t: SmokeTarget, expectedProjectId: string): Promi
         priority: 'P1',
       });
       if (!('jobId' in r)) throw new Error(`not queued: ${r.status}`);
-      let job = await t.engine.wait(r.jobId, 25_000);
+      let job = await t.engine.wait(t.projectId, r.jobId, 25_000);
       for (let i = 0; i < 4 && job.status !== 'succeeded' && job.status !== 'failed'; i++)
-        job = await t.engine.wait(r.jobId, 25_000);
+        job = await t.engine.wait(t.projectId, r.jobId, 25_000);
       if (job.status !== 'succeeded') throw new Error(`job ${job.status}: ${job.lastError?.message ?? ''}`);
       const asset = (job.result as Obj).asset as Obj;
       await run('getAsset', p({ assetId: asset.id }));

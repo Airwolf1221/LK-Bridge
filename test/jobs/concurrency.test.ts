@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { LockManager, WriterPool, lockKeyFor, type JobView } from '../../src/jobs/index.js';
 import { requireOperation } from '../../src/lk/registry.js';
-import { harness, origin, type Harness, type Wire, queue } from './helpers.js';
+import { harness, origin, type Harness, type Wire, queue, PROJECT } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -21,6 +21,7 @@ function seedTwoDocs(hh: Harness) {
 
 const updateBlock = (resourceId: string, documentId: string, blockId: string, text: string) => ({
   kind: 'batch_ops' as const,
+  project: PROJECT,
   origin,
   steps: [
     {
@@ -43,16 +44,20 @@ describe('locks', () => {
     // j1 and j3 are in flight together (two documents, two slots); j2 waits for d_r1's lock.
     await h.until(
       () =>
-        e.sent.filter(isPatchBlock).length === 2 && e.engine.queries.getJob(j2)?.status === 'waiting_lock',
+        e.sent.filter(isPatchBlock).length === 2 &&
+        e.engine.queries.getJob(PROJECT, j2)?.status === 'waiting_lock',
     );
-    expect(e.engine.queries.getJob(j2)!.waitReason).toMatchObject({ lockKey: 'doc:d_r1' });
+    // v2 A1: locks are per project and per entity, so the key carries the project id.
+    expect(e.engine.queries.getJob(PROJECT, j2)!.waitReason).toMatchObject({
+      lockKey: `${PROJECT}:doc:d_r1`,
+    });
     expect(
       e.engine.queries
         .locks()
         .map((l) => ({ key: l.key, holder: l.holder.jobId, waiting: l.waiting.map((w) => w.jobId) })),
     ).toEqual([
-      { key: 'doc:d_r1', holder: j1, waiting: [j2] },
-      { key: 'doc:d_r2', holder: j3, waiting: [] },
+      { key: `${PROJECT}:doc:d_r1`, holder: j1, waiting: [j2] },
+      { key: `${PROJECT}:doc:d_r2`, holder: j3, waiting: [] },
     ]);
     const writers = e.engine.queries.writers();
     expect(writers).toMatchObject({ max: 2, busy: 2 });
@@ -60,7 +65,7 @@ describe('locks', () => {
     expect(writers.slots[0]).toMatchObject({ state: 'busy', opId: 'updateBlock' });
 
     release();
-    await h.drive(e, () => [j1, j2, j3].every((j) => done(e.engine.queries.getJob(j))));
+    await h.drive(e, () => [j1, j2, j3].every((j) => done(e.engine.queries.getJob(PROJECT, j))));
     // j2 read the version after j1 wrote, so no 412 storm: three PATCHes, three versions.
     const patches = h.mock.calls.filter((c) => c.method === 'PATCH');
     expect(patches).toHaveLength(3);
@@ -127,7 +132,7 @@ describe('writer pool', () => {
     expect(e.engine.queries.writers()).toMatchObject({ max: 1, busy: 1, waiting: [{ jobId: j2 }] });
 
     // A read needs no slot.
-    const read = e.engine.run('getResource', { path: { resourceId: 'r1' } }, { origin });
+    const read = e.engine.run('getResource', { path: { resourceId: 'r1' } }, { project: PROJECT, origin });
     await h.until(() =>
       h!.mock.calls.some(
         (c) => c.method === 'GET' && c.path.startsWith('/api/v3/projects/proj_mock/resources/r1'),
@@ -140,7 +145,7 @@ describe('writer pool', () => {
     await h.until(() => e.sent.filter(isPatchBlock).length === 2);
     expect(e.engine.queries.writers()).toMatchObject({ max: 2, busy: 2, waiting: [] });
     release();
-    await h.drive(e, () => [j1, j2].every((j) => done(e.engine.queries.getJob(j))));
+    await h.drive(e, () => [j1, j2].every((j) => done(e.engine.queries.getJob(PROJECT, j))));
 
     // Persisted: a new engine starts with 2 even though its env default says 1.
     await e.engine.stop();
@@ -154,6 +159,7 @@ describe('writer pool', () => {
     let t = 0;
     const pool = new WriterPool(2, () => t++);
     const info = (jobId: string) => ({
+      projectId: PROJECT,
       jobId,
       stepNo: 1,
       opId: 'x',

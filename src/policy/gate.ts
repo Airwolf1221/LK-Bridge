@@ -96,7 +96,9 @@ export class LivePolicyGate implements PolicyGate {
       if (ctx.jobKind !== 'batch_ops' || ctx.stepIndex === undefined) {
         return deny('approved work must be submitted as the approved batch');
       }
-      if (!token.covers(principal.principalId, ctx.stepIndex, op.operationId, params, this.now())) {
+      if (
+        !token.covers(principal.principalId, ctx.project, ctx.stepIndex, op.operationId, params, this.now())
+      ) {
         return deny('the approval does not cover this operation');
       }
       if (this.o.proposalState(token.proposalId) !== 'approved') {

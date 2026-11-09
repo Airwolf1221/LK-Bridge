@@ -132,3 +132,13 @@ describe('budget footer', () => {
     expect(formatBudgetFooter(env.governor.snapshot())).toMatch(/ \| blocked key-min 120s$/);
   });
 });
+
+describe('the footer names the project (v2 A1)', () => {
+  it('reads "budget (<project>): …" when given the project, and is otherwise unchanged', () => {
+    const s = snapshot({ 'write-min': 3 }, { P0: 0, P1: 1, P2: 0, P3: 0 });
+    expect(formatBudgetFooter(s, 'arkona')).toBe(
+      formatBudgetFooter(s).replace(/^budget: /, 'budget (arkona): '),
+    );
+    expect(formatBudgetFooter(s)).toMatch(/^budget: writes /);
+  });
+});

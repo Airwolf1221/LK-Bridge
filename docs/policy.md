@@ -24,6 +24,10 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
   scope `read`.
 - New profiles get the **default scope for new connections**, `read` unless the owner changes it
   (`setDefaultScope`).
+- **Projects (v2 A1).** Profiles and scopes are per connection and apply to every project the bridge serves (ADR
+  0023). A proposal belongs to the project its write was for: the agent tools and the dashboard show it in that project
+  only, and approving it executes it against that project only. With several projects, a write (direct or proposed)
+  must name its project (`REQUIRE_PROJECT_FOR_WRITES`).
 
 ## Scopes
 
@@ -137,10 +141,10 @@ never pruned. Jobs, journal entries and audit rows keep the proposal id as text.
 Both are read tools (`access: 'read'`, `readOnlyHint: true`) restricted to the caller's own proposals (by principal);
 another principal's proposal is reported exactly as if it did not exist.
 
-| Tool                     | Input                                | Returns                                                                                                             |
-| ------------------------ | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `bridge_proposal_status` | `{ proposalId }`                     | state, summary, operation count, times, the rejection reason, the job id, the conflicting operation, the error text |
-| `bridge_proposals_mine`  | `{ state?, limit? (1-50, def. 20) }` | the same, newest first                                                                                              |
+| Tool                     | Input                                          | Returns                                                                                                             |
+| ------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `bridge_proposal_status` | `{ proposalId, project? }`                     | state, summary, operation count, times, the rejection reason, the job id, the conflicting operation, the error text |
+| `bridge_proposals_mine`  | `{ state?, limit? (1-50, def. 20), project? }` | the same, newest first                                                                                              |
 
 No MCP tool can change a scope, approve or reject a proposal, or create or revoke a token
 (`test/policy/no-agent-escalation.test.ts` calls every registered tool with hostile arguments and checks).

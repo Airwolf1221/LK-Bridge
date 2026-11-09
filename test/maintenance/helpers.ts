@@ -5,7 +5,10 @@
  */
 import { defaultMaintenanceSettings, type MaintenanceSettings } from '../../src/config/index.js';
 import { createMaintenance, type Maintenance, type MaintenanceJobDef } from '../../src/maintenance/index.js';
+import { PROJECT } from '../jobs/helpers.js';
 import { policyRig, type PolicyRig } from '../policy/helpers.js';
+
+export { PROJECT };
 
 export interface MaintenanceRig {
   readonly rig: PolicyRig;
@@ -37,7 +40,7 @@ export async function maintenanceRig(
       m.maintenance = createMaintenance({
         db: rig.db,
         engine: rig.e.engine,
-        lk: rig.e.lk,
+        projects: rig.e.projects,
         policy: rig.policy,
         clock: rig.h.clock,
         settings: defaultMaintenanceSettings({ ...o.settings, ...mo.settings }),
@@ -58,4 +61,4 @@ export async function maintenanceRig(
 }
 
 /** Budget samples stored so far. */
-export const sampleCount = (r: PolicyRig) => r.e.engine.queries.listBudgetSamples({}).length;
+export const sampleCount = (r: PolicyRig) => r.e.engine.queries.listBudgetSamples(PROJECT, {}).length;

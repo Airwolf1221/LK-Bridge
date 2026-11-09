@@ -65,13 +65,14 @@ const envSchema = z.object({
   BRIDGE_PUBLIC_URL: z.url(),
   DB_PATH: z.string().min(1).default('./data/bridge.db'),
 
-  // LegendKeeper
-  LK_API_KEY: z.string().min(1),
-  LK_PROJECT_ID: z.string().min(1),
+  // LegendKeeper. The projects themselves (LK_PROJECTS and each LK_PROJECT_<NAME>_API_KEY, or the single-project
+  // form's LK_API_KEY / LK_PROJECT_ID / LK_PROJECT_NAME) are read by `projectsFrom` below: their names are dynamic.
   LK_BASE_URL: z.url().default(DEFAULT_LK_BASE_URL),
   LK_READ_ONLY: bool(true), // fail closed; set false deliberately at go-live (PLAN §9.7)
   LK_ALLOW_MEMBER_ADMIN: bool(false),
   LK_TIER_LIMITS: tierOverrides,
+  // v2 A1: a write tool called with no `project` is refused when more than one project is registered.
+  REQUIRE_PROJECT_FOR_WRITES: bool(true),
 
   // Governor (PLAN §5.2)
   RESERVE_FLOOR_INTERACTIVE: fraction(0.1),
@@ -106,8 +107,14 @@ export interface Config {
     readonly dbPath: string;
   };
   readonly lk: {
-    readonly apiKey: string;
-    readonly projectId: string;
+    /** The configured projects (v2 A1), in LK_PROJECTS order. Keys are secrets: never log or show them. */
+    readonly projects: readonly ProjectKeyConfig[];
+    /** Name of the default project (LK_DEFAULT_PROJECT; the only project when there is one). */
+    readonly defaultProject: string;
+    /** True when the deprecated single-project form (LK_API_KEY, LK_PROJECT_ID) configured the one project. */
+    readonly singleProjectForm: boolean;
+    /** A write tool without `project` is refused when more than one project is registered (default true). */
+    readonly requireProjectForWrites: boolean;
     readonly baseUrl: string;
     readonly readOnly: boolean;
     readonly allowMemberAdmin: boolean;
@@ -130,6 +137,125 @@ export interface Config {
     readonly jwtSigningKey: string;
     readonly ownerPasswordHash?: string;
   };
+  /** Start-up warnings about the configuration (names only, never values). */
+  readonly warnings: readonly string[];
+}
+
+/** One configured LegendKeeper project: its name, its key, and (single-project form only) the id the env claims. */
+export interface ProjectKeyConfig {
+  /** Lowercase, `[a-z][a-z0-9_]*`, at most 32 characters. */
+  readonly name: string;
+  /** Secret. */
+  readonly apiKey: string;
+  /** LK_PROJECT_ID in the single-project form: the key must belong to exactly this project. Null otherwise. */
+  readonly expectedProjectId: string | null;
+  /** The env variable that holds the key (for messages; never the value). */
+  readonly keyVariable: string;
+}
+
+/** A project name: lowercase letter first, then lowercase letters, digits and underscores; 1 to 32 characters. */
+export const PROJECT_NAME_PATTERN = /^[a-z][a-z0-9_]{0,31}$/;
+
+/** The env variable holding a project's API key: `LK_PROJECT_<NAME>_API_KEY`, the name upper-cased. */
+export function projectKeyVariable(name: string): string {
+  return `LK_PROJECT_${name.toUpperCase()}_API_KEY`;
+}
+
+/** The single-project form's project name when LK_PROJECT_NAME is not set. */
+export const DEFAULT_SINGLE_PROJECT_NAME = 'test';
+
+const nonEmpty = (v: string | undefined): string | undefined => {
+  const t = v?.trim();
+  return t ? t : undefined;
+};
+
+/**
+ * Reads the projects (v2 A1). Only the named variables are read (the environment is never enumerated), and messages
+ * name variables, never values.
+ *
+ * - `LK_PROJECTS=test,arkona`: each name needs `LK_PROJECT_<NAME>_API_KEY`; `LK_DEFAULT_PROJECT` names the default
+ *   (required when there are several). The LegendKeeper project id of each is discovered from its key at start-up.
+ * - Without LK_PROJECTS, the single-project form: `LK_API_KEY` and `LK_PROJECT_ID` become one project named
+ *   `LK_PROJECT_NAME` (default `test`), with a warning recommending the new form.
+ */
+export function projectsFrom(env: NodeJS.ProcessEnv): {
+  readonly projects: ProjectKeyConfig[];
+  readonly defaultProject: string;
+  readonly singleProjectForm: boolean;
+  readonly issues: string[];
+  readonly warnings: string[];
+} {
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  const projects: ProjectKeyConfig[] = [];
+  const listed = nonEmpty(env.LK_PROJECTS);
+  const wantedDefault = nonEmpty(env.LK_DEFAULT_PROJECT)?.toLowerCase();
+  if (listed !== undefined) {
+    const names = listed
+      .split(',')
+      .map((n) => n.trim().toLowerCase())
+      .filter((n) => n.length > 0);
+    if (names.length === 0) issues.push('LK_PROJECTS: list at least one project name');
+    const seen = new Set<string>();
+    for (const name of names) {
+      if (!PROJECT_NAME_PATTERN.test(name)) {
+        issues.push(
+          `LK_PROJECTS: "${name.slice(0, 40)}" is not a valid project name (a lowercase letter, then lowercase letters, digits or underscores; at most 32)`,
+        );
+        continue;
+      }
+      if (seen.has(name)) {
+        issues.push(`LK_PROJECTS: "${name}" is listed twice`);
+        continue;
+      }
+      seen.add(name);
+      const keyVariable = projectKeyVariable(name);
+      const apiKey = nonEmpty(env[keyVariable]);
+      if (apiKey === undefined) {
+        issues.push(`${keyVariable}: required for project "${name}" (listed in LK_PROJECTS)`);
+        continue;
+      }
+      projects.push({ name, apiKey, expectedProjectId: null, keyVariable });
+    }
+    if (nonEmpty(env.LK_API_KEY) !== undefined || nonEmpty(env.LK_PROJECT_ID) !== undefined) {
+      warnings.push(
+        'LK_API_KEY and LK_PROJECT_ID are ignored because LK_PROJECTS is set; remove them from the env file.',
+      );
+    }
+    let defaultProject = wantedDefault ?? (seen.size === 1 ? [...seen][0]! : '');
+    if (wantedDefault === undefined && seen.size > 1) {
+      issues.push('LK_DEFAULT_PROJECT: required when LK_PROJECTS lists more than one project');
+    } else if (wantedDefault !== undefined && !seen.has(wantedDefault)) {
+      issues.push(`LK_DEFAULT_PROJECT: "${wantedDefault.slice(0, 40)}" is not listed in LK_PROJECTS`);
+      defaultProject = '';
+    }
+    return { projects, defaultProject, singleProjectForm: false, issues, warnings };
+  }
+
+  // The single-project form (v1).
+  const apiKey = nonEmpty(env.LK_API_KEY);
+  const projectId = nonEmpty(env.LK_PROJECT_ID);
+  if (apiKey === undefined) issues.push('LK_API_KEY: required (or set LK_PROJECTS and a key per project)');
+  if (projectId === undefined)
+    issues.push('LK_PROJECT_ID: required (or set LK_PROJECTS and a key per project)');
+  const name = nonEmpty(env.LK_PROJECT_NAME)?.toLowerCase() ?? DEFAULT_SINGLE_PROJECT_NAME;
+  if (!PROJECT_NAME_PATTERN.test(name)) {
+    issues.push(
+      'LK_PROJECT_NAME: not a valid project name (a lowercase letter, then lowercase letters, digits or underscores; at most 32)',
+    );
+  }
+  if (wantedDefault !== undefined && wantedDefault !== name) {
+    issues.push(`LK_DEFAULT_PROJECT: must be "${name}", the only project in the single-project form`);
+  }
+  if (apiKey !== undefined && projectId !== undefined && PROJECT_NAME_PATTERN.test(name)) {
+    projects.push({ name, apiKey, expectedProjectId: projectId, keyVariable: 'LK_API_KEY' });
+    warnings.push(
+      `LK_API_KEY and LK_PROJECT_ID are the single-project form: the bridge serves them as project "${name}". ` +
+        `Move to LK_PROJECTS=${name}, ${projectKeyVariable(name)} and LK_DEFAULT_PROJECT=${name} ` +
+        '(docs/runbook-deploy.md, "Moving to several projects (v2 A1)").',
+    );
+  }
+  return { projects, defaultProject: name, singleProjectForm: true, issues, warnings };
 }
 
 export class ConfigError extends Error {
@@ -142,8 +268,14 @@ export class ConfigError extends Error {
 /** Parses and validates environment variables. Never logs or echoes values, only names. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = envSchema.safeParse(env);
-  if (!parsed.success) {
-    throw new ConfigError(parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`));
+  const projects = projectsFrom(env);
+  if (!parsed.success || projects.issues.length > 0) {
+    throw new ConfigError([
+      ...projects.issues,
+      ...(parsed.success
+        ? []
+        : parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)),
+    ]);
   }
   const e = parsed.data;
   const { interactive, job, maintenance } = {
@@ -159,8 +291,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: e.LOG_LEVEL,
     server: { host: e.HOST, port: e.PORT, publicUrl: e.BRIDGE_PUBLIC_URL, dbPath: e.DB_PATH },
     lk: {
-      apiKey: e.LK_API_KEY,
-      projectId: e.LK_PROJECT_ID,
+      projects: projects.projects,
+      defaultProject: projects.defaultProject,
+      singleProjectForm: projects.singleProjectForm,
+      requireProjectForWrites: e.REQUIRE_PROJECT_FOR_WRITES,
       baseUrl: e.LK_BASE_URL,
       readOnly: e.LK_READ_ONLY,
       allowMemberAdmin: e.LK_ALLOW_MEMBER_ADMIN,
@@ -179,6 +313,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       jwtSigningKey: e.JWT_SIGNING_KEY,
       ...(e.OWNER_PASSWORD_HASH ? { ownerPasswordHash: e.OWNER_PASSWORD_HASH } : {}),
     },
+    warnings: projects.warnings,
   };
 }
 

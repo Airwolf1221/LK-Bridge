@@ -2,7 +2,7 @@
  * Public surface of `src/maintenance` (docs/maintenance.md): the job registry, the scheduler, and the owner commands.
  *
  * ```ts
- * const maintenance = createMaintenance({ db, engine, lk, policy, clock, settings, expirySweepMs });
+ * const maintenance = createMaintenance({ db, engine, projects, policy, clock, settings, expirySweepMs });
  * maintenance.start();            // after the engine has started
  * await maintenance.stop();       // on shutdown, before the engine stops
  * maintenance.commands            // owner commands for the admin routes (never for MCP)
@@ -11,7 +11,8 @@
 import type { MaintenanceSettings } from '../config/maintenance.js';
 import type { Db } from '../db/open.js';
 import type { JobEngine } from '../jobs/index.js';
-import type { Clock, LkClient } from '../lk/index.js';
+import type { Clock } from '../lk/index.js';
+import type { ProjectRegistry, ProjectsRuntime } from '../projects/registry.js';
 import type { Policy } from '../policy/index.js';
 import { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
 import { builtinJobs } from './jobs.js';
@@ -28,7 +29,8 @@ export interface Maintenance {
 export interface CreateMaintenanceOptions {
   readonly db: Db;
   readonly engine: JobEngine;
-  readonly lk: LkClient;
+  /** Every project's governor, and which projects are served (v2 A1). */
+  readonly projects: ProjectsRuntime & Partial<Pick<ProjectRegistry, 'clients'>>;
   readonly policy: Policy;
   readonly clock: Clock;
   readonly settings: MaintenanceSettings;
@@ -45,13 +47,13 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
   const scheduler = new MaintenanceScheduler({
     db: o.db,
     engine: o.engine,
-    lk: o.lk,
+    projects: o.projects,
     clock: o.clock,
     settings: o.settings,
     jobs: [
       ...builtinJobs({
         engine: o.engine,
-        lk: o.lk,
+        projects: o.projects,
         db: o.db,
         proposals: o.policy.proposals,
         expirySweepMs: o.expirySweepMs,

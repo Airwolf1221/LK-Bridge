@@ -107,17 +107,17 @@ async function start(world: Partial<WorldOptions> = {}, projectSeen = PROJECT) {
   const w = new World({ projectId: projectSeen, assetBase: `https://assets.test:${port}`, ...world });
   mock = new MockLk({ clock: systemClock, apiKey: API_KEY, respond: w.respond });
   const url = await mock.start();
-  soak = createSoakRuntime({
+  soak = await createSoakRuntime({
     apiKey: API_KEY,
-    projectId: PROJECT,
+    project: 'sandbox',
     baseUrl: url,
     writersMax: 1,
     env: { WRITE_SPACING_MS: '0', WRITE_SPACING_STRETCHED_MS: '0' },
   });
   const target = {
     engine: soak.runtime.engine,
-    lk: soak.runtime.lk,
-    projectId: PROJECT,
+    lk: soak.lk,
+    projectId: soak.projectId,
     counters: soak.counters,
   };
   return { world: w, mock, soak, target };
@@ -142,7 +142,7 @@ function report(outcome: SpikeOutcome, s: SoakRuntime): string {
         downloads: outcome.downloads,
       },
       cleanup: outcome.cleanup,
-      budgetFooter: s.runtime.lk.budgetFooter(),
+      budgetFooter: s.lk.budgetFooter(),
     },
     outcome.checks,
   );
@@ -157,7 +157,11 @@ describe('spike v2 (dry run)', () => {
     const t = await start({}, 'proj_somebody_else');
     await expect(run(t)).rejects.toBeInstanceOf(SandboxGuardError);
     expect(nonGets()).toHaveLength(0);
-    expect(mock!.calls.filter((c) => c.method === 'GET')).toHaveLength(1); // listProjects, nothing else
+    // listProjects twice (v2 A1: the runtime's own key check at start, then the spike's guard), nothing else.
+    expect(mock!.calls.filter((c) => c.method === 'GET').map((c) => c.path.replace(/\/$/, ''))).toEqual([
+      '/api/v3/projects',
+      '/api/v3/projects',
+    ]);
   });
 
   it('runs all ten checks, writes only under the throwaway root, deletes it, and reports', async () => {
@@ -197,7 +201,7 @@ describe('spike v2 (dry run)', () => {
     ).toEqual([]);
     expect(outcome.cleanup).toMatchObject({ attempted: true, ok: true });
     // The three writes went through the engine, so they are in the write journal.
-    const journal = t.soak.runtime.engine.queries.journalLookup({ limit: 50 });
+    const journal = t.soak.runtime.engine.queries.journalLookup(t.soak.projectId, { limit: 50 });
     expect(journal.map((j) => j.opId).sort()).toEqual([
       'createManyResources',
       'createResource',

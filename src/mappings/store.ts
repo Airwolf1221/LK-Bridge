@@ -1,4 +1,8 @@
-/** SQLite storage for mapping sets, type rules and field maps (migration 0400). */
+/**
+ * SQLite storage for mapping sets, type rules and field maps (migration 0400). Since v2 A1 (migration 0600) mappings
+ * belong to a project: a store is bound to ONE project's LegendKeeper id, and every query and insert carries it, so
+ * another project's sets, rules and field maps are invisible (and unknown ids answer "not found").
+ */
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import {
@@ -93,7 +97,11 @@ export class MappingStore {
   constructor(
     readonly db: Db,
     private readonly now: () => number,
-  ) {}
+    /** The project this store reads and writes (its LegendKeeper id). */
+    readonly projectId: string,
+  ) {
+    if (typeof projectId !== 'string' || projectId === '') throw new Error('A mapping store needs a project');
+  }
 
   tx<T>(fn: () => T): T {
     return this.db.transaction(fn)();
@@ -107,14 +115,16 @@ export class MappingStore {
         .prepare(
           `SELECT s.*, (SELECT COUNT(*) FROM mapping_type_rules WHERE set_id = s.id) AS rule_count,
                   (SELECT COUNT(*) FROM mapping_field_maps WHERE set_id = s.id) AS field_count
-             FROM mapping_sets s ORDER BY s.active DESC, s.name COLLATE NOCASE`,
+             FROM mapping_sets s WHERE s.project_id = ? ORDER BY s.active DESC, s.name COLLATE NOCASE`,
         )
-        .all() as Row[]
+        .all(this.projectId) as Row[]
     ).map((r) => ({ ...toSet(r), ruleCount: Number(r.rule_count), fieldCount: Number(r.field_count) }));
   }
 
   getSet(id: string): MappingSet | undefined {
-    const r = this.db.prepare('SELECT * FROM mapping_sets WHERE id = ?').get(id) as Row | undefined;
+    const r = this.db
+      .prepare('SELECT * FROM mapping_sets WHERE id = ? AND project_id = ?')
+      .get(id, this.projectId) as Row | undefined;
     return r ? toSet(r) : undefined;
   }
 
@@ -125,14 +135,16 @@ export class MappingStore {
   }
 
   activeSet(): MappingSet | undefined {
-    const r = this.db.prepare('SELECT * FROM mapping_sets WHERE active = 1').get() as Row | undefined;
+    const r = this.db
+      .prepare('SELECT * FROM mapping_sets WHERE active = 1 AND project_id = ?')
+      .get(this.projectId) as Row | undefined;
     return r ? toSet(r) : undefined;
   }
 
   private nameTaken(name: string, exceptId?: string): boolean {
     const r = this.db
-      .prepare('SELECT id FROM mapping_sets WHERE name = ? COLLATE NOCASE AND id IS NOT ?')
-      .get(name, exceptId ?? null);
+      .prepare('SELECT id FROM mapping_sets WHERE project_id = ? AND name = ? COLLATE NOCASE AND id IS NOT ?')
+      .get(this.projectId, name, exceptId ?? null);
     return r !== undefined;
   }
 
@@ -143,9 +155,9 @@ export class MappingStore {
     const at = this.now();
     this.db
       .prepare(
-        'INSERT INTO mapping_sets (id, name, description, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)',
+        'INSERT INTO mapping_sets (id, project_id, name, description, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
       )
-      .run(id, input.name, input.description, input.notes, at, at);
+      .run(id, this.projectId, input.name, input.description, input.notes, at, at);
     return this.requireSet(id);
   }
 
@@ -154,8 +166,10 @@ export class MappingStore {
     if (this.nameTaken(input.name, id))
       throw new MappingError('NAME_TAKEN', `A mapping set named “${input.name}” already exists`);
     this.db
-      .prepare('UPDATE mapping_sets SET name = ?, description = ?, notes = ?, updated_at = ? WHERE id = ?')
-      .run(input.name, input.description, input.notes, this.now(), id);
+      .prepare(
+        'UPDATE mapping_sets SET name = ?, description = ?, notes = ?, updated_at = ? WHERE id = ? AND project_id = ?',
+      )
+      .run(input.name, input.description, input.notes, this.now(), id, this.projectId);
     return this.requireSet(id);
   }
 
@@ -165,22 +179,27 @@ export class MappingStore {
     this.tx(() => {
       if (active)
         this.db
-          .prepare('UPDATE mapping_sets SET active = 0, updated_at = ? WHERE active = 1 AND id <> ?')
-          .run(this.now(), id);
+          .prepare(
+            'UPDATE mapping_sets SET active = 0, updated_at = ? WHERE active = 1 AND id <> ? AND project_id = ?',
+          )
+          .run(this.now(), id, this.projectId);
       this.db
-        .prepare('UPDATE mapping_sets SET active = ?, updated_at = ? WHERE id = ?')
-        .run(active ? 1 : 0, this.now(), id);
+        .prepare('UPDATE mapping_sets SET active = ?, updated_at = ? WHERE id = ? AND project_id = ?')
+        .run(active ? 1 : 0, this.now(), id, this.projectId);
     });
     return this.requireSet(id);
   }
 
   deleteSet(id: string): void {
     this.requireSet(id);
-    this.db.prepare('DELETE FROM mapping_sets WHERE id = ?').run(id); // rules and field maps cascade
+    // Rules and field maps cascade.
+    this.db.prepare('DELETE FROM mapping_sets WHERE id = ? AND project_id = ?').run(id, this.projectId);
   }
 
   private touch(setId: string): void {
-    this.db.prepare('UPDATE mapping_sets SET updated_at = ? WHERE id = ?').run(this.now(), setId);
+    this.db
+      .prepare('UPDATE mapping_sets SET updated_at = ? WHERE id = ? AND project_id = ?')
+      .run(this.now(), setId, this.projectId);
   }
 
   // ---------------------------------------------------------------------------------------------- rules
@@ -189,14 +208,16 @@ export class MappingStore {
     return (
       this.db
         .prepare(
-          'SELECT * FROM mapping_type_rules WHERE set_id = ? ORDER BY priority DESC, created_at, rowid',
+          'SELECT * FROM mapping_type_rules WHERE set_id = ? AND project_id = ? ORDER BY priority DESC, created_at, rowid',
         )
-        .all(setId) as Row[]
+        .all(setId, this.projectId) as Row[]
     ).map(toRule);
   }
 
   getRule(id: string): TypeRule | undefined {
-    const r = this.db.prepare('SELECT * FROM mapping_type_rules WHERE id = ?').get(id) as Row | undefined;
+    const r = this.db
+      .prepare('SELECT * FROM mapping_type_rules WHERE id = ? AND project_id = ?')
+      .get(id, this.projectId) as Row | undefined;
     return r ? toRule(r) : undefined;
   }
 
@@ -213,10 +234,22 @@ export class MappingStore {
     const c = ruleColumns(input.selector);
     this.db
       .prepare(
-        `INSERT INTO mapping_type_rules (id, set_id, selector_kind, selector_id, descendants, semantic_type, priority, notes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO mapping_type_rules (id, set_id, project_id, selector_kind, selector_id, descendants, semantic_type, priority, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, setId, c.kind, c.id, c.descendants, input.semanticType, input.priority, input.notes, at, at);
+      .run(
+        id,
+        setId,
+        this.projectId,
+        c.kind,
+        c.id,
+        c.descendants,
+        input.semanticType,
+        input.priority,
+        input.notes,
+        at,
+        at,
+      );
     this.touch(setId);
     return this.requireRule(id);
   }
@@ -227,16 +260,26 @@ export class MappingStore {
     this.db
       .prepare(
         `UPDATE mapping_type_rules SET selector_kind = ?, selector_id = ?, descendants = ?, semantic_type = ?, priority = ?,
-           notes = ?, updated_at = ? WHERE id = ?`,
+           notes = ?, updated_at = ? WHERE id = ? AND project_id = ?`,
       )
-      .run(c.kind, c.id, c.descendants, input.semanticType, input.priority, input.notes, this.now(), id);
+      .run(
+        c.kind,
+        c.id,
+        c.descendants,
+        input.semanticType,
+        input.priority,
+        input.notes,
+        this.now(),
+        id,
+        this.projectId,
+      );
     this.touch(before.setId);
     return this.requireRule(id);
   }
 
   deleteRule(id: string): TypeRule {
     const before = this.requireRule(id);
-    this.db.prepare('DELETE FROM mapping_type_rules WHERE id = ?').run(id);
+    this.db.prepare('DELETE FROM mapping_type_rules WHERE id = ? AND project_id = ?').run(id, this.projectId);
     this.touch(before.setId);
     return before;
   }
@@ -247,14 +290,16 @@ export class MappingStore {
     return (
       this.db
         .prepare(
-          'SELECT * FROM mapping_field_maps WHERE set_id = ? ORDER BY semantic_type COLLATE NOCASE, field_name COLLATE NOCASE',
+          'SELECT * FROM mapping_field_maps WHERE set_id = ? AND project_id = ? ORDER BY semantic_type COLLATE NOCASE, field_name COLLATE NOCASE',
         )
-        .all(setId) as Row[]
+        .all(setId, this.projectId) as Row[]
     ).map(toField);
   }
 
   getField(id: string): FieldMap | undefined {
-    const r = this.db.prepare('SELECT * FROM mapping_field_maps WHERE id = ?').get(id) as Row | undefined;
+    const r = this.db
+      .prepare('SELECT * FROM mapping_field_maps WHERE id = ? AND project_id = ?')
+      .get(id, this.projectId) as Row | undefined;
     return r ? toField(r) : undefined;
   }
 
@@ -287,12 +332,13 @@ export class MappingStore {
     const c = fieldColumns(input.location);
     this.db
       .prepare(
-        `INSERT INTO mapping_field_maps (id, set_id, semantic_type, field_name, location_kind, property_title, infobox_title, row_key,
-           heading_text, block_id, expected_kind, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO mapping_field_maps (id, set_id, project_id, semantic_type, field_name, location_kind, property_title, infobox_title, row_key,
+           heading_text, block_id, expected_kind, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         setId,
+        this.projectId,
         input.semanticType,
         input.fieldName,
         c.kind,
@@ -322,7 +368,7 @@ export class MappingStore {
     this.db
       .prepare(
         `UPDATE mapping_field_maps SET semantic_type = ?, field_name = ?, location_kind = ?, property_title = ?, infobox_title = ?,
-           row_key = ?, heading_text = ?, block_id = ?, expected_kind = ?, notes = ?, updated_at = ? WHERE id = ?`,
+           row_key = ?, heading_text = ?, block_id = ?, expected_kind = ?, notes = ?, updated_at = ? WHERE id = ? AND project_id = ?`,
       )
       .run(
         input.semanticType,
@@ -337,6 +383,7 @@ export class MappingStore {
         input.notes,
         this.now(),
         id,
+        this.projectId,
       );
     this.touch(before.setId);
     return this.requireField(id);
@@ -344,7 +391,7 @@ export class MappingStore {
 
   deleteField(id: string): FieldMap {
     const before = this.requireField(id);
-    this.db.prepare('DELETE FROM mapping_field_maps WHERE id = ?').run(id);
+    this.db.prepare('DELETE FROM mapping_field_maps WHERE id = ? AND project_id = ?').run(id, this.projectId);
     this.touch(before.setId);
     return before;
   }

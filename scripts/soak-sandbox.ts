@@ -1,15 +1,17 @@
 /**
- * `npm run soak:sandbox [-- --writes N] [-- --writers N]`: the sandbox soak (chunk 8). About 1,000 writes (or N) and a
- * matching mix of reads against the LegendKeeper SANDBOX project, through the real engine and governor, then a report:
- * total time, writes per minute, 429 responses (target zero), retries, budget waits and peak memory.
+ * `npm run soak:sandbox -- --project NAME [--writes N] [--writers N]`: the sandbox soak (chunk 8). About 1,000 writes
+ * (or N) and a matching mix of reads against a LegendKeeper SANDBOX project, through the real engine and governor, then
+ * a report: total time, writes per minute, 429 responses (target zero), retries, budget waits and peak memory.
  *
- * Needs LK_SANDBOX_API_KEY and LK_SANDBOX_PROJECT_ID in the environment (on the server, deploy/soak-sandbox.sh reads
- * them from the env file, and refuses when the sandbox project is the bridge's own unless told otherwise). It refuses to
- * run unless the key's own project is exactly LK_SANDBOX_PROJECT_ID. It uses a temporary database and cleans up.
+ * v2 A1: `--project` names a project registered in the bridge's database (DB_PATH) and marked as a sandbox there; any
+ * other project is refused (test/sandbox/target.ts). Its key is the bridge's own variable for it,
+ * LK_PROJECT_<NAME>_API_KEY (on the server, deploy/soak-sandbox.sh reads just that one from the env file). It also
+ * refuses unless the key's own project is exactly the registered one. It uses a temporary database and cleans up.
  * Exit code: 0 when the report passes, 1 when it fails, 2 when it refused to run.
  */
 import { SandboxGuardError } from '../test/sandbox/smoke.js';
 import { createSoakRuntime, formatSoakReport, runSoak } from '../test/sandbox/soak.js';
+import { projectFlag, resolveSandboxTarget } from '../test/sandbox/target.js';
 
 function argValue(name: string, fallback: number, min: number, max: number): number {
   const args = process.argv.slice(2);
@@ -27,29 +29,32 @@ function argValue(name: string, fallback: number, min: number, max: number): num
 async function main(): Promise<void> {
   if (process.argv.includes('--help') || process.argv.includes('-h')) {
     process.stdout.write(
-      'usage: npm run soak:sandbox -- [--writes N (8-5000, default 1000)] [--writers N (1-8, default 2)]\n',
+      'usage: npm run soak:sandbox -- --project NAME [--writes N (8-5000, default 1000)] [--writers N (1-8, default 2)]\n',
     );
     return;
   }
   const writes = argValue('--writes', 1000, 8, 5000);
   const writers = argValue('--writers', 2, 1, 8);
-  const key = process.env.LK_SANDBOX_API_KEY;
-  const project = process.env.LK_SANDBOX_PROJECT_ID;
-  if (!key || !project) {
-    process.stderr.write(
-      'LK_SANDBOX_API_KEY and LK_SANDBOX_PROJECT_ID must be set (sandbox project only). On the server use deploy/soak-sandbox.sh.\n',
-    );
-    process.exit(2);
+  let target;
+  let soak;
+  try {
+    target = resolveSandboxTarget(projectFlag(process.argv.slice(2)));
+    soak = await createSoakRuntime({ apiKey: target.apiKey, project: target.name, writersMax: writers });
+  } catch (e) {
+    if (e instanceof SandboxGuardError) {
+      process.stderr.write(`${e.message}\n`);
+      process.exit(2);
+    }
+    throw e;
   }
-  const soak = createSoakRuntime({ apiKey: key, projectId: project, writersMax: writers });
   let code: number;
   try {
     process.stdout.write(
-      `Soak: about ${writes} writes with ${writers} writer(s) against the sandbox project.\n`,
+      `Soak: about ${writes} writes with ${writers} writer(s) against sandbox project "${target.name}".\n`,
     );
     const report = await runSoak(
-      { engine: soak.runtime.engine, lk: soak.runtime.lk, projectId: project, counters: soak.counters },
-      project,
+      { engine: soak.runtime.engine, lk: soak.lk, projectId: soak.projectId, counters: soak.counters },
+      target.projectId,
       { writes, log: (line) => process.stdout.write(`${new Date().toISOString()} ${line}\n`) },
     );
     process.stdout.write(formatSoakReport(report));

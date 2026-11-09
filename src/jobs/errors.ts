@@ -22,6 +22,8 @@ export type JobsErrorCode =
   | 'JOB_NOT_FOUND'
   | 'INVALID_CONTROL'
   | 'CANCELLED'
+  | 'UNKNOWN_PROJECT'
+  | 'PROJECT_UNAVAILABLE'
   | 'BRIDGE_ERROR';
 
 export interface JobRef {
@@ -119,11 +121,50 @@ export class PolicyDeniedError extends JobsError {
 
 export class ReadOnlyError extends JobsError {
   override readonly name = 'ReadOnlyError';
-  constructor(readonly opId: string) {
-    super('READ_ONLY', `The bridge is in read-only mode; ${opId} writes and was refused`);
+  /** v2 A1: set when the refusal comes from the project's own read-only flag rather than the bridge-wide one. */
+  readonly project: string | undefined;
+  constructor(
+    readonly opId: string,
+    project?: { readonly name: string; readonly projectOnly: boolean },
+  ) {
+    super(
+      'READ_ONLY',
+      project?.projectOnly
+        ? `Project "${project.name}" is read-only; ${opId} writes and was refused`
+        : `The bridge is in read-only mode; ${opId} writes and was refused`,
+    );
+    this.project = project?.projectOnly ? project.name : undefined;
   }
   override toJSON() {
-    return { ...super.toJSON(), opId: this.opId };
+    return { ...super.toJSON(), opId: this.opId, ...(this.project ? { project: this.project } : {}) };
+  }
+}
+
+/** v2 A1: a project id the bridge does not know (the engine is only ever given ids; tools resolve names first). */
+export class UnknownProjectError extends JobsError {
+  override readonly name = 'UnknownProjectError';
+  constructor(readonly project: string) {
+    super('UNKNOWN_PROJECT', `There is no project ${project} on this bridge`);
+  }
+  override toJSON() {
+    return { ...super.toJSON(), project: this.project };
+  }
+}
+
+/**
+ * v2 A1: the project exists but is not served now (its key was refused or belongs to another project, or LegendKeeper
+ * could not be asked at start-up). Nothing was queued or sent.
+ */
+export class ProjectUnavailableError extends JobsError {
+  override readonly name = 'ProjectUnavailableError';
+  constructor(
+    readonly project: string,
+    readonly reason: string,
+  ) {
+    super('PROJECT_UNAVAILABLE', reason);
+  }
+  override toJSON() {
+    return { ...super.toJSON(), project: this.project };
   }
 }
 

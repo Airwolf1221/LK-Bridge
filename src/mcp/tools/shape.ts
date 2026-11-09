@@ -22,22 +22,87 @@ import {
   type OpParams,
   type RunResult,
 } from '../../jobs/index.js';
-import type { LkClient } from '../../lk/index.js';
+import type { ProjectsRuntime } from '../../projects/registry.js';
+import type {
+  ProjectSelector,
+  ProjectSelectionError,
+  SelectableProjects,
+  SelectedProject,
+} from '../../projects/selection.js';
+import type { ProjectView } from '../../projects/types.js';
 import type { McpToolResult } from '../server.js';
 import type { GuardOptions } from './upload-http.js';
+
+/** The projects as the tools see them (v2 A1): `ProjectRegistry` and `StaticProjects` both provide this. */
+export type ToolProjects = ProjectsRuntime & SelectableProjects & { list(): ProjectView[] };
 
 /** What every tool handler needs. */
 export interface ToolDeps {
   readonly engine: JobEngine;
-  readonly lk: LkClient;
+  /** Every project's client (for its budget footer) and the `project` argument's choices (v2 A1). */
+  readonly projects: ToolProjects;
+  /** Resolves the `project` argument (REQUIRE_PROJECT_FOR_WRITES applies to write tools). */
+  readonly selector: ProjectSelector;
   readonly settings: ToolsSettings;
   readonly version: string;
-  readonly projectId: string;
   /** LK_READ_ONLY as configured (the effective flag, which can be overridden at runtime, comes from the engine). */
   readonly configuredReadOnly: boolean;
   /** Test seam for the upload guard (resolver, CA, allowed addresses). Never set in production. */
   readonly uploadGuard?: GuardOptions | undefined;
   readonly now?: () => number;
+}
+
+/** A tool call's deps, bound to the project the call resolved to (every result names it). */
+export interface ProjectDeps extends ToolDeps {
+  readonly project: SelectedProject;
+}
+
+/** The optional `project` argument every tool takes (v2 A1). */
+export const projectArg = z
+  .string()
+  .min(1)
+  .max(64)
+  .optional()
+  .describe(
+    'The LegendKeeper project (its name, or its id): see list_projects. Reads default to the default project; ' +
+      'writes must name one when the bridge serves several.',
+  );
+
+/**
+ * Resolves the call's `project` and runs `fn` with deps bound to it. An unknown project, a write with no project while
+ * several are served (REQUIRE_PROJECT_FOR_WRITES), or a project not available now is refused here, before anything is
+ * sent or recorded.
+ */
+export function withProject(
+  deps: ToolDeps,
+  project: string | undefined,
+  access: 'read' | 'write',
+  fn: (pd: ProjectDeps) => McpToolResult | Promise<McpToolResult>,
+): McpToolResult | Promise<McpToolResult> {
+  const sel = deps.selector.select(project, access);
+  if (!sel.ok) return selectionError(deps, sel.error);
+  return fn({ ...deps, project: sel.project });
+}
+
+/** The refusal of a `project` argument, with the default project's budget line (it is where a read would go). */
+export function selectionError(deps: ToolDeps, error: ProjectSelectionError): McpToolResult {
+  const hint =
+    error.code === 'PROJECT_REQUIRED'
+      ? 'Pass project with one of the names in registered (list_projects shows them all).'
+      : 'Call list_projects to see the projects this bridge serves.';
+  const text = `${JSON.stringify({ error: { ...error, hint } })}\n${defaultFooter(deps)}`;
+  return { content: [{ type: 'text', text }], isError: true };
+}
+
+function defaultFooter(deps: Pick<ToolDeps, 'projects'>): string {
+  const d = deps.projects.defaultProject();
+  return footerFor(deps, d.id, d.name);
+}
+
+/** The budget line of one project (each has its own governor), naming it. */
+export function footerFor(deps: Pick<ToolDeps, 'projects'>, projectId: string | null, name: string): string {
+  const lk = projectId !== null ? deps.projects.anyClient(projectId) : undefined;
+  return lk ? lk.budgetFooter(name) : `budget (${name}): not available (the project is not served now)`;
 }
 
 // ------------------------------------------------------------------------------------------------ principal
@@ -51,9 +116,20 @@ export { mcpOrigin } from '../../policy/mcp.js';
 
 // ------------------------------------------------------------------------------------------------ rendering
 
-/** Compact JSON, then the budget footer on its own last line. */
-export function render(body: unknown, deps: Pick<ToolDeps, 'lk'>, isError = false): McpToolResult {
-  const text = `${JSON.stringify(body)}\n${deps.lk.budgetFooter()}`;
+/**
+ * Compact JSON, then the budget footer on its own last line. Every result names the project it used (v2 A1): an
+ * object body gets `project` (the name) unless it already says, and the footer is that project's, naming it.
+ */
+export function render(
+  body: unknown,
+  deps: Pick<ProjectDeps, 'projects' | 'project'>,
+  isError = false,
+): McpToolResult {
+  const named =
+    body !== null && typeof body === 'object' && !Array.isArray(body) && !('project' in body)
+      ? { project: deps.project.name, ...(body as Record<string, unknown>) }
+      : body;
+  const text = `${JSON.stringify(named)}\n${footerFor(deps, deps.project.id, deps.project.name)}`;
   return { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) };
 }
 
@@ -63,7 +139,10 @@ export interface ToolErrorBody {
   readonly [key: string]: unknown;
 }
 
-export function errorResult(error: ToolErrorBody, deps: Pick<ToolDeps, 'lk'>): McpToolResult {
+export function errorResult(
+  error: ToolErrorBody,
+  deps: Pick<ProjectDeps, 'projects' | 'project'>,
+): McpToolResult {
   return render({ error }, deps, true);
 }
 
@@ -75,7 +154,7 @@ function jsonOf(e: JobsError): ToolErrorBody {
 }
 
 /** Maps anything an engine call can throw to a typed tool error. */
-export function errorFromThrown(e: unknown, deps: Pick<ToolDeps, 'lk'>): McpToolResult {
+export function errorFromThrown(e: unknown, deps: Pick<ProjectDeps, 'projects' | 'project'>): McpToolResult {
   if (e instanceof BudgetExhaustedError) {
     return errorResult(
       {
@@ -380,7 +459,7 @@ export interface StoredHandle {
  * stored as a `result` artefact (a succeeded one-step job) and a handle comes back.
  */
 export function shapeRead(
-  deps: ToolDeps,
+  deps: ProjectDeps,
   args: {
     readonly opId: string;
     readonly params: OpParams;
@@ -393,6 +472,7 @@ export function shapeRead(
   const text = JSON.stringify(shaped) ?? 'null';
   if (text.length <= deps.settings.resultMaxChars) return { inline: shaped };
   const stored = deps.engine.recordResult({
+    project: deps.project.id,
     opId: args.opId,
     params: args.params,
     value: args.value,

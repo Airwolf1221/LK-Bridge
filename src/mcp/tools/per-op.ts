@@ -9,7 +9,7 @@ import type { McpToolAnnotations, McpToolProvider } from '../server.js';
 import { defineTool } from './define.js';
 import { executeOne } from './lk-api.js';
 import { rateCostText } from './schemas.js';
-import type { ToolDeps } from './shape.js';
+import { projectArg, withProject, type ToolDeps } from './shape.js';
 
 const IDEMPOTENT_POSTS = new Set([
   'moveResource',
@@ -40,6 +40,7 @@ export function perOpTools(deps: ToolDeps): McpToolProvider[] {
     const isWrite = op.kind !== 'read';
     const extra: z.ZodRawShape = {
       detail: z.enum(['summary', 'full']).optional().describe('summary (default) or full payload.'),
+      project: projectArg,
       ...(isWrite
         ? {
             allowUnsupportedLoss: z.boolean().optional(),
@@ -64,18 +65,21 @@ export function perOpTools(deps: ToolDeps): McpToolProvider[] {
       handler: (input: Record<string, unknown>, ctx) => {
         const params: Record<string, unknown> = {};
         for (const k of PARAM_KEYS) if (input[k] !== undefined) params[k] = input[k];
-        return executeOne(
-          deps,
-          name,
-          'any',
-          {
-            operationId: op.operationId,
-            params,
-            detail: input.detail === 'full' ? 'full' : 'summary',
-            allowUnsupportedLoss: input.allowUnsupportedLoss === true,
-            confirm: input.confirm === 'cascade' ? 'cascade' : undefined,
-          },
-          ctx,
+        const project = typeof input.project === 'string' ? input.project : undefined;
+        return withProject(deps, project, isWrite ? 'write' : 'read', (pd) =>
+          executeOne(
+            pd,
+            name,
+            'any',
+            {
+              operationId: op.operationId,
+              params,
+              detail: input.detail === 'full' ? 'full' : 'summary',
+              allowUnsupportedLoss: input.allowUnsupportedLoss === true,
+              confirm: input.confirm === 'cascade' ? 'cascade' : undefined,
+            },
+            ctx,
+          ),
         );
       },
     });

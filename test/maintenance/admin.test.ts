@@ -6,7 +6,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fullFlow } from '../auth/helpers.js';
-import { startAdminStack, until, type AdminStack } from '../admin/helpers.js';
+import { PROJECT, startAdminStack, until, type AdminStack } from '../admin/helpers.js';
 
 let stack: AdminStack;
 let oauthAccess: string;
@@ -170,22 +170,18 @@ describe('changes', () => {
     for (const row of added) expect(row.action).toBe('maintenance.disable');
   });
 
-  it('Run now answers at once, runs the job, links the run to its job and audits it', async () => {
+  it('Run now answers at once, runs the job, records the run and audits it', async () => {
     const r = await stack.post('/api/admin/maintenance/sqlite-optimise/run');
     expect(r.status).toBe(202);
     await until(() => stack.runtime.maintenance.scheduler.get('sqlite-optimise').lastRun !== null);
     const job = (await stack.get('/api/admin/maintenance/sqlite-optimise')).json.job;
     expect(job.lastRun).toMatchObject({ outcome: 'succeeded' });
-    expect(job.history[0]).toMatchObject({ trigger: 'manual', outcome: 'succeeded' });
-    expect(job.lastRun.jobId).toMatch(/^j/);
-    // The linked job is a P3 maintenance job on the Jobs page.
-    const linked = await stack.get(`/api/admin/jobs/${job.lastRun.jobId as string}`);
-    expect(linked.status).toBe(200);
-    expect(linked.json.job).toMatchObject({
-      status: 'succeeded',
-      priority: 'P3',
-      origin: { kind: 'maintenance', tool: 'sqlite-optimise' },
-    });
+    // v2 A1: SQLite upkeep is bridge-wide, so its run is recorded in the history (project `*`) and not as a job on any
+    // one project's Jobs page.
+    expect(job.history[0]).toMatchObject({ trigger: 'manual', outcome: 'succeeded', projectId: '*' });
+    expect(job.lastRun.jobId).toBeNull();
+    const jobs = (await stack.get('/api/admin/jobs?limit=200')).json.jobs as { origin: { tool?: string } }[];
+    expect(jobs.filter((j) => j.origin.tool === 'sqlite-optimise')).toEqual([]);
     expect(stack.audit('maintenance.run_now')).toHaveLength(1);
   });
 
@@ -198,6 +194,16 @@ describe('changes', () => {
   });
 
   it('the Jobs page can filter maintenance runs by origin', async () => {
+    // v2 A1: the built-in jobs are all bridge-wide now (no job record); a per-project run is a job of its project, as
+    // the later LegendKeeper jobs will be. Record one the way the scheduler does.
+    stack.runtime.engine.recordResult({
+      project: PROJECT,
+      opId: 'maintenance:probe',
+      params: {},
+      value: { outcome: 'succeeded' },
+      origin: { kind: 'maintenance', client: 'maintenance', tool: 'probe' },
+      priority: 'P3',
+    });
     const r = await stack.get('/api/admin/jobs?view=history&origin=maintenance');
     expect(r.status).toBe(200);
     expect(r.json.jobs.length).toBeGreaterThan(0);

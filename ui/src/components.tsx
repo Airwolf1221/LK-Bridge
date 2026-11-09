@@ -10,7 +10,15 @@ import {
   type ReactNode,
 } from 'react';
 import { ApiError } from './api';
-import { STATUS_LABELS, TIER_LABELS, fmtDuration, fmtInt, pct, prettyJson } from './format';
+import {
+  PROJECT_STATUS_LABELS,
+  STATUS_LABELS,
+  TIER_LABELS,
+  fmtDuration,
+  fmtInt,
+  pct,
+  prettyJson,
+} from './format';
 import type { TierSnapshot } from './types';
 
 // ------------------------------------------------------------------------------------------------ toasts
@@ -151,6 +159,18 @@ export const StatusBadge = ({ status }: { status: string }) => (
   <Badge tone={STATUS_TONE[status] ?? 'neutral'}>{STATUS_LABELS[status] ?? status}</Badge>
 );
 
+const PROJECT_STATUS_TONE: Record<string, 'neutral' | 'ok' | 'warn' | 'bad' | 'info'> = {
+  active: 'ok',
+  verifying: 'info',
+  unverified: 'warn',
+  stopped: 'bad',
+  not_configured: 'warn',
+};
+/** A project's status (v2 A1): active, checking its key, not verified, stopped, no key configured. */
+export const ProjectStatusBadge = ({ status }: { status: string }) => (
+  <Badge tone={PROJECT_STATUS_TONE[status] ?? 'neutral'}>{PROJECT_STATUS_LABELS[status] ?? status}</Badge>
+);
+
 export function Button({
   variant = 'default',
   busy,
@@ -239,10 +259,26 @@ export function Empty({ children }: { children: ReactNode }) {
   return <p className="empty">{children}</p>;
 }
 
-export function PageHeader({ title, children }: { title: string; children?: ReactNode }) {
+/** A page's title. `project` names the project a scoped page shows, so the owner always knows which one it is. */
+export function PageHeader({
+  title,
+  project,
+  children,
+}: {
+  title: string;
+  project?: string | null;
+  children?: ReactNode;
+}) {
   return (
     <header className="page-header">
-      <h1>{title}</h1>
+      <div className="page-title">
+        <h1>{title}</h1>
+        {project && (
+          <span className="project-label" data-testid="page-project">
+            Project: <strong>{project}</strong>
+          </span>
+        )}
+      </div>
       <div className="page-actions">{children}</div>
     </header>
   );

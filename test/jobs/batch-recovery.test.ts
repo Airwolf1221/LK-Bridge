@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JobView } from '../../src/jobs/index.js';
-import { harness, origin, queue, seen, settle, type Harness, type Wire } from './helpers.js';
+import { harness, origin, queue, seen, settle, type Harness, type Wire, PROJECT } from './helpers.js';
 
 let h: Harness | undefined;
 afterEach(async () => {
@@ -27,6 +27,7 @@ describe('createManyResources recovery', () => {
     const e1 = h.newEngine();
     const killed = e1.killAfter(isBatch); // ...and the bridge dies before it sees the answer
     const { jobId } = await queue(e1.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin,
       steps: [
@@ -43,8 +44,8 @@ describe('createManyResources recovery', () => {
     expect(h.model.count('createResource')).toBe(3);
 
     const e2 = h.newEngine();
-    await h.drive(e2, () => terminal(e2.engine.queries.getJob(jobId)));
-    const job = e2.engine.queries.getJob(jobId)!;
+    await h.drive(e2, () => terminal(e2.engine.queries.getJob(PROJECT, jobId)));
+    const job = e2.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.status).toBe('succeeded');
     const minted = job.steps[0]!.clientIds;
     expect(minted).toHaveLength(6);
@@ -80,14 +81,14 @@ describe('createManyResources recovery', () => {
     const r = await settle(
       h,
       e,
-      e.engine.run('createManyResources', { body: { resources: items(5) } }, { origin }),
+      e.engine.run('createManyResources', { body: { resources: items(5) } }, { project: PROJECT, origin }),
     );
     expect(r.error).toBeUndefined();
     const v = r.value as { status: string; jobId: string; result: { resources: { id: string }[] } };
     expect(v.status).toBe('succeeded');
     expect(v.result.resources).toHaveLength(5);
     expect(h.model.count('createResource')).toBe(5);
-    const job = e.engine.queries.getJob(v.jobId)!;
+    const job = e.engine.queries.getJob(PROJECT, v.jobId)!;
     expect(new Set(v.result.resources.map((x) => x.id))).toEqual(new Set(job.steps[0]!.clientIds));
     expect(job.steps).toHaveLength(2);
   });
@@ -98,6 +99,7 @@ describe('createManyResources recovery', () => {
     const e1 = h.newEngine();
     const killed = e1.killAfter(isBatch);
     const { jobId } = await queue(e1.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin,
       steps: [{ op: 'createManyResources', params: { body: { resources: items(4) } } }],
@@ -106,8 +108,8 @@ describe('createManyResources recovery', () => {
     await killed;
     e1.crash();
     const e2 = h.newEngine();
-    await h.drive(e2, () => terminal(e2.engine.queries.getJob(jobId)));
-    const job = e2.engine.queries.getJob(jobId)!;
+    await h.drive(e2, () => terminal(e2.engine.queries.getJob(PROJECT, jobId)));
+    const job = e2.engine.queries.getJob(PROJECT, jobId)!;
     expect(job.status).toBe('succeeded');
     expect(job.steps).toHaveLength(1);
     expect(h.mock.calls.filter((c) => c.method === 'POST')).toHaveLength(1);
@@ -122,12 +124,13 @@ describe('createManyResources recovery', () => {
     // The batch fails part-way, and then LK fails the verification reads too.
     h.mock.inject((c) => c.method === 'GET', { kind: 'status', status: 500, code: 'INTERNAL' }, 100);
     const { jobId } = await queue(e.engine, {
+      project: PROJECT,
       kind: 'batch_ops',
       origin,
       steps: [{ op: 'createManyResources', params: { body: { resources: items(3) } } }],
     });
-    await h.drive(e, () => terminal(e.engine.queries.getJob(jobId)));
-    const job = e.engine.queries.getJob(jobId)!;
+    await h.drive(e, () => terminal(e.engine.queries.getJob(PROJECT, jobId)));
+    const job = e.engine.queries.getJob(PROJECT, jobId)!;
     expect(job).toMatchObject({ status: 'failed', uncertain: true });
     expect(job.steps[0]!.status).toBe('uncertain');
     expect(job.steps).toHaveLength(1);

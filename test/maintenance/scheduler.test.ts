@@ -7,7 +7,8 @@ import {
 } from '../../src/maintenance/index.js';
 import { defaultMaintenanceSettings } from '../../src/config/index.js';
 import { settle } from '../jobs/helpers.js';
-import { maintenanceRig, sampleCount, type MaintenanceRig } from './helpers.js';
+import { ALL_PROJECTS } from '../../src/projects/index.js';
+import { PROJECT, maintenanceRig, sampleCount, type MaintenanceRig } from './helpers.js';
 
 let m: MaintenanceRig | undefined;
 afterEach(async () => {
@@ -33,6 +34,9 @@ function probe(over: Partial<MaintenanceJobDef> = {}) {
     writes: false,
     usesLk: false,
     record: 'always',
+    // v2 A1: the probe stands in for the per-project jobs to come (they touch LegendKeeper or one project's data), so it
+    // runs once per served project (here one) and each run is recorded as a job of that project.
+    scope: 'project',
     run: (ctx) => {
       calls.push({ trigger: ctx.trigger, now: ctx.now });
       return { summary: 'probed', changed: true };
@@ -270,7 +274,7 @@ describe('priority and the engine', () => {
     expect(out.error).toBeUndefined();
     expect(history('writer')[0]).toMatchObject({ outcome: 'succeeded' });
     expect(m.rig.h.model.count('updateResource')).toBe(1);
-    const all = m.rig.e.engine.queries.listJobs({});
+    const all = m.rig.e.engine.queries.listJobs(PROJECT, {});
     const update = all.find(
       (j) => j.title === 'Maintenance: Writer' && j.priority === 'P3' && j.origin.tool === 'writer',
     );
@@ -289,13 +293,16 @@ describe('priority and the engine', () => {
     m = await maintenanceRig({ start: false });
     // A governor that reports queued interactive work, then idle.
     let queued = 1;
-    const lk = {
-      governor: { snapshot: () => ({ queues: { P0: 0, P1: queued, P2: 0, P3: 0 } }) },
+    const governor = { snapshot: () => ({ queues: { P0: 0, P1: queued, P2: 0, P3: 0 } }) };
+    const projects = {
+      activeIds: () => [PROJECT],
+      anyClient: () => ({ governor }),
+      nameOf: () => 'mock',
     } as never;
     const sched = new MaintenanceScheduler({
       db: m.rig.db,
       engine: m.rig.e.engine,
-      lk,
+      projects,
       clock: m.rig.h.clock,
       settings: defaultMaintenanceSettings({ deferMs: 15_000 }),
       jobs: [lkJob.def],
@@ -383,15 +390,14 @@ describe('run now', () => {
     expect(job.running).toBe(true);
     const run = (await done)!;
     expect(run).toMatchObject({ outcome: 'succeeded', trigger: 'manual' });
-    expect(run.jobId).toMatch(/^j/);
-    const jobView = m.rig.e.engine.queries.getJob(run.jobId!)!;
-    expect(jobView).toMatchObject({
-      status: 'succeeded',
-      priority: 'P3',
-      principalId: 'system',
-      origin: { kind: 'maintenance', tool: 'sqlite-optimise' },
-    });
-    expect(view('sqlite-optimise').lastRun).toMatchObject({ jobId: run.jobId });
+    // v2 A1: SQLite upkeep is bridge-wide: its run is in the history (project `*`), not a job of any project.
+    expect(run).toMatchObject({ projectId: '*', jobId: null });
+    expect(
+      m.rig.e.engine.queries
+        .listJobs(ALL_PROJECTS, { limit: 500 })
+        .filter((j) => j.origin.tool === 'sqlite-optimise'),
+    ).toEqual([]);
+    expect(view('sqlite-optimise').lastRun).toMatchObject({ outcome: 'succeeded', jobId: null });
     expect(seen).toContain('owner:maintenance.run_now:sqlite-optimise');
     expect(m.rig.policy.commands.listAudit('owner').map((a) => a.action)).toContain('maintenance.run_now');
   });
@@ -416,7 +422,7 @@ describe('run now', () => {
     const { done } = m.maintenance.scheduler.runNow('probe');
     const run = (await done)!;
     expect(run).toMatchObject({ outcome: 'failed', detail: 'disk on fire' });
-    expect(m.rig.e.engine.queries.getJob(run.jobId!)).toMatchObject({ status: 'failed' });
+    expect(m.rig.e.engine.queries.getJob(PROJECT, run.jobId!)).toMatchObject({ status: 'failed' });
     await m.rig.h.clock.advance(60_000);
     expect(history('probe').length).toBeGreaterThanOrEqual(2); // still scheduled
   });

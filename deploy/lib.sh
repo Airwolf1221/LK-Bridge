@@ -43,6 +43,41 @@ env_file_get() {
   printf '%s' "$line"
 }
 
+# project_key_var NAME: the env variable that holds project NAME's key (v2 A1): LK_PROJECT_<NAME>_API_KEY in the
+# multi-project form (LK_PROJECTS set), or LK_API_KEY in the single-project form for the project LK_PROJECT_NAME names
+# (default "test"). Prints the variable's NAME only, never a value. Fails for a malformed name.
+project_key_var() {
+  local name="$1" single
+  [[ "$name" =~ ^[a-z][a-z0-9_]{0,31}$ ]] || return 1
+  single="$(env_file_get LK_PROJECT_NAME)"
+  single="${single:-test}"
+  if [[ -z "$(env_file_get LK_PROJECTS)" && -n "$(env_file_get LK_API_KEY)" && "$name" == "${single,,}" ]]; then
+    printf 'LK_API_KEY'
+  else
+    printf 'LK_PROJECT_%s_API_KEY' "${name^^}"
+  fi
+}
+
+# sandbox_project_env NAME: for the sandbox, soak and spike wrappers (v2 A1). Exports exactly what the script needs to
+# find the project and its key: DB_PATH (the bridge's database, which says whether NAME is a sandbox project), the one
+# variable holding NAME's key, and LK_PROJECT_NAME when that is the single-project form's LK_API_KEY. Prints nothing;
+# never prints the key. The script itself refuses a project that is not registered as a sandbox.
+sandbox_project_env() {
+  local name="$1" var key db_path
+  [[ -n "$name" ]] || die "Name the sandbox project: --project <name> (a project the bridge has registered and that is marked as a sandbox: npm run projects -- list)."
+  var="$(project_key_var "$name")" || die "\"${name}\" is not a project name (lowercase letter first, then lowercase letters, digits or underscores)."
+  key="$(env_file_get "$var")"
+  [[ -n "$key" ]] || die "${var} is empty in ${LKB_ENV_FILE}: the key of project \"${name}\" is needed."
+  db_path="$(env_file_get DB_PATH)"
+  export DB_PATH="${db_path:-${LKB_DATA_DIR}/bridge.db}"
+  export "${var}=${key}"
+  if [[ "$var" == LK_API_KEY ]]; then
+    local single
+    single="$(env_file_get LK_PROJECT_NAME)"
+    export LK_PROJECT_NAME="${single:-test}"
+  fi
+}
+
 # use_private_node: puts the bridge's private Node first on PATH and checks it is the real thing.
 use_private_node() {
   [[ -x "${LKB_NODE_DIR}/bin/node" ]] || die "Private Node not found at ${LKB_NODE_DIR}/bin/node. Run deploy/install-node.sh (as root) first."
@@ -68,6 +103,11 @@ env_names() {
 #   - an optional setting the template lists (as `# NAME=…`) that the live file does not mention at all (a release
 #     added it; copy the commented line across to keep the file in step);
 #   - a variable the live file sets that the template no longer lists (a release removed it; the bridge ignores it).
+#
+# v2 A1: the project variables are judged by their own rules, not by the template's names: each project in LK_PROJECTS
+# needs its LK_PROJECT_<NAME>_API_KEY, a key line for a project not listed is ignored by the bridge, the single-project
+# form (LK_API_KEY, LK_PROJECT_ID, LK_PROJECT_NAME) still works but should be moved off, and the sandbox settings are
+# retired. Only names are ever printed.
 env_drift_report() {
   local template="${1:-$(dirname "${BASH_SOURCE[0]}")/env.template}" live="${2:-$LKB_ENV_FILE}"
   if [[ ! -r "$template" || ! -r "$live" ]]; then
@@ -75,23 +115,75 @@ env_drift_report() {
     return 0
   fi
   local name count=0
+  # Names judged by the project rules below rather than by the template.
+  local special='^(LK_PROJECT_[A-Z0-9_]+_API_KEY|LK_API_KEY|LK_PROJECT_ID|LK_PROJECT_NAME|LK_SANDBOX_API_KEY|LK_SANDBOX_PROJECT_ID)$'
   while IFS= read -r name; do
-    [[ -n "$name" ]] || continue
+    [[ -n "$name" && ! "$name" =~ $special ]] || continue
     warn "${live} does not set ${name}, which deploy/env.template sets. Add it (see the template) or the default applies."
     count=$((count + 1))
   done < <(comm -23 <(env_names "$template" active) <(env_names "$live" active))
   while IFS= read -r name; do
-    [[ -n "$name" ]] || continue
+    [[ -n "$name" && ! "$name" =~ $special ]] || continue
     warn "${live} does not mention the optional setting ${name} (new in deploy/env.template). Copy its commented line across to keep the file in step."
     count=$((count + 1))
   done < <(comm -23 <(comm -13 <(env_names "$template" active) <(env_names "$template")) <(env_names "$live"))
   while IFS= read -r name; do
-    [[ -n "$name" ]] || continue
+    [[ -n "$name" && ! "$name" =~ $special ]] || continue
     warn "${live} sets ${name}, which deploy/env.template no longer lists: the bridge ignores it. Remove the line."
     count=$((count + 1))
   done < <(comm -13 <(env_names "$template") <(env_names "$live" active))
+  _env_project_drift "$live" || count=$((count + $?))
   if ((count == 0)); then log "Env file matches deploy/env.template (names only checked)."; fi
   return 0
+}
+
+# _env_project_drift LIVE: the project rules of env_drift_report. Returns the number of warnings (0 = none).
+_env_project_drift() {
+  local live="$1" listed name var n=0
+  local -a names=()
+  listed="$(env_file_get LK_PROJECTS "$live")"
+  local active
+  active="$(env_names "$live" active)"
+  if [[ -n "$listed" ]]; then
+    for name in ${listed//,/ }; do
+      name="${name,,}"
+      if [[ ! "$name" =~ ^[a-z][a-z0-9_]{0,31}$ ]]; then
+        warn "${live}: LK_PROJECTS lists a name that is not a valid project name. The bridge will refuse to start."
+        n=$((n + 1))
+        continue
+      fi
+      names+=("$name")
+      var="LK_PROJECT_${name^^}_API_KEY"
+      if ! grep -qxF "$var" <<<"$active"; then
+        warn "${live}: LK_PROJECTS lists project ${name} but the file does not set ${var}. The bridge will refuse to start."
+        n=$((n + 1))
+      fi
+    done
+    while IFS= read -r var; do
+      [[ "$var" =~ ^LK_PROJECT_([A-Z0-9_]+)_API_KEY$ ]] || continue
+      name="${BASH_REMATCH[1],,}"
+      if [[ " ${names[*]} " != *" ${name} "* ]]; then
+        warn "${live} sets ${var}, but LK_PROJECTS does not list project ${name}: the bridge ignores it. List the project or remove the line."
+        n=$((n + 1))
+      fi
+    done <<<"$active"
+    for var in LK_API_KEY LK_PROJECT_ID LK_PROJECT_NAME; do
+      if grep -qxF "$var" <<<"$active"; then
+        warn "${live} sets ${var}, which the bridge ignores because LK_PROJECTS is set (the single-project form). Remove the line."
+        n=$((n + 1))
+      fi
+    done
+  elif grep -qxF LK_API_KEY <<<"$active" || grep -qxF LK_PROJECT_ID <<<"$active"; then
+    warn "${live} uses the single-project form (LK_API_KEY, LK_PROJECT_ID), which still works but is deprecated. Move to LK_PROJECTS, LK_PROJECT_<NAME>_API_KEY and LK_DEFAULT_PROJECT (runbook, \"Moving to several projects (v2 A1)\")."
+    n=$((n + 1))
+  fi
+  for var in LK_SANDBOX_API_KEY LK_SANDBOX_PROJECT_ID; do
+    if grep -qxF "$var" <<<"$active"; then
+      warn "${live} sets ${var}, which is retired (v2 A1): the sandbox, soak and spike scripts take --project <name> instead. Remove the line."
+      n=$((n + 1))
+    fi
+  done
+  return "$n"
 }
 
 # ------------------------------------------------------------------------------------- permissions (v1.0.1, ADR 0020)

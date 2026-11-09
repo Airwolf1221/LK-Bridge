@@ -115,7 +115,17 @@ describe('deploy.sh with a separate build user (v1.0.1, ADR 0020, F-17)', () => 
     }
     expect(code).toMatch(/as_build npm ci --no-audit --no-fund/);
     expect(code).toMatch(/as_build npm run build/);
-    expect(code).toMatch(/as_service env DB_PATH="\$db_path" node dist\/db\/migrate\.js/);
+    // v2 A1: the migrations also get the single-project form's project id and name (migration 0600), never a key.
+    expect(code).toMatch(
+      /as_service env DB_PATH="\$db_path" LK_PROJECT_ID="\$legacy_project_id" LK_PROJECT_NAME="\$legacy_project_name" node dist\/db\/migrate\.js/,
+    );
+    expect(code).toMatch(/legacy_project_id="\$\(env_file_get LK_PROJECT_ID\)"/);
+    expect(
+      code
+        .split('\n')
+        .filter((l) => /migrate\.js/.test(l))
+        .join('\n'),
+    ).not.toMatch(/KEY|SECRET/);
     expect(code).toMatch(/as_service env DB_PATH="\$db_path" "\$\{app_dir\}\/deploy\/backup\.sh" pre-deploy/);
     expect(code).toMatch(/as_service "\$\{app_dir\}\/deploy\/healthcheck\.sh"/);
   });
@@ -323,16 +333,18 @@ describe('env drift check (chunk 8, F-10)', () => {
   });
 
   it('warns by name, never by value, about missing, new optional and removed variables, and never fails', () => {
+    // (v2 A1: the project variables follow their own rules, below; SESSION_SECRET stands in for "a secret set in both
+    // files", which LK_API_KEY was before.)
     const template = [
       '# A comment with NAME=value inside prose is not a variable',
-      'LK_API_KEY=',
+      'SESSION_SECRET=',
       'WRITERS_MAX=1',
       '# UPLOAD_MAX_BYTES=10485760',
       '# BRAND_NEW_OPTION=on',
       '',
     ].join('\n');
     const live = [
-      "LK_API_KEY='the-real-secret-value'",
+      "SESSION_SECRET='the-real-secret-value'",
       '# UPLOAD_MAX_BYTES=10485760',
       'ADMIN_BUDGET_SAMPLE_SECONDS=10',
       "OLD_SECRET='another-secret-value'",
@@ -344,8 +356,49 @@ describe('env drift check (chunk 8, F-10)', () => {
     expect(r.err).toMatch(/optional setting BRAND_NEW_OPTION/);
     expect(r.err).toMatch(/sets ADMIN_BUDGET_SAMPLE_SECONDS, which deploy\/env.template no longer lists/);
     expect(r.err).toMatch(/sets OLD_SECRET/);
-    expect(r.err).not.toMatch(/UPLOAD_MAX_BYTES|LK_API_KEY|NAME/);
+    expect(r.err).not.toMatch(/UPLOAD_MAX_BYTES|SESSION_SECRET|NAME/);
     expect(r.err + r.out).not.toMatch(/the-real-secret-value|another-secret-value|10485760/);
+  });
+
+  it('judges the project variables by the project rules (v2 A1), by name only', () => {
+    const template = read('env.template');
+    // The shipped template with a second project, its key, and nothing else: quiet.
+    const two = template
+      .replace(/^LK_PROJECTS=test$/m, 'LK_PROJECTS=test,arkona')
+      .replace(
+        /^LK_PROJECT_TEST_API_KEY=$/m,
+        "LK_PROJECT_TEST_API_KEY='k1-secret'\nLK_PROJECT_ARKONA_API_KEY='k2-secret'",
+      );
+    const quiet = run(template, two);
+    expect(quiet.err).toBe('');
+    expect(quiet.out).toMatch(/matches deploy\/env.template/);
+    // A listed project without its key, a key for a project not listed, the old form left behind, and the retired
+    // sandbox settings: each named, no value ever printed.
+    const messy = template
+      .replace(/^LK_PROJECTS=test$/m, 'LK_PROJECTS=test,arkona')
+      .replace(
+        /^LK_PROJECT_TEST_API_KEY=$/m,
+        "LK_PROJECT_TEST_API_KEY='k1-secret'\nLK_PROJECT_OLD_API_KEY='k3-secret'",
+      )
+      .concat("LK_API_KEY='k4-secret'\nLK_SANDBOX_API_KEY='k5-secret'\n");
+    const r = run(template, messy);
+    expect(r.status).toBe(0);
+    expect(r.err).toMatch(/lists project arkona but the file does not set LK_PROJECT_ARKONA_API_KEY/);
+    expect(r.err).toMatch(/sets LK_PROJECT_OLD_API_KEY, but LK_PROJECTS does not list project old/);
+    expect(r.err).toMatch(/sets LK_API_KEY, which the bridge ignores because LK_PROJECTS is set/);
+    expect(r.err).toMatch(/sets LK_SANDBOX_API_KEY, which is retired/);
+    expect(r.err + r.out).not.toMatch(/k[1-5]-secret/);
+    // The single-project form on its own: one warning recommending the move, no "missing key" noise.
+    const legacy = template
+      .replace(/^LK_PROJECTS=test$/m, '')
+      .replace(/^LK_PROJECT_TEST_API_KEY=$/m, "LK_API_KEY='k6-secret'\nLK_PROJECT_ID=proj_x")
+      .replace(/^LK_DEFAULT_PROJECT=test$/m, '');
+    const old = run(template, legacy);
+    expect(old.err).toMatch(
+      /uses the single-project form \(LK_API_KEY, LK_PROJECT_ID\), which still works but is deprecated/,
+    );
+    expect(old.err).not.toMatch(/LK_PROJECT_TEST_API_KEY/);
+    expect(old.err + old.out).not.toMatch(/k6-secret|proj_x/);
   });
 
   it('is called by deploy.sh and healthcheck.sh', () => {

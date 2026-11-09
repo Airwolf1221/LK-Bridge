@@ -12,16 +12,20 @@ import {
   useConfirm,
 } from '../components';
 import { fmtDuration, fmtInt, shortId } from '../format';
-import { useApi, useNow, useReloadOn } from '../hooks';
+import { useNow, useReloadOn } from '../hooks';
+import { useLiveBudget, useProject, useScopedApi } from '../project';
 import { Link } from '../router';
-import { useStreamEvent } from '../stream';
-import type { BudgetPayload, Controls, WritersResponse } from '../types';
+import type { Controls, WritersResponse } from '../types';
 
+/**
+ * The writer pool and the document locks are bridge-wide (shared by every project), so this page spans projects and
+ * names each busy slot's, waiting step's and lock's project. Only the budget figures are the selected project's.
+ */
 export function WritersPage() {
-  const w = useApi<WritersResponse>('/writers');
+  const { selected, nameOf } = useProject();
+  const w = useScopedApi<WritersResponse>('/writers');
   useReloadOn(['writers', 'lock', 'controls', 'job'], w.reload, 150);
-  const [live, setLive] = useState<BudgetPayload | null>(null);
-  useStreamEvent<BudgetPayload>('budget', setLive);
+  const live = useLiveBudget();
   const now = useNow();
   const { run, busy } = useAction();
   const confirm = useConfirm();
@@ -38,7 +42,25 @@ export function WritersPage() {
   const rate = live?.writesPerMinute ?? d.writesPerMinute;
   const limit = live?.snapshot.tiers['write-min'].limit ?? d.writeMinuteLimit;
   const title = (jobId: string) => d.jobs[jobId]?.title ?? shortId(jobId, 12);
-  const jobLink = (jobId: string) => <Link to={`/jobs/${encodeURIComponent(jobId)}`}>{title(jobId)}</Link>;
+  /** A job's project name: from the slot or wait entry's project id, else from the jobs map. */
+  const projectOf = (jobId: string | undefined, projectId?: string | null) =>
+    nameOf(projectId) ?? (jobId ? d.jobs[jobId]?.project : undefined) ?? null;
+  // The link names the job's project, which may not be the one selected.
+  const jobLink = (jobId: string, projectId?: string | null) => {
+    const project = projectOf(jobId, projectId);
+    return (
+      <Link
+        to={`/jobs/${encodeURIComponent(jobId)}${project ? `?project=${encodeURIComponent(project)}` : ''}`}
+      >
+        {title(jobId)}
+      </Link>
+    );
+  };
+  /** Lock keys are `<projectId>:doc:<id>` and so on: the project id is the first part. */
+  const lockProjectId = (key: string) => {
+    const i = key.indexOf(':');
+    return i > 0 ? key.slice(0, i) : null;
+  };
 
   return (
     <>
@@ -54,6 +76,11 @@ export function WritersPage() {
       <div className="grid">
         <section className="card" aria-labelledby="rate-h">
           <h2 id="rate-h">Writes per minute</h2>
+          {selected && (
+            <p className="muted small-text">
+              Project <strong>{selected}</strong> (each project has its own budget)
+            </p>
+          )}
           <div className="stat">
             <span className="stat-value" data-testid="writes-per-minute">
               {fmtInt(rate)}
@@ -169,6 +196,9 @@ export function WritersPage() {
         <h2 id="slots-h">
           Slots ({d.writers.busy} of {d.writers.max} busy)
         </h2>
+        <p className="muted small-text">
+          The writer slots and the locks are shared by every project; each busy slot names its project.
+        </p>
         <div className="slots">
           {d.writers.slots.map((s) => (
             <div
@@ -183,8 +213,12 @@ export function WritersPage() {
               ) : (
                 <dl className="meta">
                   <div>
+                    <dt>Project</dt>
+                    <dd>{projectOf(s.jobId, s.projectId) ?? '–'}</dd>
+                  </div>
+                  <div>
                     <dt>Job</dt>
-                    <dd>{s.jobId ? jobLink(s.jobId) : '–'}</dd>
+                    <dd>{s.jobId ? jobLink(s.jobId, s.projectId) : '–'}</dd>
                   </div>
                   <div>
                     <dt>Operation</dt>
@@ -215,7 +249,10 @@ export function WritersPage() {
             <ol>
               {d.writers.waiting.map((x) => (
                 <li key={`${x.jobId}:${x.stepNo}`}>
-                  {jobLink(x.jobId)} · step {x.stepNo} · <span className="mono">{x.opId}</span>
+                  {jobLink(x.jobId, x.projectId)} · step {x.stepNo} · <span className="mono">{x.opId}</span>
+                  {projectOf(x.jobId, x.projectId) && (
+                    <span className="muted"> · project {projectOf(x.jobId, x.projectId)}</span>
+                  )}
                 </li>
               ))}
             </ol>
@@ -233,6 +270,7 @@ export function WritersPage() {
               <thead>
                 <tr>
                   <th>Lock</th>
+                  <th>Project</th>
                   <th>Held by</th>
                   <th>Waiting, in order</th>
                 </tr>
@@ -241,8 +279,9 @@ export function WritersPage() {
                 {d.locks.map((l) => (
                   <tr key={l.key}>
                     <td className="mono">{l.key}</td>
+                    <td>{projectOf(l.holder.jobId, lockProjectId(l.key)) ?? '–'}</td>
                     <td>
-                      {jobLink(l.holder.jobId)} · step {l.holder.stepNo}
+                      {jobLink(l.holder.jobId, lockProjectId(l.key))} · step {l.holder.stepNo}
                       <div className="muted small-text">for {fmtDuration(now - l.holder.since)}</div>
                     </td>
                     <td>
@@ -252,7 +291,7 @@ export function WritersPage() {
                         <ol>
                           {l.waiting.map((x) => (
                             <li key={`${x.jobId}:${x.stepNo}`}>
-                              {jobLink(x.jobId)} · step {x.stepNo}{' '}
+                              {jobLink(x.jobId, lockProjectId(l.key))} · step {x.stepNo}{' '}
                               {d.jobs[x.jobId] && <StatusBadge status={d.jobs[x.jobId]!.status} />}
                             </li>
                           ))}

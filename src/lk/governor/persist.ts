@@ -133,21 +133,24 @@ interface SqliteLike {
 }
 
 /**
- * Keeps the counters in the bridge database, table `governor_counters` (migration 0500), one row. `load` returns the
- * parsed JSON (or undefined when there is no row); a row that is not JSON throws, which the governor reports.
+ * Keeps one project's counters in the bridge database, table `governor_counters`, one row per project (migration 0500;
+ * scoped by project since v2 A1, migration 0600). Each project has its own governor and so its own row: `projectId` is
+ * the LegendKeeper project id. `load` returns the parsed JSON (or undefined when there is no row); a row that is not
+ * JSON throws, which the governor reports. A failing save (for example a project not registered in `projects`) is
+ * reported by the governor too and never fatal.
  */
-export function createSqliteCounterStore(db: SqliteLike, key = 'lk'): CounterStore {
+export function createSqliteCounterStore(db: SqliteLike, projectId: string): CounterStore {
   return {
     load() {
-      const row = db.prepare('SELECT data FROM governor_counters WHERE key = ?').get(key) as
+      const row = db.prepare('SELECT data FROM governor_counters WHERE project_id = ?').get(projectId) as
         { data: string } | undefined;
       return row ? (JSON.parse(row.data) as unknown) : undefined;
     },
     save(counters) {
       db.prepare(
-        `INSERT INTO governor_counters (key, saved_at, data) VALUES (?, ?, ?)
-         ON CONFLICT (key) DO UPDATE SET saved_at = excluded.saved_at, data = excluded.data`,
-      ).run(key, counters.savedAt, JSON.stringify(counters));
+        `INSERT INTO governor_counters (project_id, saved_at, data) VALUES (?, ?, ?)
+         ON CONFLICT (project_id) DO UPDATE SET saved_at = excluded.saved_at, data = excluded.data`,
+      ).run(projectId, counters.savedAt, JSON.stringify(counters));
     },
   };
 }

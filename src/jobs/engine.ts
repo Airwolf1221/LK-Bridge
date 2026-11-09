@@ -6,6 +6,8 @@ import { randomBytes } from 'node:crypto';
 import { WRITERS_LIMIT, WRITERS_MIN, type JobsSettings } from '../config/jobs.js';
 import type { Db } from '../db/open.js';
 import type { LkClient } from '../lk/client.js';
+import type { ProjectsRuntime } from '../projects/registry.js';
+import type { ProjectScope } from '../projects/types.js';
 import { BridgeLkError, BudgetWaitError } from '../lk/errors.js';
 import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
 import type { BudgetSnapshot } from '../lk/governor/types.js';
@@ -21,7 +23,9 @@ import {
   JobsError,
   LkOperationError,
   PolicyDeniedError,
+  ProjectUnavailableError,
   UncertainOutcomeError,
+  UnknownProjectError,
   UnknownOperationError,
   UnsupportedBlockLossError,
   VersionConflictError,
@@ -46,7 +50,7 @@ import {
   type ProposedOp,
 } from './policy.js';
 import { createJobQueries, JobsRepo, type ErrorInput, type NewStep } from './repo.js';
-import { StepExecutor, type StepOutcome } from './step-exec.js';
+import { StepExecutor, type StepOutcome, type WriteHold } from './step-exec.js';
 import {
   SYSTEM_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
@@ -83,7 +87,11 @@ export interface EngineLogger {
 
 export interface CreateJobEngineOptions {
   readonly db: Db;
-  readonly lk: LkClient;
+  /**
+   * The projects this engine serves (v2 A1): each has its own LK client and governor. Every operation names its
+   * project; a project that is not served now refuses new work and holds its queued jobs until it is back.
+   */
+  readonly projects: ProjectsRuntime;
   readonly settings: JobsSettings;
   readonly clock?: Clock;
   readonly log?: EngineLogger;
@@ -131,8 +139,9 @@ export class JobEngine {
   private readonly clock: Clock;
   private readonly log: EngineLogger;
   private readonly settings: JobsSettings;
-  private readonly lk: LkClient;
+  private readonly projects: ProjectsRuntime;
   private readonly db: Db;
+  private readonly offProjects: () => void;
   private readonly policyGate: PolicyGate;
   private readonly proposalSink: ProposalSink;
   private readonly active = new Map<string, Active>();
@@ -151,7 +160,7 @@ export class JobEngine {
 
   constructor(o: CreateJobEngineOptions) {
     this.db = o.db;
-    this.lk = o.lk;
+    this.projects = o.projects;
     this.settings = o.settings;
     this.clock = o.clock ?? systemClock;
     this.log = o.log ?? silentLog;
@@ -170,7 +179,7 @@ export class JobEngine {
     this.locks = new LockManager(now, (e) => this.events.emit('lock', e));
     this.writers = new WriterPool(max, now, (v) => this.events.emit('writers', v));
     this.executor = new StepExecutor({
-      lk: o.lk,
+      lkFor: (projectId) => this.projects.client(projectId),
       repo: this.repo,
       journal: this.journal,
       locks: this.locks,
@@ -179,18 +188,25 @@ export class JobEngine {
       now,
       recordLkError: (err, ref) => this.recordLkError(err, ref),
       setJobWaiting: (jobId, waiting, detail) => this.setWaitingLock(jobId, waiting, detail),
-      writeHold: () => this.writeHold(),
+      writeHold: (projectId) => this.writeHold(projectId),
       customSteps: o.customSteps,
     });
     const base = createJobQueries(o.db);
     this.queries = {
       ...base,
-      resolveErrorGroup: (fingerprint: string) => base.resolveErrorGroup(fingerprint, this.clock.now()),
-      journalLookup: (filter: JournalFilter = {}) => journalLookup(o.db, filter),
+      resolveErrorGroup: (projectId: string, fingerprint: string) =>
+        base.resolveErrorGroup(projectId, fingerprint, this.clock.now()),
+      journalLookup: (scope: ProjectScope, filter: JournalFilter = {}) => journalLookup(o.db, scope, filter),
       writers: (): WritersView => this.writers.view(),
       locks: (): LockView[] => this.locks.state(),
-      controls: (): ControlsView => this.controlsView(),
+      /** Bridge-wide controls; for one project, `readOnly` also counts that project's own flag. */
+      controls: (projectId?: string): ControlsView => this.controlsView(projectId),
     };
+    // A project coming back into service (or its read-only flag changing) releases its held jobs.
+    this.offProjects = this.projects.onChange(() => {
+      this.clearHolds();
+      this.pump();
+    });
     if (o.autoStart !== false) this.start();
   }
 
@@ -218,6 +234,7 @@ export class JobEngine {
    */
   async stop(): Promise<void> {
     this.stopped = true;
+    this.offProjects();
     for (const t of this.resumeTimers.values()) this.clock.clearTimeout(t);
     this.resumeTimers.clear();
     for (const a of this.active.values()) a.current.abort(new CancelledError());
@@ -235,27 +252,30 @@ export class JobEngine {
    * Throws only `JobsError` subclasses.
    */
   async run(opId: string, params: OpParams = {}, opts: RunOptions): Promise<RunResult> {
+    const project = this.requireProject(opts.project);
     const def = this.validate(opId, params);
     const options = stepOptions(opts);
     const origin = normaliseOrigin(opts.origin);
     const title = opts.title ?? def.operationId;
     const priority = opts.priority ?? 'P1';
-    const proposal = await this.authorize([{ def, params, options }], origin, 'single_op', {
+    const proposal = await this.authorize([{ def, params, options }], origin, 'single_op', project, {
       title,
       priority,
     });
     if (proposal) return proposal;
-    checkSubmitGuards(def, params, options, this.guardContext());
-    const estimate = this.estimateFor([{ def, params }], priority);
+    checkSubmitGuards(def, params, options, this.guardContext(project));
+    const estimate = this.estimateFor(project, [{ def, params }], priority);
     const slow = estimate.wallClockMs > this.settings.inlineMaxEstimateMs;
 
-    if (!isWriteOp(def) && !slow) return this.runInlineRead(def, params, priority, origin, opts.signal);
+    if (!isWriteOp(def) && !slow) {
+      return this.runInlineRead(project, def, params, priority, origin, opts.signal);
+    }
     if (this.draining) throw new DrainingError();
 
     const prepared = this.prepare(def, params, options);
-    const hold = isWriteOp(def) ? this.writeHold() : null;
+    const hold = isWriteOp(def) ? this.writeHold(project) : null;
     if (slow || hold) {
-      const job = this.createJob('single_op', title, origin, priority, 'stop', [prepared], 'queued');
+      const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', [prepared], 'queued');
       this.pump();
       return {
         status: 'queued',
@@ -266,7 +286,7 @@ export class JobEngine {
     }
 
     // Inline write: recorded as a one-step job and run now, through the same slots, locks and guards.
-    const job = this.createJob('single_op', title, origin, priority, 'stop', [prepared], 'running');
+    const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', [prepared], 'running');
     const onAbort = () => this.cancelJob(job.id);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     let result: RunnerResult;
@@ -291,7 +311,7 @@ export class JobEngine {
       return { status: 'waiting_budget', jobId: job.id, eta: final.resumeAt, reason: 'budget' };
     }
     if (final.status === 'queued') {
-      const reason = (final.waitReason?.held as 'writes_paused' | 'read_only' | undefined) ?? 'writes_paused';
+      const reason = (final.waitReason?.held as WriteHold | undefined) ?? 'writes_paused';
       return { status: 'queued', jobId: job.id, eta: null, reason };
     }
     if (final.status === 'cancelled') throw new CancelledError({ jobId: job.id, stepNo: 1 });
@@ -300,6 +320,7 @@ export class JobEngine {
   }
 
   private async runInlineRead(
+    project: string,
     def: OperationDef,
     params: OpParams,
     priority: PriorityClass,
@@ -309,13 +330,14 @@ export class JobEngine {
     const stats = newCallStats();
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     try {
-      const result = await callOp(this.lk, def, params, {
+      const result = await callOp(this.clientOf(project), def, params, {
         priority,
         signal,
         requestIdPrefix: `lkb.r${randomBytes(6).toString('hex')}`,
         stats,
         onError: (err) =>
           this.recordLkError(err, {
+            projectId: project,
             opId: def.operationId,
             principalId: principal.principalId,
             profile: principal.profile,
@@ -342,6 +364,7 @@ export class JobEngine {
   }
 
   private async submitBatch(req: BatchSubmit): Promise<SubmitResult | ProposalCaptured> {
+    const project = this.requireProject(req.project);
     if (req.steps.length === 0)
       throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
     const origin = normaliseOrigin(req.origin);
@@ -364,23 +387,29 @@ export class JobEngine {
     const title = req.title ?? `batch of ${validated.length} operation(s)`;
     // Every step is put to the policy gate before anything is queued: one deny denies the batch, one propose
     // turns the whole batch into one proposal.
-    const proposal = await this.authorize(validated, origin, 'batch_ops', { title, priority, onError });
+    const proposal = await this.authorize(validated, origin, 'batch_ops', project, {
+      title,
+      priority,
+      onError,
+    });
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
-    const guard = this.guardContext();
+    const guard = this.guardContext(project);
     for (const v of validated) checkSubmitGuards(v.def, v.params, v.options, guard);
     const prepared = validated.map((v) => this.prepare(v.def, v.params, v.options));
-    const job = this.createJob('batch_ops', title, origin, priority, onError, prepared, 'queued');
+    const job = this.createJob(project, 'batch_ops', title, origin, priority, onError, prepared, 'queued');
     const estimate = this.estimateFor(
+      project,
       prepared.map((p) => ({ def: p.def, params: p.step.params })),
       priority,
     );
     this.pump();
-    const held = prepared.some((p) => isWriteOp(p.def)) && this.writeHold() !== null;
+    const held = prepared.some((p) => isWriteOp(p.def)) && this.writeHold(project) !== null;
     return { jobId: job.id, status: job.status, eta: held ? null : this.clock.now() + estimate.wallClockMs };
   }
 
   private async submitPaginate(req: PaginateSubmit): Promise<SubmitResult | ProposalCaptured> {
+    const project = this.requireProject(req.project);
     const params = req.params ?? {};
     const def = this.validate(req.op, params);
     if (!def.paged || def.kind !== 'read') {
@@ -390,7 +419,7 @@ export class JobEngine {
     }
     const origin = normaliseOrigin(req.origin);
     const title = req.title ?? `${def.operationId}: every page`;
-    const proposal = await this.authorize([{ def, params, options: {} }], origin, 'paginate_all', {
+    const proposal = await this.authorize([{ def, params, options: {} }], origin, 'paginate_all', project, {
       title,
       priority: req.priority ?? 'P2',
       paginate: {
@@ -406,6 +435,7 @@ export class JobEngine {
     const first: OpParams = { ...params, query };
     const priority = req.priority ?? 'P2';
     const job = this.createJob(
+      project,
       'paginate_all',
       title,
       origin,
@@ -427,7 +457,7 @@ export class JobEngine {
     return {
       jobId: job.id,
       status: 'queued',
-      eta: this.clock.now() + this.estimateFor([{ def, params }], priority).wallClockMs,
+      eta: this.clock.now() + this.estimateFor(project, [{ def, params }], priority).wallClockMs,
     };
   }
 
@@ -437,6 +467,7 @@ export class JobEngine {
    * The upload key is bound into the last step when it is about to run (see `bindUploadStep`).
    */
   private async submitUpload(req: UploadImageSubmit): Promise<SubmitResult | ProposalCaptured> {
+    const project = this.requireProject(req.project);
     const origin = normaliseOrigin(req.origin);
     const uploadParams: OpParams = {
       body: {
@@ -459,10 +490,10 @@ export class JobEngine {
       { def: upload, params: uploadParams, options: {} },
       { def: asset, params: { body: assetBody } as OpParams, options: {} },
     ];
-    const proposal = await this.authorize(items, origin, 'upload_image', { title, priority });
+    const proposal = await this.authorize(items, origin, 'upload_image', project, { title, priority });
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
-    const guard = this.guardContext();
+    const guard = this.guardContext(project);
     for (const v of items) checkSubmitGuards(v.def, v.params, v.options, guard);
     const steps: Pick<PreparedStep, 'step'>[] = [
       this.prepare(upload, uploadParams, {}),
@@ -485,8 +516,9 @@ export class JobEngine {
       },
       this.prepare(asset, { body: assetBody }, {}),
     ];
-    const job = this.createJob('upload_image', title, origin, priority, 'stop', steps, 'queued');
+    const job = this.createJob(project, 'upload_image', title, origin, priority, 'stop', steps, 'queued');
     const estimate = this.estimateFor(
+      project,
       [
         { def: upload, params: uploadParams },
         { def: asset, params: { body: assetBody } },
@@ -497,7 +529,7 @@ export class JobEngine {
     return {
       jobId: job.id,
       status: job.status,
-      eta: this.writeHold() !== null ? null : this.clock.now() + estimate.wallClockMs,
+      eta: this.writeHold(project) !== null ? null : this.clock.now() + estimate.wallClockMs,
     };
   }
 
@@ -531,6 +563,8 @@ export class JobEngine {
    * not recorded as jobs; this is the exception, and it makes the stored result visible in the job list.
    */
   recordResult(args: {
+    /** The project the value belongs to (v2 A1): it must be a project this bridge knows. */
+    readonly project: string;
     /** What produced the value: a registry operation id, or a label such as `bridge_journal_lookup`. */
     readonly opId: string;
     readonly params: OpParams;
@@ -541,8 +575,10 @@ export class JobEngine {
     /** Chunk 6: records the work as a FAILED job (a maintenance run that threw) instead of a succeeded one. */
     readonly failure?: { readonly code: string; readonly message: string };
   }): { readonly jobId: string; readonly artifactId: string; readonly bytes: number } {
+    if (!this.projects.known(args.project)) throw new UnknownProjectError(args.project);
     const origin = normaliseOrigin(args.origin);
     const job = this.createJob(
+      args.project,
       'single_op',
       args.title ?? `${args.opId} (stored result)`,
       origin,
@@ -594,10 +630,13 @@ export class JobEngine {
     return { jobId: job.id, artifactId, bytes };
   }
 
-  /** Bounded wait (at most `maxWaitMs`, 25 s) for a job to finish. Resolves with the job as it then stands. */
-  wait(jobId: string, ms: number): Promise<JobView> {
+  /**
+   * Bounded wait (at most `maxWaitMs`, 25 s) for a job of `projectId` to finish. Resolves with the job as it then
+   * stands. A job of another project is not found.
+   */
+  wait(projectId: string, jobId: string, ms: number): Promise<JobView> {
     const job = this.repo.job(jobId);
-    if (!job) return Promise.reject(new JobNotFoundError(jobId));
+    if (!job || job.projectId !== projectId) return Promise.reject(new JobNotFoundError(jobId));
     if (TERMINAL_JOB_STATUSES.has(job.status)) return Promise.resolve(job);
     const bounded = Math.max(0, Math.min(ms, this.settings.maxWaitMs));
     return new Promise((resolve) => {
@@ -662,11 +701,17 @@ export class JobEngine {
       this.pump();
       return this.controlsChanged();
     },
-    /** Cancels a job: an in-flight step completes, then it stops; nothing further is sent. */
-    cancel: (jobId: string): JobView => this.cancelJob(jobId),
+    /**
+     * Cancels a job of `projectId`: an in-flight step completes, then it stops; nothing further is sent. Every job
+     * control names the project; a job of another project is not found (v2 A1).
+     */
+    cancel: (projectId: string, jobId: string): JobView => {
+      this.requireJob(jobId, projectId);
+      return this.cancelJob(jobId);
+    },
     /** Pauses a job after its in-flight step. */
-    pauseJob: (jobId: string): JobView => {
-      const job = this.requireJob(jobId);
+    pauseJob: (projectId: string, jobId: string): JobView => {
+      const job = this.requireJob(jobId, projectId);
       if (TERMINAL_JOB_STATUSES.has(job.status))
         throw new InvalidControlError(`Job ${jobId} has finished`, { jobId });
       if (this.active.has(jobId)) {
@@ -678,8 +723,8 @@ export class JobEngine {
       }
       return this.emitJob(jobId, 'updated');
     },
-    resumeJob: (jobId: string): JobView => {
-      const job = this.requireJob(jobId);
+    resumeJob: (projectId: string, jobId: string): JobView => {
+      const job = this.requireJob(jobId, projectId);
       if (job.status !== 'paused' && !job.pauseRequested) {
         throw new InvalidControlError(`Job ${jobId} is not paused`, { jobId });
       }
@@ -699,8 +744,13 @@ export class JobEngine {
      *   it goes through verify-before-resend again and can never duplicate.
      * - `force: true` (a person checked LK and wants it sent again) re-runs even those as new work.
      */
-    retryStep: (jobId: string, stepNo: number, opts: { readonly force?: boolean } = {}): JobView => {
-      const job = this.requireJob(jobId);
+    retryStep: (
+      projectId: string,
+      jobId: string,
+      stepNo: number,
+      opts: { readonly force?: boolean } = {},
+    ): JobView => {
+      const job = this.requireJob(jobId, projectId);
       if (this.active.has(jobId) || !TERMINAL_JOB_STATUSES.has(job.status) || job.status === 'cancelled') {
         throw new InvalidControlError(`Job ${jobId} must have failed to retry a step`, { jobId, stepNo });
       }
@@ -744,12 +794,20 @@ export class JobEngine {
     },
   };
 
-  /** Records a budget snapshot for the Request Budgets sparklines (chunk 6 schedules this every 10 s). */
-  recordBudgetSample(snapshot: BudgetSnapshot = this.lk.governor.snapshot()): void {
-    this.repo.recordBudgetSample(snapshot);
+  /**
+   * Records a budget snapshot of one project's governor for the Request Budgets sparklines (chunk 6 schedules this
+   * every 10 s, for every project). Without `snapshot`, the project's governor is sampled now.
+   */
+  recordBudgetSample(projectId: string, snapshot?: BudgetSnapshot): void {
+    const s = snapshot ?? this.projects.anyClient(projectId)?.governor.snapshot();
+    if (!s) throw new UnknownProjectError(projectId);
+    this.repo.recordBudgetSample(projectId, s);
   }
 
-  /** Journal retention (default 30 days or 2 GB). The scheduled `journal-prune` job (chunk 6) calls this. */
+  /**
+   * Journal retention (default 30 days or 2 GB), over every project's entries. The scheduled `journal-prune` job
+   * (chunk 6) calls this.
+   */
   pruneJournal() {
     return this.journal.prune(this.settings.journal);
   }
@@ -773,12 +831,17 @@ export class JobEngine {
     if (!this.started || this.stopped || this.draining) return;
     let capacity = this.settings.maxActiveJobs - this.active.size;
     if (capacity <= 0) return;
-    const hold = this.writeHold();
     for (const job of this.repo.queuedJobs(capacity + 100)) {
       if (capacity <= 0) break;
       if (this.active.has(job.id)) continue;
       const step = this.repo.nextStep(job.id);
-      if (step && hold && step.opKind !== 'read') {
+      // A project that is not served now holds every step of its jobs; otherwise only writes can be held.
+      const hold: WriteHold | null = !this.projects.client(job.projectId)
+        ? 'project_unavailable'
+        : step && step.opKind !== 'read'
+          ? this.writeHold(job.projectId)
+          : null;
+      if (step && hold) {
         if (job.waitReason?.held !== hold) {
           this.repo.updateJob(job.id, { waitReason: { held: hold } });
           this.emitJob(job.id, 'updated');
@@ -1118,7 +1181,34 @@ export class JobEngine {
     };
   }
 
+  /** A project id that is known and served now; otherwise the typed refusal (nothing is queued or sent). */
+  private requireProject(projectId: string | undefined): string {
+    if (typeof projectId !== 'string' || projectId === '' || !this.projects.known(projectId)) {
+      throw new UnknownProjectError(String(projectId));
+    }
+    const why = this.projects.unavailableReason(projectId);
+    if (why !== null || !this.projects.client(projectId)) {
+      throw new ProjectUnavailableError(
+        this.projects.nameOf(projectId),
+        why ?? `project "${this.projects.nameOf(projectId)}" is not available now`,
+      );
+    }
+    return projectId;
+  }
+
+  private clientOf(projectId: string): LkClient {
+    const lk = this.projects.client(projectId);
+    if (!lk) {
+      throw new ProjectUnavailableError(
+        this.projects.nameOf(projectId),
+        this.projects.unavailableReason(projectId) ?? 'not available now',
+      );
+    }
+    return lk;
+  }
+
   private createJob(
+    projectId: string,
     kind: JobKind,
     title: string,
     origin: JobOrigin,
@@ -1130,6 +1220,7 @@ export class JobEngine {
   ): JobView {
     const job = this.repo.insertJob({
       id: newJobId(),
+      projectId,
       kind,
       title: title.slice(0, 500),
       origin,
@@ -1144,6 +1235,7 @@ export class JobEngine {
   }
 
   private estimateFor(
+    projectId: string,
     items: readonly { def: OperationDef; params: OpParams | undefined }[],
     priority: PriorityClass,
   ) {
@@ -1162,28 +1254,41 @@ export class JobEngine {
         createManyItems += Array.isArray(list) ? list.length : 0;
       } else writes++;
     }
-    return this.lk.governor.estimate({ reads, writes, createManyItems, priority });
+    return this.clientOf(projectId).governor.estimate({ reads, writes, createManyItems, priority });
   }
 
-  private guardContext() {
-    return { readOnly: this.readOnly(), allowMemberAdmin: this.settings.allowMemberAdmin };
+  private guardContext(projectId: string) {
+    const bridge = this.readOnly();
+    const own = this.projects.readOnly(projectId);
+    return {
+      readOnly: bridge || own,
+      allowMemberAdmin: this.settings.allowMemberAdmin,
+      project: { name: this.projects.nameOf(projectId), projectOnly: own && !bridge },
+    };
   }
 
+  /** The bridge-wide read-only flag: the runtime override if set, else LK_READ_ONLY. */
   private readOnly(): boolean {
     return this.readOnlyOverride ?? this.settings.readOnly;
   }
 
-  private writeHold(): 'writes_paused' | 'read_only' | null {
-    if (this.readOnly()) return 'read_only';
+  /** Why a new write to `projectId` may not start now: bridge-wide or project read-only, or a writes pause. */
+  private writeHold(projectId: string): WriteHold | null {
+    if (this.readOnly() || this.projects.readOnly(projectId)) return 'read_only';
     if (this.writesPaused) return 'writes_paused';
     return null;
   }
 
-  /** Drops stale "held" reasons once writes may run again. */
+  /** Drops stale "held" reasons once a job's work may run again. */
   private clearHolds(): void {
-    if (this.writeHold() !== null) return;
     for (const job of this.repo.jobsWithStatus(['queued'])) {
-      if (job.waitReason?.held) {
+      const held = job.waitReason?.held;
+      if (!held) continue;
+      const still =
+        held === 'project_unavailable'
+          ? !this.projects.client(job.projectId)
+          : this.writeHold(job.projectId) !== null;
+      if (!still) {
         this.repo.updateJob(job.id, { waitReason: null });
         this.emitJob(job.id, 'updated');
       }
@@ -1210,9 +1315,10 @@ export class JobEngine {
     });
   }
 
-  private requireJob(jobId: string): JobView {
+  /** The job, or JobNotFoundError; with `projectId`, a job of another project is not found either. */
+  private requireJob(jobId: string, projectId?: string): JobView {
     const job = this.repo.job(jobId);
-    if (!job) throw new JobNotFoundError(jobId);
+    if (!job || (projectId !== undefined && job.projectId !== projectId)) throw new JobNotFoundError(jobId);
     return job;
   }
 
@@ -1225,18 +1331,36 @@ export class JobEngine {
   private emitStep(job: JobView, stepNo: number): void {
     const step = this.repo.step(job.id, stepNo);
     if (step) {
-      this.events.emit('step', { jobId: job.id, principalId: job.principalId, profile: job.profile, step });
+      this.events.emit('step', {
+        projectId: job.projectId,
+        jobId: job.id,
+        principalId: job.principalId,
+        profile: job.profile,
+        step,
+      });
     }
   }
 
-  private controlsView(): ControlsView {
-    return {
+  private controlsView(projectId?: string): ControlsView {
+    const base = {
       writesPaused: this.writesPaused,
       draining: this.draining,
       readOnly: this.readOnly(),
       readOnlyOverride: this.readOnlyOverride,
       writersMax: this.writers.max,
       allowMemberAdmin: this.settings.allowMemberAdmin,
+    };
+    if (projectId === undefined) return base;
+    const own = this.projects.readOnly(projectId);
+    return {
+      ...base,
+      readOnly: base.readOnly || own,
+      project: {
+        id: projectId,
+        name: this.projects.nameOf(projectId),
+        readOnly: own,
+        available: this.projects.client(projectId) !== undefined,
+      },
     };
   }
 
@@ -1248,9 +1372,17 @@ export class JobEngine {
 
   private recordLkError(
     err: BridgeLkError,
-    ref: { opId: string; jobId?: string; stepNo?: number; principalId?: string; profile?: string },
+    ref: {
+      projectId: string;
+      opId: string;
+      jobId?: string;
+      stepNo?: number;
+      principalId?: string;
+      profile?: string;
+    },
   ): void {
     this.recordError({
+      projectId: ref.projectId,
       opId: ref.opId,
       jobId: ref.jobId,
       stepNo: ref.stepNo,
@@ -1281,6 +1413,7 @@ export class JobEngine {
             ? 'upstream'
             : 'bridge';
     this.recordError({
+      projectId: job.projectId,
       opId,
       jobId,
       stepNo,
@@ -1305,7 +1438,8 @@ export class JobEngine {
     items: readonly { def: OperationDef; params: OpParams; options: StepOptions }[],
     origin: JobOrigin,
     jobKind: JobKind,
-    meta: Omit<ProposalMeta, 'kind' | 'origin'>,
+    project: string,
+    meta: Omit<ProposalMeta, 'kind' | 'origin' | 'project'>,
   ): Promise<ProposalCaptured | null> {
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     const batch = jobKind === 'batch_ops';
@@ -1316,6 +1450,7 @@ export class JobEngine {
       try {
         decision = await this.policyGate.authorize(principal, policyOpMeta(def, options), params, {
           origin,
+          project,
           jobKind,
           phase: 'entry',
           ...(batch ? { stepIndex: i } : {}),
@@ -1335,6 +1470,7 @@ export class JobEngine {
             batch ? i : undefined,
           ),
           principal,
+          project,
         );
       }
       if (decision.decision === 'propose') propose = true;
@@ -1350,10 +1486,11 @@ export class JobEngine {
         ...meta,
         kind: jobKind,
         origin,
+        project,
       });
       return { status: 'proposal_captured', proposalId, ...(summary !== undefined ? { summary } : {}) };
     } catch (e) {
-      if (e instanceof PolicyDeniedError) throw this.policyDenied(e, principal);
+      if (e instanceof PolicyDeniedError) throw this.policyDenied(e, principal, project);
       // A sink that refuses with a typed reason (a guard, invalid params, a failed read) keeps it.
       if (e instanceof JobsError) throw e;
       throw new JobsError(
@@ -1392,6 +1529,7 @@ export class JobEngine {
         this.repo.stepParams(step),
         {
           origin,
+          project: job.projectId,
           jobKind: job.kind,
           phase: 'execute',
           ...(job.kind === 'batch_ops' ? { stepIndex: step.stepNo - 1 } : {}),
@@ -1420,6 +1558,7 @@ export class JobEngine {
       finishedAt: this.clock.now(),
     });
     this.recordError({
+      projectId: job.projectId,
       opId: step.opId,
       jobId: job.id,
       stepNo: step.stepNo,
@@ -1437,8 +1576,9 @@ export class JobEngine {
     this.finish(job.id);
   }
 
-  private policyDenied(error: PolicyDeniedError, principal: Principal): PolicyDeniedError {
+  private policyDenied(error: PolicyDeniedError, principal: Principal, project: string): PolicyDeniedError {
     this.recordError({
+      projectId: project,
       opId: error.opId,
       code: error.code,
       message: error.message,

@@ -252,27 +252,38 @@ describe('the SQLite counter store', () => {
     dir = undefined;
   });
 
-  it('round-trips through table governor_counters (migration 0500), and a corrupt row starts empty', async () => {
+  it('round-trips through table governor_counters (migration 0500), one row per project (0600), and a corrupt row starts empty', async () => {
     dir = mkdtempSync(join(tmpdir(), 'lkb-gov-'));
     db = openDatabase(join(dir, 'bridge.db'));
     runMigrations(db);
+    // v2 A1: each project has its own governor and its own saved row, keyed by the project's LegendKeeper id.
+    for (const id of ['proj_a', 'proj_b']) {
+      db.prepare('INSERT INTO projects (id, name, created_at, updated_at) VALUES (?, ?, 0, 0)').run(
+        id,
+        id.replace('proj_', 'p'),
+      );
+    }
     const clock = new FakeClock();
-    const a = build(clock, createSqliteCounterStore(db));
+    const a = build(clock, createSqliteCounterStore(db, 'proj_a'));
     await Promise.all(Array.from({ length: 30 }, () => a.write()));
     a.governor.close();
-    const row = db.prepare('SELECT key, saved_at, data FROM governor_counters').all() as {
-      key: string;
+    const row = db.prepare('SELECT project_id, saved_at, data FROM governor_counters').all() as {
+      project_id: string;
       saved_at: number;
     }[];
-    expect(row).toEqual([expect.objectContaining({ key: 'lk', saved_at: clock.now() })]);
+    expect(row).toEqual([expect.objectContaining({ project_id: 'proj_a', saved_at: clock.now() })]);
     await clock.advance(5_000);
-    const b = build(clock, createSqliteCounterStore(db));
+    // Another project's governor restores nothing of proj_a's counts.
+    const other = build(clock, createSqliteCounterStore(db, 'proj_b'));
+    expect(other.used('write-min')).toBe(0);
+    other.governor.close();
+    const b = build(clock, createSqliteCounterStore(db, 'proj_a'));
     expect(b.used('write-min')).toBe(30);
     b.governor.close();
 
-    db.prepare(`UPDATE governor_counters SET data = '{not json'`).run();
+    db.prepare(`UPDATE governor_counters SET data = '{not json' WHERE project_id = 'proj_a'`).run();
     const warnings: string[] = [];
-    const c = build(clock, createSqliteCounterStore(db), warnings);
+    const c = build(clock, createSqliteCounterStore(db, 'proj_a'), warnings);
     expect(c.used('write-min')).toBe(0);
     expect(warnings).toEqual([expect.stringMatching(/Could not read the saved governor counters/)]);
     c.governor.close();

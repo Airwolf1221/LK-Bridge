@@ -158,6 +158,74 @@ export async function openStream(): Promise<FakeSource> {
 
 // --------------------------------------------------------------------------------------------- mock data
 
+/** The two projects of the mock bridge (v2 A1): `baisheng` (the default) and `test` (a sandbox). */
+export const PROJECT_ID = 'lkp_baisheng';
+export const OTHER_PROJECT_ID = 'lkp_test';
+
+/** The `project` query parameter of a request (null: none). */
+export const projectOf = (call: Pick<Call, 'query'>): string | null =>
+  new URLSearchParams(call.query).get('project');
+
+export const project = (over: Record<string, unknown> = {}) => ({
+  name: 'baisheng',
+  id: PROJECT_ID,
+  displayName: 'Baisheng',
+  isDefault: true,
+  isSandbox: false,
+  readOnly: false,
+  configured: true,
+  registered: true,
+  status: 'active',
+  reason: null,
+  keyVariable: 'LK_PROJECT_BAISHENG_API_KEY',
+  keyPresent: true,
+  keyValid: true,
+  verifiedAt: Date.now() - 3_600_000,
+  checkedAt: Date.now() - 60_000,
+  settings: {},
+  settingsProblem: null,
+  ...over,
+});
+
+export const otherProject = (over: Record<string, unknown> = {}) =>
+  project({
+    name: 'test',
+    id: OTHER_PROJECT_ID,
+    displayName: 'Test world',
+    isDefault: false,
+    isSandbox: true,
+    keyVariable: 'LK_PROJECT_TEST_API_KEY',
+    ...over,
+  });
+
+export const SETTING_KEYS = [
+  { key: 'aiRepositoryRootId', label: 'AI REPOSITORY root', kind: 'resource id' },
+  { key: 'charactersRootId', label: 'Characters root', kind: 'resource id' },
+  { key: 'chronologyResourceId', label: 'Chronology resource', kind: 'resource id' },
+  { key: 'templateIds', label: 'Template ids', kind: 'role → template id' },
+];
+
+/** `GET /projects`. */
+export const projectsJson = (projects: unknown[] = [project(), otherProject()]) => ({
+  default: 'baisheng',
+  requireProjectForWrites: true,
+  singleProjectForm: false,
+  settingKeys: SETTING_KEYS,
+  projects,
+});
+
+/** A live `budget` event: every project's budget by LegendKeeper id (default: only the default project's). */
+export const budgetEvent = (
+  projects: Record<string, { snapshot: unknown; writesPerMinute: number; name?: string }>,
+) => ({
+  projects: Object.fromEntries(
+    Object.entries(projects).map(([id, b]) => [
+      id,
+      { name: b.name ?? (id === PROJECT_ID ? 'baisheng' : 'test'), ...b },
+    ]),
+  ),
+});
+
 export const tier = (
   id: string,
   used: number,
@@ -214,6 +282,7 @@ export const controls = (over: Record<string, unknown> = {}) => ({
 
 export const job = (over: Record<string, unknown> = {}) => ({
   id: 'job_1',
+  projectId: PROJECT_ID,
   kind: 'batch_ops',
   title: 'Rewrite the Kingdom page',
   origin: { kind: 'mcp', tool: 'lk_api_batch' },
@@ -240,6 +309,7 @@ export const job = (over: Record<string, unknown> = {}) => ({
 
 export const step = (over: Record<string, unknown> = {}) => ({
   jobId: 'job_1',
+  projectId: PROJECT_ID,
   stepNo: 1,
   opId: 'replaceDocumentBlocks',
   opKind: 'write',
@@ -297,7 +367,22 @@ export const connections = [
 ];
 
 export const baseRoutes = (): Routes => ({
-  'GET /proposals/counts': { counts: { pending: 2, conflicted: 1 } },
+  'GET /projects': projectsJson(),
+  // The selected project's counts by state; `byProject` holds every project's pending count.
+  'GET /proposals/counts': (c: Call) => {
+    const name = projectOf(c) ?? 'baisheng';
+    return name === 'test'
+      ? {
+          project: { id: OTHER_PROJECT_ID, name },
+          counts: { pending: 5 },
+          byProject: { baisheng: 2, test: 5 },
+        }
+      : {
+          project: { id: PROJECT_ID, name },
+          counts: { pending: 2, conflicted: 1 },
+          byProject: { baisheng: 2, test: 5 },
+        };
+  },
   'GET /clients': {
     profiles,
     defaultScope: 'read',

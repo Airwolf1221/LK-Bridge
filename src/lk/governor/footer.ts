@@ -31,7 +31,11 @@ function pair(snapshot: BudgetSnapshot, tier: TierId, unit: string): string {
   return `${fmt(t.used)}/${fmt(t.limit)}${DOT}${unit}`;
 }
 
-export function formatBudgetFooter(snapshot: BudgetSnapshot): string {
+/**
+ * The one-line footer (PLAN §5.4). With `project` (v2 A1: each project has its own governor), the line names it:
+ * `budget (arkona): writes …`.
+ */
+export function formatBudgetFooter(snapshot: BudgetSnapshot, project?: string): string {
   const q = snapshot.queues;
   const queue = [
     ...(q.P0 > 0 ? [`P0:${q.P0}`] : []),
@@ -40,7 +44,7 @@ export function formatBudgetFooter(snapshot: BudgetSnapshot): string {
     ...(q.P3 > 0 ? [`P3:${q.P3}`] : []),
   ].join(' ');
   const parts = [
-    `budget: writes ${pair(snapshot, 'write-min', 'min')} ${pair(snapshot, 'write-hour', 'h')}`,
+    `budget${project ? ` (${project})` : ''}: writes ${pair(snapshot, 'write-min', 'min')} ${pair(snapshot, 'write-hour', 'h')}`,
     `all ${pair(snapshot, 'key-min', 'min')} ${pair(snapshot, 'key-hour', 'h')} ${pair(snapshot, 'key-day', 'd')}`,
     `project ${pair(snapshot, 'project-hour', 'h')}`,
     `queue ${queue}`,

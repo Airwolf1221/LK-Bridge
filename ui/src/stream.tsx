@@ -34,6 +34,7 @@ const EVENTS = [
   'proposal',
   'throttled',
   'budget-wait',
+  'project',
   'unauthenticated',
 ] as const;
 

@@ -18,6 +18,8 @@ import type { OpParams, StepOptions } from './types.js';
 export interface GuardContext {
   readonly readOnly: boolean;
   readonly allowMemberAdmin: boolean;
+  /** v2 A1: the project, and whether the refusal is its own flag (the bridge-wide flag is off). */
+  readonly project?: { readonly name: string; readonly projectOnly: boolean };
 }
 
 export function isWriteOp(op: OperationDef): boolean {
@@ -31,7 +33,7 @@ export function checkSubmitGuards(
   options: StepOptions,
   ctx: GuardContext,
 ): void {
-  if (isWriteOp(op) && ctx.readOnly) throw new ReadOnlyError(op.operationId);
+  if (isWriteOp(op) && ctx.readOnly) throw new ReadOnlyError(op.operationId, ctx.project);
   if (op.risk === 'admin' && !ctx.allowMemberAdmin) throw new MemberAdminDisabledError(op.operationId);
   if (cascadeRequested(params) && options.confirm !== 'cascade') {
     throw new CascadeConfirmationRequiredError(op.operationId);

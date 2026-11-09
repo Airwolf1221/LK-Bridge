@@ -50,8 +50,8 @@ export interface LkClient {
   readonly fetch: Governor['fetch'];
   /** Registry-aware `governor.execute`: derives `kind` and `costs` from the operation registry. */
   call<T>(req: LkCallRequest<T>): Promise<T>;
-  /** `formatBudgetFooter(governor.snapshot())`. */
-  budgetFooter(): string;
+  /** `formatBudgetFooter(governor.snapshot(), project)`: with `project`, the line names it (v2 A1). */
+  budgetFooter(project?: string): string;
 }
 
 /** SDK's own timeout sits just above the governor's, so the governor's (clock-driven) one fires first. */
@@ -95,6 +95,6 @@ export function createLkClient(config: LkClientConfig): LkClient {
         run: (signal) => req.run(sdk, signal),
       });
     },
-    budgetFooter: () => formatBudgetFooter(governor.snapshot()),
+    budgetFooter: (project?: string) => formatBudgetFooter(governor.snapshot(), project),
   };
 }

@@ -16,25 +16,26 @@ export interface Health {
 
 const TTL_MS = 60_000;
 
+/** One cached check per project (v2 A1: each project has its own key, so its own answer). */
 export function createHealthCheck(engine: JobEngine, now: () => number) {
-  let cached: Health | undefined;
-  let inFlight: Promise<Health> | undefined;
+  const cache = new Map<string, Health>();
+  const inFlight = new Map<string, Promise<Health>>();
   const origin = { kind: 'ui', tool: 'overview' } as const;
 
-  const probe = async (): Promise<Health> => {
+  const probe = async (project: string): Promise<Health> => {
     let reachable: boolean | null = null;
     let projectName: string | null = null;
     let keyRole: Health['keyRole'] = 'unknown';
     let plan: Health['plan'] = 'unknown';
     let note: string | null = null;
     try {
-      const p = await engine.run('getProject', {}, { origin, priority: 'P0' });
+      const p = await engine.run('getProject', {}, { origin, priority: 'P0', project });
       reachable = true;
       plan = 'ok';
       if (p.status === 'succeeded')
         projectName = ((p.result as { name?: unknown })?.name as string | undefined) ?? null;
       try {
-        const m = await engine.run('listMembers', {}, { origin, priority: 'P0' });
+        const m = await engine.run('listMembers', {}, { origin, priority: 'P0', project });
         if (m.status === 'succeeded') {
           // LegendKeeper shows member emails to ADMIN keys only: the cheapest honest probe of the key's role.
           const members = ((m.result as { data?: { email?: unknown }[] })?.data ?? []) as {
@@ -50,7 +51,9 @@ export function createHealthCheck(engine: JobEngine, now: () => number) {
     } catch (e) {
       const lk = (e as { lk?: { code?: string; status?: number } }).lk;
       const code = (e as { code?: string }).code;
-      if (lk?.code === 'PAID_PLAN_REQUIRED' || lk?.status === 402) {
+      if (code === 'PROJECT_UNAVAILABLE' || code === 'UNKNOWN_PROJECT') {
+        note = (e as Error).message;
+      } else if (lk?.code === 'PAID_PLAN_REQUIRED' || lk?.status === 402) {
         reachable = true;
         plan = 'unpaid';
         note = 'LegendKeeper says the project owner needs a paid plan.';
@@ -68,14 +71,19 @@ export function createHealthCheck(engine: JobEngine, now: () => number) {
         note = 'LegendKeeper could not be reached.';
       }
     }
-    return (cached = { checkedAt: now(), reachable, projectName, keyRole, plan, note });
+    const h: Health = { checkedAt: now(), reachable, projectName, keyRole, plan, note };
+    cache.set(project, h);
+    return h;
   };
 
-  return async (refresh = false): Promise<Health> => {
+  return async (project: string, refresh = false): Promise<Health> => {
+    const cached = cache.get(project);
     if (!refresh && cached && now() - cached.checkedAt < TTL_MS) return cached;
-    inFlight ??= probe().finally(() => {
-      inFlight = undefined;
-    });
-    return inFlight;
+    let p = inFlight.get(project);
+    if (!p) {
+      p = probe(project).finally(() => inFlight.delete(project));
+      inFlight.set(project, p);
+    }
+    return p;
   };
 }

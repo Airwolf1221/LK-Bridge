@@ -45,7 +45,8 @@ export interface OwnerCommands {
   setConnectionProfile(actor: OwnerActor, connectionId: string, profileId: string): ConnectionView;
   /** Revokes a grant (`grant_…`: its refresh and access tokens) or a PAT (`pat_…`). */
   revoke(actor: OwnerActor, connectionId: string): boolean;
-  listProposals(actor: OwnerActor, filter?: ProposalFilter): ProposalView[];
+  /** v2 A1: `filter.project` is one project's id or `ALL_PROJECTS`. */
+  listProposals(actor: OwnerActor, filter: ProposalFilter): ProposalView[];
   getProposal(actor: OwnerActor, id: string): ProposalDetail;
   approve(actor: OwnerActor, id: string): Promise<ProposalView>;
   reject(actor: OwnerActor, id: string, reason?: string): ProposalView;
@@ -158,7 +159,7 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
       return done;
     },
 
-    listProposals(actor, filter = {}) {
+    listProposals(actor, filter) {
       assertOwner(actor);
       return proposals.list(filter);
     },

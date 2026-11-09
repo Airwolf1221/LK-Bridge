@@ -15,7 +15,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DEFAULT_TOOLS_SETTINGS, loadConfig } from '../../src/config/index.js';
+import { DEFAULT_TOOLS_SETTINGS, loadConfig, projectKeyVariable } from '../../src/config/index.js';
 import { defaultMaintenanceSettings } from '../../src/config/maintenance.js';
 import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase } from '../../src/db/open.js';
@@ -80,31 +80,39 @@ export function countingTransport(inner: Transport, c: HttpCounters): Transport 
 export interface SoakRuntime {
   readonly runtime: Runtime;
   readonly counters: HttpCounters;
+  /** The project's LegendKeeper id, as its key proved it (the scripts compare it with the registered one). */
+  readonly projectId: string;
+  /** The project's governed client. */
+  readonly lk: LkClient;
   close(): Promise<void>;
 }
 
 /**
- * A bridge runtime of its own for the soak: a temporary database, the sandbox key and project, writes allowed, the
- * maintenance scheduler off, and the transport counted. Never the bridge's own database or key.
+ * A bridge runtime of its own for the soak, spike or smoke: a temporary database, one project (the sandbox's name and
+ * key, in the multi-project form), writes allowed, the maintenance scheduler off, and the transport counted. Never the
+ * bridge's own database. Resolves once the key has been checked; throws `SandboxGuardError` if it was refused.
  */
-export function createSoakRuntime(o: {
+export async function createSoakRuntime(o: {
   readonly apiKey: string;
-  readonly projectId: string;
+  /** The bridge's name for the sandbox project (default `sandbox`). */
+  readonly project?: string;
   /** Only to point at a mock LegendKeeper (the dry run). */
   readonly baseUrl?: string;
   readonly writersMax?: number;
   /** Extra environment for the config (the dry run sets the pacing to zero). */
   readonly env?: Readonly<Record<string, string>>;
   readonly transport?: Transport;
-}): SoakRuntime {
+}): Promise<SoakRuntime> {
   const dir = mkdtempSync(join(tmpdir(), 'lkb-soak-'));
   const db = openDatabase(join(dir, 'soak.db'));
   runMigrations(db);
   const secret = () => randomBytes(32).toString('base64url');
+  const name = o.project ?? 'sandbox';
   const config = loadConfig({
     BRIDGE_PUBLIC_URL: 'https://soak.invalid',
-    LK_API_KEY: o.apiKey,
-    LK_PROJECT_ID: o.projectId,
+    LK_PROJECTS: name,
+    [projectKeyVariable(name)]: o.apiKey,
+    LK_DEFAULT_PROJECT: name,
     LK_READ_ONLY: 'false',
     LOG_LEVEL: 'warn',
     WRITERS_MAX: String(o.writersMax ?? 2),
@@ -122,15 +130,21 @@ export function createSoakRuntime(o: {
     lkTransport: countingTransport(o.transport ?? defaultTransport, counters),
     maintenanceSettings: defaultMaintenanceSettings({ enabled: false }),
   });
-  return {
-    runtime,
-    counters,
-    async close() {
-      await runtime.shutdown(5_000);
-      db.close();
-      rmSync(dir, { recursive: true, force: true });
-    },
+  const close = async () => {
+    await runtime.shutdown(5_000);
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
   };
+  await runtime.ready;
+  const view = runtime.projects.byConfiguredName(name);
+  const lk = view?.id ? runtime.projects.client(view.id) : undefined;
+  if (!view?.id || !lk) {
+    await close();
+    throw new SandboxGuardError(
+      `Refusing to run: the key of project "${name}" could not be verified (${view?.reason ?? 'unknown'}).`,
+    );
+  }
+  return { runtime, counters, projectId: view.id, lk, close };
 }
 
 export interface SoakTarget {
@@ -185,7 +199,7 @@ export async function runSoak(
   const batchSize = o.batchSize ?? 99;
   const origin = { kind: 'test' as const, client: 'sandbox-soak', tool: 'sandbox-soak' };
   const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> => {
-    const r = await t.engine.run(op, params, { origin, priority: 'P1', ...extra });
+    const r = await t.engine.run(op, params, { origin, priority: 'P1', project: t.projectId, ...extra });
     if (r.status !== 'succeeded') throw new Error(`${op} did not complete: ${r.status}`);
     return r.result;
   };
@@ -225,6 +239,7 @@ export async function runSoak(
   const submitAll = async (steps: StepSpec[], label: string) => {
     for (let i = 0; i < steps.length; i += batchSize) {
       const r = await t.engine.submit({
+        project: t.projectId,
         kind: 'batch_ops',
         steps: steps.slice(i, i + batchSize),
         onError: 'continue',
@@ -240,7 +255,7 @@ export async function runSoak(
     for (const id of jobIds) {
       let job: JobView | undefined;
       for (;;) {
-        job = await t.engine.wait(id, 25_000);
+        job = await t.engine.wait(t.projectId, id, 25_000);
         if (TERMINAL_JOB_STATUSES.has(job.status)) break;
         log(`  waiting for ${id}: ${job.status} ${job.progress.stepsDone}/${job.progress.stepsTotal}`);
       }
@@ -358,7 +373,7 @@ export async function runSoak(
   let other = 0;
   let retries = 0;
   for (const id of jobIds) {
-    const job = t.engine.queries.getJob(id);
+    const job = t.engine.queries.getJob(t.projectId, id);
     for (const s of job?.steps ?? []) {
       retries += Math.max(0, s.attempts - 1);
       if (s.status === 'succeeded') succeeded++;

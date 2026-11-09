@@ -101,6 +101,9 @@ describe('result shaping', () => {
       'loop',
       'waiting_budget',
       'proposal_captured',
+      // v2 A1
+      'list_projects',
+      'a write must name its project',
     ]) {
       expect(BRIDGE_INSTRUCTIONS).toContain(phrase);
     }

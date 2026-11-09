@@ -14,7 +14,8 @@ import { issueApprovalToken } from '../../src/policy/approval.js';
 import { hashJson, proposalTools, type PolicyError } from '../../src/policy/index.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
 import type { Block } from '../jobs/lk-model.js';
-import { settle } from '../jobs/helpers.js';
+import { ProjectSelector } from '../../src/projects/index.js';
+import { PROJECT, settle } from '../jobs/helpers.js';
 import { makePat, mcpOriginFor, policyRig, type PolicyRig } from './helpers.js';
 
 let rig: PolicyRig | undefined;
@@ -70,13 +71,13 @@ describe('capture', () => {
       r.e.engine.run(
         'replaceDocumentBlocks',
         { path: { resourceId: doc.resourceId, documentId: doc.documentId }, body: { blocks: keepU1 } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(res.summary).toContain('replaceDocumentBlocks');
     expect(writesAtMock(r)).toEqual([]);
     expect(r.h.model.mutations).toEqual([]);
-    expect(r.e.engine.queries.listJobs()).toEqual([]);
+    expect(r.e.engine.queries.listJobs(PROJECT)).toEqual([]);
     const detail = r.policy.commands.getProposal('owner', res.proposalId);
     expect(detail).toMatchObject({ state: 'pending', profile: 'chatgpt', opCount: 1, jobKind: 'single_op' });
     expect(detail.ops[0]).toMatchObject({
@@ -95,6 +96,7 @@ describe('capture', () => {
     const res = await propose(
       r,
       r.e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         origin,
         steps: [
@@ -110,7 +112,7 @@ describe('capture', () => {
         ],
       }),
     );
-    const all = r.policy.commands.listProposals('owner');
+    const all = r.policy.commands.listProposals('owner', { project: PROJECT });
     expect(all).toHaveLength(1);
     expect(all[0]).toMatchObject({ id: res.proposalId, opCount: 3, jobKind: 'batch_ops' });
     const d = r.policy.commands.getProposal('owner', res.proposalId);
@@ -128,7 +130,7 @@ describe('capture', () => {
       r.e.engine.run(
         'replaceDocumentBlocks',
         { path: { resourceId: doc.resourceId, documentId: doc.documentId }, body: { blocks: [] } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(lossy.error).toBeInstanceOf(UnsupportedBlockLossError);
@@ -138,11 +140,11 @@ describe('capture', () => {
       r.e.engine.run(
         'deleteResource',
         { path: { resourceId: 'rbbbbbbb' }, query: { cascade: true } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect((cascade.error as { code?: string }).code).toBe('CASCADE_CONFIRM_REQUIRED');
-    expect(r.policy.commands.listProposals('owner')).toEqual([]);
+    expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
     expect(writesAtMock(r)).toEqual([]);
   });
 
@@ -160,6 +162,7 @@ describe('capture', () => {
     const res = await propose(
       r,
       r.e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         origin,
         steps: Array.from({ length: 20 }, () => ({
@@ -191,9 +194,9 @@ describe('capture', () => {
     const { r, doc, agent, origin } = await setup();
     const now = r.h.clock.now();
     const insert = r.db.prepare(
-      `INSERT INTO proposals (id, principal_id, principal_label, profile, origin, job_kind, title, priority, summary,
-         state, created_at, updated_at, expires_at)
-       VALUES (?, ?, 'x', 'chatgpt', '{"kind":"mcp"}', 'single_op', 't', 'P1', 's', 'pending', ?, ?, ?)`,
+      `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
+         priority, summary, state, created_at, updated_at, expires_at)
+       VALUES (?, '${PROJECT}', ?, 'x', 'chatgpt', '{"kind":"mcp"}', 'single_op', 't', 'P1', 's', 'pending', ?, ?, ?)`,
     );
     for (let i = 0; i < 50; i++)
       insert.run(`prop_seed${i}`, agent.principal.principalId, now, now, now + 86_400_000);
@@ -204,7 +207,7 @@ describe('capture', () => {
       r.e.engine.run(
         'replaceDocumentBlocks',
         { path: { resourceId: doc.resourceId, documentId: doc.documentId }, body: { blocks: keepU1 } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     expect(out.error).toBeInstanceOf(PolicyDeniedError);
@@ -217,7 +220,7 @@ describe('capture', () => {
       r.e.engine.run(
         'replaceDocumentBlocks',
         { path: { resourceId: doc.resourceId, documentId: doc.documentId }, body: { blocks: keepU1 } },
-        { origin: mcpOriginFor(other.principal) },
+        { project: PROJECT, origin: mcpOriginFor(other.principal) },
       ),
     );
   });
@@ -227,14 +230,18 @@ describe('capture', () => {
     const w = await settle(
       r.h,
       r.e,
-      r.e.engine.run('updateResource', { path: { resourceId: 'rbbbbbbb' }, body: { name: 'x' } }, { origin }),
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'x' } },
+        { project: PROJECT, origin },
+      ),
     );
     expect(w.error).toBeInstanceOf(PolicyDeniedError);
     expect((w.error as Error).message).toContain('read-only');
     const rd = await settle(
       r.h,
       r.e,
-      r.e.engine.run('getResource', { path: { resourceId: 'rbbbbbbb' } }, { origin }),
+      r.e.engine.run('getResource', { path: { resourceId: 'rbbbbbbb' } }, { project: PROJECT, origin }),
     );
     expect(rd.value).toMatchObject({ status: 'succeeded' });
     expect(writesAtMock(r)).toEqual([]);
@@ -251,7 +258,7 @@ describe('approval', () => {
       r.e.engine.run(
         'replaceDocumentBlocks',
         { path: { resourceId: doc.resourceId, documentId: doc.documentId }, body: { blocks: keepU1 } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     // Double click: two approvals at once. Exactly one wins.
@@ -266,10 +273,10 @@ describe('approval', () => {
     await r.h.drive(r.e, () => r.policy.proposals.state(proposalId) === 'executed');
 
     expect(r.h.model.count('replaceDocumentBlocks')).toBe(1);
-    expect(r.policy.commands.listProposals('owner')).toHaveLength(1); // no new proposal
+    expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toHaveLength(1); // no new proposal
     const p = r.policy.proposals.get(proposalId)!;
     expect(p).toMatchObject({ state: 'executed', decidedBy: 'owner' });
-    const job = r.e.engine.queries.getJob(p.jobId!)!;
+    const job = r.e.engine.queries.getJob(PROJECT, p.jobId!)!;
     expect(job).toMatchObject({
       kind: 'batch_ops',
       principalId: agent.patId,
@@ -278,10 +285,10 @@ describe('approval', () => {
       status: 'succeeded',
     });
     expect(job.origin).toMatchObject({ detail: `proposal:${proposalId}`, approval: { proposalId } });
-    const journal = r.e.engine.queries.journalLookup({ jobId: p.jobId! });
+    const journal = r.e.engine.queries.journalLookup(PROJECT, { jobId: p.jobId! });
     expect(journal[0]).toMatchObject({ principalId: agent.patId, profile: 'chatgpt', approvedBy: 'owner' });
     // The executed write was pinned to the captured version.
-    expect(r.e.engine.queries.getJob(p.jobId!)!.steps[0]!.ifMatch).toBe('v1');
+    expect(r.e.engine.queries.getJob(PROJECT, p.jobId!)!.steps[0]!.ifMatch).toBe('v1');
 
     // Approving again (a retry) does nothing.
     await expect(r.policy.commands.approve('owner', proposalId)).rejects.toMatchObject({
@@ -298,7 +305,11 @@ describe('approval', () => {
     const { r, agent, origin } = await setup();
     const { proposalId } = await propose(
       r,
-      r.e.engine.run('updateResource', { path: { resourceId: 'rbbbbbbb' }, body: { name: 'Z' } }, { origin }),
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'Z' } },
+        { project: PROJECT, origin },
+      ),
     );
     r.policy.commands.setScope('owner', agent.profileId, 'read');
     expect((await approveAndRun(r, proposalId)).state).toBe('executed');
@@ -310,6 +321,7 @@ describe('approval', () => {
     const { proposalId } = await propose(
       r,
       r.e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         origin,
         steps: [
@@ -336,7 +348,7 @@ describe('approval', () => {
       currentVersion: 'v2',
     });
     expect(writesAtMock(r)).toEqual([]);
-    expect(r.e.engine.queries.listJobs()).toEqual([]);
+    expect(r.e.engine.queries.listJobs(PROJECT)).toEqual([]);
     const view = r.policy.proposals.agentView(p);
     expect(view.conflict).toMatchObject({ operation: 2, op: 'replaceDocumentBlocks' });
   });
@@ -346,6 +358,7 @@ describe('approval', () => {
     const { proposalId } = await propose(
       r,
       r.e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         origin,
         steps: [
@@ -373,7 +386,7 @@ describe('approval', () => {
     expect(p.error).toMatchObject({ code: 'JOB_FAILED', jobId: p.jobId, stepsDone: 1, stepsTotal: 2 });
     expect(r.h.model.count('updateResource')).toBe(1);
     expect(r.h.model.count('replaceDocumentBlocks')).toBe(0); // u9 survives
-    const job = r.e.engine.queries.getJob(p.jobId!)!;
+    const job = r.e.engine.queries.getJob(PROJECT, p.jobId!)!;
     expect(job.steps[1]!.error).toMatchObject({ code: 'UNSUPPORTED_BLOCK_LOSS' });
   });
 
@@ -381,7 +394,11 @@ describe('approval', () => {
     const { r, origin } = await setup();
     const { proposalId } = await propose(
       r,
-      r.e.engine.run('updateResource', { path: { resourceId: 'rbbbbbbb' }, body: { name: 'R' } }, { origin }),
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'R' } },
+        { project: PROJECT, origin },
+      ),
     );
     r.e.engine.controls.setReadOnly(true);
     await expect(r.policy.commands.approve('owner', proposalId)).rejects.toMatchObject({
@@ -405,7 +422,11 @@ describe('approval', () => {
     });
     const { proposalId } = await propose(
       r,
-      r.e.engine.run('updateResource', { path: { resourceId: 'rbbbbbbb' }, body: { name: 'E' } }, { origin }),
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'E' } },
+        { project: PROJECT, origin },
+      ),
     );
     await r.h.clock.advance(3_600_000 + 60_000);
     expect(r.policy.proposals.state(proposalId)).toBe('expired');
@@ -426,7 +447,7 @@ describe('approval', () => {
             r.e.engine.run(
               'updateResource',
               { path: { resourceId: 'rbbbbbbb' }, body: { name } },
-              { origin },
+              { project: PROJECT, origin },
             ),
           )
         ).proposalId,
@@ -453,7 +474,9 @@ describe('approval', () => {
         error: expect.objectContaining({ code: 'PROPOSAL_NOT_FOUND' }) as unknown,
       },
     ]);
-    const [status] = proposalTools(r.policy.proposals);
+    const [status] = proposalTools(r.policy.proposals, {
+      selector: new ProjectSelector(r.e.projects, true),
+    });
     const ctx = { principal: agent.principal } as unknown as McpToolContext;
     const out = await status!.handler({ proposalId: ids[0] }, ctx);
     expect(JSON.parse((out.content[0] as { text: string }).text)).toMatchObject({
@@ -473,14 +496,12 @@ describe('approval cannot loop, and cannot be forged', () => {
         r.e.engine.run(
           'updateResource',
           { path: { resourceId: 'rbbbbbbb' }, body: { name: 'F' } },
-          {
-            origin: { ...origin, ...extra },
-          },
+          { project: PROJECT, origin: { ...origin, ...extra } },
         ),
       );
       expect(out.error).toBeInstanceOf(PolicyDeniedError);
     }
-    expect(r.policy.commands.listProposals('owner')).toEqual([]);
+    expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
     expect(writesAtMock(r)).toEqual([]);
   });
 
@@ -488,21 +509,27 @@ describe('approval cannot loop, and cannot be forged', () => {
     const { r, agent, origin } = await setup();
     const a = await propose(
       r,
-      r.e.engine.run('updateResource', { path: { resourceId: 'rbbbbbbb' }, body: { name: 'A' } }, { origin }),
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'A' } },
+        { project: PROJECT, origin },
+      ),
     );
     const bParams = { path: { resourceId: 'raaaaaaa' }, body: { name: 'B' } };
-    const b = await propose(r, r.e.engine.run('updateResource', bParams, { origin }));
+    const b = await propose(r, r.e.engine.run('updateResource', bParams, { project: PROJECT, origin }));
     // Put A into the state the token is honoured in, as approve does.
     r.db.prepare(`UPDATE proposals SET state = 'approved' WHERE id = ?`).run(a.proposalId);
     const aParams = { path: { resourceId: 'rbbbbbbb' }, body: { name: 'A' } };
     const tokenA = issueApprovalToken(
       a.proposalId,
       agent.principal.principalId,
+      PROJECT,
       [{ op: 'updateResource', paramsHash: hashJson(aParams) }],
       r.h.clock.now(),
     );
     const submitWith = (params: object, approval: unknown): BatchSubmit => ({
       kind: 'batch_ops',
+      project: PROJECT,
       steps: [{ op: 'updateResource', params }],
       origin: { ...origin, approvedBy: 'owner', approval },
     });
@@ -514,7 +541,7 @@ describe('approval cannot loop, and cannot be forged', () => {
     const spent = await settle(r.h, r.e, r.e.engine.submit(submitWith(aParams, tokenA)));
     expect(spent.error).toBeInstanceOf(PolicyDeniedError);
     expect(r.policy.proposals.state(b.proposalId)).toBe('pending');
-    expect(r.policy.commands.listProposals('owner')).toHaveLength(2);
+    expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toHaveLength(2);
     expect(writesAtMock(r)).toEqual([]);
   });
 });
@@ -527,7 +554,7 @@ describe('crash during approval', () => {
       r.e.engine.run(
         'updateResource',
         { path: { resourceId: 'rbbbbbbb' }, body: { name: 'Crash' } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     r.e.hold((w) => w.method === 'PATCH');
@@ -538,7 +565,7 @@ describe('crash during approval', () => {
     r.restart({ crash: true });
     await r.h.drive(r.e, () => r.policy.proposals.state(proposalId) === 'executed');
     expect(r.h.model.count('updateResource')).toBe(1);
-    expect(r.e.engine.queries.listJobs()).toHaveLength(1);
+    expect(r.e.engine.queries.listJobs(PROJECT)).toHaveLength(1);
     await expect(r.policy.commands.approve('owner', proposalId)).rejects.toMatchObject({
       code: 'INVALID_TRANSITION',
     });
@@ -551,7 +578,7 @@ describe('crash during approval', () => {
       r.e.engine.run(
         'updateResource',
         { path: { resourceId: 'rbbbbbbb' }, body: { name: 'Again' } },
-        { origin },
+        { project: PROJECT, origin },
       ),
     );
     r.db
@@ -575,11 +602,11 @@ describe('member administration', () => {
       const out = await settle(
         r.h,
         r.e,
-        r.e.engine.run('removeMember', { path: { userId: 'u1' } }, { origin: o }),
+        r.e.engine.run('removeMember', { path: { userId: 'u1' } }, { project: PROJECT, origin: o }),
       );
       expect((out.error as { code?: string }).code).toBe('MEMBER_ADMIN_DISABLED');
     }
-    expect(r.policy.commands.listProposals('owner')).toEqual([]);
+    expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
     expect(writesAtMock(r)).toEqual([]);
   });
 });
