@@ -26,3 +26,12 @@ mix of reads through the real engine and governor against the same sandbox proje
 that it deletes at the end, and reports the time taken, writes per minute, 429 responses (target zero), retries, budget
 waits and peak memory. Same guard as above. Code: `soak.ts`; dry run against the mock: `test/tools/soak-dryrun.test.ts`.
 How to run it, and why it takes about 20 minutes: docs/runbook-deploy.md, "Soak test".
+
+## The v2 phase 0 spike
+
+`npm run spike:v2` (on the server: `deploy/spike-v2.sh --allow-bridge-project`) is a read-mostly script that checks ten
+assumptions of docs/PLAN-v2.md against the test world and prints a Markdown report (PASS / FAIL / INFO with evidence).
+Only check 1 writes (a `createManyResources` batch whose parents are minted in the same batch), under one throwaway root
+that is deleted at the end, even after a failure. Same guard as the soak; every call goes through the real engine and
+governor at P3. Code: `spike-v2.ts` (checks), `spike-report.ts` (report layout); dry run against the mock:
+`test/tools/spike-v2-dryrun.test.ts`. How to run it: docs/runbook-deploy.md, "Phase 0 spike".

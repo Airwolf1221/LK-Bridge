@@ -36,6 +36,7 @@ describe('deploy scripts', () => {
       'lk-run.sh',
       'sandbox-test.sh',
       'soak-sandbox.sh', // chunk 8
+      'spike-v2.sh', // v2 phase 0
       'restore.sh', // chunk 8
       'migrate-to-build-user.sh', // v1.0.1
     ]) {

@@ -33,7 +33,8 @@ block → health check → sandbox script ✋ → connect Claude and ChatGPT ✋
 in that order.
 
 Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), [rollback](#rollback),
-[logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the browser smoke test](#browser-smoke-test),
+[logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the v2 phase 0 spike](#v2-phase-0-spike-),
+[the browser smoke test](#browser-smoke-test),
 [memory](#memory), [migrating an existing install to v1.0.1](#migrating-an-existing-install-to-v101).
 
 ## What is where
@@ -57,7 +58,7 @@ Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), 
 `lkbuild` has no login shell, no password and no sudo rights, and is not in group `lkbridge`.
 
 The scripts, all in `deploy/`: `install-node.sh`, `deploy.sh`, `backup.sh`, `restore.sh` (chunk 8), `healthcheck.sh`,
-`lk-run.sh` (runs a command with the private Node and `DB_PATH` set), `sandbox-test.sh`, `soak-sandbox.sh` (chunk 8),
+`lk-run.sh` (runs a command with the private Node and `DB_PATH` set), `sandbox-test.sh`, `soak-sandbox.sh` (chunk 8), `spike-v2.sh` (v2 phase 0),
 `migrate-to-build-user.sh` (v1.0.1, once), plus `lib.sh` (shared helpers) and the files the steps install:
 `lk-bridge.service`, `lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`, `sudoers.lk-bridge`,
 `env.template`. `deploy.sh` and `lib.sh` are also installed into `/opt/lk-bridge/bin` (step 8).
@@ -667,6 +668,40 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh                   # t
   clean-up. Exit code 0 means PASS (no 429, no failed step, cleaned up). Keep the output for the next review.
 - Without the wrapper: `LK_SANDBOX_API_KEY=… LK_SANDBOX_PROJECT_ID=… npm run soak:sandbox -- --writes 100` (from a
   checkout with dependencies installed; never on a shared screen).
+
+## v2 phase 0 spike ✋
+
+A one-off check of the assumptions in `docs/PLAN-v2.md` against the **test world** (PLAN-v2, section 6, session 0): the
+results settle its "to verify" items before any v2 code is built on them. Run it after deploying this version, send the
+report back, then you will not need it again. It makes roughly 100 to 250 LegendKeeper requests (about 35 of them list
+the whole project; the asset folder walk is the unknown, one request per folder at most, capped at 600) and takes
+about 2 to 5 minutes. Only the first check writes, three or four requests, under one throwaway resource that is
+deleted at the end.
+
+🔒 sudo (as `lkbridge`)
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/spike-v2.sh --allow-bridge-project
+```
+
+- Needs `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID` in the env file, as for the soak; reads only those two and
+  prints neither. It **refuses** unless the key's own project is exactly `LK_SANDBOX_PROJECT_ID`, and, like the soak, needs
+  `--allow-bridge-project` while the bridge itself serves the test world (then it shares the bridge's rate budget: its
+  reads run at the lowest priority, but run it while the bridge is quiet). Never pass the flag once the bridge serves
+  Baisheng or Arkona.
+- **What it writes:** the report on screen (stdout; progress is on stderr), and the same report to
+  `/var/lib/lk-bridge/spike/spike-v2-<timestamp>.md`, with the calendar oracle beside it as
+  `spike-v2-<timestamp>-oracle.json`. Send back the `.md` file (and the `.json`). Nothing goes to `bridge.db`; the script uses a temporary
+  database.
+- **Writes:** check 1 creates one resource named `lk-bridge spike <time>` with three children under it, and deletes it
+  (cascade) at the end of the check. If the delete fails the report says **NOT DELETED** with the id to delete by
+  hand, and the exit code is 1. `--skip 1` makes the whole run read-only.
+- Useful flags (after the wrapper's own): `--skip 1,3` leaves checks out, `--sample-lines 80` allows longer samples,
+  `--rare-query TEXT` and `--common-query TEXT` choose check 2's queries, and `--root`, `--chronology`, `--main-doc`,
+  `--table-doc`, `--timeline-doc` and `--calendar` replace the known test-world ids. `npm run spike:v2 -- --help` lists them
+  all. Ctrl-C stops after the current call and still deletes the throwaway resource.
+- Exit code: 0 when the report was produced (a FAIL is a finding, not a fault), 1 when the clean-up failed or the report
+  file could not be written, 2 when it refused to run.
 
 ## Browser smoke test
 
