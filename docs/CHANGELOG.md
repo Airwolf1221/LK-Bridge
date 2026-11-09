@@ -30,8 +30,8 @@ only: no MCP tools, no database tables, no LegendKeeper calls. No existing behav
   `--root`) through the real engine at P3, read-only, about one read per page, and checks each: blocks → Markdown →
   blocks identical, and an empty plan for the unchanged write-back. It reports totals, keep regions and self-check
   fallbacks, and for each failing page the resource, the first difference and a minimal reproduction in
-  `/var/lib/lk-bridge/roundtrip/`. Project selection as for the phase 0 spike (`LK_SANDBOX_*`,
-  `--allow-bridge-project`).
+  `/var/lib/lk-bridge/roundtrip/`. Project selection is A1's, as for the spike and the soak: `--project <name>`, a
+  project the bridge has registered and marked as a sandbox (`deploy/markdown-roundtrip.sh --project test`).
 - **Tests** (`test/markdown`): property-based tests (fast-check) that generate pages within the spec's schema and prove
   blocks → Markdown → blocks is the identity with an empty plan, that the parser reads every expressible page back as
   exactly what it shows, and that the Markdown is stable; an escaping fuzz over every Markdown-significant character in

@@ -1,12 +1,13 @@
 /**
- * `npm run roundtrip [-- flags]`: the Markdown round trip over every page of a project (docs/PLAN-v2.md 4.7, and the
- * go-live gate in section 7, step 4). READ-ONLY: it sends only listProjects, listResources and getDocumentBlocks, through
- * the real job engine and governor at priority P3, so it gives way to agents and jobs.
+ * `npm run roundtrip -- --project NAME [flags]`: the Markdown round trip over every page of a project (docs/PLAN-v2.md
+ * 4.7, and the go-live gate in section 7, step 4). READ-ONLY: it sends only listProjects, listResources and
+ * getDocumentBlocks, through the real job engine and governor at priority P3, so it gives way to agents and jobs.
  *
- * Project selection works as for the phase 0 spike: the key and project come from LK_SANDBOX_API_KEY and
- * LK_SANDBOX_PROJECT_ID (on the server, deploy/markdown-roundtrip.sh reads them from the env file and refuses the
- * project the bridge serves unless told otherwise). It refuses to run unless the key's own project is exactly that
- * project, uses a temporary database, and never prints a secret.
+ * v2 A1: `--project NAME` names a project registered in the bridge's database (DB_PATH) and marked as a sandbox there;
+ * any other project is refused before any request (test/sandbox/target.ts), as for the spike and the soak. Its key is
+ * the bridge's own variable for it (`LK_PROJECT_<NAME>_API_KEY`, or `LK_API_KEY` in the single-project form). It refuses
+ * to run unless the key's own project is exactly the registered one, uses a temporary database, and never prints a
+ * secret. On the server, deploy/markdown-roundtrip.sh exports just that key and DB_PATH from the env file.
  *
  * Output: the Markdown report on stdout (progress on stderr) and in <out-dir>/roundtrip-<timestamp>.md; for every
  * failing page, a minimal reproduction in <out-dir>/roundtrip-<timestamp>/<resourceId>-<documentId>.json.
@@ -16,16 +17,18 @@
 import { mkdirSync } from 'node:fs';
 import { fileStamp } from '../test/sandbox/spike-report.js';
 import { SandboxGuardError } from '../test/sandbox/smoke.js';
-import { createSoakRuntime } from '../test/sandbox/soak.js';
+import { createSoakRuntime, type SoakRuntime } from '../test/sandbox/soak.js';
+import { resolveSandboxTarget, type SandboxTarget } from '../test/sandbox/target.js';
 import { formatRoundTripReport, runRoundTrip, writeRoundTripReport } from './markdown-roundtrip-core.js';
 
-const USAGE = `usage: npm run roundtrip -- [flags]
+const USAGE = `usage: npm run roundtrip -- --project NAME [flags]
+  --project NAME   the project to check (registered by the bridge and marked as a sandbox)
   --root ID        only pages of this resource and everything under it (default: the whole project)
   --max-pages N    stop after N pages (a quick trial)
   --out-dir DIR    where the report and reproductions go (default /var/lib/lk-bridge/roundtrip)
 `;
 
-const VALUE_FLAGS = new Set(['--root', '--max-pages', '--out-dir']);
+const VALUE_FLAGS = new Set(['--project', '--root', '--max-pages', '--out-dir']);
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -52,12 +55,13 @@ async function main(): Promise<void> {
     return;
   }
   const flags = parseArgs(process.argv.slice(2));
-  const key = process.env.LK_SANDBOX_API_KEY;
-  const project = process.env.LK_SANDBOX_PROJECT_ID;
-  if (!key || !project)
-    fail(
-      'LK_SANDBOX_API_KEY and LK_SANDBOX_PROJECT_ID must be set. On the server use deploy/markdown-roundtrip.sh.',
-    );
+  let target: SandboxTarget;
+  try {
+    target = resolveSandboxTarget(flags.get('--project'));
+  } catch (e) {
+    if (e instanceof SandboxGuardError) fail(e.message);
+    throw e;
+  }
   let maxPages: number | undefined;
   if (flags.has('--max-pages')) {
     maxPages = Number(flags.get('--max-pages'));
@@ -83,15 +87,21 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => onSignal('SIGINT'));
   process.on('SIGTERM', () => onSignal('SIGTERM'));
 
-  const rt = createSoakRuntime({ apiKey: key, projectId: project, writersMax: 1 });
+  let rt: SoakRuntime;
+  try {
+    rt = await createSoakRuntime({ apiKey: target.apiKey, project: target.name, writersMax: 1 });
+  } catch (e) {
+    if (e instanceof SandboxGuardError) fail(e.message);
+    throw e;
+  }
   let code = 0;
   try {
     const started = new Date();
     const stamp = fileStamp(started);
-    process.stderr.write('Markdown round trip: read-only, every read at P3.\n');
+    process.stderr.write(`Markdown round trip of project "${target.name}": read-only, every read at P3.\n`);
     const out = await runRoundTrip(
-      { engine: rt.runtime.engine, lk: rt.runtime.lk, projectId: project, counters: rt.counters },
-      project,
+      { engine: rt.runtime.engine, lk: rt.lk, projectId: rt.projectId, counters: rt.counters },
+      target.projectId,
       {
         ...(root !== undefined ? { root } : {}),
         ...(maxPages !== undefined ? { maxPages } : {}),
@@ -103,10 +113,10 @@ async function main(): Promise<void> {
     );
     const report = formatRoundTripReport(out, {
       generatedAt: started.toISOString(),
-      projectId: project,
+      projectId: `${target.name} (${target.projectId})`,
       ...(root !== undefined ? { root } : {}),
       requests: { total: rt.counters.requests, reads: rt.counters.reads, writes: rt.counters.writes },
-      budgetFooter: rt.runtime.lk.budgetFooter(),
+      budgetFooter: rt.lk.budgetFooter(target.name),
     });
     process.stdout.write(report);
     try {

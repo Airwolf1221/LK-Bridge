@@ -6,7 +6,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { systemClock } from '../../src/lk/index.js';
 import { checkRoundTrip, firstDifference, minimalRepro } from '../../src/markdown/check.js';
 import type { LkBlock } from '../../src/markdown/types.js';
@@ -121,21 +121,23 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'lkb-roundtrip-'));
   mock = new MockLk({ clock: systemClock, apiKey: API_KEY, respond, limits: { 'write-min': 120 } });
   const url = await mock.start();
-  soak = createSoakRuntime({ apiKey: API_KEY, projectId: PROJECT, baseUrl: url, writersMax: 1 });
+  // v2 A1: the runtime serves one named project and proves its key's project at start-up.
+  soak = await createSoakRuntime({ apiKey: API_KEY, project: 'sandbox', baseUrl: url, writersMax: 1 });
+  expect(soak.projectId).toBe(PROJECT);
 });
 afterAll(async () => {
   await soak.close();
   await mock.stop();
   rmSync(dir, { recursive: true, force: true });
 });
-afterEach(() => {
+beforeEach(() => {
   mock.calls.length = 0;
 });
 
 const target = () => ({
   engine: soak.runtime.engine,
-  lk: soak.runtime.lk,
-  projectId: PROJECT,
+  lk: soak.lk,
+  projectId: soak.projectId,
   counters: soak.counters,
 });
 
@@ -230,10 +232,11 @@ describe('the round-trip script (dry run against the mock)', () => {
     expect(report).toContain(bad[0]!.repro!);
   });
 
-  it('refuses a key for another project before reading anything else', async () => {
-    await expect(
-      runRoundTrip({ ...target(), projectId: 'proj_other' }, 'proj_other', { outDir: dir, stamp: 'x' }),
-    ).rejects.toBeInstanceOf(SandboxGuardError);
+  it('refuses when the key’s own project is not the registered one, before reading anything else', async () => {
+    // The registered sandbox project is proj_other; the key proves proj_mock.
+    await expect(runRoundTrip(target(), 'proj_other', { outDir: dir, stamp: 'x' })).rejects.toBeInstanceOf(
+      SandboxGuardError,
+    );
     expect(mock.calls.map((c) => c.path.replace(/\/$/, ''))).toEqual(['/api/v3/projects']);
   });
 

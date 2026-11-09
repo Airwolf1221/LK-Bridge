@@ -90,13 +90,14 @@ class Reader {
     for (let attempt = 0; ; attempt++) {
       try {
         const r = await this.t.engine.run(op, params, {
+          project: this.t.projectId,
           origin: this.origin,
           priority: 'P3',
           title: `markdown-roundtrip: ${op}`,
         });
         if (r.status === 'succeeded') return r.result;
         if (r.status === 'proposal_captured') throw new Error(`${op} was captured as a proposal`);
-        this.t.engine.controls.cancel(r.jobId);
+        this.t.engine.controls.cancel(this.t.projectId, r.jobId);
         if (attempt >= 20) throw new Error(`${op} stayed queued (${r.reason})`);
         await sleep(Math.min(60_000, Math.max(2_000, (r.eta ?? Date.now()) - Date.now())));
       } catch (e) {
@@ -127,7 +128,10 @@ class Reader {
   }
 }
 
-/** Runs the round trip. Throws SandboxGuardError (nothing read beyond the project list) if the key is not for the project. */
+/**
+ * Runs the round trip. `expectedProjectId` is the registered sandbox project's LegendKeeper id (resolveSandboxTarget);
+ * throws SandboxGuardError (nothing read beyond the project list) if the key's own project is not exactly that one.
+ */
 export async function runRoundTrip(
   t: RoundTripTarget,
   expectedProjectId: string,

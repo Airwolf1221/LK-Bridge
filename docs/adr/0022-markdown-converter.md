@@ -81,10 +81,13 @@ lose anything. It is a library (`src/markdown`) that later sessions wrap in tool
 11. **Image URLs** are checked through `ctx.isProjectAsset` (A4's asset tree); without it, URLs the page holds pass,
     `data:`, `blob:` and non-https URLs are refused, and others pass with a warning (LegendKeeper refuses a foreign URL
     before writing anything). The library never names LegendKeeper's asset host (the ESLint rule for `src/`).
-12. **The round-trip script** (`npm run roundtrip`, `deploy/markdown-roundtrip.sh`) selects the project the way the
-    phase 0 spike does (`LK_SANDBOX_API_KEY`, `LK_SANDBOX_PROJECT_ID`, `--allow-bridge-project`), because A1's
-    `--project` had not merged when B1 finished. It reads only (listProjects, listResources, getDocumentBlocks) at P3.
-    Switching it to A1's project selection is a small change in the CLI and wrapper.
+12. **The round-trip script** (`npm run roundtrip`, `deploy/markdown-roundtrip.sh`) selects its project with A1's
+    mechanism (ADR 0023), exactly as the spike and the soak do: `--project <name>` must name a project the bridge has
+    registered and marked as a sandbox (`resolveSandboxTarget`), its key is the bridge's own variable for it (the
+    wrapper exports just that and `DB_PATH`, through `sandbox_project_env`), and the key's own project must be exactly
+    the registered one. It reads only (listProjects, listResources, getDocumentBlocks) at P3. Checking Arkona before
+    go-live (PLAN-v2 7, step 4) therefore needs Arkona marked as a sandbox for the run, or a read-only variant of this
+    selection; that is E5's decision.
 13. **One known limit of GFM:** inline code cannot end a backslash right before `|` inside a table cell (GFM reads
     `\|` as an escaped pipe even in code), so such a table is a keep region.
 
