@@ -3,6 +3,7 @@ import { qs } from '../api';
 import { Badge, CopyButton, Empty, ErrorNote, Json, Loading, PageHeader } from '../components';
 import { fmtBytes, fmtTime } from '../format';
 import { useApi } from '../hooks';
+import { useProject, useScopedApi } from '../project';
 import { Link } from '../router';
 import type { ClientsResponse, JournalEntry } from '../types';
 
@@ -36,11 +37,12 @@ export function JournalPage() {
   const before = cursors.at(-1);
   const [text, setText] = useState('');
   const [open, setOpen] = useState<number | null>(null);
+  const { selected } = useProject();
   const clients = useApi<ClientsResponse>('/clients');
-  const list = useApi<{ entries: JournalEntry[]; hasMore: boolean; nextBefore: number | null }>(
+  const list = useScopedApi<{ entries: JournalEntry[]; hasMore: boolean; nextBefore: number | null }>(
     `/journal${qs({ ...f, limit: 100, ...(before !== undefined ? { before } : {}) })}`,
   );
-  const detail = useApi<{ entry: JournalEntry }>(open === null ? null : `/journal/${open}`);
+  const detail = useScopedApi<{ entry: JournalEntry }>(open === null ? null : `/journal/${open}`);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
     setCursors([]);
     setF({ ...f, [k]: e.target.value.trim() });
@@ -69,7 +71,7 @@ export function JournalPage() {
 
   return (
     <>
-      <PageHeader title="Journal" />
+      <PageHeader title="Journal" project={selected} />
       <p className="muted">
         Every write the bridge sends to LegendKeeper is listed here, with who made it and whether it applied,
         so you can see what each agent changed. Before a destructive write the bridge also keeps what it

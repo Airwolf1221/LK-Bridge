@@ -176,6 +176,14 @@ export function specRespond(overrides: Record<string, (req: MockRequest) => Mock
       };
     const custom = overrides[route.operationId]?.(req);
     if (custom) return custom;
+    // v2 A1: a project key sees exactly its own project, which the bridge checks at start-up (the spec's example would
+    // be a project with the id "id"). Tests that need another answer override listProjects.
+    if (route.operationId === 'listProjects') {
+      return {
+        status: 200,
+        body: { data: [{ id: 'proj_mock', name: 'Mock project' }], hasMore: false, nextCursor: null },
+      };
+    }
     if (route.status === 204 || !route.schema) return { status: route.status };
     return {
       status: route.status,

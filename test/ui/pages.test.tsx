@@ -9,6 +9,7 @@ import {
   installApi,
   job,
   profiles,
+  projectOf,
   renderApp,
   snapshot,
   step,
@@ -33,13 +34,15 @@ describe('navigation', () => {
       'Proposals',
       'Clients & Access',
       'Journal',
+      'Projects',
       'Settings',
       'Maintenance Jobs',
       'Repository Mappings',
     ]) {
       expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInTheDocument();
     }
-    expect(within(nav).getByRole('link', { name: /^Proposals/ })).toHaveTextContent('2'); // pending count from the API
+    // The selected (default) project's pending count from the API; it arrives once the project list has loaded.
+    await waitFor(() => expect(within(nav).getByRole('link', { name: /^Proposals/ })).toHaveTextContent('2'));
     expect(within(nav).getByRole('link', { name: /^Overview/ })).toHaveAttribute('aria-current', 'page');
     expect(screen.getByText('Owner dashboard · v9.9.9')).toBeInTheDocument();
   });
@@ -78,6 +81,18 @@ function overview(over: Record<string, unknown> = {}) {
     errorsLastHour: { count: 3, capped: false },
     pendingProposals: 2,
     writes: { state: 'running', perMinute: 12 },
+    project: { id: 'lkp_baisheng', name: 'baisheng' },
+    projects: [
+      {
+        name: 'baisheng',
+        id: 'lkp_baisheng',
+        status: 'active',
+        reason: null,
+        isDefault: true,
+        readOnly: false,
+      },
+      { name: 'test', id: 'lkp_test', status: 'active', reason: null, isDefault: false, readOnly: false },
+    ],
     budget: {
       queues: snap.queues,
       gauges: ['write-min', 'key-min', 'key-hour', 'project-hour'].map(
@@ -112,6 +127,9 @@ describe('Overview', () => {
     expect(within(budget).getByText('Writes per minute')).toBeInTheDocument();
     expect(within(budget).getByText('12 / 120')).toBeInTheDocument();
     expect(within(budget).getAllByRole('img', { name: /per cent used/ })).toHaveLength(4);
+    // v2 A1: which project this is, and no warning while every project is active.
+    expect(screen.getByTestId('page-project')).toHaveTextContent('Project: baisheng');
+    expect(screen.queryByRole('region', { name: /need(s)? attention/ })).toBeNull();
   });
 
   it('flags an unreachable LegendKeeper and an unpaid plan', async () => {
@@ -208,6 +226,7 @@ describe('Jobs', () => {
     expect(q.get('profile')).toBe('Claude Code');
     expect(q.get('principalId')).toBe('pat_abc');
     expect(q.get('view')).toBe('active');
+    expect(q.get('project')).toBe('baisheng'); // v2 A1: the selected (here the default) project
   });
 
   it('shows a job’s detail: steps, attempts, request ids with a copy button, errors, artefacts', async () => {
@@ -326,6 +345,7 @@ describe('Errors', () => {
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Mark resolved' }));
     await waitFor(() => expect(api.find('POST', '/errors/resolve')).toHaveLength(1));
     expect(api.find('POST', '/errors/resolve')[0]!.body).toEqual({ fingerprint: group.fingerprint });
+    expect(projectOf(api.find('POST', '/errors/resolve')[0]!)).toBe('baisheng'); // resolved within the project
   });
 });
 

@@ -11,8 +11,11 @@
  * none for every other write (inserts, creates, row and property additions, patches).
  */
 import type { Db } from '../db/open.js';
+import { isAllProjects, type ProjectScope } from '../projects/types.js';
 
 export interface JournalEntryInput {
+  /** The project the write went to (v2 A1). */
+  readonly projectId: string;
   readonly jobId?: string | undefined;
   readonly stepNo?: number | undefined;
   readonly opId: string;
@@ -35,6 +38,7 @@ export type JournalOutcome = 'pending' | 'applied' | 'not_applied' | 'unknown';
 
 export interface JournalEntry {
   readonly id: number;
+  readonly projectId: string;
   readonly at: number;
   readonly jobId: string | null;
   readonly stepNo: number | null;
@@ -88,6 +92,7 @@ const PARAMS_CAP_BYTES = 16 * 1024;
 
 interface Row {
   id: number;
+  project_id: string;
   at: number;
   job_id: string | null;
   step_no: number | null;
@@ -154,11 +159,12 @@ export class WriteJournal {
     const bytes = Buffer.byteLength(pre ?? '') + Buffer.byteLength(params ?? '');
     const info = this.db
       .prepare(
-        `INSERT INTO write_journal (at, job_id, step_no, op_id, principal_id, profile, approved_by, risk,
+        `INSERT INTO write_journal (project_id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk,
            target_kind, target_id, resource_id, document_id, version, params, pre_image, bytes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
+        e.projectId,
         this.now(),
         e.jobId ?? null,
         e.stepNo ?? null,
@@ -180,9 +186,9 @@ export class WriteJournal {
     const targets = [...new Set(e.targets ?? [])].filter((t) => t !== '' && t !== e.targetId).slice(0, 1000);
     if (targets.length > 0) {
       const add = this.db.prepare(
-        'INSERT OR IGNORE INTO write_journal_targets (target_id, journal_id) VALUES (?, ?)',
+        'INSERT OR IGNORE INTO write_journal_targets (target_id, journal_id, project_id) VALUES (?, ?, ?)',
       );
-      for (const t of targets) add.run(t, id);
+      for (const t of targets) add.run(t, id, e.projectId);
     }
     return id;
   }
@@ -217,28 +223,37 @@ export class WriteJournal {
     );
   }
 
-  lookup(filter: JournalFilter = {}): JournalEntry[] {
-    return journalLookup(this.db, filter);
+  lookup(scope: ProjectScope, filter: JournalFilter = {}): JournalEntry[] {
+    return journalLookup(this.db, scope, filter);
   }
 
+  /** Retention covers every project's entries (one age limit and one size cap for the whole journal). */
   prune(retention: JournalRetention): { removedByAge: number; removedBySize: number; bytes: number } {
     return pruneJournal(this.db, retention, this.now());
   }
 }
 
-/** `bridge_journal_lookup` and the UI's journal view. Newest first. */
-export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[] {
+/**
+ * `bridge_journal_lookup` and the UI's journal view. Newest first. `scope` is one project's LegendKeeper id, or
+ * `ALL_PROJECTS` (v2 A1); another project's entries are never returned for a project scope.
+ */
+export function journalLookup(db: Db, scope: ProjectScope, filter: JournalFilter = {}): JournalEntry[] {
   const where: string[] = [];
   const vals: unknown[] = [];
   const eq = (col: string, v: unknown) => {
     where.push(`${col} = ?`);
     vals.push(v);
   };
+  if (!isAllProjects(scope)) {
+    if (typeof scope !== 'string' || scope === '') throw new Error('A project scope is required');
+    eq('project_id', scope);
+  }
   if (filter.id !== undefined) eq('id', filter.id);
   if (filter.jobId !== undefined) eq('job_id', filter.jobId);
   if (filter.resourceId !== undefined) eq('resource_id', filter.resourceId);
   if (filter.documentId !== undefined) eq('document_id', filter.documentId);
   if (filter.targetId !== undefined) {
+    // Both halves stay inside the same project when one is given (the outer project_id condition applies too).
     where.push(
       'id IN (SELECT id FROM write_journal WHERE target_id = ? UNION SELECT journal_id FROM write_journal_targets WHERE target_id = ?)',
     );
@@ -267,7 +282,7 @@ export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[
     vals.push(filter.before);
   }
   const withPre = filter.includePreImage !== false;
-  const cols = `id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk, target_kind, target_id, resource_id, document_id, version,
+  const cols = `id, project_id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk, target_kind, target_id, resource_id, document_id, version,
     params, bytes, outcome${withPre ? ', pre_image' : ''}`;
   const rows = db
     .prepare(
@@ -277,6 +292,7 @@ export function journalLookup(db: Db, filter: JournalFilter = {}): JournalEntry[
     .all(...vals, Math.min(filter.limit ?? 50, 1000)) as Row[];
   return rows.map((r) => ({
     id: r.id,
+    projectId: r.project_id,
     at: r.at,
     jobId: r.job_id,
     stepNo: r.step_no,

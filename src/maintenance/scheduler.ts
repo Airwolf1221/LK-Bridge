@@ -14,11 +14,12 @@
  */
 import type { Db } from '../db/open.js';
 import { SYSTEM_PRINCIPAL, type JobEngine, type JobOrigin, type OpParams } from '../jobs/index.js';
-import type { Clock, LkClient } from '../lk/index.js';
+import type { Clock } from '../lk/index.js';
+import type { ProjectsRuntime } from '../projects/registry.js';
 import type { TimerHandle } from '../lk/governor/clock.js';
 import type { MaintenanceSettings } from '../config/maintenance.js';
 import { describeSchedule, nextRun, parseSchedule, type Schedule } from './schedule.js';
-import { MaintenanceStore, type JobState } from './store.js';
+import { BRIDGE_WIDE, MaintenanceStore, type JobState } from './store.js';
 import type {
   MaintenanceContext,
   MaintenanceJobDef,
@@ -44,7 +45,8 @@ export class MaintenanceError extends Error {
 export interface SchedulerOptions {
   readonly db: Db;
   readonly engine: JobEngine;
-  readonly lk: LkClient;
+  /** Every project's governor (P1/P2 queues) and which projects are served (per-project jobs run once for each). */
+  readonly projects: ProjectsRuntime;
   readonly clock: Clock;
   readonly settings: MaintenanceSettings;
   readonly jobs: readonly MaintenanceJobDef[];
@@ -97,6 +99,7 @@ export class MaintenanceScheduler {
         // The process died during a run. Say so; do not run it again as if nothing happened.
         this.store.recordRun(
           {
+            projectId: BRIDGE_WIDE,
             jobId: def.id,
             trigger: 'schedule',
             startedAt: state.runningSince,
@@ -146,9 +149,9 @@ export class MaintenanceScheduler {
     return this.view(this.def(id));
   }
 
-  history(id: string, limit = 20) {
+  history(id: string, limit = 20, projectId?: string) {
     this.def(id);
-    return this.store.history(id, limit);
+    return this.store.history(id, limit, projectId);
   }
 
   // ---------------------------------------------------------------------------------------------- changes
@@ -247,6 +250,7 @@ export class MaintenanceScheduler {
       description: def.description,
       implemented: def.implemented,
       writes: def.writes,
+      scope: def.scope ?? 'bridge',
       enabled: def.implemented && (s?.enabled ?? false),
       schedule,
       scheduleText: describeSchedule(schedule),
@@ -328,46 +332,87 @@ export class MaintenanceScheduler {
     };
   }
 
-  /** Why a job that writes (or calls LegendKeeper) must not run now, or null. */
-  private blockedReason(def: MaintenanceJobDef): string | null {
+  /** Why a job that writes (or calls LegendKeeper) must not run now in `projectId` (or bridge-wide), or null. */
+  private blockedReason(def: MaintenanceJobDef, projectId: string | null): string | null {
     if (!def.writes && !def.usesLk) return null;
-    const c = this.o.engine.queries.controls();
+    const c = this.o.engine.queries.controls(projectId ?? undefined);
     if (def.writes) {
-      if (c.readOnly) return 'Skipped: read-only mode is on.';
+      if (c.readOnly) {
+        return c.project?.readOnly ? 'Skipped: the project is read-only.' : 'Skipped: read-only mode is on.';
+      }
       if (c.writesPaused) return 'Skipped: writes are paused.';
     }
     if (c.draining) return 'Skipped: the bridge is draining.';
     return null;
   }
 
-  private busy(def: MaintenanceJobDef): boolean {
+  /** P3 yields to P1 and P2 work: of its own project, or (bridge-wide) of any project. */
+  private busy(def: MaintenanceJobDef, projectId: string | null): boolean {
     if (!def.usesLk) return false;
-    const q = this.o.lk.governor.snapshot().queues;
-    return q.P1 + q.P2 > 0;
+    const ids = projectId !== null ? [projectId] : this.o.projects.activeIds();
+    return ids.some((id) => {
+      const q = this.o.projects.anyClient(id)?.governor.snapshot().queues;
+      return q !== undefined && q.P1 + q.P2 > 0;
+    });
   }
 
+  /** The projects a run covers: every served project for a per-project job, or one bridge-wide run (null). */
+  private targets(def: MaintenanceJobDef): ({ id: string; name: string } | null)[] {
+    if ((def.scope ?? 'bridge') === 'bridge') return [null];
+    return this.o.projects.activeIds().map((id) => ({ id, name: this.o.projects.nameOf(id) }));
+  }
+
+  /**
+   * One scheduled (or manual) run: bridge-wide, or once per served project for a per-project job (each recorded under
+   * its project). Returns the last run's view, or null when it had to wait for P1/P2 work first.
+   */
   private async execute(def: MaintenanceJobDef, trigger: RunTrigger): Promise<RunView | null> {
-    const { clock, settings } = this.o;
+    const targets = this.targets(def);
+    if (targets.some((t) => this.busy(def, t?.id ?? null))) return this.defer(def, trigger);
+    const trig = this.manualPending.delete(def.id) ? 'manual' : trigger;
+    this.retryAt.delete(def.id);
+    if (targets.length === 0) {
+      return this.finish(
+        def,
+        trig,
+        this.o.clock.now(),
+        'skipped',
+        'Skipped: no project is served now.',
+        null,
+        null,
+      );
+    }
+    let last: RunView | null = null;
+    for (const t of targets) last = await this.executeOne(def, trig, t);
+    return last;
+  }
+
+  private defer(def: MaintenanceJobDef, trigger: RunTrigger): null {
+    const started = this.o.clock.now();
+    // P3 yields to P1 and P2: look again shortly. Not a skip; nothing is recorded until it really runs.
+    this.retryAt.set(def.id, started + this.o.settings.deferMs);
+    if (trigger === 'manual') {
+      this.manualPending.add(def.id);
+      this.store.update(def.id, { nextRunAt: started }, started);
+    }
+    this.arm();
+    return null;
+  }
+
+  private async executeOne(
+    def: MaintenanceJobDef,
+    trig: RunTrigger,
+    project: { id: string; name: string } | null,
+  ): Promise<RunView | null> {
+    const { clock } = this.o;
     const id = def.id;
     const started = clock.now();
-    const trig = this.manualPending.delete(id) ? 'manual' : trigger;
+    const projectId = project?.id ?? null;
 
-    const blocked = this.blockedReason(def);
+    const blocked = this.blockedReason(def, projectId);
     if (blocked) {
-      return this.finish(def, trig, started, 'skipped', blocked, null);
+      return this.finish(def, trig, started, 'skipped', blocked, null, projectId);
     }
-    if (this.busy(def)) {
-      // P3 yields to P1 and P2: look again shortly. Not a skip; nothing is recorded until it really runs.
-      this.retryAt.set(id, started + settings.deferMs);
-      if (trigger === 'manual') {
-        this.manualPending.add(id);
-        this.store.update(id, { nextRunAt: started }, started);
-      }
-      this.arm();
-      return null;
-    }
-    this.retryAt.delete(id);
-
     this.running.add(id);
     this.store.update(id, { runningSince: started }, started);
     let outcome: RunOutcome = 'succeeded';
@@ -379,12 +424,20 @@ export class MaintenanceScheduler {
         trigger: trig,
         now: started,
         db: this.o.db,
-        run: (op: string, params: OpParams = {}) =>
-          this.o.engine.run(op, params, {
+        project,
+        run: (op: string, params: OpParams = {}) => {
+          if (project === null) {
+            return Promise.reject(
+              new Error(`${def.name} is bridge-wide (scope "bridge") and cannot call LegendKeeper`),
+            );
+          }
+          return this.o.engine.run(op, params, {
+            project: project.id,
             origin: this.origin(def),
             priority: 'P3',
             title: `Maintenance: ${def.name}`,
-          }),
+          });
+        },
       };
       const result = await def.run!(ctx);
       detail = result.summary;
@@ -397,9 +450,12 @@ export class MaintenanceScheduler {
     }
 
     let engineJobId: string | null = null;
-    if (def.record === 'always' || outcome === 'failed' || changed) {
+    // v2 A1: a per-project run is recorded as a job of its project. A bridge-wide run belongs to no project's job list:
+    // its record is the run history on the Maintenance page.
+    if (project !== null && (def.record === 'always' || outcome === 'failed' || changed)) {
       try {
         engineJobId = this.o.engine.recordResult({
+          project: project.id,
           opId: `maintenance:${id}`,
           params: {},
           value: { job: id, outcome, summary: detail, trigger: trig },
@@ -414,7 +470,7 @@ export class MaintenanceScheduler {
         this.o.log?.warn({ err: e, job: id }, 'could not record a maintenance run as a job');
       }
     }
-    return this.finish(def, trig, started, outcome, detail, engineJobId);
+    return this.finish(def, trig, started, outcome, detail, engineJobId, projectId);
   }
 
   /** Records the run and schedules the next one from now (never from a missed slot). */
@@ -425,11 +481,13 @@ export class MaintenanceScheduler {
     outcome: RunOutcome,
     detail: string | null,
     engineJobId: string | null,
+    projectId: string | null,
   ): RunView {
     const finished = this.o.clock.now();
     const durationMs = Math.max(0, finished - started);
     this.store.recordRun(
       {
+        projectId: projectId ?? BRIDGE_WIDE,
         jobId: def.id,
         trigger,
         startedAt: started,
@@ -449,6 +507,14 @@ export class MaintenanceScheduler {
       this.store.update(def.id, { nextRunAt: next }, finished);
     }
     this.arm();
-    return { at: started, outcome, durationMs, jobId: engineJobId, detail, trigger };
+    return {
+      projectId: projectId ?? BRIDGE_WIDE,
+      at: started,
+      outcome,
+      durationMs,
+      jobId: engineJobId,
+      detail,
+      trigger,
+    };
   }
 }

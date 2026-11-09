@@ -82,6 +82,8 @@ export interface StartBridgeOptions {
   readonly authOverrides?: BuildServerOptions['authOverrides'];
   /** A database file to use instead of a fresh in-memory one (to simulate a restart on the same data). */
   readonly dbPath?: string;
+  /** v2 A1: builds the policy layer on the database (for example with the proposal tools' project selector). */
+  readonly policy?: (db: Db) => Policy;
 }
 
 export async function startBridge(o: StartBridgeOptions = {}): Promise<TestBridge> {
@@ -112,6 +114,7 @@ export async function startBridge(o: StartBridgeOptions = {}): Promise<TestBridg
     logStream,
     pruneIntervalMs: 0,
     ...(o.tools ? { tools: o.tools } : {}),
+    ...(o.policy ? { policy: o.policy(db) } : {}),
     authOverrides: { now: () => clock.now(), ...o.authOverrides },
   });
   const base = await app.listen({ host: '127.0.0.1', port: 0 });

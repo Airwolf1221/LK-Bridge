@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { OpParams } from '../../src/jobs/index.js';
 import type { Scope } from '../../src/policy/index.js';
-import { settle } from '../jobs/helpers.js';
+import { PROJECT, settle } from '../jobs/helpers.js';
 import { makePat, mcpOriginFor, policyRig, type PolicyRig } from './helpers.js';
 
 let rig: PolicyRig | undefined;
@@ -40,18 +40,18 @@ describe('member administration is disabled (LK_ALLOW_MEMBER_ADMIN=false)', () =
     for (const [op, params] of ADMIN_OPS) {
       it(`${op} at ${scope} scope is refused, as one operation and inside a batch`, async () => {
         const { r, origin } = await setup(false, scope);
-        const single = await settle(r.h, r.e, r.e.engine.run(op, params, { origin }));
+        const single = await settle(r.h, r.e, r.e.engine.run(op, params, { project: PROJECT, origin }));
         const batch = await settle(
           r.h,
           r.e,
-          r.e.engine.submit({ kind: 'batch_ops', steps: [{ op, params }], origin }),
+          r.e.engine.submit({ project: PROJECT, kind: 'batch_ops', steps: [{ op, params }], origin }),
         );
         for (const out of [single, batch]) {
           expect(out.value, `${scope} ${op}`).toBeUndefined();
           // Read scope: the connection is read-only. Otherwise the engine's specific refusal, not a proposal.
           expect(code(out.error)).toBe(scope === 'read' ? 'POLICY_DENIED' : 'MEMBER_ADMIN_DISABLED');
         }
-        expect(r.policy.commands.listProposals('owner')).toEqual([]);
+        expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
         expect(r.h.mock.calls.filter((c) => c.method !== 'GET')).toEqual([]);
       });
     }
@@ -64,6 +64,7 @@ describe('member administration is disabled (LK_ALLOW_MEMBER_ADMIN=false)', () =
       r.h,
       r.e,
       r.e.engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         steps: [
           { op: 'updateResource', params: { path: { resourceId: 'raaaaaaa' }, body: { name: 'x' } } },
@@ -73,14 +74,14 @@ describe('member administration is disabled (LK_ALLOW_MEMBER_ADMIN=false)', () =
       }),
     );
     expect(code(out.error)).toBe('MEMBER_ADMIN_DISABLED');
-    expect(r.policy.commands.listProposals('owner')).toEqual([]);
+    expect(r.policy.commands.listProposals('owner', { project: PROJECT })).toEqual([]);
   });
 
   for (const scope of SCOPES) {
     for (const [op, params] of READ_OPS) {
       it(`${op} (a read) is allowed at ${scope} scope`, async () => {
         const { r, origin } = await setup(false, scope);
-        const out = await settle(r.h, r.e, r.e.engine.run(op, params, { origin }));
+        const out = await settle(r.h, r.e, r.e.engine.run(op, params, { project: PROJECT, origin }));
         expect(out.error).toBeUndefined();
         expect((out.value as { status: string }).status).toBe('succeeded');
       });
@@ -93,7 +94,7 @@ describe('member administration is enabled (LK_ALLOW_MEMBER_ADMIN=true)', () => 
     it(`${op}: denied at read, proposed at propose, executed at write`, async () => {
       for (const scope of SCOPES) {
         const { r, origin } = await setup(true, scope);
-        const out = await settle(r.h, r.e, r.e.engine.run(op, params, { origin }));
+        const out = await settle(r.h, r.e, r.e.engine.run(op, params, { project: PROJECT, origin }));
         if (scope === 'read') {
           expect(code(out.error)).toBe('POLICY_DENIED');
         } else if (scope === 'propose') {

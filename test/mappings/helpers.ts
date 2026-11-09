@@ -1,21 +1,25 @@
-import { createMappings, type Mappings } from '../../src/mappings/index.js';
+import { createMappings, type Mappings, type ProjectMappings } from '../../src/mappings/index.js';
+import { PROJECT } from '../jobs/helpers.js';
 import { policyRig, type PolicyRig } from '../policy/helpers.js';
 
 export interface MappingRig {
   readonly rig: PolicyRig;
-  readonly mappings: Mappings;
+  /** The mock project's mappings (v2 A1: mappings belong to a project). */
+  readonly mappings: ProjectMappings;
+  /** Every project's, by id. */
+  readonly all: Mappings;
   close(): Promise<void>;
 }
 
 export async function mappingRig(): Promise<MappingRig> {
   const rig = await policyRig();
-  const mappings = createMappings({
+  const all = createMappings({
     db: rig.db,
     engine: rig.e.engine,
     policyStore: rig.policy.store,
     now: () => rig.h.clock.now(),
   });
-  return { rig, mappings, close: () => rig.close() };
+  return { rig, mappings: all.forProject(PROJECT), all, close: () => rig.close() };
 }
 
 export const SET = { name: 'Baisheng taxonomy', description: 'The main repository', notes: 'First draft' };

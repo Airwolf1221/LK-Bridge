@@ -2,13 +2,14 @@ import * as z from 'zod';
 import { ADMIN_CSRF_PURPOSE, sessionTokenOf } from '../guard.js';
 import { budgetPayload } from '../stream.js';
 import { redactDeep } from '../redact.js';
-import { limitSchema, parseInput, type Register } from './util.js';
+import type { Health } from '../health.js';
+import { limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const ACTIVE = ['queued', 'running', 'waiting_budget', 'waiting_lock', 'paused'] as const;
 
 export const registerOverview: Register = (api, ctx) => {
   const { deps, now } = ctx;
-  const { engine, lk, policy } = deps.runtime;
+  const { engine, projects, policy } = deps.runtime;
   const { owner, config } = deps.services;
 
   /** Who is signed in, and the two tokens the dashboard needs: CSRF for its requests, and for the sign-out form. */
@@ -26,15 +27,48 @@ export const registerOverview: Register = (api, ctx) => {
   });
 
   api.get('/overview', async (req) => {
-    const q = parseInput(z.object({ refresh: z.stringbool().default(false) }), req.query);
-    const health = await ctx.health(q.refresh);
-    const controls = engine.queries.controls();
-    const active = engine.queries.listJobs({ status: ACTIVE, limit: 500 });
-    const errors = engine.queries.listErrors({ since: now() - 3_600_000, limit: 1000 });
-    const pending = policy.commands.listProposals('owner', { state: 'pending', limit: 500 });
-    const budget = budgetPayload(lk);
+    const q = parseInput(
+      z.object({ refresh: z.stringbool().default(false), project: projectParam }),
+      req.query,
+    );
+    // The Overview must show a project that is not served (a refused key, a mismatched id, LegendKeeper unreachable at
+    // start-up) even before its key ever proved its id: such a project has no data yet, only its status and reason.
+    const view = q.project ? projects.find(q.project) : projects.defaultProject();
+    if (!view) ctx.project(q.project); // throws the 400 UNKNOWN_PROJECT
+    const project = { id: view!.id, name: view!.name };
+    const served = view!.status === 'active' && project.id !== null;
+    const health: Health = served
+      ? await ctx.health({ id: project.id!, name: project.name }, q.refresh)
+      : {
+          checkedAt: view!.checkedAt ?? now(),
+          // A key LegendKeeper answered about (refused, unpaid, another project) means it was reachable.
+          reachable: view!.keyValid !== null ? true : view!.status === 'unverified' ? false : null,
+          projectName: view!.displayName,
+          keyRole: 'unknown',
+          plan: /paid plan/.test(view!.reason ?? '') ? 'unpaid' : 'unknown',
+          note: view!.reason,
+        };
+    const id = project.id;
+    const controls = engine.queries.controls(id ?? undefined);
+    const active = id ? engine.queries.listJobs(id, { status: ACTIVE, limit: 500 }) : [];
+    const errors = id ? engine.queries.listErrors(id, { since: now() - 3_600_000, limit: 1000 }) : [];
+    const pending = id
+      ? policy.commands.listProposals('owner', { project: id, state: 'pending', limit: 500 })
+      : [];
+    const lk = project.id ? projects.anyClient(project.id) : undefined;
+    const budget = lk ? budgetPayload(lk) : null;
     const headline = ['write-min', 'key-min', 'key-hour', 'project-hour'] as const;
     return {
+      project,
+      // v2 A1: every project's status, so a stopped one (a refused key, a mismatched id) shows here.
+      projects: projects.list().map((p) => ({
+        name: p.name,
+        id: p.id,
+        status: p.status,
+        reason: p.reason,
+        isDefault: p.isDefault,
+        readOnly: p.readOnly,
+      })),
       health,
       controls,
       activeJobs: {
@@ -49,12 +83,14 @@ export const registerOverview: Register = (api, ctx) => {
       pendingProposals: pending.length,
       writes: {
         state: controls.draining ? 'draining' : controls.writesPaused ? 'paused' : 'running',
-        perMinute: budget.writesPerMinute,
+        perMinute: budget?.writesPerMinute ?? 0,
       },
-      budget: {
-        queues: budget.snapshot.queues,
-        gauges: headline.map((t) => budget.snapshot.tiers[t]),
-      },
+      budget: budget
+        ? {
+            queues: budget.snapshot.queues,
+            gauges: headline.map((t) => budget.snapshot.tiers[t]),
+          }
+        : null,
     };
   });
 

@@ -1,7 +1,7 @@
 import * as z from 'zod';
 import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES } from '../../policy/index.js';
 import { redactDeep } from '../redact.js';
-import { csv, idSchema, limitSchema, parseInput, type Register } from './util.js';
+import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const scope = z.enum(SCOPES);
 
@@ -21,9 +21,11 @@ export const registerPolicy: Register = (api, ctx) => {
         profile: idSchema.optional(),
         before: z.coerce.number().int().optional(),
         limit: limitSchema(50, 200),
+        project: projectParam,
       }),
       req.query,
     );
+    const project = ctx.project(q.project);
     const groups: Record<string, readonly (typeof PROPOSAL_STATES)[number][]> = {
       pending: ['pending'],
       conflicted: ['conflicted'],
@@ -37,29 +39,44 @@ export const registerPolicy: Register = (api, ctx) => {
         ? groups[q.group]
         : undefined;
     const proposals = cmd.listProposals('owner', {
+      project: project.id,
       ...(states ? { state: states } : {}),
       ...(q.principalId ? { principalId: q.principalId } : {}),
       ...(q.profile ? { profile: q.profile } : {}),
       ...(q.before !== undefined ? { before: q.before } : {}),
       limit: q.limit,
     });
-    return { proposals: redactDeep(proposals), hasMore: proposals.length === q.limit };
+    return { project, proposals: redactDeep(proposals), hasMore: proposals.length === q.limit };
   });
 
-  /** Proposal counts by state, for the page's tabs. */
-  api.get('/proposals/counts', () => {
+  const projectQuery = z.object({ project: projectParam });
+
+  /** Proposal counts by state, for the page's tabs; `byProject` holds every project's pending count (v2 A1). */
+  api.get('/proposals/counts', (req) => {
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
     const counts: Record<string, number> = {};
     for (const state of PROPOSAL_STATES) {
-      counts[state] = cmd.listProposals('owner', { state, limit: 500 }).length;
+      counts[state] = cmd.listProposals('owner', { project: project.id, state, limit: 500 }).length;
     }
-    return { counts };
+    const byProject: Record<string, number> = {};
+    for (const p of ctx.deps.runtime.projects.list()) {
+      if (p.id) {
+        byProject[p.name] = cmd.listProposals('owner', {
+          project: p.id,
+          state: 'pending',
+          limit: 500,
+        }).length;
+      }
+    }
+    return { project, counts, byProject };
   });
 
   api.get('/proposals/:id', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
     // Block trees and pre-states can be large; the diff view needs them whole, so only secrets are removed here.
     return {
-      proposal: redactDeep(cmd.getProposal('owner', id), {
+      proposal: redactDeep(actions.getProposal(project.id, id), {
         maxString: 200_000,
         maxItems: 5000,
         maxKeys: 1000,
@@ -70,13 +87,15 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.post('/proposals/:id/approve', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    return { proposal: redactDeep(await actions.approve(id)) };
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { proposal: redactDeep(await actions.approve(project.id, id)) };
   });
 
   api.post('/proposals/:id/reject', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ reason: z.string().max(1000).optional() }), req.body);
-    return { proposal: redactDeep(actions.reject(id, b.reason)) };
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { proposal: redactDeep(actions.reject(project.id, id, b.reason)) };
   });
 
   api.post('/proposals/bulk', async (req) => {
@@ -88,8 +107,11 @@ export const registerPolicy: Register = (api, ctx) => {
       }),
       req.body,
     );
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
     const results =
-      b.action === 'approve' ? await actions.bulkApprove(b.ids) : actions.bulkReject(b.ids, b.reason);
+      b.action === 'approve'
+        ? await actions.bulkApprove(project.id, b.ids)
+        : actions.bulkReject(project.id, b.ids, b.reason);
     return { results };
   });
 

@@ -11,6 +11,7 @@ import type { BudgetSnapshot } from '../lk/governor/types.js';
 import type { ErrorClassification } from '../lk/errors.js';
 import { idempotencyKeyFor } from '../lk/idempotency.js';
 import { newArtifactId } from './ids.js';
+import { isAllProjects, type ProjectScope } from '../projects/types.js';
 import type {
   ArtifactView,
   JobError,
@@ -54,6 +55,7 @@ const PRIORITY_ORDER = "CASE priority WHEN 'P0' THEN 0 WHEN 'P1' THEN 1 WHEN 'P2
 
 interface JobRow {
   id: string;
+  project_id: string;
   kind: JobKind;
   title: string;
   origin: string;
@@ -84,6 +86,7 @@ interface JobRow {
 
 interface StepRow {
   job_id: string;
+  project_id: string;
   step_no: number;
   op_id: string;
   op_kind: OperationKind;
@@ -110,6 +113,7 @@ interface StepRow {
 interface ArtifactRow {
   id: string;
   job_id: string;
+  project_id: string;
   step_no: number | null;
   kind: ArtifactView['kind'];
   data: string | null;
@@ -124,6 +128,7 @@ interface ArtifactRow {
 function toJob(r: JobRow): JobView {
   return {
     id: r.id,
+    projectId: r.project_id,
     kind: r.kind,
     title: r.title,
     origin: parse<JobOrigin>(r.origin, { kind: 'system' }),
@@ -152,6 +157,7 @@ function toJob(r: JobRow): JobView {
 function toStep(r: StepRow): StepView {
   return {
     jobId: r.job_id,
+    projectId: r.project_id,
     stepNo: r.step_no,
     opId: r.op_id,
     opKind: r.op_kind,
@@ -180,6 +186,7 @@ function toArtifact(r: ArtifactRow): ArtifactView {
   return {
     id: r.id,
     jobId: r.job_id,
+    projectId: r.project_id,
     stepNo: r.step_no,
     kind: r.kind,
     itemCount: r.item_count,
@@ -205,6 +212,8 @@ export interface NewStep {
 
 export interface NewJob {
   readonly id: string;
+  /** The LegendKeeper project id (v2 A1). */
+  readonly projectId: string;
   readonly kind: JobKind;
   readonly title: string;
   readonly origin: JobOrigin;
@@ -249,6 +258,8 @@ export interface StepPatch {
 }
 
 export interface ErrorInput {
+  /** The project the failed work was for (v2 A1). */
+  readonly projectId: string;
   readonly opId: string;
   readonly jobId?: string | undefined;
   readonly stepNo?: number | undefined;
@@ -267,6 +278,7 @@ export interface ErrorInput {
 
 export interface ErrorRecordView {
   readonly id: number;
+  readonly projectId: string;
   readonly at: number;
   readonly opId: string;
   readonly jobId: string | null;
@@ -287,6 +299,7 @@ export interface ErrorRecordView {
 }
 
 export interface ErrorGroupView {
+  readonly projectId: string;
   readonly fingerprint: string;
   readonly opId: string;
   readonly code: string | null;
@@ -304,6 +317,7 @@ export interface ErrorGroupView {
 
 interface ErrorRow {
   id: number;
+  project_id: string;
   at: number;
   op_id: string;
   job_id: string | null;
@@ -326,6 +340,7 @@ interface ErrorRow {
 function toError(r: ErrorRow): ErrorRecordView {
   return {
     id: r.id,
+    projectId: r.project_id,
     at: r.at,
     opId: r.op_id,
     jobId: r.job_id,
@@ -352,6 +367,7 @@ export function errorFingerprint(opId: string, code: string | undefined, path: s
 }
 
 export interface BudgetSampleView {
+  readonly projectId: string;
   readonly at: number;
   readonly tiers: Record<
     string,
@@ -377,12 +393,13 @@ export class JobsRepo {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO jobs (id, kind, title, origin, origin_kind, principal_id, profile, approved_by, priority,
-             status, on_error, steps_total, options, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO jobs (id, project_id, kind, title, origin, origin_kind, principal_id, profile, approved_by,
+             priority, status, on_error, steps_total, options, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           job.id,
+          job.projectId,
           job.kind,
           job.title,
           JSON.stringify(job.origin),
@@ -398,7 +415,7 @@ export class JobsRepo {
           at,
           at,
         );
-      job.steps.forEach((s, i) => this.insertStepRow(job.id, i + 1, s, at));
+      job.steps.forEach((s, i) => this.insertStepRow(job.id, job.projectId, i + 1, s, at));
     })();
     return this.job(job.id)!;
   }
@@ -411,7 +428,7 @@ export class JobsRepo {
         .prepare('SELECT COALESCE(MAX(step_no), 0) AS n FROM steps WHERE job_id = ?')
         .get(jobId) as { n: number };
       const stepNo = row.n + 1;
-      this.insertStepRow(jobId, stepNo, step, at);
+      this.insertStepRow(jobId, this.projectOf(jobId), stepNo, step, at);
       this.db
         .prepare('UPDATE jobs SET steps_total = steps_total + 1, updated_at = ? WHERE id = ?')
         .run(at, jobId);
@@ -442,7 +459,7 @@ export class JobsRepo {
         const row = this.db
           .prepare('SELECT COALESCE(MAX(step_no), 0) AS n FROM steps WHERE job_id = ?')
           .get(jobId) as { n: number };
-        this.insertStepRow(jobId, row.n + 1, step, at);
+        this.insertStepRow(jobId, this.projectOf(jobId), row.n + 1, step, at);
         this.db
           .prepare('UPDATE jobs SET steps_total = steps_total + 1, updated_at = ? WHERE id = ?')
           .run(at, jobId);
@@ -461,7 +478,7 @@ export class JobsRepo {
         if (r.idempotency_key !== null)
           rekey.run(idempotencyKeyFor(jobId, r.step_no + 1, r.attempt0), jobId, r.step_no + 1);
       }
-      this.insertStepRow(jobId, afterStepNo + 1, step, at);
+      this.insertStepRow(jobId, this.projectOf(jobId), afterStepNo + 1, step, at);
       this.db
         .prepare('UPDATE jobs SET steps_total = steps_total + 1, updated_at = ? WHERE id = ?')
         .run(at, jobId);
@@ -469,7 +486,15 @@ export class JobsRepo {
     })();
   }
 
-  private insertStepRow(jobId: string, stepNo: number, s: NewStep, at: number): void {
+  /** The project a job belongs to: every row a job owns (steps, artefacts, items) carries the same one. */
+  projectOf(jobId: string): string {
+    const r = this.db.prepare('SELECT project_id FROM jobs WHERE id = ?').get(jobId) as
+      { project_id: string } | undefined;
+    if (!r) throw new Error(`No job ${jobId}`);
+    return r.project_id;
+  }
+
+  private insertStepRow(jobId: string, projectId: string, stepNo: number, s: NewStep, at: number): void {
     const paramsJson = JSON.stringify(s.params);
     let inline: string | null = paramsJson;
     let artifactId: string | null = null;
@@ -480,12 +505,13 @@ export class JobsRepo {
     const key = s.post ? idempotencyKeyFor(jobId, stepNo, 0) : null;
     this.db
       .prepare(
-        `INSERT INTO steps (job_id, step_no, op_id, op_kind, params, params_artifact_id, params_hash, options,
-           idempotency_key, client_ids, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        `INSERT INTO steps (job_id, project_id, step_no, op_id, op_kind, params, params_artifact_id, params_hash,
+           options, idempotency_key, client_ids, status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
       )
       .run(
         jobId,
+        projectId,
         stepNo,
         s.opId,
         s.opKind,
@@ -694,10 +720,20 @@ export class JobsRepo {
     const id = newArtifactId();
     this.db
       .prepare(
-        `INSERT INTO job_artifacts (id, job_id, step_no, kind, data, bytes, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO job_artifacts (id, job_id, project_id, step_no, kind, data, bytes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, jobId, stepNo, kind, data, data === null ? 0 : Buffer.byteLength(data), at, at);
+      .run(
+        id,
+        jobId,
+        this.projectOf(jobId),
+        stepNo,
+        kind,
+        data,
+        data === null ? 0 : Buffer.byteLength(data),
+        at,
+        at,
+      );
     return id;
   }
 
@@ -705,20 +741,21 @@ export class JobsRepo {
   appendItems(artifactId: string, items: readonly unknown[]): { itemCount: number; bytes: number } {
     return this.db.transaction(() => {
       const a = this.db
-        .prepare('SELECT item_count, bytes FROM job_artifacts WHERE id = ?')
+        .prepare('SELECT item_count, bytes, project_id FROM job_artifacts WHERE id = ?')
         .get(artifactId) as {
         item_count: number;
         bytes: number;
+        project_id: string;
       };
       const insert = this.db.prepare(
-        'INSERT INTO job_artifact_items (artifact_id, idx, data) VALUES (?, ?, ?)',
+        'INSERT INTO job_artifact_items (artifact_id, project_id, idx, data) VALUES (?, ?, ?, ?)',
       );
       let bytes = a.bytes;
       let idx = a.item_count;
       for (const item of items) {
         const text = JSON.stringify(item);
         bytes += Buffer.byteLength(text);
-        insert.run(artifactId, idx++, text);
+        insert.run(artifactId, a.project_id, idx++, text);
       }
       this.db
         .prepare('UPDATE job_artifacts SET item_count = ?, bytes = ?, updated_at = ? WHERE id = ?')
@@ -745,11 +782,12 @@ export class JobsRepo {
     const fingerprint = errorFingerprint(e.opId, e.code, path);
     const info = this.db
       .prepare(
-        `INSERT INTO errors (at, op_id, job_id, step_no, principal_id, profile, http_status, code, message, issues,
-           path, request_id, retryable, classification, fingerprint, detail)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO errors (project_id, at, op_id, job_id, step_no, principal_id, profile, http_status, code,
+           message, issues, path, request_id, retryable, classification, fingerprint, detail)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
+        e.projectId,
         this.now(),
         e.opId,
         e.jobId ?? null,
@@ -773,7 +811,8 @@ export class JobsRepo {
 
   // -------------------------------------------------------------------------------- budget samples
 
-  recordBudgetSample(s: BudgetSnapshot): void {
+  /** One budget sample of one project's governor (each project has its own, v2 A1). */
+  recordBudgetSample(projectId: string, s: BudgetSnapshot): void {
     const tiers: BudgetSampleView['tiers'] = {};
     for (const [id, t] of Object.entries(s.tiers)) {
       tiers[id] = {
@@ -785,8 +824,8 @@ export class JobsRepo {
       };
     }
     this.db
-      .prepare('INSERT INTO budget_samples (at, data) VALUES (?, ?)')
-      .run(s.atMs, JSON.stringify({ tiers, queues: s.queues, inFlight: s.inFlight }));
+      .prepare('INSERT INTO budget_samples (project_id, at, data) VALUES (?, ?, ?)')
+      .run(projectId, s.atMs, JSON.stringify({ tiers, queues: s.queues, inFlight: s.inFlight }));
   }
 
   pruneBudgetSamples(beforeMs: number): number {
@@ -827,6 +866,8 @@ export interface RuntimeSettingView {
 
 export interface ErrorGroupFilter {
   readonly resolved?: boolean;
+  /** Only this group. */
+  readonly fingerprint?: string;
   /** Only occurrences for this principal. */
   readonly principalId?: string;
   readonly since?: number;
@@ -841,12 +882,34 @@ export interface ErrorFilter {
   readonly limit?: number;
 }
 
-/** Read-only queries over the job tables (for chunk 5's admin API and the MCP awareness tools). */
+/**
+ * `project_id = ?` for one project, or nothing for `ALL_PROJECTS` (an explicit choice, v2 A1). `col` is qualified when
+ * the query joins tables.
+ */
+export function projectWhere(
+  scope: ProjectScope,
+  col = 'project_id',
+): { sql: string | null; vals: unknown[] } {
+  if (isAllProjects(scope)) return { sql: null, vals: [] };
+  if (typeof scope !== 'string' || scope === '') throw new Error('A project scope is required');
+  return { sql: `${col} = ?`, vals: [scope] };
+}
+
+/**
+ * Read-only queries over the job tables (for chunk 5's admin API and the MCP awareness tools). Every function takes
+ * the project scope first: one project's LegendKeeper id, or `ALL_PROJECTS` where spanning projects is meant (v2 A1).
+ * A row of another project answers exactly like one that does not exist.
+ */
 export function createJobQueries(db: Db) {
   return {
-    listJobs(filter: JobFilter = {}): JobView[] {
+    listJobs(scope: ProjectScope, filter: JobFilter = {}): JobView[] {
       const where: string[] = [];
       const vals: unknown[] = [];
+      const p = projectWhere(scope);
+      if (p.sql) {
+        where.push(p.sql);
+        vals.push(...p.vals);
+      }
       if (filter.status !== undefined) {
         const list: readonly JobStatus[] = Array.isArray(filter.status)
           ? (filter.status as readonly JobStatus[])
@@ -879,26 +942,35 @@ export function createJobQueries(db: Db) {
       return (db.prepare(sql).all(...vals, Math.min(filter.limit ?? 50, 500)) as JobRow[]).map(toJob);
     },
 
-    getJob(id: string): JobWithSteps | undefined {
-      const r = db.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as JobRow | undefined;
+    getJob(scope: ProjectScope, id: string): JobWithSteps | undefined {
+      const p = projectWhere(scope);
+      const r = db
+        .prepare(`SELECT * FROM jobs WHERE id = ?${p.sql ? ` AND ${p.sql}` : ''}`)
+        .get(id, ...p.vals) as JobRow | undefined;
       if (!r) return undefined;
       const steps = (
-        db.prepare('SELECT * FROM steps WHERE job_id = ? ORDER BY step_no').all(id) as StepRow[]
+        db
+          .prepare('SELECT * FROM steps WHERE job_id = ? AND project_id = ? ORDER BY step_no')
+          .all(id, r.project_id) as StepRow[]
       ).map(toStep);
       const artifacts = (
         db
-          .prepare('SELECT * FROM job_artifacts WHERE job_id = ? ORDER BY created_at, id')
-          .all(id) as ArtifactRow[]
+          .prepare('SELECT * FROM job_artifacts WHERE job_id = ? AND project_id = ? ORDER BY created_at, id')
+          .all(id, r.project_id) as ArtifactRow[]
       ).map(toArtifact);
       return { ...toJob(r), steps, artifacts };
     },
 
     /** Items of an `items` artefact (paginate_all results), or the JSON of a params/result artefact. */
     readArtifact(
+      scope: ProjectScope,
       id: string,
       page: { offset?: number; limit?: number } = {},
     ): { artifact: ArtifactView; items?: unknown[]; data?: unknown; nextOffset: number | null } | undefined {
-      const r = db.prepare('SELECT * FROM job_artifacts WHERE id = ?').get(id) as ArtifactRow | undefined;
+      const p = projectWhere(scope);
+      const r = db
+        .prepare(`SELECT * FROM job_artifacts WHERE id = ?${p.sql ? ` AND ${p.sql}` : ''}`)
+        .get(id, ...p.vals) as ArtifactRow | undefined;
       if (!r) return undefined;
       const artifact = toArtifact(r);
       if (r.kind !== 'items') return { artifact, data: parse<unknown>(r.data, null), nextOffset: null };
@@ -906,20 +978,26 @@ export function createJobQueries(db: Db) {
       const limit = Math.min(Math.max(1, page.limit ?? 100), 1000);
       const rows = db
         .prepare(
-          'SELECT data FROM job_artifact_items WHERE artifact_id = ? AND idx >= ? ORDER BY idx LIMIT ?',
+          'SELECT data FROM job_artifact_items WHERE artifact_id = ? AND project_id = ? AND idx >= ? ORDER BY idx LIMIT ?',
         )
-        .all(id, offset, limit) as { data: string }[];
+        .all(id, r.project_id, offset, limit) as { data: string }[];
       const items = rows.map((x) => parse<unknown>(x.data, null));
       const next = offset + items.length;
       return { artifact, items, nextOffset: next < r.item_count ? next : null };
     },
 
-    listErrorGroups(filter: ErrorGroupFilter = {}): ErrorGroupView[] {
+    /** Error groups (fingerprint = op + code + path), per project: the same failure in two projects is two groups. */
+    listErrorGroups(scope: ProjectScope, filter: ErrorGroupFilter = {}): ErrorGroupView[] {
       const having: string[] = [];
       if (filter.resolved === true) having.push('SUM(resolved_at IS NULL) = 0');
       if (filter.resolved === false) having.push('SUM(resolved_at IS NULL) > 0');
       const conds: string[] = [];
       const vals: unknown[] = [];
+      const p = projectWhere(scope);
+      if (p.sql) {
+        conds.push(p.sql);
+        vals.push(...p.vals);
+      }
       if (filter.since !== undefined) {
         conds.push('at >= ?');
         vals.push(filter.since);
@@ -928,16 +1006,21 @@ export function createJobQueries(db: Db) {
         conds.push('principal_id = ?');
         vals.push(filter.principalId);
       }
+      if (filter.fingerprint !== undefined) {
+        conds.push('fingerprint = ?');
+        vals.push(filter.fingerprint);
+      }
       const where = conds.length ? `WHERE ${conds.join(' AND ')}` : '';
       const rows = db
         .prepare(
-          `SELECT fingerprint, op_id, code, path, COUNT(*) AS count, MIN(at) AS first_seen, MAX(at) AS last_seen,
-             SUM(resolved_at IS NULL) AS open, MAX(id) AS last_id
-           FROM errors ${where} GROUP BY fingerprint
+          `SELECT project_id, fingerprint, op_id, code, path, COUNT(*) AS count, MIN(at) AS first_seen,
+             MAX(at) AS last_seen, SUM(resolved_at IS NULL) AS open, MAX(id) AS last_id
+           FROM errors ${where} GROUP BY project_id, fingerprint
            ${having.length ? `HAVING ${having.join(' AND ')}` : ''}
            ORDER BY last_seen DESC LIMIT ?`,
         )
         .all(...vals, Math.min(filter.limit ?? 100, 1000)) as {
+        project_id: string;
         fingerprint: string;
         op_id: string;
         code: string | null;
@@ -952,6 +1035,7 @@ export function createJobQueries(db: Db) {
       return rows.map((g) => {
         const l = last.get(g.last_id) as ErrorRow;
         return {
+          projectId: g.project_id,
           fingerprint: g.fingerprint,
           opId: g.op_id,
           code: g.code,
@@ -968,9 +1052,14 @@ export function createJobQueries(db: Db) {
       });
     },
 
-    listErrors(filter: ErrorFilter = {}): ErrorRecordView[] {
+    listErrors(scope: ProjectScope, filter: ErrorFilter = {}): ErrorRecordView[] {
       const where: string[] = [];
       const vals: unknown[] = [];
+      const p = projectWhere(scope);
+      if (p.sql) {
+        where.push(p.sql);
+        vals.push(...p.vals);
+      }
       if (filter.fingerprint !== undefined) {
         where.push('fingerprint = ?');
         vals.push(filter.fingerprint);
@@ -996,25 +1085,41 @@ export function createJobQueries(db: Db) {
       ).map(toError);
     },
 
-    /** Marks every current occurrence resolved. Returns how many rows changed. */
-    resolveErrorGroup(fingerprint: string, atMs: number = Date.now()): number {
+    /** Marks every current occurrence of a group resolved, in ONE project. Returns how many rows changed. */
+    resolveErrorGroup(projectId: string, fingerprint: string, atMs: number = Date.now()): number {
+      const p = projectWhere(projectId);
       return db
-        .prepare('UPDATE errors SET resolved_at = ? WHERE fingerprint = ? AND resolved_at IS NULL')
-        .run(atMs, fingerprint).changes;
+        .prepare(
+          `UPDATE errors SET resolved_at = ? WHERE ${p.sql} AND fingerprint = ? AND resolved_at IS NULL`,
+        )
+        .run(atMs, ...p.vals, fingerprint).changes;
     },
 
-    listBudgetSamples(range: { since?: number; until?: number; limit?: number } = {}): BudgetSampleView[] {
+    listBudgetSamples(
+      scope: ProjectScope,
+      range: { since?: number; until?: number; limit?: number } = {},
+    ): BudgetSampleView[] {
+      const p = projectWhere(scope);
       const rows = db
-        .prepare('SELECT at, data FROM budget_samples WHERE at >= ? AND at <= ? ORDER BY at LIMIT ?')
+        .prepare(
+          `SELECT project_id, at, data FROM budget_samples WHERE ${p.sql ? `${p.sql} AND ` : ''}at >= ? AND at <= ?
+           ORDER BY at LIMIT ?`,
+        )
         .all(
+          ...p.vals,
           range.since ?? 0,
           range.until ?? Number.MAX_SAFE_INTEGER,
           Math.min(range.limit ?? 10_000, 50_000),
         ) as {
+        project_id: string;
         at: number;
         data: string;
       }[];
-      return rows.map((r) => ({ at: r.at, ...parse(r.data, { tiers: {}, queues: {}, inFlight: 0 }) }));
+      return rows.map((r) => ({
+        projectId: r.project_id,
+        at: r.at,
+        ...parse(r.data, { tiers: {}, queues: {}, inFlight: 0 }),
+      }));
     },
 
     runtimeSettings(): RuntimeSettingView[] {

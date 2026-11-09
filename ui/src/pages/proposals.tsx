@@ -15,9 +15,10 @@ import {
 } from '../components';
 import { diffBlocks, looksLikeBlocks } from '../diff';
 import { fmtAgo, fmtTime, prettyJson } from '../format';
-import { useApi, useNow, useReloadOn } from '../hooks';
+import { useNow } from '../hooks';
+import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useRoute } from '../router';
-import type { Proposal, ProposalDetail, ProposalOp } from '../types';
+import type { Proposal, ProposalCounts, ProposalDetail, ProposalOp } from '../types';
 
 type Tab = 'pending' | 'conflicted' | 'history';
 
@@ -26,13 +27,14 @@ export function ProposalsPage() {
   const tab =
     (['pending', 'conflicted', 'history'] as const).find((t) => t === query.get('tab')) ?? 'pending';
   const openId = query.get('id');
-  const list = useApi<{ proposals: Proposal[] }>(`/proposals${qs({ group: tab, limit: 100 })}`);
-  const counts = useApi<{ counts: Record<string, number> }>('/proposals/counts');
+  const { selected } = useProject();
+  const list = useScopedApi<{ proposals: Proposal[] }>(`/proposals${qs({ group: tab, limit: 100 })}`);
+  const counts = useScopedApi<ProposalCounts>('/proposals/counts');
   const reloadAll = () => {
     list.reload();
     counts.reload();
   };
-  useReloadOn(['proposal'], reloadAll, 300);
+  useProjectReloadOn(['proposal'], reloadAll, 300);
   const now = useNow();
   const [picked, setPicked] = useState<Set<string>>(new Set());
   useEffect(() => setPicked(new Set()), [tab]);
@@ -51,7 +53,7 @@ export function ProposalsPage() {
 
   return (
     <>
-      <PageHeader title="Proposals" />
+      <PageHeader title="Proposals" project={selected} />
       <p className="muted">
         Writes that agents at the “propose” scope asked for. Nothing is sent to LegendKeeper until you approve
         it.
@@ -169,9 +171,10 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
   const toast = useToast();
   const [reason, setReason] = useState('');
   type Result = { id: string; ok: boolean; state?: string; error?: { message: string } };
+  const { withProject } = useProject();
   const act = (action: 'approve' | 'reject') =>
     run(() =>
-      api.post<{ results: Result[] }>('/proposals/bulk', {
+      api.post<{ results: Result[] }>(withProject('/proposals/bulk'), {
         action,
         ids,
         ...(action === 'reject' && reason ? { reason } : {}),
@@ -331,8 +334,9 @@ function ProposalReview({
   onChanged: () => void;
   onClose: () => void;
 }) {
-  const d = useApi<{ proposal: ProposalDetail }>(`/proposals/${encodeURIComponent(id)}`);
-  useReloadOn(['proposal'], d.reload, 300);
+  const { withProject } = useProject();
+  const d = useScopedApi<{ proposal: ProposalDetail }>(`/proposals/${encodeURIComponent(id)}`);
+  useProjectReloadOn(['proposal'], d.reload, 300);
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const [rejecting, setRejecting] = useState(false);
@@ -410,7 +414,7 @@ function ProposalReview({
                       }).then((ok) => {
                         if (ok)
                           void run(
-                            () => api.post(`/proposals/${encodeURIComponent(p.id)}/approve`),
+                            () => api.post(withProject(`/proposals/${encodeURIComponent(p.id)}/approve`)),
                             'Approved.',
                           ).then(done);
                       });
@@ -442,7 +446,7 @@ function ProposalReview({
                         void run(
                           () =>
                             api.post(
-                              `/proposals/${encodeURIComponent(p.id)}/reject`,
+                              withProject(`/proposals/${encodeURIComponent(p.id)}/reject`),
                               reason ? { reason } : {},
                             ),
                           'Rejected.',

@@ -4,13 +4,17 @@
  */
 import type { JobEngine } from '../jobs/index.js';
 import type { LkClient } from '../lk/index.js';
+import type { ProjectsRuntime } from '../projects/registry.js';
 import type { Db } from '../db/open.js';
 import type { ProposalService } from '../policy/proposals.js';
 import type { MaintenanceJobDef } from './types.js';
 
 export interface BuiltinJobDeps {
   readonly engine: JobEngine;
-  readonly lk: LkClient;
+  /** Every project with a governor (the budget sampler samples each, v2 A1). */
+  readonly projects: Pick<ProjectsRuntime, 'activeIds' | 'anyClient'> & {
+    clients?(): readonly { readonly id: string; readonly client: LkClient }[];
+  };
   readonly db: Db;
   readonly proposals: Pick<ProposalService, 'expireDue' | 'pruneFinished'>;
   /** POLICY_PROPOSAL_RETENTION_DAYS in milliseconds: what `proposal-prune` keeps. */
@@ -37,6 +41,8 @@ const placeholder = (
   writes,
   usesLk: true,
   record: 'always',
+  // These touch LegendKeeper and one project's data: once per served project (v2 A1).
+  scope: 'project',
 });
 
 /** Ids of the placeholders, for tests and docs. */
@@ -53,29 +59,36 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       id: 'budget-sampler',
       name: 'Budget sampler',
       description:
-        'Stores one snapshot of the request budgets every 10 seconds. The Request Budgets sparklines are drawn from these samples.',
+        'Stores one snapshot of every project’s request budgets (each project has its own governor) every 10 seconds. The Request Budgets sparklines are drawn from these samples.',
       defaultSchedule: { kind: 'interval', everySeconds: 10 },
       defaultEnabled: true,
       implemented: true,
       writes: false,
       usesLk: false,
       record: 'on-change', // every 10 s: a job record only if it fails
+      scope: 'bridge', // one run samples every project's governor
       run: () => {
-        d.engine.recordBudgetSample(d.lk.governor.snapshot());
-        return { summary: 'Stored a budget sample.' };
+        const sampled = d.projects.clients
+          ? d.projects.clients().map((c) => ({ id: c.id, lk: c.client }))
+          : d.projects.activeIds().map((id) => ({ id, lk: d.projects.anyClient(id)! }));
+        for (const p of sampled) d.engine.recordBudgetSample(p.id, p.lk.governor.snapshot());
+        return {
+          summary: `Stored a budget sample for ${sampled.length} ${sampled.length === 1 ? 'project' : 'projects'}.`,
+        };
       },
     },
     {
       id: 'journal-prune',
       name: 'Journal prune',
       description:
-        'Removes write-journal entries older than the retention period, then the oldest ones if the journal is over its size limit.',
+        'Removes write-journal entries older than the retention period, then the oldest ones if the journal is over its size limit. Covers every project.',
       defaultSchedule: { kind: 'daily', time: '03:30' },
       defaultEnabled: true,
       implemented: true,
       writes: false,
       usesLk: false,
       record: 'always',
+      scope: 'bridge',
       run: () => {
         const r = d.engine.pruneJournal();
         const n = r.removedByAge + r.removedBySize;
@@ -88,13 +101,15 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
     {
       id: 'proposal-expiry',
       name: 'Proposal expiry',
-      description: 'Expires pending proposals that the owner has not decided before their expiry time.',
+      description:
+        'Expires pending proposals that the owner has not decided before their expiry time, in every project.',
       defaultSchedule: { kind: 'interval', everySeconds: Math.max(10, Math.round(d.expirySweepMs / 1000)) },
       defaultEnabled: true,
       implemented: true,
       writes: false,
       usesLk: false,
       record: 'on-change', // a job record only when something expired (or the sweep failed)
+      scope: 'bridge',
       run: () => {
         const n = d.proposals.expireDue();
         return {
@@ -107,7 +122,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
     {
       id: 'proposal-prune',
       name: 'Proposal prune',
-      description: `Deletes executed, rejected, expired and failed proposals that finished more than ${Math.round(d.proposalRetentionMs / 86_400_000)} days ago, with their stored before-state. Pending and conflicted proposals are never deleted; jobs and journal entries keep the proposal id.`,
+      description: `Deletes, in every project, executed, rejected, expired and failed proposals that finished more than ${Math.round(d.proposalRetentionMs / 86_400_000)} days ago, with their stored before-state. Pending and conflicted proposals are never deleted; jobs and journal entries keep the proposal id.`,
       // Daily, a quarter of an hour after journal-prune, so the two never contend for the database.
       defaultSchedule: { kind: 'daily', time: '03:45' },
       defaultEnabled: true,
@@ -115,6 +130,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       writes: false,
       usesLk: false,
       record: 'always',
+      scope: 'bridge',
       run: () => {
         const r = d.proposals.pruneFinished(d.proposalRetentionMs);
         return {
@@ -134,6 +150,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       writes: false,
       usesLk: false,
       record: 'always',
+      scope: 'bridge',
       run: () => {
         d.db.pragma('optimize');
         const rows = d.db.pragma('wal_checkpoint(PASSIVE)') as {

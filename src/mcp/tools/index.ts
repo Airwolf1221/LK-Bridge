@@ -16,7 +16,9 @@ export { createUploadTransport } from './upload-http.js';
 
 /** The MCP server `instructions`: short guidance every connected agent sees (also in docs/tools.md). */
 export const BRIDGE_INSTRUCTIONS =
-  'LK-Bridge gives governed access to one LegendKeeper project. Rate budget is shared and finite: every result ends with a budget line. ' +
+  'LK-Bridge gives governed access to one or more LegendKeeper projects: list_projects names them, and every tool takes an optional project. ' +
+  'Reads without project use the default project; a write must name its project when the bridge serves several. ' +
+  "Each project has its own rate budget, shared and finite: every result names its project and ends with that project's budget line. " +
   'Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. ' +
   'Read before you write, and pass the version you read as params.ifMatch. ' +
   'Never loop on budget errors: wait until the stated retry time. ' +

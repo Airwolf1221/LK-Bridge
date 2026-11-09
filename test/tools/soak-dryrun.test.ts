@@ -32,9 +32,9 @@ async function start(projectSeen: string) {
     }),
   });
   const url = await mock.start();
-  soak = createSoakRuntime({
+  soak = await createSoakRuntime({
     apiKey: API_KEY,
-    projectId: PROJECT,
+    project: 'sandbox',
     baseUrl: url,
     // The real pacing would make this take minutes; the published limits are still enforced by the mock.
     env: { WRITE_SPACING_MS: '0', WRITE_SPACING_STRETCHED_MS: '0' },
@@ -47,7 +47,7 @@ describe('sandbox soak (dry run)', () => {
     const { mock, soak } = await start('proj_somebody_else');
     await expect(
       runSoak(
-        { engine: soak.runtime.engine, lk: soak.runtime.lk, projectId: PROJECT, counters: soak.counters },
+        { engine: soak.runtime.engine, lk: soak.lk, projectId: soak.projectId, counters: soak.counters },
         PROJECT,
         { writes: 24 },
       ),
@@ -59,7 +59,7 @@ describe('sandbox soak (dry run)', () => {
     const { mock, soak } = await start(PROJECT);
     const lines: string[] = [];
     const report = await runSoak(
-      { engine: soak.runtime.engine, lk: soak.runtime.lk, projectId: PROJECT, counters: soak.counters },
+      { engine: soak.runtime.engine, lk: soak.lk, projectId: soak.projectId, counters: soak.counters },
       PROJECT,
       { writes: 40, batchSize: 7, log: (l) => lines.push(l) },
     );

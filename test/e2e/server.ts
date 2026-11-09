@@ -21,6 +21,8 @@ import { LkModel } from '../jobs/lk-model.js';
 const PORT = Number(process.env.E2E_PORT ?? 8799);
 export const OWNER_PASSWORD = 'e2e-password-not-a-secret';
 const API_KEY = 'mock-key-not-real';
+/** The mock project's LegendKeeper id (served as project "test", the single-project form's default name). */
+const PROJECT = 'proj_mock';
 const secret = () => randomBytes(48).toString('base64');
 const delay = Number(process.env.E2E_WRITE_DELAY_MS ?? 700);
 
@@ -98,6 +100,7 @@ async function propose(text: string): Promise<string> {
       },
     },
     {
+      project: PROJECT,
       origin: {
         kind: 'mcp',
         tool: 'lk_api_write',
@@ -116,6 +119,7 @@ createServer((req, res) => {
     if (url.pathname === '/job') {
       const steps = Number(url.searchParams.get('steps') ?? 5);
       const r = await engine.submit({
+        project: PROJECT,
         kind: 'batch_ops',
         title: url.searchParams.get('title') ?? 'E2E batch',
         origin,

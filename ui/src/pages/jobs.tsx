@@ -15,6 +15,7 @@ import {
 } from '../components';
 import { fmtAgo, fmtBytes, fmtDuration, fmtTime, pct, shortId } from '../format';
 import { useApi, useNow, useReloadOn } from '../hooks';
+import { useProject, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
 import { useStreamEvent } from '../stream';
 import type { ClientsResponse, Job, JobDetail, JobStatus, Step } from '../types';
@@ -68,19 +69,23 @@ export function Progress({ job }: { job: Pick<Job, 'progress' | 'status'> }) {
   );
 }
 
-function JobControls({ job, onDone }: { job: Job; onDone?: () => void }) {
+/** Pause, resume and cancel act within the job's project (`project`: its name). */
+function JobControls({ job, project, onDone }: { job: Job; project: string | null; onDone?: () => void }) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
+  const { withProject } = useProject();
   const active = ACTIVE.includes(job.status);
   if (!active) return null;
   const paused = job.status === 'paused' || job.pauseRequested;
+  const control = (action: 'pause' | 'resume' | 'cancel') =>
+    api.post(withProject(`/jobs/${encodeURIComponent(job.id)}/${action}`, project));
   return (
     <span className="row">
       {paused ? (
         <Button
           className="small"
           busy={busy}
-          onClick={() => void run(() => api.post(`/jobs/${job.id}/resume`), 'Job resumed.').then(onDone)}
+          onClick={() => void run(() => control('resume'), 'Job resumed.').then(onDone)}
         >
           Resume
         </Button>
@@ -89,10 +94,7 @@ function JobControls({ job, onDone }: { job: Job; onDone?: () => void }) {
           className="small"
           busy={busy}
           onClick={() =>
-            void run(
-              () => api.post(`/jobs/${job.id}/pause`),
-              'The job will pause after its current step.',
-            ).then(onDone)
+            void run(() => control('pause'), 'The job will pause after its current step.').then(onDone)
           }
         >
           Pause
@@ -118,7 +120,7 @@ function JobControls({ job, onDone }: { job: Job; onDone?: () => void }) {
             confirmLabel: 'Cancel job',
             danger: true,
           }).then((ok) => {
-            if (ok) void run(() => api.post(`/jobs/${job.id}/cancel`), 'Job cancelled.').then(onDone);
+            if (ok) void run(() => control('cancel'), 'Job cancelled.').then(onDone);
           });
         }}
       >
@@ -149,14 +151,17 @@ function JobList() {
     navigate(`/jobs${q}`, { replace: true });
   };
   const path = `/jobs${qs({ view: filters.view, status: filters.status, origin: filters.origin, profile: filters.profile, principalId: filters.principalId, limit: 100 })}`;
-  const list = useApi<{ jobs: Job[]; hasMore: boolean }>(path);
+  const { selected, isSelected } = useProject();
+  const list = useScopedApi<{ jobs: Job[]; hasMore: boolean }>(path);
   const clients = useApi<ClientsResponse>('/clients');
   const now = useNow();
   const { set } = list;
 
-  // Live: a job event updates the row in place (progress, status, current step) without a request.
+  // Live: a job event updates the row in place (progress, status, current step) without a request. Another project's
+  // jobs never appear here.
   const key = JSON.stringify(filters);
   useStreamEvent<{ type: 'created' | 'updated'; job: Job }>('job', ({ job }) => {
+    if (!isSelected(job.projectId)) return;
     const f = JSON.parse(key) as Filters;
     set((prev) => {
       if (!prev) return prev;
@@ -171,7 +176,7 @@ function JobList() {
   const statuses = filters.view === 'active' ? ACTIVE : HISTORY;
   return (
     <>
-      <PageHeader title="Jobs" />
+      <PageHeader title="Jobs" project={selected} />
       <div className="tabs" role="group" aria-label="Which jobs">
         <button
           type="button"
@@ -298,7 +303,7 @@ function JobList() {
                   </td>
                   <td>{fmtAgo(j.updatedAt, now)}</td>
                   <td>
-                    <JobControls job={j} />
+                    <JobControls job={j} project={selected} />
                   </td>
                 </tr>
               ))}
@@ -313,13 +318,27 @@ function JobList() {
   );
 }
 
-function StepRow({ step, job, onChange }: { step: Step; job: JobDetail; onChange: () => void }) {
+function StepRow({
+  step,
+  job,
+  project,
+  onChange,
+}: {
+  step: Step;
+  job: JobDetail;
+  project: string | null;
+  onChange: () => void;
+}) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
+  const { withProject } = useProject();
   const retry = step.retry;
   const doRetry = (force: boolean) =>
     run(
-      () => api.post(`/jobs/${job.id}/steps/${step.stepNo}/retry`, { force }),
+      () =>
+        api.post(withProject(`/jobs/${encodeURIComponent(job.id)}/steps/${step.stepNo}/retry`, project), {
+          force,
+        }),
       force ? 'Step queued to run again as new work.' : 'Step queued to run again.',
     ).then(onChange);
   return (
@@ -430,14 +449,18 @@ function StepRow({ step, job, onChange }: { step: Step; job: JobDetail; onChange
 }
 
 function JobDetailView({ id }: { id: string }) {
-  const d = useApi<{ job: JobDetail }>(`/jobs/${encodeURIComponent(id)}`);
+  // A link from a page that spans projects (Concurrent Writers) names the job's project; otherwise the selected one.
+  const { query } = useRoute();
+  const { selected, withProject } = useProject();
+  const project = query.get('project') ?? selected;
+  const d = useScopedApi<{ job: JobDetail }>(`/jobs/${encodeURIComponent(id)}`, project);
   const now = useNow();
   const { set } = d;
   useStreamEvent<{ type: string; job: Job }>('job', ({ job }) => {
     if (job.id !== id) return;
     set((prev) => (prev ? { job: { ...prev.job, ...job } } : prev));
   });
-  useReloadOn(['step'], d.reload, 300);
+  useReloadOn(['step'], d.reload, 300, (e) => (e as { jobId?: unknown } | null)?.jobId === id);
   const [artifact, setArtifact] = useState<{ id: string; data: unknown } | null>(null);
   useEffect(() => setArtifact(null), [id]);
   const job = d.data?.job;
@@ -448,7 +471,7 @@ function JobDetailView({ id }: { id: string }) {
 
   return (
     <>
-      <PageHeader title={job?.title || 'Job'}>
+      <PageHeader title={job?.title || 'Job'} project={project}>
         <Link to="/jobs?view=history">← All jobs</Link>
       </PageHeader>
       <ErrorNote error={d.error} onRetry={d.reload} />
@@ -465,7 +488,7 @@ function JobDetailView({ id }: { id: string }) {
                 {job.cancelRequested && <Badge tone="warn">cancelling after this step</Badge>}
                 <span className="mono muted small-text">{job.id}</span>
               </div>
-              <JobControls job={job} onDone={d.reload} />
+              <JobControls job={job} project={project} onDone={d.reload} />
             </div>
             {job.uncertain && (
               <p className="note note-bad" role="alert">
@@ -566,7 +589,7 @@ function JobDetailView({ id }: { id: string }) {
                 </thead>
                 <tbody>
                   {job.steps.map((s) => (
-                    <StepRow key={s.stepNo} step={s} job={job} onChange={d.reload} />
+                    <StepRow key={s.stepNo} step={s} job={job} project={project} onChange={d.reload} />
                   ))}
                 </tbody>
               </table>
@@ -613,7 +636,10 @@ function JobDetailView({ id }: { id: string }) {
                             onClick={() => {
                               void api
                                 .get<{ items?: unknown[]; data?: unknown }>(
-                                  `/jobs/${encodeURIComponent(job.id)}/artifacts/${encodeURIComponent(a.id)}?limit=20`,
+                                  withProject(
+                                    `/jobs/${encodeURIComponent(job.id)}/artifacts/${encodeURIComponent(a.id)}?limit=20`,
+                                    project,
+                                  ),
                                 )
                                 .then((r) => setArtifact({ id: a.id, data: r.items ?? r.data }));
                             }}

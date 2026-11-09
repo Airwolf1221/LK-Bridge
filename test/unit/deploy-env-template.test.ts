@@ -29,7 +29,10 @@ const loaders: readonly (readonly [string, (env: NodeJS.ProcessEnv) => unknown])
  * Runs every loader against an empty environment that records each name read. `read` is every variable any loader looks
  * at; `required` is every variable whose absence makes a loader fail (the issues name them).
  */
-function inspectLoaders(): { read: Set<string>; required: Set<string> } {
+function inspectLoaders(given: Readonly<Record<string, string>> = {}): {
+  read: Set<string>;
+  required: Set<string>;
+} {
   const read = new Set<string>();
   const required = new Set<string>();
   for (const [name, load] of loaders) {
@@ -38,11 +41,11 @@ function inspectLoaders(): { read: Set<string>; required: Set<string> } {
       {
         get: (_t, key) => {
           if (typeof key === 'string') read.add(key);
-          return undefined;
+          return typeof key === 'string' ? given[key] : undefined;
         },
         has: (_t, key) => {
           if (typeof key === 'string') read.add(key);
-          return false;
+          return typeof key === 'string' && key in given;
         },
       },
     );
@@ -104,22 +107,40 @@ const PRODUCTION_DEFAULTS: Readonly<Record<string, string>> = {
   WRITERS_MAX: '1',
   MCP_EXPOSE_PER_OP_TOOLS: 'false',
   OWNER_USERNAME: 'owner',
+  // v2 A1: the projects (names, not secrets); each project's key line stays blank.
+  LK_PROJECTS: 'test',
+  LK_DEFAULT_PROJECT: 'test',
 };
 
 describe('deploy/env.template', () => {
-  const { read, required } = inspectLoaders();
   const parsed = parse(template);
+  // v2 A1: the template uses the multi-project form, so what it must set is derived with its own LK_PROJECTS (which
+  // makes each project's LK_PROJECT_<NAME>_API_KEY required). What the loaders read is collected in both forms: the
+  // single-project form's names (LK_API_KEY, LK_PROJECT_ID, LK_PROJECT_NAME) must still be mentioned, commented out.
+  const multi = inspectLoaders({ LK_PROJECTS: parsed.active.get('LK_PROJECTS') ?? '' });
+  const single = inspectLoaders();
+  const required = multi.required;
+  const read = new Set([...multi.read, ...single.read]);
 
   it('the derivation finds the variables we know are required (guards against an empty list)', () => {
     for (const name of [
       'BRIDGE_PUBLIC_URL',
-      'LK_API_KEY',
-      'LK_PROJECT_ID',
+      'LK_PROJECT_TEST_API_KEY',
       'SESSION_SECRET',
       'JWT_SIGNING_KEY',
       'OWNER_PASSWORD_HASH',
     ]) {
       expect(required, name).toContain(name);
+    }
+    // The single-project form is still recognised: without LK_PROJECTS, its key and id are what is required.
+    for (const name of ['LK_API_KEY', 'LK_PROJECT_ID']) expect(single.required, name).toContain(name);
+    for (const name of [
+      'LK_PROJECTS',
+      'LK_DEFAULT_PROJECT',
+      'REQUIRE_PROJECT_FOR_WRITES',
+      'LK_PROJECT_NAME',
+    ]) {
+      expect(read, name).toContain(name);
     }
     for (const name of [
       'TRUST_PROXY',
@@ -156,8 +177,16 @@ describe('deploy/env.template', () => {
     expect(parsed.active.get('WRITERS_MAX')).toBe('1');
     expect(parsed.active.get('DB_PATH')).toBe('/var/lib/lk-bridge/bridge.db');
     expect(parsed.active.get('HOST')).toBe('127.0.0.1');
-    expect(parsed.active.has('LK_SANDBOX_API_KEY')).toBe(true);
-    expect(parsed.active.has('LK_SANDBOX_PROJECT_ID')).toBe(true);
+    // v2 A1: the projects, one key line each (blank), and no sandbox settings any more.
+    expect(parsed.active.get('LK_PROJECTS')).toBe('test');
+    expect(parsed.active.get('LK_DEFAULT_PROJECT')).toBe('test');
+    expect(parsed.active.get('LK_PROJECT_TEST_API_KEY')).toBe('');
+    expect(parsed.active.has('LK_SANDBOX_API_KEY')).toBe(false);
+    expect(parsed.active.has('LK_SANDBOX_PROJECT_ID')).toBe(false);
+    expect(parsed.commented.has('LK_SANDBOX_API_KEY')).toBe(false);
+    // The single-project form's names are documented, commented out.
+    for (const n of ['LK_API_KEY', 'LK_PROJECT_ID', 'LK_PROJECT_NAME'])
+      expect(parsed.commented.has(n), n).toBe(true);
   });
 
   it('holds no values except the documented production defaults', () => {

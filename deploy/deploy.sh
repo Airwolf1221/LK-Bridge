@@ -255,7 +255,11 @@ fi
 
 step="database migrations"
 log "Running migrations on ${db_path} (as ${svc_user}) ..."
-as_service env DB_PATH="$db_path" node dist/db/migrate.js
+# v2 A1 (migration 0600): rows written before multi-project support belong to the project the single-project form names
+# (LK_PROJECT_ID, and LK_PROJECT_NAME, default "test"). Ids and names only, never a key.
+legacy_project_id="$(env_file_get LK_PROJECT_ID)"
+legacy_project_name="$(env_file_get LK_PROJECT_NAME)"
+as_service env DB_PATH="$db_path" LK_PROJECT_ID="$legacy_project_id" LK_PROJECT_NAME="$legacy_project_name" node dist/db/migrate.js
 
 # ---------------------------------------------------------------- 5. start
 step="starting the service"

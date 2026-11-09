@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { ConfirmProvider, ToastProvider } from './components';
+import { ConfirmProvider, Loading, ToastProvider } from './components';
+import { PROJECT_STATUS_LABELS } from './format';
 import { Link, Router, useRoute } from './router';
 import { StreamProvider, useStream, useStreamEvent, type SourceFactory } from './stream';
-import { useApi, useReloadOn } from './hooks';
-import type { SessionInfo } from './types';
+import { useReloadOn } from './hooks';
+import { ProjectProvider, useProject, useScopedApi } from './project';
+import type { ProposalCounts, SessionInfo } from './types';
 import { BudgetsPage } from './pages/budgets';
 import { ClientsPage } from './pages/clients';
 import { ErrorsPage } from './pages/errors';
@@ -12,6 +14,7 @@ import { JournalPage } from './pages/journal';
 import { MaintenancePage } from './pages/maintenance';
 import { MappingsPage } from './pages/mappings';
 import { OverviewPage } from './pages/overview';
+import { ProjectsPage } from './pages/projects';
 import { ProposalsPage } from './pages/proposals';
 import { SettingsPage } from './pages/settings';
 import { WritersPage } from './pages/writers';
@@ -44,6 +47,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/proposals', label: 'Proposals' },
   { to: '/clients', label: 'Clients & Access' },
   { to: '/journal', label: 'Journal' },
+  { to: '/projects', label: 'Projects' },
   { to: '/settings', label: 'Settings' },
   { to: '/maintenance', label: 'Maintenance Jobs' },
   { to: '/mappings', label: 'Repository Mappings' },
@@ -84,6 +88,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/proposals') return <ProposalsPage />;
   if (path === '/clients') return <ClientsPage session={session} />;
   if (path === '/journal') return <JournalPage />;
+  if (path === '/projects') return <ProjectsPage />;
   if (path === '/settings') return <SettingsPage />;
   if (path === '/maintenance') return <MaintenancePage />;
   if (path === '/mappings' || path.startsWith('/mappings/')) return <MappingsPage />;
@@ -97,12 +102,57 @@ function Routes({ session }: { session: SessionInfo }) {
   );
 }
 
+/**
+ * The project switcher (v2 A1): which project the scoped pages show. Projects without a proven LegendKeeper id have no
+ * data yet, so they cannot be chosen. Other projects' pending proposals are listed under it.
+ */
+function ProjectSwitcher({ counts }: { counts: ProposalCounts | undefined }) {
+  const { projects, selected, current, select, error, ready } = useProject();
+  if (!ready) return null;
+  if (projects.length === 0) {
+    return (
+      <div className="project-switch">
+        <p className="muted small-text">
+          {error ? 'The project list could not be loaded: showing the default project.' : 'No projects.'}
+        </p>
+      </div>
+    );
+  }
+  const elsewhere = Object.entries(counts?.byProject ?? {}).filter(([name, n]) => name !== selected && n > 0);
+  return (
+    <div className="project-switch">
+      <label htmlFor="project-select">Project</label>
+      <select id="project-select" value={selected ?? ''} onChange={(e) => select(e.target.value)}>
+        {projects.map((p) => (
+          <option key={p.name} value={p.name} disabled={p.id === null && p.name !== selected}>
+            {`${p.name}${p.isDefault ? ' (default)' : ''}${p.status !== 'active' ? ` · ${PROJECT_STATUS_LABELS[p.status] ?? p.status}` : ''}`}
+          </option>
+        ))}
+      </select>
+      {current && current.status !== 'active' && (
+        <p className="project-warn small-text">
+          This project is {PROJECT_STATUS_LABELS[current.status] ?? current.status}
+          {current.reason ? `: ${current.reason}` : '.'}
+        </p>
+      )}
+      {current?.readOnly && <p className="muted small-text">Read-only: writes to it are refused.</p>}
+      {elsewhere.length > 0 && (
+        <p className="muted small-text" data-testid="pending-elsewhere">
+          Pending proposals elsewhere: {elsewhere.map(([name, n]) => `${name} ${n}`).join(', ')}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function Shell({ session }: { session: SessionInfo }) {
   const { path } = useRoute();
   const { status } = useStream();
   const [theme, cycleTheme] = useTheme();
-  const counts = useApi<{ counts: Record<string, number> }>('/proposals/counts');
-  useReloadOn(['proposal'], counts.reload, 500);
+  const { ready, selected } = useProject();
+  // The badge counts the selected project's pending proposals; `byProject` holds every project's.
+  const counts = useScopedApi<ProposalCounts>('/proposals/counts');
+  useReloadOn(['proposal', 'project'], counts.reload, 500);
   const pending = counts.data?.counts.pending ?? 0;
   const [, setTick] = useState(0);
   useStreamEvent('unauthenticated', () => setTick((n) => n + 1));
@@ -123,6 +173,7 @@ function Shell({ session }: { session: SessionInfo }) {
           LK-Bridge
           <small>Owner dashboard · v{session.version}</small>
         </div>
+        <ProjectSwitcher counts={counts.data} />
         <nav className="nav" aria-label="Main">
           {NAV.map((n) => {
             const current = n.to === '/' ? path === '/' : path === n.to || path.startsWith(`${n.to}/`);
@@ -157,7 +208,8 @@ function Shell({ session }: { session: SessionInfo }) {
         </div>
       </aside>
       <main id="content">
-        <Routes session={session} />
+        {/* Scoped pages wait for the project list; a new project remounts the page, so nothing of the last one stays. */}
+        {ready ? <Routes key={selected ?? ''} session={session} /> : <Loading />}
       </main>
     </div>
   );
@@ -169,7 +221,9 @@ export function App({ session, createSource }: { session: SessionInfo; createSou
       <ConfirmProvider>
         <Router>
           <StreamProvider {...(createSource ? { createSource } : {})}>
-            <Shell session={session} />
+            <ProjectProvider>
+              <Shell session={session} />
+            </ProjectProvider>
           </StreamProvider>
         </Router>
       </ConfirmProvider>

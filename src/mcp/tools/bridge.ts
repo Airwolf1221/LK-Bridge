@@ -12,10 +12,14 @@ import { defineTool, READ_ANNOTATIONS } from './define.js';
 import {
   errorFromThrown,
   errorResult,
+  footerFor,
   mcpOrigin,
   project,
+  projectArg,
   render,
   summarise,
+  withProject,
+  type ProjectDeps,
   type ToolDeps,
 } from './shape.js';
 
@@ -45,46 +49,56 @@ export const BRIDGE_INFO_LOOKUP_ORIGIN = {
   detail: 'shared project lookup (cached 10 minutes)',
 } as const;
 
-/** Project name and the key's role, from LK, cached: bridge_info must stay cheap and must never fail on budget. */
+/**
+ * Project name and the key's role, from LK, cached per project (each project has its own key): bridge_info must stay
+ * cheap and must never fail on budget.
+ */
 function projectLookup(deps: ToolDeps) {
-  let cached: ProjectLookup | undefined;
-  let inFlight: Promise<ProjectLookup> | undefined;
+  const cache = new Map<string, ProjectLookup>();
+  const inFlight = new Map<string, Promise<ProjectLookup>>();
   const now = deps.now ?? Date.now;
-  return async (ctx: Parameters<typeof mcpOrigin>[0]): Promise<ProjectLookup> => {
+  return async (ctx: Parameters<typeof mcpOrigin>[0], projectId: string): Promise<ProjectLookup> => {
     // Only a caller with a principal gets here at all (mcpOrigin refuses one without), but the lookup itself runs
     // as the bridge's own work.
     mcpOrigin(ctx, 'bridge_info');
+    const cached = cache.get(projectId);
     if (cached && now() - cached.at < LOOKUP_TTL_MS) return cached;
-    inFlight ??= (async () => {
-      let name: string | null = null;
-      let role: ProjectLookup['role'] = 'unknown';
-      let note: string | undefined;
-      try {
-        const origin = BRIDGE_INFO_LOOKUP_ORIGIN;
-        const priority = 'P1';
-        // The registry takes no projectId: the client supplies the configured project (as the dashboard's health
-        // check does). Passing `{ path: … }` is rejected by the registry's schema, which left role and name unknown.
-        const p = await deps.engine.run('getProject', {}, { origin, priority });
-        if (p.status === 'succeeded')
-          name = ((p.result as { name?: unknown })?.name as string | undefined) ?? null;
-        const m = await deps.engine.run('listMembers', {}, { origin, priority });
-        if (m.status === 'succeeded') {
-          // LK shows member emails only to ADMIN keys: that is the cheapest honest probe of the key's role.
-          const members = ((m.result as { data?: { email?: unknown }[] })?.data ?? []) as {
-            email?: unknown;
-          }[];
-          if (members.some((x) => typeof x.email === 'string')) role = 'ADMIN';
-          else if (members.length > 0) role = 'MEMBER';
-          note = 'role inferred from listMembers (emails are visible to ADMIN keys only)';
+    let pending = inFlight.get(projectId);
+    if (!pending) {
+      pending = (async () => {
+        let name: string | null = null;
+        let role: ProjectLookup['role'] = 'unknown';
+        let note: string | undefined;
+        try {
+          const origin = BRIDGE_INFO_LOOKUP_ORIGIN;
+          const priority = 'P1';
+          // The registry takes no projectId: the client supplies the configured project (as the dashboard's health
+          // check does). Passing `{ path: … }` is rejected by the registry's schema, which left role and name unknown.
+          const p = await deps.engine.run('getProject', {}, { origin, priority, project: projectId });
+          if (p.status === 'succeeded')
+            name = ((p.result as { name?: unknown })?.name as string | undefined) ?? null;
+          const m = await deps.engine.run('listMembers', {}, { origin, priority, project: projectId });
+          if (m.status === 'succeeded') {
+            // LK shows member emails only to ADMIN keys: that is the cheapest honest probe of the key's role.
+            const members = ((m.result as { data?: { email?: unknown }[] })?.data ?? []) as {
+              email?: unknown;
+            }[];
+            if (members.some((x) => typeof x.email === 'string')) role = 'ADMIN';
+            else if (members.length > 0) role = 'MEMBER';
+            note = 'role inferred from listMembers (emails are visible to ADMIN keys only)';
+          }
+        } catch (e) {
+          note = `LegendKeeper lookup unavailable (${(e as { code?: string }).code ?? 'error'}); showing what is known`;
         }
-      } catch (e) {
-        note = `LegendKeeper lookup unavailable (${(e as { code?: string }).code ?? 'error'}); showing what is known`;
-      }
-      return (cached = { name, role, at: now(), ...(note ? { note } : {}) });
-    })().finally(() => {
-      inFlight = undefined;
-    });
-    return inFlight;
+        const value: ProjectLookup = { name, role, at: now(), ...(note ? { note } : {}) };
+        cache.set(projectId, value);
+        return value;
+      })().finally(() => {
+        inFlight.delete(projectId);
+      });
+      inFlight.set(projectId, pending);
+    }
+    return pending;
   };
 }
 
@@ -95,53 +109,111 @@ function infoTool(deps: ToolDeps) {
     title: 'Bridge information',
     access: 'read',
     description:
-      'Shows the LK-Bridge version, the LegendKeeper project (id and name) and the key’s role, the read-only flag, the writer pool, ' +
-      'whether writes are paused or the bridge is draining, and which connection is calling with its profile and scope (read, propose or write). Cost: up to 2 cached reads (10 minutes), ' +
-      'usually none. Risk: none. Call it first to learn whether writes are possible.',
+      'Shows the LK-Bridge version, the LegendKeeper project asked for (default: the default project; its name, id and the key’s role), ' +
+      'the read-only flags (the bridge’s and the project’s own), the writer pool, whether writes are paused or the bridge is draining, ' +
+      'the other projects this bridge serves, and which connection is calling with its profile and scope (read, propose or write). ' +
+      'Cost: up to 2 cached reads (10 minutes), usually none. Risk: none. Call it first to learn whether writes are possible.',
+    inputSchema: z.object({ project: projectArg }),
+    annotations: READ_ANNOTATIONS,
+    handler: ({ project: asked }, ctx) =>
+      withProject(deps, asked, 'read', async (pd) => {
+        const bridgeControls = deps.engine.queries.controls();
+        const controls = deps.engine.queries.controls(pd.project.id);
+        const writers = deps.engine.queries.writers();
+        const available = controls.project?.available ?? false;
+        const looked = available
+          ? await lookup(ctx, pd.project.id)
+          : { name: null, role: 'unknown' as const, note: 'the project is not served now' };
+        const view = deps.projects.resolve(pd.project.id);
+        return render(
+          {
+            bridge: 'LK-Bridge',
+            version: deps.version,
+            project: pd.project.name,
+            // `project` (the name) is on every result; the details of the project asked for are here.
+            projectInfo: {
+              name: pd.project.name,
+              id: pd.project.id,
+              // LegendKeeper's own name for it: looked up live (cached), else as it was at the last key check.
+              displayName: looked.name ?? view?.displayName ?? null,
+              default: pd.project.isDefault,
+              readOnly: controls.project?.readOnly ?? false,
+              available,
+            },
+            projects: deps.projects.configuredNames(),
+            key: { role: looked.role, ...(looked.note ? { note: looked.note } : {}) },
+            readOnly: {
+              effective: controls.readOnly,
+              bridge: bridgeControls.readOnly,
+              project: controls.project?.readOnly ?? false,
+              configured: deps.configuredReadOnly,
+              overridden: controls.readOnlyOverride !== null,
+            },
+            writes: {
+              paused: controls.writesPaused,
+              draining: controls.draining,
+              canWrite: available && !controls.readOnly && !controls.writesPaused && !controls.draining,
+            },
+            writers: { max: controls.writersMax, busy: writers.busy, waiting: writers.waiting.length },
+            memberAdminEnabled: controls.allowMemberAdmin,
+            uploads: {
+              maxBytes: deps.settings.upload.maxBytes,
+              urlSource: deps.settings.upload.allowUrlSource,
+            },
+            caller: ctx.caller
+              ? { kind: ctx.caller.kind, clientId: ctx.caller.clientId, label: ctx.caller.label ?? null }
+              : null,
+            // The calling connection's policy profile and its live scope (docs/policy.md).
+            profile: ctx.principal?.profile ?? null,
+            scope: ctx.scope ?? null,
+            principalId: ctx.principal?.principalId ?? null,
+            canWriteAs:
+              ctx.scope === 'write'
+                ? 'direct'
+                : ctx.scope === 'propose'
+                  ? 'proposal (the owner approves)'
+                  : 'no (read-only)',
+          },
+          pd,
+        );
+      }),
+  });
+}
+
+// ------------------------------------------------------------------------------------------------ projects
+
+function listProjectsTool(deps: ToolDeps) {
+  return defineTool({
+    name: 'list_projects',
+    title: 'List projects',
+    access: 'read',
+    description:
+      'Lists the LegendKeeper projects this bridge serves: name (pass it as `project` to any tool), LegendKeeper id, display ' +
+      'name, which is the default (reads without `project` use it) and whether the project is read-only. Writes must name ' +
+      'their project when there are several. Cost: none. Risk: none.',
     inputSchema: z.object({}),
     annotations: READ_ANNOTATIONS,
-    handler: async (_input, ctx) => {
-      const controls = deps.engine.queries.controls();
-      const writers = deps.engine.queries.writers();
-      const looked = await lookup(ctx);
-      return render(
-        {
-          bridge: 'LK-Bridge',
-          version: deps.version,
-          project: { id: deps.projectId, name: looked.name },
-          key: { role: looked.role, ...(looked.note ? { note: looked.note } : {}) },
-          readOnly: {
-            effective: controls.readOnly,
-            configured: deps.configuredReadOnly,
-            overridden: controls.readOnlyOverride !== null,
-          },
-          writes: {
-            paused: controls.writesPaused,
-            draining: controls.draining,
-            canWrite: !controls.readOnly && !controls.writesPaused && !controls.draining,
-          },
-          writers: { max: controls.writersMax, busy: writers.busy, waiting: writers.waiting.length },
-          memberAdminEnabled: controls.allowMemberAdmin,
-          uploads: {
-            maxBytes: deps.settings.upload.maxBytes,
-            urlSource: deps.settings.upload.allowUrlSource,
-          },
-          caller: ctx.caller
-            ? { kind: ctx.caller.kind, clientId: ctx.caller.clientId, label: ctx.caller.label ?? null }
-            : null,
-          // The calling connection's policy profile and its live scope (docs/policy.md).
-          profile: ctx.principal?.profile ?? null,
-          scope: ctx.scope ?? null,
-          principalId: ctx.principal?.principalId ?? null,
-          canWriteAs:
-            ctx.scope === 'write'
-              ? 'direct'
-              : ctx.scope === 'propose'
-                ? 'proposal (the owner approves)'
-                : 'no (read-only)',
-        },
-        deps,
-      );
+    handler: () => {
+      const all = deps.projects.list().filter((p) => p.configured);
+      const def = deps.projects.defaultProject();
+      // Never the sandbox flag, never a key or the name of its variable.
+      const body = {
+        project: def.name,
+        count: all.length,
+        default: def.name,
+        writesNeedProject: deps.selector.requireForWrites && all.length > 1,
+        projects: all.map((p) => ({
+          name: p.name,
+          id: p.id,
+          displayName: p.displayName,
+          default: p.isDefault,
+          readOnly: p.readOnly,
+          available: p.status === 'active',
+          ...(p.status !== 'active' && p.reason ? { reason: p.reason } : {}),
+        })),
+      };
+      const text = `${JSON.stringify(body)}\n${footerFor(deps, def.id, def.name)}`;
+      return { content: [{ type: 'text' as const, text }] };
     },
   });
 }
@@ -257,14 +329,22 @@ function callerId(ctx: McpToolContext): string | undefined {
   return ctx.principal?.principalId;
 }
 
-function ownJob(deps: ToolDeps, ctx: McpToolContext, id: string): JobWithSteps | undefined {
+/** The caller's own job in the call's project; another principal's job, or another project's, is "not found". */
+function ownJob(deps: ProjectDeps, ctx: McpToolContext, id: string): JobWithSteps | undefined {
   const who = callerId(ctx);
-  const job = who === undefined ? undefined : deps.engine.queries.getJob(id);
+  const job = who === undefined ? undefined : deps.engine.queries.getJob(deps.project.id, id);
   return job && job.principalId === who ? job : undefined;
 }
 
-const jobNotFound = (deps: ToolDeps, id: string) =>
-  errorResult({ code: 'JOB_NOT_FOUND', message: `No job ${id}` }, deps);
+const jobNotFound = (deps: ProjectDeps, id: string) =>
+  errorResult(
+    {
+      code: 'JOB_NOT_FOUND',
+      message: `No job ${id} in project "${deps.project.name}"`,
+      hint: 'Jobs belong to a project: pass the project the job was started in.',
+    },
+    deps,
+  );
 
 function jobTools(deps: ToolDeps) {
   const jobId = z.string().min(1).max(100);
@@ -296,38 +376,40 @@ function jobTools(deps: ToolDeps) {
           .optional()
           .describe('When listing: only jobs in this status.'),
         limit: z.number().int().min(1).max(50).optional().describe('When listing: default 10.'),
+        project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ jobId: id, steps, status, limit }, ctx) => {
-        if (id === undefined) {
-          const who = callerId(ctx);
-          const jobs =
-            who === undefined
-              ? []
-              : deps.engine.queries.listJobs({
-                  principalId: who,
-                  ...(status ? { status } : {}),
-                  limit: limit ?? 10,
-                });
-          return render(
-            {
-              count: jobs.length,
-              jobs: jobs.map((j) => ({
-                jobId: j.id,
-                kind: j.kind,
-                title: j.title,
-                status: j.status,
-                progress: j.progress,
-                createdAt: iso(j.createdAt),
-              })),
-            },
-            deps,
-          );
-        }
-        const job = ownJob(deps, ctx, id);
-        if (!job) return jobNotFound(deps, id);
-        return render(jobBody(job, steps ? 'steps' : 'summary'), deps);
-      },
+      handler: ({ jobId: id, steps, status, limit, project: asked }, ctx) =>
+        withProject(deps, asked, 'read', (pd) => {
+          if (id === undefined) {
+            const who = callerId(ctx);
+            const jobs =
+              who === undefined
+                ? []
+                : deps.engine.queries.listJobs(pd.project.id, {
+                    principalId: who,
+                    ...(status ? { status } : {}),
+                    limit: limit ?? 10,
+                  });
+            return render(
+              {
+                count: jobs.length,
+                jobs: jobs.map((j) => ({
+                  jobId: j.id,
+                  kind: j.kind,
+                  title: j.title,
+                  status: j.status,
+                  progress: j.progress,
+                  createdAt: iso(j.createdAt),
+                })),
+              },
+              pd,
+            );
+          }
+          const job = ownJob(pd, ctx, id);
+          if (!job) return jobNotFound(pd, id);
+          return render(jobBody(job, steps ? 'steps' : 'summary'), pd);
+        }),
     }),
     defineTool({
       name: 'bridge_job_wait',
@@ -339,19 +421,21 @@ function jobTools(deps: ToolDeps) {
       inputSchema: z.object({
         jobId,
         seconds: z.number().min(1).max(25).optional().describe('How long to wait, 1-25. Default 20.'),
+        project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
-      handler: async ({ jobId: id, seconds }, ctx) => {
-        // Checked before waiting, so another principal's job returns at once, exactly like an unknown id.
-        if (!ownJob(deps, ctx, id)) return jobNotFound(deps, id);
-        try {
-          await deps.engine.wait(id, Math.min(25, seconds ?? 20) * 1000);
-          const job = ownJob(deps, ctx, id);
-          return job ? render(jobBody(job, 'summary'), deps) : jobNotFound(deps, id);
-        } catch (e) {
-          return errorFromThrown(e, deps);
-        }
-      },
+      handler: ({ jobId: id, seconds, project: asked }, ctx) =>
+        withProject(deps, asked, 'read', async (pd) => {
+          // Checked before waiting, so another principal's job returns at once, exactly like an unknown id.
+          if (!ownJob(pd, ctx, id)) return jobNotFound(pd, id);
+          try {
+            await deps.engine.wait(pd.project.id, id, Math.min(25, seconds ?? 20) * 1000);
+            const job = ownJob(pd, ctx, id);
+            return job ? render(jobBody(job, 'summary'), pd) : jobNotFound(pd, id);
+          } catch (e) {
+            return errorFromThrown(e, pd);
+          }
+        }),
     }),
     defineTool({
       name: 'bridge_job_cancel',
@@ -360,22 +444,23 @@ function jobTools(deps: ToolDeps) {
       description:
         'Cancels a job: the step in flight finishes, nothing further is sent, and the remaining steps are cancelled. ' +
         'Steps already done are not undone. Cost: none. Risk: low (stops pending work).',
-      inputSchema: z.object({ jobId }),
+      inputSchema: z.object({ jobId, project: projectArg }),
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
         idempotentHint: true,
         openWorldHint: false,
       },
-      handler: ({ jobId: id }, ctx) => {
-        if (!ownJob(deps, ctx, id)) return jobNotFound(deps, id);
-        try {
-          const job = deps.engine.controls.cancel(id);
-          return render(jobBody(deps.engine.queries.getJob(job.id) ?? job, 'summary'), deps);
-        } catch (e) {
-          return errorFromThrown(e, deps);
-        }
-      },
+      handler: ({ jobId: id, project: asked }, ctx) =>
+        withProject(deps, asked, 'write', (pd) => {
+          if (!ownJob(pd, ctx, id)) return jobNotFound(pd, id);
+          try {
+            const job = deps.engine.controls.cancel(pd.project.id, id);
+            return render(jobBody(deps.engine.queries.getJob(pd.project.id, job.id) ?? job, 'summary'), pd);
+          } catch (e) {
+            return errorFromThrown(e, pd);
+          }
+        }),
     }),
   ];
 }
@@ -389,11 +474,45 @@ function otherTools(deps: ToolDeps) {
       title: 'Rate budget',
       access: 'read',
       description:
-        'Shows every rate tier (used, limit, remaining, time to reset, any block after a 429), the queue depth per priority class and ' +
-        'the write pacing. The same numbers, in one line, end every tool result. Cost: none. Risk: none.',
-      inputSchema: z.object({}),
+        'Shows every rate tier of one project (used, limit, remaining, time to reset, any block after a 429), the queue depth per ' +
+        'priority class and the write pacing. Each project has its own key and so its own budget; allProjects: true shows every ' +
+        'project side by side. The same numbers, in one line, end every tool result. Cost: none. Risk: none.',
+      inputSchema: z.object({
+        project: projectArg,
+        allProjects: z.boolean().optional().describe('Every project’s budget, side by side.'),
+      }),
       annotations: READ_ANNOTATIONS,
-      handler: () => render(budgetBody(deps.lk.governor.snapshot()), deps),
+      handler: ({ project: asked, allProjects }) =>
+        withProject(deps, asked, 'read', (pd) => {
+          if (allProjects === true) {
+            return render(
+              {
+                project: pd.project.name,
+                allProjects: deps.projects
+                  .list()
+                  .filter((p) => p.configured)
+                  .map((p) => {
+                    const lk = p.id !== null ? deps.projects.anyClient(p.id) : undefined;
+                    return {
+                      name: p.name,
+                      id: p.id,
+                      available: p.status === 'active',
+                      ...(lk ? { budget: budgetBody(lk.governor.snapshot()) } : { budget: null }),
+                    };
+                  }),
+              },
+              pd,
+            );
+          }
+          const lk = deps.projects.anyClient(pd.project.id);
+          if (!lk) {
+            return errorResult(
+              { code: 'PROJECT_UNAVAILABLE', message: `Project "${pd.project.name}" has no budget now.` },
+              pd,
+            );
+          }
+          return render(budgetBody(lk.governor.snapshot()), pd);
+        }),
     }),
     defineTool({
       name: 'bridge_estimate',
@@ -417,34 +536,43 @@ function otherTools(deps: ToolDeps) {
           .enum(['P1', 'P2', 'P3'])
           .optional()
           .describe('P1 interactive, P2 job (default), P3 maintenance.'),
+        project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ reads, writes, createManyItems, priority }) => {
-        const e = deps.lk.governor.estimate({
-          reads: reads ?? 0,
-          writes: writes ?? 0,
-          createManyItems: createManyItems ?? 0,
-          priority: priority ?? 'P2',
-        });
-        const minutes = Math.round((e.wallClockMs / 60_000) * 10) / 10;
-        return render(
-          {
-            wallClockSeconds: Math.round(e.wallClockMs / 1000),
-            wallClock: minutes < 1 ? `${Math.round(e.wallClockMs / 1000)} s` : `${minutes} min`,
-            tightestTier: e.tightestTier,
-            fitsToday: e.fitsToday,
-            dayRemaining: e.dayRemaining,
-            dayNeeded: e.dayNeeded,
-            calls: e.calls,
-            advice: !e.fitsToday
-              ? 'This does not fit in today’s request budget. Split it over several days or reduce it.'
-              : e.wallClockMs > 60_000
-                ? 'Run it with lk_api_batch (a job), not as a loop of single calls.'
-                : 'Fits comfortably.',
-          },
-          deps,
-        );
-      },
+      handler: ({ reads, writes, createManyItems, priority, project: asked }) =>
+        withProject(deps, asked, 'read', (pd) => {
+          const lk = deps.projects.anyClient(pd.project.id);
+          if (!lk) {
+            return errorResult(
+              { code: 'PROJECT_UNAVAILABLE', message: `Project "${pd.project.name}" has no budget now.` },
+              pd,
+            );
+          }
+          const e = lk.governor.estimate({
+            reads: reads ?? 0,
+            writes: writes ?? 0,
+            createManyItems: createManyItems ?? 0,
+            priority: priority ?? 'P2',
+          });
+          const minutes = Math.round((e.wallClockMs / 60_000) * 10) / 10;
+          return render(
+            {
+              wallClockSeconds: Math.round(e.wallClockMs / 1000),
+              wallClock: minutes < 1 ? `${Math.round(e.wallClockMs / 1000)} s` : `${minutes} min`,
+              tightestTier: e.tightestTier,
+              fitsToday: e.fitsToday,
+              dayRemaining: e.dayRemaining,
+              dayNeeded: e.dayNeeded,
+              calls: e.calls,
+              advice: !e.fitsToday
+                ? 'This does not fit in today’s request budget. Split it over several days or reduce it.'
+                : e.wallClockMs > 60_000
+                  ? 'Run it with lk_api_batch (a job), not as a loop of single calls.'
+                  : 'Fits comfortably.',
+            },
+            pd,
+          );
+        }),
     }),
     defineTool({
       name: 'bridge_errors_recent',
@@ -462,62 +590,64 @@ function otherTools(deps: ToolDeps) {
           .max(60 * 24 * 30)
           .optional(),
         jobId: z.string().max(100).optional().describe('Only when grouped is false.'),
+        project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ grouped, limit, sinceMinutes, jobId }, ctx) => {
-        const since = sinceMinutes ? (deps.now ?? Date.now)() - sinceMinutes * 60_000 : undefined;
-        // Only the caller's own failures (by principal); nobody else's errors, request ids or job ids.
-        const principalId = callerId(ctx) ?? 'unknown-caller';
-        if (grouped === false) {
-          const rows = deps.engine.queries.listErrors({
+      handler: ({ grouped, limit, sinceMinutes, jobId, project: asked }, ctx) =>
+        withProject(deps, asked, 'read', (pd) => {
+          const since = sinceMinutes ? (deps.now ?? Date.now)() - sinceMinutes * 60_000 : undefined;
+          // Only the caller's own failures (by principal); nobody else's errors, request ids or job ids.
+          const principalId = callerId(ctx) ?? 'unknown-caller';
+          if (grouped === false) {
+            const rows = deps.engine.queries.listErrors(pd.project.id, {
+              principalId,
+              limit: limit ?? 20,
+              ...(since !== undefined ? { since } : {}),
+              ...(jobId ? { jobId } : {}),
+            });
+            return render(
+              {
+                count: rows.length,
+                errors: rows.map((r) => ({
+                  at: iso(r.at),
+                  op: r.opId,
+                  status: r.status,
+                  code: r.code,
+                  message: r.message,
+                  requestId: r.requestId,
+                  classification: r.classification,
+                  jobId: r.jobId,
+                  retryable: r.retryable,
+                })),
+              },
+              pd,
+            );
+          }
+          const groups = deps.engine.queries.listErrorGroups(pd.project.id, {
             principalId,
             limit: limit ?? 20,
             ...(since !== undefined ? { since } : {}),
-            ...(jobId ? { jobId } : {}),
           });
           return render(
             {
-              count: rows.length,
-              errors: rows.map((r) => ({
-                at: iso(r.at),
-                op: r.opId,
-                status: r.status,
-                code: r.code,
-                message: r.message,
-                requestId: r.requestId,
-                classification: r.classification,
-                jobId: r.jobId,
-                retryable: r.retryable,
+              count: groups.length,
+              groups: groups.map((g) => ({
+                op: g.opId,
+                code: g.code,
+                path: g.path || undefined,
+                classification: g.classification,
+                count: g.count,
+                firstSeen: iso(g.firstSeen),
+                lastSeen: iso(g.lastSeen),
+                resolved: g.resolved,
+                lastMessage: g.lastMessage,
+                lastRequestId: g.lastRequestId,
+                lastJobId: g.lastJobId,
               })),
             },
-            deps,
+            pd,
           );
-        }
-        const groups = deps.engine.queries.listErrorGroups({
-          principalId,
-          limit: limit ?? 20,
-          ...(since !== undefined ? { since } : {}),
-        });
-        return render(
-          {
-            count: groups.length,
-            groups: groups.map((g) => ({
-              op: g.opId,
-              code: g.code,
-              path: g.path || undefined,
-              classification: g.classification,
-              count: g.count,
-              firstSeen: iso(g.firstSeen),
-              lastSeen: iso(g.lastSeen),
-              resolved: g.resolved,
-              lastMessage: g.lastMessage,
-              lastRequestId: g.lastRequestId,
-              lastJobId: g.lastJobId,
-            })),
-          },
-          deps,
-        );
-      },
+        }),
     }),
     defineTool({
       name: 'bridge_journal_lookup',
@@ -573,10 +703,12 @@ function otherTools(deps: ToolDeps) {
           .boolean()
           .optional()
           .describe('Default false: metadata only. True adds the stored pre-images.'),
+        project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
       handler: (
         {
+          project: asked,
           resourceId,
           documentId,
           targetId,
@@ -592,73 +724,75 @@ function otherTools(deps: ToolDeps) {
           includePreImage,
         },
         ctx,
-      ) => {
-        // Every principal's entries are shown (agents cross-check each other's edits), each with its principal and
-        // profile; job ids, which the job tools keep private, only on the caller's own entries.
-        const who = callerId(ctx);
-        const foreignJob = jobId !== undefined && !ownJob(deps, ctx, jobId);
-        const entries = foreignJob
-          ? []
-          : deps.engine.queries.journalLookup({
-              ...(resourceId ? { resourceId } : {}),
-              ...(documentId ? { documentId } : {}),
-              ...(targetId ? { targetId } : {}),
-              ...(operationId ? { opId: operationId } : {}),
-              ...(jobId ? { jobId } : {}),
-              ...(principalId ? { principalId } : {}),
-              ...(profile ? { profile } : {}),
-              ...(outcome ? { outcome } : {}),
-              ...(withPreImage === true ? { withPreImage: true } : {}),
-              ...(before !== undefined ? { before } : {}),
-              ...(sinceMinutes ? { since: (deps.now ?? Date.now)() - sinceMinutes * 60_000 } : {}),
-              limit: limit ?? 10,
-              includePreImage: includePreImage === true,
-            });
-        const pageSize = limit ?? 10;
-        const body = {
-          count: entries.length,
-          // Paging (chunk 8): the journal records every write, so there are many entries; ask again with before.
-          nextBefore: entries.length === pageSize ? (entries.at(-1)?.id ?? null) : null,
-          entries: entries.map((e) => ({
-            id: e.id,
-            at: iso(e.at),
-            op: e.opId,
-            risk: e.risk,
-            outcome: e.outcome,
-            target: {
-              kind: e.targetKind,
-              id: e.targetId,
-              resourceId: e.resourceId,
-              documentId: e.documentId,
-            },
-            version: e.version,
-            jobId: e.principalId === who ? e.jobId : null,
-            principalId: e.principalId,
-            profile: e.profile,
-            approvedBy: e.approvedBy,
-            mine: e.principalId === who,
-            bytes: e.bytes,
-            ...(includePreImage === true ? { preImage: e.preImage } : {}),
-          })),
-        };
-        if (JSON.stringify(body).length <= deps.settings.resultMaxChars) return render(body, deps);
-        const stored = deps.engine.recordResult({
-          opId: 'bridge_journal_lookup',
-          params: {},
-          value: body,
-          origin: mcpOrigin(ctx, 'bridge_journal_lookup'),
-          title: 'journal lookup (stored result)',
-        });
-        return render(
-          {
-            status: 'stored',
-            handle: stored.artifactId,
+      ) =>
+        withProject(deps, asked, 'read', (pd) => {
+          // Every principal's entries are shown (agents cross-check each other's edits), each with its principal and
+          // profile; job ids, which the job tools keep private, only on the caller's own entries.
+          const who = callerId(ctx);
+          const foreignJob = jobId !== undefined && !ownJob(pd, ctx, jobId);
+          const entries = foreignJob
+            ? []
+            : deps.engine.queries.journalLookup(pd.project.id, {
+                ...(resourceId ? { resourceId } : {}),
+                ...(documentId ? { documentId } : {}),
+                ...(targetId ? { targetId } : {}),
+                ...(operationId ? { opId: operationId } : {}),
+                ...(jobId ? { jobId } : {}),
+                ...(principalId ? { principalId } : {}),
+                ...(profile ? { profile } : {}),
+                ...(outcome ? { outcome } : {}),
+                ...(withPreImage === true ? { withPreImage: true } : {}),
+                ...(before !== undefined ? { before } : {}),
+                ...(sinceMinutes ? { since: (deps.now ?? Date.now)() - sinceMinutes * 60_000 } : {}),
+                limit: limit ?? 10,
+                includePreImage: includePreImage === true,
+              });
+          const pageSize = limit ?? 10;
+          const body = {
             count: entries.length,
-            hint: 'Too large to return at once. Page it with bridge_result_page({ handle, offset }), or look up fewer entries.',
-          },
-          deps,
-        );
-      },
+            // Paging (chunk 8): the journal records every write, so there are many entries; ask again with before.
+            nextBefore: entries.length === pageSize ? (entries.at(-1)?.id ?? null) : null,
+            entries: entries.map((e) => ({
+              id: e.id,
+              at: iso(e.at),
+              op: e.opId,
+              risk: e.risk,
+              outcome: e.outcome,
+              target: {
+                kind: e.targetKind,
+                id: e.targetId,
+                resourceId: e.resourceId,
+                documentId: e.documentId,
+              },
+              version: e.version,
+              jobId: e.principalId === who ? e.jobId : null,
+              principalId: e.principalId,
+              profile: e.profile,
+              approvedBy: e.approvedBy,
+              mine: e.principalId === who,
+              bytes: e.bytes,
+              ...(includePreImage === true ? { preImage: e.preImage } : {}),
+            })),
+          };
+          if (JSON.stringify(body).length <= deps.settings.resultMaxChars) return render(body, pd);
+          const stored = deps.engine.recordResult({
+            project: pd.project.id,
+            opId: 'bridge_journal_lookup',
+            params: {},
+            value: body,
+            origin: mcpOrigin(ctx, 'bridge_journal_lookup'),
+            title: 'journal lookup (stored result)',
+          });
+          return render(
+            {
+              status: 'stored',
+              handle: stored.artifactId,
+              count: entries.length,
+              hint: 'Too large to return at once. Page it with bridge_result_page({ handle, offset }), or look up fewer entries.',
+            },
+            pd,
+          );
+        }),
     }),
     defineTool({
       name: 'bridge_result_page',
@@ -679,67 +813,76 @@ function otherTools(deps: ToolDeps) {
           .optional()
           .describe('Items per page (item handles). Default 50.'),
         detail: z.enum(['summary', 'full']).optional().describe('Items only. Default summary.'),
+        project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ handle, offset, limit, detail }, ctx) => {
-        const page = deps.engine.queries.readArtifact(handle, {
-          offset: offset ?? 0,
-          limit: Math.min(limit ?? 50, 500),
-        });
-        // A stored result belongs to the job that stored it: someone else's handle is "not found".
-        if (!page || !ownJob(deps, ctx, page.artifact.jobId))
-          return errorResult({ code: 'HANDLE_NOT_FOUND', message: `No stored result ${handle}` }, deps);
-        const maxChars = Math.floor(deps.settings.resultMaxChars * 0.75);
-        const a = page.artifact;
-        if (page.items) {
-          // Trim the page to the output budget: never return more than maxChars of items.
-          const shaped = page.items.map((x) => (detail === 'full' ? x : project(x)));
-          const kept: unknown[] = [];
-          let chars = 0;
-          for (const item of shaped) {
-            const n = (JSON.stringify(item) ?? '').length + 1;
-            if (kept.length > 0 && chars + n > maxChars) break;
-            kept.push(item);
-            chars += n;
+      handler: ({ handle, offset, limit, detail, project: asked }, ctx) =>
+        withProject(deps, asked, 'read', (pd) => {
+          const page = deps.engine.queries.readArtifact(pd.project.id, handle, {
+            offset: offset ?? 0,
+            limit: Math.min(limit ?? 50, 500),
+          });
+          // A stored result belongs to the job that stored it: someone else's handle is "not found".
+          if (!page || !ownJob(pd, ctx, page.artifact.jobId))
+            return errorResult(
+              {
+                code: 'HANDLE_NOT_FOUND',
+                message: `No stored result ${handle} in project "${pd.project.name}"`,
+              },
+              pd,
+            );
+          const maxChars = Math.floor(deps.settings.resultMaxChars * 0.75);
+          const a = page.artifact;
+          if (page.items) {
+            // Trim the page to the output budget: never return more than maxChars of items.
+            const shaped = page.items.map((x) => (detail === 'full' ? x : project(x)));
+            const kept: unknown[] = [];
+            let chars = 0;
+            for (const item of shaped) {
+              const n = (JSON.stringify(item) ?? '').length + 1;
+              if (kept.length > 0 && chars + n > maxChars) break;
+              kept.push(item);
+              chars += n;
+            }
+            const start = offset ?? 0;
+            const next = start + kept.length;
+            return render(
+              {
+                handle,
+                kind: 'items',
+                total: a.itemCount,
+                offset: start,
+                count: kept.length,
+                nextOffset: next < a.itemCount ? next : null,
+                ...(a.truncated ? { truncated: true, truncatedReason: a.truncatedReason } : {}),
+                items: kept,
+              },
+              pd,
+            );
           }
-          const start = offset ?? 0;
-          const next = start + kept.length;
+          const text = JSON.stringify(page.data) ?? 'null';
+          const start = Math.min(offset ?? 0, text.length);
+          const end = Math.min(text.length, start + maxChars);
           return render(
             {
               handle,
-              kind: 'items',
-              total: a.itemCount,
+              kind: 'result',
+              totalChars: text.length,
               offset: start,
-              count: kept.length,
-              nextOffset: next < a.itemCount ? next : null,
-              ...(a.truncated ? { truncated: true, truncatedReason: a.truncatedReason } : {}),
-              items: kept,
+              nextOffset: end < text.length ? end : null,
+              note: 'A slice of the stored JSON text; concatenate the slices in order.',
+              text: text.slice(start, end),
             },
-            deps,
+            pd,
           );
-        }
-        const text = JSON.stringify(page.data) ?? 'null';
-        const start = Math.min(offset ?? 0, text.length);
-        const end = Math.min(text.length, start + maxChars);
-        return render(
-          {
-            handle,
-            kind: 'result',
-            totalChars: text.length,
-            offset: start,
-            nextOffset: end < text.length ? end : null,
-            note: 'A slice of the stored JSON text; concatenate the slices in order.',
-            text: text.slice(start, end),
-          },
-          deps,
-        );
-      },
+        }),
     }),
   ];
 }
 
 export function bridgeTools(deps: ToolDeps) {
-  return [infoTool(deps), ...otherTools(deps).slice(0, 2), ...jobTools(deps), ...otherTools(deps).slice(2)];
+  const other = otherTools(deps);
+  return [listProjectsTool(deps), infoTool(deps), ...other.slice(0, 2), ...jobTools(deps), ...other.slice(2)];
 }
 
 // `summarise` is part of the shaping contract; re-exported for tests.

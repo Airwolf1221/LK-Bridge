@@ -1,10 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+import { ALL_PROJECTS } from '../../src/projects/index.js';
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { systemClock } from '../../src/lk/index.js';
 import { operations } from '../../src/lk/registry.js';
 import { LkModel } from '../jobs/lk-model.js';
-import { startStack, type Stack } from './helpers.js';
+import { PROJECT, startStack, type Stack } from './helpers.js';
 
 const model = new LkModel(() => systemClock.now());
 model.seedResource('res1', { name: 'Root' });
@@ -53,7 +54,7 @@ describe('read / write mismatches spend no budget', () => {
       });
     }
     expect(wire()).toBe(before);
-    expect(stack.runtime.engine.queries.listJobs({}).length).toBe(0);
+    expect(stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length).toBe(0);
   });
 
   it('suggests close names for an unknown operation', async () => {
@@ -123,7 +124,7 @@ describe('engine guards through the tools', () => {
   });
 
   it('batch validation refuses the whole batch up front', async () => {
-    const before = stack.runtime.engine.queries.listJobs({}).length;
+    const before = stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length;
     const r = await stack.call(client, 'lk_api_batch', {
       calls: [
         { operationId: 'createResource', params: { body: { name: 'ok' } } },
@@ -131,7 +132,7 @@ describe('engine guards through the tools', () => {
       ],
     });
     expect(r.body.error.code).toBe('MEMBER_ADMIN_DISABLED');
-    expect(stack.runtime.engine.queries.listJobs({}).length).toBe(before);
+    expect(stack.runtime.engine.queries.listJobs(ALL_PROJECTS, {}).length).toBe(before);
   });
 
   it('paginate_all refuses an operation that is not a paged read', async () => {
@@ -189,7 +190,7 @@ describe('read-only mode and budget', () => {
 describe('the tool list', () => {
   it('every tool carries an access tag consistent with its annotations', () => {
     const tools = stack.runtime.tools;
-    expect(tools).toHaveLength(18); // chunk 3's 16, plus chunk 2b's two proposal tools
+    expect(tools).toHaveLength(19); // chunk 3's 16, chunk 2b's two proposal tools, and v2 A1's list_projects
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');
@@ -201,7 +202,7 @@ describe('the tool list', () => {
     try {
       const c = await on.connect();
       const { tools } = await c.listTools();
-      expect(tools).toHaveLength(18 + 89);
+      expect(tools).toHaveLength(19 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));
@@ -224,7 +225,9 @@ describe('the tool list', () => {
       expect(got.body.status, got.text).toBe('succeeded');
       const made = await on.call(c, 'lk_op_createResource', { body: { name: 'via per-op tool' } });
       expect(made.isError, made.text).toBe(false);
-      expect(on.runtime.engine.queries.getJob(made.body.jobId)!.origin.tool).toBe('lk_op_createResource');
+      expect(on.runtime.engine.queries.getJob(PROJECT, made.body.jobId)!.origin.tool).toBe(
+        'lk_op_createResource',
+      );
     } finally {
       await on.close();
     }

@@ -13,7 +13,8 @@ import {
   useConfirm,
 } from '../components';
 import { fmtAgo, fmtInt, fmtTime } from '../format';
-import { useApi, useNow, useReloadOn } from '../hooks';
+import { useNow } from '../hooks';
+import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
 import type { ErrorGroup, ErrorRecord } from '../types';
 
@@ -39,12 +40,13 @@ export function ErrorsPage() {
 
 function ErrorList({ open }: { open: (fingerprint: string) => void }) {
   const [show, setShow] = useState<'false' | 'true' | 'all'>('false');
-  const list = useApi<{ groups: ErrorGroup[] }>(`/errors${qs({ resolved: show })}`);
-  useReloadOn(['error'], list.reload, 500);
+  const { selected } = useProject();
+  const list = useScopedApi<{ groups: ErrorGroup[] }>(`/errors${qs({ resolved: show })}`);
+  useProjectReloadOn(['error'], list.reload, 500);
   const now = useNow();
   return (
     <>
-      <PageHeader title="Errors" />
+      <PageHeader title="Errors" project={selected} />
       <div className="tabs" role="group" aria-label="Which errors">
         {(
           [
@@ -118,15 +120,18 @@ function ErrorList({ open }: { open: (fingerprint: string) => void }) {
 }
 
 function ErrorDetail({ fingerprint, back }: { fingerprint: string; back: () => void }) {
-  const d = useApi<{ group: ErrorGroup; occurrences: ErrorRecord[] }>(`/errors/group${qs({ fingerprint })}`);
-  useReloadOn(['error'], d.reload, 500);
+  const { selected, withProject } = useProject();
+  const d = useScopedApi<{ group: ErrorGroup; occurrences: ErrorRecord[] }>(
+    `/errors/group${qs({ fingerprint })}`,
+  );
+  useProjectReloadOn(['error'], d.reload, 500);
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const now = useNow();
   const g = d.data?.group;
   return (
     <>
-      <PageHeader title="Error group">
+      <PageHeader title="Error group" project={selected}>
         <button type="button" className="small" onClick={back}>
           ← All errors
         </button>
@@ -163,9 +168,10 @@ function ErrorDetail({ fingerprint, back }: { fingerprint: string; back: () => v
                       confirmLabel: 'Mark resolved',
                     }).then((ok) => {
                       if (ok)
-                        void run(() => api.post('/errors/resolve', { fingerprint }), 'Marked resolved.').then(
-                          d.reload,
-                        );
+                        void run(
+                          () => api.post(withProject('/errors/resolve'), { fingerprint }),
+                          'Marked resolved.',
+                        ).then(d.reload);
                     });
                   }}
                 >

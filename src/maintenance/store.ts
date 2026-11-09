@@ -42,8 +42,13 @@ const toState = (r: Row): JobState => {
   };
 };
 
+/** `project_id` of a bridge-wide run (journal and proposal pruning, the budget sampler, SQLite upkeep). */
+export const BRIDGE_WIDE = '*';
+
 export interface RunRecord {
   readonly id: number;
+  /** The LegendKeeper id of the project a per-project run worked on, or `*` (BRIDGE_WIDE) for a bridge-wide run. */
+  readonly projectId: string;
   readonly jobId: string;
   readonly trigger: RunTrigger;
   readonly startedAt: number;
@@ -103,10 +108,21 @@ export class MaintenanceStore {
     this.db.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO maintenance_runs (job_id, trigger, started_at, finished_at, outcome, duration_ms, engine_job_id, detail)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO maintenance_runs (project_id, job_id, trigger, started_at, finished_at, outcome, duration_ms,
+             engine_job_id, detail)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(r.jobId, r.trigger, r.startedAt, r.finishedAt, r.outcome, r.durationMs, r.engineJobId, r.detail);
+        .run(
+          r.projectId,
+          r.jobId,
+          r.trigger,
+          r.startedAt,
+          r.finishedAt,
+          r.outcome,
+          r.durationMs,
+          r.engineJobId,
+          r.detail,
+        );
       this.db
         .prepare(
           `UPDATE maintenance_jobs SET last_run_at = ?, last_outcome = ?, last_duration_ms = ?, last_job_id = ?,
@@ -115,20 +131,25 @@ export class MaintenanceStore {
         .run(r.startedAt, r.outcome, r.durationMs, r.engineJobId, r.detail, r.finishedAt, r.jobId);
       this.db
         .prepare(
-          `DELETE FROM maintenance_runs WHERE job_id = ? AND id NOT IN
-             (SELECT id FROM maintenance_runs WHERE job_id = ? ORDER BY id DESC LIMIT ?)`,
+          `DELETE FROM maintenance_runs WHERE job_id = ? AND project_id = ? AND id NOT IN
+             (SELECT id FROM maintenance_runs WHERE job_id = ? AND project_id = ? ORDER BY id DESC LIMIT ?)`,
         )
-        .run(r.jobId, r.jobId, keep);
+        .run(r.jobId, r.projectId, r.jobId, r.projectId, keep);
     })();
   }
 
-  history(jobId: string, limit = 20): RunRecord[] {
+  /** Runs of a job, newest first: of every project (and bridge-wide), unless `projectId` narrows it. */
+  history(jobId: string, limit = 20, projectId?: string): RunRecord[] {
     return (
       this.db
-        .prepare('SELECT * FROM maintenance_runs WHERE job_id = ? ORDER BY id DESC LIMIT ?')
-        .all(jobId, limit) as Row[]
+        .prepare(
+          `SELECT * FROM maintenance_runs WHERE job_id = ?${projectId !== undefined ? ' AND project_id = ?' : ''}
+           ORDER BY id DESC LIMIT ?`,
+        )
+        .all(jobId, ...(projectId !== undefined ? [projectId] : []), limit) as Row[]
     ).map((r) => ({
       id: Number(r.id),
+      projectId: r.project_id as string,
       jobId: r.job_id as string,
       trigger: r.trigger as RunTrigger,
       startedAt: Number(r.started_at),

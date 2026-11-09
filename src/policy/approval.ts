@@ -7,7 +7,7 @@
  * - was minted by this module (identity is checked against a private set, so JSON look-alikes are worthless),
  * - has not been consumed or expired,
  * - is bound to the proposal whose ops are being submitted (same proposal id, same principal, same op ids and
- *   params hashes, in the same order).
+ *   params hashes, in the same order), and to the proposal's project (v2 A1): it covers nothing in another project.
  *
  * `issueApprovalToken` is deliberately NOT exported from `src/policy/index.ts`: only the proposal service's
  * `approve`, which only the owner command layer calls, mints one. Nothing an agent can reach can create or read one,
@@ -44,29 +44,55 @@ const TOKEN_TTL_MS = 120_000;
 export class ApprovalToken {
   readonly #expected: readonly ExpectedOp[];
   readonly #principalId: string;
+  readonly #projectId: string;
   readonly #expiresAt: number;
 
   private constructor(
     readonly proposalId: string,
     principalId: string,
+    projectId: string,
     expected: readonly ExpectedOp[],
     expiresAt: number,
   ) {
     this.#expected = expected;
     this.#principalId = principalId;
+    this.#projectId = projectId;
     this.#expiresAt = expiresAt;
   }
 
   /** @internal Use `issueApprovalToken`. */
-  static mint(proposalId: string, principalId: string, expected: readonly ExpectedOp[], now: number) {
-    const t = new ApprovalToken(proposalId, principalId, Object.freeze([...expected]), now + TOKEN_TTL_MS);
+  static mint(
+    proposalId: string,
+    principalId: string,
+    projectId: string,
+    expected: readonly ExpectedOp[],
+    now: number,
+  ) {
+    const t = new ApprovalToken(
+      proposalId,
+      principalId,
+      projectId,
+      Object.freeze([...expected]),
+      now + TOKEN_TTL_MS,
+    );
     live.add(t);
     return t;
   }
 
-  /** Is this a live token for `principalId`, and is `op` with `params` step `index` of the approved proposal? */
-  covers(principalId: string, index: number, op: string, params: unknown, now: number): boolean {
+  /**
+   * Is this a live token for `principalId` in `projectId`, and is `op` with `params` step `index` of the approved
+   * proposal?
+   */
+  covers(
+    principalId: string,
+    projectId: string,
+    index: number,
+    op: string,
+    params: unknown,
+    now: number,
+  ): boolean {
     if (!live.has(this) || now > this.#expiresAt || principalId !== this.#principalId) return false;
+    if (projectId !== this.#projectId) return false;
     const want = this.#expected[index];
     return want !== undefined && want.op === op && want.paramsHash === hashJson(params);
   }
@@ -90,10 +116,11 @@ export class ApprovalToken {
 export function issueApprovalToken(
   proposalId: string,
   principalId: string,
+  projectId: string,
   expected: readonly ExpectedOp[],
   now: number,
 ): ApprovalToken {
-  return ApprovalToken.mint(proposalId, principalId, expected, now);
+  return ApprovalToken.mint(proposalId, principalId, projectId, expected, now);
 }
 
 /** True only for a token this module minted and that has not been consumed. */

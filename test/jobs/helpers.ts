@@ -19,11 +19,15 @@ import {
 } from '../../src/jobs/index.js';
 import { createLkClient, type LkClient } from '../../src/lk/client.js';
 import { FakeClock, flushMicrotasks } from '../../src/lk/governor/clock.js';
+import { StaticProjects } from '../../src/projects/index.js';
 import { MockLk, type SeenCall } from '../contract/mock-lk.js';
 import { LkModel } from './lk-model.js';
 
 export const API_KEY = 'mock-key-not-real';
+/** The mock project's LegendKeeper id (v2 A1: every engine call names its project). */
 export const PROJECT = 'proj_mock';
+/** The bridge's name for it. */
+export const PROJECT_NAME = 'mock';
 
 const realDelay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -35,6 +39,8 @@ export interface Wire {
 export interface EngineHandle {
   readonly engine: JobEngine;
   readonly lk: LkClient;
+  /** The one project this engine serves (registered in `projects`, served at once). */
+  readonly projects: StaticProjects;
   readonly db: Db;
   /** Requests this instance sent (reached or not). */
   readonly sent: Wire[];
@@ -112,9 +118,10 @@ export async function harness(): Promise<Harness> {
       transport,
       governor: defaultGovernorSettings({ requestTimeoutMs: 10_000, ...o.governor }),
     });
+    const projects = new StaticProjects(db, [{ client: lk, name: PROJECT_NAME }], () => clock.now());
     const engine = createJobEngine({
       db,
-      lk,
+      projects,
       clock,
       settings: defaultJobsSettings({ readOnly: false, ...o.settings }),
       ...(o.policyGate ? { policyGate: o.policyGate } : {}),
@@ -123,6 +130,7 @@ export async function harness(): Promise<Harness> {
     const handle: EngineHandle = {
       engine,
       lk,
+      projects,
       db,
       sent,
       hold(match) {

@@ -1,8 +1,15 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies and mock data in tests */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- parsed JSON replies and mock data in tests */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { systemClock } from '../../src/lk/index.js';
 import { LkModel } from '../jobs/lk-model.js';
-import { openStream, startAdminStack, until, type AdminStack, type SseConnection } from './helpers.js';
+import {
+  PROJECT,
+  openStream,
+  startAdminStack,
+  until,
+  type AdminStack,
+  type SseConnection,
+} from './helpers.js';
 
 const model = new LkModel(() => systemClock.now());
 let stack: AdminStack;
@@ -23,12 +30,13 @@ afterAll(async () => {
 
 const runJob = async (name: string) => {
   const r = (await stack.runtime.engine.submit({
+    project: PROJECT,
     kind: 'batch_ops',
     title: name,
     origin: { kind: 'ui', tool: 'stream-test' },
     steps: [{ op: 'createResource', params: { body: { name } } }],
   })) as { jobId: string };
-  await until(() => stack.runtime.engine.queries.getJob(r.jobId)?.status === 'succeeded');
+  await until(() => stack.runtime.engine.queries.getJob(PROJECT, r.jobId)?.status === 'succeeded');
   return r.jobId;
 };
 
@@ -46,10 +54,13 @@ describe('the live stream', () => {
     expect(c.headers.get('cache-control')).toMatch(/no-store/);
     const hello = await c.waitFor((f) => f.event === 'hello');
     expect(hello.data.data).toMatchObject({ resumed: false, heartbeatMs: 200 });
+    // v2 A1: one snapshot per project (each has its own governor), by LegendKeeper id.
     const budget = await c.waitFor((f) => f.event === 'budget');
-    expect(budget.data.data.snapshot.tiers['write-min']).toMatchObject({ limit: 120, windowMs: 60_000 });
-    expect(budget.data.data.snapshot.tiers.upload.reactiveOnly).toBe(true);
-    expect(budget.data.data.writesPerMinute).toBeTypeOf('number');
+    const one = (budget.data.data as { projects: Record<string, Record<string, any>> }).projects[PROJECT]!;
+    expect(one.name).toBe('test');
+    expect(one.snapshot.tiers['write-min']).toMatchObject({ limit: 120, windowMs: 60_000 });
+    expect(one.snapshot.tiers.upload.reactiveOnly).toBe(true);
+    expect(one.writesPerMinute).toBeTypeOf('number');
   });
 
   it('carries engine, governor and policy events as they happen', async () => {
@@ -85,6 +96,7 @@ describe('the live stream', () => {
     const c = await connect();
     stack.runtime.engine.events.emit('error', {
       id: 1,
+      projectId: PROJECT,
       at: Date.now(),
       opId: 'createImageUpload',
       jobId: null,

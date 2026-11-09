@@ -3,7 +3,7 @@ import type { JobStatus, JobWithSteps, StepView } from '../../jobs/index.js';
 import { TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
 import { AdminHttpError } from '../http.js';
 import { redactDeep } from '../redact.js';
-import { csv, idSchema, limitSchema, parseInput, type Register } from './util.js';
+import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const ACTIVE: readonly JobStatus[] = ['queued', 'running', 'waiting_budget', 'waiting_lock', 'paused'];
 const HISTORY: readonly JobStatus[] = ['succeeded', 'failed', 'cancelled'];
@@ -41,9 +41,11 @@ export const registerJobs: Register = (api, ctx) => {
         kind: z.enum(['single_op', 'batch_ops', 'paginate_all', 'upload_image']).optional(),
         before: z.coerce.number().int().optional(),
         limit: limitSchema(50, 200),
+        project: projectParam,
       }),
       req.query,
     );
+    const project = ctx.project(q.project);
     let status: readonly JobStatus[] | undefined;
     if (q.status && q.status.length > 0) {
       const bad = q.status.filter((s) => !STATUSES.has(s));
@@ -51,7 +53,7 @@ export const registerJobs: Register = (api, ctx) => {
       status = q.status as JobStatus[];
     } else if (q.view === 'active') status = ACTIVE;
     else if (q.view === 'history') status = HISTORY;
-    const jobs = engine.queries.listJobs({
+    const jobs = engine.queries.listJobs(project.id, {
       ...(status ? { status } : {}),
       ...(q.origin ? { originKind: q.origin } : {}),
       ...(q.principalId ? { principalId: q.principalId } : {}),
@@ -60,13 +62,16 @@ export const registerJobs: Register = (api, ctx) => {
       ...(q.before !== undefined ? { before: q.before } : {}),
       limit: q.limit,
     });
-    return { jobs: redactDeep(jobs), hasMore: jobs.length === q.limit };
+    return { project, jobs: redactDeep(jobs), hasMore: jobs.length === q.limit };
   });
+
+  const projectQuery = z.object({ project: projectParam });
 
   api.get('/jobs/:id', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    const job = engine.queries.getJob(id);
-    if (!job) throw new AdminHttpError(404, 'JOB_NOT_FOUND', `No job ${id}`);
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    const job = engine.queries.getJob(project.id, id);
+    if (!job) throw new AdminHttpError(404, 'JOB_NOT_FOUND', `No job ${id} in project ${project.name}`);
     const steps = job.steps.map((s) => ({ ...s, retry: retryAdvice(job, s) }));
     return { job: redactDeep({ ...job, steps }, { maxString: 4000 }) };
   });
@@ -74,32 +79,42 @@ export const registerJobs: Register = (api, ctx) => {
   api.get('/jobs/:id/artifacts/:artifactId', (req) => {
     const p = parseInput(z.object({ id: idSchema, artifactId: idSchema }), req.params);
     const q = parseInput(
-      z.object({ offset: z.coerce.number().int().min(0).default(0), limit: limitSchema(50, 200) }),
+      z.object({
+        offset: z.coerce.number().int().min(0).default(0),
+        limit: limitSchema(50, 200),
+        project: projectParam,
+      }),
       req.query,
     );
-    const page = engine.queries.readArtifact(p.artifactId, q);
+    const project = ctx.project(q.project);
+    const page = engine.queries.readArtifact(project.id, p.artifactId, { offset: q.offset, limit: q.limit });
     if (!page || page.artifact.jobId !== p.id) {
       throw new AdminHttpError(404, 'ARTIFACT_NOT_FOUND', `No artefact ${p.artifactId} on job ${p.id}`);
     }
     return redactDeep(page, { maxString: 4000 });
   });
 
+  // Job controls act within the project the page shows (?project=, default: the default project).
   api.post('/jobs/:id/cancel', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    return { job: redactDeep(actions.cancelJob(id)) };
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { job: redactDeep(actions.cancelJob(project.id, id)) };
   });
   api.post('/jobs/:id/pause', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    return { job: redactDeep(actions.pauseJob(id)) };
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { job: redactDeep(actions.pauseJob(project.id, id)) };
   });
   api.post('/jobs/:id/resume', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
-    return { job: redactDeep(actions.resumeJob(id)) };
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { job: redactDeep(actions.resumeJob(project.id, id)) };
   });
   api.post('/jobs/:id/steps/:stepNo/retry', (req) => {
     const p = parseInput(z.object({ id: idSchema, stepNo: z.coerce.number().int().min(0) }), req.params);
     const b = parseInput(z.object({ force: z.boolean().default(false) }), req.body);
-    return { job: redactDeep(actions.retryStep(p.id, p.stepNo, b.force)) };
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { job: redactDeep(actions.retryStep(project.id, p.id, p.stepNo, b.force)) };
   });
 
   // ------------------------------------------------------------------------------------------------ errors
@@ -110,29 +125,34 @@ export const registerJobs: Register = (api, ctx) => {
         resolved: z.enum(['true', 'false', 'all']).default('false'),
         principalId: idSchema.optional(),
         limit: limitSchema(100, 500),
+        project: projectParam,
       }),
       req.query,
     );
-    const groups = engine.queries.listErrorGroups({
+    const project = ctx.project(q.project);
+    const groups = engine.queries.listErrorGroups(project.id, {
       ...(q.resolved === 'all' ? {} : { resolved: q.resolved === 'true' }),
       ...(q.principalId ? { principalId: q.principalId } : {}),
       limit: q.limit,
     });
-    return { groups: redactDeep(groups) };
+    return { project, groups: redactDeep(groups) };
   });
 
   api.get('/errors/group', (req) => {
-    const q = parseInput(z.object({ fingerprint: z.string().min(1).max(500) }), req.query);
-    const group = engine.queries
-      .listErrorGroups({ limit: 1000 })
-      .find((g) => g.fingerprint === q.fingerprint);
+    const q = parseInput(
+      z.object({ fingerprint: z.string().min(1).max(500), project: projectParam }),
+      req.query,
+    );
+    const project = ctx.project(q.project);
+    const [group] = engine.queries.listErrorGroups(project.id, { fingerprint: q.fingerprint, limit: 1 });
     if (!group) throw new AdminHttpError(404, 'ERROR_GROUP_NOT_FOUND', 'No such error group');
-    const occurrences = engine.queries.listErrors({ fingerprint: q.fingerprint, limit: 50 });
+    const occurrences = engine.queries.listErrors(project.id, { fingerprint: q.fingerprint, limit: 50 });
     return { group: redactDeep(group), occurrences: redactDeep(occurrences, { maxString: 8000 }) };
   });
 
   api.post('/errors/resolve', (req) => {
     const b = parseInput(z.object({ fingerprint: z.string().min(1).max(500) }), req.body);
-    return { resolved: actions.resolveErrorGroup(b.fingerprint) };
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { resolved: actions.resolveErrorGroup(project.id, b.fingerprint) };
   });
 };

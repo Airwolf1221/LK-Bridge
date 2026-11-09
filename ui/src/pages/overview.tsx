@@ -1,33 +1,62 @@
-import { useState } from 'react';
-import { Badge, ErrorNote, Gauge, Loading, PageHeader } from '../components';
+import { Badge, ErrorNote, Gauge, Loading, PageHeader, ProjectStatusBadge } from '../components';
 import { fmtAgo, fmtInt } from '../format';
-import { useApi, useNow, useReloadOn } from '../hooks';
+import { useNow } from '../hooks';
+import { useLiveBudget, useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { Link } from '../router';
-import { useStreamEvent } from '../stream';
-import type { BudgetPayload, Overview } from '../types';
+import type { Overview, ProjectStatusSummary } from '../types';
+
+/** Every project whose status is not `active` (a refused key, a mismatched id, not checked yet, no key), with why. */
+function ProjectsAttention({ projects }: { projects: ProjectStatusSummary[] }) {
+  const attention = projects.filter((p) => p.status !== 'active');
+  if (attention.length === 0) return null;
+  return (
+    <section className="card card-alert" aria-labelledby="attention-h">
+      <h2 id="attention-h">
+        {attention.length === 1 ? 'A project needs attention' : `${attention.length} projects need attention`}
+      </h2>
+      <ul className="plain">
+        {attention.map((p) => (
+          <li key={p.name} data-project={p.name}>
+            <strong>{p.name}</strong> <ProjectStatusBadge status={p.status} />
+            {p.isDefault && <> (the default project)</>}
+            {p.reason && <div>{p.reason}</div>}
+          </li>
+        ))}
+      </ul>
+      <p className="small-text">
+        A stopped project is not served until its key is fixed; the others carry on. The{' '}
+        <Link to="/projects">Projects</Link> page shows each key and can check it again.
+      </p>
+    </section>
+  );
+}
 
 export function OverviewPage() {
-  const o = useApi<Overview>('/overview');
-  useReloadOn(['job', 'controls', 'error', 'proposal'], o.reload, 600);
-  const [live, setLive] = useState<BudgetPayload | null>(null);
-  useStreamEvent<BudgetPayload>('budget', setLive);
+  const { selected } = useProject();
+  const o = useScopedApi<Overview>('/overview');
+  useProjectReloadOn(['job', 'controls', 'error', 'proposal', 'project'], o.reload, 600);
+  const live = useLiveBudget();
   const now = useNow();
 
   if (o.error) return <ErrorNote error={o.error} onRetry={o.reload} />;
   if (!o.data) return <Loading />;
   const d = o.data;
-  const gauges = live ? d.budget.gauges.map((g) => live.snapshot.tiers[g.tier]) : d.budget.gauges;
-  const queues = live?.snapshot.queues ?? d.budget.queues;
+  const budget = d.budget;
+  const gauges = budget ? (live ? budget.gauges.map((g) => live.snapshot.tiers[g.tier]) : budget.gauges) : [];
+  const queues = live?.snapshot.queues ?? budget?.queues;
   const perMinute = live?.writesPerMinute ?? d.writes.perMinute;
   const h = d.health;
+  const own = d.controls.project;
 
   return (
     <>
-      <PageHeader title="Overview">
+      <PageHeader title="Overview" project={selected}>
         <button type="button" className="small" onClick={o.reload}>
           Refresh
         </button>
       </PageHeader>
+
+      <ProjectsAttention projects={d.projects ?? []} />
 
       <div className="grid">
         <section className="card" aria-labelledby="health-h">
@@ -72,6 +101,16 @@ export function OverviewPage() {
                 <Badge tone="ok">off</Badge>
               )}
             </div>
+            {own?.readOnly && (
+              <p className="muted small-text">
+                This project’s own read-only flag is on (<Link to="/projects">Projects</Link>).
+              </p>
+            )}
+            {own && !own.available && (
+              <p className="note note-warn small-text">
+                This project is not served now: nothing is sent to it.
+              </p>
+            )}
             <div className="row">
               <span>Writes</span>
               {d.writes.state === 'running' && <Badge tone="ok">running</Badge>}
@@ -131,15 +170,24 @@ export function OverviewPage() {
           <h2 id="budget-h">Request budget</h2>
           <Link to="/budgets">All tiers</Link>
         </div>
-        <div className="grid">
-          {gauges.map((g) => (
-            <Gauge key={g.tier} tier={g} now={now} />
-          ))}
-        </div>
-        <p className="muted small-text">
-          Waiting for budget: interactive {queues.P1} · jobs {queues.P2} · maintenance {queues.P3} · dashboard{' '}
-          {queues.P0}
-        </p>
+        {budget && queues ? (
+          <>
+            <div className="grid">
+              {gauges.map((g) => (
+                <Gauge key={g.tier} tier={g} now={now} />
+              ))}
+            </div>
+            <p className="muted small-text">
+              Waiting for budget: interactive {queues.P1} · jobs {queues.P2} · maintenance {queues.P3} ·
+              dashboard {queues.P0}
+            </p>
+          </>
+        ) : (
+          <p className="muted">
+            No budget to show: this project’s key is not in use now, so nothing is sent to LegendKeeper for
+            it.
+          </p>
+        )}
       </section>
     </>
   );

@@ -1,5 +1,6 @@
 /** Shared types of the policy layer (docs/policy.md). */
 import type { Principal } from '../jobs/types.js';
+import type { ProjectScope } from '../projects/types.js';
 
 export const SCOPES = ['read', 'propose', 'write'] as const;
 /** `read`: reads only. `propose`: writes become proposals. `write`: writes execute (within every guard). */
@@ -80,6 +81,8 @@ export interface ProposalOpView {
 
 export interface ProposalView {
   readonly id: string;
+  /** v2 A1: the LegendKeeper id of the project the proposal is for; approval executes against it only. */
+  readonly projectId: string;
   readonly principalId: string;
   readonly principalLabel: string;
   readonly profile: string;
@@ -110,6 +113,8 @@ export interface ProposalConflict {
 }
 
 export interface ProposalFilter {
+  /** v2 A1: one project's LegendKeeper id, or `ALL_PROJECTS`. Required: lists never span projects by accident. */
+  readonly project: ProjectScope;
   readonly state?: ProposalState | readonly ProposalState[];
   readonly principalId?: string;
   readonly profile?: string;

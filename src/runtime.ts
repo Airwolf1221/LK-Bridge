@@ -1,10 +1,10 @@
 import { pino } from 'pino';
+import type { Writable } from 'node:stream';
 import { applyStoredSettings } from './admin/index.js';
 import {
   defaultMaintenanceSettings,
   defaultPolicySettings,
   jobsSettingsFrom,
-  lkSettingsFrom,
   type AdminSettings,
   type Config,
   type MaintenanceSettings,
@@ -13,14 +13,7 @@ import {
 } from './config/index.js';
 import type { Db } from './db/open.js';
 import { createJobEngine, UPLOAD_PUT_STEP, type JobEngine } from './jobs/index.js';
-import {
-  createLkClient,
-  createSqliteCounterStore,
-  defaultTransport,
-  type Clock,
-  type LkClient,
-  type Transport,
-} from './lk/index.js';
+import { defaultTransport, type Clock, type Transport } from './lk/index.js';
 import type { McpToolProvider } from './mcp/server.js';
 import {
   BRIDGE_INSTRUCTIONS,
@@ -29,10 +22,17 @@ import {
   createUploadTransport,
 } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
+import { footerFor } from './mcp/tools/shape.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
-import { createPolicy, proposalTools, type Policy } from './policy/index.js';
+import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
+import {
+  InstanceGuard,
+  ProjectSelector,
+  createProjectRegistry,
+  type ProjectRegistry,
+} from './projects/index.js';
 
 /**
  * The bridge's working parts, in the order they depend on each other: governor-backed LK client, then the job
@@ -41,7 +41,17 @@ import { systemClock } from './lk/index.js';
  * built first: its live gate and proposal sink go into the engine, and it is attached once the engine has started.
  */
 export interface Runtime {
-  readonly lk: LkClient;
+  /**
+   * The projects this bridge serves (v2 A1), each with its own governor and key; which are served now, and why not.
+   */
+  readonly projects: ProjectRegistry;
+  /** Resolves the `project` argument of the tools (REQUIRE_PROJECT_FOR_WRITES). */
+  readonly selector: ProjectSelector;
+  /**
+   * Resolves once every configured project's key has been checked (each is served from the moment its own check
+   * passes). Never rejects: a failed check stops only that project.
+   */
+  readonly ready: Promise<void>;
   readonly engine: JobEngine;
   /** Profiles, the live policy gate, proposals and owner commands; pass it to `buildServer({ policy })`. */
   readonly policy: Policy;
@@ -75,6 +85,16 @@ export interface RuntimeOptions {
   readonly clock?: Clock;
   readonly lkTransport?: Transport;
   readonly uploadGuard?: GuardOptions;
+  /**
+   * Claim the database for this process (ADR 0023: one bridge process per database and project). Default true; the
+   * sandbox scripts, which run on a database of their own, may switch it off.
+   */
+  readonly instanceGuard?: boolean;
+  /** Delays before a project whose key could not be checked is checked again (tests). */
+  readonly projectRetryMs?: { readonly first: number; readonly max: number };
+  /** The runtime's log level and destination (default: LOG_LEVEL, to stdout). `createBridge` passes the server's. */
+  readonly logLevel?: string;
+  readonly logStream?: Writable;
 }
 
 export function createRuntime(o: RuntimeOptions): Runtime {
@@ -82,7 +102,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // reserve floors) are applied here, on top of the environment. `envConfig` is kept for "reset to default".
   const envConfig = o.config;
   const config = applyStoredSettings(envConfig, o.db);
-  const log = pino({ level: config.logLevel, base: { component: 'engine' } });
+  const logOptions = { level: o.logLevel ?? config.logLevel, base: { component: 'engine' } };
+  const log = o.logStream ? pino(logOptions, o.logStream) : pino(logOptions);
   // Signed upload URLs are on another host: the transport sends LegendKeeper's host through the platform fetch
   // and every other host through the SSRF guard. Both stay under the governor.
   // The SSRF guard for every non-LegendKeeper fetch of the tool layer (the signed-URL PUT and an image source URL):
@@ -96,16 +117,32 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     lk: o.lkTransport ?? defaultTransport,
     ...uploadGuard,
   });
-  const lk = createLkClient({
-    ...lkSettingsFrom(config),
+  for (const w of config.warnings) log.warn({}, w);
+  // ADR 0023: exactly one bridge process serves a database (and so its projects). Refuses a second one.
+  const guard = o.instanceGuard === false ? null : new InstanceGuard({ db: o.db });
+  const took = guard?.acquire();
+  if (took?.tookOver) {
+    log.warn(
+      { pid: took.tookOver.pid, host: took.tookOver.hostname },
+      'took over the database from a bridge process that is no longer running',
+    );
+  }
+  // v2 A1: one governor per project (its key's tiers and its project tier), with counts that survive a restart
+  // (governor_counters, one row per project). Each project's key is checked below, without blocking start-up.
+  const projects = createProjectRegistry({
+    db: o.db,
+    config,
     transport,
-    // v1.0.1 (F-14): the governor's recent per-tier counts survive a restart (table governor_counters).
-    persistence: {
-      store: createSqliteCounterStore(o.db),
-      warn: (message, err) => log.warn({ err }, message),
+    log: {
+      info: (obj, msg) => log.info(obj, msg),
+      warn: (obj, msg) => log.warn(obj, msg),
+      error: (obj, msg) => log.error(obj, msg),
     },
     ...(o.clock ? { clock: o.clock } : {}),
+    ...(o.projectRetryMs ? { retryMs: o.projectRetryMs } : {}),
   });
+  const selector = new ProjectSelector(projects, config.lk.requireProjectForWrites);
+  const footer = (p: { id: string | null; name: string }) => footerFor({ projects }, p.id, p.name);
   const maintenanceSettings = o.maintenanceSettings ?? defaultMaintenanceSettings();
   const policySettings = o.policySettings ?? defaultPolicySettings();
   const policy = createPolicy({
@@ -116,11 +153,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     externalExpirySweep: maintenanceSettings.enabled,
     allowMemberAdmin: config.lk.allowMemberAdmin,
     log,
+    proposalTools: { selector, footer },
     ...(o.clock ? { clock: o.clock } : {}),
   });
   const engine = createJobEngine({
     db: o.db,
-    lk,
+    projects,
     settings: jobsSettingsFrom(config),
     log,
     policyGate: policy.gate,
@@ -143,7 +181,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const maintenance = createMaintenance({
     db: o.db,
     engine,
-    lk,
+    projects,
     policy,
     clock: o.clock ?? systemClock,
     settings: maintenanceSettings,
@@ -162,20 +200,25 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const bridgeTools = createBridgeTools(
     {
       engine,
-      lk,
+      projects,
+      selector,
       settings: o.toolsSettings,
       version: o.version,
-      projectId: config.lk.projectId,
       configuredReadOnly: config.lk.readOnly,
       uploadGuard,
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
   );
-  // The agent-facing proposal tools (read-only, own proposals only), with the budget footer like every tool.
-  const tools = [...bridgeTools, ...proposalTools(policy.proposals, () => lk.budgetFooter())];
+  // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
+  // tool.
+  const tools = [...bridgeTools, ...policy.tools];
+  // Each project's key is checked now; a project is served from the moment its check passes.
+  const ready = projects.verifyAll().catch((err: unknown) => log.error({ err }, 'project checks failed'));
 
   return {
-    lk,
+    projects,
+    selector,
+    ready,
     engine,
     policy,
     maintenance,
@@ -196,7 +239,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       clearTimeout(timer);
       detachPolicy();
       await engine.stop();
-      lk.governor.close();
+      projects.close(); // every governor saves its counts
+      guard?.release();
     },
   };
 }

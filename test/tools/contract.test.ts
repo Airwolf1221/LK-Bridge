@@ -30,7 +30,7 @@ describe('all registry operations through lk_api_read / lk_api_write', () => {
     // The only operation whose example needs an extra confirmation is a cascading delete; the example has none.
     const r = await stack.call(client, tool, args);
     expect(r.isError, r.text.slice(0, 600)).toBe(false);
-    expect(r.footer).toMatch(/^budget: /);
+    expect(r.footer).toMatch(/^budget \(test\): /); // v2 A1: the footer names the project
     expect(['succeeded', 'queued']).toContain(r.body.status);
     // LK saw the operation's own request (method and route), however many reads the engine made around it.
     const seen = stack.mock.calls

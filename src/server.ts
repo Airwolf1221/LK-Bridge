@@ -28,7 +28,13 @@ import {
   PolicyConfigError,
   type ToolsSettings,
 } from './config/index.js';
-import { runMigrations } from './db/migrate.js';
+import {
+  MigrationError,
+  defaultMigrationsDir,
+  migrationContextFromEnv,
+  runMigrations,
+} from './db/migrate.js';
+import { InstanceLockError } from './projects/index.js';
 import { type Db, openDatabase } from './db/open.js';
 import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/server.js';
 import { mcpMaxBodyBytes, mcpTransportPlugin } from './mcp/transport.js';
@@ -222,6 +228,13 @@ export interface CreateBridgeOptions {
   readonly clock?: RuntimeOptions['clock'];
   readonly lkTransport?: RuntimeOptions['lkTransport'];
   readonly uploadGuard?: RuntimeOptions['uploadGuard'];
+  readonly projectRetryMs?: RuntimeOptions['projectRetryMs'];
+  /**
+   * Wait until every project's key has been checked before returning (default true: tests and the e2e server then
+   * start with their projects served). `main` does not wait: the bridge listens at once and serves each project
+   * from the moment its own check passes.
+   */
+  readonly awaitProjects?: boolean;
 }
 
 /**
@@ -242,7 +255,12 @@ export async function createBridge(
     ...(o.clock ? { clock: o.clock } : {}),
     ...(o.lkTransport ? { lkTransport: o.lkTransport } : {}),
     ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
+    ...(o.projectRetryMs ? { projectRetryMs: o.projectRetryMs } : {}),
+    // The runtime logs (project checks, start-up warnings) go where the server's do.
+    ...(o.logLevel ? { logLevel: o.logLevel } : {}),
+    ...(o.logStream ? { logStream: o.logStream } : {}),
   });
+  if (o.awaitProjects !== false) await runtime.ready;
   const { app, services } = await buildServer({
     authConfig: o.authConfig,
     db: o.db,
@@ -292,18 +310,33 @@ async function main(): Promise<void> {
     throw err;
   }
   const db = openDatabase(config.server.dbPath);
-  runMigrations(db);
-  // Governor, LK client, policy layer, job engine (its startup recovery runs here, before /mcp accepts anything) and
-  // tools, in dependency order; then the HTTP server with the same policy layer.
-  const { app, runtime } = await createBridge({
-    config,
-    authConfig,
-    toolsSettings,
-    policySettings,
-    adminSettings,
-    maintenanceSettings,
-    db,
-  });
+  let created;
+  try {
+    // v2 A1: migration 0600 assigns rows written before multi-project support to the single-project form's project.
+    // (LK_PROJECT_ID and LK_PROJECT_NAME, the same values `npm run db:migrate` and deploy.sh use; not secrets.)
+    runMigrations(db, defaultMigrationsDir(), { context: migrationContextFromEnv(process.env) });
+    // Project registry and one governor per project, policy layer, job engine (its startup recovery runs here, before
+    // /mcp accepts anything) and tools, in dependency order; then the HTTP server with the same policy layer. Each
+    // project's key is checked in the background; a project is served once its check passes.
+    created = await createBridge({
+      config,
+      authConfig,
+      toolsSettings,
+      policySettings,
+      adminSettings,
+      maintenanceSettings,
+      db,
+      awaitProjects: false,
+    });
+  } catch (err) {
+    if (err instanceof MigrationError || err instanceof InstanceLockError) {
+      process.stderr.write(`${err.message}\n`);
+      db.close();
+      process.exit(1);
+    }
+    throw err;
+  }
+  const { app, runtime } = created;
   // SIGTERM: stop new work and let running jobs finish (drain), then stop HTTP, then close the database.
   const shutdown = (signal: string) => {
     app.log.info({ signal }, 'shutting down');

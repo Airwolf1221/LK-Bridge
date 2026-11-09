@@ -10,7 +10,10 @@ import * as z from 'zod';
 import { policyOpMeta } from '../../src/jobs/index.js';
 import { getOperation } from '../../src/lk/registry.js';
 import type { McpToolProvider } from '../../src/mcp/server.js';
-import { mcpOrigin } from '../../src/policy/index.js';
+import { defaultGovernorSettings } from '../../src/config/lk.js';
+import { createLkClient } from '../../src/lk/client.js';
+import { createPolicy, mcpOrigin } from '../../src/policy/index.js';
+import { ProjectSelector, StaticProjects } from '../../src/projects/index.js';
 import {
   Browser,
   type TestBridge,
@@ -57,7 +60,7 @@ const writeStub = (): McpToolProvider => ({
             ctx.principal!,
             policyOpMeta(getOperation('updateResource')!, {}),
             {},
-            { origin: mcpOrigin(ctx, 'stub_write'), jobKind: 'single_op' },
+            { origin: mcpOrigin(ctx, 'stub_write'), project: PROJECT, jobKind: 'single_op' },
           ),
         ),
       },
@@ -68,8 +71,32 @@ const writeStub = (): McpToolProvider => ({
 /** Wrongly tagged `read`, so it is listed to everyone: the gate must still refuse its write. */
 const mislabelled = (): McpToolProvider => ({ ...writeStub(), name: 'stub_mislabelled', access: 'read' });
 
+/** v2 A1: proposals belong to a project; the proposal tools resolve the `project` argument (default: this one). */
+const PROJECT = 'proj_mock';
+
 beforeAll(async () => {
-  bridge = await startBridge({ tools: [whoami, writeStub(), mislabelled()] });
+  bridge = await startBridge({
+    tools: [whoami, writeStub(), mislabelled()],
+    policy: (db) => {
+      const projects = new StaticProjects(db, [
+        {
+          name: 'mock',
+          // Never called: the proposal tools only read the database.
+          client: createLkClient({
+            apiKey: 'unused',
+            projectId: PROJECT,
+            baseUrl: 'http://127.0.0.1:9',
+            governor: defaultGovernorSettings(),
+          }),
+        },
+      ]);
+      return createPolicy({
+        db,
+        allowMemberAdmin: false,
+        proposalTools: { selector: new ProjectSelector(projects, true) },
+      });
+    },
+  });
 });
 afterAll(() => bridge.close());
 
@@ -438,12 +465,12 @@ describe('tool lists and calls per scope', () => {
     const now = Date.now();
     bridge.db
       .prepare(
-        `INSERT INTO proposals (id, principal_id, principal_label, profile, origin, job_kind, title, priority, summary,
-           state, created_at, updated_at, expires_at, reject_reason)
-         VALUES ('prop_a1', ?, 'A', 'agent-a', '{"kind":"mcp"}', 'single_op', 't', 'P1', 'Proposed x', 'rejected',
+        `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
+           priority, summary, state, created_at, updated_at, expires_at, reject_reason)
+         VALUES ('prop_a1', ?, ?, 'A', 'agent-a', '{"kind":"mcp"}', 'single_op', 't', 'P1', 'Proposed x', 'rejected',
            ?, ?, ?, 'No thanks')`,
       )
-      .run(a.pat.id, now, now, now + 1000);
+      .run(PROJECT, a.pat.id, now, now, now + 1000);
     const ca = await connect(a.token);
     const cb = await connect(b.token);
     try {

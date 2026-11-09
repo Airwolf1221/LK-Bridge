@@ -1,20 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { api } from '../api';
 import {
   Badge,
   Button,
+  Empty,
   ErrorNote,
   Gauge,
   Loading,
   PageHeader,
+  ProjectStatusBadge,
   Sparkline,
   useAction,
   useConfirm,
 } from '../components';
 import { TIER_LABELS, fmtInt } from '../format';
 import { useApi, useNow } from '../hooks';
-import { useStreamEvent } from '../stream';
-import type { BudgetPayload, BudgetsResponse, PriorityClass, TierId } from '../types';
+import { useLiveBudget, useLiveBudgets, useProject, useScopedApi } from '../project';
+import { useRoute } from '../router';
+import type { BudgetSamples, BudgetsAllResponse, BudgetsResponse, PriorityClass, TierId } from '../types';
 
 const QUEUE_LABELS: Record<PriorityClass, string> = {
   P0: 'P0 · dashboard',
@@ -23,32 +26,69 @@ const QUEUE_LABELS: Record<PriorityClass, string> = {
   P3: 'P3 · maintenance',
 };
 
-export function BudgetsPage() {
-  const b = useApi<BudgetsResponse>('/budgets');
-  const { reload } = b;
-  const [live, setLive] = useState<BudgetPayload | null>(null);
-  useStreamEvent<BudgetPayload>('budget', setLive);
-  const now = useNow();
-  // The 24 hour history changes slowly (one point per bucket): refresh it every minute.
+/** The 24 hour history changes slowly (one point per bucket): refresh it every minute. */
+function useMinuteRefresh(reload: () => void): void {
   useEffect(() => {
     const t = setInterval(reload, 60_000);
     return () => clearInterval(t);
   }, [reload]);
+}
 
-  if (b.error) return <ErrorNote error={b.error} onRetry={b.reload} />;
+const seriesOf = (samples: BudgetSamples, tier: TierId) =>
+  samples.points.map((p) => p.tiers[tier]?.used ?? 0);
+
+/** One project's budgets (each project has its own key, so its own tiers), or every project side by side. */
+export function BudgetsPage() {
+  const { query, navigate } = useRoute();
+  const { selected } = useProject();
+  const all = query.get('view') === 'all';
+  const toggle = (
+    <div className="tabs" role="group" aria-label="Which budgets">
+      <button type="button" aria-pressed={!all} onClick={() => navigate('/budgets', { replace: true })}>
+        {selected ? `This project (${selected})` : 'This project'}
+      </button>
+      <button
+        type="button"
+        aria-pressed={all}
+        onClick={() => navigate('/budgets?view=all', { replace: true })}
+      >
+        All projects
+      </button>
+    </div>
+  );
+  return all ? <AllBudgets toggle={toggle} /> : <ProjectBudgets toggle={toggle} />;
+}
+
+function ProjectBudgets({ toggle }: { toggle: ReactNode }) {
+  const { selected } = useProject();
+  const b = useScopedApi<BudgetsResponse>('/budgets');
+  const live = useLiveBudget();
+  const now = useNow();
+  useMinuteRefresh(b.reload);
+
+  if (b.error) {
+    return (
+      <>
+        <PageHeader title="Request Budgets" project={selected} />
+        {toggle}
+        <ErrorNote error={b.error} onRetry={b.reload} />
+      </>
+    );
+  }
   if (!b.data) return <Loading />;
   const snap = live?.snapshot ?? b.data.snapshot;
-  const series = (tier: TierId) => b.data!.samples.points.map((p) => p.tiers[tier]?.used ?? 0);
+  const series = (tier: TierId) => seriesOf(b.data!.samples, tier);
   const project = snap.tiers['project-hour'];
   const drift = project.drift;
 
   return (
     <>
-      <PageHeader title="Request Budgets">
+      <PageHeader title="Request Budgets" project={selected}>
         <span className="muted small-text">
           Live · {b.data.samples.count} samples in the last 24 hours (one every 10 seconds)
         </span>
       </PageHeader>
+      {toggle}
 
       <div className="grid">
         {b.data.tierOrder.map((t) => {
@@ -126,6 +166,84 @@ export function BudgetsPage() {
       </section>
 
       <FloorsCard data={b.data} onSaved={b.reload} />
+    </>
+  );
+}
+
+/** Every project with a governor, side by side: one card each, with its gauges and its 24 hour write history. */
+function AllBudgets({ toggle }: { toggle: ReactNode }) {
+  const b = useApi<BudgetsAllResponse>('/budgets/all');
+  const live = useLiveBudgets();
+  const { selected } = useProject();
+  const now = useNow();
+  useMinuteRefresh(b.reload);
+
+  return (
+    <>
+      <PageHeader title="Request Budgets">
+        <span className="muted small-text">Every project, side by side · live</span>
+      </PageHeader>
+      {toggle}
+      <p className="muted">
+        Each project has its own key, so its own budget: one project’s work never spends another’s.
+      </p>
+      <ErrorNote error={b.error} onRetry={b.reload} />
+      {!b.data ? (
+        !b.error && <Loading />
+      ) : b.data.projects.length === 0 ? (
+        <Empty>No project’s key is in use now, so there is no budget to show.</Empty>
+      ) : (
+        <div className="grid">
+          {b.data.projects.map((p, i) => {
+            const current = live?.[p.project.id];
+            const snap = current?.snapshot ?? p.snapshot;
+            const perMinute = current?.writesPerMinute ?? p.writesPerMinute;
+            const writes = seriesOf(p.samples, 'write-min');
+            const drift = snap.tiers['project-hour']?.drift ?? p.projectDrift;
+            return (
+              <section
+                key={p.project.id}
+                className="card"
+                aria-labelledby={`budget-project-${i}`}
+                data-project={p.project.name}
+              >
+                <div className="row row-between">
+                  <h2 id={`budget-project-${i}`}>{p.project.name}</h2>
+                  <span className="row">
+                    {p.project.name === selected && <Badge tone="info">selected</Badge>}
+                    <ProjectStatusBadge status={p.status} />
+                  </span>
+                </div>
+                <p className="muted small-text">
+                  {fmtInt(perMinute)} write{perMinute === 1 ? '' : 's'} in the last minute · waiting for
+                  budget: interactive {snap.queues.P1} · jobs {snap.queues.P2} · maintenance {snap.queues.P3}
+                </p>
+                <div className="stack">
+                  {b.data!.tierOrder.map((t) =>
+                    snap.tiers[t] ? <Gauge key={t} tier={snap.tiers[t]} now={now} compact /> : null,
+                  )}
+                </div>
+                <div className="mt">
+                  <Sparkline
+                    values={writes}
+                    max={snap.tiers['write-min']?.limit ?? 1}
+                    label={`${p.project.name}: writes per minute over the last 24 hours`}
+                  />
+                  <span className="muted small-text">
+                    {writes.length < 2 ? 'Collecting history.' : 'Writes per minute, last 24 hours'}
+                  </span>
+                </div>
+                {drift && (
+                  <p className="muted small-text">
+                    Project tier: {fmtInt(drift.observedUsed)} observed by LegendKeeper,{' '}
+                    {fmtInt(drift.modelledUsed)} counted by the bridge.
+                  </p>
+                )}
+              </section>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }

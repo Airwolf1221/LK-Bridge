@@ -8,7 +8,7 @@ import { specRespond } from './spec-mock.js';
 let stack: Stack;
 const target = (): SmokeTarget => ({
   engine: stack.runtime.engine,
-  lk: stack.runtime.lk,
+  lk: stack.runtime.projects.client(PROJECT)!,
   projectId: PROJECT,
   baseUrl: stack.mock.url,
   apiKey: API_KEY,
@@ -47,12 +47,21 @@ describe('sandbox smoke script (dry run)', () => {
       }),
     });
     try {
+      // v2 A1: the bridge's own start-up check already refuses the key (it belongs to another project than
+      // LK_PROJECT_ID), so the project is stopped and the smoke script cannot reach it at all.
+      expect(other.runtime.projects.find('test')).toMatchObject({ status: 'stopped' });
+      expect(other.runtime.projects.find('test')!.reason).toContain('proj_other');
       await expect(
         runSmoke(
-          { ...target(), engine: other.runtime.engine, lk: other.runtime.lk, baseUrl: other.mock.url },
+          {
+            ...target(),
+            engine: other.runtime.engine,
+            lk: other.runtime.projects.anyClient(PROJECT)!,
+            baseUrl: other.mock.url,
+          },
           PROJECT,
         ),
-      ).rejects.toBeInstanceOf(SandboxGuardError);
+      ).rejects.toThrow();
       expect(other.mock.calls.filter((c) => c.method !== 'GET')).toHaveLength(0);
     } finally {
       await other.close();

@@ -8,6 +8,7 @@ export interface JobEngineEvents {
   job: { readonly type: 'created' | 'updated'; readonly job: JobView };
   /** A step reached a final state (succeeded, failed, uncertain, cancelled). */
   step: {
+    readonly projectId: string;
     readonly jobId: string;
     readonly principalId: string;
     readonly profile: string;
@@ -33,6 +34,8 @@ export interface JobEngineEvents {
   proposal: {
     readonly type: 'captured' | 'updated';
     readonly proposalId: string;
+    /** v2 A1: the project the proposal is for. */
+    readonly projectId: string;
     readonly state: string;
     readonly principalId: string;
     readonly profile: string;

@@ -51,16 +51,22 @@ type Resource = { id?: unknown; name?: unknown; parentId?: unknown; tags?: unkno
 
 export async function previewResource(args: {
   engine: JobEngine;
+  /** The project the mapping set belongs to; the resource is read there (v2 A1). */
+  project: string;
   rules: readonly TypeRule[];
   fields: readonly FieldMap[];
   resourceId: string;
 }): Promise<PreviewResult> {
-  const { engine, rules, fields, resourceId } = args;
+  const { engine, rules, fields, resourceId, project } = args;
   const origin = { kind: 'ui', tool: 'mappings-preview' } as const;
   let reads = 0;
   const read = async (id: string): Promise<Resource> => {
     reads++;
-    const r = await engine.run('getResource', { path: { resourceId: id } }, { origin, priority: 'P0' });
+    const r = await engine.run(
+      'getResource',
+      { path: { resourceId: id } },
+      { origin, priority: 'P0', project },
+    );
     if (r.status !== 'succeeded')
       throw new JobsError('BRIDGE_ERROR', `Could not read resource ${id} now (${r.status})`);
     return r.result ?? {};
