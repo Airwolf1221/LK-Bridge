@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase } from '../../src/db/open.js';
+import { ProjectStore } from '../../src/projects/index.js';
 
 const deployDir = new URL('../../deploy/', import.meta.url).pathname;
 const have = (cmd: string) => spawnSync(cmd, ['--version'], { stdio: 'ignore' }).status === 0;
@@ -46,8 +47,16 @@ describe.skipIf(!tools)('backup.sh and restore.sh (chunk 8)', () => {
     // The bridge's database, open, with rows still in the WAL.
     const db = openDatabase(dbPath);
     runMigrations(db);
+    // v2 A1: journal rows belong to a registered project (migration 0600).
+    new ProjectStore(db, () => 1).insert({
+      id: 'proj_backup',
+      name: 'test',
+      displayName: null,
+      verifiedAt: 1,
+    });
     db.prepare(
-      `INSERT INTO write_journal (at, op_id, risk, target_kind, bytes) VALUES (1, 'createResource', 'safe', 'resource', 0)`,
+      `INSERT INTO write_journal (project_id, at, op_id, risk, target_kind, bytes)
+       VALUES ('proj_backup', 1, 'createResource', 'safe', 'resource', 0)`,
     ).run();
     db.prepare(`INSERT INTO runtime_settings (key, value, updated_at) VALUES ('k', '"before"', 1)`).run();
     expect(existsSync(`${dbPath}-wal`)).toBe(true);
@@ -85,7 +94,9 @@ describe.skipIf(!tools)('backup.sh and restore.sh (chunk 8)', () => {
       expect(restored.prepare(`SELECT value FROM runtime_settings WHERE key = 'k'`).get()).toEqual({
         value: '"before"',
       });
-      expect(restored.prepare('SELECT COUNT(*) AS n FROM write_journal').get()).toEqual({ n: 1 });
+      expect(restored.prepare('SELECT project_id FROM write_journal').all()).toEqual([
+        { project_id: 'proj_backup' },
+      ]);
     } finally {
       restored.close();
     }
