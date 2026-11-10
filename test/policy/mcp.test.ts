@@ -178,9 +178,10 @@ describe('consent screen: profile and scope', () => {
     expect(html).not.toContain('<img src=x');
     expect(html).toContain('&#60;img src=x onerror=alert(1)&#62; Claude');
     expect(html).toContain('untrusted name');
-    expect(consentDefaults(html)).toMatchObject({ new_label: 'claude', new_kind: 'claude', scope: 'read' });
-    expect(html).toContain('name="scope" value="read" checked');
-    expect(html).not.toMatch(/value="(propose|write)" checked/);
+    // ADR 0033: the preselected scope radio is always "keep"; for a new profile it resolves to the default (read).
+    expect(consentDefaults(html)).toMatchObject({ new_label: 'claude', new_kind: 'claude', scope: 'keep' });
+    expect(html).toContain('name="scope" value="keep" checked');
+    expect(html).not.toMatch(/value="(read|propose|write)" checked/);
   });
 
   it('suggests chatgpt for chatgpt.com and claude-code for loopback', async () => {
@@ -299,10 +300,10 @@ describe("consent keeps an existing profile's scope unless the owner confirms a 
     const chatgpt = profile('chatgpt', 'write');
     const before = scopeAudits(chatgpt.id).length;
     const c = await consentPage(CHATGPT, 'ChatGPT');
-    expect(consentDefaults(c.page.html)).toMatchObject({ profile: chatgpt.id, scope: 'write' });
-    expect(c.page.html).toContain('name="scope" value="write" checked');
-    expect(c.page.html).not.toMatch(/value="(read|propose)" checked/);
-    expect(c.page.html).toContain('(its current scope)');
+    expect(consentDefaults(c.page.html)).toMatchObject({ profile: chatgpt.id, scope: 'keep' });
+    expect(c.page.html).toContain('name="scope" value="keep" checked');
+    expect(c.page.html).not.toMatch(/value="(read|propose|write)" checked/);
+    expect(c.page.html).toContain('Keep the chosen profile’s current scope');
     await finish(c); // the page's own defaults, unchanged
     expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
     expect(scopeAudits(chatgpt.id).length).toBe(before);
@@ -375,12 +376,59 @@ describe("consent keeps an existing profile's scope unless the owner confirms a 
     const chatgpt = profile('chatgpt', 'write');
     const other = profile('chatgpt-spare', 'read');
     const c = await consentPage(CHATGPT, 'ChatGPT');
-    expect(consentDefaults(c.page.html).scope).toBe('write'); // preselected for "chatgpt"
-    const r = await post(c, { profile: other.id, scope: 'write' }); // only the profile select was changed
+    expect(consentDefaults(c.page.html).scope).toBe('keep'); // follows whichever profile is chosen (ADR 0033)
+    // Only the profile select was changed: the scope is still "keep", so the other profile asks for nothing and keeps its own.
+    const kept = await post(c, { profile: other.id, scope: 'keep' });
+    expect(kept.status).toBe(303);
+    expect(new URL(kept.headers.get('location')!).searchParams.get('code')).toBeTruthy();
+    expect(bridge.policy.store.getProfile(other.id)!.scope).toBe('read');
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
+    // An EXPLICIT scope that differs from the other profile's still asks first, and changes nothing yet.
+    const d = await consentPage(CHATGPT, 'ChatGPT');
+    const r = await post(d, { profile: other.id, scope: 'write' });
     expect(r.status).toBe(200);
     expect(await r.text()).toContain('chatgpt-spare');
     expect(bridge.policy.store.getProfile(other.id)!.scope).toBe('read');
-    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('write');
+  });
+
+  it("keep resolves to the chosen profile's scope without any confirmation, and to the default for a new profile", async () => {
+    const chatgpt = profile('chatgpt', 'propose');
+    const before = scopeAudits(chatgpt.id).length;
+    const c = await consentPage(CHATGPT, 'ChatGPT');
+    const ok = await post(c, { profile: chatgpt.id, scope: 'keep' });
+    expect(ok.status).toBe(303); // no "Confirm scope change" page
+    expect(bridge.policy.store.getProfile(chatgpt.id)!.scope).toBe('propose');
+    expect(scopeAudits(chatgpt.id).length).toBe(before);
+    // A new profile: keep is the default scope (here propose), not read.
+    bridge.policy.commands.setDefaultScope('owner', 'propose');
+    try {
+      const d = await consentPage(CHATGPT, 'ChatGPT');
+      expect(
+        (await post(d, { profile: 'new', new_label: 'kept-new', new_kind: 'chatgpt', scope: 'keep' })).status,
+      ).toBe(303);
+      expect(bridge.policy.store.getProfileByLabel('kept-new')).toMatchObject({ scope: 'propose' });
+    } finally {
+      bridge.policy.commands.setDefaultScope('owner', 'read');
+    }
+    // A profile that vanished meanwhile: keep fails like any other choice, without using up the request.
+    const e = await consentPage(CHATGPT, 'ChatGPT');
+    const gone = await post(e, { profile: 'prof_gone', scope: 'keep' });
+    expect(gone.status).toBe(400);
+    expect(await gone.text()).toContain('no longer exists');
+  });
+
+  it('the new-profile fields are hidden by CSS :has() unless "New profile…" is selected, and need no script', async () => {
+    const c = await consentPage(CHATGPT, 'ChatGPT');
+    const html = c.page.html;
+    // The rule the browser applies, and the fallback: visible under a heading wherever :has() is unsupported.
+    expect(html).toContain('@supports selector(:has(*)){');
+    expect(html).toContain('.new-profile{display:none}');
+    expect(html).toContain('form:has(#profile option[value="new"]:checked) .new-profile{display:block}');
+    expect(html).toMatch(
+      /<div class="new-profile">\s*<h3>Only for New profile…<\/h3>\s*<label for="new_label">New profile label<\/label>[^\n]*\s*<label for="new_kind">New profile kind<\/label>[\s\S]*?<\/select>\s*<\/div>/,
+    );
+    // The fields sit inside the form, after the profile select; no script was added.
+    expect(html).not.toMatch(/<script/i);
   });
 
   it('a new profile defaults to read, and follows the configured default scope', async () => {
@@ -390,16 +438,18 @@ describe("consent keeps an existing profile's scope unless the owner confirms a 
     expect(consentDefaults(c.page.html)).toMatchObject({
       profile: 'new',
       new_label: 'claude-code',
-      scope: 'read',
+      scope: 'keep', // ADR 0033: "keep" resolves to the default scope for a new profile
     });
+    expect(c.page.html).toContain('A new profile starts at read');
     bridge.policy.commands.setDefaultScope('owner', 'propose');
     try {
       const d = await consentPage(LOOPBACK, 'Claude Code');
-      expect(consentDefaults(d.page.html)).toMatchObject({ profile: 'new', scope: 'propose' });
+      expect(consentDefaults(d.page.html)).toMatchObject({ profile: 'new', scope: 'keep' });
+      expect(d.page.html).toContain('A new profile starts at propose');
     } finally {
       bridge.policy.commands.setDefaultScope('owner', 'read');
     }
-    await finish(c); // the first page's defaults: a new profile at read
+    await finish(c); // the first page's defaults: a new profile at the default scope, read
     expect(bridge.policy.store.getProfileByLabel('claude-code')).toMatchObject({
       kind: 'claude-code',
       scope: 'read',

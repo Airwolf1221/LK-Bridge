@@ -655,7 +655,7 @@ function otherTools(deps: ToolDeps) {
       access: 'read',
       description:
         'Looks up the write journal: EVERY write the bridge has sent (creates, inserts, updates and deletes), newest first, with ' +
-        'its operation, target, time, outcome, principal, profile and approver. Destructive writes also keep a pre-image ' +
+        'its operation, target, time, outcome, principal (the connection’s name, with “removed <date>” once the owner has removed it), profile and approver. Destructive writes also keep a pre-image ' +
         '(previous blocks, board, metadata, or ids). Use it to see what changed and who changed it: it shows every connection’s ' +
         'writes, so agents can cross-check each other; job ids appear on your own entries only. Filter by resource, document, ' +
         'target id, operation, principal, profile or outcome; page older entries with before (the nextBefore of the previous page). ' +
@@ -748,6 +748,8 @@ function otherTools(deps: ToolDeps) {
                 includePreImage: includePreImage === true,
               });
           const pageSize = limit ?? 10;
+          // A removed connection is still named (from its tombstone): never a bare id, never an empty name.
+          const names = deps.principalNames?.(entries.map((e) => e.principalId));
           const body = {
             count: entries.length,
             // Paging (chunk 8): the journal records every write, so there are many entries; ask again with before.
@@ -769,6 +771,7 @@ function otherTools(deps: ToolDeps) {
               ...(e.operation !== null && e.operation !== undefined ? { operation: e.operation } : {}),
               jobId: e.principalId === who ? e.jobId : null,
               principalId: e.principalId,
+              principal: names?.get(e.principalId)?.name ?? `${e.profile} connection`,
               profile: e.profile,
               approvedBy: e.approvedBy,
               mine: e.principalId === who,

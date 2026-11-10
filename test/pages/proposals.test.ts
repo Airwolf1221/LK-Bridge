@@ -182,6 +182,24 @@ describe('approval', () => {
     expect(methods(before)).toEqual(['GET', 'GET']); // the re-read and the in-lock read; no PUT
     expect(w.stored('miyabi').blocks.at(-1)).toMatchObject({ id: 'race' });
   });
+  it('a proposal conflicted at execution (executing → conflicted) can be rejected, with its conflict details kept', async () => {
+    const r = await call({ page: 'miyabi01', mode: 'append', markdown: 'Raced again.' });
+    w.after('miyabi', 'GET', 0, () => w.outsideEdit('miyabi', (b) => b.push(p('race2', 'App edit.'))));
+    await commands().approve('owner', r.body.proposalId);
+    const d = (await waitFor(r.body.proposalId, ['executed', 'failed', 'conflicted'])) as any;
+    expect(d.state).toBe('conflicted');
+    const rejected = commands().reject('owner', r.body.proposalId, 'The page moved on') as any;
+    expect(rejected).toMatchObject({
+      state: 'rejected',
+      rejectReason: 'The page moved on',
+      decidedBy: 'owner',
+    });
+    expect(rejected.conflict.reason).toMatch(/inside the page’s lock/);
+    const audit = commands()
+      .listAudit('owner', { action: 'proposal.reject' })
+      .find((a: any) => a.target === r.body.proposalId);
+    expect(audit).toMatchObject({ before: { state: 'conflicted' } });
+  });
   it('an outside write between the approved write and its verify read is caught by verify, and shown on the proposal', async () => {
     const r = await call({ page: 'miyabi01', mode: 'append', markdown: 'Verified?' });
     w.after('miyabi', 'PUT', 0, () => w.outsideEdit('miyabi', (b) => b.push(p('late', 'Right after.'))));

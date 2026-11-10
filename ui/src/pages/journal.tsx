@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { qs } from '../api';
 import { Badge, CopyButton, Empty, ErrorNote, Json, Loading, PageHeader } from '../components';
-import { fmtBytes, fmtTime } from '../format';
+import { fmtBytes, fmtTime, principalText, type PrincipalNames } from '../format';
 import { useApi } from '../hooks';
 import { useProject, useScopedApi } from '../project';
 import { Link } from '../router';
@@ -39,9 +39,12 @@ export function JournalPage() {
   const [open, setOpen] = useState<number | null>(null);
   const { selected } = useProject();
   const clients = useApi<ClientsResponse>('/clients');
-  const list = useScopedApi<{ entries: JournalEntry[]; hasMore: boolean; nextBefore: number | null }>(
-    `/journal${qs({ ...f, limit: 100, ...(before !== undefined ? { before } : {}) })}`,
-  );
+  const list = useScopedApi<{
+    entries: JournalEntry[];
+    hasMore: boolean;
+    nextBefore: number | null;
+    principals?: PrincipalNames;
+  }>(`/journal${qs({ ...f, limit: 100, ...(before !== undefined ? { before } : {}) })}`);
   const detail = useScopedApi<{ entry: JournalEntry }>(open === null ? null : `/journal/${open}`);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
     setCursors([]);
@@ -55,6 +58,7 @@ export function JournalPage() {
       [
         e.opId,
         e.principalId,
+        principalText(e.principalId, list.data?.principals, e.profile),
         e.profile,
         e.approvedBy,
         e.targetId,
@@ -177,7 +181,9 @@ export function JournalPage() {
                       {e.documentId ?? e.targetId ?? e.resourceId ?? '–'}
                     </div>
                   </td>
-                  <td className="mono small-text">{e.principalId}</td>
+                  <td title={e.principalId}>
+                    {principalText(e.principalId, list.data?.principals, e.profile)}
+                  </td>
                   <td>{e.profile}</td>
                   <td>
                     {e.approvedBy ? (

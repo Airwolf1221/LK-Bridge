@@ -1,4 +1,5 @@
 import { SCOPE_DESCRIPTIONS } from './scopes.js';
+import { KEEP_SCOPE, type ExistingConnection } from './services.js';
 
 /** Server-rendered pages for login, consent and errors. All dynamic text is HTML-escaped. */
 
@@ -29,8 +30,32 @@ select{width:100%;padding:.6rem;border:1px solid var(--line);border-radius:6px;b
 fieldset{border:1px solid var(--line);border-radius:8px;padding:.75rem 1rem;margin:1rem 0}legend{font-weight:600;padding:0 .25rem}
 label.choice{display:flex;gap:.5rem;align-items:flex-start;font-weight:400;margin:.5rem 0}
 label.choice input{width:auto;margin-top:.3rem}
+
+/* Hotfix (ADR 0033): the new-profile fields matter only when "New profile…" is chosen. The page works without
+   JavaScript (the CSP allows none): where :has() is supported the fields are hidden until that option is selected;
+   anywhere else they stay visible under their heading "Only for New profile…". */
+@supports selector(:has(*)){
+.new-profile{display:none}
+form:has(#profile option[value="new"]:checked) .new-profile{display:block}
+}
+.new-profile{margin-top:.5rem}
+.new-profile h3{font-size:.95rem;margin:.5rem 0 0}
+.existing label.choice{margin:.6rem 0}.existing .muted{display:block}
 .badge{display:inline-block;font-size:.75rem;font-weight:600;padding:0 .4rem;border-radius:4px;background:var(--warn-bg);color:var(--warn-ink)}
 `;
+
+/** `10 Nov 2026, 14:02`: dates on these pages always carry the year (British English, the owner's time zone). */
+export function formatWhen(ms: number): string {
+  return new Date(ms).toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'Europe/London',
+  });
+}
 
 function layout(title: string, body: string): string {
   return `<!doctype html>
@@ -95,6 +120,11 @@ export interface ConsentView {
   readonly scopes: readonly string[];
   /** The policy profile and scope choice (src/policy). Omitted: no profile choice is shown. */
   readonly profiles?: ConsentProfileView;
+  /**
+   * The active connections of this same application (ADR 0033), offered for replacement: each is ticked by default and
+   * revoked only when the new connection's authorisation code is exchanged. Empty or omitted: nothing is shown.
+   */
+  readonly existing?: readonly ExistingConnection[];
 }
 
 export interface ConsentProfileView {
@@ -115,10 +145,13 @@ export interface ConsentProfileView {
   readonly defaultScope: string;
 }
 
-/** The scope the page preselects: the suggested existing profile's current scope, else the default for new ones. */
-export function preselectedScope(p: ConsentProfileView): string {
-  const existing = p.options.find((o) => o.label.toLowerCase() === p.suggested.label.toLowerCase());
-  return existing ? existing.scope : p.defaultScope;
+/**
+ * The scope radio the page preselects: always `keep` (ADR 0033), whichever profile is chosen. `keep` resolves on the
+ * server to the chosen existing profile's current scope, or to the default scope for a new profile, so choosing another
+ * profile in the menu can never leave a stale scope selected that would ask for a scope-change confirmation.
+ */
+export function preselectedScope(_p: ConsentProfileView): string {
+  return KEEP_SCOPE;
 }
 
 const SCOPE_CHOICES: Readonly<Record<string, string>> = {
@@ -143,26 +176,50 @@ function renderProfileChoice(p: ConsentProfileView): string {
     )
     .join('');
   const checked = preselectedScope(p);
-  const scopes = Object.entries(SCOPE_CHOICES)
+  const explicit = Object.entries(SCOPE_CHOICES)
     .map(
       ([v, text]) =>
-        `<label class="choice"><input type="radio" name="scope" value="${v}"${v === checked ? ' checked' : ''}><span><strong>${v}</strong>${existing && v === existing.scope ? ' (its current scope)' : ''}: ${escapeHtml(text.slice(text.indexOf(':') + 2))}</span></label>`,
+        `<label class="choice"><input type="radio" name="scope" value="${v}"${v === checked ? ' checked' : ''}><span><strong>${v}</strong>: ${escapeHtml(text.slice(text.indexOf(':') + 2))}</span></label>`,
     )
     .join('');
+  const keep = `<label class="choice"><input type="radio" name="scope" value="${KEEP_SCOPE}"${checked === KEEP_SCOPE ? ' checked' : ''}><span><strong>Keep the chosen profile’s current scope</strong>: changes nothing for an existing profile; a new profile starts at ${escapeHtml(p.defaultScope)}, the default for new connections.</span></label>`;
   const preselectNote = existing
-    ? `<p class="muted">Preselected: the current scope of profile “${escapeHtml(existing.label)}”, so approving without changing anything leaves it as it is. A new profile starts at ${escapeHtml(p.defaultScope)}.</p>`
-    : `<p class="muted">A new profile starts at ${escapeHtml(p.defaultScope)}, the default for new connections.</p>`;
+    ? `<p class="muted">Preselected: keep the current scope of whichever profile is chosen (profile “${escapeHtml(existing.label)}” is currently ${escapeHtml(existing.scope)}), so approving without changing anything leaves its scope as it is. Choosing read, propose or write below sets that scope on the chosen profile, after you confirm.</p>`
+    : `<p class="muted">Preselected: keep the current scope of the chosen profile. A new profile starts at ${escapeHtml(p.defaultScope)}, the default for new connections.</p>`;
   return `<fieldset><legend>Profile</legend>
 <p class="muted">The connection acts under a profile. Permissions belong to the profile and apply at once to every connection that uses it.</p>
 <label for="profile">Use profile</label>
 <select id="profile" name="profile">${options}<option value="new"${existing ? '' : ' selected'}>New profile…</option></select>
+<div class="new-profile">
+<h3>Only for New profile…</h3>
 <label for="new_label">New profile label</label><input id="new_label" name="new_label" value="${escapeHtml(p.suggested.label)}" maxlength="64">
 <label for="new_kind">New profile kind</label><select id="new_kind" name="new_kind">${kinds}</select>
+</div>
 </fieldset>
 <fieldset><legend>Scope</legend>
 <p class="muted">Applies to the chosen profile, so it also changes what other connections on that profile may do. Changing an existing profile’s scope asks you to confirm first.</p>
 ${preselectNote}
-${scopes}
+${keep}
+${explicit}
+</fieldset>`;
+}
+
+/**
+ * "This application's existing connections" (ADR 0033): the same application's other active connections, ticked by
+ * default. Nothing is revoked at approval: the ticked ones are revoked when the new connection's code is exchanged.
+ */
+function renderExisting(list: readonly ExistingConnection[]): string {
+  if (list.length === 0) return '';
+  const rows = list
+    .map(
+      (c) =>
+        `<label class="choice"><input type="checkbox" name="replace" value="${escapeHtml(c.id)}" checked><span><strong>${escapeHtml(c.label)}</strong>
+<span class="muted">Profile: ${escapeHtml(c.profile ?? 'none')} · created ${escapeHtml(formatWhen(c.createdAt))} · last used ${c.lastUsedAt === null ? 'never' : escapeHtml(formatWhen(c.lastUsedAt))}</span></span></label>`,
+    )
+    .join('');
+  return `<fieldset class="existing"><legend>This application's existing connections</legend>
+<p class="muted">Ticked connections are revoked as soon as this new connection is issued. Untick one to keep it, for example a second device or a separate Claude Code session.</p>
+${rows}
 </fieldset>`;
 }
 
@@ -178,6 +235,8 @@ export interface ScopeConfirmView {
   readonly to: string;
   readonly connections: number;
   readonly token: string;
+  /** The existing connections the owner ticked for replacement: carried through the confirmation unchanged. */
+  readonly replace?: readonly string[];
 }
 
 export function renderScopeConfirm(v: ScopeConfirmView): string {
@@ -198,6 +257,7 @@ export function renderScopeConfirm(v: ScopeConfirmView): string {
 <input type="hidden" name="decision" value="approve">
 <input type="hidden" name="profile" value="${escapeHtml(v.profileId)}">
 <input type="hidden" name="confirm_scope_change" value="${escapeHtml(v.token)}">
+${(v.replace ?? []).map((id) => `<input type="hidden" name="replace" value="${escapeHtml(id)}">`).join('\n')}
 <div class="actions"><button class="primary" type="submit" name="scope" value="${escapeHtml(v.to)}">Change to ${escapeHtml(v.to)} and approve</button>
 <button type="submit" name="scope" value="${escapeHtml(v.from)}">Keep ${escapeHtml(v.from)} and approve</button></div>
 </form>
@@ -238,6 +298,7 @@ ${loopbackWarning}
 <input type="hidden" name="request_id" value="${escapeHtml(v.requestId)}">
 <input type="hidden" name="csrf_token" value="${escapeHtml(v.csrf)}">
 ${v.profiles ? renderProfileChoice(v.profiles) : ''}
+${v.profiles && v.existing ? renderExisting(v.existing) : ''}
 <div class="actions"><button class="primary" type="submit" name="decision" value="approve">Approve</button>
 <button type="submit" name="decision" value="deny">Deny</button></div>
 </form>`,

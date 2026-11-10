@@ -46,7 +46,12 @@ export const registerPolicy: Register = (api, ctx) => {
       ...(q.before !== undefined ? { before: q.before } : {}),
       limit: q.limit,
     });
-    return { project, proposals: redactDeep(proposals), hasMore: proposals.length === q.limit };
+    return {
+      project,
+      proposals: redactDeep(proposals),
+      hasMore: proposals.length === q.limit,
+      principals: ctx.principals(proposals.map((p) => p.principalId)),
+    };
   });
 
   const projectQuery = z.object({ project: projectParam });
@@ -75,13 +80,15 @@ export const registerPolicy: Register = (api, ctx) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     // Block trees and pre-states can be large; the diff view needs them whole, so only secrets are removed here.
+    const proposal = actions.getProposal(project.id, id);
     return {
-      proposal: redactDeep(actions.getProposal(project.id, id), {
+      proposal: redactDeep(proposal, {
         maxString: 200_000,
         maxItems: 5000,
         maxKeys: 1000,
         maxDepth: 64,
       }),
+      principals: ctx.principals([proposal.principalId]),
     };
   });
 
@@ -135,6 +142,11 @@ export const registerPolicy: Register = (api, ctx) => {
     connections: redactDeep(cmd.listGrantsAndPats('owner')),
     kinds: PROFILE_KINDS,
     scopes: SCOPES,
+    // Hotfix (ADR 0033): the connection settings, in days (0 = never).
+    settings: {
+      autoRemoveDays: cmd.getAutoRemoveDays('owner'),
+      staleAfterDays: cmd.getStaleAfterDays('owner'),
+    },
   }));
 
   api.post('/clients/profiles', (req) => {
@@ -178,6 +190,31 @@ export const registerPolicy: Register = (api, ctx) => {
   api.post('/clients/connections/:id/revoke', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     return { revoked: actions.revokeConnection(id) };
+  });
+
+  // ADR 0033: removing revoked and expired connections. An active connection is refused (409 CONNECTION_ACTIVE).
+  // The fixed path is registered before `:id/remove`, so `remove-inactive` is never read as an id.
+  api.post('/clients/connections/remove-inactive', () => actions.removeInactiveConnections());
+
+  api.post('/clients/connections/:id/remove', (req) => {
+    const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    return { removed: actions.removeConnection(id) };
+  });
+
+  /** Revokes the stale connections of one profile (unused for `settings.staleAfterDays`). */
+  api.post('/clients/connections/revoke-stale', (req) => {
+    const b = parseInput(z.object({ profileId: idSchema }), req.body);
+    return actions.revokeStaleConnections(b.profileId);
+  });
+
+  const days = z.object({ days: z.number().int().min(0).max(3650) });
+  api.put('/clients/settings/auto-remove-days', (req) => {
+    const b = parseInput(days, req.body);
+    return { autoRemoveDays: actions.setAutoRemoveDays(b.days) };
+  });
+  api.put('/clients/settings/stale-after-days', (req) => {
+    const b = parseInput(days, req.body);
+    return { staleAfterDays: actions.setStaleAfterDays(b.days) };
   });
 
   /** The one response that carries a token value, once. Nothing stores or logs it; only its hash is kept. */

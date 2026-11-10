@@ -52,6 +52,55 @@ the agent guide's "Editing facts and links" and "Canon and approval" in [bridge-
   verification recording a difference; two projects isolated, the admin routes), `test/ui/canon.test.tsx`, and the
   Playwright smoke test's canonical approval.
 
+## Unreleased: hotfix, removing connections, replace on reconnect, operation discovery (10 November 2026)
+
+Found by the owner while testing C1 and B2 ([ADR 0033](adr/0033-removing-connections-replace-on-reconnect-and-operation-discovery.md);
+the owner-facing rules in [policy.md](policy.md)). Migration 1400. Deploy normally; `--update-self` is not needed.
+
+- **Removing connections.** A revoked or expired connection (grant or PAT) can be removed from Clients & Access:
+  one transaction deletes its credentials (a grant's token family with every refresh token, access token and code; a
+  PAT's row; `auth_clients` untouched), writes a **tombstone** (`removed_connections`) and the audit row
+  `connection.remove` (`before`: the tombstone fields, `after`: `null`). An active connection is refused
+  (`409 CONNECTION_ACTIVE`). Single Remove needs no confirmation; "Remove all revoked and expired (N)" (only when N > 0)
+  lists the rows first. API: `POST /api/admin/clients/connections/:id/remove`, `POST .../remove-inactive` (returns the
+  count), `PUT /api/admin/clients/settings/auto-remove-days`.
+- **History still names them.** The journal, proposals, jobs and errors pages and `bridge_journal_lookup` (new `principal`
+  field) name a removed connection from its tombstone, for example "ChatGPT (removed 10 Nov 2026)"; never a bare id.
+- **Automatic removal.** `connections.auto_remove_days` (default 30, `0` = never; the count starts at `revoked_at`, or at
+  `expires_at` for a connection that expired unrevoked); new maintenance job `connection-removal`, daily at 04:00 London,
+  audited as `connection.remove` by the system. The auth prune no longer deletes grants silently.
+- **Stale.** `connections.stale_after_days` (default 14, `0` = never): a "stale" badge, and "Revoke stale (N)" per
+  profile with a confirmation (`PUT .../settings/stale-after-days`, `POST .../connections/revoke-stale`).
+- **Replace on reconnect.** The consent page lists the same application's active connections (same `client_id` for a CIMD
+  client, else the same verified redirect origin; the name never decides), ticked by default. Nothing is revoked at
+  approval: the ticked ids ride on the authorisation code (`auth_codes.replaces`) and are revoked only when the code is
+  exchanged successfully (re-checked: still active, still the same application; `replaced by <new grant>`; audited
+  `connection.revoke`, `via: 'replaced'`). The access token is now signed before anything is stored.
+- **Consent page clarity.** The new-profile label and kind show only when "New profile…" is selected (CSS `:has()`, no
+  script; visible under "Only for New profile…" without `:has()`). A first scope radio, "Keep the chosen profile's
+  current scope" (`keep`), is preselected whichever profile is chosen: the profile's current scope, or the default for a
+  new one, never a scope-change confirmation. An explicit read, propose or write still asks (F-15). CSRF unchanged.
+- **Dates.** `fmtTime` adds the year when it is not the current one ("3 Nov 2027, 02:12:35"). The revoked "Claude Code
+  (PC)" PAT's expiry is 3 Nov 2027 (8 Nov 2026 + 360 days, checked against `auth_pats.expires_at`). The consent page's
+  connection list always shows the year.
+- **Operation discovery without the low-level tools.** `UNKNOWN_OPERATION` (in `lk_api_read`, `lk_api_write`,
+  `lk_api_describe_operation`, `lk_api_paginate_all` and now `lk_api_batch`, which refuses the batch up front naming the
+  call) suggests up to 5 close ids (edit distance plus append/add/create → insert, edit/set → update, remove → delete,
+  fetch → get/list: `appendDocumentBlocks` → `insertBlock`, …) and names the low-level tools only when the profile shows
+  them. `get_bridge_guide` (and the MCP resource) ends with an **Operations** section generated from the registry: every
+  operation, grouped by tag, with kind and risk.
+- **Tool-list caching** is documented (Clients & Access, `policy.md`, the bridge guide): claude.ai keeps its own copy of a
+  connector's tool list, so a visibility change shows only after disconnecting and reconnecting the connector (observed on
+  10 November 2026, not a guarantee); ChatGPT: Plugins, the bridge, Refresh.
+- **Conflicted proposals can be rejected** (addendum). `reject` accepts `pending` or `conflicted` as one compare-and-set; the
+  audit row's `before` records the real state; any other state: "Proposal … is X; only pending or conflicted proposals can
+  be rejected"; `bulkReject` follows. A rejected conflicted proposal keeps its `conflict` details, gets the reason,
+  `decided_by: 'owner'` and `finished_at`, moves to History, is prunable after the retention, and the proposer sees
+  `rejected` with the reason. They were stuck for good before.
+- Tests: `test/admin/connections.test.ts`, `test/policy/replace.test.ts`, `test/policy/mcp.test.ts` (consent),
+  `test/tools/discovery.test.ts`, `test/ui/units.test.ts`, `test/ui/access.test.tsx`, `test/policy/proposals.test.ts`,
+  `test/pages/proposals.test.ts`, `test/maintenance/jobs.test.ts`.
+
 ## Unreleased: v2 C1, write_page (10 November 2026)
 
 The main way agents change the owner's pages ([ADR 0031](adr/0031-write-page.md); the tool in

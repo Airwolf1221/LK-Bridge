@@ -18,6 +18,7 @@ import type { TreeQueries } from '../../tree/index.js';
 import {
   BudgetExhaustedError,
   JobsError,
+  UnknownOperationError,
   LkOperationError,
   PolicyDeniedError,
   UnsupportedBlockLossError,
@@ -36,6 +37,7 @@ import type {
 } from '../../projects/selection.js';
 import type { ProjectView } from '../../projects/types.js';
 import type { McpToolResult } from '../server.js';
+import { unknownOperationBody } from './discovery.js';
 import type { GuardOptions } from './upload-http.js';
 
 /** The projects as the tools see them (v2 A1): `ProjectRegistry` and `StaticProjects` both provide this. */
@@ -71,6 +73,11 @@ export interface ToolDeps {
   /** v2 B2: the tree, registry and asset tree (the Discover and Read tools). */
   readonly services?: DiscoverServices | undefined;
   readonly version: string;
+  /**
+   * Hotfix (ADR 0033): names principal ids (a live connection's label, or a removed connection's tombstone with the
+   * day it was removed). Without it (tests of the tool layer alone) tools fall back to the profile.
+   */
+  readonly principalNames?: ((ids: Iterable<string>) => Map<string, { readonly name: string }>) | undefined;
   /** LK_READ_ONLY as configured (the effective flag, which can be overridden at runtime, comes from the engine). */
   readonly configuredReadOnly: boolean;
   /** Test seam for the upload guard (resolver, CA, allowed addresses). Never set in production. */
@@ -232,6 +239,11 @@ export function errorFromThrown(e: unknown, deps: Pick<ProjectDeps, 'projects' |
   }
   if (e instanceof PolicyDeniedError) {
     return errorResult({ ...jsonOf(e), hint: 'This connection is not allowed to do that.' }, deps);
+  }
+  if (e instanceof UnknownOperationError) {
+    // Raised deeper than a tool (a proposal's capture, a batch step): same suggestions, and the hint that never names a
+    // tool the caller might not see.
+    return errorResult(unknownOperationBody(e.opId, false), deps);
   }
   if (e instanceof JobsError) {
     return errorResult(jsonOf(e), deps);

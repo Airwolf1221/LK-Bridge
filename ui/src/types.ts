@@ -605,12 +605,16 @@ export interface Connection {
   expiresAt: number | null;
   revokedAt: number | null;
   active: boolean;
+  /** Active, but unused for longer than `settings.staleAfterDays`. */
+  stale: boolean;
 }
 
 export interface ClientsResponse {
   profiles: Profile[];
   defaultScope: Scope;
   connections: Connection[];
+  /** In days; 0 = never. */
+  settings: { autoRemoveDays: number; staleAfterDays: number };
   kinds: string[];
   scopes: Scope[];
 }

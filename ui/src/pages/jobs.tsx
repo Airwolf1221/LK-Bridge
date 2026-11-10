@@ -13,7 +13,16 @@ import {
   useAction,
   useConfirm,
 } from '../components';
-import { fmtAgo, fmtBytes, fmtDuration, fmtTime, pct, shortId } from '../format';
+import {
+  fmtAgo,
+  fmtBytes,
+  fmtDuration,
+  fmtTime,
+  pct,
+  principalText,
+  shortId,
+  type PrincipalNames,
+} from '../format';
 import { useApi, useNow, useReloadOn } from '../hooks';
 import { useProject, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
@@ -152,7 +161,7 @@ function JobList() {
   };
   const path = `/jobs${qs({ view: filters.view, status: filters.status, origin: filters.origin, profile: filters.profile, principalId: filters.principalId, limit: 100 })}`;
   const { selected, isSelected } = useProject();
-  const list = useScopedApi<{ jobs: Job[]; hasMore: boolean }>(path);
+  const list = useScopedApi<{ jobs: Job[]; hasMore: boolean; principals?: PrincipalNames }>(path);
   const clients = useApi<ClientsResponse>('/clients');
   const now = useNow();
   const { set } = list;
@@ -299,7 +308,11 @@ function JobList() {
                   </td>
                   <td>
                     {j.profile}
-                    <div className="muted small-text mono">{shortId(j.principalId, 14)}</div>
+                    {principalText(j.principalId, list.data?.principals, j.profile) !== j.profile && (
+                      <div className="muted small-text" title={j.principalId}>
+                        {principalText(j.principalId, list.data?.principals, j.profile)}
+                      </div>
+                    )}
                   </td>
                   <td>{fmtAgo(j.updatedAt, now)}</td>
                   <td>
@@ -453,12 +466,15 @@ function JobDetailView({ id }: { id: string }) {
   const { query } = useRoute();
   const { selected, withProject } = useProject();
   const project = query.get('project') ?? selected;
-  const d = useScopedApi<{ job: JobDetail }>(`/jobs/${encodeURIComponent(id)}`, project);
+  const d = useScopedApi<{ job: JobDetail; principals?: PrincipalNames }>(
+    `/jobs/${encodeURIComponent(id)}`,
+    project,
+  );
   const now = useNow();
   const { set } = d;
   useStreamEvent<{ type: string; job: Job }>('job', ({ job }) => {
     if (job.id !== id) return;
-    set((prev) => (prev ? { job: { ...prev.job, ...job } } : prev));
+    set((prev) => (prev ? { ...prev, job: { ...prev.job, ...job } } : prev));
   });
   useReloadOn(['step'], d.reload, 300, (e) => (e as { jobId?: unknown } | null)?.jobId === id);
   const [artifact, setArtifact] = useState<{ id: string; data: unknown } | null>(null);
@@ -514,7 +530,10 @@ function JobDetailView({ id }: { id: string }) {
               <div>
                 <dt>Principal</dt>
                 <dd>
-                  {job.profile} <span className="mono muted">{job.principalId}</span>
+                  {job.profile}{' '}
+                  <span className="muted" title={job.principalId}>
+                    {principalText(job.principalId, d.data?.principals, job.profile)}
+                  </span>
                 </dd>
               </div>
               {job.approvedBy && (

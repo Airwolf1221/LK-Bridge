@@ -48,9 +48,11 @@ export function ClientsPage({ session }: { session?: SessionInfo }) {
         on their very next call.
       </p>
       <DefaultScopeCard value={d.defaultScope} onSaved={c.reload} />
+      <ConnectionSettingsCard settings={d.settings} onSaved={c.reload} />
       <ProfilesCard profiles={d.profiles} kinds={d.kinds} onChanged={c.reload} />
       <section className="card" aria-labelledby="conn-h">
         <h2 id="conn-h">Connections, by profile</h2>
+        <RemoveInactive connections={d.connections} onChanged={c.reload} />
         {groups.length === 0 && <Empty>No connections yet.</Empty>}
         {groups.map(({ profile, connections }) => (
           <div key={profile?.id ?? 'none'} className="mt">
@@ -58,6 +60,14 @@ export function ClientsPage({ session }: { session?: SessionInfo }) {
               {profile ? profile.label : 'No profile'}{' '}
               {profile && (
                 <Badge tone={profile.scope === 'write' ? 'warn' : 'neutral'}>{profile.scope}</Badge>
+              )}
+              {profile && (
+                <RevokeStale
+                  profile={profile}
+                  stale={connections.filter((x) => x.stale)}
+                  staleAfterDays={d.settings.staleAfterDays}
+                  onChanged={c.reload}
+                />
               )}
             </h3>
             {connections.length === 0 ? (
@@ -75,7 +85,7 @@ export function ClientsPage({ session }: { session?: SessionInfo }) {
                       <th>Status</th>
                       <th>Profile</th>
                       <th>
-                        <span className="offscreen">Revoke</span>
+                        <span className="offscreen">Revoke or remove</span>
                       </th>
                     </tr>
                   </thead>
@@ -136,7 +146,15 @@ function ConnectionRow({
         ) : expired ? (
           <Badge tone="warn">expired</Badge>
         ) : conn.active ? (
-          <Badge tone="ok">active</Badge>
+          <>
+            <Badge tone="ok">active</Badge>
+            {conn.stale && (
+              <>
+                {' '}
+                <Badge tone="warn">stale</Badge>
+              </>
+            )}
+          </>
         ) : (
           <Badge>inactive</Badge>
         )}
@@ -191,8 +209,207 @@ function ConnectionRow({
             Revoke
           </Button>
         )}
+        {!conn.active && (
+          // No confirmation: the connection is already dead, and the tombstone and the audit log keep the record.
+          <Button
+            className="small"
+            variant="danger"
+            busy={busy}
+            onClick={() =>
+              void run(() => api.post(`/clients/connections/${conn.id}/remove`), 'Removed.').then(onChanged)
+            }
+          >
+            Remove
+          </Button>
+        )}
       </td>
     </tr>
+  );
+}
+
+/** The connections that are revoked or expired (what Remove would delete). */
+const inactiveOf = (connections: Connection[]) => connections.filter((x) => !x.active);
+
+function ConnectionList({ items }: { items: Connection[] }) {
+  return (
+    <ul>
+      {items.map((x) => (
+        <li key={x.id}>
+          <strong>{x.label}</strong>{' '}
+          <span className="muted small-text">
+            ({x.profile ?? 'no profile'}, created {fmtTime(x.createdAt)}
+            {x.revokedAt ? `, revoked ${fmtTime(x.revokedAt)}` : ''}
+            {!x.revokedAt && x.expiresAt ? `, expired ${fmtTime(x.expiresAt)}` : ''})
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** "Remove all revoked and expired (N)", only when there is something to remove; confirmed with the rows listed. */
+function RemoveInactive({ connections, onChanged }: { connections: Connection[]; onChanged: () => void }) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const dead = inactiveOf(connections);
+  if (dead.length === 0) return null;
+  return (
+    <p>
+      <Button
+        variant="danger"
+        busy={busy}
+        onClick={() => {
+          void confirm({
+            title: `Remove ${dead.length} revoked and expired ${dead.length === 1 ? 'connection' : 'connections'}?`,
+            message: (
+              <>
+                <p>
+                  Their credentials are deleted. The journal, proposals, jobs, errors and the audit log keep
+                  naming them as “removed”.
+                </p>
+                <ConnectionList items={dead} />
+              </>
+            ),
+            confirmLabel: `Remove ${dead.length}`,
+            danger: true,
+          }).then((ok) => {
+            if (ok)
+              void run(
+                () => api.post('/clients/connections/remove-inactive'),
+                `Removed ${dead.length}.`,
+              ).then(onChanged);
+          });
+        }}
+      >
+        Remove all revoked and expired ({dead.length})
+      </Button>
+    </p>
+  );
+}
+
+/** "Revoke stale (N)" for one profile: active connections unused for longer than the stale setting. */
+function RevokeStale({
+  profile,
+  stale,
+  staleAfterDays,
+  onChanged,
+}: {
+  profile: Profile;
+  stale: Connection[];
+  staleAfterDays: number;
+  onChanged: () => void;
+}) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  if (stale.length === 0) return null;
+  return (
+    <>
+      {' '}
+      <Button
+        className="small"
+        variant="danger"
+        busy={busy}
+        onClick={() => {
+          void confirm({
+            title: `Revoke ${stale.length} stale ${stale.length === 1 ? 'connection' : 'connections'} on “${profile.label}”?`,
+            message: (
+              <>
+                <p>
+                  Not used for {staleAfterDays} days or more. Each stops working at once; a client can connect
+                  again.
+                </p>
+                <ConnectionList items={stale} />
+              </>
+            ),
+            confirmLabel: `Revoke ${stale.length}`,
+            danger: true,
+          }).then((ok) => {
+            if (ok)
+              void run(
+                () => api.post('/clients/connections/revoke-stale', { profileId: profile.id }),
+                `Revoked ${stale.length}.`,
+              ).then(onChanged);
+          });
+        }}
+      >
+        Revoke stale ({stale.length})
+      </Button>
+    </>
+  );
+}
+
+/** Automatic removal of revoked and expired connections, and the stale threshold. Both in days; 0 = never. */
+function ConnectionSettingsCard({
+  settings,
+  onSaved,
+}: {
+  settings: { autoRemoveDays: number; staleAfterDays: number };
+  onSaved: () => void;
+}) {
+  const { run, busy } = useAction();
+  const [auto, setAuto] = useState(String(settings.autoRemoveDays));
+  const [stale, setStale] = useState(String(settings.staleAfterDays));
+  const valid = (v: string) => /^\d{1,4}$/.test(v) && Number(v) <= 3650;
+  return (
+    <section className="card" aria-labelledby="connset-h">
+      <h2 id="connset-h">Old connections</h2>
+      <div className="row">
+        <label htmlFor="auto-remove-days">Remove revoked and expired connections automatically after</label>
+        <input
+          id="auto-remove-days"
+          type="number"
+          min={0}
+          max={3650}
+          value={auto}
+          onChange={(e) => setAuto(e.target.value)}
+          style={{ width: '6rem' }}
+        />
+        <span>days (0 = never)</span>
+        <Button
+          busy={busy}
+          disabled={!valid(auto) || Number(auto) === settings.autoRemoveDays}
+          onClick={() =>
+            void run(
+              () => api.put('/clients/settings/auto-remove-days', { days: Number(auto) }),
+              'Automatic removal saved.',
+            ).then(onSaved)
+          }
+        >
+          Save
+        </Button>
+      </div>
+      <div className="row">
+        <label htmlFor="stale-after-days">Mark a connection stale after</label>
+        <input
+          id="stale-after-days"
+          type="number"
+          min={0}
+          max={3650}
+          value={stale}
+          onChange={(e) => setStale(e.target.value)}
+          style={{ width: '6rem' }}
+        />
+        <span>days without use (0 = never)</span>
+        <Button
+          busy={busy}
+          disabled={!valid(stale) || Number(stale) === settings.staleAfterDays}
+          onClick={() =>
+            void run(
+              () => api.put('/clients/settings/stale-after-days', { days: Number(stale) }),
+              'Stale threshold saved.',
+            ).then(onSaved)
+          }
+        >
+          Save
+        </Button>
+      </div>
+      <p className="muted small-text">
+        The day count starts when a connection was revoked, or when it expired if it was never revoked.
+        Removing deletes its credentials; its name stays in the history as “removed”. Only revoked or expired
+        connections can be removed: revoke an active one first. The sweep runs daily (maintenance job
+        “Connection removal”).
+      </p>
+    </section>
   );
 }
 
@@ -341,6 +558,7 @@ function ProfilesCard({
                       checked={p.showLowLevelTools}
                       disabled={busy}
                       aria-label={`Show low-level tools to ${p.label}`}
+                      aria-describedby="tool-cache-hint"
                       onChange={(e) =>
                         void run(
                           () =>
@@ -365,8 +583,14 @@ function ProfilesCard({
         <code>lk_api_list_operations</code>, <code>lk_api_describe_operation</code>,{' '}
         <code>lk_api_paginate_all</code> and every <code>lk_op_*</code>). Hidden by default. Hiding only
         changes the tool list the agent is shown: a call to a hidden tool is still allowed or refused by the
-        profile’s scope exactly as before. ChatGPT needs a tool refresh (Plugins → the bridge → Refresh) after
-        you change this.
+        profile’s scope exactly as before.
+      </p>
+      <p className="muted" id="tool-cache-hint">
+        <strong>Tool lists are cached by the client.</strong> claude.ai keeps its own copy of a connector’s
+        tool list, so a change to tool visibility (the “Show low-level tools” checkbox, or a scope change that
+        hides or shows the write tools) shows in claude.ai only after the connector is disconnected and
+        reconnected in claude.ai’s settings. New chats alone were not enough (observed on 10 November 2026;
+        not a guarantee). In ChatGPT, use Plugins, then the bridge, then Refresh.
       </p>
       <h3>New profile</h3>
       <div className="field-row">

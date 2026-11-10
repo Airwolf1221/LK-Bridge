@@ -219,6 +219,22 @@ included).
 - **Never loop on a budget error.** `BUDGET_EXHAUSTED` names the time to retry: wait until then.
 - Several pages at once: `get_resources` reads up to 25 as one job, and shows an estimate first when it is large.
 
+## Tool lists and the Operations list
+
+The tools you are shown depend on your profile. The owner can show or hide the low-level tools
+(`lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_op_*`), and a profile's scope decides
+whether the write tools are shown. Hiding is cosmetic: you can still run any operation through `lk_api_read`,
+`lk_api_write` and `lk_api_batch`, and policy decides what is allowed. If you do not have the low-level tools, the
+**Operations** section at the end of this guide lists every operation id, with its kind and risk. Use an id exactly as
+listed: an unknown id is refused with up to five close suggestions. `lk_api_describe_operation` gives an operation's
+schema when you can see it; either way `getBlock` and `getDocumentBlocks` show the current shape of real data.
+
+**Tool-list caching (for the person using the connector).** claude.ai keeps its own copy of a connector's tool list. On
+10 November 2026 a change to tool visibility (the "Show low-level tools" checkbox, or a scope change that hides or shows
+the write tools) appeared in claude.ai only after the connector was disconnected and reconnected in claude.ai's
+settings; new chats alone were not enough. (Observed, not a guarantee.) In ChatGPT, use Plugins, then the bridge, then
+Refresh.
+
 ## Proposals and the owner
 
 The bridge owner controls what each connection may do. A connection with scope `read` can only read. One with scope

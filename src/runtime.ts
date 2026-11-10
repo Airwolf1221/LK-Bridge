@@ -334,6 +334,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       selector,
       settings: o.toolsSettings,
       version: o.version,
+      principalNames: (ids) => policy.store.describePrincipals(ids),
       configuredReadOnly: config.lk.readOnly,
       uploadGuard,
       services: {

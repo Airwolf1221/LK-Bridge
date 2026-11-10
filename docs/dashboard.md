@@ -67,8 +67,19 @@ shell (`npm run projects`).
 Each profile row on **Clients & Access** has a **Low-level tools** checkbox (shown / hidden; hidden is the default). It
 controls only whether the raw LegendKeeper operation tools are listed to that profile's connections; the scope, not this
 box, decides what the profile may do. A change is audited (`profile.set_low_level_tools`) and applies at the agent's next
-tool listing. ChatGPT keeps its own copy of the tool list: after changing it, open ChatGPT's Plugins page, the bridge,
-and use **Refresh**. See [policy.md](policy.md#hiding-the-low-level-tools-v2-b2).
+tool listing. Clients keep their own copy of the tool list: claude.ai shows a change (this box, or a scope change that
+hides or shows the write tools) only after the connector is disconnected and reconnected in claude.ai's settings (observed
+on 10 November 2026, not a guarantee); in ChatGPT, open Plugins, the bridge, and use **Refresh**. The page says so beside
+the checkbox. See [policy.md](policy.md#hiding-the-low-level-tools-v2-b2).
+
+## Old connections (hotfix, ADR 0033)
+
+**Clients & Access** also shows, above the profile tables, "Remove all revoked and expired (N)" (only when N > 0, with a
+confirmation listing the rows), a **Remove** button on every revoked or expired row (no confirmation: the row is already
+dead, and the tombstone and the audit log keep the record), a **stale** badge on active connections unused for longer than
+the threshold, "Revoke stale (N)" per profile, and the two settings "Remove revoked and expired connections automatically
+after N days (0 = never)" (default 30) and "Mark a connection stale after N days" (default 14). Dates now carry the year
+when it is not the current one. See [policy.md](policy.md#removing-connections-stale-connections-and-automatic-removal-adr-0033).
 
 ## Account, and keys on the Projects page (OPS2)
 

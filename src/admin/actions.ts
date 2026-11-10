@@ -740,6 +740,15 @@ export function createAdminActions(d: AdminDeps) {
     setConnectionProfile: (connectionId: string, profileId: string) =>
       cmd.setConnectionProfile(OWNER, connectionId, profileId),
     revokeConnection: (connectionId: string) => cmd.revoke(OWNER, connectionId),
+    // ADR 0033: removal (with tombstones, audited by the command layer), stale revocation and the two settings.
+    removeConnection: (connectionId: string) => cmd.removeConnection(OWNER, connectionId),
+    removeInactiveConnections: () => cmd.removeInactiveConnections(OWNER),
+    revokeStaleConnections: (profileId: string) => {
+      const revoked = cmd.revokeStaleConnections(OWNER, profileId);
+      return { revoked: revoked.length, ids: revoked };
+    },
+    setAutoRemoveDays: (days: number) => cmd.setAutoRemoveDays(OWNER, days),
+    setStaleAfterDays: (days: number) => cmd.setStaleAfterDays(OWNER, days),
     /** The token is in the result once and nowhere else: the audit row and events carry no secret. */
     createPat(input: { name: string; profileId: string; expiresInDays?: number }): {
       token: string;

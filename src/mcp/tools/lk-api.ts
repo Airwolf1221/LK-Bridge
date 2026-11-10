@@ -8,6 +8,7 @@ import type { JobEngine, OpParams } from '../../jobs/index.js';
 import { getOperation, operations, type OperationDef } from '../../lk/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
+import { unknownOperationBody } from './discovery.js';
 import { canonicalBody } from './shape.js';
 import {
   costClass,
@@ -15,7 +16,6 @@ import {
   paramsSchema,
   rateCostText,
   referencedDefs,
-  suggestOperations,
   versionReader,
 } from './schemas.js';
 import {
@@ -62,18 +62,7 @@ export async function executeOne(
 ): Promise<McpToolResult> {
   const op = getOperation(input.operationId);
   if (!op) {
-    return errorResult(
-      {
-        code: 'UNKNOWN_OPERATION',
-        message: `Unknown LegendKeeper operation: ${input.operationId}`,
-        didYouMean: suggestOperations(
-          input.operationId,
-          operations.map((o) => o.operationId),
-        ),
-        hint: 'Use lk_api_list_operations to see all 89 operations.',
-      },
-      deps,
-    );
+    return errorResult(unknownOperationBody(input.operationId, ctx.showLowLevelTools === true), deps);
   }
   const right = toolFor(op);
   if (expected !== 'any' && right !== expected) {
@@ -203,17 +192,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
       withProject(deps, project, 'read', (pd) => {
         const op = getOperation(operationId);
         if (!op) {
-          return errorResult(
-            {
-              code: 'UNKNOWN_OPERATION',
-              message: `Unknown LegendKeeper operation: ${operationId}`,
-              didYouMean: suggestOperations(
-                operationId,
-                operations.map((o) => o.operationId),
-              ),
-            },
-            pd,
-          );
+          return errorResult(unknownOperationBody(operationId, ctx.showLowLevelTools === true), pd);
         }
         const reader = versionReader(op);
         const body = {
@@ -363,6 +342,18 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     handler: ({ calls, onError, title, project }, ctx) =>
       withProject(deps, project, 'write', async (pd) => {
+        // An unknown operation anywhere in the batch refuses the whole batch up front (nothing is queued or spent),
+        // with the same suggestions and hint a single call would get.
+        const unknown = calls.findIndex((c) => !getOperation(c.operationId));
+        if (unknown >= 0) {
+          return errorResult(
+            unknownOperationBody(calls[unknown]!.operationId, ctx.showLowLevelTools === true, {
+              callIndex: unknown,
+              message: `Unknown LegendKeeper operation: ${calls[unknown]!.operationId} (call ${unknown + 1} of ${calls.length}). Nothing was queued.`,
+            }),
+            pd,
+          );
+        }
         try {
           const r = await deps.engine.submit({
             kind: 'batch_ops',
@@ -407,16 +398,15 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
       withProject(deps, project, 'read', async (pd) => {
         const op = getOperation(operationId);
         if (!op || op.kind !== 'read' || !op.paged) {
+          const paged = operations.filter((o) => o.paged && o.kind === 'read').map((o) => o.operationId);
           return errorResult(
-            {
-              code: op ? 'NOT_PAGED' : 'UNKNOWN_OPERATION',
-              message: op
-                ? `${op.operationId} is not a paged read operation, so it cannot be paginated. (No budget was spent.)`
-                : `Unknown LegendKeeper operation: ${operationId}`,
-              pagedOperations: operations
-                .filter((o) => o.paged && o.kind === 'read')
-                .map((o) => o.operationId),
-            },
+            op
+              ? {
+                  code: 'NOT_PAGED',
+                  message: `${op.operationId} is not a paged read operation, so it cannot be paginated. (No budget was spent.)`,
+                  pagedOperations: paged,
+                }
+              : unknownOperationBody(operationId, ctx.showLowLevelTools === true, { pagedOperations: paged }),
             pd,
           );
         }

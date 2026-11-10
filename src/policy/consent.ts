@@ -5,12 +5,14 @@
  * profile's scope is applied only after the owner confirms it on a second page (v1.0.1, F-15).
  * Only the redirect host (which the bridge verified) drives the suggestion; the client's self-reported name never does.
  */
-import type {
-  ConsentApplyResult,
-  ConsentProfileChoice,
-  ConsentProfiles,
-  ProfileOption,
+import {
+  KEEP_SCOPE,
+  type ConsentApplyResult,
+  type ConsentProfileChoice,
+  type ConsentProfiles,
+  type ProfileOption,
 } from '../auth/services.js';
+import type { ConnectionManager } from './connections.js';
 import { PolicyError } from './errors.js';
 import type { PolicyStore } from './store.js';
 import { PROFILE_KINDS, SCOPES, isProfileKind, isScope, type ProfileKind, type Scope } from './types.js';
@@ -63,7 +65,7 @@ export function scopeChangeToken(profileId: string, from: Scope, to: Scope): str
   return `${profileId}:${from}:${to}`;
 }
 
-export function createConsentProfiles(store: PolicyStore): ConsentProfiles {
+export function createConsentProfiles(store: PolicyStore, connections?: ConnectionManager): ConsentProfiles {
   return {
     kinds: PROFILE_KINDS,
     scopes: SCOPES,
@@ -82,9 +84,20 @@ export function createConsentProfiles(store: PolicyStore): ConsentProfiles {
       const kind = suggestKind(redirectUri);
       return { kind, label: kind };
     },
+    existingConnections: (app) => connections?.existing(app) ?? [],
+    replaceConnections: (r) => connections?.replace(r) ?? [],
     apply: (choice: ConsentProfileChoice): ConsentApplyResult => {
-      if (!isScope(choice.scope)) return { ok: false, error: 'Choose read, propose or write.' };
-      const scope: Scope = choice.scope;
+      // `keep` (hotfix, ADR 0033): the chosen existing profile's current scope, or the default scope for a new profile.
+      // It never differs from the profile's scope, so it never asks for the scope-change confirmation.
+      let chosen: string = choice.scope;
+      if (chosen === KEEP_SCOPE) {
+        const current = choice.profileId === 'new' ? undefined : store.getProfile(choice.profileId);
+        if (choice.profileId !== 'new' && !current)
+          return { ok: false, error: 'That profile no longer exists. Start again from the application.' };
+        chosen = current ? current.scope : store.defaultScope();
+      }
+      if (!isScope(chosen)) return { ok: false, error: 'Choose read, propose or write.' };
+      const scope: Scope = chosen;
       try {
         if (choice.profileId === 'new') {
           if (!isProfileKind(choice.newKind))

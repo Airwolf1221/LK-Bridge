@@ -7,7 +7,7 @@
  * version, a fingerprint and the pre-state for a diff. The ordered operations are stored as ONE proposal. Nothing but
  * those reads is sent to LegendKeeper.
  *
- * States: pending → approved → executing → executed | failed; pending → rejected | expired; approved → conflicted.
+ * States: pending → approved → executing → executed | failed; pending → rejected | expired; approved → conflicted; conflicted → rejected.
  * Every transition is a compare-and-set on the current state, so a double click or a retry cannot act twice.
  *
  * Approve (owner only): refused while the bridge is read-only, writes are paused or it is draining (the proposal stays
@@ -889,31 +889,38 @@ export class ProposalService implements ProposalSink {
     return this.require(id);
   }
 
-  /** Rejects a pending proposal with an optional reason the agent can read (owner command layer only). */
+  /**
+   * Rejects a `pending` or a `conflicted` proposal with an optional reason the agent can read (owner command layer
+   * only). A conflicted proposal (the target changed after capture) can only be closed this way: nothing else moves it
+   * on, and `proposal-prune` never deletes it until it is rejected. It keeps its stored `conflict` details; the
+   * rejection stamps `finished_at`, so it is pruned after the retention like any rejected proposal. One compare-and-set
+   * from those two states; the audit row's `before` records the state it really was in.
+   */
   reject(actor: OwnerActor, id: string, reason?: string): ProposalView {
     assertOwner(actor);
     const p = this.require(id);
-    if (p.state !== 'pending') {
-      throw new PolicyError('INVALID_TRANSITION', `Proposal ${id} is ${p.state}, not pending`);
+    if (p.state !== 'pending' && p.state !== 'conflicted') {
+      throw new PolicyError(
+        'INVALID_TRANSITION',
+        `Proposal ${id} is ${p.state}; only pending or conflicted proposals can be rejected`,
+      );
     }
     const why = reason?.trim().slice(0, REASON_MAX) || null;
+    const was = p.state;
     if (
-      !this.transition(id, ['pending'], 'rejected', {
+      !this.transition(id, ['pending', 'conflicted'], 'rejected', {
         decided_at: this.now(),
         decided_by: 'owner',
         reject_reason: why,
         finished_at: this.now(),
       })
     ) {
-      throw new PolicyError('INVALID_TRANSITION', `Proposal ${id} is no longer pending`);
+      throw new PolicyError(
+        'INVALID_TRANSITION',
+        `Proposal ${id} is ${this.require(id).state}; only pending or conflicted proposals can be rejected`,
+      );
     }
-    this.store.audit(
-      'owner',
-      'proposal.reject',
-      id,
-      { state: 'pending' },
-      { state: 'rejected', reason: why },
-    );
+    this.store.audit('owner', 'proposal.reject', id, { state: was }, { state: 'rejected', reason: why });
     return this.require(id);
   }
 

@@ -14,7 +14,10 @@ const guide = readFileSync(new URL('../../docs/bridge-guide.md', import.meta.url
 
 describe('docs/bridge-guide.md', () => {
   it('is what get_bridge_guide serves, and the Markdown guide is what get_markdown_guide serves', () => {
-    expect(readGuide(GUIDES.find((g) => g.id === 'bridge')!)).toBe(guide);
+    // The bridge guide is the file, with the Operations section generated from the registry appended (ADR 0033).
+    const served = readGuide(GUIDES.find((g) => g.id === 'bridge')!);
+    expect(served.startsWith(guide.trimEnd())).toBe(true);
+    expect(served.slice(guide.trimEnd().length)).toMatch(/^\n\n## Operations\n/);
     expect(readGuide(GUIDES.find((g) => g.id === 'markdown')!)).toBe(
       readFileSync(new URL('../../docs/markdown.md', import.meta.url), 'utf8'),
     );

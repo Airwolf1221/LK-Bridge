@@ -363,6 +363,7 @@ export const connections = [
     expiresAt: null,
     revokedAt: null,
     active: true,
+    stale: false,
   },
   {
     id: 'pat_1',
@@ -377,6 +378,7 @@ export const connections = [
     expiresAt: Date.now() + 86_400_000 * 30,
     revokedAt: null,
     active: true,
+    stale: false,
   },
 ];
 
@@ -401,6 +403,7 @@ export const baseRoutes = (): Routes => ({
     profiles,
     defaultScope: 'read',
     connections,
+    settings: { autoRemoveDays: 30, staleAfterDays: 14 },
     kinds: ['claude', 'chatgpt', 'claude-code', 'other'],
     scopes: ['read', 'propose', 'write'],
   },

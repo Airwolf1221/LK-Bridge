@@ -1,13 +1,15 @@
 /**
  * The agent guides (v2 B2, ADR 0029): `get_markdown_guide` (docs/markdown.md) and `get_bridge_guide`
  * (docs/bridge-guide.md), each also published as an MCP resource. The text is the file as it is in the repository's
- * docs folder, read on every request, so a guide is edited in one place only.
+ * docs folder, read on every request, so a guide is edited in one place only. The bridge guide gets an Operations
+ * section appended, generated from the operation registry (ADR 0033).
  */
 import { readFileSync } from 'node:fs';
 import * as z from 'zod';
 import { getSection, MarkdownError, outline } from '../../markdown/index.js';
 import type { McpResourceProvider, McpToolProvider } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
+import { operationsGuideSection } from './discovery.js';
 import { errorResult, projectArg, render, withProject, type ToolDeps } from './shape.js';
 
 export interface Guide {
@@ -44,11 +46,14 @@ export const GUIDES: readonly Guide[] = [
 const DOCS = new URL('../../../docs/', import.meta.url);
 
 export function readGuide(g: Guide): string {
+  let text: string;
   try {
-    return readFileSync(new URL(g.file, DOCS), 'utf8');
+    text = readFileSync(new URL(g.file, DOCS), 'utf8');
   } catch {
     return `# ${g.title}\n\nThis guide could not be read on the server (docs/${g.file} is missing). Ask the bridge owner.\n`;
   }
+  // ADR 0033: the bridge guide ends with an Operations section generated from the registry at serve time.
+  return g.id === 'bridge' ? `${text.replace(/\s+$/, '')}\n\n${operationsGuideSection()}` : text;
 }
 
 export function guideResources(): McpResourceProvider[] {

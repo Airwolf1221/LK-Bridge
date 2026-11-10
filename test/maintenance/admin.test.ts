@@ -79,6 +79,7 @@ describe('the registry', () => {
       'journal-prune',
       'proposal-expiry',
       'proposal-prune',
+      'connection-removal',
       'sqlite-optimise',
       'tree-sweep',
       'tree-check',
@@ -95,8 +96,8 @@ describe('the registry', () => {
       scheduleText: 'Every 10 seconds',
       lastRun: null,
     });
-    expect(r.json.jobs[5]).toMatchObject({ id: 'tree-sweep', implemented: true, scope: 'project' });
-    expect(r.json.jobs[7]).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
+    expect(r.json.jobs[6]).toMatchObject({ id: 'tree-sweep', implemented: true, scope: 'project' });
+    expect(r.json.jobs[8]).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
   });
 
   it('404s an unknown job', async () => {

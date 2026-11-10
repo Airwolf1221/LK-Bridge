@@ -3,7 +3,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { baseRoutes, installApi, renderApp, useDom } from './helpers';
+import { baseRoutes, connections, installApi, renderApp, useDom } from './helpers';
 
 useDom();
 
@@ -293,5 +293,142 @@ describe('settings ask for confirmation', () => {
       value: { 'write-min': 60 },
       confirm: true,
     });
+  });
+});
+
+describe('old connections (ADR 0033)', () => {
+  const DAY = 86_400_000;
+  const dead = {
+    id: 'pat_dead',
+    type: 'pat',
+    label: 'Claude Code (PC)',
+    clientId: null,
+    profileId: 'prof_cc',
+    profile: 'claude-code',
+    scope: 'write',
+    createdAt: Date.now() - 20 * DAY,
+    lastUsedAt: null,
+    expiresAt: Date.now() + 340 * DAY, // next year or later: the year is shown
+    revokedAt: Date.now() - 2 * DAY,
+    active: false,
+    stale: false,
+  };
+  const expired = {
+    ...dead,
+    id: 'grant_old',
+    type: 'grant',
+    label: 'ChatGPT',
+    profileId: 'prof_claude',
+    profile: 'Claude',
+    revokedAt: null,
+    expiresAt: Date.now() - DAY,
+    createdAt: Date.now() - 91 * DAY,
+  };
+  const stale = {
+    ...connections[0]!,
+    id: 'grant_stale',
+    label: 'Old Claude',
+    stale: true,
+    lastUsedAt: Date.now() - 20 * DAY,
+  };
+  const withOld = () => ({
+    ...baseRoutes(),
+    'GET /clients': {
+      ...(baseRoutes()['GET /clients'] as object),
+      connections: [...connections, dead, expired, stale],
+    },
+  });
+
+  it('a revoked or expired row has Remove (no confirmation) where an active one has Revoke; active rows cannot be removed', async () => {
+    const api = installApi({ ...withOld(), 'POST /clients/connections/pat_dead/remove': { removed: {} } });
+    const user = userEvent.setup();
+    renderApp('/ui/clients');
+    const row = await screen.findByRole('row', { name: /Claude Code \(PC\)/ });
+    expect(within(row).queryByRole('button', { name: 'Revoke' })).toBeNull();
+    expect(within(row).getByText('revoked')).toBeInTheDocument();
+    expect(within(row).getByText(/\d{4}/)).toBeInTheDocument(); // the expiry carries its year
+    const live = screen.getByRole('row', { name: /Laptop/ });
+    expect(within(live).queryByRole('button', { name: 'Remove' })).toBeNull();
+    await user.click(within(row).getByRole('button', { name: 'Remove' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(api.find('POST', '/clients/connections/pat_dead/remove')).toHaveLength(1));
+  });
+
+  it('"Remove all revoked and expired (N)" shows only when N > 0, and confirms with the rows listed', async () => {
+    installApi(baseRoutes());
+    const first = renderApp('/ui/clients');
+    await screen.findByRole('row', { name: /Laptop/ });
+    expect(screen.queryByRole('button', { name: /Remove all revoked and expired/ })).toBeNull();
+    first.unmount();
+    const api = installApi({
+      ...withOld(),
+      'POST /clients/connections/remove-inactive': { removed: 2, ids: ['pat_dead', 'grant_old'] },
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/clients');
+    await user.click(await screen.findByRole('button', { name: 'Remove all revoked and expired (2)' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Claude Code (PC)');
+    expect(dialog).toHaveTextContent('ChatGPT');
+    expect(api.find('POST', /remove-inactive/)).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Remove 2' }));
+    await waitFor(() => expect(api.find('POST', '/clients/connections/remove-inactive')).toHaveLength(1));
+  });
+
+  it('saves the automatic removal days and the stale threshold; 0 = never', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'PUT /clients/settings/auto-remove-days': { autoRemoveDays: 0 },
+      'PUT /clients/settings/stale-after-days': { staleAfterDays: 7 },
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/clients');
+    const auto = await screen.findByLabelText('Remove revoked and expired connections automatically after');
+    expect(auto).toHaveValue(30);
+    await user.clear(auto);
+    await user.type(auto, '0');
+    await user.click(within(auto.closest('.row') as HTMLElement).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.find('PUT', '/clients/settings/auto-remove-days')).toHaveLength(1));
+    expect(api.find('PUT', '/clients/settings/auto-remove-days')[0]!.body).toEqual({ days: 0 });
+    const stale = screen.getByLabelText('Mark a connection stale after');
+    await user.clear(stale);
+    await user.type(stale, '7');
+    await user.click(within(stale.closest('.row') as HTMLElement).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.find('PUT', '/clients/settings/stale-after-days')).toHaveLength(1));
+    expect(api.find('PUT', '/clients/settings/stale-after-days')[0]!.body).toEqual({ days: 7 });
+  });
+
+  it('a stale connection gets a badge; its profile gets "Revoke stale (N)", confirmed with the list', async () => {
+    const api = installApi({
+      ...withOld(),
+      'POST /clients/connections/revoke-stale': { revoked: 1, ids: ['grant_stale'] },
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/clients');
+    const row = await screen.findByRole('row', { name: /Old Claude/ });
+    expect(within(row).getByText('stale')).toBeInTheDocument();
+    expect(within(screen.getByRole('row', { name: /Laptop/ })).queryByText('stale')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Revoke stale (1)' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Old Claude');
+    expect(api.find('POST', /revoke-stale/)).toHaveLength(0);
+    await user.click(within(dialog).getByRole('button', { name: 'Revoke 1' }));
+    await waitFor(() => expect(api.find('POST', '/clients/connections/revoke-stale')).toHaveLength(1));
+    expect(api.find('POST', '/clients/connections/revoke-stale')[0]!.body).toEqual({
+      profileId: 'prof_claude',
+    });
+  });
+
+  it('says that claude.ai caches the tool list, beside the low-level tools checkbox', async () => {
+    installApi(baseRoutes());
+    renderApp('/ui/clients');
+    const box = await screen.findByLabelText('Show low-level tools to claude-code');
+    const hint = document.getElementById(box.getAttribute('aria-describedby')!)!;
+    expect(hint).toHaveTextContent(/claude\.ai keeps its own copy of a connector’s tool list/);
+    expect(hint).toHaveTextContent(/disconnected and reconnected in claude\.ai’s settings/);
+    expect(hint).toHaveTextContent(
+      /New chats alone were not enough \(observed on 10 November 2026; not a guarantee\)/,
+    );
+    expect(hint).toHaveTextContent(/ChatGPT, use Plugins, then the bridge, then Refresh/);
   });
 });

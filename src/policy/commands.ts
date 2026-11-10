@@ -5,9 +5,17 @@
  * (test/policy/no-agent-escalation.test.ts enumerates every registered tool and checks).
  */
 import type { AuthStore } from '../auth/store.js';
+import type { ConnectionManager } from './connections.js';
 import { PolicyError } from './errors.js';
 import type { ProposalDetail, ProposalService } from './proposals.js';
-import type { AuditRow, ConnectionView, PolicyStore } from './store.js';
+import {
+  AUTO_REMOVE_DAYS_KEY,
+  STALE_AFTER_DAYS_KEY,
+  type AuditRow,
+  type ConnectionView,
+  type PolicyStore,
+  type RemovedConnection,
+} from './store.js';
 import {
   isProfileKind,
   isScope,
@@ -47,6 +55,21 @@ export interface OwnerCommands {
   setConnectionProfile(actor: OwnerActor, connectionId: string, profileId: string): ConnectionView;
   /** Revokes a grant (`grant_…`: its refresh and access tokens) or a PAT (`pat_…`). */
   revoke(actor: OwnerActor, connectionId: string): boolean;
+  /**
+   * Hotfix (ADR 0033): removes a REVOKED or EXPIRED connection: its credentials are deleted and a tombstone keeps its
+   * name for history. An active connection is refused (`CONNECTION_ACTIVE`). Audited `connection.remove`.
+   */
+  removeConnection(actor: OwnerActor, connectionId: string): RemovedConnection;
+  /** Removes every revoked and expired connection in one transaction; returns how many. */
+  removeInactiveConnections(actor: OwnerActor): { removed: number; ids: string[] };
+  /** Revokes the stale connections of one profile (audited `connection.revoke`, `via: 'stale'`). */
+  revokeStaleConnections(actor: OwnerActor, profileId: string): string[];
+  /** Days after which revoked and expired connections are removed automatically (0 = never; default 30). */
+  getAutoRemoveDays(actor: OwnerActor): number;
+  setAutoRemoveDays(actor: OwnerActor, days: number): number;
+  /** Days of disuse after which an active connection is "stale" (0 = never; default 14). */
+  getStaleAfterDays(actor: OwnerActor): number;
+  setStaleAfterDays(actor: OwnerActor, days: number): number;
   /** v2 A1: `filter.project` is one project's id or `ALL_PROJECTS`. */
   listProposals(actor: OwnerActor, filter: ProposalFilter): ProposalView[];
   getProposal(actor: OwnerActor, id: string): ProposalDetail;
@@ -63,10 +86,18 @@ export interface OwnerCommandDeps {
   readonly store: PolicyStore;
   readonly proposals: ProposalService;
   readonly authStore: AuthStore;
+  readonly connections: ConnectionManager;
 }
 
 function assertOwner(actor: unknown): asserts actor is OwnerActor {
   if (actor !== 'owner') throw new PolicyError('NOT_OWNER', 'Only the owner can do this');
+}
+
+function validDays(days: unknown): number {
+  if (typeof days !== 'number' || !Number.isInteger(days) || days < 0 || days > 3650) {
+    throw new PolicyError('INVALID_INPUT', 'Days is a whole number from 0 to 3650 (0 = never)');
+  }
+  return days;
 }
 
 const errorOf = (e: unknown) =>
@@ -176,6 +207,48 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
       if (done)
         store.audit('owner', 'connection.revoke', connectionId, { active: before.active }, { active: false });
       return done;
+    },
+
+    removeConnection(actor, connectionId) {
+      assertOwner(actor);
+      return d.connections.remove(connectionId, 'owner');
+    },
+
+    removeInactiveConnections(actor) {
+      assertOwner(actor);
+      return d.connections.removeInactive('owner');
+    },
+
+    revokeStaleConnections(actor, profileId) {
+      assertOwner(actor);
+      if (!store.getProfile(profileId)) throw new PolicyError('PROFILE_NOT_FOUND', `No profile ${profileId}`);
+      return d.connections.revokeStale(profileId);
+    },
+
+    getAutoRemoveDays(actor) {
+      assertOwner(actor);
+      return store.autoRemoveDays();
+    },
+
+    setAutoRemoveDays(actor, days) {
+      assertOwner(actor);
+      const before = store.autoRemoveDays();
+      store.writeSetting(AUTO_REMOVE_DAYS_KEY, validDays(days), 'owner');
+      store.audit('owner', 'policy.set_auto_remove_days', AUTO_REMOVE_DAYS_KEY, { days: before }, { days });
+      return days;
+    },
+
+    getStaleAfterDays(actor) {
+      assertOwner(actor);
+      return store.staleAfterDays();
+    },
+
+    setStaleAfterDays(actor, days) {
+      assertOwner(actor);
+      const before = store.staleAfterDays();
+      store.writeSetting(STALE_AFTER_DAYS_KEY, validDays(days), 'owner');
+      store.audit('owner', 'policy.set_stale_after_days', STALE_AFTER_DAYS_KEY, { days: before }, { days });
+      return days;
     },
 
     listProposals(actor, filter) {

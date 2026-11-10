@@ -437,7 +437,7 @@ describe('ChatGPT end to end with private_key_jwt', () => {
       profile: 'new',
       new_label: 'chatgpt',
       new_kind: 'chatgpt',
-      scope: 'read',
+      scope: 'keep', // ADR 0033: resolves to the default scope (read) for a new profile
     });
     expect(logEvents(b, 'client.metadata_fetched')).toContainEqual(
       expect.objectContaining({
@@ -525,7 +525,7 @@ describe('ChatGPT end to end with private_key_jwt', () => {
 
     // A second connection preselects the existing chatgpt profile at its current scope.
     const again = await authorise(b, CHATGPT_CIMD, CHATGPT_REDIRECT, browser);
-    expect(consentDefaults(again.html)).toMatchObject({ scope: 'read' });
+    expect(consentDefaults(again.html)).toMatchObject({ scope: 'keep' });
     expect(consentDefaults(again.html).profile).not.toBe('new');
   });
 

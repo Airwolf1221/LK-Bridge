@@ -137,6 +137,7 @@ export const registerSettings: Register = (api, ctx) => {
     return {
       project,
       entries: redactDeep(entries),
+      principals: ctx.principals(entries.map((e) => e.principalId)),
       hasMore,
       // Paging (chunk 8): pass as `before` for the next, older page.
       nextBefore: hasMore ? (entries.at(-1)?.id ?? null) : null,
@@ -151,6 +152,7 @@ export const registerSettings: Register = (api, ctx) => {
     // View only. A pre-image is the owner's own LegendKeeper content, so it is shown whole (secrets still removed).
     return {
       entry: redactDeep(entry, { maxString: 500_000, maxItems: 20_000, maxKeys: 2000, maxDepth: 64 }),
+      principals: ctx.principals([entry.principalId]),
     };
   });
 };

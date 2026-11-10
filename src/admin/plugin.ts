@@ -38,6 +38,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
     actions,
     hub,
     now,
+    principals: (ids) => Object.fromEntries(deps.runtime.policy.store.describePrincipals(ids)),
     health: (project, refresh) => health(project.id, refresh),
     // v2 A1: the `project` query parameter of every project-scoped route; default: the default project.
     project: (ref) => {

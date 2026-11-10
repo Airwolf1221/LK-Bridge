@@ -47,7 +47,7 @@ function probe(over: Partial<MaintenanceJobDef> = {}) {
 }
 
 describe('the registry', () => {
-  it('lists the seven implemented jobs and the three placeholders, with schedule, last run and next run', async () => {
+  it('lists the eight implemented jobs and the three placeholders, with schedule, last run and next run', async () => {
     m = await maintenanceRig();
     const jobs = m.maintenance.scheduler.list();
     expect(jobs.map((j) => j.id)).toEqual([
@@ -55,6 +55,7 @@ describe('the registry', () => {
       'journal-prune',
       'proposal-expiry',
       'proposal-prune',
+      'connection-removal',
       'sqlite-optimise',
       'tree-sweep',
       'tree-check',
@@ -518,7 +519,7 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(12);
+    expect(m.maintenance.scheduler.list()).toHaveLength(13);
   });
 });
 
