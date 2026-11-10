@@ -4,7 +4,7 @@ import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useCon
 import { fmtAgo, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectApi, useScopedApi } from '../project';
-import { Link } from '../router';
+import { Link, useRoute } from '../router';
 import type { TreeCorrection, TreeNodeView, TreeOverview, TreePass, TreeStatusName } from '../types';
 
 /**
@@ -585,8 +585,11 @@ interface ChildrenResponse {
 
 /** A simple browser: one level at a time, from the root, with the selected page's details. */
 function TreeBrowser({ rootId }: { rootId: string | null }) {
-  const [at, setAt] = useState<string | null>(null);
-  useEffect(() => setAt(null), [rootId]);
+  // v2 A3: other pages link to a node with `?node=<id>` (the registry's drift report and taxonomy).
+  const { query } = useRoute();
+  const linked = query.get('node');
+  const [at, setAt] = useState<string | null>(linked);
+  useEffect(() => setAt(linked), [rootId, linked]);
   const level = useScopedApi<ChildrenResponse>(`/tree/children${at ? `?id=${encodeURIComponent(at)}` : ''}`);
   const now = useNow();
   const d = level.data;
