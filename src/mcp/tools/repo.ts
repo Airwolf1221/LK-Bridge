@@ -4,7 +4,7 @@
  * root, and the size rule for results.
  */
 import type { ProjectTypes } from '../../registry/index.js';
-import { RegistryError } from '../../registry/index.js';
+import { RegistryError, ROLE_LABEL } from '../../registry/index.js';
 import type { NodeRef } from '../../registry/index.js';
 import type { TreeMeta, TreeNode, TreeQueries } from '../../tree/index.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
@@ -154,7 +154,16 @@ export function resolvePage(
           {
             code: 'AMBIGUOUS',
             message: `${o.what ?? '“' + query + '”'} matches ${r.candidates.length} pages. Choose one and pass its id.`,
-            candidates: r.candidates.map((c) => ({ ...nodeRefBody(c), matchedBy: c.matchedBy })),
+            // v2 C2b: a write target is never chosen for the agent, even among one character's pages; each
+            // candidate says its character role, so the agent can name the one it means.
+            candidates: r.candidates.map((c) => {
+              const role = ctx.types.characterRole?.(c.id);
+              return {
+                ...nodeRefBody(c),
+                matchedBy: c.matchedBy,
+                ...(role ? { role: ROLE_LABEL[role.role] } : {}),
+              };
+            }),
           },
           ctx.pd,
         ),

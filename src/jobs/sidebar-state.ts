@@ -277,3 +277,90 @@ export function compareCollection(
     out.push({ path: `${label} filter`, expected: short(expected.filter), actual: short(actual.filter) });
   return out;
 }
+
+// ============================================================================================ v2 C2b: the whole sidebar
+
+/**
+ * One sidebar property as `factsVersion` sees it: a key-value property's rows (rank order, by id) or a link collection's
+ * items and filter. Other kinds (text fields, images, `unsupported`) are not part of the facts and are left out.
+ */
+export interface SidebarPropertyState {
+  readonly id: string;
+  readonly kind: string;
+  readonly title: string;
+  readonly rows?: readonly RowState[];
+  readonly collection?: CollectionState;
+}
+
+const FACT_KINDS: ReadonlySet<string> = new Set(['keyValue', 'resourceCollection', 'resourceLink']);
+
+/**
+ * The facts of a sidebar, normalised: a `listProperties` answer (`{ data }`), a `getResource` answer (`{ properties }`)
+ * or a list of properties. Properties are sorted by id and rows put in rank order, so every endpoint gives the same
+ * state whatever order it lists them in.
+ */
+export function sidebarState(body: unknown): SidebarPropertyState[] {
+  const list = Array.isArray(body)
+    ? body
+    : isObj(body) && Array.isArray(body.data)
+      ? body.data
+      : isObj(body) && Array.isArray(body.properties)
+        ? body.properties
+        : [];
+  return (list as unknown[])
+    .filter(isObj)
+    .filter((p) => typeof p.kind === 'string' && FACT_KINDS.has(p.kind))
+    .map((p) => {
+      const base = {
+        id: typeof p.id === 'string' ? p.id : '',
+        kind: p.kind as string,
+        title: typeof p.title === 'string' ? p.title : '',
+      };
+      return p.kind === 'keyValue'
+        ? { ...base, rows: rowsState(p.rows) }
+        : { ...base, collection: collectionState(p) };
+    })
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * `factsVersion` (v2 C2b): the bridge's own version of a page's sidebar facts, since LegendKeeper gives none that covers
+ * the whole sidebar. A stable hash of `sidebarState`: the same on every read of an unchanged sidebar, from any endpoint;
+ * different after any change to a row (key, value, rank, added or removed) or to a link collection (items or filter).
+ */
+export function factsVersionOf(state: readonly SidebarPropertyState[]): string {
+  return `fv1_${stateHash(state).slice(0, 24)}`;
+}
+
+/** Every difference between two sidebar states, property by property (rows by id, items in order). */
+export function compareSidebarStates(
+  expected: readonly SidebarPropertyState[],
+  actual: readonly SidebarPropertyState[],
+  out: StateDifference[] = [],
+): StateDifference[] {
+  const byId = new Map(actual.map((p) => [p.id, p]));
+  const seen = new Set<string>();
+  for (const e of expected) {
+    const a = byId.get(e.id);
+    const label = e.title || e.id;
+    if (!a) {
+      out.push({ path: `${label} (property removed)`, expected: 'present', actual: '(gone)' });
+      continue;
+    }
+    seen.add(e.id);
+    if (a.title !== e.title) out.push({ path: `${label} title`, expected: e.title, actual: a.title });
+    if (e.rows || a.rows) compareRows(label, e.rows ?? [], a.rows ?? [], out);
+    if (e.collection || a.collection)
+      compareCollection(
+        label,
+        e.collection ?? { items: [], filter: null },
+        a.collection ?? { items: [], filter: null },
+        out,
+      );
+  }
+  for (const a of actual) {
+    if (!seen.has(a.id))
+      out.push({ path: `${a.title || a.id} (property added)`, expected: '(no property)', actual: a.kind });
+  }
+  return out;
+}

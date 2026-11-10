@@ -70,6 +70,15 @@ export class TreeQueries {
     return (this.db.prepare(sql).all(...args) as NodeRow[]).map((r) => TreeStore.toView(r));
   }
 
+  /**
+   * v2 C2b: whether the tree held `id` until it was found gone (deleted), and when: restore_resource restores only pages
+   * that were inside the AI REPOSITORY.
+   */
+  tombstone(projectId: string, id: string): { readonly observedAt: number; readonly reason: string } | null {
+    const t = this.store.tombstone(projectId, id);
+    return t ? { observedAt: t.observed_at, reason: t.reason } : null;
+  }
+
   /** The tree's status alone. */
   status(projectId: string): TreeMeta {
     return this.metaOf(projectId);

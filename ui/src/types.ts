@@ -465,7 +465,7 @@ export interface PageSummaryEntry {
 export interface ProtectedChange {
   ruleId?: string;
   key?: string;
-  direction?: 'to' | 'from' | 'change';
+  direction?: 'to' | 'from' | 'change' | 'delete';
   value?: string;
   before?: string[];
   after?: string[];
@@ -560,7 +560,8 @@ export interface ProposalDetail extends Proposal {
 export interface CanonRule {
   id: string;
   key: string;
-  kind: 'value' | 'change';
+  /** `delete` (v2 C2b): deleting a page whose fact holds one of `values` needs canonical approval. */
+  kind: 'value' | 'change' | 'delete';
   values?: string[];
   note?: string;
 }

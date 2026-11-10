@@ -58,6 +58,19 @@ describe('the MCP surface with the official client', () => {
         'search',
         'set_facts', // v2 C2a
         'write_page', // v2 C1
+        // v2 C2b
+        'create_bare_resource',
+        'create_character',
+        'create_document',
+        'create_index',
+        'create_many_resources',
+        'create_resource',
+        'delete_document',
+        'delete_resource',
+        'move_resource',
+        'restore_resource',
+        'update_document',
+        'update_resource',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));

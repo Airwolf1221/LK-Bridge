@@ -92,7 +92,7 @@ export const DEFAULT_CHARACTER_PLACEMENT: CharacterPlacementConfig = Object.free
   referenceTypes: { core: 'Character Core', compact: 'Compact Character Reference' },
   subjectRow: 'Subject',
   speciesRow: 'Race / Species',
-  pageNames: { core: '{name}', compact: '{name}' },
+  pageNames: { core: '{name} - Character Core', compact: '{name} - Character Reference' },
 });
 
 export interface PageTemplate {

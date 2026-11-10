@@ -33,6 +33,7 @@ import {
 import { NameResolver } from './resolve.js';
 import { RegistryStore } from './store.js';
 import { ProjectTree, type RegistryTree } from './tree-view.js';
+import type { CharacterRole, MentionChoice } from './resolve.js';
 import type { NodeRef, ResolveKind, ResolveOptions, ResolveResult, Slot, TemplateInfo } from './types.js';
 
 /** The registry of ONE project (its LegendKeeper id); nothing of another project is reachable through it. */
@@ -44,8 +45,15 @@ export interface ProjectTypes {
   resolve(query: string, o?: ResolveOptions): ResolveResult;
   /** The same, as one node or a typed `RegistryError` (`AMBIGUOUS`, `NOT_FOUND`). */
   resolveOne(query: string, o?: ResolveOptions): NodeRef;
-  /** `ctx.resolveMention` for the Markdown converter (B1). */
-  mentionResolver(o?: ResolveOptions): ResolveMention;
+  /**
+   * `ctx.resolveMention` for the Markdown converter (B1). v2 C2b: several pages of one character resolve to its Core,
+   * else its Reference, else its index; `onChoice` hears which and why.
+   */
+  mentionResolver(
+    o?: ResolveOptions & { readonly onChoice?: (c: MentionChoice & { name: string }) => void },
+  ): ResolveMention;
+  /** v2 C2b: a page's character role (Core, Reference, index) and subject, or null. */
+  characterRole(id: string): { readonly role: CharacterRole; readonly subject: string } | null;
   /** The ordering slot for a new or moved page (PLAN-v2 4.5). */
   placementFor(parentId: string, newDisplayName: string, kind: ResolveKind, o?: { excludeId?: string }): Slot;
   /** Siblings out of order (reports only). */
@@ -132,7 +140,10 @@ export function createRegistry(o: RegistryOptions): Registry {
       }),
       resolve: (q: string, ro?: ResolveOptions) => resolver().resolve(q, ro),
       resolveOne: (q: string, ro?: ResolveOptions) => resolver().resolveOne(q, ro),
-      mentionResolver: (ro?: ResolveOptions) => resolver().mentionResolver(ro),
+      mentionResolver: (
+        ro?: ResolveOptions & { readonly onChoice?: (c: MentionChoice & { name: string }) => void },
+      ) => resolver().mentionResolver(ro),
+      characterRole: (id: string) => resolver().characterRole(id),
       placementFor: (parentId: string, name: string, kind: ResolveKind, po?: { excludeId?: string }) =>
         placementFor(tree(), parentId, name, kind, po),
       outOfOrder: (parentId?: string) => outOfOrder(tree(), parentId),
@@ -165,7 +176,7 @@ export function createRegistry(o: RegistryOptions): Registry {
 
 export { RegistryStore } from './store.js';
 export { ProjectTree, type RegistryTree } from './tree-view.js';
-export { NameResolver } from './resolve.js';
+export { NameResolver, ROLE_LABEL, type CharacterRole, type MentionChoice } from './resolve.js';
 export { classifyType, type Classification, type CategoryCandidate } from './classify.js';
 export { computeDrift, type DriftCode, type DriftFinding, type DriftReport } from './drift.js';
 export {

@@ -7,7 +7,9 @@
  * - the set_facts planner (plan.ts) and its expansion into one job (expand.ts).
  */
 export {
+  assessDelete,
   assessFactChange,
+  CASCADE_READ_LIMIT,
   canonicalReason,
   CanonicalGuard,
   type CanonicalGuardDeps,
@@ -20,6 +22,7 @@ export {
   canonicalRulesSchema,
   DEFAULT_AGENT_STATUS,
   DEFAULT_CANONICAL_RULES,
+  DEFAULT_DELETE_RULE,
   factKey,
   type CanonConfig,
   type CanonicalRule,

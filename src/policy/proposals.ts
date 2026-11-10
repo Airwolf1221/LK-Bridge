@@ -31,7 +31,12 @@ import {
 } from '../jobs/errors.js';
 import { assertNoUnsupportedLoss, checkSubmitGuards, unsupportedLoss } from '../jobs/guards.js';
 import { READERS, opMeta } from '../jobs/op-meta.js';
-import { internalStepIssues, isInternalStep } from '../jobs/internal-steps.js';
+import {
+  EXPECT_STEP,
+  internalStepIssues,
+  isInternalStep,
+  withoutDirectOnlyChecks,
+} from '../jobs/internal-steps.js';
 import { mintClientId } from '../jobs/ids.js';
 import type { ProposalMeta, ProposalSink, ProposedOp } from '../jobs/policy.js';
 import {
@@ -388,7 +393,13 @@ export class ProposalService implements ProposalSink {
   ): Promise<{ proposalId: string; summary: string }> {
     // v2 C2a (PLAN-v2 10.2): every client id the expansion needs is minted NOW and stored, so a child "under" a new
     // index and a link "to" a new page are fixed in the proposal, and approval runs with exactly these ids.
-    const ops = proposed.map(withMintedIds);
+    // v2 C2b: a whole-sidebar check made for a direct write (`baseFactsVersion`) is left out: from capture on, the
+    // proposal's own captured state protects it.
+    const ops = proposed
+      .map(withMintedIds)
+      .map((o) =>
+        o.op === EXPECT_STEP ? { ...o, params: withoutDirectOnlyChecks(o.params) as OpParams } : o,
+      );
     const engine = this.requireEngine();
     if (meta.kind !== 'single_op' && meta.kind !== 'batch_ops') {
       throw new PolicyDeniedError(
@@ -457,9 +468,13 @@ export class ProposalService implements ProposalSink {
     const seen = new Map<string, Snapshot>();
     const reads = new Map<string, Promise<{ readonly found: boolean; readonly body: unknown }>>();
     const captured: { target: CapturedTarget | null; snap: Snapshot | null }[] = [];
+    // v2 C2b: a page an earlier operation of this proposal creates does not exist yet: nothing to capture or compare.
+    const created = new Set<string>();
     for (let i = 0; i < ops.length; i++) {
       const o = ops[i]!;
-      const target = defs[i] ? readerTarget(o.op, o.params) : null;
+      const rid = o.params.path?.resourceId;
+      const target = defs[i] && !(rid && created.has(rid)) ? readerTarget(o.op, o.params) : null;
+      for (const id of createdIds(o.op, o.params)) created.add(id);
       if (!target) {
         captured.push({ target: null, snap: null });
         continue;
@@ -1425,6 +1440,20 @@ function executionSteps(ops: readonly ProposalOpView[]): StepSpec[] {
   });
 }
 
+/** v2 C2b: the resources an operation creates with client ids (a create, a template copy, a batch). */
+function createdIds(op: string, params: OpParams): string[] {
+  const body = params.body as Record<string, unknown> | undefined;
+  if (!body) return [];
+  if (op === 'createResource' || op === 'createResourceFromTemplate')
+    return typeof body.id === 'string' ? [body.id] : [];
+  if (op === 'createManyResources' && Array.isArray(body.resources)) {
+    return (body.resources as Record<string, unknown>[])
+      .map((r) => r?.id)
+      .filter((x): x is string => typeof x === 'string');
+  }
+  return [];
+}
+
 /** v2 C2a: a create's client id(s), minted now where the operation takes one and none was given. */
 function withMintedIds(o: ProposedOp): ProposedOp {
   if (isInternalStep(o.op) || !getOperation(o.op)) return o;
@@ -1455,6 +1484,8 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.expectCurrent ? { expectCurrent: o.expectCurrent } : {}),
     ...(o.deferTreeReread === true ? { deferTreeReread: true } : {}),
     ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
+    // v2 C2b: a write to a page the same job creates from a template: its ids are bound in the job.
+    ...(o.bindIds ? { bindIds: o.bindIds } : {}),
   };
 }
 

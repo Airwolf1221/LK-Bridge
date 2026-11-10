@@ -17,8 +17,8 @@
  * as the plan saw it (the check confirmed it) as its pre-image; `updateProperty` keeps its own. The tree re-reads the
  * page once, when the job ends.
  */
-import { EXPECT_STEP, VERIFY_STEP, type ExpectCheck } from '../jobs/internal-steps.js';
-import { rowsContentHash, stateHash } from '../jobs/sidebar-state.js';
+import { EXPECT_STEP, VERIFY_STEP, type ExpectCheck, type VerifyTarget } from '../jobs/internal-steps.js';
+import { rowsContentHash, stateHash, type SidebarPropertyState } from '../jobs/sidebar-state.js';
 import type { StepSpec } from '../jobs/types.js';
 import { rowStates, type FactsPlan, type LinkTarget } from './plan.js';
 import type { SidebarProperty } from './sidebar.js';
@@ -70,6 +70,16 @@ export function expandFacts(
   page: FactsPage,
   sidebar: readonly SidebarProperty[],
   inputs: { readonly facts: unknown; readonly links: unknown },
+  o: {
+    /**
+     * v2 C2b: the agent passed `baseFactsVersion`, so the WHOLE sidebar must still be the state the plan was built on
+     * inside the lock too (a direct write only: capture leaves it out of a proposal).
+     */
+    readonly wholeSidebar?: {
+      readonly factsVersion: string;
+      readonly state: readonly SidebarPropertyState[];
+    };
+  } = {},
 ): FactsJob {
   const { parts, counts } = planCounts(plan);
   const pageParts = ['sidebar', ...parts];
@@ -84,6 +94,16 @@ export function expandFacts(
   const rowWrites = plan.writes.filter((w) => w.op !== 'updateProperty');
   const collWrites = plan.writes.filter((w) => w.op === 'updateProperty');
   const checks: ExpectCheck[] = [];
+  if (o.wholeSidebar) {
+    checks.push({
+      label: 'sidebar',
+      kind: 'sidebar',
+      resourceId: page.id,
+      factsVersion: o.wholeSidebar.factsVersion,
+      properties: o.wholeSidebar.state,
+      directOnly: true,
+    });
+  }
   if (rowWrites.length > 0 && plan.property) {
     checks.push({
       label: kvLabel,
@@ -184,4 +204,130 @@ function rowText(content: readonly Record<string, unknown>[]): string {
       return `[${label}](lk://resources/${s(m.resourceId)}${doc ? `/docs/${doc}` : ''})`;
     })
     .join('');
+}
+
+// ============================================================================================ v2 C2b: a new page
+
+export interface NewPageFacts {
+  /** The copy check (a `bridge.expect` step), then the writes; empty when the plan writes nothing. */
+  readonly steps: readonly StepSpec[];
+  /** The `facts` target for the job's verify step (null when nothing is written). */
+  readonly verify: VerifyTarget | null;
+  /** "6 facts", "1 link": what the page gets, in words. */
+  readonly parts: readonly string[];
+  readonly counts: Record<string, number>;
+  /** The facts table (key, value), for results and the proposal. */
+  readonly facts: readonly { readonly key: string; readonly value: string | null }[];
+  readonly links: readonly Record<string, unknown>[];
+}
+
+/**
+ * The facts and links of a page created from a template in the SAME job (v2 C2b, ADR 0034). `plan` was made by
+ * `planFacts` on the TEMPLATE's sidebar with the new page's id, so its writes name the template's property, row and
+ * item ids. The steps:
+ *
+ * 1. `bridge.expect` with a `copy` check (step `copyStepNo` of the job): the new page's sidebar, read in the job, must
+ *    be the template's layout (kinds, titles, keys and values in rank order); its result maps each template id to the
+ *    copy's, else a conflict and nothing is written;
+ * 2. the row writes, each with `bindIds` (the copy's ids, bound just before it runs), the If-Match chain and the in-step
+ *    check of the rows (by key and value, so no id is needed) as set_facts has them; then the collection writes.
+ *
+ * Every write is journalled with the high-level operation; the tree re-reads the page once, when the job ends.
+ */
+export function expandNewPageFacts(input: {
+  readonly plan: FactsPlan;
+  readonly page: FactsPage;
+  readonly templateId: string;
+  readonly templateSidebar: readonly SidebarProperty[];
+  readonly copyStepNo: number;
+  readonly journalOperation: Record<string, unknown>;
+}): NewPageFacts {
+  const { plan, page } = input;
+  const { parts, counts } = planCounts(plan);
+  const facts = plan.rowsAfter.map((r) => ({ key: r.key, value: rowText(r.content) || null }));
+  const links = plan.links.map((l) => ({
+    title: l.title,
+    added: l.added.map(linkView),
+    ...(l.filtered ? { filtered: true } : {}),
+  }));
+  if (plan.empty) return { steps: [], verify: null, parts, counts, facts, links };
+  const label = `${page.name} (new)`;
+  const rowWrites = plan.writes.filter((w) => w.op !== 'updateProperty');
+  const collWrites = plan.writes.filter((w) => w.op === 'updateProperty');
+  const touched = new Set(plan.writes.map((w) => w.propertyId));
+  const properties = input.templateSidebar
+    .filter((p) => touched.has(p.id))
+    .map((p) =>
+      p.kind === 'keyValue'
+        ? {
+            id: p.id,
+            kind: p.kind,
+            title: p.title,
+            rows: (p.rows ?? []).map((r) => ({ id: r.id ?? '', key: r.key, content: r.content })),
+          }
+        : {
+            id: p.id,
+            kind: p.kind,
+            title: p.title,
+            items: (Array.isArray(p.raw.items) ? (p.raw.items as { id?: unknown }[]) : [])
+              .map((i) => i.id)
+              .filter((x): x is string => typeof x === 'string'),
+          },
+    );
+  const steps: StepSpec[] = [
+    {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [{ label, kind: 'copy', resourceId: page.id, templateId: input.templateId, properties }],
+        },
+      },
+    },
+  ];
+  const bind = { step: input.copyStepNo };
+  const journal = { ...input.journalOperation, page: { id: page.id, name: page.name }, counts };
+  rowWrites.forEach((w, i) => {
+    steps.push({
+      op: w.op,
+      params: w.params,
+      bindIds: bind,
+      ifMatchFrom: i === 0 ? { step: input.copyStepNo, key: label } : { step: input.copyStepNo + i },
+      expectCurrent: { state: 'rows', hash: rowsContentHash(rowStates(w.rowsBefore ?? [])), label },
+      deferTreeReread: true,
+      journalOperation: { ...journal, write: w.label },
+    });
+  });
+  for (const w of collWrites) {
+    steps.push({
+      op: w.op,
+      params: w.params,
+      bindIds: bind,
+      deferTreeReread: true,
+      journalOperation: { ...journal, write: w.label },
+    });
+  }
+  const verify: VerifyTarget = {
+    kind: 'facts',
+    label: page.name,
+    resourceId: page.id,
+    ...(plan.property && rowWrites.length > 0
+      ? {
+          property: {
+            title: plan.property.title,
+            rows: plan.rowsAfter.map((r) => ({ key: r.key, content: [...r.content] })),
+          },
+        }
+      : {}),
+    ...(collWrites.length > 0
+      ? {
+          collections: plan.links
+            .filter((l) => collWrites.some((w) => w.propertyId === l.propertyId))
+            .map((l) => ({
+              title: l.title,
+              items: l.after.items.map((it) => ({ resourceId: it.resourceId, documentId: it.documentId })),
+            })),
+        }
+      : {}),
+  };
+  return { steps, verify, parts, counts, facts, links };
 }

@@ -1211,6 +1211,10 @@ export class TreeService {
           }
           const outcome = this.store.applyObservation(ctx, obs, r.t);
           if (listingNow) this.store.stageIfListing(projectId, obs, r.t);
+          // v2 C2b: a page the bridge created from a template records that template at once (set_facts' template order).
+          if (kind === 'create' && typeof flags.templateId === 'string' && this.store.has(projectId, id)) {
+            this.store.setTemplate(projectId, id, flags.templateId);
+          }
           const after = this.store.node(projectId, id);
           if (
             outcome === 'added' ||
@@ -1608,9 +1612,12 @@ function targetIds(op: string, params: OpParams, value: unknown): string[] {
 
 function flagsOf(op: string, params: OpParams): RereadFlags {
   const body = (params.body ?? {}) as Record<string, unknown>;
-  return op === 'createResourceFromTemplate' && body.includeChildren === true
-    ? { includeChildren: true }
-    : {};
+  if (op !== 'createResourceFromTemplate') return {};
+  return {
+    ...(body.includeChildren === true ? { includeChildren: true } : {}),
+    // v2 C2b: the template the page was created from, recorded on its node by the re-read.
+    ...(typeof body.templateId === 'string' ? { templateId: body.templateId } : {}),
+  };
 }
 
 function parseIds(text: string): string[] {

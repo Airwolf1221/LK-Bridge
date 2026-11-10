@@ -841,6 +841,54 @@ export class JobEngine {
    * been sent keeps the version it was sent with (recovery compares with it). Returns the refusal when the version is
    * missing (nothing is sent then), or null.
    */
+  /**
+   * v2 C2b: replaces the template ids in the params of a step with `options.bindIds` by the ids of the page this job
+   * created from that template, from the `ids` map the named `bridge.expect` step returned (see `StepOptions.bindIds`).
+   * Done once, before anything is sent, and stored; a step being recovered keeps what it was sent with.
+   */
+  private bindIds(job: JobView, step: StepView): JobsError | null {
+    const from = step.options.bindIds;
+    if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
+    const result =
+      source?.status === 'succeeded'
+        ? (this.repo.stepResult(source) as { ids?: Record<string, unknown> } | null)
+        : null;
+    const ids = result?.ids;
+    if (!ids || typeof ids !== 'object') {
+      return new JobsError(
+        'BRIDGE_ERROR',
+        `${step.opId}: step ${from.step} gave no ids of the new page to bind; nothing was sent`,
+        ref,
+      );
+    }
+    const map = (v: unknown): unknown => (typeof v === 'string' && typeof ids[v] === 'string' ? ids[v] : v);
+    const params = this.repo.stepParams(step);
+    const path = params.path
+      ? Object.fromEntries(
+          Object.entries(params.path).map(([k, v]) => [
+            k,
+            k === 'propertyId' || k === 'rowId' ? (map(v) as string) : v,
+          ]),
+        )
+      : undefined;
+    let body = params.body;
+    if (body && typeof body === 'object' && !Array.isArray(body)) {
+      const b = { ...(body as Record<string, unknown>) };
+      for (const k of ['after', 'before']) if (k in b) b[k] = map(b[k]);
+      if (Array.isArray(b.items)) {
+        b.items = (b.items as unknown[]).map((i) =>
+          i && typeof i === 'object' && 'id' in i ? { ...(i as Record<string, unknown>), id: map(i.id) } : i,
+        );
+      }
+      body = b;
+    }
+    const next: OpParams = { ...params, ...(path ? { path } : {}), ...(body !== undefined ? { body } : {}) };
+    if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
+    return null;
+  }
+
   private bindIfMatch(job: JobView, step: StepView): JobsError | null {
     const from = step.options.ifMatchFrom;
     if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
@@ -1315,8 +1363,13 @@ export class JobEngine {
       }
       entry.current = new AbortController();
       this.repo.updateJob(jobId, { currentStep: step.stepNo });
-      // v2 C2a: a write that chains its If-Match from an earlier step gets it now (stored before anything is sent).
-      const bound = this.bindIfMatch(job, step);
+      // v2 C2b: a write to a page this job created from a template gets the copy's ids now; v2 C2a: a write that chains
+      // its If-Match from an earlier step gets it now (both stored before anything is sent).
+      let bound = this.bindIds(job, step);
+      if (!bound) {
+        step = this.repo.step(jobId, step.stepNo) ?? step; // the params as just bound
+        bound = this.bindIfMatch(job, step);
+      }
       if (bound) {
         last = { kind: 'failed', error: bound, uncertain: false };
         this.repo.updateStep(jobId, step.stepNo, {
@@ -2142,6 +2195,8 @@ function stepOptions(o: StepOptions): StepOptions {
       : {}),
     ...(o.deferTreeReread === true ? { deferTreeReread: true } : {}),
     ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
+    // v2 C2b: set by bridge code only.
+    ...(o.bindIds && Number.isInteger(o.bindIds.step) ? { bindIds: { step: o.bindIds.step } } : {}),
   };
 }
 

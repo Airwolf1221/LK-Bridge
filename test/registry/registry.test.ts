@@ -514,8 +514,8 @@ describe('character placement', () => {
     expect(p.page).toEqual({
       action: 'create',
       parentId: null,
-      rawName: '[BSRC] Kitsune Ren',
-      displayName: 'Kitsune Ren',
+      rawName: '[BSRC] Kitsune Ren - Character Core',
+      displayName: 'Kitsune Ren - Character Core',
       templateRole: 'core',
       templateId: 'tplcore1',
       referenceType: 'Character Core',
@@ -531,7 +531,8 @@ describe('character placement', () => {
     ]);
     const p = plan('Wren Hale', 'Dwarves', 'core');
     expect(p.characterIndex).toMatchObject({ action: 'reuse', node: { id: 'wren0001' } });
-    expect(p.page).toMatchObject({ action: 'create', parentId: 'wren0001', slot: { before: 'wren0002' } });
+    // The default page name is "{name} - Character Core" (C2b), which sorts after "Wren Hale - Art".
+    expect(p.page).toMatchObject({ action: 'create', parentId: 'wren0001', slot: { after: 'wren0002' } });
   });
 
   it('places a compact reference directly under the race, or returns the existing one', () => {
@@ -540,7 +541,7 @@ describe('character placement', () => {
     expect(p.page).toMatchObject({
       action: 'create',
       parentId: 'human001',
-      rawName: '[BSRC] Oren Pike',
+      rawName: '[BSRC] Oren Pike - Character Reference',
       templateId: 'tplcomp1',
       referenceType: 'Compact Character Reference',
       slot: { after: 'cora0001' },

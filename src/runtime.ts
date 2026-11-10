@@ -39,6 +39,8 @@ import {
   WRITE_PAGE_PLANNER,
 } from './pages/index.js';
 import { CanonicalGuard } from './facts/index.js';
+import { FactsVersions } from './facts/version.js';
+import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
 import {
   InstanceGuard,
@@ -270,6 +272,20 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       settings: (projectId) => projectStore.byId(projectId)?.settings,
       engine,
       pageName,
+      // v2 C2b: a cascade delete's pages, from the repository tree (null when the tree cannot answer).
+      descendants: (projectId, resourceId) => {
+        try {
+          const status = tree.queries.status(projectId).status;
+          if (status !== 'ready' && status !== 'stale') return null;
+          if (!tree.queries.node(projectId, resourceId).data) return null; // not in the tree: listed live
+          return tree.queries
+            .subtree(projectId, resourceId, { limit: 100_000 })
+            .data.entries.map((e) => e.node.id)
+            .filter((id) => id !== resourceId);
+        } catch {
+          return null;
+        }
+      },
     }),
   );
 
@@ -344,6 +360,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         versions,
         projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
         templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
+        // v2 C2b: factsVersion's memory, and the create tools' operation ids and duplicate-request claims (kept at
+        // least as long as the journal).
+        factsVersions: new FactsVersions(o.db, () => (o.clock ?? systemClock).now()),
+        requests: new RequestRegistry(
+          o.db,
+          () => (o.clock ?? systemClock).now(),
+          Math.max(30, config.journal.retentionDays + 1) * 24 * 3_600_000,
+        ),
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
