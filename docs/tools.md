@@ -8,9 +8,9 @@ Source: `src/mcp/tools/`. Design notes: [ADR 0011](adr/0011-tool-layer.md). Auth
 
 ## Agent guidance (the MCP server `instructions`)
 
-> LK-Bridge gives governed access to one or more LegendKeeper projects: list_projects names them, and every tool takes an optional project. Reads without project use the default project; a write must name its project when the bridge serves several. Each project has its own rate budget, shared and finite: every result names its project and ends with that project's budget line. Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. Read before you write, and pass the version you read as params.ifMatch. Never loop on budget errors: wait until the stated retry time. Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost: follow a job with bridge_job_status and a proposal with bridge_proposal_status. Results are summaries; ask for detail "full" only when you need the whole payload, and page oversized results with bridge_result_page.
+> LK-Bridge gives governed access to LegendKeeper projects (list_projects); every tool takes an optional project, and a write must name its project when the bridge serves several. Call get_bridge_guide first: it explains projects, the repository tree, finding and reading pages, writing, budgets and proposals. Find pages with search and browse_repository_tree, read them with get_resource and read_document (Markdown; see get_markdown_guide). Every result names its project and ends with that project's budget line; budgets are finite, so never loop on budget errors, and check bridge_estimate before hundreds of calls. Never retry a write that returned waiting_budget, queued or proposal_captured: follow a job with bridge_job_status and a proposal with bridge_proposal_status. Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page. The lk_api_* tools are the low-level fallback.
 
-The text is `BRIDGE_INSTRUCTIONS` in `src/mcp/tools/index.ts`; a test checks it covers each point.
+The text is `BRIDGE_INSTRUCTIONS` in `src/mcp/tools/index.ts`; a test checks it covers each point. Since v2 B2 it is short and points to the bridge guide ([bridge-guide.md](bridge-guide.md), served by `get_bridge_guide`); the detail that used to be here lives in the guide.
 
 ## How results look
 
@@ -50,28 +50,42 @@ budget (arkona): writes 0/120·min …
 
 `access` (`read` or `write`) is what the policy layer filters on: a connection whose profile has scope `read` sees only `read` tools, and a direct call to a hidden `write` tool is refused with the read-only message; the engine's policy gate refuses the write in any case ([policy.md](policy.md)). Annotations are what Claude and ChatGPT use to decide what to auto-approve: read tools are `readOnlyHint: true`; write tools are `readOnlyHint: false`.
 
-| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                              |
-| --------------------------- | ------ | --------------------------------------------------------------- | --------------------------------- |
-| `list_projects`             | read   | true / false / true / false                                     | none                              |
-| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                              |
-| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                              |
-| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                            |
-| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)  |
-| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority |
-| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100            |
-| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)  |
-| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)     |
-| `bridge_budget`             | read   | true / false / true / false                                     | none                              |
-| `bridge_estimate`           | read   | true / false / true / false                                     | none                              |
-| `bridge_job_status`         | read   | true / false / true / false                                     | none                              |
-| `bridge_job_wait`           | read   | true / false / true / false                                     | none (waits at most 25 s)         |
-| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                              |
-| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                              |
-| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                              |
-| `bridge_result_page`        | read   | true / false / true / false                                     | none                              |
-| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                              |
-| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                              |
-| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation             |
+| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                                      |
+| --------------------------- | ------ | --------------------------------------------------------------- | ----------------------------------------- |
+| `list_projects`             | read   | true / false / true / false                                     | none                                      |
+| `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                           |
+| `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                     |
+| `search`                    | read   | true / false / true / false                                     | none; 1 read with `content: true`         |
+| `get_resource`              | read   | true / false / true / false                                     | 1 read (none with `live: false`)          |
+| `get_resources`             | read   | true / false / true / false                                     | 1 read per page, one job                  |
+| `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                           |
+| `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates         |
+| `list_calendars`            | read   | true / false / true / false                                     | 1 read                                    |
+| `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                     |
+| `read_document`             | read   | true / false / true / false                                     | 1 read (a timeline: 2 + 1 per 100 events) |
+| `get_markdown_guide`        | read   | true / false / true / false                                     | none                                      |
+| `get_bridge_guide`          | read   | true / false / true / false                                     | none                                      |
+| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                      |
+| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                                      |
+| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                                    |
+| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)          |
+| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority         |
+| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                    |
+| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)          |
+| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)             |
+| `bridge_budget`             | read   | true / false / true / false                                     | none                                      |
+| `bridge_estimate`           | read   | true / false / true / false                                     | none                                      |
+| `bridge_job_status`         | read   | true / false / true / false                                     | none                                      |
+| `bridge_job_wait`           | read   | true / false / true / false                                     | none (waits at most 25 s)                 |
+| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                      |
+| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                      |
+| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                      |
+| `bridge_result_page`        | read   | true / false / true / false                                     | none                                      |
+| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                                      |
+| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                                      |
+| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                     |
+
+`lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*` are **low-level tools**: since v2 B2 they are left out of the tool list of a profile whose **show low-level tools** setting is off (the default; [below](#visibility-of-the-low-level-tools)).
 
 `lk_api_write` is annotated `destructiveHint: true` because it covers the destructive operations; clients therefore ask before each write.
 
@@ -114,7 +128,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (106 tools in all, 108 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (118 tools in all, 120 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -139,6 +153,123 @@ budget (arkona): writes 0/120·min …
 **`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)).
 
 **`bridge_result_page`** `{ handle, offset?, limit?, detail? }`: for a paginate handle `offset` and `limit` count items (the page is trimmed to the output budget; use `nextOffset`); for a stored oversized result `offset` counts characters of the JSON text and slices must be concatenated in order.
+
+## Discover and read tools (v2 B2)
+
+The first tools built on the bridge's own models (the repository tree, the asset tree and the type registry) and on the
+Markdown converter. All are `read` tools with `readOnlyHint: true`, take the optional `project`, and end with the
+project's budget line. Design: [ADR 0029](adr/0029-discover-and-read-tools.md). The agent guide is
+[bridge-guide.md](bridge-guide.md).
+
+**Rules that hold for all of them**
+
+- **Only the AI REPOSITORY.** A page outside the project's AI REPOSITORY root is refused (`NOT_FOUND`, or
+  `NOT_IN_REPOSITORY` for an id-shaped query), with a message that `lk_api_read` can still reach it. The asset library
+  has no such root and is browsable whole; templates are listed by `list_templates`.
+- **Names or ids.** A page is a name or an id, resolved by A3's resolver (display name, full name, alias, Canonical
+  Display Name; a stray `[INDEX]` or `[BSRC]` is removed). Several matches are refused as `AMBIGUOUS` with `candidates`
+  (id, name, kind, path); none is `NOT_FOUND` with `near` names as a hint only. Nothing is guessed.
+- **The tree's status.** Every answer from the tree has `tree: { status, confirmedAt, confirmed, note? }`. `stale` still
+  answers (and says so); `not_configured`, `not_built` and `building` are refused with `TREE_NOT_CONFIGURED` or
+  `TREE_NOT_READY`, with nothing spent. Asset answers carry `assetTree` the same way and refuse with
+  `ASSET_TREE_NOT_READY`.
+- **Sizes.** Summaries by default; a result longer than `MCP_RESULT_MAX_CHARS` is stored and comes back as
+  `{ status: "stored", handle, chars, preview }` for `bridge_result_page`. Default results stay under 20,000 tokens (3.5
+  characters per token) on the test world's largest subtree, a 100-result search and the Fourth Age table page.
+
+### Finding things
+
+**`browse_repository_tree`** `{ path?, depth?, kinds?, limit?, offset? }`: a subtree, nested. Each page: `id`, `name`
+(display), `kind` (`index` / `bsrc` / `unclassified`), `type` (Reference Type), `scope` (shortened to 60 characters),
+`tags`, `childCount`, and `children` down to `depth` (default 2, at most 6; 0 is the page alone). `path` is a name, an id
+or `"Characters / Beastkin / Foxians"` (default: the root). `kinds` leaves out other kinds (and their subtrees; `matchingChildren` says how many matched).
+`limit` (default 150, at most 400) cuts the listing level by level and says so (`truncated`, `nextOffset`); `offset`
+skips the first page's children. Cost: none.
+
+```json
+{ "path": "Foxians", "depth": 2 }
+```
+
+**`browse_asset_tree`** `{ folder?, depth?, includeAssets?, assetsPerFolder?, limit? }`: the same for asset folders:
+each folder's `folderCount` and `assetCount`, subfolders to `depth`, and with `includeAssets: true` up to
+`assetsPerFolder` (20) assets per folder (name, type, dimensions, size where LegendKeeper says). `folder` is an id, a name
+or a path (`"Characters / Beastkin / Qishen"`); a name shared by several folders is `AMBIGUOUS` with their paths. Cost: none.
+
+**`search`** `{ query, content?, limit?, offset? }`. Syntax: words (all must match), `"quoted phrases"`, `OR`, `NOT` or a
+leading `-`, `( )`, and the filters `name:` `tag:` `type:` (Reference Type, whole words) `kind:` (`index` / `bsrc` /
+`unclassified`) `under:` (a page name or id; pages below it) `scope:`. `NOT` binds tightest, then `AND` (spaces), then
+`OR`; `OR`, `AND` and `NOT` are operators only in capitals. A word without a filter matches the display name, aliases,
+Canonical Display Name and Scope. Results are ranked exact name, name prefix, a word of the name, text inside the name,
+alias or Canonical Display Name, then Scope, and each result's `matched` says why. A malformed query is `SEARCH_SYNTAX`
+with `position` and an explanation. Cost: none from the tree.
+
+`content: true` also runs LegendKeeper's own search for the positive words (1 read; ranked, **incomplete by nature**,
+no operators). The bridge applies the operators to the combined results, removes duplicates and pages outside the root,
+and marks pages found only through their text (`foundBy: "page text"`, ranked after every name match). With no words to
+search for (only filters), LegendKeeper is not asked. If the tree cannot answer, a plain-text content search still works
+(live, confined to the root by each hit's ancestry); anything with operators is refused.
+
+```json
+{ "query": "foxian tag:elder -kind:index under:Characters", "limit": 10 }
+```
+
+**`get_resource`** `{ resource, live? }`: the page from the tree (`path`, `kind`, `documents` (id, name, type), `tags`,
+`aliases`, `referenceType`, `scope`, `indexScope`, `canonicalDisplayName`, `childCount`, flags, when the tree read it)
+and, from one live `getResource`, its `sidebar` in order: `facts` (key and value, with `mentions` of pages), `links`
+(collections and links, each item with the page's name and, for a link to one document, `documentId` and the document's
+name; `hasFilter` when LegendKeeper adds items by a filter), `text`, and any other property named with `readOnly: true`
+(`unsupported: true` for what the API cannot show, such as the TAGS block). A property's `version` is included where
+LegendKeeper's answer has one. Cost: 1 read; `live: false` makes none.
+
+**`get_resources`** `{ resources, live?, detail?, confirm? }`: up to 25 pages as one `batch_ops` job. Each entry is `ok`
+with the same data (summarised unless `detail: "full"`) or has its own `error`. More than 10 live reads return
+`{ status: "estimate", reads, wallClockSeconds, tightestTier, fitsToday }` and run only on `confirm: true`. Cost: 1 read per page.
+
+**`list_tags`** `{ query?, limit? }`: the tags in use under the root with counts, most used first. Cost: none.
+**`list_templates`** `{ refresh? }`: each template (name, id) and the registry type and role that use it
+(`usedBy`). From the bridge's copy (when it was read is shown); read live (1 read per 100) when there is none or with
+`refresh: true`. **`list_calendars`** `{}`: name, id, months (count and names), days in a regular year, hours and
+minutes, eras and formats, summarised. Cost: 1 read. **`list_assets`** `{ folder?, type?, limit?, offset? }`: the assets
+directly in a folder, paged, with `url` (use it in Markdown as `![alt](url)`). Cost: none.
+
+### Reading
+
+**`read_document`** `{ resource, document?, outline?, section?, format? }`: a document of a page, `document` by name or id
+(default "Main"; a page without one named Main but with a single document uses that, and says so). Returns
+`{ format: "markdown", markdown, version, regions, warnings?, blockCount }`: B1's Markdown, the document version for the
+write tools, and every keep region (`id`, `kind`, why). `outline: true` returns `headings` (level, text, `path`);
+`section: "Biography > Early Life"` returns just that section (with its regions); a heading that occurs more than once
+is `SECTION_AMBIGUOUS` with `options` (choose with `Notes [2]`), and none is `SECTION_NOT_FOUND` with the page's
+headings. `format: "json"` returns the raw blocks. Maps, timelines and boards are rendered read-only by B1's renderers
+(`document.type` says which). Cost: 1 read for a page, map or board; a timeline reads its lanes and then 100 events per
+read (at most 1,000 events). A long result is a handle.
+
+```json
+{ "resource": "Asagiri Miyabi", "section": "Biography" }
+```
+
+### The guides
+
+**`get_bridge_guide`** and **`get_markdown_guide`** `{ section? }` return [bridge-guide.md](bridge-guide.md) and
+[markdown.md](markdown.md), whole or one section by heading (`"Keep regions"`, or `"A > B"`; an unknown heading lists
+them). Both are also MCP resources: `lk-bridge://guides/bridge` and `lk-bridge://guides/markdown`
+(`text/markdown`). Cost: none.
+
+### Visibility of the low-level tools
+
+Each profile has **show low-level tools** (default off), edited on the dashboard's Clients & Access page and audited
+(`profile.set_low_level_tools`). When off, `tools/list` leaves out `lk_api_list_operations`, `lk_api_describe_operation`,
+`lk_api_paginate_all` and every `lk_op_*`. `lk_api_read`, `lk_api_write`, `lk_api_batch` and `lk_upload_image` stay.
+**Hiding changes the list, nothing else:** a hidden tool is still refused or allowed at call time by the profile's scope
+and the engine's guards exactly as before. The change applies at the next `tools/list`; ChatGPT needs a tool refresh
+(Plugins, the bridge, Refresh).
+
+The tools a profile sees:
+
+| Setting | Tools                                                                                                                                                                                                                                                                                                        |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| off     | the 12 above, `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (28 for a profile with scope `propose` or `write`; a `read` profile does not see the four write tools `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                    |
 
 ## Image upload
 

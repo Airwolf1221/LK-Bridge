@@ -32,3 +32,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0026](0026-type-registry-and-name-resolution.md)      | The type registry and taxonomy, name resolution, ordering and character placement     | Accepted |
 | [0027](0027-asset-tree.md)                             | The asset tree: a walk of the library, observation order, placement as a pure plan    | Accepted |
 | [0028](0028-secrets-on-the-dashboard.md)               | Projects, keys and the owner's sign-in on the dashboard, in an encrypted store        | Accepted |
+| [0029](0029-discover-and-read-tools.md)                | The Discover and Read tools, the guides, and hiding the low-level tools per profile   | Accepted |

@@ -36,7 +36,12 @@ import {
 } from './db/migrate.js';
 import { InstanceLockError } from './projects/index.js';
 import { type Db, openDatabase } from './db/open.js';
-import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/server.js';
+import {
+  type BridgeInfo,
+  type McpResourceProvider,
+  type McpToolProvider,
+  bridgeInfoStub,
+} from './mcp/server.js';
 import { mcpMaxBodyBytes, mcpTransportPlugin } from './mcp/transport.js';
 import { type Policy, createPolicy } from './policy/index.js';
 import { createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
@@ -59,6 +64,8 @@ export interface BuildServerOptions {
   /** MCP tools. Defaults to the `bridge_info` stub. */
   readonly tools?: readonly McpToolProvider[];
   readonly bridgeInfo?: () => BridgeInfo;
+  /** v2 B2: documents published as MCP resources (the guides). */
+  readonly resources?: readonly McpResourceProvider[];
   /** MCP server `instructions` shown to connecting agents. */
   readonly instructions?: string;
   /** Largest `/mcp` request body (chunk 8, F-05). Defaults to the SDK's 4 MiB; `createBridge` sizes it for uploads. */
@@ -198,6 +205,7 @@ export async function buildServer(
     // The policy layer's proposal tools, unless the caller's list has them already (the runtime's does).
     tools: withPolicyTools(o.tools ?? [bridgeInfoStub(bridgeInfo)], policy.tools),
     access: policy.access,
+    ...(o.resources ? { resources: o.resources } : {}),
     ...(o.mcpMaxBodyBytes !== undefined ? { maxBodyBytes: o.mcpMaxBodyBytes } : {}),
   });
 
@@ -276,6 +284,7 @@ export async function createBridge(
     ...(o.logStream ? { logStream: o.logStream } : {}),
     ...(o.pruneIntervalMs !== undefined ? { pruneIntervalMs: o.pruneIntervalMs } : {}),
     tools: runtime.tools,
+    resources: runtime.resources,
     instructions: runtime.instructions,
     mcpMaxBodyBytes: mcpMaxBodyBytes(o.toolsSettings.upload.maxBytes),
     policy: runtime.policy,

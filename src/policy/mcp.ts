@@ -21,7 +21,7 @@ export function createMcpAccessControl(gate: LivePolicyGate): McpAccessControl {
       if (!id) return undefined;
       const r = gate.resolve(id);
       if (!r?.active) return undefined;
-      return { principal: r.principal, scope: r.scope };
+      return { principal: r.principal, scope: r.scope, showLowLevelTools: r.showLowLevelTools };
     },
   };
 }

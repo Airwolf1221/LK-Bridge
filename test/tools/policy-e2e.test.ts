@@ -73,6 +73,8 @@ describe('boot: the live gate is in use', () => {
 describe('every engine-backed tool acts as the caller', () => {
   it('sends the real principal and the tool name to the engine, never a placeholder or system', async () => {
     const me = await as('origins', 'write');
+    // The low-level tools are hidden by default (v2 B2); this test calls every one.
+    stack.runtime.policy.commands.setShowLowLevelTools('owner', me.profileId, true);
     const principal = stack.runtime.policy.store.lookupPrincipal(me.patId)!.principal;
     const engine = stack.runtime.engine;
     const seen: { tool: string; origin: JobOrigin; opId?: string }[] = [];

@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased: v2 B2, the Discover and Read tools (10 November 2026)
+
+The first v2 tools agents use ([ADR 0029](adr/0029-discover-and-read-tools.md); every tool in
+[tools.md](tools.md#discover-and-read-tools-v2-b2); the agent guide in [bridge-guide.md](bridge-guide.md)).
+
+- **Twelve new read tools**, all `readOnlyHint: true`, all taking `project` and ending with the budget footer:
+  `browse_repository_tree`, `browse_asset_tree`, `search`, `get_resource`, `get_resources`, `list_tags`,
+  `list_templates`, `list_calendars`, `list_assets`, `read_document`, `get_markdown_guide` and `get_bridge_guide`. They
+  answer from the repository tree, the asset tree and the type registry (no LegendKeeper request) except where a
+  description says it reads live. Every answer from the tree states its status and when it was last confirmed; a tree
+  that cannot answer is refused with nothing spent. Only the AI REPOSITORY is reachable; a page outside it is refused with
+  a message that `lk_api_read` can still reach it.
+- **`search`** has a real query language (words, `"phrases"`, `OR`, `NOT` or `-`, parentheses, `name:` `tag:` `type:`
+  `kind:` `under:` `scope:`), ranked results that say why they matched, and parse errors with a position.
+  `content: true` also asks LegendKeeper's own (incomplete) search once and merges, de-duplicates and marks its results.
+- **`read_document`** returns B1's Markdown with the document version and keep regions, or `outline`, or one `section`
+  (a duplicate heading is refused with the options), or `format: "json"`; maps, timelines and boards are rendered
+  read-only. A long page is stored and returned as a handle.
+- **The guides** are tools and MCP resources (`lk-bridge://guides/bridge`, `lk-bridge://guides/markdown`). The server
+  instructions are now a few sentences pointing to `get_bridge_guide`.
+- **`showLowLevelTools`** (new, per profile, default off; migration 1100; audited as `profile.set_low_level_tools`;
+  a checkbox on Clients & Access): when off, `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`
+  and every `lk_op_*` are left out of the tool list. Calls to them are refused or allowed by policy exactly as before.
+- Engine: `JobEngine.stepResults(project, jobId)` (the stored result of each step of a finished job), used by
+  `get_resources`.
+- Tests: `test/discover/` (the language, every tool through the real server and the official client on a 1,200-page
+  world with the spike's asset library, a tree that is not ready or stale, result sizes, two projects, visibility), the
+  tool-enumeration security test now covers the new tools and shows every tool to its attacker, and the tool-list tests
+  count 31 tools (28 shown to a profile without the setting).
+- **Merged A4's branch** (PR #23, not yet on `main` when this was built) to build on the asset tree. Merge #23 first.
+- **For the owner:** ChatGPT keeps its own copy of the tool list. After deploying: Plugins, the bridge, **Refresh**.
+
 ## Unreleased: v2 A4 follow-up, the registry wiring and two deploy fixes (10 November 2026)
 
 - **The planner uses A3's type registry** ([docs/assets.md](assets.md#placement-planning), ADR 0027). The project's

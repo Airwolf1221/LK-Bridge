@@ -96,8 +96,8 @@ describe('result shaping', () => {
   it('tells agents what the plan requires', () => {
     for (const phrase of [
       'bridge_estimate',
-      'lk_api_batch',
-      'ifMatch',
+      'get_bridge_guide',
+      'get_markdown_guide',
       'loop',
       'waiting_budget',
       'proposal_captured',

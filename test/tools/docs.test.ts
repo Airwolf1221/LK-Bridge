@@ -15,9 +15,9 @@ describe('docs/tools.md', () => {
     expect(docs).toContain('lk_op_<operationId>');
   });
   it('states the tool counts', () => {
-    // Chunk 3's 16 and v2 A1's list_projects (the policy layer adds its two proposal tools on the server).
-    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(17);
-    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(17 + 89);
-    expect(docs).toContain('106 tools');
+    // Chunk 3's 16, v2 A1's list_projects and v2 B2's twelve (the policy layer adds its two proposal tools on the server).
+    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(29);
+    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(29 + 89);
+    expect(docs).toContain('118 tools');
   });
 });

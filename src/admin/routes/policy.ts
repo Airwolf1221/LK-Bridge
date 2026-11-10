@@ -146,6 +146,13 @@ export const registerPolicy: Register = (api, ctx) => {
     return { profile: actions.setScope(id, b.scope, b.confirmRaise) };
   });
 
+  /** v2 B2: whether the profile's connections are shown the low-level tools (hiding is cosmetic; policy is unchanged). */
+  api.put('/clients/profiles/:id/low-level-tools', (req) => {
+    const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    const b = parseInput(z.object({ show: z.boolean() }), req.body);
+    return { profile: actions.setShowLowLevelTools(id, b.show) };
+  });
+
   api.put('/clients/default-scope', (req) => {
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
     return { defaultScope: actions.setDefaultScope(b.scope, b.confirmRaise) };

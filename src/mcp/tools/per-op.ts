@@ -51,6 +51,7 @@ export function perOpTools(deps: ToolDeps): McpToolProvider[] {
     const name = `lk_op_${op.operationId}`;
     return defineTool({
       name,
+      lowLevel: true,
       title: op.summary,
       access: isWrite ? 'write' : 'read',
       description:

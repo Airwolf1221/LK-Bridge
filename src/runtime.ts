@@ -14,11 +14,12 @@ import {
 import type { Db } from './db/open.js';
 import { createJobEngine, UPLOAD_PUT_STEP, type JobEngine } from './jobs/index.js';
 import { defaultTransport, type Clock, type Transport } from './lk/index.js';
-import type { McpToolProvider } from './mcp/server.js';
+import type { McpResourceProvider, McpToolProvider } from './mcp/server.js';
 import {
   BRIDGE_INSTRUCTIONS,
   createBridgeTools,
   createUploadPutHandler,
+  guideResources,
   createUploadTransport,
 } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
@@ -72,6 +73,8 @@ export interface Runtime {
   /** v2 A4: the asset tree of each project's asset library (build, after-write updates, refresh, check, queries, placement). */
   readonly assets: AssetService;
   readonly tools: readonly McpToolProvider[];
+  /** v2 B2: the guides, published as MCP resources. */
+  readonly resources: readonly McpResourceProvider[];
   readonly instructions: string;
   /** The configuration the components were built from: the environment plus the dashboard's stored settings. */
   readonly config: Config;
@@ -293,6 +296,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       version: o.version,
       configuredReadOnly: config.lk.readOnly,
       uploadGuard,
+      services: { tree, registry, assets },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
   );
@@ -315,6 +319,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     registry,
     assets,
     tools,
+    resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
     config,
     envConfig,

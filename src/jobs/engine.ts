@@ -743,6 +743,31 @@ export class JobEngine {
   }
 
   /**
+   * v2 B2: the stored result of each step of a finished job of `projectId` (a read's value, or its error), in step
+   * order. Undefined for a job of another project or one that does not exist.
+   */
+  stepResults(
+    projectId: string,
+    jobId: string,
+  ):
+    | readonly {
+        readonly stepNo: number;
+        readonly status: string;
+        readonly value: unknown;
+        readonly error: unknown;
+      }[]
+    | undefined {
+    const job = this.repo.job(jobId);
+    if (!job || job.projectId !== projectId) return undefined;
+    return this.repo.steps(jobId).map((st) => ({
+      stepNo: st.stepNo,
+      status: st.status,
+      value: st.status === 'succeeded' ? this.repo.stepResult(st) : null,
+      error: st.error,
+    }));
+  }
+
+  /**
    * Bounded wait (at most `maxWaitMs`, 25 s) for a job of `projectId` to finish. Resolves with the job as it then
    * stands. A job of another project is not found.
    */

@@ -1,0 +1,127 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { operations } from '../../src/lk/index.js';
+import { discoverWorld, type DiscoverWorld } from './world.js';
+
+let w: DiscoverWorld;
+beforeAll(async () => {
+  w = await discoverWorld({ bulk: 20, env: { MCP_EXPOSE_PER_OP_TOOLS: 'true' } });
+});
+afterAll(() => w.close());
+
+const LOW = ['lk_api_list_operations', 'lk_api_describe_operation', 'lk_api_paginate_all'];
+const list = async (token: string) =>
+  (await (await w.stack.connect(token)).listTools()).tools.map((t) => t.name).sort();
+
+describe('showLowLevelTools, per profile', () => {
+  it('is off by default: the low-level tools and every lk_op_* are hidden, the fallback stays', async () => {
+    const names = await list(w.stack.token);
+    for (const n of LOW) expect(names, n).not.toContain(n);
+    expect(names.filter((n) => n.startsWith('lk_op_'))).toEqual([]);
+    for (const n of ['lk_api_read', 'lk_api_write', 'lk_api_batch', 'lk_upload_image'])
+      expect(names, n).toContain(n);
+    for (const n of ['browse_repository_tree', 'search', 'read_document', 'get_resource', 'get_bridge_guide'])
+      expect(names, n).toContain(n);
+    // The final list with the setting off (documented in docs/tools.md).
+    expect(names).toEqual(
+      [
+        'bridge_budget',
+        'bridge_errors_recent',
+        'bridge_estimate',
+        'bridge_info',
+        'bridge_job_cancel',
+        'bridge_job_status',
+        'bridge_job_wait',
+        'bridge_journal_lookup',
+        'bridge_proposal_status',
+        'bridge_proposals_mine',
+        'bridge_result_page',
+        'browse_asset_tree',
+        'browse_repository_tree',
+        'get_bridge_guide',
+        'get_markdown_guide',
+        'get_resource',
+        'get_resources',
+        'list_assets',
+        'list_calendars',
+        'list_projects',
+        'list_tags',
+        'list_templates',
+        'lk_api_batch',
+        'lk_api_read',
+        'lk_api_write',
+        'lk_upload_image',
+        'read_document',
+        'search',
+      ].sort(),
+    );
+  });
+
+  it('is per profile and takes effect on the next tools/list, with an audit row', async () => {
+    const a = w.stack.newToken('shows-low', 'write');
+    const b = w.stack.newToken('hides-low', 'write');
+    expect(await list(a.token)).not.toContain('lk_api_describe_operation');
+    const before = w.stack.policy.store.listAudit({ action: 'profile.set_low_level_tools' }).length;
+    w.stack.policy.commands.setShowLowLevelTools('owner', a.profileId, true);
+    expect(w.stack.policy.store.listAudit({ action: 'profile.set_low_level_tools' })).toHaveLength(
+      before + 1,
+    );
+    const withLow = await list(a.token);
+    for (const n of LOW) expect(withLow, n).toContain(n);
+    expect(withLow.filter((n) => n.startsWith('lk_op_'))).toHaveLength(operations.length);
+    // Another profile is untouched.
+    expect(await list(b.token)).not.toContain('lk_api_describe_operation');
+    expect(await list(w.stack.token)).not.toContain('lk_api_paginate_all');
+    // And back.
+    w.stack.policy.commands.setShowLowLevelTools('owner', a.profileId, false);
+    expect(await list(a.token)).not.toContain('lk_api_list_operations');
+  });
+
+  it('shows 28 tools off and 28 + 3 + 89 on', async () => {
+    const t = w.stack.newToken('counting', 'write');
+    expect(await list(t.token)).toHaveLength(28);
+    w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
+    expect(await list(t.token)).toHaveLength(28 + 3 + operations.length);
+  });
+
+  it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {
+    // read scope: the hidden read tools still work, the hidden write tools are refused as read-only.
+    const reader = w.stack.newToken('hidden-reader', 'read');
+    const rc = await w.stack.connect(reader.token);
+    const describe = await w.stack.call(rc, 'lk_api_describe_operation', { operationId: 'getResource' });
+    expect(describe.isError, describe.text).toBe(false);
+    const list = await w.stack.call(rc, 'lk_api_list_operations', { kind: 'read' });
+    expect(list.isError).toBe(false);
+    const write = await rc.callTool({
+      name: 'lk_op_updateResource',
+      arguments: { path: { resourceId: 'kaede001' }, body: { name: 'x' } },
+    });
+    expect(write.isError).toBe(true);
+    expect((write.content[0] as { text: string }).text).toMatch(/read-only/);
+    // propose scope: a hidden write tool is captured as a proposal, nothing is sent.
+    const proposer = w.stack.newToken('hidden-proposer', 'propose');
+    const pc = await w.stack.connect(proposer.token);
+    const writesBefore = w.stack.mock.calls.filter((x) => x.method !== 'GET').length;
+    const prop = await w.stack.call(pc, 'lk_op_updateResource', {
+      path: { resourceId: 'kaede001' },
+      body: { name: 'x' },
+    });
+    expect(prop.body.status).toBe('proposal_captured');
+    expect(w.stack.mock.calls.filter((x) => x.method !== 'GET').length).toBe(writesBefore);
+    // write scope: it runs, with the caller's principal.
+    const writer = w.stack.newToken('hidden-writer', 'write');
+    const wc = await w.stack.connect(writer.token);
+    const done = await w.stack.call(wc, 'lk_op_getResource', { path: { resourceId: 'kaede001' } });
+    expect(done.body.status).toBe('succeeded');
+    // Showing the tools changes none of that: the same refusal for the same read-only profile.
+    w.stack.policy.commands.setShowLowLevelTools('owner', reader.profileId, true);
+    const again = await rc.callTool({
+      name: 'lk_op_updateResource',
+      arguments: { path: { resourceId: 'kaede001' }, body: { name: 'x' } },
+    });
+    expect(again.isError).toBe(true);
+    expect((again.content[0] as { text: string }).text).toMatch(/read-only/);
+    const names = (await rc.listTools()).tools.map((x) => x.name);
+    expect(names).not.toContain('lk_op_updateResource'); // read scope never lists write tools
+    expect(names).toContain('lk_op_getResource'); // …but lists the read ones once shown
+  });
+});

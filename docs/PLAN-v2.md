@@ -315,6 +315,11 @@ Every high-level write runs as a **job**, through the same guards as v1: policy,
 | Fallback  | `api_read`, `api_write`                                                                                                                                                                                                                  | R / W  | The doc's `api_request`, kept split so reads can be auto-approved                                                                                                   |
 | Low-level | `lk_api_*`, `lk_op_*`                                                                                                                                                                                                                    |        | **Hidden by default** (a per-profile `showLowLevelTools` setting). Final list decided in phase E                                                                    |
 
+**B2 notes (what built differs from the table):** the asset tools (`browse_asset_tree`, `list_assets`) cover the whole asset
+library, which has no AI REPOSITORY root; `get_resource` shows a sidebar property's `version` only where LegendKeeper's
+`getResource` gives one (it does not; `set_facts` reads the version itself); the final visible list stays E3's decision
+([ADR 0029](adr/0029-discover-and-read-tools.md)).
+
 **Note for ChatGPT:** after the tools change, open ChatGPT's **Plugins** page, open the bridge, and use **Refresh**. ChatGPT keeps its own copy of the tool list.
 
 ---
