@@ -62,7 +62,12 @@ export const registerJobs: Register = (api, ctx) => {
       ...(q.before !== undefined ? { before: q.before } : {}),
       limit: q.limit,
     });
-    return { project, jobs: redactDeep(jobs), hasMore: jobs.length === q.limit };
+    return {
+      project,
+      jobs: redactDeep(jobs),
+      hasMore: jobs.length === q.limit,
+      principals: ctx.principals(jobs.map((j) => j.principalId)),
+    };
   });
 
   const projectQuery = z.object({ project: projectParam });
@@ -73,7 +78,10 @@ export const registerJobs: Register = (api, ctx) => {
     const job = engine.queries.getJob(project.id, id);
     if (!job) throw new AdminHttpError(404, 'JOB_NOT_FOUND', `No job ${id} in project ${project.name}`);
     const steps = job.steps.map((s) => ({ ...s, retry: retryAdvice(job, s) }));
-    return { job: redactDeep({ ...job, steps }, { maxString: 4000 }) };
+    return {
+      job: redactDeep({ ...job, steps }, { maxString: 4000 }),
+      principals: ctx.principals([job.principalId]),
+    };
   });
 
   api.get('/jobs/:id/artifacts/:artifactId', (req) => {
@@ -147,7 +155,11 @@ export const registerJobs: Register = (api, ctx) => {
     const [group] = engine.queries.listErrorGroups(project.id, { fingerprint: q.fingerprint, limit: 1 });
     if (!group) throw new AdminHttpError(404, 'ERROR_GROUP_NOT_FOUND', 'No such error group');
     const occurrences = engine.queries.listErrors(project.id, { fingerprint: q.fingerprint, limit: 50 });
-    return { group: redactDeep(group), occurrences: redactDeep(occurrences, { maxString: 8000 }) };
+    return {
+      group: redactDeep(group),
+      occurrences: redactDeep(occurrences, { maxString: 8000 }),
+      principals: ctx.principals(occurrences.map((o) => o.principalId)),
+    };
   });
 
   api.post('/errors/resolve', (req) => {

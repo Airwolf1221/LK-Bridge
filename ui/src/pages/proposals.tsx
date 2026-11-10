@@ -14,7 +14,7 @@ import {
   useToast,
 } from '../components';
 import { diffBlocks, looksLikeBlocks } from '../diff';
-import { fmtAgo, fmtTime, prettyJson } from '../format';
+import { fmtAgo, fmtTime, prettyJson, principalText, type PrincipalNames } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useRoute } from '../router';
@@ -28,7 +28,9 @@ export function ProposalsPage() {
     (['pending', 'conflicted', 'history'] as const).find((t) => t === query.get('tab')) ?? 'pending';
   const openId = query.get('id');
   const { selected } = useProject();
-  const list = useScopedApi<{ proposals: Proposal[] }>(`/proposals${qs({ group: tab, limit: 100 })}`);
+  const list = useScopedApi<{ proposals: Proposal[]; principals?: PrincipalNames }>(
+    `/proposals${qs({ group: tab, limit: 100 })}`,
+  );
   const counts = useScopedApi<ProposalCounts>('/proposals/counts');
   const reloadAll = () => {
     list.reload();
@@ -144,7 +146,9 @@ export function ProposalsPage() {
                   </td>
                   <td>
                     {p.profile}
-                    <div className="muted small-text">{p.principalLabel}</div>
+                    <div className="muted small-text">
+                      {principalText(p.principalId, list.data?.principals, p.principalLabel, true)}
+                    </div>
                   </td>
                   <td>
                     <StatusBadge status={p.state} />
@@ -431,7 +435,9 @@ function ProposalReview({
   onClose: () => void;
 }) {
   const { withProject } = useProject();
-  const d = useScopedApi<{ proposal: ProposalDetail }>(`/proposals/${encodeURIComponent(id)}`);
+  const d = useScopedApi<{ proposal: ProposalDetail; principals?: PrincipalNames }>(
+    `/proposals/${encodeURIComponent(id)}`,
+  );
   useProjectReloadOn(['proposal'], d.reload, 300);
   const { run, busy } = useAction();
   const confirm = useConfirm();
@@ -458,7 +464,10 @@ function ProposalReview({
           <div className="row">
             <StatusBadge status={p.state} />
             <span>
-              Proposed by <strong>{p.profile}</strong> <span className="muted">({p.principalLabel})</span>
+              Proposed by <strong>{p.profile}</strong>{' '}
+              <span className="muted">
+                ({principalText(p.principalId, d.data?.principals, p.principalLabel, true)})
+              </span>
             </span>
             <span className="muted small-text">{fmtTime(p.createdAt)}</span>
           </div>

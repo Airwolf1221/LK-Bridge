@@ -12,7 +12,7 @@ import {
   useAction,
   useConfirm,
 } from '../components';
-import { fmtAgo, fmtInt, fmtTime } from '../format';
+import { fmtAgo, fmtInt, fmtTime, principalText, type PrincipalNames } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
@@ -121,7 +121,7 @@ function ErrorList({ open }: { open: (fingerprint: string) => void }) {
 
 function ErrorDetail({ fingerprint, back }: { fingerprint: string; back: () => void }) {
   const { selected, withProject } = useProject();
-  const d = useScopedApi<{ group: ErrorGroup; occurrences: ErrorRecord[] }>(
+  const d = useScopedApi<{ group: ErrorGroup; occurrences: ErrorRecord[]; principals?: PrincipalNames }>(
     `/errors/group${qs({ fingerprint })}`,
   );
   useProjectReloadOn(['error'], d.reload, 500);
@@ -227,7 +227,10 @@ function ErrorDetail({ fingerprint, back }: { fingerprint: string; back: () => v
                   <div>
                     <dt>Principal</dt>
                     <dd>
-                      {e.profile} <span className="mono muted">{e.principalId}</span>
+                      {e.profile}{' '}
+                      <span className="muted" title={e.principalId}>
+                        {principalText(e.principalId, d.data?.principals, e.profile)}
+                      </span>
                     </dd>
                   </div>
                 </dl>

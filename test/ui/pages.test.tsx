@@ -610,6 +610,16 @@ describe('Journal', () => {
           },
         ],
         hasMore: false,
+        // ADR 0033: a removed connection is named from its tombstone, never shown as a bare id.
+        principals: {
+          pat_abc: {
+            id: 'pat_abc',
+            name: 'Laptop (removed 10 Nov 2026)',
+            type: 'removed',
+            removedAt: Date.UTC(2026, 10, 10),
+          },
+          system: { id: 'system', name: 'System', type: 'system', removedAt: null },
+        },
       },
       'GET /journal/7': {
         entry: {
@@ -623,6 +633,8 @@ describe('Journal', () => {
     renderApp('/ui/journal');
     const row = await screen.findByRole('row', { name: /replaceDocumentBlocks/ });
     expect(within(row).getByText('Claude Code')).toBeInTheDocument();
+    expect(within(row).getByText('Laptop (removed 10 Nov 2026)')).toBeInTheDocument();
+    expect(within(row).queryByText('pat_abc')).toBeNull();
     expect(within(row).getByText('owner')).toBeInTheDocument();
     expect(within(row).getByText('applied')).toBeInTheDocument();
     await user.type(screen.getByLabelText('Search these results'), 'deleteRes');

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { blocksToLines, diffBlocks, lineDiff, looksLikeBlocks } from '../../ui/src/diff';
-import { fmtAgo, fmtBytes, fmtDuration, fmtInt, pct } from '../../ui/src/format';
+import { PatService } from '../../src/auth/pats.js';
+import { AuthStore } from '../../src/auth/store.js';
+import { runMigrations } from '../../src/db/migrate.js';
+import { openDatabase } from '../../src/db/open.js';
+import { fmtAgo, fmtBytes, fmtDuration, fmtInt, fmtTime, pct, principalText } from '../../ui/src/format';
 
 describe('block text', () => {
   it('flattens a tree to one indented line per block, with inline text and scalar properties', () => {
@@ -90,5 +94,68 @@ describe('formatting', () => {
     expect(fmtAgo(1000, 31_000)).toBe('30 s ago');
     expect(fmtAgo(0, 120_000)).toBe('2 min ago');
     expect(fmtAgo(null, 0)).toBe('never');
+  });
+});
+
+describe('dates carry the year when it is not the current one (hotfix, ADR 0033)', () => {
+  const utc = (y: number, m: number, d: number, h = 0, min = 0, sec = 0) =>
+    Date.UTC(y, m - 1, d, h, min, sec);
+  const NOW = utc(2026, 11, 10, 12);
+
+  it('omits the year inside the current year and adds it outside it, in British English, 24-hour', () => {
+    expect(fmtTime(utc(2026, 11, 3, 2, 12, 35), NOW, 'UTC')).toBe('3 Nov, 02:12:35');
+    expect(fmtTime(utc(2027, 11, 3, 2, 12, 35), NOW, 'UTC')).toBe('3 Nov 2027, 02:12:35');
+    expect(fmtTime(utc(2025, 12, 31, 23, 59, 59), NOW, 'UTC')).toBe('31 Dec 2025, 23:59:59');
+    expect(fmtTime(utc(2026, 1, 1, 13, 5, 0), NOW, 'UTC')).toBe('1 Jan, 13:05:00'); // 24-hour, not 1:05 pm
+  });
+
+  it('across a year boundary: the same instant reads differently before and after midnight on 31 December', () => {
+    const t = utc(2026, 12, 31, 23, 0, 0);
+    expect(fmtTime(t, utc(2026, 12, 31, 23, 30), 'UTC')).toBe('31 Dec, 23:00:00');
+    expect(fmtTime(t, utc(2027, 1, 1, 0, 30), 'UTC')).toBe('31 Dec 2026, 23:00:00');
+    // The year is the one in the display zone, not in UTC: 23:30 UTC on 31 Dec is already 2027 in Auckland.
+    expect(fmtTime(utc(2026, 12, 31, 23, 30), utc(2026, 6, 1), 'Pacific/Auckland')).toContain('2027');
+    expect(fmtTime(null, NOW)).toBe('–');
+  });
+
+  it('a PAT created on 8 Nov 2026 with 360 days expires on 3 Nov 2027, from auth_pats.expires_at', () => {
+    const db = openDatabase(':memory:');
+    try {
+      runMigrations(db);
+      const created = utc(2026, 11, 8, 2, 12, 35);
+      const pats = new PatService({
+        store: new AuthStore(db),
+        event: () => {},
+        now: () => Math.floor(created / 1000),
+      });
+      const { pat } = pats.create({ name: 'Claude Code (PC)', expiresInDays: 360 });
+      const row = db.prepare('SELECT created_at, expires_at FROM auth_pats WHERE id = ?').get(pat.id) as {
+        created_at: number;
+        expires_at: number;
+      };
+      expect(new Date(row.created_at * 1000).toISOString()).toBe('2026-11-08T02:12:35.000Z');
+      expect(new Date(row.expires_at * 1000).toISOString()).toBe('2027-11-03T02:12:35.000Z');
+      // What the dashboard shows on 10 Nov 2026: the creation without a year, the expiry WITH it.
+      expect(fmtTime(row.created_at * 1000, NOW, 'UTC')).toBe('8 Nov, 02:12:35');
+      expect(fmtTime(row.expires_at * 1000, NOW, 'UTC')).toBe('3 Nov 2027, 02:12:35');
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe('principal names (hotfix, ADR 0033)', () => {
+  const names = {
+    pat_1: { id: 'pat_1', name: 'ChatGPT (removed 10 Nov 2026)', type: 'removed' as const, removedAt: 1 },
+    grant_2: { id: 'grant_2', name: 'Claude', type: 'grant' as const, removedAt: null },
+  };
+  it('names a removed connection from its tombstone, a live one by its label, and never shows a bare id', () => {
+    expect(principalText('pat_1', names, 'chatgpt')).toBe('ChatGPT (removed 10 Nov 2026)');
+    expect(principalText('pat_1', names, 'chatgpt', true)).toBe('ChatGPT (removed 10 Nov 2026)');
+    expect(principalText('grant_2', names, 'claude')).toBe('Claude');
+    expect(principalText('grant_2', names, 'Claude (OAuth)', true)).toBe('Claude (OAuth)');
+    expect(principalText('pat_gone', undefined, 'chatgpt')).toBe('chatgpt');
+    expect(principalText('pat_gone', {}, undefined)).toBe('Unknown connection');
+    expect(principalText('system', undefined)).toBe('System');
   });
 });

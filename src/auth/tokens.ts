@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { SignJWT, jwtVerify } from 'jose';
 import type { AuthConfig } from '../config/auth.js';
+import { type ApplicationRef } from './application.js';
 import { CODE_VERIFIER, type KeyRing, hashSecret, pkceS256, randomToken, safeEqual } from './crypto.js';
 import { invalidGrant, invalidRequest, invalidScope, invalidTarget, unauthorizedClient } from './errors.js';
 import type { AuthEventLogger } from './events.js';
@@ -71,6 +72,16 @@ export class TokenService {
       readonly keys: KeyRing;
       readonly event: AuthEventLogger;
       readonly now: () => number;
+      /**
+       * Hotfix (ADR 0033): revokes the grants an authorisation code replaces, once the code has been exchanged. Called
+       * inside the same transaction that stores the new grant; returns the ids it revoked.
+       */
+      readonly replace?: (r: {
+        readonly newFamilyId: string;
+        readonly app: ApplicationRef;
+        readonly replaces: readonly string[];
+        readonly now: number;
+      }) => readonly string[];
     },
   ) {
     this.audience = canonicaliseResource(deps.config.mcpUrl) as string;
@@ -86,6 +97,8 @@ export class TokenService {
     readonly resource: string;
     /** The policy profile the owner chose at consent; the grant (and every token from it) inherits it. */
     readonly profileId?: string | null;
+    /** Hotfix (ADR 0033): grants to revoke when this code is exchanged (never before). */
+    readonly replaces?: readonly string[];
   }): string {
     const code = `${CODE_PREFIX}${randomToken(32)}`;
     const now = this.deps.now();
@@ -100,6 +113,7 @@ export class TokenService {
       createdAt: now,
       expiresAt: now + this.deps.config.ttl.authCodeSeconds,
       profileId: p.profileId ?? null,
+      ...(p.replaces && p.replaces.length > 0 ? { replaces: p.replaces } : {}),
     });
     return code;
   }
@@ -156,7 +170,9 @@ export class TokenService {
     const { config } = this.deps;
     const access = this.prepareAccess(client.clientId, familyId, scopes, now);
     const refresh = withRefresh ? `${REFRESH_PREFIX}${randomToken(32)}` : undefined;
-    store.tx(() => {
+    // Signed BEFORE anything is stored: if signing failed, no grant would exist and no old grant may be revoked.
+    const accessJwt = await this.sign(access);
+    const replaced = store.tx((): readonly string[] => {
       store.insertFamily({
         familyId,
         clientId: client.clientId,
@@ -179,6 +195,14 @@ export class TokenService {
         });
       }
       store.touchClient(client.clientId, now);
+      // The owner ticked these on the consent page. Only now, with the new grant stored, are they revoked (ADR 0033).
+      if (rec.replaces.length === 0 || !this.deps.replace) return [];
+      return this.deps.replace({
+        newFamilyId: familyId,
+        app: { clientId: client.clientId, kind: client.kind, redirectUri: rec.redirectUri },
+        replaces: rec.replaces,
+        now,
+      });
     });
     this.deps.event('token.issued', {
       grant_type: 'authorization_code',
@@ -187,8 +211,9 @@ export class TokenService {
       token_id: access.record.jti,
       scope: rec.scope,
       refresh: withRefresh,
+      ...(replaced.length > 0 ? { replaced: replaced.join(',') } : {}),
     });
-    return this.response(await this.sign(access), scopes, refresh);
+    return this.response(accessJwt, scopes, refresh);
   }
 
   /** `grant_type=refresh_token` with rotation and reuse detection (OAuth 2.1 §4.3.1). */

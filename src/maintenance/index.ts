@@ -61,6 +61,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         projects: o.projects,
         db: o.db,
         proposals: o.policy.proposals,
+        connections: o.policy.connections,
         expirySweepMs: o.expirySweepMs,
         proposalRetentionMs: o.proposalRetentionMs ?? 90 * 86_400_000,
         ...(o.tree ? { tree: o.tree } : {}),

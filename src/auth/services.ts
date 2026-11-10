@@ -1,6 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { AuthConfig } from '../config/auth.js';
 import type { Db } from '../db/open.js';
+import type { ApplicationRef } from './application.js';
 import { BearerGuard } from './bearer.js';
 import { CimdFetcher } from './cimd.js';
 import { ClientAssertionVerifier, JwksCache, createJwksFetcher } from './client-assertion.js';
@@ -80,12 +81,31 @@ export interface ProfileOption {
   readonly connections?: number;
 }
 
+/** An active connection of the application being approved, offered for replacement on the consent page. */
+export interface ExistingConnection {
+  readonly id: string;
+  readonly label: string;
+  readonly type: 'grant' | 'pat';
+  /** The profile's label, or null for a connection without one. */
+  readonly profile: string | null;
+  /** Unix milliseconds. */
+  readonly createdAt: number;
+  readonly lastUsedAt: number | null;
+}
+
+/** The scope the consent form submits when the owner does not choose one: the chosen profile's current scope. */
+export const KEEP_SCOPE = 'keep';
+
 /** The owner's choice on the consent screen: an existing profile, or a new one; and its scope. */
 export interface ConsentProfileChoice {
   /** An existing profile id, or `new`. */
   readonly profileId: string;
   readonly newLabel?: string;
   readonly newKind?: string;
+  /**
+   * `read`, `propose` or `write`, or `keep` (hotfix, ADR 0033): the chosen existing profile's current scope, or the
+   * default scope for a new profile. `keep` never asks for the scope-change confirmation.
+   */
   readonly scope: string;
   /**
    * Set by the confirmation page: `<profileId>:<from>:<to>`. A change to an EXISTING profile's scope is applied only
@@ -130,6 +150,23 @@ export interface ConsentProfiles {
   apply(choice: ConsentProfileChoice): ConsentApplyResult;
   /** The profile id a PAT created without one gets. */
   defaultPatProfileId(): string;
+  /**
+   * Hotfix (ADR 0033): the ACTIVE grants of the same application as `app` (see ./application.ts), newest first, which
+   * the consent page offers to replace.
+   */
+  existingConnections(app: ApplicationRef): readonly ExistingConnection[];
+  /**
+   * Hotfix (ADR 0033): called once, when an `authorization_code` exchange has succeeded and `newFamilyId` exists.
+   * Revokes each listed grant that is still active and still of the same application (`replaced by <newFamilyId>`),
+   * audited as `connection.revoke` with `via: 'replaced'`. Anything else on the list is skipped. Returns the ids revoked.
+   */
+  replaceConnections(r: {
+    readonly newFamilyId: string;
+    readonly app: ApplicationRef;
+    readonly replaces: readonly string[];
+    /** The token endpoint's clock, Unix seconds (the time the revocations are stamped with). */
+    readonly now: number;
+  }): readonly string[];
 }
 
 export interface AuthServices {
@@ -208,7 +245,14 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
     now,
   });
   const clients = new ClientService({ store, config, cimd, assertions, event, now });
-  const tokens = new TokenService({ store, config, keys, event, now });
+  const tokens = new TokenService({
+    store,
+    config,
+    keys,
+    event,
+    now,
+    ...(o.profiles ? { replace: (r) => o.profiles!.replaceConnections(r) } : {}),
+  });
   const credentials = new OwnerCredentials({
     db: o.db,
     store: o.secrets,

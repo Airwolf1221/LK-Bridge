@@ -334,6 +334,30 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
     for (const id of Object.values(ids)) expect(exists(id)).toBe(true);
   });
 
+  it('a conflicted proposal is stuck until it is rejected; then it is pruned after the retention like any rejected one', async () => {
+    m = await maintenanceRig({ proposalRetentionMs: 7 * D });
+    const r = m.rig;
+    for (const job of [
+      'budget-sampler',
+      'proposal-expiry',
+      'sqlite-optimise',
+      'journal-prune',
+      'proposal-prune',
+    ])
+      m.maintenance.commands.disable('owner', job);
+    const id = await capture(r, 'rfaaaaaa', 'Conflicted');
+    force(id, 'conflicted', r.h.clock.now());
+    r.db.prepare('UPDATE proposals SET expires_at = ? WHERE id = ?').run(Number.MAX_SAFE_INTEGER, id);
+    await r.h.clock.advance(30 * D);
+    expect(r.policy.proposals.pruneFinished(7 * D).removed).toBe(0); // conflicted is never pruned
+    expect(exists(id)).toBe(true);
+    r.policy.commands.reject('owner', id, 'stale');
+    expect(r.policy.proposals.pruneFinished(7 * D).removed).toBe(0); // the retention starts at the rejection
+    await r.h.clock.advance(8 * D);
+    expect(r.policy.proposals.pruneFinished(7 * D).removed).toBe(1);
+    expect(exists(id)).toBe(false);
+  });
+
   it('follows the configured retention (POLICY_PROPOSAL_RETENTION_DAYS)', async () => {
     m = await maintenanceRig({ proposalRetentionMs: 7 * D });
     const r = m.rig;

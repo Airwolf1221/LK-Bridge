@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import * as z from 'zod';
 import type { AdminActions } from '../actions.js';
+import type { PrincipalName } from '../../policy/index.js';
 import { AdminHttpError } from '../http.js';
 import type { StreamHub } from '../stream.js';
 import type { AdminDeps } from '../types.js';
@@ -20,6 +21,12 @@ export interface RouteContext {
   /** The health of one project's LegendKeeper connection (cached a minute per project). */
   readonly health: (project: RouteProject, refresh: boolean) => Promise<Health>;
   readonly now: () => number;
+  /**
+   * Hotfix (ADR 0033): the names of principal ids (a grant, a PAT or `system`), keyed by id. History rows hold only the
+   * id; a removed connection is named from its tombstone, so a row never shows a bare id. Responses carry this as
+   * `principals` next to the rows.
+   */
+  readonly principals: (ids: Iterable<string>) => Record<string, PrincipalName>;
   /**
    * The `project` query parameter (a name or id; default: the default project), as a project with stored data. Unknown:
    * 400 UNKNOWN_PROJECT. Configured but never verified (so it has no id and no data yet): 409 PROJECT_UNAVAILABLE.

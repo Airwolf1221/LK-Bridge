@@ -85,9 +85,9 @@ Tool handlers get `ctx.principal` (and `ctx.scope`). Every engine-backed tool bu
                 reject    │  │ expiry (timer)          │ a target changed             │ job failed / cancelled
                           ▼  ▼                         ▼                              ▼
                      rejected expired              conflicted                       failed
-                                                       ▲                              │
-                                                       └── v2 C1: a page write whose ─┘
-                                                           in-lock version check refused it
+                        ▲                              │ ▲
+                        └── reject (owner) ────────────┘ └── v2 C1: a page write whose in-lock version check refused it
+                                                             (executing → conflicted)
 ```
 
 **Capture** (the `ProposalSink`, when the gate returns `propose`):
@@ -143,7 +143,14 @@ fails with `VERSION_CONFLICT` before any step succeeded (the compare-and-swap in
 made after the approval's re-read), the proposal becomes `conflicted` (`executing → conflicted`), not `failed`: nothing
 was written. v1 proposals are unchanged.
 
-**Reject** (owner only) takes an optional reason, which the agent can read.
+**Reject** (owner only) takes an optional reason, which the agent can read. It accepts a `pending` **or a `conflicted`**
+proposal, as one compare-and-set from those two states (ADR 0033): a conflicted proposal (the target changed after
+capture) used to be stuck for good, because the dashboard told the owner to reject it, `reject` allowed only `pending`,
+and `proposal-prune` never deletes `conflicted`. A rejected conflicted proposal keeps its stored `conflict` details, gets
+the reason, `decided_by: 'owner'` and `finished_at`, moves to History, and is pruned after the retention like any
+rejected proposal; the audit row's `before` records the state it really was in, and the proposer sees `rejected` with the
+reason in `bridge_proposal_status`. Any other state is refused: "Proposal … is X; only pending or conflicted proposals can
+be rejected". `bulkReject` follows the same rule.
 
 **Retention (v1.0.1).** `executed`, `rejected`, `expired` and `failed` proposals are deleted, with their operations and
 pre-state, `POLICY_PROPOSAL_RETENTION_DAYS` (90) days after they finished, by the `proposal-prune` maintenance job
@@ -182,7 +189,12 @@ emits a `policy` event on the engine's event emitter; proposal state changes als
 | `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                        | –                                                |
 | `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks | –                                                |
 | `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`)                        | `proposal.approve` (then `proposal.executed`, …) |
-| `reject(actor, id, reason?)`                                 |                                                                                           | `proposal.reject`                                |
+| `reject(actor, id, reason?)`                                 | A pending or conflicted proposal                                                          | `proposal.reject`                                |
+| `removeConnection(actor, id)`                                | Removes a revoked or expired connection (tombstone); an active one: `CONNECTION_ACTIVE`   | `connection.remove`                              |
+| `removeInactiveConnections(actor)`                           | Removes every revoked and expired connection, in one transaction                          | `connection.remove` (each)                       |
+| `revokeStaleConnections(actor, profileId)`                   | Revokes the profile's stale connections                                                   | `connection.revoke` (`via: 'stale'`)             |
+| `getAutoRemoveDays` / `setAutoRemoveDays(actor, days)`       | Days before the daily sweep removes dead connections (0 = never; default 30)              | `policy.set_auto_remove_days`                    |
+| `getStaleAfterDays` / `setStaleAfterDays(actor, days)`       | Days of disuse before a connection is stale (0 = never; default 14)                       | `policy.set_stale_after_days`                    |
 | `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id                                                  | as above                                         |
 | `listAudit(actor, filter?)`                                  | The audit log, newest first                                                               | –                                                |
 
@@ -191,7 +203,7 @@ The system writes its own rows with actor `system`: `proposal.conflicted`, `prop
 audited.
 
 Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PROFILE_EXISTS`, `PROFILE_NOT_FOUND`,
-`CONNECTION_NOT_FOUND`, `PROPOSAL_NOT_FOUND`, `INVALID_TRANSITION`, `PROPOSAL_EXPIRED`, `BRIDGE_READ_ONLY`,
+`CONNECTION_NOT_FOUND`, `CONNECTION_ACTIVE`, `PROPOSAL_NOT_FOUND`, `INVALID_TRANSITION`, `PROPOSAL_EXPIRED`, `BRIDGE_READ_ONLY`,
 `WRITES_PAUSED`, `DRAINING`, `NO_ENGINE`, `REREAD_FAILED`.
 
 ## Consent and PATs
@@ -200,19 +212,70 @@ Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PR
   self-reported name marked _untrusted name_ (HTML-escaped), and chooses an existing profile or a new one (label and
   kind) and its scope. The suggestion comes from the redirect host only: `claude.ai` and `claude.com` → `claude`,
   `chatgpt.com` → `chatgpt`, loopback → `claude-code`, anything else → `other`. An existing profile with the
-  suggested label is preselected; otherwise "New profile" with that label. **Preselected scope (v1.0.1,
-  [ADR 0019](adr/0019-consent-keeps-existing-scope.md)):** an existing profile's **current** scope, so approving
-  without touching anything changes nothing; a new profile gets the default scope for new connections (`read` unless
-  the owner changed it). **A change to an existing profile's scope is confirmed first:** the bridge shows a second page
+  suggested label is preselected; otherwise "New profile" with that label. The new-profile label and kind appear only
+  when "New profile…" is selected (CSS `:has()`, no script; a browser without `:has()` shows them all the time under
+  "Only for New profile…"). **Preselected scope (v1.0.1, [ADR 0019](adr/0019-consent-keeps-existing-scope.md), changed
+  by [ADR 0033](adr/0033-removing-connections-replace-on-reconnect-and-operation-discovery.md)):** the first scope
+  radio is _Keep the chosen profile's current scope_ (`keep`), preselected whichever profile is chosen. On the server
+  `keep` is the chosen existing profile's current scope, or the default scope for a new profile (`read` unless the
+  owner changed it), so approving without touching anything changes nothing and `keep` never asks for a confirmation.
+  Choosing read, propose or write explicitly still goes through the confirmation below. **A change to an existing profile's scope is confirmed first:** the bridge shows a second page
   with the warning that it affects every connection on that profile (and how many there are), the change (`from` →
   `to`) and two buttons, _Change to … and approve_ and _Keep … and approve_. Only that confirmation, for exactly that
   change, applies it (audited `profile.set_scope`, `via: consent`); picking another existing profile in the list
   without choosing its scope therefore never changes it silently. A bad choice shows an error without using up the
   request; denial is unchanged.
+- **Replace on reconnect (ADR 0033).** When the application being approved already has active connections, the page
+  lists them in "This application's existing connections", each with a checkbox ticked by default (label, profile,
+  created, last used). The same application is the same `client_id` for a Client ID Metadata Document client; for any
+  other client (Dynamic Client Registration gives a new `client_id` every time) it is the same verified redirect origin
+  (a loopback address compares scheme and host, not the ephemeral port). The client's self-reported name never decides
+  it. **Nothing is revoked at approval.** The ticked grants are stored on the authorisation code
+  (`auth_codes.replaces`); only when the `authorization_code` grant succeeds at the token endpoint, in the same
+  transaction that stores the new grant, each is re-checked (still active, still the same application, else skipped)
+  and revoked with `revoked_reason = 'replaced by <new grant id>'`, audited `connection.revoke` with `via: 'replaced'`.
+  If the code is never exchanged, or the exchange fails, the old connections are untouched.
 - **PATs:** `npm run pat -- create --name "<name>" [--profile <label>] [--scope read|propose|write]`. The profile
   (default `claude-code`) is created if absent, at the default scope unless `--scope` is given; with an existing
   profile, `--scope` changes its scope (audited). `npm run pat -- list` shows each token's profile and scope. Claude
   Code's PAT profile is expected to be `claude-code` at `write`, set deliberately by the owner.
+
+## Removing connections, stale connections and automatic removal (ADR 0033)
+
+- **Remove.** A revoked or expired connection (grant or PAT) can be removed from Clients & Access. Removing deletes
+  its credentials in one transaction: for a grant the `auth_token_families` row and every `auth_refresh_tokens`,
+  `auth_access_tokens` and `auth_codes` row of that family; for a PAT the `auth_pats` row. `auth_clients` is never
+  touched (a registration may serve other grants). The same transaction writes a **tombstone**
+  (`removed_connections`: id, type, label, client, profile, created, revoked, expires, removed at, removed by) and the
+  audit row `connection.remove` (`before`: the tombstone fields, `after`: `null`; the actor is `owner`, or `system` for
+  the sweep). An **active connection is refused**: `409 CONNECTION_ACTIVE`; revoke it first.
+- **History stays readable.** The journal, proposals, jobs, errors and audit log keep the grant or PAT id. Wherever the
+  dashboard (journal, proposals, jobs, errors) or `bridge_journal_lookup` shows who, a removed connection is named from
+  its tombstone, for example "ChatGPT (removed 10 Nov 2026)"; one with no tombstone (removed before this hotfix, by the
+  old prune) reads "Removed connection". Never a bare id.
+- **API:** `POST /api/admin/clients/connections/:id/remove`, `POST /api/admin/clients/connections/remove-inactive`
+  (returns `{ removed, ids }`), `PUT /api/admin/clients/settings/auto-remove-days`,
+  `PUT /api/admin/clients/settings/stale-after-days`, `POST /api/admin/clients/connections/revoke-stale`
+  (`{ profileId }`). The dashboard's single Remove has no confirmation (the row is already dead); "Remove all revoked and
+  expired (N)" shows only when N > 0 and lists the rows.
+- **Automatic removal.** `connections.auto_remove_days` (in `policy_settings`, default **30**, `0` = never; audited
+  `policy.set_auto_remove_days`). The maintenance job `connection-removal` runs daily (04:00 London) and removes revoked
+  or expired connections whose dead time is at least that many days ago: `revoked_at`, or `expires_at` for a connection
+  that expired without being revoked. The auth prune no longer deletes grants (it used to, silently, 30 days after a
+  revocation and one day after an expiry); only this sweep and the owner remove a connection, so there is always a
+  tombstone.
+- **Stale.** An active connection whose last use (its creation, if never used) is older than
+  `connections.stale_after_days` (default **14**, `0` = never; audited `policy.set_stale_after_days`) gets a "stale"
+  badge. Each profile table has "Revoke stale (N)", with a confirmation listing them; each revocation is audited
+  `connection.revoke` with `via: 'stale'`.
+
+## Tool-list caching (observed 10 November 2026)
+
+Tool visibility (a profile's "Show low-level tools", or a scope change that hides or shows the write tools) changes the
+next `tools/list`, but a client may keep its own copy. **claude.ai** keeps a copy of a connector's tool list: on 10
+November 2026 a change showed only after the connector was disconnected and reconnected in claude.ai's settings, and
+new chats alone were not enough (observed, not a guarantee). **ChatGPT:** Plugins, then the bridge, then Refresh. The
+Clients & Access page and the bridge guide say so too.
 
 ## Wiring
 
@@ -241,7 +304,16 @@ The scope cache is fixed at one second at most (`cacheMs`, 0-1000, in code).
 A profile's **show low-level tools** setting (`showLowLevelTools`, default off, migration 1100) decides whether its
 connections are _shown_ `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*`
 in `tools/list`. The owner changes it on Clients & Access (`PUT /api/admin/clients/profiles/:id/low-level-tools`),
-no confirmation is asked, and it is audited as `profile.set_low_level_tools` with the old and new value. It is read live
+no confirmation is asked, and it is audited as `profile.set_low_level_tools` with the old and new value. **A client may
+keep showing the old tool list:** claude.ai keeps its own copy of a connector's tool list, so a change here (or a scope
+change that hides or shows write tools) shows in claude.ai only after the connector is disconnected and reconnected in
+claude.ai's settings; new chats alone were not enough (observed 10 November 2026, not a guarantee). In ChatGPT, use
+Plugins, then the bridge, then Refresh. **Operation discovery without these tools:** a profile that cannot see
+`lk_api_list_operations` can still run every operation, so an `UNKNOWN_OPERATION` error suggests up to 5 close ids
+(edit distance plus a small synonym map: append, add, create → insert; edit, set → update; remove → delete; fetch → get
+or list) and names the low-level tools only if the profile shows them; otherwise it points at `get_bridge_guide`
+(Operations), whose Operations section is generated from the registry
+([ADR 0033](adr/0033-removing-connections-replace-on-reconnect-and-operation-discovery.md)). It is read live
 with the scope, so the next `tools/list` follows it. **It is not a permission.** Every tool stays registered, so a call
 to a hidden tool is refused or allowed exactly as before: a `read` profile still gets the read-only refusal for a hidden
 write tool, a `propose` profile still gets a proposal, and the engine's guards apply as ever

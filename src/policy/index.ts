@@ -22,6 +22,7 @@ import type { JobEngine } from '../jobs/engine.js';
 import type { Clock } from '../lk/governor/clock.js';
 import type { McpAccessControl, McpToolProvider } from '../mcp/server.js';
 import { createOwnerCommands, type OwnerCommands } from './commands.js';
+import { createConnectionManager, type ConnectionManager } from './connections.js';
 import { createConsentProfiles } from './consent.js';
 import { createPolicyGate, type LivePolicyGate } from './gate.js';
 import { createMcpAccessControl, proposalTools, type ProposalToolsOptions } from './mcp.js';
@@ -49,6 +50,8 @@ export interface Policy {
   readonly gate: LivePolicyGate;
   readonly proposals: ProposalService;
   readonly consent: ConsentProfiles;
+  /** Connection removal, the daily sweep, stale connections and replace-on-reconnect (ADR 0033). */
+  readonly connections: ConnectionManager;
   readonly access: McpAccessControl;
   /** `bridge_proposal_status` and `bridge_proposals_mine`. */
   readonly tools: readonly McpToolProvider[];
@@ -73,19 +76,31 @@ export function createPolicy(o: CreatePolicyOptions): Policy {
     cacheMs: settings.cacheMs,
     proposalState: (id) => proposals.state(id),
   });
+  const authStore = new AuthStore(o.db);
+  const connections = createConnectionManager({ store, authStore });
   return {
     store,
     gate,
     proposals,
-    consent: createConsentProfiles(store),
+    consent: createConsentProfiles(store, connections),
+    connections,
     access: createMcpAccessControl(gate),
     tools: proposalTools(proposals, o.proposalTools ?? {}),
-    commands: createOwnerCommands({ store, proposals, authStore: new AuthStore(o.db) }),
+    commands: createOwnerCommands({ store, proposals, authStore, connections }),
     attach: (engine) => proposals.attach(engine),
   };
 }
 
-export { PolicyStore, validateLabel, type AuditRow, type ConnectionView } from './store.js';
+export {
+  PolicyStore,
+  validateLabel,
+  formatDay,
+  type AuditRow,
+  type ConnectionView,
+  type RemovedConnection,
+  type PrincipalName,
+} from './store.js';
+export { createConnectionManager, type ConnectionManager } from './connections.js';
 export {
   LivePolicyGate,
   createPolicyGate,

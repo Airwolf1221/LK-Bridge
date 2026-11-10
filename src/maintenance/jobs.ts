@@ -1,5 +1,5 @@
 /**
- * The maintenance job registry: seven implemented jobs and three placeholders (PLAN §8 page 6, docs/maintenance.md;
+ * The maintenance job registry: eight implemented jobs and three placeholders (PLAN §8 page 6, docs/maintenance.md;
  * v2 A2 added the repository tree's sweep and check, replacing the `tree-snapshot` placeholder).
  * A placeholder has no `run`, cannot be enabled and cannot be run. Its real logic is a later chunk's work.
  */
@@ -7,6 +7,7 @@ import type { JobEngine } from '../jobs/index.js';
 import type { LkClient } from '../lk/index.js';
 import type { ProjectsRuntime } from '../projects/registry.js';
 import type { Db } from '../db/open.js';
+import type { ConnectionManager } from '../policy/connections.js';
 import type { ProposalService } from '../policy/proposals.js';
 import { assetJobs, type AssetMaintenance } from './asset-jobs.js';
 import type { MaintenanceJobDef, MaintenanceResult } from './types.js';
@@ -25,6 +26,8 @@ export interface BuiltinJobDeps {
   };
   readonly db: Db;
   readonly proposals: Pick<ProposalService, 'expireDue' | 'pruneFinished'>;
+  /** Hotfix (ADR 0033): the connection removal sweep. */
+  readonly connections?: Pick<ConnectionManager, 'sweepInactive'>;
   /** POLICY_PROPOSAL_RETENTION_DAYS in milliseconds: what `proposal-prune` keeps. */
   readonly proposalRetentionMs: number;
   /** The proposal expiry sweep interval from the policy settings (POLICY_EXPIRY_SWEEP_SECONDS). */
@@ -144,6 +147,31 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
         const r = d.proposals.pruneFinished(d.proposalRetentionMs);
         return {
           summary: `Removed ${r.removed} finished ${r.removed === 1 ? 'proposal' : 'proposals'} that finished before ${new Date(r.cutoff).toISOString()}.`,
+          changed: r.removed > 0,
+        };
+      },
+    },
+    {
+      id: 'connection-removal',
+      name: 'Connection removal',
+      description:
+        'Removes revoked and expired connections (OAuth grants and personal access tokens) once they have been dead for the number of days set on Clients & Access (connections.auto_remove_days, default 30; 0 = never). The day count starts at the revocation, or at the expiry for a connection that expired without being revoked. Their credentials are deleted; a tombstone keeps each name for the journal, proposals, jobs and errors. Audited as connection.remove by the system.',
+      // Daily, after the other prunes.
+      defaultSchedule: { kind: 'daily', time: '04:00' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: false,
+      record: 'on-change', // a job record only when something was removed (or the sweep failed)
+      scope: 'bridge',
+      run: () => {
+        if (!d.connections) return { skipped: true, summary: 'Skipped: the policy layer is not running.' };
+        const r = d.connections.sweepInactive();
+        return {
+          summary:
+            r.removed === 0
+              ? 'No revoked or expired connection was due for removal.'
+              : `Removed ${r.removed} revoked or expired ${r.removed === 1 ? 'connection' : 'connections'}.`,
           changed: r.removed > 0,
         };
       },

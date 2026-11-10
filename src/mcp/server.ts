@@ -35,6 +35,11 @@ export interface McpToolContext {
   readonly principal?: Principal;
   /** The principal's scope, read live for this request. */
   readonly scope?: string;
+  /**
+   * Whether the caller's profile is shown the low-level tools (`lk_api_list_operations`, `lk_api_describe_operation`…),
+   * read live. Tool hints name those tools only when this is true (ADR 0033).
+   */
+  readonly showLowLevelTools?: boolean;
 }
 
 /** Whether a tool only reads (`read`) or may write (`write`). Tools without it count as `write` unless read-only. */
@@ -192,7 +197,13 @@ export function registerTools(server: McpServerLike, deps: RegisterToolsDeps): v
             caller,
             signal: ctx.mcpReq.signal,
             log: deps.log,
-            ...(policy ? { principal: policy.principal, scope: policy.scope } : {}),
+            ...(policy
+              ? {
+                  principal: policy.principal,
+                  scope: policy.scope,
+                  showLowLevelTools: policy.showLowLevelTools === true,
+                }
+              : {}),
           });
           return result as CallToolResult;
         } catch (err) {

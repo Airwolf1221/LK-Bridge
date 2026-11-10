@@ -486,6 +486,129 @@ describe('approval', () => {
   });
 });
 
+describe('rejecting conflicted proposals (ADR 0033 addendum)', () => {
+  /** A two-step proposal whose page is then edited outside, so the approval's re-read ends it `conflicted`. */
+  async function conflicted(
+    r: PolicyRig,
+    doc: { resourceId: string; documentId: string },
+    origin: ReturnType<typeof mcpOriginFor>,
+  ) {
+    const { proposalId } = await propose(
+      r,
+      r.e.engine.submit({
+        project: PROJECT,
+        kind: 'batch_ops',
+        origin,
+        steps: [
+          {
+            op: 'replaceDocumentBlocks',
+            params: {
+              path: { resourceId: doc.resourceId, documentId: doc.documentId },
+              body: { blocks: keepU1 },
+            },
+          },
+        ],
+      }),
+    );
+    r.h.model.outsideEdit(doc.documentId, (blocks) =>
+      blocks.push({ id: 'p9', kind: 'paragraph', content: [] }),
+    );
+    const p = await approveAndRun(r, proposalId);
+    expect(p.state).toBe('conflicted');
+    return proposalId;
+  }
+  const auditRows = (r: PolicyRig, id: string) =>
+    r.policy.commands.listAudit('owner', { action: 'proposal.reject' }).filter((a) => a.target === id);
+
+  it('rejects one conflicted at approval: keeps the conflict, stamps the reason, the owner and the finish time', async () => {
+    const { r, doc, agent, origin } = await setup();
+    const id = await conflicted(r, doc, origin);
+    const before = r.policy.proposals.get(id)!;
+    await r.h.clock.advance(5000);
+    const view = r.policy.commands.reject('owner', id, 'Page changed; propose again');
+    expect(view).toMatchObject({
+      state: 'rejected',
+      rejectReason: 'Page changed; propose again',
+      decidedBy: 'owner',
+      conflict: before.conflict, // the stored details stay
+    });
+    expect(view.finishedAt).toBeGreaterThan(before.finishedAt!);
+    // The audit row records the state it really was in.
+    expect(auditRows(r, id)[0]).toMatchObject({
+      before: { state: 'conflicted' },
+      after: { state: 'rejected', reason: 'Page changed; propose again' },
+    });
+    // The proposer sees rejected, with the reason.
+    const [status] = proposalTools(r.policy.proposals, { selector: new ProjectSelector(r.e.projects, true) });
+    const out = await status!.handler({ proposalId: id }, {
+      principal: agent.principal,
+    } as unknown as McpToolContext);
+    expect(JSON.parse((out.content[0] as { text: string }).text)).toMatchObject({
+      state: 'rejected',
+      rejectReason: 'Page changed; propose again',
+    });
+    // It is in History now, and nothing was ever written.
+    expect(writesAtMock(r)).toEqual([]);
+  });
+
+  it('refuses a double reject, and any state but pending or conflicted, with the new message', async () => {
+    const { r, doc, origin } = await setup();
+    const id = await conflicted(r, doc, origin);
+    r.policy.commands.reject('owner', id);
+    expect(() => r.policy.commands.reject('owner', id)).toThrowError(
+      `Proposal ${id} is rejected; only pending or conflicted proposals can be rejected`,
+    );
+    const executed = await propose(
+      r,
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'E' } },
+        { project: PROJECT, origin },
+      ),
+    );
+    expect((await approveAndRun(r, executed.proposalId)).state).toBe('executed');
+    expect(() => r.policy.commands.reject('owner', executed.proposalId)).toThrowError(
+      `Proposal ${executed.proposalId} is executed; only pending or conflicted proposals can be rejected`,
+    );
+  });
+
+  it('bulk reject takes a mix of pending and conflicted proposals, and reports the others', async () => {
+    const { r, doc, origin } = await setup();
+    const c = await conflicted(r, doc, origin);
+    const pending = await propose(
+      r,
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'P' } },
+        { project: PROJECT, origin },
+      ),
+    );
+    const done = r.policy.commands.reject('owner', pending.proposalId); // already rejected: refused in the bulk
+    expect(done.state).toBe('rejected');
+    const other = await propose(
+      r,
+      r.e.engine.run(
+        'updateResource',
+        { path: { resourceId: 'rbbbbbbb' }, body: { name: 'Q' } },
+        { project: PROJECT, origin },
+      ),
+    );
+    const out = r.policy.commands.bulkReject('owner', [c, other.proposalId, pending.proposalId], 'clean-up');
+    expect(out).toEqual([
+      { id: c, ok: true, state: 'rejected' },
+      { id: other.proposalId, ok: true, state: 'rejected' },
+      {
+        id: pending.proposalId,
+        ok: false,
+        state: 'rejected',
+        error: expect.objectContaining({ code: 'INVALID_TRANSITION' }) as unknown,
+      },
+    ]);
+    expect(auditRows(r, c)[0]).toMatchObject({ before: { state: 'conflicted' } });
+    expect(auditRows(r, other.proposalId)[0]).toMatchObject({ before: { state: 'pending' } });
+  });
+});
+
 describe('approval cannot loop, and cannot be forged', () => {
   it('a forged approvedBy or approval from an agent has no effect', async () => {
     const { r, origin } = await setup();

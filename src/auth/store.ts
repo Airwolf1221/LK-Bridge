@@ -36,6 +36,8 @@ export interface CodeRecord {
   readonly familyId: string | null;
   /** The policy profile the owner chose at consent (migration 0300); the grant inherits it. */
   readonly profileId: string | null;
+  /** Hotfix (migration 1400, ADR 0033): grants the owner ticked on the consent page, revoked once this code is exchanged. */
+  readonly replaces: string[];
 }
 
 export interface FamilyRecord {
@@ -142,7 +144,18 @@ function toCode(r: Row): CodeRecord {
     usedAt: num(r.used_at),
     familyId: str(r.family_id),
     profileId: str(r.profile_id),
+    replaces: parseReplaces(r.replaces),
   };
+}
+
+function parseReplaces(v: unknown): string[] {
+  if (typeof v !== 'string' || v === '') return [];
+  try {
+    const parsed = JSON.parse(v) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
 }
 
 function toFamily(r: Row): FamilyRecord {
@@ -281,11 +294,16 @@ export class AuthStore {
 
   // --- Authorization codes ---
 
-  insertCode(c: Omit<CodeRecord, 'usedAt' | 'familyId' | 'profileId'> & { profileId?: string | null }): void {
+  insertCode(
+    c: Omit<CodeRecord, 'usedAt' | 'familyId' | 'profileId' | 'replaces'> & {
+      profileId?: string | null;
+      replaces?: readonly string[];
+    },
+  ): void {
     this.db
       .prepare(
         `INSERT INTO auth_codes (code_hash, client_id, redirect_uri, redirect_uri_provided, code_challenge, scope,
-           resource, created_at, expires_at, profile_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           resource, created_at, expires_at, profile_id, replaces) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         c.codeHash,
@@ -298,6 +316,7 @@ export class AuthStore {
         c.createdAt,
         c.expiresAt,
         c.profileId ?? null,
+        c.replaces && c.replaces.length > 0 ? json(c.replaces) : null,
       );
   }
 
@@ -363,6 +382,33 @@ export class AuthStore {
         .prepare('UPDATE auth_access_tokens SET revoked_at = ? WHERE family_id = ? AND revoked_at IS NULL')
         .run(now, familyId);
       return changed;
+    });
+  }
+
+  /**
+   * Deletes a grant's credentials: its token family and every refresh token, access token and authorisation code of
+   * it (hotfix, ADR 0033). The refresh and access tokens would cascade; they are deleted by name anyway, and the codes
+   * (whose `family_id` is a plain column, no foreign key) only by name. `auth_clients` is never touched: a client
+   * registration may serve other grants. Run it inside the caller's transaction.
+   */
+  deleteGrantCredentials(familyId: string): {
+    family: number;
+    refresh: number;
+    access: number;
+    codes: number;
+  } {
+    return this.tx(() => {
+      const codes = this.db.prepare('DELETE FROM auth_codes WHERE family_id = ?').run(familyId).changes;
+      const refresh = this.db
+        .prepare('DELETE FROM auth_refresh_tokens WHERE family_id = ?')
+        .run(familyId).changes;
+      const access = this.db
+        .prepare('DELETE FROM auth_access_tokens WHERE family_id = ?')
+        .run(familyId).changes;
+      const family = this.db
+        .prepare('DELETE FROM auth_token_families WHERE family_id = ?')
+        .run(familyId).changes;
+      return { family, refresh, access, codes };
     });
   }
 
@@ -462,6 +508,11 @@ export class AuthStore {
     );
   }
 
+  /** Deletes a personal access token (hotfix, ADR 0033). Run it inside the caller's transaction. */
+  deletePat(id: string): boolean {
+    return this.db.prepare('DELETE FROM auth_pats WHERE id = ?').run(id).changes === 1;
+  }
+
   touchPat(id: string, now: number): void {
     this.db.prepare('UPDATE auth_pats SET last_used_at = ? WHERE id = ?').run(now, id);
   }
@@ -556,9 +607,12 @@ export class AuthStore {
   // --- Housekeeping ---
 
   /**
-   * Deletes expired and long-dead codes, tokens, grants and sessions. Returns the rows removed.
+   * Deletes expired and long-dead codes, tokens and sessions. Returns the rows removed.
    * Client registrations are never removed here: DCR clients (ChatGPT reuses one per connection)
    * and CIMD records live until deleted explicitly with {@link deleteClient} (ADR 0008).
+   * Grants (token families) and personal access tokens are not removed here either (ADR 0033): history names a
+   * connection by its id, so a removal leaves a tombstone, and only the owner (Clients & Access) or the daily
+   * `connection-removal` sweep removes one, through the policy layer.
    */
   prune(now: number): number {
     const day = 86400;
@@ -569,11 +623,6 @@ export class AuthStore {
       n += this.db
         .prepare(
           'DELETE FROM auth_refresh_tokens WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)',
-        )
-        .run(now - day, now - 30 * day).changes;
-      n += this.db
-        .prepare(
-          'DELETE FROM auth_token_families WHERE expires_at < ? OR (revoked_at IS NOT NULL AND revoked_at < ?)',
         )
         .run(now - day, now - 30 * day).changes;
       n += this.db

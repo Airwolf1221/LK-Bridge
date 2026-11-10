@@ -237,6 +237,12 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
                 kinds: s.profiles.kinds,
                 defaultScope: s.profiles.defaultScope(),
               },
+              // ADR 0033: this application's other active connections, offered for replacement (ticked by default).
+              existing: s.profiles.existingConnections({
+                clientId: client.clientId,
+                kind: client.kind,
+                redirectUri,
+              }),
             }
           : {}),
       });
@@ -296,6 +302,24 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
     // The owner's choice of profile and scope (policy layer). Checked before the request is used up, so a mistake
     // can be corrected with the browser's Back button.
     let profileId: string | undefined;
+    // ADR 0033: the existing connections the owner left ticked. Only ids still offered for THIS application are kept
+    // (a submitted id is never trusted); they are revoked later, when the code is exchanged, never now.
+    let replaces: string[] = [];
+    if (decision === 'approve' && s.profiles) {
+      const client = s.store.getClient(pending.clientId);
+      if (client) {
+        const offered = new Set(
+          s.profiles
+            .existingConnections({
+              clientId: client.clientId,
+              kind: client.kind,
+              redirectUri: pending.redirectUri,
+            })
+            .map((c) => c.id),
+        );
+        replaces = [...new Set(form.getAll('replace'))].filter((id) => offered.has(id));
+      }
+    }
     if (decision === 'approve' && s.profiles) {
       const choice = form.get('profile');
       const scope = form.get('scope');
@@ -335,6 +359,7 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
             csrf: form.get('csrf_token') ?? '',
             redirectHost: displayHost(pending.redirectUri),
             ...applied.confirm,
+            replace: replaces,
           }),
           [new URL(pending.redirectUri).origin],
         );
@@ -362,12 +387,14 @@ export function registerAuthorizeRoutes(app: FastifyInstance, s: AuthServices): 
       scopes: pending.scopes,
       resource: pending.resource,
       ...(profileId !== undefined ? { profileId } : {}),
+      ...(replaces.length > 0 ? { replaces } : {}),
     });
     s.event('consent.granted', {
       client_id: pending.clientId,
       scope: pending.scopes.join(' '),
       redirect_host: displayHost(pending.redirectUri),
       ...(profileId !== undefined ? { profile_id: profileId } : {}),
+      ...(replaces.length > 0 ? { replaces: replaces.length } : {}),
     });
     return back({ code });
   };
