@@ -3,17 +3,22 @@
  * create_character (v2 C2b) end to end through the REAL server and the official MCP client: a Core with a new index,
  * a Core under an existing index, a Compact reference; return-existing for both; an unknown race to Undetermined /
  * Unknown with Unestablished; a declared race that does not resolve; Race / Species exactly as given; nothing invented;
- * placement, names, identity facts, Status Working, the template recorded in the tree, verify, dry run.
+ * placement, names, identity facts, the template recorded in the tree, verify, dry run. v2 C2c: these are Authoritative
+ * characters (under their race, as [BSRC], Status Authoritative, CANON tag), each a canonical proposal the owner accepts
+ * as canon here; Working characters are in test/lifecycle/creates.test.ts.
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
-import { childNames, facts, resourcesWorld, T, type ResourcesWorld } from './world.js';
+import { asCanon, childNames, facts, resourcesWorld, T, type ResourcesWorld } from './world.js';
 
 let w: ResourcesWorld;
 let client: Client;
-const call = (args: Record<string, unknown>) =>
-  w.stack.call(client, 'create_character', { project: 'test', ...args });
+const call = async (args: Record<string, unknown>) =>
+  asCanon(
+    w,
+    await w.stack.call(client, 'create_character', { project: 'test', status: 'authoritative', ...args }),
+  );
 const node = (id: string) => w.stack.runtime.tree.queries.node(PROJECT, id).data;
 const writes = () => w.seen.filter((l) => !l.startsWith('GET'));
 
@@ -24,7 +29,7 @@ beforeAll(async () => {
 afterAll(async () => w.close());
 
 describe('create_character: core', () => {
-  it('a new core: the character index from the Index template, the Core beneath it, identity facts, Status Working', async () => {
+  it('a new core: the character index from the Index template, the Core beneath it, identity facts, Status Authoritative', async () => {
     const before = writes().length;
     const r = await call({
       kind: 'core',
@@ -49,19 +54,21 @@ describe('create_character: core', () => {
       '[BSRC] Asagiri Kaede',
     ]);
     expect(childNames(w, idx.id)).toEqual(['[BSRC] Asagiri Ren - Character Core']);
-    // Identity facts exactly, Status Working, then the caller's facts, in the template's order.
+    // Identity facts exactly, Status Authoritative, then the caller's facts, in the template's order.
     expect(facts(w, core.id)).toEqual([
       'Reference Type=Character Core',
       'Subject=Asagiri Ren',
       'Race / Species=Foxian',
-      'Status=Working',
+      'Status=Authoritative',
       'Continuity Type=',
       'Continuity=',
       'Scope=Shrine guard',
       'Canonical Display Name=Asagiri Ren',
     ]);
-    // The index gets Status Working too (its template has a Status row).
-    expect(facts(w, idx.id)).toContain('Status=Working');
+    // v2 C2c: the index has no lifecycle, so it gets no Status; the Core gets the CANON tag.
+    expect(facts(w, idx.id)).toContain('Status=');
+    expect(w.repo.res.get(core.id)!.tags).toEqual(['CANON']);
+    expect(w.repo.res.get(idx.id)!.tags).toEqual([]);
     // Both templates recorded in the tree at once; the Core's Reference Type in the tree after the job's re-read.
     expect(node(idx.id)).toMatchObject({ templateId: T.index });
     expect(node(core.id)).toMatchObject({ templateId: T.core, referenceType: 'Character Core' });
@@ -69,7 +76,8 @@ describe('create_character: core', () => {
     // Writes: two creates (each with its place), then one row write per fact.
     const w2 = writes().slice(before);
     expect(w2.filter((l) => l.startsWith('POST /resources/from-template'))).toHaveLength(2);
-    expect(w2.filter((l) => /^PATCH .*\/rows\//.test(l))).toHaveLength(7); // 6 facts on the core + Status on the index
+    expect(w2.filter((l) => /^PATCH .*\/rows\//.test(l))).toHaveLength(6); // 6 facts on the core
+    expect(w2.filter((l) => /^PATCH \/resources\/[^/]+$/.test(l))).toHaveLength(1); // the Core's tags
   });
 
   it('the same request again returns the existing Core with a note: nothing is duplicated', async () => {
@@ -132,7 +140,7 @@ describe('create_character: compact and races', () => {
       'Reference Type=Compact Character Reference',
       'Subject=Oren Pike',
       'Race / Species=Human',
-      'Status=Working',
+      'Status=Authoritative',
       'Canonical Display Name=Oren Pike',
       'Scope=',
     ]);
@@ -175,7 +183,7 @@ describe('create_character: compact and races', () => {
       '[BSRC] Hana Sora - Character Core',
     ]);
     expect(writes().length).toBe(before);
-    // No tag was ever invented.
-    expect(JSON.stringify(r.body)).not.toMatch(/"tags"/);
+    // No tag was ever invented: the Core's status tag only (v2 C2c), the index none.
+    expect(r.body.pages.map((p: { tags?: string[] }) => p.tags)).toEqual([undefined, ['CANON']]);
   });
 });

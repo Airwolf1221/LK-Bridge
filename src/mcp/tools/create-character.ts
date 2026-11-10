@@ -19,12 +19,17 @@ import * as z from 'zod';
 import { RegistryError } from '../../registry/index.js';
 import type { McpToolProvider } from '../server.js';
 import {
+  STATUS_DESCRIPTION,
   characterClaim,
   createCtx,
   newPage,
   planNewPageFacts,
+  statusValue,
   withRequest,
+  withStatusTag,
+  workingIndex,
   type CreateOutcome,
+  type CreateStatus,
   type NewPage,
 } from './create-support.js';
 import { factsVersionOfRead } from './discover.js';
@@ -39,13 +44,17 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a character',
     access: 'write',
     description:
-      'Creates a character’s pages under its race inside the Characters index, by the bridge’s fixed rules. kind "core": ' +
-      'the character’s own [INDEX] {name} (an existing one is reused) with “{name} - Character Core” beneath it; kind ' +
-      '"compact": “{name} - Character Reference” directly under the race, with no index. An existing Core or Reference is ' +
-      'returned, not duplicated. In the same job the page gets Reference Type, Subject, Canonical Display Name, Race / ' +
-      'Species (exactly as given; Unestablished when the race is unknown or omitted) and Status Working, then your `facts` ' +
-      'and `links`. An unknown or omitted race goes to Undetermined / Unknown; a race given that does not resolve fails (it ' +
-      'is never created, and nothing is guessed). Two requests for the same character at once are refused as duplicates ' +
+      'Creates a character’s pages by the bridge’s fixed rules. `status` (default "working"): the whole set goes under ' +
+      '[INDEX] Working: kind "core" gets [INDEX] {name} there with “[BWRK] {name} - Character Core” beneath it; kind ' +
+      '"compact" gets “[BWRK] {name} - Character Reference” directly under [INDEX] Working; it goes under its race only ' +
+      'when promoted (promote_page). "authoritative": under its race inside the Characters index, as [BSRC] (core: the ' +
+      'character’s own [INDEX] {name}, an existing one reused, with the Core beneath it; compact: directly under the race), ' +
+      'with Status Authoritative and the CANON tag: canon, so always a proposal only the owner can accept as canon. An ' +
+      'existing Core or Reference (under the race or under [INDEX] Working) is returned, not duplicated. In the same job ' +
+      'the page gets Reference Type, Subject, Canonical Display Name, Race / Species (exactly as given; Unestablished when ' +
+      'the race is unknown or omitted) and its Status, then your `facts` and `links`. An unknown or omitted race goes to ' +
+      'Undetermined / Unknown; a race given that does not resolve fails, whatever the status (it is never created, and ' +
+      'nothing is guessed). Two requests for the same character at once are refused as duplicates ' +
       '(DUPLICATE_REQUEST). Example: { "kind": "core", "name": "Asagiri Ren", "race": "Foxian", "facts": { "Scope": ' +
       '"Shrine guard" }, "project": "test" }. Cost: 1 read per template’s sidebar (Index and Core), 1 write per page, 1 read ' +
       'and 1 write per fact for the Core or Reference, then the verify step (1 read per page, 1 listing per parent) and the ' +
@@ -69,6 +78,7 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
         .max(100)
         .optional()
         .describe('The character type, when the project has more than one.'),
+      status: z.enum(['working', 'authoritative']).optional().describe(STATUS_DESCRIPTION),
       facts: factsArg,
       links: linksArg,
       dryRun: z.boolean().optional().describe('Show the plan; write nothing.'),
@@ -89,6 +99,15 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
           args,
           { key: characterClaim(name), label: `the character “${name}”` },
           async (): Promise<CreateOutcome> => {
+            const cc = createCtx(pd, mctx, ctx, 'create_character');
+            const status: CreateStatus = args.status ?? 'working';
+            // v2 C2c: a Working character's set goes under [INDEX] Working (it must be confirmed).
+            let working: { indexId: string } | undefined;
+            if (status === 'working') {
+              const wi = workingIndex(cc);
+              if (!wi.ok) return { kind: 'answer', result: wi.result };
+              working = { indexId: wi.value.id };
+            }
             let plan;
             try {
               plan = ctx.types.planCharacterPlacement({
@@ -96,6 +115,7 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                 race: args.race ?? null,
                 kind: args.kind,
                 ...(args.type !== undefined ? { type: args.type } : {}),
+                ...(working ? { working } : {}),
               });
             } catch (e) {
               if (e instanceof RegistryError) return { kind: 'answer', result: registryError(e, ctx) };
@@ -112,6 +132,8 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                 index: plan.raceIndex.rawName,
               },
               species: { [plan.species.row]: plan.species.value },
+              status,
+              ...(plan.working ? { placedUnder: plan.home.rawName } : {}),
               ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
             };
             if (plan.page.action === 'return_existing') {
@@ -127,11 +149,11 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                 factsVersion: factsVersionOfRead(ctx, existing.id, read.value),
                 note:
                   `${plan.kind === 'core' ? 'A Character Core' : 'A Compact Character Reference'} for “${plan.characterName}” already exists; ` +
-                  'it was returned and nothing was created. Change it with set_facts and write_page.',
+                  'it was returned and nothing was created. Change it with set_facts and write_page' +
+                  (existing.kind === 'bwrk' ? '; it is Working: promote_page makes it Authoritative.' : '.'),
               };
               return { kind: 'answer', result: render(body, pd), final: body };
             }
-            const cc = createCtx(pd, mctx, ctx, 'create_character');
             const settings = pd.services?.projectSettings?.(ctx.projectId) ?? {};
             const refRow =
               typeof settings.treeReferenceTypeRow === 'string'
@@ -153,13 +175,15 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                 parent: { existing: ci.parentId },
                 templateId: ci.templateId,
                 facts: null,
-                parentName: plan.raceIndex.rawName,
+                parentName: plan.home.rawName,
                 templateName: `the ${plan.type.singular} Index template`,
+                status: null,
               });
               const f = await planNewPageFacts(cc, {
                 pageId: p.id,
                 pageName: p.rawName,
                 templateId: ci.templateId,
+                status: null,
                 what: p.rawName,
               });
               if (!f.ok) return { kind: 'answer', result: f.result };
@@ -172,17 +196,18 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                 ? ci.rawName
                 : ci?.action === 'reuse'
                   ? ci.node.rawName
-                  : plan.raceIndex.rawName;
+                  : plan.home.rawName;
             const page = newPage({
               key: 'page',
               rawName: pg.rawName,
               parent: indexPage
                 ? { item: 'index' }
-                : { existing: ci?.action === 'reuse' ? ci.node.id : (pg.parentId ?? plan.raceIndex.id) },
+                : { existing: ci?.action === 'reuse' ? ci.node.id : (pg.parentId ?? plan.home.id) },
               templateId: pg.templateId,
               facts: null,
               parentName,
               templateName: `the ${plan.type.singular} ${pg.templateRole === 'core' ? 'Core' : 'Compact'} template`,
+              status,
             });
             const f = await planNewPageFacts(cc, {
               pageId: page.id,
@@ -196,10 +221,12 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
               ],
               ...(args.facts ? { facts: args.facts } : {}),
               ...(args.links ? { links: args.links } : {}),
+              status: statusValue(cc.lifecycle, status),
               what: page.rawName,
             });
             if (!f.ok) return { kind: 'answer', result: f.result };
-            pages.push({ ...page, facts: f.value });
+            const tags = withStatusTag(cc.lifecycle, cc.templateTags.get(pg.templateId) ?? [], status);
+            pages.push({ ...page, facts: f.value, tags });
             return finishCreate(cc, pages, {
               batch: false,
               dryRun: args.dryRun === true,
@@ -209,7 +236,9 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                   ? { characterIndex: { reused: ci.node.rawName, id: ci.node.id } }
                   : {}),
               },
-              summary: `create_character: ${page.rawName}${indexPage ? ` (with ${indexPage.rawName})` : ''} under ${plan.raceIndex.rawName}`,
+              // v2 C2c: a Working character's own index under [INDEX] Working is part of the lifecycle change.
+              ...(indexPage && plan.working ? { markerPages: [{ id: indexPage.id, to: null }] } : {}),
+              summary: `create_character: ${page.rawName}${indexPage ? ` (with ${indexPage.rawName})` : ''} under ${plan.home.rawName}`,
             });
           },
         );

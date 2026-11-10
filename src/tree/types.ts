@@ -1,7 +1,14 @@
 /** Shared types of the repository tree (v2 A2, docs/tree.md, ADR 0025). */
 
-/** `root` is the AI REPOSITORY page itself; every other node is classified by its name's prefix. */
-export type NodeKind = 'root' | 'index' | 'bsrc' | 'unclassified';
+/**
+ * `root` is the AI REPOSITORY page itself; every other node is classified by its name's prefix. v2 C2c (ADR 0035): the
+ * page lifecycle adds `bwrk` (`[BWRK]`, a Working page) and `barc` (`[BARC]`, an Archived page) beside `bsrc`
+ * (`[BSRC]`, an Authoritative page in its normal place).
+ */
+export type NodeKind = 'root' | 'index' | 'bsrc' | 'bwrk' | 'barc' | 'unclassified';
+
+/** v2 C2c: the kinds of page (not index, not root, not unclassified): one per lifecycle state. */
+export type PageKind = 'bsrc' | 'bwrk' | 'barc';
 
 /**
  * The tree of one project:

@@ -39,6 +39,9 @@ import {
   WRITE_PAGE_PLANNER,
 } from './pages/index.js';
 import { CanonicalGuard } from './facts/index.js';
+import { combineGuards } from './jobs/write-guard.js';
+import { LifecycleGuard } from './lifecycle/guard.js';
+import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { FactsVersions } from './facts/version.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
@@ -83,6 +86,8 @@ export interface Runtime {
   readonly registry: Registry;
   /** v2 A4: the asset tree of each project's asset library (build, after-write updates, refresh, check, queries, placement). */
   readonly assets: AssetService;
+  /** v2 C2c (ADR 0035): the page lifecycle (settings, records, the link index). */
+  readonly lifecycle: Lifecycle;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -267,27 +272,82 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   policy.proposals.setPageNames(pageName);
   // Read live, so a rule the owner changes on the dashboard applies to the next write.
   const projectStore = new ProjectStore(o.db, () => (o.clock ?? systemClock).now());
+  // v2 C2c (ADR 0035): the lifecycle guard beside it: lifecycle changes only through the lifecycle tools (Part 3).
+  const treeNode = (projectId: string, id: string) => {
+    try {
+      return tree.queries.node(projectId, id).data ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const lifecycleGuard = new LifecycleGuard({
+    settings: (projectId) => projectStore.byId(projectId)?.settings,
+    engine,
+    node: treeNode,
+  });
   const unregisterGuard = engine.setWriteGuard(
-    new CanonicalGuard({
-      settings: (projectId) => projectStore.byId(projectId)?.settings,
-      engine,
-      pageName,
-      // v2 C2b: a cascade delete's pages, from the repository tree (null when the tree cannot answer).
-      descendants: (projectId, resourceId) => {
-        try {
-          const status = tree.queries.status(projectId).status;
-          if (status !== 'ready' && status !== 'stale') return null;
-          if (!tree.queries.node(projectId, resourceId).data) return null; // not in the tree: listed live
-          return tree.queries
-            .subtree(projectId, resourceId, { limit: 100_000 })
-            .data.entries.map((e) => e.node.id)
-            .filter((id) => id !== resourceId);
-        } catch {
-          return null;
-        }
-      },
-    }),
+    combineGuards(
+      new CanonicalGuard({
+        settings: (projectId) => projectStore.byId(projectId)?.settings,
+        engine,
+        pageName,
+        // v2 C2b: a cascade delete's pages, from the repository tree (null when the tree cannot answer).
+        descendants: (projectId, resourceId) => {
+          try {
+            const status = tree.queries.status(projectId).status;
+            if (status !== 'ready' && status !== 'stale') return null;
+            if (!tree.queries.node(projectId, resourceId).data) return null; // not in the tree: listed live
+            return tree.queries
+              .subtree(projectId, resourceId, { limit: 100_000 })
+              .data.entries.map((e) => e.node.id)
+              .filter((id) => id !== resourceId);
+          } catch {
+            return null;
+          }
+        },
+        // v2 C2c: a page's kind (its prefix) and a document's type, for the delete rules of the lifecycle (ADR 0035).
+        pageKind: (projectId, resourceId) => {
+          try {
+            return tree.queries.node(projectId, resourceId).data?.kind ?? null;
+          } catch {
+            return null;
+          }
+        },
+        documentInfo: (projectId, resourceId, documentId) => {
+          try {
+            const d = tree.queries
+              .node(projectId, resourceId)
+              .data?.documents.find((x) => x.id === documentId);
+            return d ? { type: d.type, name: d.name } : null;
+          } catch {
+            return null;
+          }
+        },
+      }),
+      lifecycleGuard,
+    ),
   );
+
+  // v2 C2c (ADR 0035): the page lifecycle: its settings, the lifecycle record (the bridge.record step) and the link
+  // index (followed from every write; swept by the maintenance job).
+  const lifecycle = createLifecycle({
+    db: o.db,
+    engine,
+    tree,
+    settings: (projectId) => projectStore.byId(projectId)?.settings,
+    setSetting: (projectId, key, value) => {
+      projects.setSetting(projectId, key, value);
+    },
+    projectName: (projectId) => projects.nameOf(projectId),
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    busy: (projectId) => {
+      const q = projects.anyClient(projectId)?.governor.snapshot().queues;
+      return q !== undefined && q.P1 + q.P2 > 0;
+    },
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachLifecycle = lifecycle.attach();
 
   const characterType = (projectId: string) =>
     registry
@@ -334,6 +394,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
     tree,
     assets,
+    links: lifecycle,
   });
   maintenance.start();
   const mappings = createMappings({
@@ -368,6 +429,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
           () => (o.clock ?? systemClock).now(),
           Math.max(30, config.journal.retentionDays + 1) * 24 * 3_600_000,
         ),
+        // v2 C2c: the page lifecycle (settings, records, the link index).
+        lifecycle,
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
@@ -390,6 +453,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     tree,
     registry,
     assets,
+    lifecycle,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -413,6 +477,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       await engine.stop();
       unregisterPlanner();
       unregisterGuard();
+      detachLifecycle();
       await tree.stop();
       detachRegistry();
       await assets.stop();

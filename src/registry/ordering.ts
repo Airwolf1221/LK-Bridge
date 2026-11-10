@@ -1,5 +1,6 @@
 /**
- * Sibling order (v2 A3, PLAN-v2 4.5): `[INDEX]` pages first, then `[BSRC]`, then unclassified ones; alphabetical
+ * Sibling order (v2 A3, PLAN-v2 4.5): `[INDEX]` pages first, then `[BSRC]` (with `[BWRK]` and `[BARC]`, v2 C2c), then
+ * unclassified ones; alphabetical
  * within each group by display name, with `Intl.Collator('en', { sensitivity: 'base', numeric: true })` (case and
  * accents ignored, numbers by value). Pure functions, plus the tree-backed `placementFor` and `outOfOrder`. Nothing
  * here moves anything: it only says where a page belongs.
@@ -10,7 +11,15 @@ import { RegistryError, type NodeRef, type ResolveKind, type Slot } from './type
 
 export const COLLATOR = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
 
-const GROUP: Readonly<Record<NodeKind, number>> = { index: 0, bsrc: 1, unclassified: 2, root: 3 };
+// v2 C2c: `[BWRK]` and `[BARC]` pages sort with `[BSRC]` ones (name handling treats them alike): by display name.
+const GROUP: Readonly<Record<NodeKind, number>> = {
+  index: 0,
+  bsrc: 1,
+  bwrk: 1,
+  barc: 1,
+  unclassified: 2,
+  root: 3,
+};
 
 export interface Orderable {
   readonly id: string;

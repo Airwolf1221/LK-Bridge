@@ -50,7 +50,7 @@ import {
 import { inRankOrder } from '../../lk/row-order.js';
 
 const SCOPE_CLIP = 60;
-const KIND = z.enum(['index', 'bsrc', 'unclassified']);
+const KIND = z.enum(['index', 'bsrc', 'bwrk', 'barc', 'unclassified']);
 const iso = (ms: number | null | undefined) =>
   ms === null || ms === undefined ? null : new Date(ms).toISOString();
 
@@ -79,7 +79,8 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Browse the repository tree',
     access: 'read',
     description:
-      'Shows part of the project’s AI REPOSITORY as a tree: for each page its kind (index / bsrc / unclassified), display name, ' +
+      'Shows part of the project’s AI REPOSITORY as a tree: for each page its kind (index / bsrc / bwrk / barc / unclassified: ' +
+      '[BSRC] Authoritative, [BWRK] Working, [BARC] Archived), display name, ' +
       'Reference Type, Scope (shortened), tags and number of child pages. Start here to see how the repository is laid out. ' +
       '`path` is a page name, an id or a path of display names such as "Characters / Beastkin / Foxians" (default: the root); ' +
       '`depth` is how many levels below it to show (default 2, at most 6); `kinds` keeps only those kinds of page. ' +
@@ -94,7 +95,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
         .optional()
         .describe('Page name, id or "A / B / C" path. Default: the root.'),
       depth: z.number().int().min(0).max(6).optional().describe('Levels below the page to show. Default 2.'),
-      kinds: z.array(KIND).max(3).optional().describe('Show only these kinds of page.'),
+      kinds: z.array(KIND).max(5).optional().describe('Show only these kinds of page.'),
       limit: z.number().int().min(1).max(400).optional().describe('Most pages to list. Default 150.'),
       offset: z.number().int().min(0).optional().describe('Skip this many of the first page’s children.'),
       project: projectArg,
@@ -189,7 +190,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     description:
       'Finds pages in the AI REPOSITORY by name. Words must all match; "quoted phrases" match as written; OR, NOT (or a leading -) ' +
       'and ( ) combine terms (capitals for OR, AND and NOT; NOT binds tightest, then AND, then OR). Filters: name: tag: type: ' +
-      '(Reference Type, whole words) kind: (index, bsrc, unclassified) under: (a page name or id; pages below it) scope:. ' +
+      '(Reference Type, whole words) kind: (index, bsrc, bwrk, barc, unclassified) under: (a page name or id; pages below it) scope:. ' +
       'A word with no filter matches the display name, aliases, Canonical Display Name and Scope. ' +
       'Results are ranked: exact name, name prefix, a word of the name, text inside a name, alias, then Scope; each says why it matched. ' +
       'Example: { "query": "foxian tag:elder -kind:index under:Characters" }. ' +

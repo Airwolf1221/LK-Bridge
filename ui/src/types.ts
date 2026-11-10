@@ -696,7 +696,7 @@ export interface TreeNodeView {
   id: string;
   rawName: string;
   displayName: string;
-  kind: 'root' | 'index' | 'bsrc' | 'unclassified';
+  kind: 'root' | 'index' | 'bsrc' | 'bwrk' | 'barc' | 'unclassified';
   parentId: string | null;
   rank: string | null;
   depth: number;
@@ -784,7 +784,7 @@ export interface TreeOverview {
   };
   counts: {
     total: number;
-    byKind: Record<'root' | 'index' | 'bsrc' | 'unclassified', number>;
+    byKind: Record<'root' | 'index' | 'bsrc' | 'bwrk' | 'barc' | 'unclassified', number>;
     maxDepth: number;
     stale: number;
     propertiesPending: number;

@@ -4,18 +4,44 @@
  * resource (an `Observation`), including the catalogue fields read from the key-value property.
  */
 import type { ProjectSettings } from '../projects/settings.js';
-import type { CatalogueFields, NodeKind, Observation, SidebarBlock, TreeDocument } from './types.js';
+import type {
+  CatalogueFields,
+  NodeKind,
+  Observation,
+  PageKind,
+  SidebarBlock,
+  TreeDocument,
+} from './types.js';
 import { inRankOrder } from '../lk/row-order.js';
 
 export const INDEX_PREFIX = '[INDEX] ';
 export const BSRC_PREFIX = '[BSRC] ';
+/** v2 C2c (ADR 0035): a Working page. */
+export const BWRK_PREFIX = '[BWRK] ';
+/** v2 C2c (ADR 0035): an Archived page. */
+export const BARC_PREFIX = '[BARC] ';
+
+/** The prefix of each classified kind, exactly as names carry it (capitals, one space). */
+export const KIND_PREFIX: Readonly<Record<'index' | PageKind, string>> = {
+  index: INDEX_PREFIX,
+  bsrc: BSRC_PREFIX,
+  bwrk: BWRK_PREFIX,
+  barc: BARC_PREFIX,
+};
+
+/** v2 C2c: the page kinds, in the order mentions prefer them (current first: [BSRC], then [BWRK], then [BARC]). */
+export const PAGE_KINDS: readonly PageKind[] = ['bsrc', 'bwrk', 'barc'];
+
+/** v2 C2c: whether a kind is a page (`[BSRC]`, `[BWRK]` or `[BARC]`): name handling treats the three alike. */
+export function isPageKind(kind: string): kind is PageKind {
+  return kind === 'bsrc' || kind === 'bwrk' || kind === 'barc';
+}
 
 /** A name's kind (by its exact prefix) and its display name (the prefix removed, and spaces after it). */
 export function classifyName(raw: string): { kind: Exclude<NodeKind, 'root'>; displayName: string } {
-  if (raw.startsWith(INDEX_PREFIX))
-    return { kind: 'index', displayName: raw.slice(INDEX_PREFIX.length).trimStart() };
-  if (raw.startsWith(BSRC_PREFIX))
-    return { kind: 'bsrc', displayName: raw.slice(BSRC_PREFIX.length).trimStart() };
+  for (const [kind, prefix] of Object.entries(KIND_PREFIX) as ['index' | PageKind, string][]) {
+    if (raw.startsWith(prefix)) return { kind, displayName: raw.slice(prefix.length).trimStart() };
+  }
   return { kind: 'unclassified', displayName: raw };
 }
 
@@ -47,9 +73,16 @@ export function treeSettingsFrom(s: ProjectSettings): TreeSettings {
   };
 }
 
-/** The settings that decide the catalogue fields, as one comparable string. */
+/**
+ * v2 C2c: the version of the name classification. Stored with the tree (in its catalogue key), so a tree built before
+ * `[BWRK]` and `[BARC]` were kinds is re-classified once, with no reads.
+ */
+export const CLASSIFICATION_VERSION = 'kinds-2';
+
+/** The settings that decide the catalogue fields (and the classification's version), as one comparable string. */
 export function catalogueSettingsKey(t: TreeSettings): string {
   return JSON.stringify([
+    CLASSIFICATION_VERSION,
     t.propertiesName,
     t.referenceTypeRow,
     t.scopeRow,

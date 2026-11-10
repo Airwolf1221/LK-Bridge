@@ -4,7 +4,7 @@
  * `not_found`, with near names as a hint only. No fuzzy matching ever decides anything.
  */
 import type { ResolveMention } from '../markdown/index.js';
-import type { TreeNode } from '../tree/index.js';
+import { KIND_PREFIX, isPageKind, type PageKind, type TreeNode } from '../tree/index.js';
 import { cleanPrefixes, key, subjectOf } from './names.js';
 import type { RegistryStore } from './store.js';
 import type { ProjectTree } from './tree-view.js';
@@ -20,16 +20,24 @@ import {
 /** v2 C2b: a character page's role, and the order a mention prefers them in. */
 export type CharacterRole = 'core' | 'compact' | 'index';
 const ROLE_ORDER: readonly CharacterRole[] = ['core', 'compact', 'index'];
-export const ROLE_LABEL: Readonly<Record<CharacterRole, string>> = {
+/** v2 C2c: why a mention chose its page: the character role (C2b), or the page's lifecycle state. */
+export type MentionRole = CharacterRole | PageKind;
+export const ROLE_LABEL: Readonly<Record<MentionRole, string>> = {
   core: 'Character Core',
   compact: 'Character Reference',
   index: 'character index',
+  bsrc: 'current [BSRC] page',
+  bwrk: 'Working [BWRK] page',
+  barc: 'Archived [BARC] page',
 };
+
+/** v2 C2c (ADR 0035): the order a mention prefers the lifecycle states of one subject in: current first. */
+const STATE_RANK: Readonly<Record<PageKind, number>> = { bsrc: 0, bwrk: 1, barc: 2 };
 
 /** v2 C2b: the page a mention of one character's pages went to, and why. */
 export interface MentionChoice {
   readonly chosen: NodeRef;
-  readonly role: CharacterRole;
+  readonly role: MentionRole;
   readonly subject: string;
   readonly candidates: readonly (NodeRef & { readonly role: string })[];
   readonly why: string;
@@ -42,7 +50,7 @@ const FIELD_RANK: Readonly<Record<MatchField, number>> = {
   alias: 3,
   canonical: 4,
 };
-const KINDS: readonly ResolveKind[] = ['index', 'bsrc', 'unclassified'];
+const KINDS: readonly ResolveKind[] = ['index', 'bsrc', 'bwrk', 'barc', 'unclassified'];
 const LK_URI = /^lk:\/\/resources\/([a-z][0-9a-z]{1,63})\/?$/;
 const MAX_QUERY = 500;
 
@@ -135,7 +143,7 @@ export class NameResolver {
     // to one prefix), so "[INDEX] Humans" matches the index's raw name exactly.
     for (const m of this.tree.findByName(cleaned)) take(m.node, m.field);
     if (prefix) {
-      const raw = `${prefix === 'index' ? '[INDEX]' : '[BSRC]'} ${cleaned}`;
+      const raw = `${KIND_PREFIX[prefix]}${cleaned}`;
       for (const m of this.tree.findByRawName(raw)) take(m.node, 'raw');
     }
     let matches = [...found.values()];
@@ -228,7 +236,8 @@ export class NameResolver {
     for (const t of this.store.listTypes()) {
       const p = t.placement;
       if (t.placementKind !== 'character' || !p) continue;
-      if (n.kind === 'bsrc' && n.referenceType) {
+      // v2 C2c: a Working or Archived Core or Reference is one too (name handling treats [BWRK] and [BARC] like [BSRC]).
+      if (isPageKind(n.kind) && n.referenceType) {
         const ref = key(n.referenceType);
         const role: CharacterRole | null =
           ref === key(p.referenceTypes.core)
@@ -259,6 +268,59 @@ export class NameResolver {
    * its index. Null when they do not (different subjects, a page with no character role, or two of the best role).
    */
   preferredMention(candidates: readonly NodeRef[]): MentionChoice | null {
+    if (candidates.length < 2) return null;
+    // v2 C2c (ADR 0035): the same subject in several lifecycle states goes to the current page first ([BSRC], then
+    // [BWRK], then [BARC]); the character rule below then decides among the pages left, if there are several.
+    const states = this.byLifecycle(candidates);
+    if (states && states.pool.length < candidates.length) {
+      if (states.pool.length === 1) {
+        const chosen = states.pool[0]!;
+        const kind = this.tree.node(chosen.id)!.kind as PageKind;
+        return {
+          chosen,
+          role: kind,
+          subject: states.subject,
+          candidates: candidates.map((c) => ({
+            ...c,
+            role: ROLE_LABEL[this.tree.node(c.id)!.kind as PageKind],
+          })),
+          why: `the names match pages of one subject (${states.subject}) in several lifecycle states; a mention goes to the current page first ([BSRC], then [BWRK], then [BARC])`,
+        };
+      }
+      const pick = this.byCharacterRole(states.pool);
+      return pick
+        ? {
+            ...pick,
+            why: `${pick.why}; ${candidates.length - states.pool.length} page(s) in a later lifecycle state were set aside`,
+          }
+        : null;
+    }
+    return this.byCharacterRole(candidates);
+  }
+
+  /**
+   * v2 C2c: when every candidate is a page or an index of ONE subject, the candidates in the best lifecycle state (an
+   * index counts as current). Null when they are not one subject, or one is unclassified.
+   */
+  private byLifecycle(
+    candidates: readonly NodeRef[],
+  ): { readonly pool: readonly NodeRef[]; readonly subject: string } | null {
+    const rows: { c: NodeRef; rank: number; subject: string }[] = [];
+    for (const c of candidates) {
+      const n = this.tree.node(c.id);
+      if (!n || (n.kind !== 'index' && !isPageKind(n.kind))) return null;
+      const subject =
+        this.characterRole(n.id)?.subject ?? subjectOf(n.displayName, this.tree.rowValue(n.id, 'Subject'));
+      rows.push({ c, rank: isPageKind(n.kind) ? STATE_RANK[n.kind] : 0, subject });
+    }
+    const k = key(rows[0]!.subject);
+    if (rows.some((r) => key(r.subject) !== k)) return null;
+    const best = Math.min(...rows.map((r) => r.rank));
+    return { pool: rows.filter((r) => r.rank === best).map((r) => r.c), subject: rows[0]!.subject };
+  }
+
+  /** v2 C2b: the Core, else the Reference, else the index of ONE character, among `candidates`; null otherwise. */
+  private byCharacterRole(candidates: readonly NodeRef[]): MentionChoice | null {
     if (candidates.length < 2) return null;
     const roles = candidates.map((c) => ({ c, r: this.characterRole(c.id) }));
     if (roles.some((x) => x.r === null)) return null;

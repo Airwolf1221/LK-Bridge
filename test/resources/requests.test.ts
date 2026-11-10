@@ -9,7 +9,7 @@
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
-import { childNames, facts, resourcesWorld, T, type ResourcesWorld } from './world.js';
+import { childNames, facts, resourcesWorld, T, type ResourcesWorld, LIFECYCLE } from './world.js';
 
 let w: ResourcesWorld;
 let writer: Client;
@@ -37,7 +37,6 @@ describe('operation_id', () => {
       project: 'test',
       name: 'Echo Hall',
       template: T.general,
-      parent: 'Kumikas',
       operation_id: 'op-echo-1',
     };
     const first = await w.stack.call(writer, 'create_resource', args);
@@ -53,7 +52,7 @@ describe('operation_id', () => {
       pages: [{ id: first.body.pages[0].id }],
     });
     expect(writes().length).toBe(before);
-    expect(childNames(w, 'kumi_idx').filter((n) => n === '[BSRC] Echo Hall')).toHaveLength(1);
+    expect(childNames(w, LIFECYCLE.working).filter((n) => n === '[BWRK] Echo Hall')).toHaveLength(1);
   });
 
   it('the same id with a different request is refused, and nothing is done', async () => {
@@ -62,7 +61,6 @@ describe('operation_id', () => {
       project: 'test',
       name: 'Other Hall',
       template: T.general,
-      parent: 'Kumikas',
       operation_id: 'op-echo-1',
     });
     expect(r.body.error).toMatchObject({ code: 'OPERATION_ID_REUSED', operation_id: 'op-echo-1' });
@@ -73,7 +71,6 @@ describe('operation_id', () => {
     const dry = await w.stack.call(writer, 'create_bare_resource', {
       project: 'test',
       name: '[BSRC] Dry Hall',
-      parent: 'Kumikas',
       operation_id: 'op-dry',
       dryRun: true,
     });
@@ -81,14 +78,12 @@ describe('operation_id', () => {
     const refused = await w.stack.call(writer, 'create_bare_resource', {
       project: 'test',
       name: 'No Prefix',
-      parent: 'Kumikas',
       operation_id: 'op-dry',
     });
     expect(refused.body.error.code).toBe('INVALID_NAME');
     const real = await w.stack.call(writer, 'create_bare_resource', {
       project: 'test',
       name: '[BSRC] Dry Hall',
-      parent: 'Kumikas',
       operation_id: 'op-dry',
     });
     expect(real.body, real.text).toMatchObject({ status: 'written' });
@@ -96,7 +91,6 @@ describe('operation_id', () => {
     const mine = await w.stack.call(other, 'create_bare_resource', {
       project: 'test',
       name: '[BSRC] Wet Hall',
-      parent: 'Kumikas',
       operation_id: 'op-dry',
     });
     expect(mine.body, mine.text).toMatchObject({ status: 'written' });
@@ -107,7 +101,6 @@ describe('operation_id', () => {
       project: 'test',
       name: 'Proposed Hall',
       template: T.general,
-      parent: 'Kumikas',
       operation_id: 'op-prop',
     };
     const first = await w.stack.call(proposer, 'create_resource', args);
@@ -196,17 +189,18 @@ describe('propose scope', () => {
     const [idx, core] = r.body.pages;
     const d = proposals().detail(String(r.body.proposalId))!;
     expect(d.pageSummary.map((e) => e.label)).toEqual([
-      `New page [INDEX] Ilse Varn under [INDEX] Humans: 1 fact`,
-      `New page [BSRC] Ilse Varn - Character Core under [INDEX] Ilse Varn: 6 facts`,
+      // v2 C2c: a Working character, under [INDEX] Working; its index gets no Status.
+      `New page [INDEX] Ilse Varn under [INDEX] Working`,
+      `New page [BWRK] Ilse Varn - Character Core under [INDEX] Ilse Varn: 6 facts`,
     ]);
     expect(d.operations).toHaveLength(2);
     expect(w.repo.res.get(idx.id)).toBeUndefined();
     await w.stack.runtime.policy.commands.approve('owner', d.id);
     expect((await settle(d.id)).state).toBe('executed');
     // Exactly the ids the proposal showed: the core under the index it showed.
-    expect(w.repo.live(idx.id)).toMatchObject({ name: '[INDEX] Ilse Varn', parentId: 'humans01' });
+    expect(w.repo.live(idx.id)).toMatchObject({ name: '[INDEX] Ilse Varn', parentId: LIFECYCLE.working });
     expect(w.repo.live(core.id)).toMatchObject({
-      name: '[BSRC] Ilse Varn - Character Core',
+      name: '[BWRK] Ilse Varn - Character Core',
       parentId: idx.id,
     });
     expect(facts(w, core.id)).toContain('Scope=Ferrywoman');
@@ -230,11 +224,10 @@ describe('never replay failed work', () => {
       project: 'test',
       name: 'Broken Hall',
       template: T.general,
-      parent: 'Kumikas',
       facts: { Scope: 'Half done' },
     });
     expect(r.body.error, r.text).toMatchObject({ code: 'WRITTEN_IN_PART' });
-    expect(r.body.error.written).toEqual(expect.arrayContaining(['create [BSRC] Broken Hall']));
+    expect(r.body.error.written).toEqual(expect.arrayContaining(['create [BWRK] Broken Hall']));
     expect(r.body.error.notWritten.length).toBeGreaterThan(0);
     expect(r.body.error.journal.length).toBeGreaterThanOrEqual(2);
     expect(r.body.error.hint).toMatch(/Do not repeat this request/);

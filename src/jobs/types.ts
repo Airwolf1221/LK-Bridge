@@ -168,6 +168,38 @@ export interface BatchSubmit {
   readonly internal?: boolean;
   /** v2 C2a: added to the proposal when the policy gate turns the batch into one (as `RunOptions.proposal`). */
   readonly proposal?: ProposalExtras;
+  /**
+   * v2 C2c (ADR 0035), bridge code only: a second job-level lock, on one document of the `holdLock` page (its main page
+   * document), taken after the page's lock and kept as long. A lifecycle change writes the page (rename, move, tags,
+   * facts) and that document (the archive note) in one job. Requires `holdLock`.
+   */
+  readonly holdDocument?: { readonly documentId: string };
+  /**
+   * v2 C2c (ADR 0035), bridge code only: the job IS a lifecycle change (or a create with a lifecycle status) and makes
+   * exactly these changes, which the lifecycle guard then allows. Nothing an agent sends reaches it (the tools build it;
+   * `lk_api_batch` never sets it).
+   */
+  readonly lifecycle?: LifecycleMarker;
+}
+
+/**
+ * v2 C2c (ADR 0035): what a lifecycle job declares it changes. The lifecycle guard allows exactly these changes of these
+ * pages (and no others), so even bridge code cannot make an undeclared one. `tool` names the tool for refusals.
+ */
+export interface LifecycleMarker {
+  readonly tool: string;
+  /**
+   * `true`: the four lifecycle tools, which always need the owner's canonical approval at every scope (and a create of
+   * an Authoritative page).
+   */
+  readonly canonical: boolean;
+  /** Why it needs canonical approval, in words (default: it changes a page's lifecycle state). */
+  readonly reason?: string;
+  readonly pages: readonly {
+    readonly id: string;
+    /** The lifecycle state the page moves to (`working`, `archived`, `authoritative`), or null for none (the index). */
+    readonly to: 'authoritative' | 'working' | 'archived' | null;
+  }[];
 }
 
 export interface PaginateSubmit {

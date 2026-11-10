@@ -26,6 +26,7 @@ import type {
   WriteGuardVerdict,
 } from '../jobs/write-guard.js';
 import { SYSTEM_PRINCIPAL } from '../jobs/types.js';
+import { classifyName } from '../tree/classify.js';
 import { canonConfigFrom, factKey, factValueKey, type CanonicalRule } from './rules.js';
 import {
   SIDEBAR_WRITE_OPS,
@@ -85,7 +86,8 @@ export function assessFactChange(
 ): ProtectedChange[] {
   const out: ProtectedChange[] = [];
   for (const rule of rules) {
-    if (rule.kind === 'delete') continue; // judged when a page is deleted (assessDelete), not on a fact change
+    // Judged when a page or document is deleted (assessDelete, assessDeleteDocument), not on a fact change.
+    if (rule.kind === 'delete' || rule.kind === 'deleteKind' || rule.kind === 'deleteDocument') continue;
     const k = factKey(rule.key);
     const b = before.filter((f) => factKey(f.key) === k);
     const a = after.filter((f) => factKey(f.key) === k);
@@ -145,9 +147,26 @@ export function assessDelete(
   rules: readonly CanonicalRule[],
   facts: readonly FactValue[],
   page: string,
+  /** v2 C2c: the page's kind by its name's prefix, for `deleteKind` rules (unknown: null, which no rule names). */
+  pageKind: string | null = null,
 ): ProtectedChange[] {
   const out: ProtectedChange[] = [];
   for (const rule of rules) {
+    if (rule.kind === 'deleteKind') {
+      if (pageKind === null || !(rule.kinds as readonly string[]).includes(pageKind)) continue;
+      const label = `[${pageKind.toUpperCase()}]`;
+      out.push({
+        ruleId: rule.id,
+        key: 'prefix',
+        direction: 'delete',
+        value: label,
+        before: [label],
+        after: [],
+        page,
+        text: `deleting “${page}”, a ${label} page`,
+      });
+      continue;
+    }
     if (rule.kind !== 'delete') continue;
     const k = factKey(rule.key);
     const held = facts
@@ -165,6 +184,44 @@ export function assessDelete(
         after: [],
         page,
         text: `deleting “${page}”, whose ${rule.key} is ${v}`,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * v2 C2c (ADR 0035): what deleting a document of type `docType` from a page holding these facts would remove that the
+ * `deleteDocument` rules protect (pure).
+ */
+export function assessDeleteDocument(
+  rules: readonly CanonicalRule[],
+  facts: readonly FactValue[],
+  page: string,
+  docType: string | null,
+  docName: string,
+): ProtectedChange[] {
+  const out: ProtectedChange[] = [];
+  for (const rule of rules) {
+    if (rule.kind !== 'deleteDocument') continue;
+    // A document whose type cannot be told counts as one of the protected types (the safe side).
+    if (docType !== null && !rule.documentTypes.includes(docType)) continue;
+    const k = factKey(rule.key);
+    const held = facts
+      .filter((f) => factKey(f.key) === k)
+      .map((f) => valueText(f.content))
+      .filter((t) => t !== '');
+    for (const v of rule.values) {
+      if (!held.some((t) => factValueKey(t) === factValueKey(v))) continue;
+      out.push({
+        ruleId: rule.id,
+        key: rule.key,
+        direction: 'delete',
+        value: v,
+        before: held,
+        after: [],
+        page,
+        text: `deleting the ${docType ?? 'unknown-type'} document “${docName}” of “${page}”, whose ${rule.key} is ${v}`,
       });
     }
   }
@@ -195,6 +252,17 @@ export interface CanonicalGuardDeps {
    * null: they cannot be listed, and a cascade counts as unchecked (so it needs canonical approval).
    */
   readonly descendants?: (projectId: string, resourceId: string) => readonly string[] | null;
+  /**
+   * v2 C2c: a page's kind by its name's prefix (`bsrc`, `bwrk`, `barc`, …), from the repository tree; null when the tree
+   * does not hold it (the guard then reads the page's name).
+   */
+  readonly pageKind?: (projectId: string, resourceId: string) => string | null;
+  /** v2 C2c: a document's type and name, from the repository tree; null when the tree does not know it. */
+  readonly documentInfo?: (
+    projectId: string,
+    resourceId: string,
+    documentId: string,
+  ) => { readonly type: string | null; readonly name: string | null } | null;
 }
 
 /** v2 C2b: at most this many pages of a cascade are read at entry; any beyond count as unchecked (protected). */
@@ -202,7 +270,9 @@ export const CASCADE_READ_LIMIT = 100;
 
 /** Keys the rules protect, for the in-lock shortcut ("can this write touch a protected fact at all?"). */
 function protectsAny(rules: readonly CanonicalRule[], rows: readonly SidebarRow[]): boolean {
-  const keys = new Set(rules.map((r) => factKey(r.key)));
+  const keys = new Set(
+    rules.flatMap((r) => (r.kind === 'value' || r.kind === 'change' ? [factKey(r.key)] : [])),
+  );
   return rows.some((r) => keys.has(factKey(r.key)));
 }
 
@@ -211,7 +281,7 @@ export class CanonicalGuard implements WriteGuard {
   constructor(private readonly d: CanonicalGuardDeps) {}
 
   private rules(projectId: string): readonly CanonicalRule[] {
-    return canonConfigFrom(this.d.settings(projectId)).rules;
+    return canonConfigFrom(this.d.settings(projectId)).active;
   }
 
   async entry(input: WriteGuardEntry): Promise<WriteGuardVerdict> {
@@ -223,7 +293,8 @@ export class CanonicalGuard implements WriteGuard {
         (it) =>
           SIDEBAR_WRITE_OPS.has(it.op) ||
           it.op === 'createResourceFromTemplate' ||
-          (it.op === 'deleteResource' && rules.some((r) => r.kind === 'delete')),
+          (it.op === 'deleteResource' && rules.some((r) => r.kind === 'delete' || r.kind === 'deleteKind')) ||
+          (it.op === 'deleteDocument' && rules.some((r) => r.kind === 'deleteDocument')),
       );
     if (guarded.length === 0) return { decision: 'allow' };
     const priority = input.origin.approval !== undefined ? 'P0' : 'P1';
@@ -311,6 +382,7 @@ export class CanonicalGuard implements WriteGuard {
             }
           }
         }
+        const byKind = rules.some((r) => r.kind === 'deleteKind');
         for (const id of pages) {
           const sb = await read(id);
           if (!sb) {
@@ -318,9 +390,35 @@ export class CanonicalGuard implements WriteGuard {
             continue;
           }
           const name = this.d.pageName?.(input.project, id) ?? id;
-          for (const c of assessDelete(rules, rowsOf(sb), name))
+          let kind: string | null | undefined = null;
+          if (byKind) {
+            kind = this.d.pageKind?.(input.project, id) ?? (await this.kindLive(input.project, id, priority));
+            if (kind === undefined) {
+              unchecked.push({ i: it.i, why: `the name of ${id} could not be read` });
+              continue;
+            }
+          }
+          for (const c of assessDelete(rules, rowsOf(sb), name, kind))
             changes.push({ ...c, stepIndex: it.i, resourceId: id });
         }
+        continue;
+      }
+      if (it.op === 'deleteDocument') {
+        // v2 C2c: a map, timeline or board of a page that holds a protected value (Status Authoritative).
+        const rid = it.params.path?.resourceId;
+        const did = it.params.path?.documentId;
+        if (!rid || !did) continue;
+        const sb = await read(rid);
+        if (!sb) {
+          unchecked.push({ i: it.i, why: `the sidebar of ${rid} could not be read` });
+          continue;
+        }
+        const doc =
+          this.d.documentInfo?.(input.project, rid, did) ??
+          (await this.documentLive(input.project, rid, did, priority));
+        const name = this.d.pageName?.(input.project, rid) ?? rid;
+        for (const c of assessDeleteDocument(rules, rowsOf(sb), name, doc?.type ?? null, doc?.name ?? did))
+          changes.push({ ...c, stepIndex: it.i, resourceId: rid });
         continue;
       }
       const rid = it.params.path?.resourceId;
@@ -359,6 +457,49 @@ export class CanonicalGuard implements WriteGuard {
     }
     const all: unknown[] = [...changes, ...unchecked.map((u) => ({ unchecked: u.why, stepIndex: u.i }))];
     return { decision: 'propose_canonical', reason, changes: all };
+  }
+
+  /** v2 C2c: a page's kind from its name, read live (undefined when it cannot be read; null when it is gone). */
+  private async kindLive(
+    project: string,
+    resourceId: string,
+    priority: 'P0' | 'P1',
+  ): Promise<string | null | undefined> {
+    try {
+      const r = (await this.d.engine.internalRead(
+        project,
+        'getResource',
+        { path: { resourceId } },
+        { priority, notFoundIsAnswer: true },
+      )) as { name?: unknown } | undefined;
+      return typeof r?.name === 'string' ? kindOfName(r.name) : null;
+    } catch (e) {
+      if (e instanceof LkOperationError && e.lk.status === 404) return null;
+      return undefined;
+    }
+  }
+
+  /** v2 C2c: a document's type and name, read live (null when it cannot be read: judged as a protected type). */
+  private async documentLive(
+    project: string,
+    resourceId: string,
+    documentId: string,
+    priority: 'P0' | 'P1',
+  ): Promise<{ type: string | null; name: string | null } | null> {
+    try {
+      const r = (await this.d.engine.internalRead(
+        project,
+        'getDocument',
+        { path: { resourceId, documentId } },
+        { priority, notFoundIsAnswer: true },
+      )) as { type?: unknown; name?: unknown } | undefined;
+      return {
+        type: typeof r?.type === 'string' ? r.type : null,
+        name: typeof r?.name === 'string' ? r.name : null,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -405,6 +546,7 @@ export class CanonicalGuard implements WriteGuard {
 
   async inLock(input: WriteGuardInLock): Promise<void> {
     if (input.opId === 'deleteResource') return this.deleteInLock(input);
+    if (input.opId === 'deleteDocument') return this.deleteDocumentInLock(input);
     if (!SIDEBAR_WRITE_OPS.has(input.opId)) return; // a template copy is checked at entry (the template is not locked)
     if (input.job.origin.canonicalApprovedBy !== undefined) return; // approved as canon (checked at entry)
     const rules = this.rules(input.job.projectId);
@@ -453,13 +595,22 @@ export class CanonicalGuard implements WriteGuard {
    */
   private async deleteInLock(input: WriteGuardInLock): Promise<void> {
     if (input.job.origin.canonicalApprovedBy !== undefined) return;
-    const rules = this.rules(input.job.projectId).filter((r) => r.kind === 'delete');
+    const rules = this.rules(input.job.projectId).filter(
+      (r) => r.kind === 'delete' || r.kind === 'deleteKind',
+    );
     const rid = input.params.path?.resourceId;
     if (rules.length === 0 || !rid) return;
     const got = await input.read('listProperties', { path: { resourceId: rid } });
     if (got === undefined) return; // already gone: LegendKeeper answers the delete itself
     const name = this.d.pageName?.(input.job.projectId, rid) ?? rid;
-    const changes = assessDelete(rules, rowsOf(sidebarFrom(got)), name).map((c) => ({
+    // v2 C2c: the page's kind as read in the lock (the engine's own read of it), else the tree's.
+    const entity = input.current?.entity ?? input.current?.body;
+    const liveName = (entity as { name?: unknown } | undefined)?.name;
+    const kind =
+      typeof liveName === 'string'
+        ? kindOfName(liveName)
+        : (this.d.pageKind?.(input.job.projectId, rid) ?? null);
+    const changes = assessDelete(rules, rowsOf(sidebarFrom(got)), name, kind).map((c) => ({
       ...c,
       resourceId: rid,
     }));
@@ -470,4 +621,36 @@ export class CanonicalGuard implements WriteGuard {
       });
     }
   }
+
+  /** v2 C2c: a document delete, judged again inside its lock on the page's facts as they are now. */
+  private async deleteDocumentInLock(input: WriteGuardInLock): Promise<void> {
+    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    const rules = this.rules(input.job.projectId).filter((r) => r.kind === 'deleteDocument');
+    const rid = input.params.path?.resourceId;
+    const did = input.params.path?.documentId;
+    if (rules.length === 0 || !rid || !did) return;
+    const got = await input.read('listProperties', { path: { resourceId: rid } });
+    if (got === undefined) return;
+    const entity = (input.current?.entity ?? input.current?.body) as
+      { type?: unknown; name?: unknown } | undefined;
+    const info = this.d.documentInfo?.(input.job.projectId, rid, did) ?? null;
+    const type = typeof entity?.type === 'string' ? entity.type : (info?.type ?? null);
+    const docName = typeof entity?.name === 'string' ? entity.name : (info?.name ?? did);
+    const name = this.d.pageName?.(input.job.projectId, rid) ?? rid;
+    const changes = assessDeleteDocument(rules, rowsOf(sidebarFrom(got)), name, type, docName).map((c) => ({
+      ...c,
+      resourceId: rid,
+    }));
+    if (changes.length > 0) {
+      throw new CanonicalApprovalRequiredError(input.opId, canonicalReason(changes), changes, {
+        jobId: input.job.id,
+        stepNo: input.step.stepNo,
+      });
+    }
+  }
+}
+
+/** v2 C2c: a page's kind from its raw name (`bsrc`, `bwrk`, `barc`, `index`, `unclassified`). */
+function kindOfName(name: string): string {
+  return classifyName(name).kind;
 }

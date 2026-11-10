@@ -8,7 +8,7 @@ import type { FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import { confirmBody, csv, idSchema, parseInput, projectParam, type Register } from './util.js';
 
-const kindSchema = z.enum(['index', 'bsrc', 'unclassified']);
+const kindSchema = z.enum(['index', 'bsrc', 'bwrk', 'barc', 'unclassified']);
 
 export const registerRegistry: Register = (api, ctx) => {
   const projectOf = (req: FastifyRequest) =>

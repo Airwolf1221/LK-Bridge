@@ -10,7 +10,7 @@
  * - a failed job is NEVER replayed (PLAN-v2 4.13): its result says which writes were made and which were not, with the
  *   journal entries, so a retry is a new, smaller request.
  */
-import type { JobView, StepSpec } from '../../jobs/index.js';
+import type { JobView, LifecycleMarker, StepSpec } from '../../jobs/index.js';
 import type { ProposalExtras } from '../../jobs/policy.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import { finish } from './repo.js';
@@ -24,6 +24,10 @@ export interface WriteJobSpec {
   readonly labels: readonly string[];
   readonly title: string;
   readonly holdLock?: { readonly resourceId: string };
+  /** v2 C2c: the second job-level lock (a document of the held page). */
+  readonly holdDocument?: { readonly documentId: string };
+  /** v2 C2c: the lifecycle change the job makes (the lifecycle guard allows exactly that). */
+  readonly lifecycle?: LifecycleMarker | undefined;
   readonly proposal: ProposalExtras;
   /** The plan, as every answer shows it. */
   readonly head: Record<string, unknown>;
@@ -63,6 +67,8 @@ export async function runWriteJob(
       origin: mcpOrigin(mctx, tool),
       title: spec.title.slice(0, 300),
       ...(spec.holdLock ? { holdLock: spec.holdLock } : {}),
+      ...(spec.holdDocument ? { holdDocument: spec.holdDocument } : {}),
+      ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
       internal: true,
       proposal: spec.proposal,
     });

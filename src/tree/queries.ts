@@ -215,7 +215,7 @@ export class TreeQueries {
   counts(projectId: string): TreeAnswer<TreeCounts> {
     const empty: TreeCounts = {
       total: 0,
-      byKind: { root: 0, index: 0, bsrc: 0, unclassified: 0 },
+      byKind: { root: 0, index: 0, bsrc: 0, bwrk: 0, barc: 0, unclassified: 0 },
       maxDepth: 0,
       stale: 0,
       propertiesPending: 0,

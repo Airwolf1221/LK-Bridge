@@ -417,7 +417,7 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
         const page = { id: node.id, name: node.rawName };
         const document = { id: doc.id, name: doc.name, type: typeName(doc.type) };
         // Flagged for the owner, not guarded: a document of a page that is protected canon.
-        const rules = canonConfigFrom(pd.services?.projectSettings?.(ctx.projectId)).rules;
+        const rules = canonConfigFrom(pd.services?.projectSettings?.(ctx.projectId)).active;
         const blocks = ctx.tree.sidebars(ctx.projectId, [node.id]).data.get(node.id) ?? [];
         const facts = blocks.flatMap((b) =>
           b.kind === 'keyValue'

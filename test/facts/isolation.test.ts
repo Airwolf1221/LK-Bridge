@@ -35,7 +35,7 @@ beforeAll(async () => {
     sb.page(page.id, [
       SidebarModel.kv(`${name}kv001`, 'PROPERTIES', [
         ['Reference Type', 'General Source'],
-        ['Status', 'Working'],
+        ['Status', 'Outline'],
         ['Scope', `${name} scope`],
       ]),
     ]);
@@ -113,7 +113,7 @@ describe('set_facts with two projects', () => {
       await new Promise((res) => setTimeout(res, 20));
     expect(proposals.get(id)).toMatchObject({ state: 'executed', canonicalApprovedBy: 'owner' });
     expect(status('beta')).toBe('Authoritative');
-    expect(status('alpha')).toBe('Working');
+    expect(status('alpha')).toBe('Outline');
     expect(t.writesAt('alpha')).toBe(alpha);
     const audit = (await t.admin.get('/audit?limit=50')).json;
     expect(JSON.stringify(audit)).toContain('proposal.approve_as_canon');
@@ -127,6 +127,8 @@ describe('set_facts with two projects', () => {
       'Continuity Type',
       'Continuity',
       'Status', // v2 C2b: deleting an Authoritative page
+      undefined, // v2 C2c: deleting a [BARC] page (by its prefix; no fact)
+      'Status', // v2 C2c: deleting a map, timeline or board of an Authoritative page
     ]);
     const bad = await t.admin.put('/projects/alpha/canon', {
       rules: [{ id: 'x', key: 'Status', kind: 'value' }],
@@ -156,7 +158,7 @@ describe('set_facts with two projects', () => {
     const b1 = await t.call(writer, 'set_facts', {
       project: 'beta',
       page: 'Shared Page',
-      facts: { Status: 'Working' },
+      facts: { Status: 'Outline' },
     });
     expect(b1.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     const audit = (await t.admin.get('/audit?limit=50')).json;

@@ -3,7 +3,7 @@
  * subraces…), character indexes (which are not categories), and the reserved unknown-race index. Seeding, "add
  * missing" and the drift report all use this one walk, so they always agree. Pure over the tree; no request.
  */
-import type { TreeNode } from '../tree/index.js';
+import { isPageKind, type TreeNode } from '../tree/index.js';
 import { key, subjectOf } from './names.js';
 import type { ProjectTree } from './tree-view.js';
 import type { RegistryType, ReviewReason } from './types.js';
@@ -59,7 +59,8 @@ export function characterPageOf(
   const kinds = new Set([key(p.referenceTypes.core), key(p.referenceTypes.compact)]);
   const want = key(index.displayName);
   for (const c of children) {
-    if (c.kind !== 'bsrc' || c.referenceType === null || !kinds.has(key(c.referenceType))) continue;
+    // v2 C2c: a Working or Archived Core or Reference counts as one (name handling treats them like [BSRC]).
+    if (!isPageKind(c.kind) || c.referenceType === null || !kinds.has(key(c.referenceType))) continue;
     if (key(subjectOf(c.displayName, tree.rowValue(c.id, p.subjectRow))) === want) {
       return { id: c.id, displayName: c.displayName, referenceType: c.referenceType };
     }
@@ -80,7 +81,7 @@ export function classifyType(tree: ProjectTree, type: RegistryType): Classificat
     l.push(e.node);
     childrenOf.set(pid, l);
   }
-  tree.preload(entries.filter((e) => e.node.kind === 'bsrc').map((e) => e.node.id));
+  tree.preload(entries.filter((e) => isPageKind(e.node.kind)).map((e) => e.node.id));
   const isCharacterType = type.placementKind === 'character' && type.placement !== null;
   const unknownKey = type.placement ? key(type.placement.unknownIndexName) : null;
 
@@ -120,7 +121,7 @@ export function classifyType(tree: ProjectTree, type: RegistryType): Classificat
           ),
         );
       }
-      if (n.propertiesPending || kids.some((k) => k.kind === 'bsrc' && k.propertiesPending)) {
+      if (n.propertiesPending || kids.some((k) => isPageKind(k.kind) && k.propertiesPending)) {
         reasons.push(
           reason(
             'unread',

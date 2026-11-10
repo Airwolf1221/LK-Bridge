@@ -22,12 +22,26 @@ import { VERIFY_STEP, type VerifyTarget } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
 import { cleanPrefixes, fillName, key } from '../../registry/names.js';
 import { SiblingSim, orderItems } from '../../resources/plan.js';
-import { BSRC_PREFIX, INDEX_PREFIX, classifyName } from '../../tree/classify.js';
+import {
+  BSRC_PREFIX,
+  BWRK_PREFIX,
+  INDEX_PREFIX,
+  KIND_PREFIX,
+  classifyName,
+  isPageKind,
+} from '../../tree/classify.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import {
   OPERATION_ID_DESCRIPTION,
+  STATUS_DESCRIPTION,
   createCtx,
+  createMarker,
+  lifecycleAreaOf,
+  statusValue,
+  withStatusTag,
+  workingIndex,
+  type CreateStatus,
   namePatternOf,
   newPage,
   planCreateJob,
@@ -85,7 +99,10 @@ const COSTS_CREATE =
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** A sibling under `parentId` with the same kind and name, among the tree's pages (null when there is none). */
+/**
+ * A sibling under `parentId` with the same kind and name, among the tree's pages (null when there is none). v2 C2c: the
+ * page kinds (`[BSRC]`, `[BWRK]`, `[BARC]`) share one name space, as name handling treats them alike.
+ */
 function sibling(
   ctx: RepoCtx,
   parentId: string,
@@ -94,18 +111,84 @@ function sibling(
   except?: string,
 ): TreeNode | null {
   const k = key(displayName);
+  const same = (c: TreeNode) => c.kind === kind || (isPageKind(kind) && isPageKind(c.kind));
   return (
     ctx.tree
       .children(ctx.projectId, parentId)
-      .data.find((c) => c.id !== except && c.kind === kind && key(c.displayName) === k) ?? null
+      .data.find((c) => c.id !== except && same(c) && key(c.displayName) === k) ?? null
   );
 }
+
+/**
+ * v2 C2c: where a new page of this status goes: a Working page directly under `[INDEX] Working` (a given parent must be
+ * it, or for `allowCharacterIndex` a character index directly under it); an Authoritative page under the given parent,
+ * which must not be in a lifecycle area.
+ */
+function parentForStatus(
+  cc: CreateCtx,
+  status: CreateStatus,
+  given: string | undefined,
+  o: { readonly allowCharacterIndex?: boolean; readonly what?: string } = {},
+): { ok: true; value: TreeNode } | { ok: false; result: McpToolResult } {
+  const { pd, ctx } = cc;
+  if (status === 'working') {
+    const wi = workingIndex(cc);
+    if (!wi.ok) return wi;
+    if (given === undefined) return { ok: true, value: wi.value };
+    const r = resolveParent(ctx, given, o.what ? { what: o.what } : {});
+    if (!r.ok) return r;
+    const underWorking =
+      r.value.id === wi.value.id ||
+      (o.allowCharacterIndex === true && r.value.kind === 'index' && r.value.parentId === wi.value.id);
+    if (!underWorking) {
+      return {
+        ok: false,
+        result: errorResult(
+          {
+            code: 'WORKING_PARENT',
+            message: `A Working page goes directly under ${wi.value.rawName}${o.allowCharacterIndex ? ' (or a character index directly under it)' : ''}, flat and alphabetical; “${r.value.displayName}” is not. Leave parent out, or pass status "authoritative" to place it there (a canonical proposal). It goes to its normal place when it is promoted.`,
+            workingIndex: { id: wi.value.id, name: wi.value.rawName },
+          },
+          pd,
+        ),
+      };
+    }
+    return { ok: true, value: r.value };
+  }
+  if (given === undefined) {
+    return {
+      ok: false,
+      result: errorResult(
+        { code: 'INVALID_PARAMS', message: 'An Authoritative page needs `parent`: the index it goes under.' },
+        pd,
+      ),
+    };
+  }
+  const r = resolveParent(ctx, given, o.what ? { what: o.what } : {});
+  if (!r.ok) return r;
+  const area = lifecycleAreaOf(cc, r.value);
+  if (area !== null) {
+    return {
+      ok: false,
+      result: errorResult(
+        {
+          code: 'LIFECYCLE_AREA',
+          message: `“${r.value.displayName}” is ${area === 'working' ? `[INDEX] ${cc.lifecycle.indexNames.working}` : `[INDEX] ${cc.lifecycle.indexNames.archived}`} or under it; an Authoritative page goes in its normal place. ${area === 'working' ? 'Create it as Working (leave status out) instead.' : 'Pages are archived only with archive_page.'}`,
+        },
+        pd,
+      ),
+    };
+  }
+  return { ok: true, value: r.value };
+}
+
+const statusArg = z.enum(['working', 'authoritative']).optional().describe(STATUS_DESCRIPTION);
 
 const nodeView = (n: TreeNode) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') });
 
 /** The canonical rules of the call's project. */
 function canonRules(pd: ProjectDeps, projectId: string): readonly CanonicalRule[] {
-  return canonConfigFrom(pd.services?.projectSettings?.(projectId)).rules;
+  return canonConfigFrom(pd.services?.projectSettings?.(projectId)).active;
 }
 
 /**
@@ -120,6 +203,8 @@ export async function finishCreate(
     readonly dryRun: boolean;
     readonly extraHead?: Obj;
     readonly summary: string;
+    /** v2 C2c: pages besides those with a status that the job places in a lifecycle area (a Working character's index). */
+    readonly markerPages?: readonly { readonly id: string; readonly to: null }[];
   },
 ): Promise<CreateOutcome> {
   const { pd, mctx, ctx, tool } = cc;
@@ -127,11 +212,23 @@ export async function finishCreate(
   if (!planned.ok) return { kind: 'answer', result: planned.result };
   const { job } = planned.value;
   const rules = canonRules(pd, ctx.projectId);
-  const canon = pages.flatMap((p) =>
-    p.facts
-      ? assessFactChange(rules, [], factRows(p.facts.plan.sidebarAfter)).map((c) => `${p.rawName}: ${c.text}`)
-      : [],
-  );
+  // v2 C2c: the job declares the lifecycle state it gives each page; an Authoritative page is canon.
+  const marker = createMarker(tool, [
+    ...pages.filter((p) => p.status).map((p) => ({ id: p.id, to: p.status! })),
+    ...(o.markerPages ?? []),
+  ]);
+  const canon = [
+    ...pages.flatMap((p) =>
+      p.facts
+        ? assessFactChange(rules, [], factRows(p.facts.plan.sidebarAfter)).map(
+            (c) => `${p.rawName}: ${c.text}`,
+          )
+        : [],
+    ),
+    ...pages
+      .filter((p) => p.status === 'authoritative' && !p.facts?.status)
+      .map((p) => `${p.rawName}: a new Authoritative page (canon)`),
+  ];
   const head: Obj = {
     ...(o.extraHead ?? {}),
     pages: job.pages,
@@ -155,6 +252,7 @@ export async function finishCreate(
     steps: job.steps,
     labels: job.labels,
     title: o.summary,
+    ...(marker ? { lifecycle: marker } : {}),
     proposal: { operations: job.operations, summary: o.summary, prefetched: prefetchedTemplates(cc) },
     head,
     preview,
@@ -185,8 +283,9 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
       'alphabetical place. The type (for example Character) and category (for example a race such as Foxians) come from the ' +
       'type registry and taxonomy: give `parent`, or `type` and `category` (the category’s index is then the parent), or ' +
       'both. An unknown type or category is refused with the known ones; an index of the same name under the same parent is ' +
-      'refused. The new page gets Status Working when its template has a Status row. Characters’ own indexes are made by ' +
-      'create_character. `dryRun: true` shows the plan. ' +
+      'refused. An index takes no status and gets no Status fact (v2 C2c: indexes have no lifecycle). Indexes are never ' +
+      'made under [INDEX] Working or [INDEX] Archived (flat). Characters’ own indexes are made by create_character. ' +
+      '`dryRun: true` shows the plan. ' +
       COSTS_CREATE,
     inputSchema: z.object({
       name: z.string().min(1).max(500).describe('The index’s name, without [INDEX] (added).'),
@@ -337,6 +436,16 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
             );
           }
           const cc = createCtx(pd, mctx, ctx, 'create_index');
+          // v2 C2c: [INDEX] Working and [INDEX] Archived are flat: no index is made under either (a Working
+          // character's own index is create_character's).
+          const area = lifecycleAreaOf(cc, parent);
+          if (area !== null) {
+            return refusal(
+              pd,
+              'LIFECYCLE_AREA',
+              `“${parent.displayName}” is [INDEX] ${area === 'working' ? cc.lifecycle.indexNames.working : cc.lifecycle.indexNames.archived} or under it: those indexes are flat, so no index is made there (a Working character’s own index is made by create_character).`,
+            );
+          }
           const id = newPage({
             key: 'index',
             rawName: `${INDEX_PREFIX}${name}`,
@@ -350,6 +459,7 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
             pageId: id.id,
             pageName: id.rawName,
             templateId: type.indexTemplateId,
+            status: null,
             what: id.rawName,
           });
           if (!facts.ok) return { kind: 'answer', result: facts.result };
@@ -394,13 +504,14 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a page from a template',
     access: 'write',
     description:
-      'Creates a [BSRC] page from a template (required: name or id; see list_templates) under an index inside the AI ' +
-      'REPOSITORY, in its alphabetical place. The page’s name follows the template role’s pattern. Optional `facts` and ' +
-      '`links` as in set_facts are written in the same job, in template order; the page gets Status Working when its ' +
-      'template has a Status row (pass Status to choose another; Authoritative needs the owner’s canonical approval). ' +
-      'A page of the same name under the same parent is refused. Character pages: use create_character. ' +
-      'Example: { "name": "The Hollow Court", "template": "[BSRC] AI General Source", "parent": "Locations", "facts": ' +
-      '{ "Scope": "A court of the Foxians" }, "project": "test" }. ' +
+      'Creates a page from a template (required: name or id; see list_templates) inside the AI REPOSITORY, in its ' +
+      'alphabetical place. `status` (default "working"): a [BWRK] page directly under [INDEX] Working with Status Working ' +
+      'and the Working tag (leave `parent` out); or "authoritative": a [BSRC] page under `parent` with Status ' +
+      'Authoritative and the CANON tag, which is canon and always becomes a proposal only the owner can accept as canon. ' +
+      'The page’s name follows the template role’s pattern. Optional `facts` and `links` as in set_facts are written in ' +
+      'the same job, in template order (Status comes from `status`). A page of the same name under the same parent is ' +
+      'refused. Character pages: use create_character. Example: { "name": "The Hollow Court", "template": "[BSRC] AI ' +
+      'General Source", "facts": { "Scope": "A court of the Foxians" }, "project": "test" }. ' +
       COSTS_CREATE,
     inputSchema: z.object({
       name: z
@@ -409,7 +520,12 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
         .max(500)
         .describe('The page’s name, without [BSRC] (the template’s pattern is applied).'),
       template: z.string().min(1).max(500).describe('The template, by name or id.'),
-      parent: pageRef.describe('The index it goes under (name or id).'),
+      parent: pageRef
+        .optional()
+        .describe(
+          'The index it goes under (name or id). Required for an Authoritative page; a Working page goes under [INDEX] Working.',
+        ),
+      status: statusArg,
       facts: factsArg,
       links: linksArg,
       tags: tagsArg,
@@ -427,7 +543,9 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
         return withRequest(pd, mctx, 'create_resource', args, null, async () => {
           const name = cleanName(args.name);
           if (!name) return refusal(pd, 'INVALID_PARAMS', 'A page name (1 to 200 characters) is required.');
-          const parent = resolveParent(ctx, args.parent);
+          const cc = createCtx(pd, mctx, ctx, 'create_resource');
+          const status: CreateStatus = args.status ?? 'working';
+          const parent = parentForStatus(cc, status, args.parent);
           if (!parent.ok) return { kind: 'answer', result: parent.result };
           const t = await resolveTemplate(pd, mctx, ctx, 'create_resource', args.template);
           const bad = pageTemplateCheck(pd, t);
@@ -452,16 +570,15 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
               },
             );
           }
-          const cc = createCtx(pd, mctx, ctx, 'create_resource');
           const page = newPage({
             key: 'page',
-            rawName: `${BSRC_PREFIX}${display}`,
+            rawName: `${status === 'working' ? BWRK_PREFIX : BSRC_PREFIX}${display}`,
             parent: { existing: parent.value.id },
             templateId: tpl.id,
             facts: null,
             parentName: parent.value.rawName,
             templateName: tpl.name ?? tpl.id,
-            ...(args.tags ? { tags: args.tags } : {}),
+            status,
             ...(args.aliases ? { aliases: args.aliases } : {}),
           });
           const facts = await planNewPageFacts(cc, {
@@ -470,12 +587,20 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
             templateId: tpl.id,
             ...(args.facts ? { facts: args.facts } : {}),
             ...(args.links ? { links: args.links } : {}),
+            status: statusValue(cc.lifecycle, status),
             what: page.rawName,
           });
           if (!facts.ok) return { kind: 'answer', result: facts.result };
-          return finishCreate(cc, [{ ...page, facts: facts.value }], {
+          // v2 C2c: the template's tags with its status tag replaced, and the caller's.
+          const tags = withStatusTag(
+            cc.lifecycle,
+            [...(cc.templateTags.get(tpl.id) ?? []), ...(args.tags ?? [])],
+            status,
+          );
+          return finishCreate(cc, [{ ...page, facts: facts.value, tags }], {
             batch: false,
             dryRun: args.dryRun === true,
+            extraHead: { status },
             summary: `create_resource: ${page.rawName} under ${parent.value.rawName}`,
           });
         });
@@ -485,21 +610,41 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
 
 // ============================================================================================ create_bare_resource
 
-/** A name with its prefix, by the registry's rule: exactly `[INDEX] ` or `[BSRC] `, then a name. */
-function bareName(raw: string): { rawName: string; displayName: string; kind: 'index' | 'bsrc' } | string {
+/**
+ * A name with its prefix, by the registry's rule: exactly `[INDEX] `, or (a page) `[BSRC] ` or `[BWRK] `, then a name.
+ * v2 C2c: a page's prefix then follows its status (`[BWRK]` Working, `[BSRC]` Authoritative); `[BWRK]` with status
+ * authoritative is a contradiction, and `[BARC]` is refused (only archive_page archives).
+ */
+function bareName(
+  raw: string,
+  status: CreateStatus | undefined,
+):
+  | { rawName: string; displayName: string; kind: 'index' | 'bsrc' | 'bwrk'; status: CreateStatus | null }
+  | string {
   const trimmed = raw.trim();
   const c = classifyName(trimmed);
   if (c.kind === 'unclassified') {
-    return `“${trimmed}” has no valid prefix: a page name starts with exactly “[INDEX] ” or “[BSRC] ” (capitals, one space).`;
+    return `“${trimmed}” has no valid prefix: a name starts with exactly “[INDEX] ”, or for a page “[BSRC] ” or “[BWRK] ” (capitals, one space).`;
   }
+  if (c.kind === 'barc')
+    return `“${trimmed}”: a page is archived only with archive_page, never created as [BARC].`;
   const display = c.displayName.replace(/\s+/g, ' ').trim();
   if (display === '' || display.length > 200)
     return 'A name (1 to 200 characters) is required after the prefix.';
   if (cleanPrefixes(display).prefix !== null) return `“${trimmed}” has its prefix twice.`;
+  if (c.kind === 'index') {
+    if (status !== undefined) return `“${trimmed}” is an index: an index takes no status.`;
+    return { rawName: `${INDEX_PREFIX}${display}`, displayName: display, kind: 'index', status: null };
+  }
+  if (c.kind === 'bwrk' && status === 'authoritative') {
+    return `“${trimmed}” is named as a Working page but status is "authoritative": give it as “[BSRC] ${display}”.`;
+  }
+  const st: CreateStatus = status ?? 'working';
   return {
-    rawName: `${c.kind === 'index' ? INDEX_PREFIX : BSRC_PREFIX}${display}`,
+    rawName: `${st === 'working' ? BWRK_PREFIX : BSRC_PREFIX}${display}`,
     displayName: display,
-    kind: c.kind,
+    kind: st === 'working' ? 'bwrk' : 'bsrc',
+    status: st,
   };
 }
 
@@ -509,14 +654,23 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a page without a template',
     access: 'write',
     description:
-      'Creates a page with no template (no sidebar facts) under an index inside the AI REPOSITORY, in its alphabetical ' +
-      'place. The name is used as given and must start with exactly “[INDEX] ” or “[BSRC] ”; anything else is refused. A ' +
-      'page of the same kind and name under the same parent is refused. Prefer create_resource (a template gives the page ' +
-      'its sidebar). Cost: 1 write, then the verify step (1 read, 1 listing of the parent’s children per 100) and the tree’s ' +
-      're-read.',
+      'Creates a page with no template (no sidebar facts) inside the AI REPOSITORY, in its alphabetical place. The name ' +
+      'starts with exactly “[INDEX] ” (an index, under `parent`; no status), or for a page “[BSRC] ” or “[BWRK] ”: a ' +
+      'page’s prefix follows `status` (default "working": [BWRK] directly under [INDEX] Working with the Working tag; ' +
+      '"authoritative": [BSRC] under `parent` with the CANON tag, a canonical proposal). Anything else is refused, and ' +
+      '[BARC] too (only archive_page archives). A page of the same kind and name under the same parent is refused. ' +
+      'Prefer create_resource (a template gives the page its sidebar). Cost: 1 write, then the verify step (1 read, 1 ' +
+      'listing of the parent’s children per 100) and the tree’s re-read.',
     inputSchema: z.object({
-      name: z.string().min(1).max(500).describe('The full name, with its prefix: “[INDEX] …” or “[BSRC] …”.'),
-      parent: pageRef.describe('The index it goes under (name or id).'),
+      name: z
+        .string()
+        .min(1)
+        .max(500)
+        .describe('The full name, with its prefix: “[INDEX] …”, or “[BSRC] …” / “[BWRK] …” for a page.'),
+      parent: pageRef
+        .optional()
+        .describe('The index it goes under (name or id). A Working page goes under [INDEX] Working.'),
+      status: statusArg,
       tags: tagsArg,
       aliases: aliasesArg,
       dryRun: dryRunArg,
@@ -530,9 +684,23 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
         if (!rc.ok) return rc.result;
         const ctx = rc.ctx;
         return withRequest(pd, mctx, 'create_bare_resource', args, null, async () => {
-          const n = bareName(args.name);
+          const n = bareName(args.name, args.status);
           if (typeof n === 'string') return refusal(pd, 'INVALID_NAME', n);
-          const parent = resolveParent(ctx, args.parent);
+          const cc = createCtx(pd, mctx, ctx, 'create_bare_resource');
+          let parent: { ok: true; value: TreeNode } | { ok: false; result: McpToolResult };
+          if (n.status !== null) parent = parentForStatus(cc, n.status, args.parent);
+          else if (args.parent === undefined)
+            return refusal(pd, 'INVALID_PARAMS', 'An index needs `parent`: the index it goes under.');
+          else {
+            parent = resolveParent(ctx, args.parent);
+            if (parent.ok && lifecycleAreaOf(cc, parent.value) !== null) {
+              return refusal(
+                pd,
+                'LIFECYCLE_AREA',
+                `“${parent.value.displayName}” is a lifecycle index or under one: those are flat, so no index is made there.`,
+              );
+            }
+          }
           if (!parent.ok) return { kind: 'answer', result: parent.result };
           const twin = sibling(ctx, parent.value.id, n.kind, n.displayName);
           if (twin) {
@@ -545,7 +713,7 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
               },
             );
           }
-          const cc = createCtx(pd, mctx, ctx, 'create_bare_resource');
+          const tags = n.status !== null ? withStatusTag(cc.lifecycle, args.tags ?? [], n.status) : args.tags;
           const page = newPage({
             key: 'page',
             rawName: n.rawName,
@@ -554,12 +722,14 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
             facts: null,
             parentName: parent.value.rawName,
             templateName: null,
-            ...(args.tags ? { tags: args.tags } : {}),
+            status: n.status,
+            ...(tags ? { tags } : {}),
             ...(args.aliases ? { aliases: args.aliases } : {}),
           });
           return finishCreate(cc, [page], {
             batch: false,
             dryRun: args.dryRun === true,
+            ...(n.status ? { extraHead: { status: n.status } } : {}),
             summary: `create_bare_resource: ${page.rawName} under ${parent.value.rawName}`,
           });
         });
@@ -581,9 +751,13 @@ const manyItem = z
       .min(1)
       .max(500)
       .describe(
-        'With a template: the name without prefix. Without one: the full name with “[INDEX] ” or “[BSRC] ”.',
+        'With a template: the name without prefix. Without one: the full name with “[INDEX] ”, or “[BSRC] ” / “[BWRK] ” for a page.',
       ),
-    parent: pageRef.optional().describe('An existing index (name or id). Give parent or parent_key.'),
+    parent: pageRef
+      .optional()
+      .describe(
+        'An existing index (name or id). Give parent or parent_key; a Working page may leave both out ([INDEX] Working).',
+      ),
     parent_key: z
       .string()
       .min(1)
@@ -596,6 +770,12 @@ const manyItem = z
       .max(500)
       .optional()
       .describe('A template (name or id); none makes a bare page.'),
+    status: z
+      .enum(['working', 'authoritative'])
+      .optional()
+      .describe(
+        'A page’s status (default "working": [BWRK] under [INDEX] Working or a character index directly under it; "authoritative": [BSRC] in its normal place, canon). Indexes take none.',
+      ),
     facts: factsArg,
     links: linksArg,
     tags: tagsArg,
@@ -611,7 +791,11 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
     description:
       'Creates up to 100 pages in ONE request, nested with `key` and `parent_key` (a parent made in the same request works), ' +
       'each in its alphabetical place. Each item follows the single-create rules: with a `template`, as create_resource (name ' +
-      'pattern, facts, links, Status Working); without, as create_bare_resource (name with its prefix). Pages without a ' +
+      'pattern, facts, links); without, as create_bare_resource (name with its prefix). Each page item has a `status` ' +
+      '(default "working": a [BWRK] page under [INDEX] Working, or a character index directly under it; never under another ' +
+      'item, as Working pages are flat; "authoritative": a [BSRC] page in its normal place, canon); mixed batches are fine, ' +
+      'and a batch with any Authoritative page is one canonical proposal. Indexes take no status and are never made under ' +
+      '[INDEX] Working or [INDEX] Archived. Pages without a ' +
       'template go in createManyResources calls (one write for many); each page from a template is its own write. Under ' +
       '`propose`, the whole batch is ONE proposal. A bad parent_key, a loop, or more than 100 items is refused before ' +
       'anything is sent. Character pages: use create_character. Cost: 1 read per distinct template; 1 write per template ' +
@@ -632,13 +816,10 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
         return withRequest(pd, mctx, 'create_many_resources', args, null, async () => {
           // 1. Keys and parents, before any read: a bad parent_key or a loop is refused for nothing.
           for (const it of args.items) {
-            if ((it.parent === undefined) === (it.parent_key === undefined)) {
-              return refusal(
-                pd,
-                'INVALID_ITEMS',
-                `Item “${it.key}”: give parent or parent_key (exactly one).`,
-                { key: it.key },
-              );
+            if (it.parent !== undefined && it.parent_key !== undefined) {
+              return refusal(pd, 'INVALID_ITEMS', `Item “${it.key}”: give parent or parent_key, not both.`, {
+                key: it.key,
+              });
             }
           }
           try {
@@ -660,17 +841,13 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
           const cc = createCtx(pd, mctx, ctx, 'create_many_resources');
           const pages: NewPage[] = [];
           const parents = new Map<string, TreeNode>();
+          const itemStatus = new Map<string, CreateStatus | null>();
           for (const it of args.items) {
             let parentName = '';
-            if (it.parent !== undefined) {
-              const p = resolveParent(ctx, it.parent, { what: `item “${it.key}”’s parent “${it.parent}”` });
-              if (!p.ok) return { kind: 'answer', result: p.result };
-              parents.set(it.key, p.value);
-              parentName = p.value.rawName;
-            }
             let rawName: string;
             let templateId: string | null = null;
             let templateName: string | null = null;
+            let status: CreateStatus | null;
             if (it.template !== undefined) {
               const t = await resolveTemplate(pd, mctx, ctx, 'create_many_resources', it.template);
               const bad = pageTemplateCheck(pd, t);
@@ -678,8 +855,14 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
               const tpl = (t as Extract<typeof t, { ok: true }>).value;
               const name = cleanName(it.name);
               if (!name) return refusal(pd, 'INVALID_ITEMS', `Item “${it.key}”: a name is required.`);
+              if (tpl.kind === 'index' && it.status !== undefined) {
+                return refusal(pd, 'INVALID_ITEMS', `Item “${it.key}”: an index takes no status.`, {
+                  key: it.key,
+                });
+              }
+              status = tpl.kind === 'index' ? null : (it.status ?? 'working');
               const display = fillName(namePatternOf(tpl), name);
-              rawName = `${tpl.kind === 'index' ? INDEX_PREFIX : BSRC_PREFIX}${display}`;
+              rawName = `${tpl.kind === 'index' ? INDEX_PREFIX : status === 'working' ? BWRK_PREFIX : BSRC_PREFIX}${display}`;
               templateId = tpl.id;
               templateName = tpl.name ?? tpl.id;
             } else {
@@ -690,11 +873,59 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
                   `Item “${it.key}”: a page without a template has no facts or links to set.`,
                 );
               }
-              const n = bareName(it.name);
+              const n = bareName(it.name, it.status);
               if (typeof n === 'string')
                 return refusal(pd, 'INVALID_NAME', `Item “${it.key}”: ${n}`, { key: it.key });
               rawName = n.rawName;
+              status = n.status;
             }
+            itemStatus.set(it.key, status);
+            // v2 C2c: the parent by the item's status. A Working page goes directly under [INDEX] Working (or a
+            // character index directly under it), never under another item (flat); an index or an Authoritative page
+            // never under a lifecycle index.
+            const what = `item “${it.key}”’s parent “${it.parent ?? ''}”`;
+            if (status === 'working' && it.parent_key !== undefined) {
+              return refusal(
+                pd,
+                'WORKING_PARENT',
+                `Item “${it.key}”: a Working page goes directly under [INDEX] ${cc.lifecycle.indexNames.working} (or a character index directly under it), never under another item of the request: Working pages are flat.`,
+                { key: it.key },
+              );
+            }
+            if (it.parent_key === undefined) {
+              let p: { ok: true; value: TreeNode } | { ok: false; result: McpToolResult };
+              if (status !== null) {
+                p = parentForStatus(cc, status, it.parent, { allowCharacterIndex: true, what });
+              } else if (it.parent === undefined) {
+                return refusal(
+                  pd,
+                  'INVALID_ITEMS',
+                  `Item “${it.key}”: an index needs parent or parent_key.`,
+                  {
+                    key: it.key,
+                  },
+                );
+              } else {
+                p = resolveParent(ctx, it.parent, { what });
+                if (p.ok && lifecycleAreaOf(cc, p.value) !== null) {
+                  return refusal(
+                    pd,
+                    'LIFECYCLE_AREA',
+                    `Item “${it.key}”: “${p.value.displayName}” is a lifecycle index or under one; those are flat, so no index is made there.`,
+                    { key: it.key },
+                  );
+                }
+              }
+              if (!p.ok) return { kind: 'answer', result: p.result };
+              parents.set(it.key, p.value);
+              parentName = p.value.rawName;
+            }
+            const tags =
+              status === null
+                ? it.tags
+                : templateId === null
+                  ? withStatusTag(cc.lifecycle, it.tags ?? [], status)
+                  : undefined; // a template page's tags need its template's: set below, with its facts
             pages.push(
               newPage({
                 key: it.key,
@@ -707,17 +938,29 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
                 facts: null,
                 parentName,
                 templateName,
-                ...(it.tags ? { tags: it.tags } : {}),
+                status,
+                ...(tags ? { tags } : {}),
                 ...(it.aliases ? { aliases: it.aliases } : {}),
               }),
             );
+          }
+          // v2 C2c: nothing goes under a Working item (flat).
+          for (const p of pages) {
+            if ('item' in p.parent && itemStatus.get(p.parent.item) === 'working') {
+              return refusal(
+                pd,
+                'WORKING_PARENT',
+                `Item “${p.key}” is under item “${p.parent.item}”, a Working page: Working pages are flat, so nothing goes under one.`,
+                { key: p.key },
+              );
+            }
           }
           const byKey = new Map(pages.map((p) => [p.key, p]));
           // Parent names for items under another item, and names taken twice under one parent.
           const seen = new Map<string, string>();
           for (const p of pages) {
             const parentKey = 'item' in p.parent ? `item:${p.parent.item}` : `node:${p.parent.existing}`;
-            const named = `${parentKey}|${p.kind}|${key(p.displayName)}`;
+            const named = `${parentKey}|${isPageKind(p.kind) ? 'page' : p.kind}|${key(p.displayName)}`;
             if (seen.has(named)) {
               return refusal(
                 pd,
@@ -758,10 +1001,18 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
               templateId: p.templateId,
               ...(it.facts ? { facts: it.facts } : {}),
               ...(it.links ? { links: it.links } : {}),
+              status: p.status ? statusValue(cc.lifecycle, p.status) : null,
               what: `Item “${p.key}” (${p.rawName})`,
             });
             if (!f.ok) return { kind: 'answer', result: f.result };
-            withFacts.push({ ...p, facts: f.value });
+            const tags = p.status
+              ? withStatusTag(
+                  cc.lifecycle,
+                  [...(cc.templateTags.get(p.templateId) ?? []), ...(it.tags ?? [])],
+                  p.status,
+                )
+              : p.tags;
+            withFacts.push({ ...p, facts: f.value, ...(tags ? { tags } : {}) });
           }
           return finishCreate(cc, withFacts, {
             batch: true,
@@ -858,10 +1109,21 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
         if (args.name !== undefined) {
           const given = cleanPrefixes(args.name);
           if (given.prefix !== null && given.prefix !== node.kind) {
+            const label =
+              node.kind === 'index' || isPageKind(node.kind)
+                ? `${node.kind === 'index' ? 'an' : 'a'} ${KIND_PREFIX[node.kind].trim()}`
+                : 'an unclassified';
             return errorResult(
               {
                 code: 'PREFIX_CHANGE',
-                message: `“${node.rawName}” is ${node.kind === 'index' ? 'an [INDEX]' : node.kind === 'bsrc' ? 'a [BSRC]' : 'an unclassified'} page; a rename keeps its prefix and never reclassifies it. Give the name without a prefix.`,
+                message:
+                  `“${node.rawName}” is ${label} page; a rename keeps its prefix and never reclassifies it. Give the name without a prefix.` +
+                  (given.prefix === 'bwrk' ||
+                  given.prefix === 'barc' ||
+                  node.kind === 'bwrk' ||
+                  node.kind === 'barc'
+                    ? ' A page’s lifecycle state ([BSRC], [BWRK], [BARC]) changes only with archive_page, unarchive_page, move_to_working or promote_page.'
+                    : ''),
               },
               pd,
             );
@@ -881,7 +1143,8 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
               { code: 'INVALID_PARAMS', message: 'A name (1 to 200 characters) is required.' },
               pd,
             );
-          const rawName = `${node.kind === 'index' ? INDEX_PREFIX : BSRC_PREFIX}${name}`;
+          // The page's own prefix, kept (v2 C2c: [BWRK] and [BARC] too).
+          const rawName = `${KIND_PREFIX[node.kind as 'index' | 'bsrc' | 'bwrk' | 'barc']}${name}`;
           if (rawName !== node.rawName) {
             const twin = node.parentId ? sibling(ctx, node.parentId, node.kind, name, node.id) : null;
             if (twin) {

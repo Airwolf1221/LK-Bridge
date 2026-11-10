@@ -105,10 +105,9 @@ describe('factsVersion', () => {
     const r = await call('create_resource', {
       name: 'Version Hall',
       template: 'tplgen01',
-      parent: 'Kumikas',
     });
     expect(r.body, r.text).toMatchObject({ status: 'written' });
-    const fv = r.body.factsVersions['[BSRC] Version Hall'];
+    const fv = r.body.factsVersions['[BWRK] Version Hall'];
     expect(fv).toBe(await version(r.body.pages[0].id));
     const s = await call('set_facts', {
       page: r.body.pages[0].id,

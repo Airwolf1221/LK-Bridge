@@ -20,7 +20,13 @@ import type { StepOptions } from './types.js';
 
 export const EXPECT_STEP = 'bridge.expect';
 export const VERIFY_STEP = 'bridge.verify';
-export const INTERNAL_STEPS: ReadonlySet<string> = new Set([EXPECT_STEP, VERIFY_STEP]);
+/**
+ * v2 C2c (ADR 0035): the lifecycle record, written by the change's own job: `begin` (incomplete) when it starts and
+ * `complete` at its end. It reads nothing from LegendKeeper and writes only the bridge's own database, through a handler
+ * the lifecycle module registers (`engine.registerRecordHandler`).
+ */
+export const RECORD_STEP = 'bridge.record';
+export const INTERNAL_STEPS: ReadonlySet<string> = new Set([EXPECT_STEP, VERIFY_STEP, RECORD_STEP]);
 
 export function isInternalStep(op: string): boolean {
   return INTERNAL_STEPS.has(op);
@@ -106,7 +112,53 @@ const sidebarCheck = z
   })
   .strict();
 
-export const expectCheckSchema = z.union([propertyCheck, copyCheck, sidebarCheck]);
+/**
+ * v2 C2c: a page's own fields must still be what the plan saw (name, parent, tags: each compared when given), read with
+ * `getResource`.
+ */
+const resourceCheck = z
+  .object({
+    label,
+    kind: z.literal('resource'),
+    resourceId: id,
+    name: z.string().max(500).optional(),
+    parentId: id.nullable().optional(),
+    tags: z.array(z.string().max(100)).max(50).optional(),
+  })
+  .strict();
+
+/** v2 C2c: the pages directly under a page must be exactly these (none, for archive_page). */
+const childrenCheck = z
+  .object({ label, kind: z.literal('children'), resourceId: id, ids: z.array(id).max(1000) })
+  .strict();
+
+/**
+ * v2 C2c: one block of a document: `first` (it is still the document's first block), `content` (it is still exactly
+ * this block, compared as C1's verify compares blocks), or `absent` (no such block); `empty`: the document has no
+ * blocks at all (a note then goes in as its only block).
+ */
+const blockCheck = z
+  .object({
+    label,
+    kind: z.literal('block'),
+    resourceId: id,
+    documentId: id,
+    blockId: id.nullable(),
+    first: z.boolean().optional(),
+    content: z.record(z.string(), z.unknown()).optional(),
+    absent: z.boolean().optional(),
+    empty: z.boolean().optional(),
+  })
+  .strict();
+
+export const expectCheckSchema = z.union([
+  propertyCheck,
+  copyCheck,
+  sidebarCheck,
+  resourceCheck,
+  childrenCheck,
+  blockCheck,
+]);
 
 export const expectParamsSchema = z
   .object({ body: z.object({ checks: z.array(expectCheckSchema).min(1).max(50) }).strict() })
@@ -185,6 +237,19 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
     .strict(),
   // v2 C2b: a resource that must be gone (deleted).
   z.object({ kind: z.literal('gone'), label, resourceId: id }).strict(),
+  // v2 C2c: one block of a document: present with exactly this content (and first, when asked), or absent.
+  z
+    .object({
+      kind: z.literal('block'),
+      label,
+      resourceId: id,
+      documentId: id,
+      blockId: id,
+      present: z.boolean(),
+      content: z.record(z.string(), z.unknown()).optional(),
+      first: z.boolean().optional(),
+    })
+    .strict(),
   // v2 C2b: one document of a page, by id or by name and type (a document the job created), or gone.
   z
     .object({
@@ -206,6 +271,18 @@ export const verifyParamsSchema = z
   .object({ body: z.object({ targets: z.array(verifyTargetSchema).min(1).max(400) }).strict() })
   .strict();
 
+/** v2 C2c: `bridge.record`'s params: the action and what the handler needs (checked by the handler itself). */
+export const recordParamsSchema = z
+  .object({
+    body: z
+      .object({
+        action: z.enum(['begin', 'complete']),
+        record: z.record(z.string(), z.unknown()),
+      })
+      .strict(),
+  })
+  .strict();
+
 export type ExpectCheck =
   | {
       readonly label: string;
@@ -217,7 +294,41 @@ export type ExpectCheck =
       readonly version?: string;
     }
   | CopyCheck
-  | SidebarCheck;
+  | SidebarCheck
+  | ResourceCheck
+  | ChildrenCheck
+  | BlockCheck;
+
+/** v2 C2c: a page's own fields as the plan saw them. */
+export interface ResourceCheck {
+  readonly label: string;
+  readonly kind: 'resource';
+  readonly resourceId: string;
+  readonly name?: string;
+  readonly parentId?: string | null;
+  readonly tags?: readonly string[];
+}
+
+/** v2 C2c: the pages directly under a page. */
+export interface ChildrenCheck {
+  readonly label: string;
+  readonly kind: 'children';
+  readonly resourceId: string;
+  readonly ids: readonly string[];
+}
+
+/** v2 C2c: one block of a document. */
+export interface BlockCheck {
+  readonly label: string;
+  readonly kind: 'block';
+  readonly resourceId: string;
+  readonly documentId: string;
+  readonly blockId: string | null;
+  readonly first?: boolean;
+  readonly content?: Readonly<Record<string, unknown>>;
+  readonly absent?: boolean;
+  readonly empty?: boolean;
+}
 
 /** One property of a template as its copy must show it (ids are the template's). */
 export interface TemplateProperty {
@@ -299,6 +410,16 @@ export type VerifyTarget =
     }
   | { readonly kind: 'gone'; readonly label: string; readonly resourceId: string }
   | {
+      readonly kind: 'block';
+      readonly label: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly blockId: string;
+      readonly present: boolean;
+      readonly content?: Readonly<Record<string, unknown>>;
+      readonly first?: boolean;
+    }
+  | {
       readonly kind: 'document';
       readonly label: string;
       readonly resourceId: string;
@@ -319,7 +440,14 @@ export function verifyStep(targets: readonly VerifyTarget[], options: StepOption
 
 /** Validates an internal step's params. Returns the issues, or an empty list. */
 export function internalStepIssues(op: string, params: unknown): { path: string; message: string }[] {
-  const schema = op === EXPECT_STEP ? expectParamsSchema : op === VERIFY_STEP ? verifyParamsSchema : null;
+  const schema =
+    op === EXPECT_STEP
+      ? expectParamsSchema
+      : op === VERIFY_STEP
+        ? verifyParamsSchema
+        : op === RECORD_STEP
+          ? recordParamsSchema
+          : null;
   if (!schema) return [{ path: 'op', message: `${op} is not one of the bridge's own steps` }];
   const r = schema.safeParse(params);
   return r.success
@@ -344,6 +472,7 @@ export function internalPolicyMeta(op: string, options: StepOptions): PolicyOpMe
 
 /** Reads an internal step makes, for estimates: one per check or target (a placement check adds one listing). */
 export function internalReads(op: string, params: unknown): number {
+  if (op === RECORD_STEP) return 0;
   const body = (params as { body?: { checks?: unknown[]; targets?: unknown[] } } | undefined)?.body;
   if (op === EXPECT_STEP) return body?.checks?.length ?? 1;
   const targets = (body?.targets ?? []) as { placement?: unknown }[];

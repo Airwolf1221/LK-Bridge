@@ -23,10 +23,14 @@ import {
 } from './errors.js';
 import {
   EXPECT_STEP,
+  RECORD_STEP,
   SIDEBAR_IGNORED_FIELDS,
   VERIFY_STEP,
   isInternalStep,
+  type BlockCheck,
+  type ChildrenCheck,
   type ExpectCheck,
+  type ResourceCheck,
   type TargetVerification,
   type VerifyTarget,
 } from './internal-steps.js';
@@ -101,7 +105,15 @@ export interface StepExecDeps {
   readonly recordVerifyMismatch?: (job: JobView, step: StepView, verification: WriteVerification) => void;
   /** v2 C2a: the write guard (protected canonical facts), asked before each write is sent, inside its lock. */
   readonly writeGuard?: () => WriteGuard | undefined;
+  /** v2 C2c: the lifecycle record's handler (`bridge.record`), registered by the lifecycle module. */
+  readonly recordHandler?: () => RecordHandler | undefined;
 }
+
+/**
+ * v2 C2c (ADR 0035): writes the lifecycle record for a `bridge.record` step (the bridge's own database only) and returns
+ * what the step stores as its result. Throwing fails the step (and stops the job before its writes).
+ */
+export type RecordHandler = (job: JobView, step: StepView, params: OpParams) => unknown;
 
 /**
  * v2 C1: what the read after a verified page write found (ADR 0031). `verified`: the stored blocks equal the blocks
@@ -226,7 +238,7 @@ export class StepExecutor {
     job: JobView,
     step: StepView,
     signal: AbortSignal,
-    opts: { readonly storeResult?: boolean; readonly heldLock?: string | null } = {},
+    opts: { readonly storeResult?: boolean; readonly heldLock?: string | readonly string[] | null } = {},
   ): Promise<StepOutcome> {
     // A project taken out of service (its key failed a check) runs nothing more until it is back: the job is held. A
     // step being recovered waits too: verifying it needs the project's client.
@@ -243,16 +255,23 @@ export class StepExecutor {
     if (op.kind === 'read') return this.runRead(job, step, op, params, store);
 
     const lockKey = projectLockKey(job.projectId, lockKeyFor(op, params));
-    // v2 C2a: the job already holds this lock for its whole run (BatchSubmit.holdLock); it is not taken again.
-    const ownLock = lockKey !== null && lockKey !== (opts.heldLock ?? null);
-    if (ownLock && opts.heldLock) {
+    // v2 C2a: the job already holds this lock for its whole run (BatchSubmit.holdLock); it is not taken again. v2 C2c:
+    // a job may hold two (the page's and one of its documents').
+    const held: readonly string[] =
+      opts.heldLock === undefined || opts.heldLock === null
+        ? []
+        : typeof opts.heldLock === 'string'
+          ? [opts.heldLock]
+          : opts.heldLock;
+    const ownLock = lockKey !== null && !held.includes(lockKey);
+    if (ownLock && held.length > 0) {
       return this.fail(
         job,
         step,
         newCallStats(),
         new JobsError(
           'BRIDGE_ERROR',
-          `${op.operationId} takes lock ${lockKey}, but the job holds ${opts.heldLock}; nothing was sent`,
+          `${op.operationId} takes lock ${lockKey}, but the job holds ${held.join(' and ')}; nothing was sent`,
           { jobId: job.id, stepNo: step.stepNo },
         ),
       );
@@ -369,6 +388,13 @@ export class StepExecutor {
       if (step.opId === EXPECT_STEP) {
         return this.succeed(job, step, stats, await this.runExpect(job, step, params, stats));
       }
+      if (step.opId === RECORD_STEP) {
+        // v2 C2c: the lifecycle record (the bridge's own database only; nothing is read or sent).
+        const handler = this.d.recordHandler?.();
+        if (!handler)
+          throw new JobsError('BRIDGE_ERROR', 'The lifecycle record is not available; nothing was written.');
+        return this.succeed(job, step, stats, await handler(job, step, params));
+      }
       if (step.opId !== VERIFY_STEP) throw new JobsError('BRIDGE_ERROR', `Unknown bridge step ${step.opId}`);
       const verification = await this.runVerify(job, step, params, stats);
       if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
@@ -429,6 +455,13 @@ export class StepExecutor {
         versions[c.label] = null;
         continue;
       }
+      // v2 C2c: a page's own fields, the pages under it, or one block of a document, as the plan saw them.
+      if (c.kind === 'resource' || c.kind === 'children' || c.kind === 'block') {
+        const diffs = await this.expectStructure(job, step, c, stats);
+        if (diffs.length > 0) throw new StateConflictError(EXPECT_STEP, c.label, diffs, null, null, ref);
+        versions[c.label] = null;
+        continue;
+      }
       const path = { resourceId: c.resourceId, propertyId: c.propertyId };
       const r = await this.readOp(
         job,
@@ -468,6 +501,87 @@ export class StepExecutor {
       versions,
       ...(Object.keys(ids).length > 0 ? { ids } : {}),
     };
+  }
+
+  /** v2 C2c: the differences between a page's fields, children or one block and what the plan saw. */
+  private async expectStructure(
+    job: JobView,
+    step: StepView,
+    c: ResourceCheck | ChildrenCheck | BlockCheck,
+    stats: CallStats,
+  ): Promise<StateDifference[]> {
+    const diffs: StateDifference[] = [];
+    if (c.kind === 'resource') {
+      const r = await this.readOp(job, step, 'getResource', { path: { resourceId: c.resourceId } }, stats);
+      if (!r.exists) return [{ path: c.label, expected: 'present', actual: '(gone)' }];
+      const b = (r.body ?? {}) as { name?: unknown; parentId?: unknown; tags?: unknown };
+      if (c.name !== undefined && b.name !== c.name)
+        diffs.push({ path: `${c.label} name`, expected: c.name, actual: b.name ?? null });
+      if (c.parentId !== undefined && (b.parentId ?? null) !== c.parentId)
+        diffs.push({ path: `${c.label} parent`, expected: c.parentId, actual: b.parentId ?? null });
+      if (c.tags !== undefined) {
+        const now = Array.isArray(b.tags) ? (b.tags as string[]) : [];
+        if (JSON.stringify(now) !== JSON.stringify(c.tags))
+          diffs.push({ path: `${c.label} tags`, expected: c.tags, actual: now });
+      }
+      return diffs;
+    }
+    if (c.kind === 'children') {
+      const ids: string[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 100; page++) {
+        const r = await this.readOp(
+          job,
+          step,
+          'listResources',
+          { query: { parentId: c.resourceId, limit: 100, ...(cursor ? { cursor } : {}) } },
+          stats,
+        );
+        const body = (r.body ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+        for (const x of Array.isArray(body.data) ? (body.data as { id?: unknown }[]) : [])
+          if (typeof x.id === 'string') ids.push(x.id);
+        if (body.hasMore !== true || typeof body.nextCursor !== 'string') break;
+        cursor = body.nextCursor;
+      }
+      const want = [...c.ids].sort();
+      const have = [...ids].sort();
+      if (JSON.stringify(want) !== JSON.stringify(have))
+        diffs.push({ path: `${c.label} pages under it`, expected: want, actual: have });
+      return diffs;
+    }
+    const r = await this.readOp(
+      job,
+      step,
+      'getDocumentBlocks',
+      { path: { resourceId: c.resourceId, documentId: c.documentId } },
+      stats,
+    );
+    if (!r.exists) return [{ path: c.label, expected: 'present', actual: '(gone)' }];
+    const blocks = ((r.body as { blocks?: unknown } | undefined)?.blocks ?? []) as { id?: unknown }[];
+    if (c.empty === true) {
+      if (blocks.length > 0)
+        diffs.push({ path: `${c.label} blocks`, expected: 'none', actual: `${blocks.length} block(s)` });
+      return diffs;
+    }
+    const at = blocks.findIndex((b) => b.id === c.blockId);
+    if (c.absent === true) {
+      if (at >= 0)
+        diffs.push({ path: `${c.label} block ${c.blockId}`, expected: 'absent', actual: 'present' });
+      return diffs;
+    }
+    if (at < 0) return [{ path: `${c.label} block ${c.blockId}`, expected: 'present', actual: '(gone)' }];
+    if (c.first === true && at !== 0)
+      diffs.push({ path: `${c.label} first block`, expected: c.blockId, actual: blocks[0]?.id ?? null });
+    if (c.content !== undefined) {
+      const cmp = compareStoredBlocks([c.content], [blocks[at]], 5);
+      for (const d of cmp.differences)
+        diffs.push({
+          path: `${c.label} block ${c.blockId}${d.path}`,
+          expected: d.expected,
+          actual: d.actual,
+        });
+    }
+    return diffs;
   }
 
   /** `bridge.verify`: each target read back and compared with the plan (see internal-steps.ts). Never throws. */
@@ -515,6 +629,26 @@ export class StepExecutor {
               diffs.push({ path: `${t.label} blocks${d.path}`, expected: d.expected, actual: d.actual });
             n = cmp.count;
           }
+        } else if (t.kind === 'block') {
+          // v2 C2c: one block, present (with its content, first when asked) or absent: the lifecycle note.
+          diffs.push(
+            ...(await this.expectStructure(
+              job,
+              step,
+              {
+                label: t.label,
+                kind: 'block',
+                resourceId: t.resourceId,
+                documentId: t.documentId,
+                blockId: t.blockId,
+                ...(t.present ? {} : { absent: true }),
+                ...(t.present && t.first ? { first: true } : {}),
+                ...(t.present && t.content ? { content: t.content } : {}),
+              },
+              stats,
+            )),
+          );
+          n = diffs.length;
         } else if (t.kind === 'document') {
           const r = await this.readOp(
             job,
@@ -901,6 +1035,7 @@ export class StepExecutor {
           step,
           opId: op.operationId,
           params,
+          jobOptions: this.d.repo.jobOptions(job.id),
           current: current ? { body: current.body, entity: current.entity } : undefined,
           read: (opId, p) => this.guardRead(job, step, opId, p),
         });

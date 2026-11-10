@@ -574,6 +574,7 @@ export class TreeStore {
 
   /** Re-derives every node's catalogue fields from its stored sidebar (after the property or row names changed). */
   recomputeCatalogue(projectId: string, settings: TreeSettings): number {
+    this.reclassify(projectId);
     const rows = this.db
       .prepare('SELECT id, sidebar FROM tree_nodes WHERE project_id = ? AND sidebar IS NOT NULL')
       .all(projectId) as { id: string; sidebar: string }[];
@@ -597,6 +598,35 @@ export class TreeStore {
       }
     })();
     return rows.length;
+  }
+
+  /**
+   * v2 C2c (ADR 0035): every node's kind and display name derived again from its raw name (no reads), with its names and
+   * the paths below it. A tree stored before `[BWRK]` and `[BARC]` were kinds held them as unclassified. Returns the
+   * number of nodes changed.
+   */
+  reclassify(projectId: string): number {
+    const rows = this.db
+      .prepare(
+        "SELECT id, raw_name, display_name, kind FROM tree_nodes WHERE project_id = ? AND kind <> 'root'",
+      )
+      .all(projectId) as { id: string; raw_name: string; display_name: string; kind: NodeKind }[];
+    const up = this.db.prepare(
+      'UPDATE tree_nodes SET kind = ?, display_name = ? WHERE project_id = ? AND id = ?',
+    );
+    let n = 0;
+    this.db.transaction(() => {
+      for (const r of rows) {
+        const c = classifyName(r.raw_name);
+        if (c.kind === r.kind && c.displayName === r.display_name) continue;
+        up.run(c.kind, c.displayName, projectId, r.id);
+        this.writeNames(projectId, r.id);
+        n++;
+      }
+      const root = this.state(projectId)?.root_id ?? null;
+      if (n > 0 && root) this.recomputePaths(projectId, root);
+    })();
+    return n;
   }
 
   /** The names a node answers to (exact-name lookups): raw, display, each alias and the Canonical Display Name. */
