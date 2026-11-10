@@ -47,6 +47,18 @@ describe('scopes', () => {
     });
   });
 
+  it('shows or hides the low-level tools per profile, without a confirmation', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'PUT /clients/profiles/prof_cc/low-level-tools': { profile: {} },
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/clients');
+    await user.click(await screen.findByLabelText('Show low-level tools to claude-code'));
+    await waitFor(() => expect(api.find('PUT', '/clients/profiles/prof_cc/low-level-tools')).toHaveLength(1));
+    expect(api.find('PUT', '/clients/profiles/prof_cc/low-level-tools')[0]!.body).toEqual({ show: true });
+  });
+
   it('confirms raising the default scope for new connections', async () => {
     const api = installApi({ ...baseRoutes(), 'PUT /clients/default-scope': { defaultScope: 'propose' } });
     const user = userEvent.setup();

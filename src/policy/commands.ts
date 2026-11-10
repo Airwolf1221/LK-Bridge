@@ -38,6 +38,8 @@ export interface OwnerCommands {
     input: { readonly label: string; readonly kind: ProfileKind; readonly scope?: Scope },
   ): Profile;
   setScope(actor: OwnerActor, profileId: string, scope: Scope): Profile;
+  /** v2 B2: shows or hides the low-level tools for a profile's connections. Audited as `profile.set_low_level_tools`. */
+  setShowLowLevelTools(actor: OwnerActor, profileId: string, show: boolean): Profile;
   getDefaultScope(actor: OwnerActor): Scope;
   setDefaultScope(actor: OwnerActor, scope: Scope): Scope;
   listGrantsAndPats(actor: OwnerActor): ConnectionView[];
@@ -106,6 +108,21 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
       assertOwner(actor);
       const { before, after } = store.updateScope(profileId, scope);
       store.audit('owner', 'profile.set_scope', profileId, { scope: before.scope }, { scope: after.scope });
+      return after;
+    },
+
+    setShowLowLevelTools(actor, profileId, show) {
+      assertOwner(actor);
+      if (typeof show !== 'boolean')
+        throw new PolicyError('INVALID_INPUT', 'showLowLevelTools is true or false');
+      const { before, after } = store.updateShowLowLevelTools(profileId, show);
+      store.audit(
+        'owner',
+        'profile.set_low_level_tools',
+        profileId,
+        { showLowLevelTools: before.showLowLevelTools },
+        { showLowLevelTools: after.showLowLevelTools },
+      );
       return after;
     },
 

@@ -62,6 +62,14 @@ valid, its status and reason, and its settings (read-only); it can switch a proj
 confirmation, audited) and **Check again** a project's key. The sandbox flag is shown but only set from the server's
 shell (`npm run projects`).
 
+## Low-level tools, per profile (v2 B2)
+
+Each profile row on **Clients & Access** has a **Low-level tools** checkbox (shown / hidden; hidden is the default). It
+controls only whether the raw LegendKeeper operation tools are listed to that profile's connections; the scope, not this
+box, decides what the profile may do. A change is audited (`profile.set_low_level_tools`) and applies at the agent's next
+tool listing. ChatGPT keeps its own copy of the tool list: after changing it, open ChatGPT's Plugins page, the bridge,
+and use **Refresh**. See [policy.md](policy.md#hiding-the-low-level-tools-v2-b2).
+
 ## Account, and keys on the Projects page (OPS2)
 
 The **Account** page: the password, the authenticator app (QR code drawn in the browser, recovery codes shown once) and

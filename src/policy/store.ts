@@ -51,6 +51,7 @@ function toProfile(r: Row): Profile {
     label: String(r.label),
     kind: r.kind as ProfileKind,
     scope: r.scope as Scope,
+    showLowLevelTools: Number(r.show_low_level_tools ?? 0) === 1,
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
   };
@@ -171,6 +172,17 @@ export class PolicyStore {
     return { before, after: this.getProfile(id)! };
   }
 
+  /** v2 B2: shows or hides the low-level tools for a profile's connections (applies at the next tools/list). */
+  updateShowLowLevelTools(id: string, show: boolean): { before: Profile; after: Profile } {
+    const before = this.getProfile(id);
+    if (!before) throw new PolicyError('PROFILE_NOT_FOUND', `No profile ${id}`);
+    this.db
+      .prepare('UPDATE agent_profiles SET show_low_level_tools = ?, updated_at = ? WHERE id = ?')
+      .run(show ? 1 : 0, this.now(), id);
+    this.bump();
+    return { before, after: this.getProfile(id)! };
+  }
+
   // ------------------------------------------------------------------------------------------ settings
 
   /** The scope a new profile gets unless one is chosen (default `read`). */
@@ -205,7 +217,7 @@ export class PolicyStore {
       const r = this.db
         .prepare(
           `SELECT f.family_id, f.client_id, f.revoked_at, f.expires_at, c.client_name,
-                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope
+                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope, p.show_low_level_tools AS profile_low
            FROM auth_token_families f
            LEFT JOIN auth_clients c ON c.client_id = f.client_id
            LEFT JOIN agent_profiles p ON p.id = f.profile_id
@@ -223,6 +235,7 @@ export class PolicyStore {
         },
         profileId: r.profile_id as string,
         scope: r.profile_scope as Scope,
+        showLowLevelTools: Number(r.profile_low ?? 0) === 1,
         active: r.revoked_at === null && Number(r.expires_at) > nowSec,
       };
     }
@@ -230,7 +243,7 @@ export class PolicyStore {
       const r = this.db
         .prepare(
           `SELECT t.id, t.name, t.revoked_at, t.expires_at,
-                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope
+                  p.id AS profile_id, p.label AS profile_label, p.scope AS profile_scope, p.show_low_level_tools AS profile_low
            FROM auth_pats t LEFT JOIN agent_profiles p ON p.id = t.profile_id WHERE t.id = ?`,
         )
         .get(principalId) as Row | undefined;
@@ -243,6 +256,7 @@ export class PolicyStore {
         },
         profileId: r.profile_id as string,
         scope: r.profile_scope as Scope,
+        showLowLevelTools: Number(r.profile_low ?? 0) === 1,
         active: r.revoked_at === null && (r.expires_at === null || Number(r.expires_at) > nowSec),
       };
     }

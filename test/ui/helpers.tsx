@@ -331,8 +331,22 @@ export const step = (over: Record<string, unknown> = {}) => ({
 });
 
 export const profiles = [
-  { id: 'prof_claude', label: 'Claude', kind: 'claude', scope: 'read', connections: 1 },
-  { id: 'prof_cc', label: 'claude-code', kind: 'claude-code', scope: 'write', connections: 1 },
+  {
+    id: 'prof_claude',
+    label: 'Claude',
+    kind: 'claude',
+    scope: 'read',
+    showLowLevelTools: false,
+    connections: 1,
+  },
+  {
+    id: 'prof_cc',
+    label: 'claude-code',
+    kind: 'claude-code',
+    scope: 'write',
+    showLowLevelTools: false,
+    connections: 1,
+  },
 ];
 
 export const connections = [

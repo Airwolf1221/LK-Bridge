@@ -678,6 +678,8 @@ export function createAdminActions(d: AdminDeps) {
       }
       return cmd.setScope(OWNER, profileId, scope);
     },
+    setShowLowLevelTools: (profileId: string, show: boolean): Profile =>
+      cmd.setShowLowLevelTools(OWNER, profileId, show),
     setDefaultScope(scope: Scope, confirmRaise: boolean): Scope {
       const current = cmd.getDefaultScope(OWNER);
       if (SCOPE_RANK[scope] > SCOPE_RANK[current] && !confirmRaise) {

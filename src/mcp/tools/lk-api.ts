@@ -136,6 +136,7 @@ const DESTRUCTIVE_LIST = operations
 export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
   const listOperations = defineTool({
     name: 'lk_api_list_operations',
+    lowLevel: true,
     title: 'List LegendKeeper operations',
     access: 'read',
     description:
@@ -186,6 +187,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
 
   const describeOperation = defineTool({
     name: 'lk_api_describe_operation',
+    lowLevel: true,
     title: 'Describe a LegendKeeper operation',
     access: 'read',
     description:
@@ -384,6 +386,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
 
   const paginate = defineTool({
     name: 'lk_api_paginate_all',
+    lowLevel: true,
     title: 'Read every page of a LegendKeeper list',
     access: 'read',
     description:

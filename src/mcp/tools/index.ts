@@ -5,29 +5,36 @@
  */
 import type { McpToolProvider } from '../server.js';
 import { bridgeTools } from './bridge.js';
+import { discoverTools } from './discover.js';
+import { guideTools } from './guides.js';
+import { readDocumentTool } from './read-document.js';
 import { lkApiTools } from './lk-api.js';
 import { perOpTools } from './per-op.js';
 import type { ToolDeps } from './shape.js';
 import { uploadTools } from './upload.js';
 
-export type { ToolDeps } from './shape.js';
+export type { ToolDeps, DiscoverServices } from './shape.js';
+export { guideResources } from './guides.js';
 export { createUploadPutHandler } from './upload-step.js';
 export { createUploadTransport } from './upload-http.js';
 
-/** The MCP server `instructions`: short guidance every connected agent sees (also in docs/tools.md). */
+/**
+ * The MCP server `instructions`: short, and pointing to the bridge guide (v2 B2; the full text is docs/bridge-guide.md,
+ * served by `get_bridge_guide` and as the resource lk-bridge://guides/bridge).
+ */
 export const BRIDGE_INSTRUCTIONS =
-  'LK-Bridge gives governed access to one or more LegendKeeper projects: list_projects names them, and every tool takes an optional project. ' +
-  'Reads without project use the default project; a write must name its project when the bridge serves several. ' +
-  "Each project has its own rate budget, shared and finite: every result names its project and ends with that project's budget line. " +
-  'Before a large workload (hundreds of calls) check bridge_estimate, and run multi-step work as one lk_api_batch job rather than a loop of single calls. ' +
-  'Read before you write, and pass the version you read as params.ifMatch. ' +
-  'Never loop on budget errors: wait until the stated retry time. ' +
-  'Never retry a write that returned waiting_budget, queued or proposal_captured; it is not lost: follow a job with bridge_job_status and a proposal with bridge_proposal_status. ' +
-  'Results are summaries; ask for detail "full" only when you need the whole payload, and page oversized results with bridge_result_page.';
+  'LK-Bridge gives governed access to LegendKeeper projects (list_projects); every tool takes an optional project, and a write must name its project when the bridge serves several. Call get_bridge_guide first: it explains projects, the repository tree, finding and reading pages, writing, budgets and proposals. ' +
+  'Find pages with search and browse_repository_tree, read them with get_resource and read_document (Markdown; see get_markdown_guide). ' +
+  "Every result names its project and ends with that project's budget line; budgets are finite, so never loop on budget errors, and check bridge_estimate before hundreds of calls. " +
+  'Never retry a write that returned waiting_budget, queued or proposal_captured: follow a job with bridge_job_status and a proposal with bridge_proposal_status. ' +
+  'Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page. The lk_api_* tools are the low-level fallback.';
 
 export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: boolean }): McpToolProvider[] {
   return [
     ...bridgeTools(deps),
+    ...discoverTools(deps),
+    readDocumentTool(deps),
+    ...guideTools(deps),
     ...lkApiTools(deps),
     ...uploadTools(deps),
     ...(opts.exposePerOpTools ? perOpTools(deps) : []),

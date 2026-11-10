@@ -190,7 +190,9 @@ describe('read-only mode and budget', () => {
 describe('the tool list', () => {
   it('every tool carries an access tag consistent with its annotations', () => {
     const tools = stack.runtime.tools;
-    expect(tools).toHaveLength(19); // chunk 3's 16, chunk 2b's two proposal tools, and v2 A1's list_projects
+    // chunk 3's 16, chunk 2b's two proposal tools, v2 A1's list_projects, and v2 B2's twelve (nine Discover tools,
+    // read_document and two guides)
+    expect(tools).toHaveLength(31);
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');
@@ -200,9 +202,15 @@ describe('the tool list', () => {
   it('registers 89 more lk_op_* tools only when MCP_EXPOSE_PER_OP_TOOLS=true', async () => {
     const on = await startStack({ respond: model.respond, env: { MCP_EXPOSE_PER_OP_TOOLS: 'true' } });
     try {
+      // The default profile does not see the low-level tools (v2 B2); this one is shown them.
+      on.policy.commands.setShowLowLevelTools(
+        'owner',
+        on.policy.store.getProfileByLabel('tools-test')!.id,
+        true,
+      );
       const c = await on.connect();
       const { tools } = await c.listTools();
-      expect(tools).toHaveLength(19 + 89);
+      expect(tools).toHaveLength(31 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));

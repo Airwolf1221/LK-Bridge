@@ -36,14 +36,26 @@ describe('the MCP surface with the official client', () => {
         'bridge_proposal_status',
         'bridge_proposals_mine',
         'bridge_result_page',
+        // v2 B2: Discover, Read and the guides
+        'browse_asset_tree',
+        'browse_repository_tree',
+        'get_bridge_guide',
+        'get_markdown_guide',
+        'get_resource',
+        'get_resources',
+        'list_assets',
+        'list_calendars',
         'list_projects', // v2 A1
+        'list_tags',
+        'list_templates',
         'lk_api_batch',
-        'lk_api_describe_operation',
-        'lk_api_list_operations',
-        'lk_api_paginate_all',
+        // lk_api_describe_operation, lk_api_list_operations and lk_api_paginate_all are low-level tools: hidden for a
+        // profile without showLowLevelTools (v2 B2).
         'lk_api_read',
         'lk_api_write',
         'lk_upload_image',
+        'read_document',
+        'search',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
@@ -68,9 +80,18 @@ describe('the MCP surface with the official client', () => {
       'bridge_errors_recent',
       'bridge_journal_lookup',
       'bridge_result_page',
-      'lk_api_paginate_all',
-      'lk_api_list_operations',
-      'lk_api_describe_operation',
+      'browse_repository_tree',
+      'browse_asset_tree',
+      'search',
+      'get_resource',
+      'get_resources',
+      'list_tags',
+      'list_templates',
+      'list_calendars',
+      'list_assets',
+      'read_document',
+      'get_markdown_guide',
+      'get_bridge_guide',
     ]) {
       expect(by[n]!.annotations?.readOnlyHint, n).toBe(true);
     }

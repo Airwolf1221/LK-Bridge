@@ -9,7 +9,10 @@
  * - failures become typed `{ error: { code, message, … } }` results, never thrown exceptions.
  */
 import * as z from 'zod';
+import type { AssetQueries } from '../../assets/index.js';
 import type { ToolsSettings } from '../../config/tools.js';
+import type { Registry } from '../../registry/index.js';
+import type { TreeQueries } from '../../tree/index.js';
 import {
   BudgetExhaustedError,
   JobsError,
@@ -36,6 +39,16 @@ import type { GuardOptions } from './upload-http.js';
 /** The projects as the tools see them (v2 A1): `ProjectRegistry` and `StaticProjects` both provide this. */
 export type ToolProjects = ProjectsRuntime & SelectableProjects & { list(): ProjectView[] };
 
+/**
+ * The bridge's models the Discover and Read tools answer from (v2 B2): the repository tree, the type registry and the
+ * asset tree. Optional so the tool list can be built without them (tests); a tool that needs one says so when called.
+ */
+export interface DiscoverServices {
+  readonly tree: { readonly queries: TreeQueries };
+  readonly registry: Pick<Registry, 'forProject'>;
+  readonly assets: { readonly queries: AssetQueries };
+}
+
 /** What every tool handler needs. */
 export interface ToolDeps {
   readonly engine: JobEngine;
@@ -44,6 +57,8 @@ export interface ToolDeps {
   /** Resolves the `project` argument (REQUIRE_PROJECT_FOR_WRITES applies to write tools). */
   readonly selector: ProjectSelector;
   readonly settings: ToolsSettings;
+  /** v2 B2: the tree, registry and asset tree (the Discover and Read tools). */
+  readonly services?: DiscoverServices | undefined;
   readonly version: string;
   /** LK_READ_ONLY as configured (the effective flag, which can be overridden at runtime, comes from the engine). */
   readonly configuredReadOnly: boolean;

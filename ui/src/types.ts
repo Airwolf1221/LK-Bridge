@@ -475,6 +475,8 @@ export interface Profile {
   label: string;
   kind: string;
   scope: Scope;
+  /** v2 B2: shown the low-level tools in tools/list. */
+  showLowLevelTools: boolean;
   connections: number;
 }
 

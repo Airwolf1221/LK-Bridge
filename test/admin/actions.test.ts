@@ -338,6 +338,36 @@ describe('clients and access', () => {
     await stack.put('/api/admin/clients/default-scope', { scope: 'read' });
   });
 
+  it('shows or hides the low-level tools per profile: off by default, audited, no confirmation (v2 B2)', async () => {
+    const created = await stack.post('/api/admin/clients/profiles', { label: 'Tools agent', kind: 'other' });
+    const profile = created.json.profile;
+    expect(profile.showLowLevelTools).toBe(false);
+    const listed = (await stack.get('/api/admin/clients')).json.profiles.find(
+      (p: any) => p.id === profile.id,
+    );
+    expect(listed.showLowLevelTools).toBe(false);
+
+    const on = await audited('profile.set_low_level_tools', profile.id, () =>
+      stack.put(`/api/admin/clients/profiles/${profile.id}/low-level-tools`, { show: true }),
+    );
+    expect(on.result.json.profile.showLowLevelTools).toBe(true);
+    expect(stack.policy.store.getProfile(profile.id)?.showLowLevelTools).toBe(true);
+    expect(on.row).toMatchObject({
+      before: { showLowLevelTools: false },
+      after: { showLowLevelTools: true },
+    });
+    // It changes what is listed, never the scope.
+    expect(stack.policy.store.getProfile(profile.id)?.scope).toBe('read');
+    await stack.put(`/api/admin/clients/profiles/${profile.id}/low-level-tools`, { show: false });
+    expect(stack.policy.store.getProfile(profile.id)?.showLowLevelTools).toBe(false);
+    expect(
+      (await stack.put(`/api/admin/clients/profiles/${profile.id}/low-level-tools`, { show: 'yes' })).status,
+    ).toBe(400);
+    expect(
+      (await stack.put('/api/admin/clients/profiles/prof_nope/low-level-tools', { show: true })).status,
+    ).toBe(404);
+  });
+
   it('creates a PAT, shows the token once, never again and never in the audit log or events', async () => {
     const profile = stack.policy.commands.listProfiles('owner').find((p) => p.label === 'Test agent')!;
     const { result, row } = await audited('pat.create', /^pat_/, () =>

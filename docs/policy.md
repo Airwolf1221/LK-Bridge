@@ -9,12 +9,12 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 
 ## The model
 
-| Term          | What it is                                                                                                                         |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Principal** | Who a request acts for: an OAuth grant (`grant_…`, one consent for one client) or a personal access token (`pat_…`).               |
-| **Profile**   | A named policy bundle (`agent_profiles`): `label` (unique), `kind` (`claude`, `chatgpt`, `claude-code`, `other`) and `scope`.      |
-| **Scope**     | `read`, `propose` or `write`. Attached to the profile, never to a token.                                                           |
-| **Owner**     | The only authority. Chooses profile and scope at consent; changes them, approves and rejects proposals in the dashboard (chunk 5). |
+| Term          | What it is                                                                                                                                                 |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Principal** | Who a request acts for: an OAuth grant (`grant_…`, one consent for one client) or a personal access token (`pat_…`).                                       |
+| **Profile**   | A named policy bundle (`agent_profiles`): `label` (unique), `kind` (`claude`, `chatgpt`, `claude-code`, `other`), `scope` and (v2 B2) `showLowLevelTools`. |
+| **Scope**     | `read`, `propose` or `write`. Attached to the profile, never to a token.                                                                                   |
+| **Owner**     | The only authority. Chooses profile and scope at consent; changes them, approves and rejects proposals in the dashboard (chunk 5).                         |
 
 - **Identity comes from the server-issued token only.** The bearer token resolves to its grant or PAT; the grant or
   PAT points at its profile. MCP `clientInfo`, a client's registered name and the profile name a caller might claim
@@ -221,3 +221,14 @@ approval needs an attached engine. It appends the proposal tools unless the give
 | `POLICY_PROPOSAL_RETENTION_DAYS` | Finished proposals (executed, rejected, expired, failed) older than this are deleted by the `proposal-prune` maintenance job, with their pre-state; pending and conflicted ones never (v1.0.1) | 90      |
 
 The scope cache is fixed at one second at most (`cacheMs`, 0-1000, in code).
+
+## Hiding the low-level tools (v2 B2)
+
+A profile's **show low-level tools** setting (`showLowLevelTools`, default off, migration 1100) decides whether its
+connections are _shown_ `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*`
+in `tools/list`. The owner changes it on Clients & Access (`PUT /api/admin/clients/profiles/:id/low-level-tools`),
+no confirmation is asked, and it is audited as `profile.set_low_level_tools` with the old and new value. It is read live
+with the scope, so the next `tools/list` follows it. **It is not a permission.** Every tool stays registered, so a call
+to a hidden tool is refused or allowed exactly as before: a `read` profile still gets the read-only refusal for a hidden
+write tool, a `propose` profile still gets a proposal, and the engine's guards apply as ever
+([ADR 0029](adr/0029-discover-and-read-tools.md)).

@@ -8,6 +8,7 @@ import type { AuthConfig } from '../config/auth.js';
 import {
   type McpAccessControl,
   type McpServerInfo,
+  type McpResourceProvider,
   type McpToolProvider,
   createMcpServerFactory,
 } from './server.js';
@@ -45,6 +46,8 @@ export interface McpTransportOptions {
   readonly event: AuthEventLogger;
   readonly serverInfo: McpServerInfo;
   readonly tools: readonly McpToolProvider[];
+  /** v2 B2: documents published as MCP resources (the guides). */
+  readonly resources?: readonly McpResourceProvider[];
   /** Per-principal tool lists and the principal in each tool's context (src/policy). */
   readonly access?: McpAccessControl;
   /** Largest request body accepted (default: the SDK's 4 MiB). See {@link mcpMaxBodyBytes}. */
@@ -62,7 +65,13 @@ export function originAllowed(origin: string | undefined, config: AuthConfig): b
 
 export function mcpTransportPlugin(app: FastifyInstance, opts: McpTransportOptions): Promise<void> {
   const { config, bearer, event } = opts;
-  const factory = createMcpServerFactory(opts.serverInfo, opts.tools, app.log, opts.access);
+  const factory = createMcpServerFactory(
+    opts.serverInfo,
+    opts.tools,
+    app.log,
+    opts.access,
+    opts.resources ?? [],
+  );
   const onerror = (err: Error) => app.log.warn({ err }, 'MCP transport error');
   const maxRequestBodySize = opts.maxBodyBytes ?? MCP_DEFAULT_MAX_BODY_BYTES;
   const handler = createMcpHandler(factory, { legacy: 'stateless', onerror, maxRequestBodySize });

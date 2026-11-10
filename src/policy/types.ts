@@ -22,6 +22,8 @@ export interface Profile {
   readonly label: string;
   readonly kind: ProfileKind;
   readonly scope: Scope;
+  /** v2 B2: whether the connections on this profile are shown the low-level tools in tools/list (default false). */
+  readonly showLowLevelTools: boolean;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -34,6 +36,8 @@ export interface ResolvedPrincipal {
   readonly principal: Principal;
   readonly profileId: string;
   readonly scope: Scope;
+  /** v2 B2: the profile's `showLowLevelTools`, read live. */
+  readonly showLowLevelTools: boolean;
   /** False when the grant or PAT is revoked or expired. */
   readonly active: boolean;
 }

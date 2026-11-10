@@ -303,6 +303,7 @@ function ProfilesCard({
               <th>Profile</th>
               <th>Kind</th>
               <th>Scope</th>
+              <th>Low-level tools</th>
               <th className="num">Active connections</th>
             </tr>
           </thead>
@@ -332,12 +333,41 @@ function ProfilesCard({
                     }}
                   />
                 </td>
+                <td>
+                  <label className="inline" htmlFor={`low-${p.id}`}>
+                    <input
+                      id={`low-${p.id}`}
+                      type="checkbox"
+                      checked={p.showLowLevelTools}
+                      disabled={busy}
+                      aria-label={`Show low-level tools to ${p.label}`}
+                      onChange={(e) =>
+                        void run(
+                          () =>
+                            api.put(`/clients/profiles/${p.id}/low-level-tools`, { show: e.target.checked }),
+                          e.target.checked
+                            ? `“${p.label}” is now shown the low-level tools.`
+                            : `“${p.label}” no longer sees the low-level tools.`,
+                        ).then(onChanged)
+                      }
+                    />{' '}
+                    {p.showLowLevelTools ? 'shown' : 'hidden'}
+                  </label>
+                </td>
                 <td className="num">{p.connections}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <p className="muted">
+        <strong>Low-level tools</strong> are the raw LegendKeeper operation tools (
+        <code>lk_api_list_operations</code>, <code>lk_api_describe_operation</code>,{' '}
+        <code>lk_api_paginate_all</code> and every <code>lk_op_*</code>). Hidden by default. Hiding only
+        changes the tool list the agent is shown: a call to a hidden tool is still allowed or refused by the
+        profile’s scope exactly as before. ChatGPT needs a tool refresh (Plugins → the bridge → Refresh) after
+        you change this.
+      </p>
       <h3>New profile</h3>
       <div className="field-row">
         <div>

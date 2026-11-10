@@ -54,7 +54,9 @@ export interface McpAccessControl {
   /** The caller's principal and live scope, or undefined when the bridge does not know it. */
   resolve(
     caller: CallerIdentity | undefined,
-  ): { readonly principal: Principal; readonly scope: string } | undefined;
+  ):
+    | { readonly principal: Principal; readonly scope: string; readonly showLowLevelTools?: boolean }
+    | undefined;
 }
 
 /**
@@ -85,9 +87,27 @@ export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
   readonly annotations?: McpToolAnnotations;
   /** `read` or `write`; filters tools/list per principal (see {@link toolVisible}). */
   readonly access?: ToolAccess;
+  /**
+   * v2 B2: a low-level tool (the raw LegendKeeper operation layer). Listed only for a profile with
+   * `showLowLevelTools`. Hiding changes `tools/list` only: a call is still refused or allowed by policy as before.
+   */
+  readonly lowLevel?: boolean;
   /** Scopes the caller must hold (checked before the handler). Default: none beyond `/mcp` access. */
   readonly requiredScopes?: readonly string[];
   handler(input: z.output<S>, ctx: McpToolContext): McpToolResult | Promise<McpToolResult>;
+}
+
+/** A read-only document published as an MCP resource (v2 B2: the guides). */
+export interface McpResourceProvider {
+  /** Resource name (shown to clients). */
+  readonly name: string;
+  /** Its URI, for example `lk-bridge://guides/markdown`. */
+  readonly uri: string;
+  readonly title: string;
+  readonly description: string;
+  readonly mimeType: string;
+  /** The current text (read on every request). */
+  read(): string;
 }
 
 /** The part of an MCP server that tool registration needs. `McpServer` satisfies it. */
@@ -100,7 +120,11 @@ export interface RegisterToolsDeps {
    * The request's principal and scope when a policy layer is wired. Write tools are then refused at call time for a
    * `read` scope even if a client calls one it was not shown (the job engine's policy gate refuses too).
    */
-  readonly policy?: { readonly principal: Principal; readonly scope: string } | null;
+  readonly policy?: {
+    readonly principal: Principal;
+    readonly scope: string;
+    readonly showLowLevelTools?: boolean;
+  } | null;
 }
 
 const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
@@ -195,6 +219,7 @@ export function createMcpServerFactory(
   tools: readonly McpToolProvider[],
   log: FastifyBaseLogger,
   access?: McpAccessControl,
+  resources: readonly McpResourceProvider[] = [],
 ): McpServerFactory {
   // Validate names once at start-up rather than on the first request.
   registerTools({ registerTool: () => undefined as never }, { tools, log });
@@ -202,8 +227,22 @@ export function createMcpServerFactory(
   return (ctx) => {
     const server = new McpServer(
       { name: info.name, version: info.version },
-      { capabilities: { tools: {} }, ...(info.instructions ? { instructions: info.instructions } : {}) },
+      {
+        capabilities: { tools: {}, ...(resources.length > 0 ? { resources: {} } : {}) },
+        ...(info.instructions ? { instructions: info.instructions } : {}),
+      },
     );
+    const addResources = (target: McpServer) => {
+      for (const r of resources) {
+        target.registerResource(
+          r.name,
+          r.uri,
+          { title: r.title, description: r.description, mimeType: r.mimeType },
+          (uri) => ({ contents: [{ uri: uri.href, mimeType: r.mimeType, text: r.read() }] }),
+        );
+      }
+    };
+    addResources(server);
     if (!access) {
       registerTools(server, { tools, log });
       return server;
@@ -211,8 +250,11 @@ export function createMcpServerFactory(
     // Per request, so a scope change shows in the very next tools/list. Unknown callers see read tools only.
     const caller = ctx?.authInfo?.extra?.caller as CallerIdentity | undefined;
     const policy = access.resolve(caller) ?? null;
+    const showLow = policy?.showLowLevelTools === true;
     const visible = new Set(
-      tools.filter((t) => toolVisible(toolAccess(t), policy?.scope)).map((t) => t.name),
+      tools
+        .filter((t) => toolVisible(toolAccess(t), policy?.scope) && (t.lowLevel !== true || showLow))
+        .map((t) => t.name),
     );
     // Every tool is registered, so a direct call to a hidden write tool gets the clear read-only refusal (from
     // registerTools) rather than "not found"; tools/list then shows only the visible ones.
@@ -228,9 +270,13 @@ export function createMcpServerFactory(
     }
     const strict = new McpServer(
       { name: info.name, version: info.version },
-      { capabilities: { tools: {} }, ...(info.instructions ? { instructions: info.instructions } : {}) },
+      {
+        capabilities: { tools: {}, ...(resources.length > 0 ? { resources: {} } : {}) },
+        ...(info.instructions ? { instructions: info.instructions } : {}),
+      },
     );
     registerTools(strict, { tools: tools.filter((t) => visible.has(t.name)), log, policy });
+    addResources(strict);
     return strict;
   };
 }

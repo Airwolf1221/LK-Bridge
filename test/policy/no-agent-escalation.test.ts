@@ -81,6 +81,8 @@ interface Target {
 
 async function attack(t: Target): Promise<string[]> {
   const profile = t.policy.commands.createProfile('owner', { label: 'agent', kind: 'other', scope: 'write' });
+  // v2 B2: the low-level tools are hidden by default; the attacker is shown every tool so every one is attacked.
+  t.policy.commands.setShowLowLevelTools('owner', profile.id, true);
   const victim = t.policy.commands.createProfile('owner', { label: 'victim', kind: 'other', scope: 'read' });
   const { token, pat } = t.pats.create({ name: 'agent', profileId: profile.id });
   const other = t.pats.create({ name: 'other', profileId: victim.id });
