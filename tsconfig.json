@@ -16,8 +16,10 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "types": ["node"],
-    "noEmit": true
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true
   },
-  "include": ["src", "scripts", "test", "vitest.config.ts", "vitest.sandbox.config.ts"],
+  "include": ["src", "scripts", "test", "deploy/*.mjs", "vitest.config.ts", "vitest.sandbox.config.ts"],
   "exclude": ["ui", "test/ui"]
 }

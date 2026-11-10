@@ -24,6 +24,7 @@
     "start": "node dist/server.js",
     "dev": "tsx src/server.ts",
     "db:migrate": "node dist/db/migrate.js",
+    "config:check": "node dist/config/check.js",
     "setup:owner": "node dist/auth/cli/setup-owner.js",
     "pat": "node dist/auth/cli/pat.js",
     "projects": "node dist/projects/cli.js",

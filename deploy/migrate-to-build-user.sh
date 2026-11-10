@@ -263,9 +263,10 @@ fi
 
 [[ -d "$LKB_BIN_DIR" && "$(owner_of "$LKB_BIN_DIR")" == root && "$(mode_of "$LKB_BIN_DIR")" == 755 ]] \
   || act "${LKB_BIN_DIR}: root:root 0755 (the deploy script runs from here, as root)" install -d -o root -g root -m 0755 "$LKB_BIN_DIR"
-for f in deploy.sh lib.sh; do
+for f in deploy.sh lib.sh env-sync.sh env-sync.mjs; do
+  [[ -f "${LKB_APP_DIR}/deploy/${f}" ]] || continue # env-sync (OPS1) is in releases from OPS1 on
   want_mode=0755
-  [[ "$f" == lib.sh ]] && want_mode=0644
+  [[ "$f" == lib.sh || "$f" == env-sync.mjs ]] && want_mode=0644
   if ! cmp -s "${LKB_APP_DIR}/deploy/${f}" "${LKB_BIN_DIR}/${f}" 2>/dev/null \
     || [[ "$(owner_of "${LKB_BIN_DIR}/${f}")" != root || "$(mode_of "${LKB_BIN_DIR}/${f}")" != "${want_mode#0}" ]]; then
     act "install ${LKB_BIN_DIR}/${f} (root, ${want_mode}) from commit ${head_sha:0:12}" \
