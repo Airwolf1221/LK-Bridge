@@ -98,7 +98,14 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- sandbox
 sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- list
 ```
 
-The scripts then take `--project test` and refuse any project not marked (`deploy/sandbox-test.sh`, `deploy/soak-sandbox.sh`, `deploy/spike-v2.sh`; [runbook-deploy.md](runbook-deploy.md)). Never mark Arkona.
+The scripts then take `--project test` and refuse any project not marked (`deploy/sandbox-test.sh`, `deploy/soak-sandbox.sh`, `deploy/spike-v2.sh`, `deploy/markdown-roundtrip.sh`; [runbook-deploy.md](runbook-deploy.md)). Never mark Arkona.
+
+They find the project's key exactly as the bridge does: the key in the encrypted store (opened with `SECRETS_MASTER_KEY`
+from the env file); only when nothing is stored for the project, the env file's `LK_PROJECT_<NAME>_API_KEY`; never the
+env file's key in place of a stored key that cannot be opened. So they keep working after
+`env-sync.sh --retire-imported-keys`. A project with a key in neither place is refused, with a pointer to the
+**Projects** page. The wrappers export only `DB_PATH` and the env file's path, and the scripts read just the names they
+need from that file ([ADR 0030](adr/0030-sandbox-scripts-find-keys-as-the-bridge-does.md)).
 
 ## Project settings
 

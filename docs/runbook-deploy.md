@@ -445,9 +445,12 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- sandbox
 sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
 ```
 
-The wrapper reads just that project's key variable (`LK_PROJECT_TEST_API_KEY`) and `DB_PATH` from the env file, exports
-only those, and prints neither. The suite refuses a project that is not marked as a sandbox, and a key whose own project
-(from `listProjects`) is not that project's stored id.
+The suite finds the project's key exactly as the bridge does (OPS2): the key kept in the bridge's encrypted store,
+opened with `SECRETS_MASTER_KEY` from the env file, or, only when nothing is stored for the project, the env file's
+`LK_PROJECT_TEST_API_KEY`. So it works after `env-sync.sh --retire-imported-keys` has commented the key lines out. The
+wrapper exports only `DB_PATH` and the env file's path, never a key, and nothing prints one. The suite refuses a project
+that is not marked as a sandbox, one with a key in neither place (add it on the dashboard's **Projects** page), and a key
+whose own project (from `listProjects`) is not that project's stored id.
 
 It uses its own temporary database, not the production one, and does not need the service stopped. Read the report at the
 end (PASS / FAIL / INCONCLUSIVE / SKIPPED per item; see `test/sandbox/README.md`). Keep the output for chunk 8's review.
@@ -758,7 +761,8 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh --project test       
 
 - `--project` names a project the bridge serves **and that is marked as a sandbox** (step 12: `npm run projects -- sandbox
 test on`); the soak refuses any other, and any key whose own project (from `listProjects`) is not that project's stored
-  id. The wrapper reads only that project's key variable and `DB_PATH`, and prints neither. Note (ADR 0020): this and
+  id. The key is found as for step 12 (the encrypted store first, the env file's key only when nothing is stored); the
+  wrapper exports only `DB_PATH` and the env file's path, and nothing prints a key. Note (ADR 0020): this and
   `sandbox-test.sh` still run Vitest and tsx (development tools) as `lkbridge`, which can read the whole env file; run them
   only when you mean to.
 - The bridge serves the same project with the same key, so the soak and the bridge share that project's rate budget: run
@@ -771,7 +775,8 @@ test on`); the soak refuses any other, and any key whose own project (from `list
 - The report: total time, the write phase and **writes per minute** achieved, HTTP responses by status, **429 responses
   (target 0)**, retries, budget waits, job steps succeeded or failed, **peak memory** (RSS, V8 heap, buffers) and the
   clean-up. Exit code 0 means PASS (no 429, no failed step, cleaned up). Keep the output for the next review.
-- Without the wrapper: `DB_PATH=… LK_PROJECT_TEST_API_KEY=… npm run soak:sandbox -- --project test --writes 100` (from a
+- Without the wrapper: `DB_PATH=… LK_PROJECT_TEST_API_KEY=… npm run soak:sandbox -- --project test --writes 100`, or
+  `LKB_ENV_FILE=<env file>` in place of the key to find it as the bridge does (from a
   checkout with dependencies installed and a database that has the project marked as a sandbox; never on a shared
   screen).
 
@@ -791,8 +796,8 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/spike-v2.sh --project test
 ```
 
 - `--project` names a project marked as a sandbox, as for the soak (step 12); it **refuses** any other, and any key whose
-  own project is not that project's stored id. The wrapper reads only that project's key variable and `DB_PATH`, and
-  prints neither. It shares that project's rate budget with the bridge (its reads run at the lowest priority, but run it
+  own project is not that project's stored id. The key is found as for step 12 (the encrypted store first); nothing
+  prints it. It shares that project's rate budget with the bridge (its reads run at the lowest priority, but run it
   while the bridge is quiet).
 - **What it writes:** the report on screen (stdout; progress is on stderr), and the same report to
   `/var/lib/lk-bridge/spike/spike-v2-<timestamp>.md`, with the calendar oracle beside it as

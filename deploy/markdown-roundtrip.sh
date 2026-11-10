@@ -9,7 +9,8 @@
 #
 # Every other argument goes to the script (see `npm run roundtrip -- --help`).
 #
-# Like spike-v2.sh: it reads just that project's key variable and DB_PATH, exports only those, and prints neither. The
+# Like spike-v2.sh: it exports only DB_PATH and the env file's path and reads no key; the script finds the project's key
+# as the bridge does (its encrypted store first, the env file's key only when nothing is stored) and prints none. The
 # script refuses any project not registered as a sandbox in the bridge's database (`npm run projects -- sandbox <name>
 # on`), and any key whose own project is not exactly that one; it sends only reads (listProjects, listResources,
 # getDocumentBlocks: about one per page) at the lowest priority, and uses its own temporary database. It draws on the
