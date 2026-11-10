@@ -24,6 +24,13 @@ function plan(template: string, live: string, extra: Partial<Parameters<typeof p
   return p;
 }
 
+/** The planner's refusal message (fails the test when it does not refuse). */
+function refusal(o: Parameters<typeof planSync>[0]): string {
+  const r = planSync(o);
+  if (!('error' in r)) throw new Error('expected a refusal');
+  return r.error;
+}
+
 describe('parseTemplate', () => {
   it('reads the shipped template with no errors, one marker per variable', () => {
     const t = parseTemplate(shipped);
@@ -278,16 +285,16 @@ describe('planSync: retiring imported keys (OPS2)', () => {
   });
 
   it('refuses any other name, and the single-project form', () => {
-    expect(planSync({ template: shipped, live, retireEqual: ['SESSION_SECRET'] })).toEqual({
-      error: expect.stringMatching(/refusing to retire: SESSION_SECRET cannot be retired/),
-    });
+    expect(refusal({ template: shipped, live, retireEqual: ['SESSION_SECRET'] })).toMatch(
+      /refusing to retire: SESSION_SECRET cannot be retired/,
+    );
     expect(
-      planSync({
+      refusal({
         template: shipped,
         live: `LK_API_KEY=${KEY}\nLK_PROJECT_ID=p\n`,
         retireEqual: ['OWNER_PASSWORD_HASH'],
       }),
-    ).toEqual({ error: expect.stringMatching(/single-project form/) });
+    ).toMatch(/single-project form/);
   });
 });
 
@@ -310,16 +317,16 @@ describe('planSync: rotating the master key (OPS2)', () => {
   });
 
   it('refuses without a master key, or with two', () => {
-    expect(planSync({ template: shipped, live: 'PORT=1\n', rotateMasterKey: true })).toEqual({
-      error: expect.stringMatching(/nothing to rotate/),
-    });
+    expect(refusal({ template: shipped, live: 'PORT=1\n', rotateMasterKey: true })).toMatch(
+      /nothing to rotate/,
+    );
     expect(
-      planSync({
+      refusal({
         template: shipped,
         live: `SECRETS_MASTER_KEY=${OLD}\nSECRETS_MASTER_KEY=${OLD}\n`,
         rotateMasterKey: true,
       }),
-    ).toEqual({ error: expect.stringMatching(/set more than once/) });
+    ).toMatch(/set more than once/);
   });
 });
 

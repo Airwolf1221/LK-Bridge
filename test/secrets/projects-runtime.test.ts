@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-call -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return -- parsed JSON replies in tests */
 /**
  * OPS2: projects managed on the dashboard, at runtime, without a restart. A project is added by pasting its key (checked
  * with LegendKeeper first, confirmed, then stored encrypted and served by a new governor at once); a key is replaced only

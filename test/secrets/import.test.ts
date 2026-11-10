@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-return -- parsed JSON replies in tests */
 /**
  * OPS2: the first start after this release, and every start after. Keys and the owner's credentials found in the env
  * file are imported into the encrypted store once (logged and audited by name only); after that the stored value wins
@@ -31,7 +31,7 @@ function dbPath(): string {
 
 async function boot(o: {
   path: string;
-  master: string | '';
+  master: string;
   keys: Record<string, string>;
   extraKeys?: Record<string, string[]>;
   env?: Record<string, string>;

@@ -24,6 +24,8 @@ export interface SessionInfo {
   logoutPath: string;
   version: string;
   publicUrl: string;
+  /** OPS2: whether sign-in (and re-authentication) asks for an authenticator code. */
+  totpEnabled?: boolean;
 }
 
 export interface Controls {
@@ -40,7 +42,7 @@ export interface Controls {
 
 // ------------------------------------------------------------------------------------------- projects (v2 A1)
 
-export type ProjectStatus = 'verifying' | 'active' | 'unverified' | 'stopped' | 'not_configured';
+export type ProjectStatus = 'verifying' | 'active' | 'unverified' | 'stopped' | 'not_configured' | 'archived';
 
 /** The project a scoped response is about. */
 export interface ProjectRef {
@@ -75,6 +77,56 @@ export interface ProjectInfo {
   checkedAt: number | null;
   settings: Record<string, unknown>;
   settingsProblem: string | null;
+  /** OPS2: where the key in use comes from: the encrypted store, the env file, or nowhere. */
+  keySource?: 'store' | 'env' | null;
+  /** OPS2: the last four characters of the key in use (all that is ever shown of a key). */
+  keyHint?: string | null;
+  /** OPS2: the env file holds another key than the store; the stored one is used. */
+  keyConflict?: string | null;
+  /** OPS2: paused and draining before removal. */
+  draining?: boolean;
+  /** OPS2: removed on the dashboard; its history is kept, read-only. */
+  archived?: boolean;
+  archivedAt?: number | null;
+  /** OPS2: what keeps it from being removed now. */
+  pending?: { jobs: number; proposals: number };
+}
+
+/** OPS2: what a key check found (nothing is stored until the owner confirms). Never the key. */
+export interface KeyCheck {
+  checkId: string;
+  kind: 'add' | 'replace';
+  name: string;
+  lkProjectId: string;
+  lkProjectName: string | null;
+  role: 'ADMIN' | 'MEMBER' | 'unknown';
+  keyHint: string;
+  expiresAt: number;
+}
+
+/** OPS2: the owner's account (GET /security). */
+export interface SecurityInfo {
+  username: string;
+  password: { source: 'store' | 'env' | null; problem: string | null };
+  totp: {
+    enabled: boolean;
+    source: 'store' | 'env' | null;
+    problem: string | null;
+    recoveryCodesLeft: number;
+    enrolmentPending: boolean;
+  };
+  reauth: { until: number | null; windowSeconds: number };
+  store: {
+    available: boolean;
+    problem: string | null;
+    keyId: string | null;
+    stored: number;
+    unreadable: number;
+    underPrevious: number;
+  };
+  canManageKeys: boolean;
+  warnings: string[];
+  keyConflicts: { project: string; message: string }[];
 }
 
 export interface ProjectSettingKey {
@@ -95,6 +147,10 @@ export interface ProjectsResponse {
   singleProjectForm: boolean;
   settingKeys: ProjectSettingKey[];
   projects: ProjectInfo[];
+  /** OPS2: keys can be added and replaced here (the encrypted store has its master key). */
+  canManageKeys?: boolean;
+  /** OPS2: start-up notes about the env file's project lines. */
+  notes?: string[];
 }
 
 /** Every project's status, as the Overview lists it. */
@@ -168,6 +224,13 @@ export interface Overview {
   writes: { state: 'running' | 'paused' | 'draining'; perMinute: number };
   /** Null when the project has no governor now (its key is not in use). */
   budget: { queues: Record<PriorityClass, number>; gauges: TierSnapshot[] } | null;
+  /** OPS2: the owner's sign-in and the secret store. */
+  security?: {
+    totpEnabled: boolean;
+    canManageKeys: boolean;
+    storeProblem: string | null;
+    warnings: string[];
+  };
 }
 
 export interface JobOrigin {

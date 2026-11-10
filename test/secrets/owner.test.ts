@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
 /**
  * OPS2: the owner's account on the dashboard. Re-authentication for sensitive actions (needed, expiring after five
  * minutes, rate-limited like sign-in, CSRF and Origin enforced); the password change (current password required, other

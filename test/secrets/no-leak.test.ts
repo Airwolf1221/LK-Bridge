@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- parsed JSON replies in tests */
 /**
  * OPS2: no secret ever leaves the bridge except where it must, once. One run does everything this release adds (import,
  * add, replace and remove a project, a refused key, a failed re-authentication, the password change, the authenticator
@@ -21,7 +21,11 @@ let m: Managed;
 let stream: SseConnection;
 const responses: { path: string; text: string }[] = [];
 const shownOnce: { path: string; text: string }[] = [];
-const secrets: Record<string, string> = {};
+const secrets: Record<string, string> & { totp: string; password: string; recoveryNew0: string } = {
+  totp: '',
+  password: '',
+  recoveryNew0: '',
+};
 
 const now = () => Math.floor(Date.now() / 1000);
 

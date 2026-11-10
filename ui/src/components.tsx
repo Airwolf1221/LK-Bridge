@@ -113,7 +113,8 @@ export function useAction() {
         if (okText) toast('ok', okText);
         return r;
       } catch (e) {
-        if (!(e instanceof ApiError && e.status === 401))
+        // A 401 sends the page to sign-in; a cancelled re-authentication (OPS2) is the owner's own choice.
+        if (!(e instanceof ApiError && (e.status === 401 || e.code === 'REAUTH_CANCELLED')))
           toast('error', e instanceof Error ? e.message : String(e));
         return undefined;
       } finally {
@@ -165,6 +166,7 @@ const PROJECT_STATUS_TONE: Record<string, 'neutral' | 'ok' | 'warn' | 'bad' | 'i
   unverified: 'warn',
   stopped: 'bad',
   not_configured: 'warn',
+  archived: 'neutral',
 };
 /** A project's status (v2 A1): active, checking its key, not verified, stopped, no key configured. */
 export const ProjectStatusBadge = ({ status }: { status: string }) => (

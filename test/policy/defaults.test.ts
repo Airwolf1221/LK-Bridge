@@ -53,8 +53,8 @@ describe('migration 0300', () => {
     ).run();
     // Chunk 6 added migration 0400, chunk 8 0201, v1.0.1 0500, v1.0.2 0101, v2 A2 0700 and v2 A1 0600 (which needs no project id
     // here: this database holds no LegendKeeper data); the point here is that 0300 is applied on top of an older
-    // database.
-    expect(runMigrations(db).applied).toEqual([
+    // database. (Later releases add more after these: OPS2's 1000, for one.)
+    expect(runMigrations(db).applied.slice(0, 7)).toEqual([
       '0101_client_assertion_jti.sql',
       '0201_journal_every_write.sql',
       '0300_policy_init.sql',

@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
 /**
  * OPS2 harness: the REAL bridge (`createBridge` through the dashboard harness) in front of several mock LegendKeeper
  * projects behind one URL. Unlike v2 A1's front, a project here may answer to more than one key (so a key can be

@@ -122,7 +122,7 @@ function main(argv: readonly string[]): number {
   const dbPath = env.DB_PATH || './data/bridge.db';
   let db: Db | undefined;
   try {
-    if (existsSync(dbPath)) db = new Database(dbPath, { readonly: true, fileMustExist: true }) as Db;
+    if (existsSync(dbPath)) db = new Database(dbPath, { readonly: true, fileMustExist: true });
   } catch {
     process.stderr.write('env-tool: cannot open the database read-only\n');
     return 2;
