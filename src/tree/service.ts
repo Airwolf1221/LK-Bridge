@@ -37,7 +37,7 @@ import {
   treeSettingsFrom,
   type TreeSettings,
 } from './classify.js';
-import { TreeStore, type ApplyContext } from './store.js';
+import { TreeStore, type ApplyContext, type PendingRow } from './store.js';
 import { TreeQueries } from './queries.js';
 import {
   ACTIVE_PASS_STATUSES,
@@ -159,6 +159,7 @@ export class TreeService {
     const off = this.o.engine.observeWrites({
       beforeWrite: (info) => this.beforeWrite(info),
       afterWrite: (r) => this.afterWrite(r),
+      flushDeferred: (info) => this.flushDeferred(info),
     });
     this.detach = off;
     return () => {
@@ -996,6 +997,13 @@ export class TreeService {
       if (pending) this.store.deletePending(pending.id);
       return;
     }
+    // v2 C2a: a step marked `deferTreeReread` (one of several writes to one page in a job) is re-read once, when its job
+    // finishes (`flushDeferred`). Its row stays owed meanwhile, so a crash or a job that never finishes is still caught
+    // by the retry loop.
+    if (r.options?.deferTreeReread === true && pending) {
+      this.scheduleRetries(RETRY_FIRST_MS);
+      return;
+    }
     const ids = targetIds(r.opId, r.params, r.value);
     // While the job re-reads, the retry loop leaves this step's row alone (it would re-read the same thing).
     if (pending) this.rereading.add(pending.id);
@@ -1019,6 +1027,51 @@ export class TreeService {
         this.scheduleRetries(RETRY_FIRST_MS); // a failed re-read is now the retry loop's
       }
     }
+  }
+
+  /**
+   * v2 C2a: the re-reads a job's `deferTreeReread` steps left owed, made now, in the job: one re-read per distinct set of
+   * pages (a set_facts job's writes all name the same page, so one getResource). A failure is handled as any re-read's
+   * (the node is marked stale, the row retried).
+   */
+  private async flushDeferred(info: {
+    readonly projectId: string;
+    readonly jobId: string;
+    readonly priority: PriorityClass;
+    readonly signal: AbortSignal;
+  }): Promise<void> {
+    const rows = this.store
+      .pending(info.projectId)
+      .filter((p) => p.job_id === info.jobId && p.status === 'in_flight' && !this.rereading.has(p.id));
+    if (rows.length === 0) return;
+    const groups = new Map<string, PendingRow[]>();
+    for (const r of rows) {
+      const key = `${r.resource_ids}|${r.flags}`;
+      groups.set(key, [...(groups.get(key) ?? []), r]);
+    }
+    for (const group of groups.values()) {
+      const first = group[0]!;
+      for (const g of group) this.rereading.add(g.id);
+      try {
+        const ok = await this.reread(
+          info.projectId,
+          first.op,
+          parseIds(first.resource_ids),
+          parseFlags(first.flags),
+          {
+            priority: info.priority,
+            jobId: info.jobId,
+            signal: info.signal,
+            waitForBudget: false,
+            pendingId: first.id,
+          },
+        );
+        if (ok) for (const g of group) this.store.deletePending(g.id);
+      } finally {
+        for (const g of group) this.rereading.delete(g.id);
+      }
+    }
+    this.scheduleRetries(RETRY_FIRST_MS);
   }
 
   /**

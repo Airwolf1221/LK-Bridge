@@ -444,6 +444,54 @@ export interface Proposal {
   opCount: number;
   /** v2 C1: the high-level operation, briefly (write_page: page, document, mode, section…), or null. */
   operation?: ProposalOperationBrief | null;
+  /** v2 C2a: the change touches protected canon: only "Approve and accept as canon" can approve it. */
+  requiresCanonicalApproval?: boolean;
+  canonicalApprovedBy?: string | null;
+  canonicalApprovedAt?: number | null;
+  /** v2 C2a: the page-level summary, one plain line per page. */
+  pages?: string[];
+}
+
+/** v2 C2a: one line of a proposal's page-level summary. */
+export interface PageSummaryEntry {
+  resourceId: string | null;
+  page: string;
+  isNew: boolean;
+  parts: string[];
+  label: string;
+}
+
+/** v2 C2a: a protected canonical change, as the guard describes it. */
+export interface ProtectedChange {
+  ruleId?: string;
+  key?: string;
+  direction?: 'to' | 'from' | 'change';
+  value?: string;
+  before?: string[];
+  after?: string[];
+  page?: string;
+  text?: string;
+  unchecked?: string;
+}
+
+/** v2 C2a: set_facts' high-level operation, as a proposal keeps it. */
+export interface FactsOperation {
+  tool: 'set_facts';
+  page?: { id: string; name: string; path?: string };
+  property?: string;
+  pageParts?: string[];
+  facts?: { key: string; before: string | null; after: string | null; change: string }[];
+  rowsBefore?: { key: string; value: string }[];
+  rowsAfter?: { key: string; value: string }[];
+  links?: {
+    title: string;
+    added: { name: string; document?: string }[];
+    removed: { name: string; document?: string }[];
+    alreadyLinked: { name: string; document?: string }[];
+    notLinked: { name: string; document?: string }[];
+    filtered?: boolean;
+  }[];
+  notes?: string[];
 }
 
 /** v2 C1: what a high-level tool proposed (write_page). */
@@ -500,6 +548,30 @@ export interface ProposalDetail extends Proposal {
   markdownDiff?: MarkdownDiff | null;
   /** v2 C1: what the read after the approved write found. */
   execution?: { verified: boolean | null; verification: unknown } | null;
+  /** v2 C2a: every high-level operation (C1's operationDetail is the first). */
+  operations?: (Record<string, unknown> & { tool?: string })[];
+  /** v2 C2a: the operations grouped by the page they affect. */
+  pageSummary?: PageSummaryEntry[];
+  /** v2 C2a: the protected changes, when the proposal needs canonical approval. */
+  canonical?: { reason: string; changes: ProtectedChange[] } | null;
+}
+
+/** v2 C2a: a project's protected canonical facts rules. */
+export interface CanonRule {
+  id: string;
+  key: string;
+  kind: 'value' | 'change';
+  values?: string[];
+  note?: string;
+}
+
+export interface CanonConfig {
+  project: string;
+  rules: CanonRule[];
+  defaults: boolean;
+  agentDefaultStatus: string;
+  problem: string | null;
+  defaultRules: CanonRule[];
 }
 
 export interface ProposalCounts {

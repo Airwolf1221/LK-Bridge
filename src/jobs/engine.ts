@@ -40,17 +40,34 @@ import { callOp, isNotFound, newCallStats } from './lk-call.js';
 import { LockManager } from './locks.js';
 import { opMeta } from './op-meta.js';
 import {
+  EXPECT_STEP,
+  internalPolicyMeta,
+  internalReads,
+  internalStepIssues,
+  isInternalStep,
+} from './internal-steps.js';
+import type { WriteGuard } from './write-guard.js';
+import {
   ALLOW_ALL_GATE,
   DENY_PROPOSALS_SINK,
   policyOpMeta,
   type PolicyDecision,
   type PolicyGate,
+  type PolicyOpMeta,
+  type ProposalJobOptions,
   type ProposalMeta,
   type ProposalSink,
   type ProposedOp,
 } from './policy.js';
 import { createJobQueries, JobsRepo, type ErrorInput, type NewStep } from './repo.js';
-import { StepExecutor, type StepOutcome, type WriteHold, type WriteVerification } from './step-exec.js';
+import {
+  StepExecutor,
+  lockKeyFor,
+  projectLockKey,
+  type StepOutcome,
+  type WriteHold,
+  type WriteVerification,
+} from './step-exec.js';
 import type { StepPlanner, StepPlanners } from './planners.js';
 import {
   SYSTEM_PRINCIPAL,
@@ -109,6 +126,8 @@ export interface CreateJobEngineOptions {
   readonly customSteps?: CustomStepHandlers;
   /** v2 C1: in-lock planners by name (src/jobs/planners.ts); more can be added with `registerPlanner`. */
   readonly planners?: StepPlanners;
+  /** v2 C2a: the write guard (the protected canonical facts); can also be set later with `setWriteGuard`. */
+  readonly writeGuard?: WriteGuard;
 }
 
 const SETTING = {
@@ -131,9 +150,29 @@ interface RunnerResult {
 }
 
 interface PreparedStep {
-  readonly def: OperationDef;
+  readonly def: OperationDef | null;
   readonly step: NewStep;
 }
+
+/** One operation put to the policy gate and the write guard (a registry operation, or one of the bridge's own steps). */
+interface AuthItem {
+  readonly opId: string;
+  readonly def: OperationDef | null;
+  readonly meta: PolicyOpMeta;
+  readonly params: OpParams;
+  readonly options: StepOptions;
+}
+
+const authItem = (def: OperationDef, params: OpParams, options: StepOptions): AuthItem => ({
+  opId: def.operationId,
+  def,
+  meta: policyOpMeta(def, options),
+  params,
+  options,
+});
+
+/** A job-level lock (`BatchSubmit.holdLock`), stored in the job's options. */
+const HELD_LOCK = 'heldLock';
 
 export class JobEngine {
   readonly events = new JobEventEmitter();
@@ -160,6 +199,8 @@ export class JobEngine {
   private readonly writeObservers = new Set<WriteObserver>();
   /** v2 C1: in-lock planners (write_page's section re-plan), by name. */
   private readonly planners = new Map<string, StepPlanner>();
+  /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
+  private writeGuard: WriteGuard | undefined;
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -202,8 +243,10 @@ export class JobEngine {
       customSteps: o.customSteps,
       planner: (name) => this.planners.get(name),
       recordVerifyMismatch: (job, step, v) => this.recordVerifyMismatch(job, step, v),
+      writeGuard: () => this.writeGuard,
     });
     for (const [name, fn] of Object.entries(o.planners ?? {})) this.planners.set(name, fn);
+    this.writeGuard = o.writeGuard;
     const base = createJobQueries(o.db);
     this.queries = {
       ...base,
@@ -271,7 +314,7 @@ export class JobEngine {
     const origin = normaliseOrigin(opts.origin);
     const title = opts.title ?? def.operationId;
     const priority = opts.priority ?? 'P1';
-    const proposal = await this.authorize([{ def, params, options }], origin, 'single_op', project, {
+    const proposal = await this.authorize([authItem(def, params, options)], origin, 'single_op', project, {
       title,
       priority,
       ...(opts.proposal ? { extras: opts.proposal } : {}),
@@ -380,6 +423,17 @@ export class JobEngine {
     };
   }
 
+  /**
+   * v2 C2a: sets the write guard (src/jobs/write-guard.ts), asked about every request at entry and before every write
+   * step inside its lock. Returns an unregister.
+   */
+  setWriteGuard(guard: WriteGuard): () => void {
+    this.writeGuard = guard;
+    return () => {
+      if (this.writeGuard === guard) this.writeGuard = undefined;
+    };
+  }
+
   /** A page write that did not land as planned: an error row with the job, so it shows on the Errors page. */
   private recordVerifyMismatch(job: JobView, step: StepView, v: WriteVerification): void {
     const first = v.differences?.[0];
@@ -390,9 +444,13 @@ export class JobEngine {
       stepNo: step.stepNo,
       code: 'VERIFY_MISMATCH',
       message:
-        `written but not as planned: the document read back after the write differs from what was sent ` +
-        `(${v.differenceCount ?? v.differences?.length ?? 0} difference(s)${first ? `, first at blocks${first.path}` : ''}). ` +
-        `The write was not retried. Its journal entry ${v.journalId ?? '(unknown)'} holds the page as it was before.`,
+        step.opId === 'replaceDocumentBlocks'
+          ? `written but not as planned: the document read back after the write differs from what was sent ` +
+            `(${v.differenceCount ?? v.differences?.length ?? 0} difference(s)${first ? `, first at blocks${first.path}` : ''}). ` +
+            `The write was not retried. Its journal entry ${v.journalId ?? '(unknown)'} holds the page as it was before.`
+          : `written but not as planned: what was read back after the job's writes differs from the plan ` +
+            `(${v.differenceCount ?? v.differences?.length ?? 0} difference(s)${first ? `, first at ${first.path}` : ''}). ` +
+            `Nothing was retried. The job's journal entries hold what each write changed.`,
       retryable: false,
       classification: 'conflict',
       detail: { ...v },
@@ -472,7 +530,21 @@ export class JobEngine {
       opId: step.opId,
       params,
       priority: job.priority,
+      options: step.options,
     };
+  }
+
+  /** v2 C2a: the observers re-read now what the job's `deferTreeReread` steps changed (awaited, inside the job). */
+  private async flushDeferred(job: JobView, signal: AbortSignal): Promise<void> {
+    if (this.writeObservers.size === 0) return;
+    if (!this.repo.steps(job.id).some((s) => s.options.deferTreeReread === true)) return;
+    for (const o of [...this.writeObservers]) {
+      try {
+        await o.flushDeferred?.({ projectId: job.projectId, jobId: job.id, priority: job.priority, signal });
+      } catch (e) {
+        this.log.warn({ err: e, jobId: job.id }, 'a write observer failed');
+      }
+    }
   }
 
   private notifyBeforeWrite(info: WriteStepInfo | null): void {
@@ -523,10 +595,22 @@ export class JobEngine {
     if (req.steps.length === 0)
       throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
     const origin = normaliseOrigin(req.origin);
-    const validated = req.steps.map((s: StepSpec, i) => {
+    const validated: AuthItem[] = req.steps.map((s: StepSpec, i) => {
       const params = s.params ?? {};
+      const options = stepOptions(s);
+      // v2 C2a: the bridge's own check and verify steps, only when bridge code asks for them (never lk_api_batch).
+      if (req.internal === true && isInternalStep(s.op)) {
+        const issues = internalStepIssues(s.op, params);
+        if (issues.length > 0) {
+          throw new InvalidParamsError(
+            s.op,
+            issues.map((x) => ({ path: `steps[${i}].${x.path}`, message: x.message })),
+          );
+        }
+        return { opId: s.op, def: null, meta: internalPolicyMeta(s.op, options), params, options };
+      }
       try {
-        return { def: this.validate(s.op, params), params, options: stepOptions(s) };
+        return authItem(this.validate(s.op, params), params, options);
       } catch (e) {
         if (e instanceof InvalidParamsError) {
           throw new InvalidParamsError(
@@ -537,30 +621,72 @@ export class JobEngine {
         throw e;
       }
     });
+    // v2 C2a: a job-level lock covers every write step: each must take that same lock (or none).
+    const heldLock = req.holdLock ? projectLockKey(project, `res:${req.holdLock.resourceId}`) : null;
+    if (heldLock) {
+      validated.forEach((v, i) => {
+        if (!v.def || v.def.kind === 'read') return;
+        const key = projectLockKey(project, lockKeyFor(v.def, v.params));
+        if (key !== null && key !== heldLock) {
+          throw new InvalidParamsError(v.opId, [
+            {
+              path: `steps[${i}]`,
+              message: `takes lock ${key}, but the job holds ${heldLock}: a job-level lock must cover every write`,
+            },
+          ]);
+        }
+      });
+    }
     const priority = req.priority ?? 'P2';
     const onError: OnError = req.onError ?? 'stop';
     const title = req.title ?? `batch of ${validated.length} operation(s)`;
+    const jobOptions: ProposalJobOptions | undefined =
+      req.holdLock || req.internal
+        ? {
+            ...(req.holdLock ? { holdLock: { resourceId: req.holdLock.resourceId } } : {}),
+            ...(req.internal ? { internal: true } : {}),
+          }
+        : undefined;
     // Every step is put to the policy gate before anything is queued: one deny denies the batch, one propose
     // turns the whole batch into one proposal.
     const proposal = await this.authorize(validated, origin, 'batch_ops', project, {
       title,
       priority,
       onError,
+      ...(req.proposal ? { extras: req.proposal } : {}),
+      ...(jobOptions ? { jobOptions } : {}),
     });
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
     const guard = this.guardContext(project);
-    for (const v of validated) checkSubmitGuards(v.def, v.params, v.options, guard);
-    const prepared = validated.map((v) => this.prepare(v.def, v.params, v.options));
-    const job = this.createJob(project, 'batch_ops', title, origin, priority, onError, prepared, 'queued');
+    for (const v of validated) if (v.def) checkSubmitGuards(v.def, v.params, v.options, guard);
+    const prepared = validated.map((v) =>
+      v.def ? this.prepare(v.def, v.params, v.options) : this.prepareInternal(v.opId, v.params, v.options),
+    );
+    const job = this.createJob(
+      project,
+      'batch_ops',
+      title,
+      origin,
+      priority,
+      onError,
+      prepared,
+      'queued',
+      heldLock ? { [HELD_LOCK]: heldLock } : undefined,
+    );
     const estimate = this.estimateFor(
       project,
-      prepared.map((p) => ({ def: p.def, params: p.step.params })),
+      prepared.map((p) => ({ def: p.def, params: p.step.params, opId: p.step.opId })),
       priority,
     );
     this.pump();
-    const held = prepared.some((p) => isWriteOp(p.def)) && this.writeHold(project) !== null;
+    const held = prepared.some((p) => p.def && isWriteOp(p.def)) && this.writeHold(project) !== null;
     return { jobId: job.id, status: job.status, eta: held ? null : this.clock.now() + estimate.wallClockMs };
+  }
+
+  /** v2 C2a: one of the bridge's own steps (a read; no client ids, no idempotency key). */
+  private prepareInternal(opId: string, params: OpParams, options: StepOptions): PreparedStep {
+    return { def: null, step: { opId, opKind: 'read', params, options, clientIds: [], post: false } };
   }
 
   private async submitPaginate(req: PaginateSubmit): Promise<SubmitResult | ProposalCaptured> {
@@ -574,7 +700,7 @@ export class JobEngine {
     }
     const origin = normaliseOrigin(req.origin);
     const title = req.title ?? `${def.operationId}: every page`;
-    const proposal = await this.authorize([{ def, params, options: {} }], origin, 'paginate_all', project, {
+    const proposal = await this.authorize([authItem(def, params, {})], origin, 'paginate_all', project, {
       title,
       priority: req.priority ?? 'P2',
       paginate: {
@@ -641,15 +767,12 @@ export class JobEngine {
     const asset = this.validate('createImageAsset', { body: { uploadKey: 'pending', ...assetBody } });
     const priority = req.priority ?? 'P2';
     const title = req.title ?? `upload image: ${req.name}`;
-    const items = [
-      { def: upload, params: uploadParams, options: {} },
-      { def: asset, params: { body: assetBody } as OpParams, options: {} },
-    ];
+    const items = [authItem(upload, uploadParams, {}), authItem(asset, { body: assetBody }, {})];
     const proposal = await this.authorize(items, origin, 'upload_image', project, { title, priority });
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
     const guard = this.guardContext(project);
-    for (const v of items) checkSubmitGuards(v.def, v.params, v.options, guard);
+    for (const v of items) if (v.def) checkSubmitGuards(v.def, v.params, v.options, guard);
     const steps: Pick<PreparedStep, 'step'>[] = [
       this.prepare(upload, uploadParams, {}),
       {
@@ -710,6 +833,45 @@ export class JobEngine {
       body: { ...body, uploadKey: created.uploadKey },
     });
     return true;
+  }
+
+  /**
+   * v2 C2a: binds `params.ifMatch` of a step with `options.ifMatchFrom` from the stored result of the step it names (a
+   * write's `version`, or the `bridge.expect` step's `versions[key]`), just before it runs. A step that may already have
+   * been sent keeps the version it was sent with (recovery compares with it). Returns the refusal when the version is
+   * missing (nothing is sent then), or null.
+   */
+  private bindIfMatch(job: JobView, step: StepView): JobsError | null {
+    const from = step.options.ifMatchFrom;
+    if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
+    const result =
+      source?.status === 'succeeded'
+        ? (this.repo.stepResult(source) as { version?: unknown; versions?: Record<string, unknown> } | null)
+        : null;
+    const version = from.key !== undefined ? result?.versions?.[from.key] : result?.version;
+    if (typeof version !== 'string' || version === '') {
+      // Nothing to chain from (a delete answers 204, without a version): a step with its own in-step check reads the
+      // state inside the lock instead, compares it with the plan, and sends the version it read.
+      if (step.options.expectCurrent) {
+        const params = this.repo.stepParams(step);
+        if (params.ifMatch !== undefined) {
+          const { ifMatch: _drop, ...rest } = params;
+          this.repo.setStepParams(job.id, step.stepNo, rest);
+        }
+        return null;
+      }
+      return new JobsError(
+        'BRIDGE_ERROR',
+        `${step.opId}: step ${from.step} gave no version${from.key ? ` for ${from.key}` : ''} to chain from; nothing was sent`,
+        ref,
+      );
+    }
+    const params = this.repo.stepParams(step);
+    if (params.ifMatch !== version)
+      this.repo.setStepParams(job.id, step.stepNo, { ...params, ifMatch: version });
+    return null;
   }
 
   /**
@@ -1016,9 +1178,11 @@ export class JobEngine {
       if (this.active.has(job.id)) continue;
       const step = this.repo.nextStep(job.id);
       // A project that is not served now holds every step of its jobs; otherwise only writes can be held.
+      // v2 C2a: the bridge's own check (`bridge.expect`) is the first step of a write and is held like one; otherwise
+      // the job would start, the step would report itself held, and the scheduler would start it again at once.
       const hold: WriteHold | null = !this.projects.client(job.projectId)
         ? 'project_unavailable'
-        : step && step.opKind !== 'read'
+        : step && (step.opKind !== 'read' || step.opId === EXPECT_STEP)
           ? this.writeHold(job.projectId)
           : null;
       if (step && hold) {
@@ -1063,7 +1227,45 @@ export class JobEngine {
     return entry;
   }
 
+  /**
+   * v2 C2a: a job with a job-level lock (`BatchSubmit.holdLock`) takes it before its first step and keeps it until it
+   * stops (finished, or parked for budget, held, paused or cancelled); then runs its steps. Nothing runs without it.
+   */
   private async runJob(jobId: string, entry: Active): Promise<RunnerResult> {
+    const opts = this.repo.jobOptions(jobId);
+    const heldLock = typeof opts[HELD_LOCK] === 'string' ? opts[HELD_LOCK] : null;
+    if (!heldLock) return this.runSteps(jobId, entry, null);
+    const job = this.requireJob(jobId);
+    let release: () => void;
+    try {
+      if (!this.locks.isFree(heldLock)) this.setWaitingLock(jobId, 'lock', { lockKey: heldLock, job: true });
+      release = await this.locks.acquire(
+        heldLock,
+        { jobId, stepNo: 0, principalId: job.principalId },
+        entry.current.signal,
+      );
+      this.setWaitingLock(jobId, null);
+    } catch (e) {
+      this.setWaitingLock(jobId, null);
+      if (!entry.current.signal.aborted) throw e;
+      // Stopped, cancelled or paused while waiting for the lock: nothing ran.
+      const now = this.requireJob(jobId);
+      if (this.stopped) this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
+      else if (now.cancelRequested) this.finishCancelled(jobId);
+      else if (now.pauseRequested) {
+        this.repo.updateJob(jobId, { status: 'paused', pauseRequested: false, currentStep: null });
+        this.emitJob(jobId, 'updated');
+      } else this.repo.updateJob(jobId, { status: 'queued', currentStep: null });
+      return { last: undefined };
+    }
+    try {
+      return await this.runSteps(jobId, entry, heldLock);
+    } finally {
+      release();
+    }
+  }
+
+  private async runSteps(jobId: string, entry: Active, heldLock: string | null): Promise<RunnerResult> {
     let job = this.requireJob(jobId);
     this.repo.updateJob(jobId, {
       status: 'running',
@@ -1081,12 +1283,14 @@ export class JobEngine {
         step = this.repo.nextStep(jobId);
       }
       if (!step) {
+        await this.flushDeferred(job, entry.current.signal);
         this.finish(jobId);
         return { last, values };
       }
       const recovering = step.status === 'running';
       if (!recovering) {
         if (job.cancelRequested) {
+          await this.flushDeferred(job, entry.current.signal);
           this.finishCancelled(jobId);
           return { last, values };
         }
@@ -1104,16 +1308,40 @@ export class JobEngine {
         const denied = await this.recheckPolicy(job, step);
         if (denied) {
           last = { kind: 'failed', error: denied, uncertain: false };
+          await this.flushDeferred(job, entry.current.signal);
           this.stopForPolicy(job, step, denied);
           return { last, values };
         }
       }
       entry.current = new AbortController();
       this.repo.updateJob(jobId, { currentStep: step.stepNo });
+      // v2 C2a: a write that chains its If-Match from an earlier step gets it now (stored before anything is sent).
+      const bound = this.bindIfMatch(job, step);
+      if (bound) {
+        last = { kind: 'failed', error: bound, uncertain: false };
+        this.repo.updateStep(jobId, step.stepNo, {
+          status: 'failed',
+          error: errorToJson(bound),
+          finishedAt: this.clock.now(),
+        });
+        this.emitStep(job, step.stepNo);
+        this.recordStepFailure(job, step.opId, step.stepNo, bound);
+        this.refreshProgress(jobId);
+        this.repo.updateJob(jobId, { lastError: errorToJson(bound) });
+        this.emitJob(jobId, 'updated');
+        if (job.onError === 'stop') {
+          await this.flushDeferred(job, entry.current.signal);
+          this.finish(jobId);
+          return { last, values };
+        }
+        continue;
+      }
+      step = this.repo.step(jobId, step.stepNo) ?? step;
       const writeInfo = this.writeInfo(job, step);
       this.notifyBeforeWrite(writeInfo);
       const outcome = await this.executor.execute(job, step, entry.current.signal, {
         storeResult: job.kind !== 'paginate_all',
+        heldLock,
       });
       // v2 A2: the repository tree re-reads what the write changed, in this job, before it moves on.
       await this.notifyAfterWrite(writeInfo, outcome, entry.current.signal);
@@ -1136,6 +1364,7 @@ export class JobEngine {
           });
           this.emitJob(jobId, 'updated');
           if (job.onError === 'stop') {
+            await this.flushDeferred(job, entry.current.signal);
             this.finish(jobId);
             return { last, values };
           }
@@ -1241,11 +1470,22 @@ export class JobEngine {
         const s = this.repo.step(jobId, 3);
         if (s?.status === 'succeeded') result = { ...result, asset: s.resultSummary };
       }
-      // v2 C1: what the read after each verified page write found, on the job itself.
+      // v2 C1: what the read after each verified page write found, on the job itself. v2 C2a: and what every generic
+      // verify step found (`bridge.verify`), the same way.
       const verifications = this.repo
         .steps(jobId)
-        .filter((s) => s.status === 'succeeded' && s.options.verifyAfterWrite === true)
-        .map((s) => ({ stepNo: s.stepNo, ...((s.resultSummary ?? {}) as { verification?: unknown }) }))
+        .filter(
+          (s) => s.status === 'succeeded' && (s.options.verifyAfterWrite === true || isInternalStep(s.opId)),
+        )
+        .map((s) => {
+          // A long verification may have gone to the step's result artefact: read it whole then.
+          const summary = (s.resultSummary ?? {}) as { verification?: unknown; truncated?: unknown };
+          const whole =
+            summary.verification === undefined && summary.truncated === true
+              ? ((this.repo.stepResult(s) ?? {}) as { verification?: unknown })
+              : summary;
+          return { stepNo: s.stepNo, verification: whole.verification };
+        })
         .filter((s) => s.verification !== undefined)
         .map((s): Record<string, unknown> => ({
           stepNo: s.stepNo,
@@ -1447,13 +1687,17 @@ export class JobEngine {
 
   private estimateFor(
     projectId: string,
-    items: readonly { def: OperationDef; params: OpParams | undefined }[],
+    items: readonly { def: OperationDef | null; params: OpParams | undefined; opId?: string }[],
     priority: PriorityClass,
   ) {
     let reads = 0;
     let writes = 0;
     let createManyItems = 0;
-    for (const { def, params } of items) {
+    for (const { def, params, opId } of items) {
+      if (!def) {
+        reads += internalReads(opId ?? '', params); // the bridge's own check and verify steps read only
+        continue;
+      }
       if (def.kind === 'read') {
         reads++;
         continue;
@@ -1646,7 +1890,7 @@ export class JobEngine {
    * its result; otherwise returns null. A gate that throws counts as a deny (fail closed).
    */
   private async authorize(
-    items: readonly { def: OperationDef; params: OpParams; options: StepOptions }[],
+    items: readonly AuthItem[],
     origin: JobOrigin,
     jobKind: JobKind,
     project: string,
@@ -1656,10 +1900,10 @@ export class JobEngine {
     const batch = jobKind === 'batch_ops';
     let propose = false;
     for (let i = 0; i < items.length; i++) {
-      const { def, params, options } = items[i]!;
+      const { opId, meta: opMetaForGate, params } = items[i]!;
       let decision: PolicyDecision;
       try {
-        decision = await this.policyGate.authorize(principal, policyOpMeta(def, options), params, {
+        decision = await this.policyGate.authorize(principal, opMetaForGate, params, {
           origin,
           project,
           jobKind,
@@ -1674,21 +1918,54 @@ export class JobEngine {
       }
       if (decision.decision === 'deny') {
         throw this.policyDenied(
-          new PolicyDeniedError(
-            def.operationId,
-            decision.reason,
-            principal.principalId,
-            batch ? i : undefined,
-          ),
+          new PolicyDeniedError(opId, decision.reason, principal.principalId, batch ? i : undefined),
           principal,
           project,
         );
       }
       if (decision.decision === 'propose') propose = true;
     }
+    // v2 C2a (ADR 0032): the write guard sees the whole request, once the gate has let every operation through.
+    let canonical: ProposalMeta['canonical'];
+    if (this.writeGuard && items.some((it) => it.meta.kind !== 'read')) {
+      let verdict: Awaited<ReturnType<WriteGuard['entry']>>;
+      try {
+        verdict = await this.writeGuard.entry({
+          project,
+          principal,
+          origin,
+          jobKind,
+          items: items.map((it) => ({ op: it.opId, params: it.params, options: it.options })),
+          ...(meta.extras?.prefetched ? { prefetched: meta.extras.prefetched } : {}),
+          gate: propose ? 'propose' : 'allow',
+        });
+      } catch (e) {
+        verdict = {
+          decision: 'deny',
+          opId: items[0]?.opId ?? 'operation',
+          reason: `the write guard failed: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
+      if (verdict.decision === 'deny') {
+        throw this.policyDenied(
+          new PolicyDeniedError(
+            verdict.opId,
+            verdict.reason,
+            principal.principalId,
+            batch ? verdict.stepIndex : undefined,
+          ),
+          principal,
+          project,
+        );
+      }
+      if (verdict.decision === 'propose_canonical') {
+        propose = true;
+        canonical = { reason: verdict.reason, changes: verdict.changes };
+      }
+    }
     if (!propose) return null;
-    const ops: ProposedOp[] = items.map(({ def, params, options }) => ({
-      op: def.operationId,
+    const ops: ProposedOp[] = items.map(({ opId, params, options }) => ({
+      op: opId,
       params,
       ...options,
     }));
@@ -1698,8 +1975,14 @@ export class JobEngine {
         kind: jobKind,
         origin,
         project,
+        ...(canonical ? { canonical } : {}),
       });
-      return { status: 'proposal_captured', proposalId, ...(summary !== undefined ? { summary } : {}) };
+      return {
+        status: 'proposal_captured',
+        proposalId,
+        ...(summary !== undefined ? { summary } : {}),
+        ...(canonical ? { canonical } : {}),
+      };
     } catch (e) {
       if (e instanceof PolicyDeniedError) throw this.policyDenied(e, principal, project);
       // A sink that refuses with a typed reason (a guard, invalid params, a failed read) keeps it.
@@ -1839,6 +2122,26 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.replan && typeof o.replan.planner === 'string'
       ? { replan: { planner: o.replan.planner, input: o.replan.input } }
       : {}),
+    // v2 C2a: set by bridge code only.
+    ...(o.ifMatchFrom && Number.isInteger(o.ifMatchFrom.step)
+      ? {
+          ifMatchFrom: {
+            step: o.ifMatchFrom.step,
+            ...(typeof o.ifMatchFrom.key === 'string' ? { key: o.ifMatchFrom.key } : {}),
+          },
+        }
+      : {}),
+    ...(o.expectCurrent && typeof o.expectCurrent.hash === 'string'
+      ? {
+          expectCurrent: {
+            state: o.expectCurrent.state,
+            hash: o.expectCurrent.hash,
+            ...(o.expectCurrent.label ? { label: o.expectCurrent.label } : {}),
+          },
+        }
+      : {}),
+    ...(o.deferTreeReread === true ? { deferTreeReread: true } : {}),
+    ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
   };
 }
 

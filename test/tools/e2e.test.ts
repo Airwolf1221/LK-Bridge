@@ -56,6 +56,7 @@ describe('the MCP surface with the official client', () => {
         'lk_upload_image',
         'read_document',
         'search',
+        'set_facts', // v2 C2a
         'write_page', // v2 C1
       ].sort(),
     );

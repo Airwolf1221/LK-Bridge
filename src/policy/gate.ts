@@ -104,11 +104,18 @@ export class LivePolicyGate implements PolicyGate {
       if (this.o.proposalState(token.proposalId) !== 'approved') {
         return deny(`proposal ${token.proposalId} is not awaiting execution`);
       }
+      // v2 C2a: "accepted as canon" only with the token the owner's canonical approval minted.
+      if (origin.canonicalApprovedBy !== undefined && !token.canonical) {
+        return deny('canonicalApprovedBy can only be set by the owner accepting a proposal as canon');
+      }
       if (adminBlocked) return deny(MEMBER_ADMIN_REASON);
       return { decision: 'allow' };
     }
     if (origin.approvedBy !== undefined) {
       return deny('approvedBy can only be set by the owner approving a proposal');
+    }
+    if (origin.canonicalApprovedBy !== undefined) {
+      return deny('canonicalApprovedBy can only be set by the owner accepting a proposal as canon');
     }
 
     // 2. Internal and dashboard work.

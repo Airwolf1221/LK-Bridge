@@ -325,6 +325,13 @@ always kept; the low-level tools remain for a deliberate deletion); a page holdi
 has no form for is refused as `PAGE_NOT_WRITABLE`; a page-write proposal whose version changes between the approval's
 check and the write becomes `conflicted` ([ADR 0031](adr/0031-write-page.md)).
 
+**C2a notes (what built differs from the table):** `set_facts` takes a value as plain text, or `{ "markdown": "…" }` for
+inline Markdown (so text with an asterisk is never read as Markdown by accident); a key that occurs twice in the
+property, or a link collection title that occurs twice, is refused rather than guessed; a link removal matches every
+item of the page unless a document is named; the job holds the page's lock from its first step to its last (a
+job-level lock), with the bridge's own check and verify steps; the If-Match token is the one `listPropertyRows` gives,
+whatever `listProperties` carries ([ADR 0032](adr/0032-set-facts-and-canon.md)).
+
 **Note for ChatGPT:** after the tools change, open ChatGPT's **Plugins** page, open the bridge, and use **Refresh**. ChatGPT keeps its own copy of the tool list.
 
 ---
@@ -336,7 +343,7 @@ Phase 0 ── spike (verify assumptions on the test world)
 Phase A ── A1 multi-project ──► A2 repository tree ──► A3 registry, resolution, ordering
                                         └───────────► A4 asset tree
 Phase B ── B1 Markdown converter (library; starts alongside A1) ──► B2 Discover and Read tools (after A3)
-Phase C ── C1 write_page ──► C2 resources, documents, facts and links, characters ──► CR mid-point review
+Phase C ── C1 write_page ──► C2a facts, links and canon ──► C2b resources, documents, characters ──► CR mid-point review
 Phase D ── D1 calendar and chronology   D2 maps   D3 image pipeline   (in parallel, after CR)
 Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool review and guides ─► E4 independent hardening ─► E5 Arkona go-live
 ```
@@ -351,12 +358,13 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 | **B1** | **Markdown converter library:** both directions, keep regions, block matching, sections, editor-limit checks, fuzz tests, real-page fixtures, round-trip server script                                                                                                                                                                                                   | **Opus 5.5 · xhigh** | — (starts alongside A1) | The riskiest piece for your data; exact round trips are hard                                                                               |
 | **B2** | **Discover and Read tools,** guides, hiding low-level tools by default                                                                                                                                                                                                                                                                                                   | Sonnet 5.5 · high    | A3, A4, B1              | Mostly assembly on top of the services                                                                                                     |
 | **C1** | **`write_page`:** modes, sections, keep-region refusals, version conflicts with retry when the section is unchanged, Markdown-diff proposals                                                                                                                                                                                                                             | **Opus 5.5 · xhigh** | B2                      | The main way agents will change your pages                                                                                                 |
-| **C2** | **Resource, document, facts and links, and character tools,** including `operation_id` and duplicate detection                                                                                                                                                                                                                                                           | **Opus 5.5 · xhigh** | C1                      | Many writes with placement, taxonomy, protected facts and guards (raised to xhigh on Max)                                                  |
-| **CR** | **Mid-point independent review of the write layer** (C1 and C2): a fresh session that trusts no earlier report, reviews `write_page`, the proposal path, the version checks inside the lock, protected facts and the verify step, then fixes what it finds, before phase D builds on them                                                                                | **Opus 5.5 · xhigh** | C2                      | The write layer is where data could be lost; catching problems before D, E and the setting packs build on it is far cheaper (added on Max) |
-| **D1** | **Calendar engine and chronology sync,** plus the timeline tools                                                                                                                                                                                                                                                                                                         | Opus 5.5 · high      | C2                      | Date arithmetic, plus a three-part write that must stay consistent                                                                         |
-| **D2** | **Map tools,** including pixel coordinates                                                                                                                                                                                                                                                                                                                               | Sonnet 5.5 · medium  | C2                      | Straightforward                                                                                                                            |
-| **D3** | **Image pipeline:** three ways in, the single-use endpoint, WebP, destinations                                                                                                                                                                                                                                                                                           | Opus 5.5 · high      | C2, A4                  | A new public endpoint that must be secure                                                                                                  |
-| **E1** | **Snapshots, Google Drive copy with rclone, restore tools, rehearsal**. The Google Drive connection is made **through the dashboard** (Google's sign-in flow), with its token kept in the encrypted secret store (OPS2, ADR 0028), rather than by configuring rclone by hand | Opus 5.5 · high      | C2, D3                  | Backups only matter if restores are right (raised to Opus on Max)                                                                          |
+| **C2a** | **`set_facts` and the protected canonical facts,** plus the proposal and job groundwork for multi-page operations: high-level operation lists, ids minted at capture, the page-level summary, the generic verify step (ADR 0032)                                                                                                                                         | **Opus 5.5 · xhigh** | C1                      | The first multi-write tool, and the guard that keeps canon in the owner's hands on every write path                                        |
+| **C2b** | **Resource, document and character tools,** including `operation_id` and duplicate detection, built on C2a's groundwork and calling its canonical guard                                                                                                                                                                                                                  | **Opus 5.5 · xhigh** | C2a                     | Many writes with placement, taxonomy and guards; multi-page proposals with ids minted at capture                                           |
+| **CR** | **Mid-point independent review of the write layer** (C1, C2a and C2b): a fresh session that trusts no earlier report, reviews `write_page`, the proposal path, the version checks inside the lock, protected facts and the verify step, then fixes what it finds, before phase D builds on them                                                                        | **Opus 5.5 · xhigh** | C2b                     | The write layer is where data could be lost; catching problems before D, E and the setting packs build on it is far cheaper (added on Max) |
+| **D1** | **Calendar engine and chronology sync,** plus the timeline tools                                                                                                                                                                                                                                                                                                         | Opus 5.5 · high      | C2b                     | Date arithmetic, plus a three-part write that must stay consistent                                                                         |
+| **D2** | **Map tools,** including pixel coordinates                                                                                                                                                                                                                                                                                                                               | Sonnet 5.5 · medium  | C2b                     | Straightforward                                                                                                                            |
+| **D3** | **Image pipeline:** three ways in, the single-use endpoint, WebP, destinations                                                                                                                                                                                                                                                                                           | Opus 5.5 · high      | C2b, A4                 | A new public endpoint that must be secure                                                                                                  |
+| **E1** | **Snapshots, Google Drive copy with rclone, restore tools, rehearsal**. The Google Drive connection is made **through the dashboard** (Google's sign-in flow), with its token kept in the encrypted secret store (OPS2, ADR 0028), rather than by configuring rclone by hand | Opus 5.5 · high      | C2b, D3                 | Backups only matter if restores are right (raised to Opus on Max)                                                                          |
 | **E2** | **Audits:** rules, the new checks, findings view                                                                                                                                                                                                                                                                                                                         | Sonnet 5.5 · medium  | A3, D1                  | Read-only, rule-driven                                                                                                                     |
 | **E3** | **Tool review (with you):** final visible tool list, descriptions, both guides, the server instructions, a check that ChatGPT and Claude each pick the right tool                                                                                                                                                                                                        | Sonnet 5.5 · high    | All of the above        | Mostly wording and judgement; you take part                                                                                                |
 | **E4** | **Independent hardening review:** a fresh session that trusts no earlier report                                                                                                                                                                                                                                                                                          | **Opus 5.5 · xhigh** | E3                      | Same reasoning as v1's chunk 8                                                                                                             |
@@ -366,7 +374,7 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 
 **Parallel sessions:** A1 and B1; A3 and A4; D1, D2 and D3. Each pair or group has its own branch and a clear split of which files it owns, as in v1. **Ground rules carried over from v1:** never force-push; merge `main` in rather than rebasing; squash merge; I write each handoff when its turn comes, from the previous session's report.
 
-**Rough effort:** 18 sessions, 11 of them on Opus (6 at xhigh), sized for the Max plan: the sessions that protect your data (A1, B1, C1, C2, the mid-point review and E4) get the most depth. That's a few weeks of steady work at your pace; there's no deadline. The four parallel groups (A1 with B1, A3 with A4, D1 with D2 and D3) are where Max's extra quota saves the most time.
+**Rough effort:** 19 sessions, 12 of them on Opus (7 at xhigh), sized for the Max plan: the sessions that protect your data (A1, B1, C1, C2a, C2b, the mid-point review and E4) get the most depth. That's a few weeks of steady work at your pace; there's no deadline. The four parallel groups (A1 with B1, A3 with A4, D1 with D2 and D3) are where Max's extra quota saves the most time.
 
 ---
 
@@ -395,7 +403,7 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 
 ---
 
-## 9. Old-bridge behaviours carried into v2 (checklist for C2, D3 and E2)
+## 9. Old-bridge behaviours carried into v2 (checklist for C2a, C2b, D3 and E2)
 
 - **Character Core:** `[INDEX] <Character>` from the Index template under the race index, then the Core template beneath it. An existing unique index is reused, and an existing core is returned rather than duplicated.
 - **Compact Character Reference:** created directly under the race index, with no index of its own.
@@ -442,7 +450,7 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 | **C2**                                                        | Add an optional **verify** step to multi-page jobs. After execution, re-read what was created or changed and compare it with the plan. Record any difference on the job (and, for proposals, on the proposal).                                                                                                                                         |
 | **D3** (images)                                               | Uploads can go to a **staging area**: the image is uploaded and verified, but not yet placed in its final folder. A later package or proposal can then **refer to staged uploads by id**, and they're placed on approval. Image bytes never travel inside a package.                                                                                   |
 
-### 10.3 Protected canonical facts (a guard, and a candidate for C2)
+### 10.3 Protected canonical facts (a guard; built in C2a)
 
 Arkona records each page's standing in its sidebar facts:
 
@@ -453,6 +461,26 @@ Arkona records each page's standing in its sidebar facts:
 - The protected facts and values are **configuration** (per project, later per pack), not hard-coded.
 - The rule covers `set_facts`, template defaults copied into new pages, and every future pack tool.
 - **Candidate for C2:** C2 builds `set_facts`, so the guard can be built there in its general form ("protected fact values"). That protects canon from v2 onwards, before any setting pack exists. The owner confirms when C2's handoff is written.
+
+**The rule as refined by the owner (decided 10 November 2026; built in C2a, [ADR 0032](adr/0032-set-facts-and-canon.md)):**
+
+- **`Status` = `Authoritative`** is protected in **both** directions: setting a page's Status TO Authoritative, or
+  changing it FROM Authoritative to anything else (removing it too), needs canonical approval.
+- **`Continuity Type` and `Continuity`:** CHANGING an existing non-empty value needs canonical approval (for example
+  CANON ↔ AU, or one AU to another). Setting them where they are empty, new pages included, is allowed.
+- The default Status of pages agents create is **`Working`** (project configuration, for C2b). **Templates carry no fact
+  defaults** (the owner confirmed), so nothing is inherited.
+- The rules are a list per project (dashboard, audited), seeded with these defaults.
+- **Every write path** is guarded, not only `set_facts`: the low-level `lk_api_write`, `lk_api_batch` and every
+  `lk_op_*` for the property and property-row operations, a template copy, and C2b's tools (the guard is in the job
+  engine, with `assessFactChange` as the shared function). A protected change becomes a proposal flagged
+  `requiresCanonicalApproval` whatever the caller's scope (`write` or `propose`), with the reason in the agent's
+  result; a `read` caller is refused as before.
+- The only approval of such a proposal is **"Approve and accept as canon"**, a separate audited action that records
+  `canonicalApprovedBy`; the ordinary Approve is disabled for it; Reject works as normal. At execution the guard checks
+  again: an expansion carrying a protected change without canonical approval is refused and nothing is written.
+- Open for the owner: whether deleting or restoring a page whose facts are protected should need canonical approval
+  (not guarded in C2a: neither changes a fact).
 
 ### 10.4 Owner planning is explicit
 

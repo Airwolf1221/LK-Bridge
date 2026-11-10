@@ -18,7 +18,14 @@ import { fmtAgo, fmtTime, prettyJson } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useRoute } from '../router';
-import type { MarkdownDiff, Proposal, ProposalCounts, ProposalDetail, ProposalOp } from '../types';
+import type {
+  FactsOperation,
+  MarkdownDiff,
+  Proposal,
+  ProposalCounts,
+  ProposalDetail,
+  ProposalOp,
+} from '../types';
 
 type Tab = 'pending' | 'conflicted' | 'history';
 
@@ -140,7 +147,18 @@ export function ProposalsPage() {
                       {openId === p.id ? 'Hide' : 'Review'}
                     </button>{' '}
                     {p.title || p.summary}
+                    {p.requiresCanonicalApproval && (
+                      <>
+                        {' '}
+                        <Badge tone="warn">canon</Badge>
+                      </>
+                    )}
                     <div className="muted small-text">{p.summary}</div>
+                    {(p.pages ?? []).slice(0, 3).map((l) => (
+                      <div key={l} className="small-text">
+                        {l}
+                      </div>
+                    ))}
                   </td>
                   <td>
                     {p.profile}
@@ -204,7 +222,8 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
               message: (
                 <p>
                   Each one is checked against LegendKeeper again, then run one at a time. A proposal whose
-                  targets have changed becomes conflicted and runs nothing.
+                  targets have changed becomes conflicted and runs nothing. A proposal that touches protected
+                  canon is not approved here: open it and use “Approve and accept as canon”.
                 </p>
               ),
               confirmLabel: 'Approve all',
@@ -331,7 +350,7 @@ export function MarkdownDiffView({ diff, title }: { diff: MarkdownDiff; title: s
 /** v2 C1: what a high-level page write asks for, and its Markdown diff. */
 function PageWriteView({ p }: { p: ProposalDetail }) {
   const o = p.operationDetail;
-  if (!o) return null;
+  if (!o || (o.tool !== undefined && o.tool !== 'write_page')) return null;
   return (
     <section className="card" aria-label="Page write">
       <div className="row row-between">
@@ -376,6 +395,141 @@ function PageWriteView({ p }: { p: ProposalDetail }) {
           <summary className="small-text">The agent’s Markdown</summary>
           <pre>{o.markdown}</pre>
         </details>
+      )}
+    </section>
+  );
+}
+
+/** v2 C2a: the proposal's operations grouped by the page they affect, shown first. */
+function PageSummaryView({ p }: { p: ProposalDetail }) {
+  const pages = p.pageSummary ?? [];
+  if (pages.length === 0) return null;
+  return (
+    <section className="card" aria-label="Pages affected">
+      <h3>Pages affected</h3>
+      <ul className="plain">
+        {pages.map((e) => (
+          <li key={`${e.resourceId ?? ''}:${e.page}`} data-page={e.resourceId ?? ''}>
+            <strong>{e.page}</strong>: {e.parts.join(', ')}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** v2 C2a: the banner of a proposal that touches protected canon. */
+function CanonBanner({ p }: { p: ProposalDetail }) {
+  if (!p.requiresCanonicalApproval) return null;
+  const changes = p.canonical?.changes ?? [];
+  return (
+    <div className="note note-warn" role="alert" aria-label="Protected canon">
+      <strong>This changes protected canon.</strong> It can only be approved with “Approve and accept as
+      canon”, a separate decision that is recorded with your name; the ordinary Approve is not available for
+      it.
+      {changes.length > 0 && (
+        <ul>
+          {changes.map((c, i) => (
+            <li key={i}>
+              {c.page ? <strong>{c.page}: </strong> : null}
+              {c.text ?? c.unchecked ?? JSON.stringify(c)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {p.canonicalApprovedBy && (
+        <p className="small-text">
+          Accepted as canon by {p.canonicalApprovedBy}
+          {p.canonicalApprovedAt ? ` on ${fmtTime(p.canonicalApprovedAt)}` : ''}.
+        </p>
+      )}
+    </div>
+  );
+}
+
+const CHANGE_LABEL: Record<string, string> = {
+  added: 'added',
+  changed: 'changed',
+  removed: 'removed',
+  unchanged: 'no change',
+  not_present: 'not there',
+};
+
+/** v2 C2a: a set_facts proposal: the facts before and after, and the links added and removed. */
+function FactsView({ o, execution }: { o: FactsOperation; execution: ProposalDetail['execution'] }) {
+  const facts = o.facts ?? [];
+  const name = (l: { name: string; document?: string }) =>
+    l.document ? `${l.name} / ${l.document}` : l.name;
+  return (
+    <section className="card" aria-label="Facts and links">
+      <h3>
+        <span className="mono">set_facts</span> on <strong>{o.page?.name ?? o.page?.id}</strong>
+        {o.property ? <span className="muted"> ({o.property})</span> : null}
+      </h3>
+      {facts.length > 0 && (
+        <div className="table-wrap">
+          <table aria-label="Facts before and after">
+            <thead>
+              <tr>
+                <th>Fact</th>
+                <th>Before</th>
+                <th>After</th>
+                <th>Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {facts.map((f) => (
+                <tr key={f.key} data-fact={f.key} data-change={f.change}>
+                  <td>{f.key}</td>
+                  <td className={f.change === 'removed' || f.change === 'changed' ? 'diff-del' : ''}>
+                    {f.before ?? <span className="muted">—</span>}
+                  </td>
+                  <td className={f.change === 'added' || f.change === 'changed' ? 'diff-add' : ''}>
+                    {f.after ?? <span className="muted">—</span>}
+                  </td>
+                  <td>{CHANGE_LABEL[f.change] ?? f.change}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {(o.links ?? []).map((l) => (
+        <div key={l.title} className="mt" aria-label={`Links: ${l.title}`} role="group">
+          <h4>{l.title}</h4>
+          {l.added.length > 0 && (
+            <p className="small-text">
+              <strong>Added:</strong> {l.added.map(name).join(', ')}
+            </p>
+          )}
+          {l.removed.length > 0 && (
+            <p className="small-text">
+              <strong>Removed:</strong> {l.removed.map(name).join(', ')}
+            </p>
+          )}
+          {l.alreadyLinked.length > 0 && (
+            <p className="muted small-text">Already linked: {l.alreadyLinked.map(name).join(', ')}</p>
+          )}
+          {l.filtered && <p className="muted small-text">The collection’s filter is kept as it is.</p>}
+        </div>
+      ))}
+      {(o.notes ?? []).map((n) => (
+        <p key={n} className="note small-text">
+          {n}
+        </p>
+      ))}
+      <p className="muted small-text">
+        Approving runs exactly this change: the sidebar is checked again inside the page’s lock, and if it has
+        changed since this was planned, nothing is written.
+      </p>
+      {execution && (
+        <p className={`note ${execution.verified === false ? 'note-bad' : ''}`} role="status">
+          {execution.verified === true
+            ? 'Written and verified: the sidebar read back after the writes is exactly what was planned.'
+            : execution.verified === false
+              ? 'Written but not as planned: the sidebar read back after the writes differs (see the job). The journal holds what each write changed.'
+              : 'Written; the sidebar could not be read back to verify it.'}
+        </p>
       )}
     </section>
   );
@@ -482,7 +636,14 @@ function ProposalReview({
               It failed: {typeof p.error.message === 'string' ? p.error.message : JSON.stringify(p.error)}
             </p>
           )}
+          <PageSummaryView p={p} />
+          <CanonBanner p={p} />
           <PageWriteView p={p} />
+          {(p.operations ?? [])
+            .filter((o) => o.tool === 'set_facts')
+            .map((o, i) => (
+              <FactsView key={i} o={o as unknown as FactsOperation} execution={p.execution ?? null} />
+            ))}
           {p.ops.map((op) => (
             <OpView key={op.index} op={op} conflict={p.conflict} />
           ))}
@@ -490,7 +651,50 @@ function ProposalReview({
           {(p.state === 'pending' || p.state === 'conflicted') && (
             <div className="stack">
               <div className="row">
-                {p.state === 'pending' && (
+                {p.state === 'pending' && p.requiresCanonicalApproval && (
+                  <>
+                    <Button
+                      variant="primary"
+                      busy={busy}
+                      onClick={() => {
+                        void confirm({
+                          title: 'Approve and accept as canon?',
+                          message: (
+                            <>
+                              <p>
+                                This makes a change to <strong>protected canon</strong>. Approving it accepts
+                                the result as canon, and the decision is recorded with your name.
+                              </p>
+                              <ul>
+                                {(p.canonical?.changes ?? []).map((c, i) => (
+                                  <li key={i}>{c.text ?? c.unchecked}</li>
+                                ))}
+                              </ul>
+                              <p className="muted small-text">{p.summary}</p>
+                            </>
+                          ),
+                          confirmLabel: 'Approve and accept as canon',
+                        }).then((ok) => {
+                          if (ok)
+                            void run(
+                              () =>
+                                api.post(
+                                  withProject(`/proposals/${encodeURIComponent(p.id)}/approve-as-canon`),
+                                  { confirm: true },
+                                ),
+                              'Approved and accepted as canon.',
+                            ).then(done);
+                        });
+                      }}
+                    >
+                      Approve and accept as canon
+                    </Button>
+                    <Button disabled title="This change touches protected canon">
+                      Approve
+                    </Button>
+                  </>
+                )}
+                {p.state === 'pending' && !p.requiresCanonicalApproval && (
                   <Button
                     variant="primary"
                     busy={busy}

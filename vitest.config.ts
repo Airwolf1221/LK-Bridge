@@ -20,6 +20,7 @@ export default defineConfig({
       'test/assets/**/*.test.ts', // v2 A4: the asset tree
       'test/discover/**/*.test.ts', // v2 B2: the Discover and Read tools
       'test/pages/**/*.test.ts', // v2 C1: write_page
+      'test/facts/**/*.test.ts', // v2 C2a: set_facts, protected canonical facts, proposal groundwork
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

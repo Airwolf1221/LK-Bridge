@@ -46,6 +46,7 @@ export class ApprovalToken {
   readonly #principalId: string;
   readonly #projectId: string;
   readonly #expiresAt: number;
+  readonly #canonical: boolean;
 
   private constructor(
     readonly proposalId: string,
@@ -53,11 +54,13 @@ export class ApprovalToken {
     projectId: string,
     expected: readonly ExpectedOp[],
     expiresAt: number,
+    canonical: boolean,
   ) {
     this.#expected = expected;
     this.#principalId = principalId;
     this.#projectId = projectId;
     this.#expiresAt = expiresAt;
+    this.#canonical = canonical;
   }
 
   /** @internal Use `issueApprovalToken`. */
@@ -67,6 +70,7 @@ export class ApprovalToken {
     projectId: string,
     expected: readonly ExpectedOp[],
     now: number,
+    canonical = false,
   ) {
     const t = new ApprovalToken(
       proposalId,
@@ -74,6 +78,7 @@ export class ApprovalToken {
       projectId,
       Object.freeze([...expected]),
       now + TOKEN_TTL_MS,
+      canonical,
     );
     live.add(t);
     return t;
@@ -101,6 +106,14 @@ export class ApprovalToken {
     return this.#expected.length;
   }
 
+  /**
+   * v2 C2a (ADR 0032): the owner approved this proposal with "Approve and accept as canon". Only such a token lets the
+   * work make a protected canonical change (src/facts/canonical.ts).
+   */
+  get canonical(): boolean {
+    return this.#canonical;
+  }
+
   /** Spent: the approved submission has been made (or abandoned). */
   consume(): void {
     live.delete(this);
@@ -112,15 +125,24 @@ export class ApprovalToken {
   }
 }
 
-/** Mints a token for one proposal. Called only by `ProposalService.approve` (owner command layer). */
+/**
+ * Mints a token for one proposal. Called only by `ProposalService.approve` and `approveAsCanon` (owner command layer);
+ * `canonical` only by the latter.
+ */
 export function issueApprovalToken(
   proposalId: string,
   principalId: string,
   projectId: string,
   expected: readonly ExpectedOp[],
   now: number,
+  canonical = false,
 ): ApprovalToken {
-  return ApprovalToken.mint(proposalId, principalId, projectId, expected, now);
+  return ApprovalToken.mint(proposalId, principalId, projectId, expected, now, canonical);
+}
+
+/** v2 C2a: true only for a live token minted by "Approve and accept as canon". */
+export function isCanonicalApproval(v: unknown): boolean {
+  return isLiveApprovalToken(v) && v.canonical;
 }
 
 /** True only for a token this module minted and that has not been consumed. */

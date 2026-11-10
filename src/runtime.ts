@@ -38,9 +38,12 @@ import {
   pageConverterContext,
   WRITE_PAGE_PLANNER,
 } from './pages/index.js';
+import { CanonicalGuard } from './facts/index.js';
+import { TemplateKeys } from './facts/templates.js';
 import {
   InstanceGuard,
   ProjectSelector,
+  ProjectStore,
   createProjectRegistry,
   type ProjectRegistry,
 } from './projects/index.js';
@@ -249,6 +252,27 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }),
   );
 
+  // v2 C2a (ADR 0032): the protected canonical facts guard, asked by the engine at the entry of every request and
+  // before every sidebar write inside its lock; and page names for the guard's reasons and the proposals' page-level
+  // summaries, from the repository tree.
+  const pageName = (projectId: string, resourceId: string): string | null => {
+    try {
+      return tree.queries.node(projectId, resourceId).data?.displayName ?? null;
+    } catch {
+      return null;
+    }
+  };
+  policy.proposals.setPageNames(pageName);
+  // Read live, so a rule the owner changes on the dashboard applies to the next write.
+  const projectStore = new ProjectStore(o.db, () => (o.clock ?? systemClock).now());
+  const unregisterGuard = engine.setWriteGuard(
+    new CanonicalGuard({
+      settings: (projectId) => projectStore.byId(projectId)?.settings,
+      engine,
+      pageName,
+    }),
+  );
+
   const characterType = (projectId: string) =>
     registry
       .forProject(projectId)
@@ -312,7 +336,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       version: o.version,
       configuredReadOnly: config.lk.readOnly,
       uploadGuard,
-      services: { tree, registry, assets, versions },
+      services: {
+        tree,
+        registry,
+        assets,
+        versions,
+        projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+        templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
+      },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
   );
@@ -356,6 +387,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachPolicy();
       await engine.stop();
       unregisterPlanner();
+      unregisterGuard();
       await tree.stop();
       detachRegistry();
       await assets.stop();
