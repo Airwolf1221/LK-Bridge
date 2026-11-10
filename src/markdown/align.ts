@@ -3,9 +3,18 @@
  * same, given integer fingerprints. Common prefix and suffix first (most edits touch one place), then an exact longest
  * common subsequence when the middle is small enough, else patience-style anchors (items unique on both sides) with the
  * same treatment recursively between them. A 3,000-row table with one edited row aligns in well under a millisecond.
+ *
+ * Identical items ("twins", such as two empty paragraphs) make the longest common subsequence ambiguous. Ties are broken
+ * by position: of all the longest subsequences, the one whose pairs sit closest to their own place (least total
+ * |i − j|, counted from the start of the part being solved) wins; exact ties are settled the same way every time
+ * (match first, then skip the current item). So an in-place edit of one twin never moves another twin's id or
+ * attributes. pairGap breaks its ties the same way.
  */
 
-/** Largest middle part solved exactly by dynamic programming (cells of a Uint16 table, about 8 MB). */
+/**
+ * Largest middle part solved exactly by dynamic programming (per cell a Uint16 length and a Uint32 displacement, about
+ * 24 MB at the limit).
+ */
 const DP_LIMIT = 4_000_000;
 
 /** Returns the matched index pairs, increasing in both coordinates. Equal values only are matched. */
@@ -49,23 +58,46 @@ function dp(
   const n = a1 - a0;
   const m = b1 - b0;
   const w = m + 1;
-  // Lengths fit in 16 bits: a container holds at most 10,000 blocks.
+  // For the suffixes a[i..], b[j..]: the longest common subsequence's length `t` and, among those, the least total
+  // displacement `c` (sum of |i − j| over its pairs). Lengths fit in 16 bits: a container holds at most 10,000 blocks;
+  // a displacement total is at most n·m ≤ DP_LIMIT.
   const t = n < 65_535 && m < 65_535 ? new Uint16Array((n + 1) * w) : new Uint32Array((n + 1) * w);
+  const c = new Uint32Array((n + 1) * w);
   for (let i = n - 1; i >= 0; i--) {
     const ai = a[a0 + i];
     for (let j = m - 1; j >= 0; j--) {
-      t[i * w + j] =
-        ai === b[b0 + j] ? t[(i + 1) * w + j + 1]! + 1 : Math.max(t[(i + 1) * w + j]!, t[i * w + j + 1]!);
+      const k = i * w + j;
+      // Skip a[i] or b[j], whichever leaves the better rest (longer, then less displaced).
+      const down = k + w;
+      const right = k + 1;
+      let bestT = t[down]!;
+      let bestC = c[down]!;
+      if (t[right]! > bestT || (t[right] === bestT && c[right]! < bestC)) {
+        bestT = t[right]!;
+        bestC = c[right]!;
+      }
+      if (ai === b[b0 + j]) {
+        const mt = t[down + 1]! + 1;
+        const mc = c[down + 1]! + Math.abs(i - j);
+        if (mt > bestT || (mt === bestT && mc <= bestC)) {
+          bestT = mt;
+          bestC = mc;
+        }
+      }
+      t[k] = bestT;
+      c[k] = bestC;
     }
   }
+  // Walk the optimum, preferring a match, then skipping a[i], then skipping b[j] (deterministic on exact ties).
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
-    if (a[a0 + i] === b[b0 + j]) {
+    const k = i * w + j;
+    if (a[a0 + i] === b[b0 + j] && t[k + w + 1]! + 1 === t[k] && c[k + w + 1]! + Math.abs(i - j) === c[k]) {
       out.push([a0 + i, b0 + j]);
       i++;
       j++;
-    } else if (t[(i + 1) * w + j]! >= t[i * w + j + 1]!) i++;
+    } else if (t[k + w] === t[k] && c[k + w] === c[k]) i++;
     else j++;
   }
 }
@@ -144,7 +176,9 @@ export function pairGap(
     }
     return out;
   }
-  // A kind with exactly one candidate on each side pairs whatever the text: the usual "one block edited" case.
+  // A kind with exactly one candidate on each side pairs whatever the text: the usual "one block edited" case. Likewise
+  // a run of identical current blocks ("twins", such as empty paragraphs) with as many candidates on each side: they
+  // were edited in place, and similarity cannot tell them apart (an empty text is similar to nothing).
   const count = (list: typeof a) => {
     const c = new Map<string, number>();
     for (const x of list) if (x.pairable) c.set(x.kind, (c.get(x.kind) ?? 0) + 1);
@@ -152,37 +186,66 @@ export function pairGap(
   };
   const ca = count(a);
   const cb = count(b);
+  // Per kind: whether every current candidate has the same text (the first one's).
+  const firstText = new Map<string, string>();
+  const twins = new Map<string, boolean>();
+  for (const x of a) {
+    if (!x.pairable) continue;
+    const first = firstText.get(x.kind);
+    if (first === undefined) {
+      firstText.set(x.kind, x.text);
+      twins.set(x.kind, true);
+    } else if (first !== x.text) twins.set(x.kind, false);
+  }
   const score = (i: number, j: number): number => {
     const x = a[i]!;
     const y = b[j]!;
     if (!x.pairable || !y.pairable || x.kind !== y.kind) return 0;
-    if (ca.get(x.kind) === 1 && cb.get(x.kind) === 1) return 1;
+    if (ca.get(x.kind) === cb.get(x.kind) && twins.get(x.kind) === true) return 1;
     const s = similarity(x.text, y.text);
     return s >= 0.3 ? s : 0;
   };
-  // Maximum total similarity, order preserved (a weighted LCS).
+  // Maximum total similarity, order preserved (a weighted LCS); among equal totals, the least total displacement
+  // |i − j|, so identical candidates pair in place.
+  const EPS = 1e-9;
   const w = m + 1;
   const t = new Float64Array((n + 1) * w);
+  const c = new Float64Array((n + 1) * w);
+  const better = (s1: number, c1: number, s2: number, c2: number) =>
+    s1 > s2 + EPS || (Math.abs(s1 - s2) <= EPS && c1 < c2);
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
+      const k = i * w + j;
+      let bs = t[k + w]!;
+      let bc = c[k + w]!;
+      if (better(t[k + 1]!, c[k + 1]!, bs, bc)) {
+        bs = t[k + 1]!;
+        bc = c[k + 1]!;
+      }
       const s = score(i, j);
-      t[i * w + j] = Math.max(
-        t[(i + 1) * w + j]!,
-        t[i * w + j + 1]!,
-        s > 0 ? t[(i + 1) * w + j + 1]! + s : 0,
-      );
+      if (s > 0) {
+        const ms = t[k + w + 1]! + s;
+        const mc = c[k + w + 1]! + Math.abs(i - j);
+        if (!better(bs, bc, ms, mc)) {
+          bs = ms;
+          bc = mc;
+        }
+      }
+      t[k] = bs;
+      c[k] = bc;
     }
   }
   const out: [number, number][] = [];
   let i = 0;
   let j = 0;
   while (i < n && j < m) {
+    const k = i * w + j;
     const s = score(i, j);
-    if (s > 0 && t[i * w + j] === t[(i + 1) * w + j + 1]! + s) {
+    if (s > 0 && t[k] === t[k + w + 1]! + s && c[k] === c[k + w + 1]! + Math.abs(i - j)) {
       out.push([i, j]);
       i++;
       j++;
-    } else if (t[(i + 1) * w + j]! >= t[i * w + j + 1]!) i++;
+    } else if (t[k] === t[k + w] && c[k] === c[k + w]) i++;
     else j++;
   }
   return out;

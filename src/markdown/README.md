@@ -44,7 +44,8 @@ The `plan` (`WritePlan`) is derived by comparing the result with the current pag
 - **parse.ts** reads Markdown with micromark (`mdast-util-from-markdown`, GFM tables, strikethrough and task items) plus
   the `[[…]]` construct in wiki-syntax.ts, into drafts: projections, keep references and raw `lk-block`s.
 - **rebuild.ts** aligns drafts with the current blocks at each container level (align.ts: common prefix and suffix, an
-  exact LCS, patience anchors for huge gaps), restores matches verbatim, keeps moved blocks, pairs edited blocks by kind
+  exact LCS, patience anchors for huge gaps; ties between identical blocks go to the pairing that keeps each block in
+  its own place), restores matches verbatim, keeps moved blocks, pairs edited blocks by kind
   and similarity (keeping their ids and every field Markdown does not show, SHOWN_FIELDS), restores keep regions by id;
   a second pass then finds, anywhere on the page, the unchanged block a still-new block may be (moved into or out of a
   container) and restores it verbatim;
@@ -61,6 +62,8 @@ rule that the current page already breaks in the same place is never refused.
 
 ## Tests
 
-`test/markdown/`: property tests (`FC_RUNS`, default 300; `FC_SEED` replays), the escaping fuzz, fixtures modelled on the
-test world, a test for every error and warning, unit tests of each part, and the round-trip script's dry run and wrapper.
+`test/markdown/`: property tests (`FC_RUNS`, default 300; run `FC_RUNS=10000` locally after changing the converter; a
+failure logs its seed, path and counterexample, and `FC_SEED` with `FC_PATH` replays it; counterexamples found are kept
+as fixed `examples`), identical neighbouring blocks (`twins.test.ts`), the escaping fuzz, fixtures modelled on the test
+world, a test for every error and warning, unit tests of each part, and the round-trip script's dry run and wrapper.
 `npm run roundtrip` (deploy/markdown-roundtrip.sh) checks every page of a real project, read-only.

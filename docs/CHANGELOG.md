@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased: hotfix, the Markdown converter's matching of identical blocks (10 November 2026)
+
+The property test "editing one paragraph changes that block only" failed once in CI on an `unsupported` block followed
+by two empty paragraphs, and passed on a re-run. It was a real bug in `src/markdown/align.ts`, not a flaky test.
+
+- **Cause.** A keep region gets a fingerprint of its own on each side, so the common-prefix step stops at it and
+  identical neighbours ("twins") go into the exact LCS. With twins, several longest subsequences exist; the traceback
+  broke ties by skipping a current block first, which matched the first twin in the Markdown with the **last** twin on
+  the page. Editing the second of two empty paragraphs therefore kept the second's id in the first's place, removed the
+  first, and wrote the edit as a new block (`removed` + `added` instead of one `changed`). Ids and attributes the
+  Markdown does not show (an image's width and layout, say) could move between twins the same way. Separately, two
+  identical blocks both edited in place were never paired as edits (an empty text is similar to nothing), so both lost
+  their ids.
+- **Fix.** Ties are broken by position, deterministically: of all longest common subsequences, the one with the least
+  total displacement (|i − j| per pair) wins, and the same rule settles ties in `pairGap`. A run of identical current
+  blocks with as many candidates of its kind on each side pairs in order, as a single block of its kind already did.
+  Unchanged blocks keep their own ids; an edit changes exactly the block edited. The exact LCS keeps its size limit and
+  speed (about 40 ms at 4 million cells, now about 24 MB at the limit instead of 8 MB).
+- **Tests.** `test/markdown/twins.test.ts` (308 cases): the CI counterexample, two to four identical paragraphs (empty
+  or not) between every pair of keep regions, headings, lists, tables and paragraphs, with every single and pair edit;
+  twins on both sides of and between keep regions; twin images whose hidden attributes differ; twins at the start and
+  end of quotes and callouts and after a keep region inside them; identical list items, table rows, lists and tables;
+  `applyEdit` on a section; and the tie-breaking of `lcsPairs` and `pairGap` directly. The edit property now requires
+  the edited block itself to be the one changed and the result to equal the edited page (it used to accept the edit
+  landing on either twin), runs at the full `FC_RUNS` instead of a third, and keeps the counterexample as a fixed
+  `examples` case.
+- **Reproducible property failures.** The converter's properties go through `assertProperty` (test/markdown/helpers.ts):
+  a failure logs the seed, the path, the shrunk counterexample (ready for `examples`) and the command that replays it;
+  `FC_SEED` and the new `FC_PATH` replay it. CI stays at 300 runs per property.
+
 ## Unreleased: v2 A4 follow-up, the registry wiring and two deploy fixes (10 November 2026)
 
 - **The planner uses A3's type registry** ([docs/assets.md](assets.md#placement-planning), ADR 0027). The project's
