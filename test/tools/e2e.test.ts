@@ -56,6 +56,7 @@ describe('the MCP surface with the official client', () => {
         'lk_upload_image',
         'read_document',
         'search',
+        'write_page', // v2 C1
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));

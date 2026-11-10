@@ -23,7 +23,7 @@ const EVENT_PAGES_MAX = 10;
 
 const KEEP_ID = /<!-- lk:keep id="([^"]*)"/g;
 
-function pickDocument(
+export function pickDocument(
   ctx: RepoCtx,
   node: TreeNode,
   wanted: string | undefined,
@@ -239,6 +239,10 @@ export function readDocumentTool(deps: ToolDeps): McpToolProvider {
         const l = await load(ctx, mctx, r.node, doc);
         if (!l.ok) return l.result;
         const loaded = l.loaded;
+        // v2 C1: remember this version's Markdown, so a section edit made from it can be checked later.
+        if (loaded.version && (doc.type === 'page' || doc.type === 'blank' || doc.type === null)) {
+          pd.services?.versions?.remember(ctx.projectId, doc.id, loaded.version, loaded.markdown);
+        }
         const head = {
           tree: treeInfo(ctx.meta, ctx.now),
           page: { id: r.node.id, name: r.node.displayName, path: r.node.path.names.join(' / ') },

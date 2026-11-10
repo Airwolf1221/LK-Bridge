@@ -32,6 +32,8 @@ export interface JournalEntryInput {
   readonly preImage?: unknown;
   /** Every entity the write creates or changes besides `targetId` (createManyResources: the ids it creates). */
   readonly targets?: readonly string[];
+  /** v2 C1: the high-level operation the write carries out (write_page: mode, section, a hash of the Markdown…). */
+  readonly operation?: Readonly<Record<string, unknown>>;
 }
 
 export type JournalOutcome = 'pending' | 'applied' | 'not_applied' | 'unknown';
@@ -57,6 +59,8 @@ export interface JournalEntry {
   readonly preImage?: unknown;
   readonly bytes: number;
   readonly outcome: JournalOutcome;
+  /** v2 C1: the high-level operation (write_page), or null. */
+  readonly operation: unknown;
 }
 
 export interface JournalFilter {
@@ -110,6 +114,7 @@ interface Row {
   pre_image?: string | null;
   bytes: number;
   outcome: JournalOutcome;
+  operation: string | null;
 }
 
 function parse(text: string | null | undefined): unknown {
@@ -146,6 +151,15 @@ function capParams(raw: unknown): string | null {
   return JSON.stringify({ path: p.path, query: p.query, ifMatch: p.ifMatch, bodyOmitted: true });
 }
 
+/** The high-level operation is small by design (no Markdown, only its hash); anything larger is cut. */
+const OPERATION_CAP_BYTES = 8 * 1024;
+
+function capOperation(op: Readonly<Record<string, unknown>>): string {
+  const text = JSON.stringify(op);
+  if (Buffer.byteLength(text) <= OPERATION_CAP_BYTES) return text;
+  return JSON.stringify({ tool: op.tool, mode: op.mode, truncated: true });
+}
+
 export class WriteJournal {
   constructor(
     private readonly db: Db,
@@ -156,12 +170,14 @@ export class WriteJournal {
   record(e: JournalEntryInput): number {
     const pre = e.preImage === undefined ? null : JSON.stringify(e.preImage);
     const params = capParams(e.params);
-    const bytes = Buffer.byteLength(pre ?? '') + Buffer.byteLength(params ?? '');
+    const operation = e.operation === undefined ? null : capOperation(e.operation);
+    const bytes =
+      Buffer.byteLength(pre ?? '') + Buffer.byteLength(params ?? '') + Buffer.byteLength(operation ?? '');
     const info = this.db
       .prepare(
         `INSERT INTO write_journal (project_id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk,
-           target_kind, target_id, resource_id, document_id, version, params, pre_image, bytes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           target_kind, target_id, resource_id, document_id, version, params, pre_image, bytes, operation)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         e.projectId,
@@ -181,6 +197,7 @@ export class WriteJournal {
         params,
         pre,
         bytes,
+        operation,
       );
     const id = Number(info.lastInsertRowid);
     const targets = [...new Set(e.targets ?? [])].filter((t) => t !== '' && t !== e.targetId).slice(0, 1000);
@@ -212,6 +229,14 @@ export class WriteJournal {
            SELECT id FROM write_journal WHERE job_id = ? AND step_no = ? ORDER BY id DESC LIMIT 1)`,
       )
       .run(outcome, jobId, stepNo);
+  }
+
+  /** The latest journal entry id of a step, or undefined (v2 C1: the reference a verify result gives for recovery). */
+  entryIdForStep(jobId: string, stepNo: number): number | undefined {
+    const r = this.db
+      .prepare('SELECT id FROM write_journal WHERE job_id = ? AND step_no = ? ORDER BY id DESC LIMIT 1')
+      .get(jobId, stepNo) as { id: number } | undefined;
+    return r?.id;
   }
 
   /** Whether a step already has a journal entry (a resumed step does not record a second pre-image). */
@@ -283,7 +308,7 @@ export function journalLookup(db: Db, scope: ProjectScope, filter: JournalFilter
   }
   const withPre = filter.includePreImage !== false;
   const cols = `id, project_id, at, job_id, step_no, op_id, principal_id, profile, approved_by, risk, target_kind, target_id, resource_id, document_id, version,
-    params, bytes, outcome${withPre ? ', pre_image' : ''}`;
+    params, bytes, outcome, operation${withPre ? ', pre_image' : ''}`;
   const rows = db
     .prepare(
       `SELECT ${cols} FROM write_journal ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -310,6 +335,7 @@ export function journalLookup(db: Db, scope: ProjectScope, filter: JournalFilter
     ...(withPre ? { preImage: parse(r.pre_image) } : {}),
     bytes: r.bytes,
     outcome: r.outcome,
+    operation: parse(r.operation),
   }));
 }
 

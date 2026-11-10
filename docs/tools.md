@@ -63,6 +63,7 @@ budget (arkona): writes 0/120·min …
 | `list_calendars`            | read   | true / false / true / false                                     | 1 read                                    |
 | `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                     |
 | `read_document`             | read   | true / false / true / false                                     | 1 read (a timeline: 2 + 1 per 100 events) |
+| `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read         |
 | `get_markdown_guide`        | read   | true / false / true / false                                     | none                                      |
 | `get_bridge_guide`          | read   | true / false / true / false                                     | none                                      |
 | `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                      |
@@ -128,7 +129,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (118 tools in all, 120 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (119 tools in all, 121 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -148,9 +149,9 @@ budget (arkona): writes 0/120·min …
 
 **`bridge_errors_recent`** `{ grouped?, limit?, sinceMinutes?, jobId? }`: failures grouped by operation, code and path (default), or one row each, with LegendKeeper `requestId`s.
 
-**`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, principalId?, profile?, outcome?, withPreImage?, before?, sinceMinutes?, limit?, includePreImage? }`: the write journal, newest first. Since chunk 8 it holds **every** write the bridge sends (creates, inserts, patches, deletes), each with operation, target, time, outcome (`applied`, `not_applied`, `unknown`, `pending`), principal, profile and approver; destructive writes also keep their pre-image. `targetId` also matches every resource a `createManyResources` created. Pages hold `limit` entries (default 10, at most 100); when a page is full, `nextBefore` is the cursor for the next, older page (`before`).
+**`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, principalId?, profile?, outcome?, withPreImage?, before?, sinceMinutes?, limit?, includePreImage? }`: the write journal, newest first. Since chunk 8 it holds **every** write the bridge sends (creates, inserts, patches, deletes), each with operation, target, time, outcome (`applied`, `not_applied`, `unknown`, `pending`), principal, profile and approver; destructive writes also keep their pre-image. Since v2 C1 an entry made by a high-level tool also has `operation`: for `write_page` the tool, mode, section, a SHA-256 of the Markdown (`markdownSha256`) and its length, the version the plan was built on (`plannedOn`), the agent's `baseVersion`, `dropRegions`, and `replannedInLock` when the bridge re-planned a section edit inside the lock. `targetId` also matches every resource a `createManyResources` created. Pages hold `limit` entries (default 10, at most 100); when a page is full, `nextBefore` is the cursor for the next, older page (`before`).
 
-**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)).
+**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)). Since v2 C1 a proposal made by a high-level tool also has `operation`, briefly (for `write_page`: the tool, page, document, mode, section, the version it was planned on and the counts; never the Markdown).
 
 **`bridge_result_page`** `{ handle, offset?, limit?, detail? }`: for a paginate handle `offset` and `limit` count items (the page is trimmed to the output budget; use `nextOffset`); for a stored oversized result `offset` counts characters of the JSON text and slices must be concatenated in order.
 
@@ -255,6 +256,110 @@ read (at most 1,000 events). A long result is a handle.
 them). Both are also MCP resources: `lk-bridge://guides/bridge` and `lk-bridge://guides/markdown`
 (`text/markdown`). Cost: none.
 
+## Writing pages: `write_page` (v2 C1)
+
+The main way agents change the owner's pages: Markdown in the owner's schema ([markdown.md](markdown.md)), turned into
+LegendKeeper blocks by B1's converter, written as ONE `replaceDocumentBlocks` under the document's lock, and read back
+to check it. Design: [ADR 0031](adr/0031-write-page.md). The agent guide's "Writing pages" section
+([bridge-guide.md](bridge-guide.md)) is the short version.
+
+**`write_page`** `{ page, document?, mode, section?, markdown, baseVersion?, dropRegions?, dryRun?, detail?, project }`:
+`access: write`, annotations `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`,
+`openWorldHint: false`. A `read` profile neither sees nor may call it. `project` follows A1's rule: required while the
+bridge serves several projects.
+
+| Argument      | Meaning                                                                                                                                                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page`        | A page name or id, resolved by A3's resolver inside the AI REPOSITORY only (as `read_document`).                                                                              |
+| `document`    | A document name or id (default "Main"). Pages (and `blank` documents, which a write makes a page) only: a map, timeline or board is refused with `WRONG_TOOL_FOR_DOCUMENT`.   |
+| `mode`        | `append`, `prepend`, `replace`, `replace_section`, `append_to_section`.                                                                                                       |
+| `section`     | A heading path (`Biography > Early Life`, `Notes [2]`), for the two section modes only.                                                                                       |
+| `markdown`    | At most 1,000,000 characters.                                                                                                                                                 |
+| `baseVersion` | The version `read_document` returned. Optional, strongly recommended (rules below).                                                                                           |
+| `dropRegions` | Keep-region block ids removed on purpose (a whole-page or section replace). `unsupported` blocks are never dropped by `write_page` (there is no `allowUnsupportedLoss` here). |
+| `dryRun`      | Plan only: the counts and the Markdown diff, nothing written, queued or proposed.                                                                                             |
+| `detail`      | `"full"` adds the Markdown diff to the result.                                                                                                                                |
+
+**Examples, one per mode**
+
+```json
+{ "project": "test", "page": "Asagiri Miyabi", "mode": "append", "markdown": "## Legacy\n\nRemembered at the shrine.", "baseVersion": "v12" }
+{ "project": "test", "page": "Asagiri Miyabi", "mode": "prepend", "markdown": "> [!warning]\n>\n> Draft: not yet canon.", "baseVersion": "v12" }
+{ "project": "test", "page": "Asagiri Miyabi", "mode": "replace", "markdown": "<the whole page as read, edited>", "baseVersion": "v12" }
+{ "project": "test", "page": "Asagiri Miyabi", "mode": "replace_section", "section": "Biography > Early Life", "markdown": "Born on Kumikas 1st, 4A 881, at dawn.", "baseVersion": "v12" }
+{ "project": "test", "page": "Fourth Age - Table", "mode": "append_to_section", "section": "Notes", "markdown": "Checked against the archives.", "baseVersion": "v7" }
+```
+
+`replace_section` replaces the heading too when the Markdown starts with a heading of the section's level or higher;
+otherwise the heading stays.
+
+**How a write runs**
+
+1. **Plan** (before anything is queued): one read of the document; B1's `applyEdit`; the version rules below. Every
+   refusal is typed. **An empty plan writes nothing** (`status: "no_change"`, no job).
+2. **Write**: one job (`replaceDocumentBlocks`, recorded as a one-step job) under the document's lock. Inside the lock
+   the engine reads the document again and compares its version with the one the plan was built on: the bridge's own
+   compare-and-swap, because LegendKeeper's `If-Match` is not atomic. On a mismatch, a **section** edit whose section's
+   Markdown is unchanged is re-planned there, on the current page; anything else ends as a conflict and nothing is
+   sent. Then ONE `replaceDocumentBlocks` with `If-Match`, every `unsupported` block echoed by id (the engine's guard
+   applies as ever). The journal keeps the pre-image and the high-level operation (above).
+3. **Verify**: still inside the lock, the document is read back and the stored blocks are compared with the blocks
+   sent, ids included. Ignored, because LegendKeeper changes them legitimately: a block's `version`; a mention's `name`
+   (read-only); run normalisation (empty text runs dropped, neighbouring runs with the same marks merged); the id
+   LegendKeeper gives a block sent without one; the document's own `version`, `text` and `schema`. A difference is
+   recorded on the job (`result.verification`), in the errors table (`VERIFY_MISMATCH`) and in the result as
+   "written but not as planned: …" with the journal entry for recovery. It is **never retried**.
+
+**Cost**: normally 2 reads and 1 write, plus the verify read (a dry run: 1 read; a proposal: 1 read to capture, then 2
+reads, 1 write and the verify read when approved).
+
+**The version rules (`baseVersion`)**
+
+| The page's version now                      | `append`, `prepend`, `replace`                     | `replace_section`, `append_to_section`                                                                                                                                                                |
+| ------------------------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| equal to `baseVersion` (or none was passed) | planned on it                                      | planned on it                                                                                                                                                                                         |
+| newer than `baseVersion`                    | `VERSION_CONFLICT`, reason `version_changed`       | planned on the current page when the section is exactly as it was at `baseVersion` (the bridge remembers recent versions it read); else `VERSION_CONFLICT` with `currentVersion` and `currentSection` |
+| changes between the plan and the write      | `VERSION_CONFLICT`, reason `changed_while_waiting` | re-planned inside the lock when the section is unchanged; else `VERSION_CONFLICT`, reason `section_changed`                                                                                           |
+
+Conflict reasons: `version_changed`, `section_changed`, `base_unknown` (the bridge no longer remembers that version,
+so it cannot tell), `section_missing_at_base`, `section_gone`, `replan_refused`, `changed_while_waiting`. A conflict
+never merges and never writes; read the page again and redo the edit.
+
+**Results** (every one names the project and ends with its budget line):
+
+```json
+{"project":"test","page":{"id":"miyabi01","name":"Asagiri Miyabi","path":"AI REPOSITORY / Characters / … / Asagiri Miyabi"},"document":{"id":"d000001c","name":"Main"},"mode":"append_to_section","section":"Asagiri Miyabi > Biography > Early Life","status":"written","version":"v13","previousVersion":"v12","counts":{"kept":11,"changed":0,"added":1,"removed":0,"moved":0,"regionsKept":1,"regionsDropped":0},"summary":"11 kept, 0 changed, 1 added, 0 removed; 1 keep region(s) kept","verified":true,"jobId":"j…","diffLines":{"added":2,"removed":0}}
+budget (test): writes 1/120·min …
+```
+
+- `status`: `written`, `no_change`, `dry_run`, `queued` or `waiting_budget` (accepted, runs by itself; never submit
+  again: it re-checks the version in the lock when it runs), `proposal_captured`.
+- `verified`: `true`, `false` (with `warning` and `verification.differences`), or `null` (the read back could not be
+  made; `verification.reason`).
+- `note`: when an older `baseVersion` was accepted because the section is unchanged, or when the write was re-planned
+  inside the lock.
+- `warnings`: the converter's (for example `KEEP_REGION_EDITED`).
+- With `detail: "full"` (and always for `dryRun`): `diff`, the Markdown diff as unified-diff text, each keep region one
+  placeholder line (`[keep region: infobox infobx01]`).
+
+**Refusals** (typed, nothing is written): every B1 code (`KEEP_REGIONS_MISSING` with `ids`, `UNSUPPORTED_BLOCK_LOSS`
+with `blockIds`, `MENTION_NOT_FOUND`, `MENTION_AMBIGUOUS` with the candidates in `problems`, `EDITOR_LIMIT` with
+`rule`, `FIELD_LIMIT`, `SCHEMA_VIOLATION`, `SECTION_NOT_FOUND` with `available`, `SECTION_AMBIGUOUS` with `options`,
+`KEEP_REGION_UNKNOWN`, `KEEP_REGION_DUPLICATE`, `INVALID_LK_BLOCK`, `IMAGE_URL_REFUSED`, …), `VERSION_CONFLICT`
+(above), `WRONG_TOOL_FOR_DOCUMENT`, `PAGE_NOT_WRITABLE` (the page already holds blocks LegendKeeper's write schema
+would not take back, such as text with an inline icon, listed in `blocks`: a whole-document write cannot leave them as
+they are), `INVALID_PARAMS` (a section mode without `section`, or a whole-page mode with one), and the name and tree
+codes of the read tools (`NOT_FOUND`, `NOT_IN_REPOSITORY`, `AMBIGUOUS`, `DOCUMENT_NOT_FOUND`, `TREE_NOT_READY`).
+
+**At scope `propose`** (or whenever policy turns the write into a proposal) the same plan is captured as ONE proposal
+that holds the **high-level operation** (page, document, mode, section, the Markdown, `baseVersion`) and its planned
+expansion (the new block tree, pinned to the version it was built on). The capture reuses the plan's read. The
+dashboard shows the page's Markdown before and after as a line diff (keep regions as labelled placeholders) beside the
+block diff. On approval the usual re-read applies: if the version changed since capture the proposal becomes
+**conflicted** (no re-planning: the owner approves exactly what they saw); otherwise the stored expansion runs through
+the same lock, compare-and-swap and verify, with `approvedBy: "owner"`. A change between the approval's re-read and
+the write is caught by the compare-and-swap, and the proposal becomes conflicted too. A `dryRun` never captures.
+
 ### Visibility of the low-level tools
 
 Each profile has **show low-level tools** (default off), edited on the dashboard's Clients & Access page and audited
@@ -266,10 +371,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                        |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| off     | the 12 above, `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (28 for a profile with scope `propose` or `write`; a `read` profile does not see the four write tools `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                    |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| off     | the 12 above, `write_page` (v2 C1), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (29 for a profile with scope `propose` or `write`; a `read` profile does not see the five write tools `write_page`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                        |
 
 ## Image upload
 

@@ -442,6 +442,40 @@ export interface Proposal {
   } | null;
   error: Record<string, unknown> | null;
   opCount: number;
+  /** v2 C1: the high-level operation, briefly (write_page: page, document, mode, section…), or null. */
+  operation?: ProposalOperationBrief | null;
+}
+
+/** v2 C1: what a high-level tool proposed (write_page). */
+export interface ProposalOperationBrief {
+  tool?: string;
+  page?: { id: string; name: string; path?: string };
+  document?: { id: string; name: string | null };
+  mode?: string;
+  section?: string;
+  plannedOn?: string;
+  baseVersion?: string;
+  counts?: Record<string, number>;
+}
+
+export interface MarkdownDiffLine {
+  kind: 'same' | 'add' | 'del';
+  text: string;
+}
+
+export interface MarkdownDiffHunk {
+  beforeStart: number;
+  beforeLines: number;
+  afterStart: number;
+  afterLines: number;
+  lines: MarkdownDiffLine[];
+}
+
+export interface MarkdownDiff {
+  added: number;
+  removed: number;
+  hunks: MarkdownDiffHunk[];
+  coarse?: boolean;
 }
 
 export interface ProposalOp {
@@ -460,6 +494,12 @@ export interface ProposalOp {
 
 export interface ProposalDetail extends Proposal {
   ops: ProposalOp[];
+  /** v2 C1: the whole high-level operation (with the agent's Markdown), or null for a v1 proposal. */
+  operationDetail?: (ProposalOperationBrief & { markdown?: string; dropRegions?: string[] }) | null;
+  /** v2 C1: the page's Markdown before and after, line by line; keep regions are labelled placeholders. */
+  markdownDiff?: MarkdownDiff | null;
+  /** v2 C1: what the read after the approved write found. */
+  execution?: { verified: boolean | null; verification: unknown } | null;
 }
 
 export interface ProposalCounts {
@@ -522,6 +562,8 @@ export interface JournalEntry {
   preImage?: unknown;
   bytes: number;
   outcome: string;
+  /** v2 C1: the high-level operation (write_page: mode, section, a hash of the Markdown…), or null. */
+  operation?: unknown;
 }
 
 interface Deferred<T> {

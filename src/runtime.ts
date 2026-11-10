@@ -33,6 +33,12 @@ import { createTree, type TreeService } from './tree/index.js';
 import { SecretStore } from './secrets/store.js';
 import { createRegistry, type Registry } from './registry/index.js';
 import {
+  createWritePagePlanner,
+  DocumentVersions,
+  pageConverterContext,
+  WRITE_PAGE_PLANNER,
+} from './pages/index.js';
+import {
   InstanceGuard,
   ProjectSelector,
   createProjectRegistry,
@@ -232,6 +238,16 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachRegistry = registry.attach();
+  // v2 C1: the bridge's memory of recent page versions, and write_page's in-lock re-planner (section edits whose section
+  // is unchanged). Registered before any job can run: the scheduler starts in a microtask, after createRuntime returns.
+  const versions = new DocumentVersions(o.db, () => (o.clock ?? systemClock).now());
+  const unregisterPlanner = engine.registerPlanner(
+    WRITE_PAGE_PLANNER,
+    createWritePagePlanner({
+      contextFor: (projectId) => pageConverterContext({ tree, registry }, projectId),
+      versions,
+    }),
+  );
 
   const characterType = (projectId: string) =>
     registry
@@ -296,7 +312,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       version: o.version,
       configuredReadOnly: config.lk.readOnly,
       uploadGuard,
-      services: { tree, registry, assets },
+      services: { tree, registry, assets, versions },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
   );
@@ -339,6 +355,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       clearTimeout(timer);
       detachPolicy();
       await engine.stop();
+      unregisterPlanner();
       await tree.stop();
       detachRegistry();
       await assets.stop();

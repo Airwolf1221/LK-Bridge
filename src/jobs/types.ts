@@ -1,6 +1,7 @@
 /** Shared types of the job engine (PLAN §6). */
 import type { PriorityClass } from '../config/lk.js';
 import type { OperationKind } from '../lk/registry-types.js';
+import type { ProposalExtras } from './policy.js';
 
 export type { PriorityClass } from '../config/lk.js';
 
@@ -77,6 +78,19 @@ export interface StepOptions {
   readonly allowUnsupportedLoss?: boolean;
   /** PLAN §4 rule 3: `deleteResource` with `cascade=true` needs `confirm: "cascade"`. */
   readonly confirm?: 'cascade';
+  /**
+   * v2 C1 (ADR 0031), set by bridge code only: after a successful `replaceDocumentBlocks`, read the document again
+   * inside the lock and compare the stored blocks with the blocks sent (src/jobs/verify-blocks.ts). A difference is
+   * recorded on the step, the job and the errors table; the write is never retried.
+   */
+  readonly verifyAfterWrite?: boolean;
+  /** v2 C1, set by bridge code only: the high-level operation, recorded in the write's journal entry. */
+  readonly journalOperation?: Readonly<Record<string, unknown>>;
+  /**
+   * v2 C1, set by bridge code only: when the in-lock read shows the document changed since `ifMatch`, ask this planner
+   * (src/jobs/planners.ts) to re-plan instead of refusing. Never stored for approved proposals.
+   */
+  readonly replan?: { readonly planner: string; readonly input: unknown };
 }
 
 export interface StepSpec extends StepOptions {
@@ -92,6 +106,8 @@ export interface RunOptions extends StepOptions {
   readonly title?: string;
   /** Aborts waiting (inline reads, and an inline write while it waits for a lock or slot). */
   readonly signal?: AbortSignal;
+  /** v2 C1: added to the proposal when the policy gate turns this write into one (src/jobs/policy.ts). */
+  readonly proposal?: ProposalExtras;
 }
 
 export interface BatchSubmit {

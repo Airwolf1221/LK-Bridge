@@ -10,6 +10,7 @@
  */
 import * as z from 'zod';
 import type { AssetQueries } from '../../assets/index.js';
+import type { DocumentVersions } from '../../pages/versions.js';
 import type { ToolsSettings } from '../../config/tools.js';
 import type { Registry } from '../../registry/index.js';
 import type { TreeQueries } from '../../tree/index.js';
@@ -47,6 +48,11 @@ export interface DiscoverServices {
   readonly tree: { readonly queries: TreeQueries };
   readonly registry: Pick<Registry, 'forProject'>;
   readonly assets: { readonly queries: AssetQueries };
+  /**
+   * v2 C1: the bridge's memory of recent page versions (src/pages/versions.ts). read_document and write_page record
+   * what they read; write_page checks a section edit made from an older version against it.
+   */
+  readonly versions?: DocumentVersions;
 }
 
 /** What every tool handler needs. */

@@ -6,6 +6,8 @@
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test --max-pages 50   # a trial
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test --root <resourceId>
+#   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test --list-keep paragraph
+#       (v2 C1: also lists every paragraph kept read-only, with the characters that made it so, as \n or \u0007)
 #
 # Every other argument goes to the script (see `npm run roundtrip -- --help`).
 #

@@ -128,6 +128,27 @@ All have `code`, `message`, and `jobId` / `stepNo` when a job recorded the work;
   `retryAtMs`, for the caller to wait out), not recorded as a job; LegendKeeper errors go to the errors table (a 404
   does not, with `notFoundIsAnswer`). Throws only `JobsError` subclasses.
 
+## Page writes (v2 C1)
+
+[ADR 0031](../../docs/adr/0031-write-page.md). Step options that only bridge code sets (the tools never pass an agent's
+input into them; `stepOptions` keeps them, proposals keep the first two):
+
+- `verifyAfterWrite: true` (`replaceDocumentBlocks`): after a successful write, still inside the lock and the writer
+  slot, the document is read again and compared with the blocks sent (`compareStoredBlocks`, src/jobs/verify-blocks.ts;
+  the fields LegendKeeper may change are `VERIFY_IGNORED_FIELDS`). The step's value is then
+  `{ document: { id, version }, verification: { status: 'verified' | 'mismatch' | 'not_checked', version?, differences?,
+differenceCount?, reason?, journalId, ignored }, replanned? }`; the job's result gets `verification` and `verified`;
+  a mismatch is also an error row (`VERIFY_MISMATCH`, classification `conflict`). Never a retry.
+- `journalOperation`: recorded as the journal entry's `operation` (with `replannedInLock` added when it applies).
+- `replan: { planner, input }`: when the read inside the lock shows a version other than the caller's `ifMatch`, the
+  engine calls the planner registered under that name (`engine.registerPlanner(name, fn)`, or `planners` at creation;
+  src/jobs/planners.ts) with the current document. It returns new params built on the current version (stored with the
+  step before anything is sent), `unchanged` (nothing is sent; the step succeeds), or throws a `JobsError` (a
+  conflict: nothing is sent). Without a registered planner the plain `VersionConflictError` stands.
+
+`RunOptions.proposal` (`ProposalExtras`: `operation`, `summary`, `prefetched` reads) is handed to the proposal sink
+when the gate turns the write into a proposal. `WriteJournal.entryIdForStep(jobId, stepNo)` gives a step's entry.
+
 ## Model
 
 **Job** (`jobs`): `kind` (`single_op`, `batch_ops`, `paginate_all`; `upload_image`, chunk 3), `title`,

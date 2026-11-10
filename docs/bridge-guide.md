@@ -9,7 +9,8 @@ to the short version below.
    `read_document`.
 2. Almost everything costs nothing: it is answered from the bridge's own copy of the repository. Only live reads cost
    LegendKeeper requests, and each tool says so.
-3. Pages are Markdown. Read `get_markdown_guide` before you write any.
+3. Pages are Markdown. Read `get_markdown_guide` before you write any; write with `write_page`, passing the version you
+   read as `baseVersion`.
 4. Budgets are finite. Never loop on an error; wait for the time it states.
 5. A write that was `queued`, `waiting_budget` or `proposal_captured` is not lost and is never retried.
 
@@ -90,16 +91,66 @@ their paths: choose one and pass its id. The bridge never guesses.
 - Long results are stored and returned as a **handle**: read them with `bridge_result_page`.
 - Results are summaries unless you pass `detail: "full"` where a tool offers it.
 
-## Writing, and what is coming
+## Writing pages
 
-Pages are changed as Markdown: you read a page, change the Markdown and send it back, and the bridge turns it into
-LegendKeeper blocks. Anything you did not change comes back exactly as it was, and content Markdown cannot show is
-protected inside **keep regions**. Never edit or remove a keep region unless you mean to delete that block. The write
-tools (`write_page` and the tools for pages, facts, maps and timelines) are being added; until they are in your tool list,
-the low-level `lk_api_write` and `lk_api_batch` are the way to write, with every guard in place.
+Pages are changed with `write_page`, in Markdown (read `get_markdown_guide` first). You send Markdown for one page
+document; the bridge turns it into LegendKeeper blocks, keeps everything you did not change exactly as it was (ids,
+styling, keep regions), and checks what it wrote.
 
-Always read before you write, and pass the version you read. A write made on an out-of-date version is refused with the
-current version; read again and redo your change on the current content.
+1. **Read first.** `read_document` gives the page's Markdown and its `version`. Change the Markdown you read; do not
+   write a page you have not read.
+2. **Pass `baseVersion`.** Give `write_page` the version you read. If the page changed since, a whole-page edit is
+   refused, and a section edit goes ahead only if that section is still exactly as you read it.
+3. **Prefer the section modes.** `append_to_section` and `replace_section` touch one section (`section: "Biography >
+Early Life"`) and nothing else, so they survive edits made elsewhere on the page at the same time. Use `replace`
+   (the whole page) only when you mean it: every keep region must be in it.
+4. **Try it first when unsure.** `dryRun: true` returns what would change and the Markdown diff, and writes nothing.
+
+| Mode                | What it does                                                                   |
+| ------------------- | ------------------------------------------------------------------------------ |
+| `append`            | Adds your Markdown at the end of the page.                                     |
+| `prepend`           | Adds it at the start.                                                          |
+| `replace`           | Replaces the whole page (keep every keep region, or name it in `dropRegions`). |
+| `replace_section`   | Replaces one section; start with its heading to change the heading too.        |
+| `append_to_section` | Adds to the end of one section.                                                |
+
+```json
+{
+  "project": "test",
+  "page": "Asagiri Miyabi",
+  "mode": "append_to_section",
+  "section": "Biography",
+  "markdown": "She became head maiden in 4A 900.",
+  "baseVersion": "v12"
+}
+```
+
+**The result** says what changed (blocks kept, changed, added and removed; keep regions kept), the new `version` (use it
+as the `baseVersion` of your next edit), whether the bridge **verified** the write by reading the page back, and the job
+id. `detail: "full"` adds the Markdown diff. An edit that changes nothing writes nothing (`no_change`).
+
+**A conflict (`VERSION_CONFLICT`) wrote nothing.** Never send the same call again: someone else changed the page.
+Read it again (the error gives the current version, and for a section edit the section's current text in
+`currentSection`), redo your change on what it holds now, and pass the new version.
+
+**"written but not as planned"** means the write was made, but the page read back afterwards differs from what was
+sent (usually someone edited it at the same moment). It is not retried. Read the page and tell the person; the journal
+entry named in the result holds the page as it was before.
+
+Other refusals name what to fix: `KEEP_REGIONS_MISSING` (put the regions back, or name them in `dropRegions`),
+`UNSUPPORTED_BLOCK_LOSS` (content the API cannot show is never deleted by `write_page`), `SECTION_NOT_FOUND` and
+`SECTION_AMBIGUOUS` (the headings or options are listed), `MENTION_NOT_FOUND` and `MENTION_AMBIGUOUS`,
+`WRONG_TOOL_FOR_DOCUMENT` (maps, timelines and boards have their own tools), `PAGE_NOT_WRITABLE` (the page holds
+something LegendKeeper's API would not take back; tell the owner).
+
+**What a proposal is.** If your connection proposes rather than writes (scope `propose`), `write_page` returns
+`proposal_captured`: nothing was written. The owner sees exactly your change, as a Markdown diff of the page, and
+approves or rejects it. If the page changes before they approve, the proposal becomes **conflicted** instead of being
+applied, and you can propose again from the current page. Never submit a proposal twice; follow it with
+`bridge_proposal_status`.
+
+The other write tools (for resources, facts and links, maps and timelines) are being added; until they are in your
+tool list, the low-level `lk_api_write` and `lk_api_batch` are the way to make those changes, with every guard in place.
 
 ## Budget rules
 
@@ -134,5 +185,6 @@ Every refusal has a code and a plain message. The common ones:
 | `SECTION_AMBIGUOUS`, `SECTION_NOT_FOUND` | A section path matched several headings, or none. The options are listed.              |
 | `BUDGET_EXHAUSTED`                       | Wait until `retryAt`. Do not retry in a loop.                                          |
 | `PROJECT_REQUIRED`                       | A write did not name its project. Pass `project`.                                      |
+| `VERSION_CONFLICT`                       | The page changed since you read it. Nothing was written: read again and redo the edit. |
 
 `bridge_errors_recent` lists recent failures with LegendKeeper's request ids when you need to report one.

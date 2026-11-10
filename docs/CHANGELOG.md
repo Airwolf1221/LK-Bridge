@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased: v2 C1, write_page (10 November 2026)
+
+The main way agents change the owner's pages ([ADR 0031](adr/0031-write-page.md); the tool in
+[tools.md](tools.md#writing-pages-write_page-v2-c1); the agent guide's "Writing pages" in [bridge-guide.md](bridge-guide.md)).
+Migration 1200.
+
+- **`write_page`** (`access: write`, `destructiveHint: true`): `append`, `prepend`, `replace`, `replace_section`,
+  `append_to_section` on a page document of the AI REPOSITORY, in Markdown, through B1's converter and A3's name
+  resolution. Every converter refusal is a typed error with its details; an empty plan writes nothing; `dryRun` returns
+  the plan and the Markdown diff; `detail: "full"` adds the diff. Maps, timelines and boards are refused with a pointer
+  to their tools. There is no `allowUnsupportedLoss`: `unsupported` blocks are always kept.
+- **Versions.** `baseVersion` (strongly recommended): an older version refuses a whole-page edit, and lets a section
+  edit through only when that section is unchanged since then (the bridge remembers recent page versions it read:
+  `document_versions`, filled by `read_document` and `write_page`). Never a silent merge: a conflict gives the current
+  version and the section's current Markdown.
+- **The bridge's own compare-and-swap.** One job, under the document lock: the version is read again inside the lock;
+  a section edit whose section is unchanged is re-planned there (new: step planners, `engine.registerPlanner`),
+  anything else is a conflict and nothing is sent. Then ONE `replaceDocumentBlocks` with `If-Match`, every unsupported
+  block echoed.
+- **Verify.** The page is read back inside the lock and compared with what was sent (ids included; the fields
+  LegendKeeper may change are listed). A difference is recorded on the job, in the errors table (`VERIFY_MISMATCH`) and
+  in the result ("written but not as planned"), with the journal entry for recovery; never retried.
+- **Journal**: entries carry the high-level `operation` (mode, section, a SHA-256 of the Markdown, the version planned
+  on, a re-plan in the lock); `bridge_journal_lookup` and the Journal page show it.
+- **Proposals** (scope `propose`) hold the high-level operation and its expansion; the dashboard's proposal page shows
+  the page's Markdown diff (keep regions as labelled placeholders) beside the block diff, and after approval whether
+  the write was verified. Approval executes the stored expansion through the same lock, compare-and-swap and verify;
+  a version change since capture, or between the approval's re-read and the write, ends `conflicted` (new transition
+  `executing → conflicted` for page writes). `bridge_proposal_status` shows the operation briefly.
+- **`PAGE_NOT_WRITABLE`**: a page that already holds content LegendKeeper's write schema has no form for (B1's model of
+  an inline icon) cannot be written by a whole-document replace; refused at planning, naming the blocks. To verify on
+  the test world.
+- **`npm run roundtrip -- --list-keep <kind>`** lists every keep region of a kind (`paragraph`, …, or `all`) with its
+  page, document, block id and the characters that made it read-only as escapes (`\n`, `\u0007`). Read-only. Rendering
+  a newline in a text run as `<br>` was checked and does not round-trip (ADR 0031); not proposed.
+- Engine: step options `verifyAfterWrite`, `journalOperation`, `replan` (bridge code only), `RunOptions.proposal`
+  (`ProposalExtras`), `compareStoredBlocks`, `WriteJournal.entryIdForStep` (src/jobs/README.md).
+- Tests: `test/pages/` (planning, every mode and refusal, sections at every level, the version rules, the
+  compare-and-swap, verify, unsupported blocks, the journal, B1's real-page fixtures including the 335-row Fourth Age
+  table, twins, proposals, concurrency, two projects, all through the real server and the official MCP client), the
+  round-trip `--list-keep` dry run, a dashboard component test and a Playwright check of the Markdown diff. Tool counts:
+  32 tools (29 shown to a profile without low-level tools).
+- **For the owner:** ChatGPT keeps its own copy of the tool list. After deploying: Plugins, the bridge, **Refresh**.
+
 ## Unreleased: v2 B2, the Discover and Read tools (10 November 2026)
 
 The first v2 tools agents use ([ADR 0029](adr/0029-discover-and-read-tools.md); every tool in

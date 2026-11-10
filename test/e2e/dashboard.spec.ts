@@ -184,6 +184,32 @@ test('reviews a proposal as a readable diff and approves it; a token is shown on
   expect(problems).toEqual([]);
 });
 
+test('v2 C1: a write_page proposal shows its Markdown diff, keep regions as placeholders, and is verified once approved', async ({
+  page,
+  request,
+}) => {
+  const problems = watch(page);
+  const { proposalId } = (await (await request.get(`${CONTROL}/page-proposal`)).json()) as {
+    proposalId: string;
+  };
+  expect(proposalId).toMatch(/^prop_/);
+  await signIn(page, `/ui/proposals?id=${proposalId}`);
+  const section = page.getByRole('region', { name: 'Page write' });
+  await expect(section).toContainText('replace_section of “Biography” on Asagiri Miyabi');
+  const md = section.getByRole('group', { name: 'Markdown changes, part 1' });
+  await expect(md.locator('[data-kind="add"]')).toContainText('Born at dawn on Kumikas 1st, 4A 881.');
+  await expect(md.locator('[data-kind="del"]')).toContainText('Born on Kumikas 1st, 4A 881.');
+  await expect(md).toContainText('[keep region: infobox mib1]');
+  // The block-level diff is still shown.
+  await expect(page.getByRole('group', { name: /Changes to/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Approve', exact: true }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Approve' }).click();
+  await expect(page.getByRole('region', { name: 'Page write' })).toContainText('Written and verified', {
+    timeout: 15_000,
+  });
+  expect(problems).toEqual([]);
+});
+
 test('is usable on a phone, in the dark', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 800 }, colorScheme: 'dark' });
   const page = await context.newPage();

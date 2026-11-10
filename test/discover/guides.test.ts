@@ -27,7 +27,7 @@ describe('docs/bridge-guide.md', () => {
       'The repository tree',
       'Finding things',
       'Reading',
-      'Writing, and what is coming',
+      'Writing pages',
       'Budget rules',
       'Proposals and the owner',
     ]) {
@@ -35,18 +35,16 @@ describe('docs/bridge-guide.md', () => {
       expect(getSection(guide, h).body.length, h).toBeGreaterThan(100);
     }
   });
-  it('names only tools that exist (or the write tools it says are coming)', () => {
+  it('names only tools that exist', () => {
     const names = new Set(tools.map((t) => t.name));
     for (const op of operations) names.add(`lk_op_${op.operationId}`);
     for (const n of ['bridge_proposal_status', 'bridge_proposals_mine']) names.add(n);
-    // The write tool the guide says is coming.
-    const coming = new Set(['write_page']);
     const mentioned = [...guide.matchAll(/`((?:lk|bridge|list|get|browse|write)(?:_[a-zA-Z]+)+)`/g)].map(
       (m) => m[1]!,
     );
     expect(mentioned.length).toBeGreaterThan(10);
     for (const n of mentioned) {
-      expect(names.has(n) || coming.has(n), n).toBe(true);
+      expect(names.has(n), n).toBe(true);
     }
   });
   it('states that content search is incomplete and that a write must name its project', () => {

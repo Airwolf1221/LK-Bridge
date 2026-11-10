@@ -27,6 +27,7 @@ import {
   PolicyDeniedError,
   ReadOnlyError,
   UnknownOperationError,
+  VersionConflictError,
 } from '../jobs/errors.js';
 import { assertNoUnsupportedLoss, checkSubmitGuards, unsupportedLoss } from '../jobs/guards.js';
 import { READERS, opMeta } from '../jobs/op-meta.js';
@@ -44,6 +45,7 @@ import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.
 import { getOperation, operationInputSchema, requireOperation } from '../lk/registry.js';
 import { projectWhere } from '../jobs/repo.js';
 import type { OperationDef } from '../lk/registry-types.js';
+import { markdownDiff, type MarkdownDiff } from '../pages/diff.js';
 import { canonicalJson, hashJson, issueApprovalToken } from './approval.js';
 import { PolicyError } from './errors.js';
 import type { PolicyStore } from './store.js';
@@ -114,7 +116,19 @@ export interface ProposalOpDetail extends ProposalOpView {
 
 export interface ProposalDetail extends ProposalView {
   readonly ops: readonly ProposalOpDetail[];
+  /**
+   * v2 C1: the high-level operation as captured (write_page: page, document, mode, section, the Markdown, the page's
+   * Markdown before and after), or null for a v1 proposal.
+   */
+  readonly operationDetail: Readonly<Record<string, unknown>> | null;
+  /** v2 C1: the page's Markdown before and after, line by line, keep regions as labelled placeholders. */
+  readonly markdownDiff: MarkdownDiff | null;
+  /** v2 C1: what the read after the write found, once the approved job ran (from the job). */
+  readonly execution: { readonly verified: boolean | null; readonly verification: unknown } | null;
 }
+
+/** v2 C1: the high-level operation kept with a proposal: each text field at most this long. */
+const OPERATION_FIELD_MAX = 512 * 1024;
 
 /** What an agent may read about its own proposal. */
 export interface AgentProposalView {
@@ -130,6 +144,8 @@ export interface AgentProposalView {
   readonly jobId: string | null;
   readonly conflict: { readonly operation: number; readonly op: string; readonly reason: string } | null;
   readonly error: string | null;
+  /** v2 C1: the high-level operation, briefly (tool, page, document, mode, section), or null. */
+  readonly operation: Readonly<Record<string, unknown>> | null;
 }
 
 export function newProposalId(): string {
@@ -170,7 +186,31 @@ function toView(r: Row, opCount: number): ProposalView {
     error: parseJson<Record<string, unknown> | null>(r.error, null),
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
     opCount,
+    operation: operationBrief(parseJson<Record<string, unknown> | null>(r.operation, null)),
   };
+}
+
+/** The part of a high-level operation a list shows (never the Markdown or the page). */
+function operationBrief(op: Record<string, unknown> | null): Readonly<Record<string, unknown>> | null {
+  if (!op) return null;
+  const out: Record<string, unknown> = {};
+  for (const k of ['tool', 'page', 'document', 'mode', 'section', 'plannedOn', 'baseVersion', 'counts'])
+    if (op[k] !== undefined) out[k] = op[k];
+  return out;
+}
+
+/** Caps each long text field of a high-level operation (the Markdown, the page before and after). */
+function capOperation(op: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const truncated: string[] = [];
+  for (const [k, v] of Object.entries(op)) {
+    if (typeof v === 'string' && v.length > OPERATION_FIELD_MAX) {
+      out[k] = v.slice(0, OPERATION_FIELD_MAX);
+      truncated.push(k);
+    } else out[k] = v;
+  }
+  if (truncated.length > 0) out.truncated = truncated;
+  return out;
 }
 
 /** Builds the read that shows an operation's target, from op-meta's reader (as the engine does before a write). */
@@ -353,8 +393,18 @@ export class ProposalService implements ProposalSink {
       const key = canonicalJson(target);
       let snap = seen.get(key);
       if (!snap) {
-        snap = await this.snapshot(engine, meta.project, target, readOrigin, meta.priority);
+        // v2 C1: a read the tool made in this same call is used as it is (the plan was built on exactly it).
+        const pre = meta.extras?.prefetched?.find(
+          (p) => p.op === target.op && canonicalJson(p.path) === canonicalJson(target.path),
+        );
+        snap = pre
+          ? this.snapshotOf(target, pre.body)
+          : await this.snapshot(engine, meta.project, target, readOrigin, meta.priority);
         seen.set(key, snap);
+      }
+      // v2 C1: a high-level write planned on a version must be captured on that version, or it is a conflict.
+      if (meta.extras?.operation && o.params.ifMatch !== undefined && snap.version !== o.params.ifMatch) {
+        throw new VersionConflictError(o.op, o.params.ifMatch, snap.version);
       }
       const om = opMeta(o.op);
       if (om.guard && snap.exists) {
@@ -369,14 +419,15 @@ export class ProposalService implements ProposalSink {
     // 3. Store the ordered operations as one proposal.
     const id = newProposalId();
     const now = this.now();
-    const summary = proposalSummary(ops);
+    const summary = meta.extras?.summary ? meta.extras.summary.slice(0, SUMMARY_MAX) : proposalSummary(ops);
     const origin = sanitiseOrigin(meta.origin);
+    const operation = meta.extras?.operation ? JSON.stringify(capOperation(meta.extras.operation)) : null;
     this.store.tx(() => {
       this.store.db
         .prepare(
           `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
-             priority, on_error, summary, state, created_at, updated_at, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+             priority, on_error, summary, state, created_at, updated_at, expires_at, operation)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -393,6 +444,7 @@ export class ProposalService implements ProposalSink {
           now,
           now,
           now + this.o.settings.proposalExpiryMs,
+          operation,
         );
       const insert = this.store.db.prepare(
         `INSERT INTO proposal_ops (proposal_id, project_id, idx, op_id, op_kind, params, params_hash, options,
@@ -466,6 +518,11 @@ export class ProposalService implements ProposalSink {
       }
       throw e;
     }
+    return this.snapshotOf(target, body);
+  }
+
+  /** What a target read's body says: whether the entity exists, its version, fingerprint and state. */
+  private snapshotOf(target: CapturedTarget, body: unknown): Snapshot {
     const reader = Object.values(READERS).find((x) => x.op === target.op)!;
     let entity: unknown = body;
     if (reader.list) {
@@ -768,6 +825,46 @@ export class ProposalService implements ProposalSink {
       }
       return;
     }
+    // v2 C1: a page write whose compare-and-swap refused it inside the lock wrote nothing: the proposal is conflicted, as
+    // if the approval's own re-read had seen the change (the owner approves exactly what they saw, never a re-plan).
+    const highLevel = this.store.db.prepare('SELECT operation FROM proposals WHERE id = ?').get(row.id) as
+      { operation: string | null } | undefined;
+    if (
+      highLevel?.operation &&
+      job.status === 'failed' &&
+      job.lastError?.code === 'VERSION_CONFLICT' &&
+      job.progress.stepsDone === 0
+    ) {
+      const le = job.lastError as {
+        stepNo?: unknown;
+        sentVersion?: unknown;
+        currentVersion?: unknown;
+        opId?: unknown;
+      };
+      const conflict: ProposalConflict = {
+        index: typeof le.stepNo === 'number' ? le.stepNo - 1 : 0,
+        op: typeof le.opId === 'string' ? le.opId : 'replaceDocumentBlocks',
+        reason:
+          'the page changed between the approval’s check and the write (the bridge’s own version check inside the page’s lock); nothing was written',
+        capturedVersion: typeof le.sentVersion === 'string' ? le.sentVersion : null,
+        currentVersion: typeof le.currentVersion === 'string' ? le.currentVersion : null,
+      };
+      if (
+        this.transition(row.id, ['executing'], 'conflicted', {
+          conflict: JSON.stringify(conflict),
+          finished_at: this.now(),
+        })
+      ) {
+        this.store.audit(
+          'system',
+          'proposal.conflicted',
+          row.id,
+          { state: 'executing' },
+          { state: 'conflicted', conflict, jobId: job.id },
+        );
+      }
+      return;
+    }
     const error = {
       code: job.status === 'cancelled' ? 'JOB_CANCELLED' : 'JOB_FAILED',
       message: `Job ${job.id} ended ${job.status}${job.lastError ? `: ${job.lastError.message}` : ''}`,
@@ -924,7 +1021,22 @@ export class ProposalService implements ProposalSink {
         unsupportedLoss: meta.guard && !truncated && pre !== null ? unsupportedLoss(guardOld, guardNew) : [],
       };
     });
-    return { ...p, ops };
+    const opRow = this.store.db.prepare('SELECT operation FROM proposals WHERE id = ?').get(id) as
+      { operation: string | null } | undefined;
+    const operationDetail = parseJson<Record<string, unknown> | null>(opRow?.operation, null);
+    const before = operationDetail?.before;
+    const after = operationDetail?.after;
+    const md = typeof before === 'string' && typeof after === 'string' ? markdownDiff(before, after) : null;
+    return { ...p, ops, operationDetail, markdownDiff: md, execution: this.execution(p) };
+  }
+
+  /** v2 C1: the verify result of the approved job, once it ran (from the job's own record). */
+  private execution(p: ProposalView): ProposalDetail['execution'] {
+    if (!p.jobId || !this.engine) return null;
+    const job = this.engine.queries.getJob(p.projectId, p.jobId);
+    const r = (job?.result ?? null) as { verified?: unknown; verification?: unknown } | null;
+    if (!r || r.verification === undefined) return null;
+    return { verified: typeof r.verified === 'boolean' ? r.verified : null, verification: r.verification };
   }
 
   /** The agent-facing view (no params, no pre-state: an agent reads its own proposal's status only). */
@@ -944,6 +1056,7 @@ export class ProposalService implements ProposalSink {
         ? { operation: p.conflict.index + 1, op: p.conflict.op, reason: p.conflict.reason }
         : null,
       error: p.error ? errorText(p.error) : null,
+      operation: p.operation,
     };
   }
 
@@ -1051,6 +1164,10 @@ function stepOptions(o: StepOptions): StepOptions {
   return {
     ...(o.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
     ...(o.confirm === 'cascade' ? { confirm: 'cascade' as const } : {}),
+    // v2 C1: an approved page write is verified and journalled with its operation like a direct one. It is never
+    // re-planned (`replan` is not kept): the owner approves exactly the expansion they saw.
+    ...(o.verifyAfterWrite === true ? { verifyAfterWrite: true } : {}),
+    ...(o.journalOperation ? { journalOperation: o.journalOperation } : {}),
   };
 }
 

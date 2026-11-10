@@ -79,6 +79,28 @@ export interface ProposalMeta {
   readonly onError?: OnError;
   /** paginate_all caps, when the proposal is a paginate_all job. */
   readonly paginate?: { readonly maxItems?: number; readonly maxPages?: number };
+  /** v2 C1: what a high-level tool adds (its operation, a summary, the reads it already made). */
+  readonly extras?: ProposalExtras;
+}
+
+/**
+ * v2 C1 (PLAN-v2 10.2): what a high-level tool adds to a proposal, besides the operations it expands to. Set by bridge
+ * code only (the tools build it; nothing an agent sends reaches it unchecked).
+ */
+export interface ProposalExtras {
+  /** The high-level operation (for write_page: page, document, mode, section, the Markdown, the page before and after). */
+  readonly operation?: Readonly<Record<string, unknown>>;
+  /** A one-line summary to show instead of the generic one. */
+  readonly summary?: string;
+  /**
+   * Reads the tool made in this same call, so capture does not repeat them: the target read's operation, path and the
+   * body it returned. Used only when the target matches exactly.
+   */
+  readonly prefetched?: readonly {
+    readonly op: string;
+    readonly path: Readonly<Record<string, string>>;
+    readonly body: unknown;
+  }[];
 }
 
 export interface ProposalSink {

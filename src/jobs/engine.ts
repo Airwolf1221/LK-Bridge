@@ -50,7 +50,8 @@ import {
   type ProposedOp,
 } from './policy.js';
 import { createJobQueries, JobsRepo, type ErrorInput, type NewStep } from './repo.js';
-import { StepExecutor, type StepOutcome, type WriteHold } from './step-exec.js';
+import { StepExecutor, type StepOutcome, type WriteHold, type WriteVerification } from './step-exec.js';
+import type { StepPlanner, StepPlanners } from './planners.js';
 import {
   SYSTEM_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
@@ -106,6 +107,8 @@ export interface CreateJobEngineOptions {
   readonly proposalSink?: ProposalSink;
   /** Non-registry step types, by step id (`upload_image.put`, supplied by the MCP tools). */
   readonly customSteps?: CustomStepHandlers;
+  /** v2 C1: in-lock planners by name (src/jobs/planners.ts); more can be added with `registerPlanner`. */
+  readonly planners?: StepPlanners;
 }
 
 const SETTING = {
@@ -155,6 +158,8 @@ export class JobEngine {
   private readonly jobWaiters = new Set<() => void>();
   /** v2 A2: told about every write step (the repository tree). */
   private readonly writeObservers = new Set<WriteObserver>();
+  /** v2 C1: in-lock planners (write_page's section re-plan), by name. */
+  private readonly planners = new Map<string, StepPlanner>();
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -195,7 +200,10 @@ export class JobEngine {
       setJobWaiting: (jobId, waiting, detail) => this.setWaitingLock(jobId, waiting, detail),
       writeHold: (projectId) => this.writeHold(projectId),
       customSteps: o.customSteps,
+      planner: (name) => this.planners.get(name),
+      recordVerifyMismatch: (job, step, v) => this.recordVerifyMismatch(job, step, v),
     });
+    for (const [name, fn] of Object.entries(o.planners ?? {})) this.planners.set(name, fn);
     const base = createJobQueries(o.db);
     this.queries = {
       ...base,
@@ -266,6 +274,7 @@ export class JobEngine {
     const proposal = await this.authorize([{ def, params, options }], origin, 'single_op', project, {
       title,
       priority,
+      ...(opts.proposal ? { extras: opts.proposal } : {}),
     });
     if (proposal) return proposal;
     checkSubmitGuards(def, params, options, this.guardContext(project));
@@ -356,6 +365,40 @@ export class JobEngine {
       if (e instanceof JobsError) throw e;
       throw new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), {}, { cause: e });
     }
+  }
+
+  // ============================================================================================ v2 C1
+
+  /**
+   * Registers an in-lock planner (src/jobs/planners.ts) under `name`, replacing any earlier one. Write steps name it in
+   * `options.replan`; a step whose planner is missing falls back to a plain version conflict. Returns an unregister.
+   */
+  registerPlanner(name: string, planner: StepPlanner): () => void {
+    this.planners.set(name, planner);
+    return () => {
+      if (this.planners.get(name) === planner) this.planners.delete(name);
+    };
+  }
+
+  /** A page write that did not land as planned: an error row with the job, so it shows on the Errors page. */
+  private recordVerifyMismatch(job: JobView, step: StepView, v: WriteVerification): void {
+    const first = v.differences?.[0];
+    this.recordError({
+      projectId: job.projectId,
+      opId: step.opId,
+      jobId: job.id,
+      stepNo: step.stepNo,
+      code: 'VERIFY_MISMATCH',
+      message:
+        `written but not as planned: the document read back after the write differs from what was sent ` +
+        `(${v.differenceCount ?? v.differences?.length ?? 0} difference(s)${first ? `, first at blocks${first.path}` : ''}). ` +
+        `The write was not retried. Its journal entry ${v.journalId ?? '(unknown)'} holds the page as it was before.`,
+      retryable: false,
+      classification: 'conflict',
+      detail: { ...v },
+      principalId: job.principalId,
+      profile: job.profile,
+    });
   }
 
   // ============================================================================================ v2 A2
@@ -1198,6 +1241,23 @@ export class JobEngine {
         const s = this.repo.step(jobId, 3);
         if (s?.status === 'succeeded') result = { ...result, asset: s.resultSummary };
       }
+      // v2 C1: what the read after each verified page write found, on the job itself.
+      const verifications = this.repo
+        .steps(jobId)
+        .filter((s) => s.status === 'succeeded' && s.options.verifyAfterWrite === true)
+        .map((s) => ({ stepNo: s.stepNo, ...((s.resultSummary ?? {}) as { verification?: unknown }) }))
+        .filter((s) => s.verification !== undefined)
+        .map((s): Record<string, unknown> => ({
+          stepNo: s.stepNo,
+          ...(s.verification as Record<string, unknown>),
+        }));
+      if (verifications.length > 0) {
+        result = {
+          ...result,
+          verification: verifications.length === 1 ? verifications[0] : verifications,
+          verified: verifications.every((v) => v.status === 'verified'),
+        };
+      }
     }
     this.refreshProgress(jobId);
     this.repo.updateJob(jobId, {
@@ -1773,6 +1833,12 @@ function stepOptions(o: StepOptions): StepOptions {
   return {
     ...(o.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
     ...(o.confirm === 'cascade' ? { confirm: 'cascade' as const } : {}),
+    // v2 C1: set by bridge code only (the tools never pass these from an agent's input).
+    ...(o.verifyAfterWrite === true ? { verifyAfterWrite: true } : {}),
+    ...(o.journalOperation ? { journalOperation: o.journalOperation } : {}),
+    ...(o.replan && typeof o.replan.planner === 'string'
+      ? { replan: { planner: o.replan.planner, input: o.replan.input } }
+      : {}),
   };
 }
 

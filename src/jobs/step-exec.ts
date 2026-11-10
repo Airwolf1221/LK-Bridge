@@ -10,6 +10,8 @@ import type { OperationDef } from '../lk/registry-types.js';
 import type { JobsSettings } from '../config/jobs.js';
 import { matchesIntent } from './compare.js';
 import type { CustomStepHandler, CustomStepHandlers } from './custom-steps.js';
+import type { StepPlanner } from './planners.js';
+import { compareStoredBlocks, VERIFY_IGNORED_FIELDS } from './verify-blocks.js';
 import {
   JobsError,
   LkOperationError,
@@ -66,6 +68,37 @@ export interface StepExecDeps {
   readonly writeHold: (projectId: string) => WriteHold | null;
   /** Non-registry step types (the upload_image PUT), by step id. */
   readonly customSteps?: CustomStepHandlers | undefined;
+  /** v2 C1: the in-lock planners, by name (src/jobs/planners.ts). */
+  readonly planner?: (name: string) => StepPlanner | undefined;
+  /** v2 C1: a page write that did not land as planned (recorded in the errors table, with the job). */
+  readonly recordVerifyMismatch?: (job: JobView, step: StepView, verification: WriteVerification) => void;
+}
+
+/**
+ * v2 C1: what the read after a verified page write found (ADR 0031). `verified`: the stored blocks equal the blocks
+ * sent; `mismatch`: they differ (`differences`); `not_checked`: the read could not be made (`reason`). Never a retry.
+ */
+export interface WriteVerification {
+  readonly status: 'verified' | 'mismatch' | 'not_checked';
+  /** The version the verify read saw. */
+  readonly version?: string | undefined;
+  readonly differences?: readonly { path: string; expected: unknown; actual: unknown }[];
+  readonly differenceCount?: number;
+  readonly reason?: string;
+  /** The write's journal entry, for recovery. */
+  readonly journalId?: number | undefined;
+  /** What LegendKeeper may change without it counting (listed explicitly). */
+  readonly ignored: readonly string[];
+}
+
+/** The value of a verified page-write step (instead of LegendKeeper's whole answer, which the verify read repeats). */
+export interface VerifiedWriteValue {
+  readonly document: { readonly id: unknown; readonly version: unknown };
+  readonly verification: WriteVerification;
+  /** The step re-planned inside the lock: from which version to which. */
+  readonly replanned?: Readonly<Record<string, unknown>>;
+  /** The re-plan found nothing to change; nothing was sent. */
+  readonly unchanged?: boolean;
 }
 
 interface Current {
@@ -293,10 +326,12 @@ export class StepExecutor {
     job: JobView,
     step: StepView,
     op: OperationDef,
-    params: OpParams,
+    plannedParams: OpParams,
     ref: JobRef,
     store: boolean,
   ): Promise<StepOutcome> {
+    let params = plannedParams;
+    let replanned: Readonly<Record<string, unknown>> | undefined;
     const meta = opMeta(op.operationId);
     const stats = newCallStats();
     let forcedIfMatch: string | undefined;
@@ -314,7 +349,7 @@ export class StepExecutor {
     }
 
     try {
-      const callerVersion = str(params.ifMatch);
+      let callerVersion = str(params.ifMatch);
       const journalled = this.d.journal.hasEntry(job.id, step.stepNo);
       const resend = forcedIfMatch !== undefined;
       const needRead =
@@ -336,7 +371,49 @@ export class StepExecutor {
           throw new JobsError('BRIDGE_ERROR', `${op.operationId}: could not read the current version`, ref);
         }
         if (callerVersion && current?.version && current.version !== callerVersion) {
-          throw new VersionConflictError(op.operationId, callerVersion, current.version, ref);
+          // v2 C1 (PLAN-v2 10.6): the bridge's own compare-and-swap, inside the lock. A step that names a planner may be
+          // re-planned on the current document (section edits whose section is unchanged); anything else is a conflict.
+          const planner = step.options.replan ? this.d.planner?.(step.options.replan.planner) : undefined;
+          if (!planner || !step.options.replan) {
+            throw new VersionConflictError(op.operationId, callerVersion, current.version, ref);
+          }
+          const r = planner({
+            projectId: job.projectId,
+            jobId: job.id,
+            stepNo: step.stepNo,
+            opId: op.operationId,
+            params,
+            input: step.options.replan.input,
+            plannedVersion: callerVersion,
+            current: { version: current.version, body: current.body },
+          });
+          if (r.kind === 'unchanged') {
+            // The document already holds the result: nothing is sent, nothing is journalled.
+            const value: VerifiedWriteValue = {
+              document: { id: params.path?.documentId ?? null, version: current.version },
+              verification: {
+                status: 'not_checked',
+                version: current.version,
+                reason: 'nothing was written: the document already holds this change',
+                ignored: VERIFY_IGNORED_FIELDS,
+              },
+              unchanged: true,
+              replanned: { from: callerVersion, to: current.version, ...r.note },
+            };
+            return this.succeed(job, step, stats, value, false, store);
+          }
+          if (str(r.params.ifMatch) !== current.version) {
+            throw new JobsError(
+              'BRIDGE_ERROR',
+              `${op.operationId}: a re-plan must be built on the current version`,
+              ref,
+            );
+          }
+          replanned = { from: callerVersion, to: current.version, ...r.note };
+          params = r.params;
+          this.d.repo.setStepParams(job.id, step.stepNo, params);
+          callerVersion = current.version;
+          ifMatch = current.version;
         }
       }
 
@@ -371,6 +448,14 @@ export class StepExecutor {
           documentId: params.path?.documentId ?? null,
           version: ifMatch ?? current?.version ?? null,
           params,
+          ...(step.options.journalOperation
+            ? {
+                operation: {
+                  ...step.options.journalOperation,
+                  ...(replanned ? { replannedInLock: replanned } : {}),
+                },
+              }
+            : {}),
           ...(created.length > 1 ? { targets: created } : {}),
           ...(meta.journal === 'pre-image' && current ? { preImage: current.entity ?? current.body } : {}),
         });
@@ -398,6 +483,17 @@ export class StepExecutor {
           if (typeof createdId === 'string' && createdId !== '')
             this.d.journal.setCreatedTarget(journalId, createdId);
         } else this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+        if (step.options.verifyAfterWrite === true && op.operationId === 'replaceDocumentBlocks') {
+          const verification = await this.verifyWrite(job, step, op, meta, params, journalId);
+          if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
+          const sent = (value ?? {}) as { id?: unknown; version?: unknown };
+          const out: VerifiedWriteValue = {
+            document: { id: sent.id ?? params.path?.documentId ?? null, version: sent.version ?? null },
+            verification,
+            ...(replanned ? { replanned } : {}),
+          };
+          return this.succeed(job, step, stats, out, false, store);
+        }
         return this.succeed(job, step, stats, value, false, store);
       } catch (e) {
         const outcome = stats.maybeSent && !(e instanceof BudgetWaitError) ? 'unknown' : 'not_applied';
@@ -427,6 +523,45 @@ export class StepExecutor {
       }
     } catch (e) {
       return this.fail(job, step, stats, e, ambiguous);
+    }
+  }
+
+  /**
+   * v2 C1: the read after a page write, still inside the lock and the writer slot, so only an edit from outside the
+   * bridge can come between the write and this read. Compares the stored blocks with the blocks sent. Never throws and
+   * never retries: a read that cannot be made (budget, LegendKeeper) leaves the write unverified, and says why.
+   */
+  private async verifyWrite(
+    job: JobView,
+    step: StepView,
+    op: OperationDef,
+    meta: OpMeta,
+    params: OpParams,
+    journalId: number | undefined,
+  ): Promise<WriteVerification> {
+    const entry = journalId ?? this.d.journal.entryIdForStep(job.id, step.stepNo);
+    const planned = (params.body as { blocks?: unknown } | undefined)?.blocks;
+    try {
+      const after = await this.readCurrent(job, step, op, meta, params, step.clientIds);
+      const stored = (after.body as { blocks?: unknown } | undefined)?.blocks;
+      const cmp = compareStoredBlocks(planned, stored);
+      return cmp.ok
+        ? { status: 'verified', version: after.version, journalId: entry, ignored: VERIFY_IGNORED_FIELDS }
+        : {
+            status: 'mismatch',
+            version: after.version,
+            differences: cmp.differences,
+            differenceCount: cmp.count,
+            journalId: entry,
+            ignored: VERIFY_IGNORED_FIELDS,
+          };
+    } catch (e) {
+      return {
+        status: 'not_checked',
+        reason: `the document could not be read back: ${e instanceof Error ? e.message : String(e)}`,
+        journalId: entry,
+        ignored: VERIFY_IGNORED_FIELDS,
+      };
     }
   }
 

@@ -141,6 +141,18 @@ The journal records **every** write the bridge sends, not only destructive ones,
 changed, with outcome, principal, profile and approver. Filters: operation, document, resource, profile, principal,
 outcome, "destructive only" (writes that kept a pre-image) and time. Pages of 100, newest first; **Older** and **Newest**
 move through them with the `before` cursor. Retention is unchanged (30 days or 2 GB, the `journal-prune` job).
+Since v2 C1 an entry made by `write_page` shows its **Operation** (mode, section, a hash of the Markdown, the version it
+was planned on, and whether it was re-planned inside the lock) above the pre-image.
+
+## Proposals: page writes (v2 C1)
+
+A proposal made by `write_page` opens with a **Page write** panel: the mode, section, page and document, the counts
+(blocks kept, changed, added, removed; keep regions kept and dropped), any keep regions the agent drops on purpose, and
+the **Markdown diff**: the page's Markdown before and after, line by line in hunks, each keep region shown as one
+labelled placeholder line (`[keep region: infobox infobx01]`). The block-level diff of the operation is shown below it
+as before. Approving runs exactly that change; if the page changed since it was planned the proposal becomes
+conflicted and nothing is written ([ADR 0031](adr/0031-write-page.md)). Once it has run, the panel says whether the
+page read back after the write was exactly what was planned.
 
 ## Stream
 
