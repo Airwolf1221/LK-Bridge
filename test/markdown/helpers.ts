@@ -1,4 +1,5 @@
 /** Helpers for the Markdown converter tests. */
+import fc from 'fast-check';
 import { parseDrafts, type Draft } from '../../src/markdown/parse.js';
 import type { LkBlock } from '../../src/markdown/types.js';
 
@@ -47,3 +48,42 @@ export const h = (level: number, text: string, id?: string): LkBlock => ({
   level,
   content: [{ text }],
 });
+
+/**
+ * fast-check parameters from the environment: FC_RUNS (runs per property, default `runs`), FC_SEED and FC_PATH (replay
+ * one failure: the seed and path a failure logs; FC_PATH needs FC_SEED).
+ */
+export function fcParams(runs = 300): { numRuns: number; seed?: number; path?: string } {
+  const seed = process.env.FC_SEED ? Number(process.env.FC_SEED) : undefined;
+  const path = process.env.FC_PATH || undefined;
+  return {
+    numRuns: Number(process.env.FC_RUNS ?? runs),
+    ...(seed !== undefined ? { seed } : {}),
+    ...(seed !== undefined && path !== undefined ? { path } : {}),
+  };
+}
+
+/**
+ * `fc.assert`, but a failure is reproducible from the log alone: the seed, the path and the shrunk counterexample are
+ * printed (with the command that replays it) before fast-check's own report is thrown. Paste the counterexample into
+ * the property's `examples` to keep it as a fixed regression case.
+ */
+export function assertProperty<Ts>(
+  name: string,
+  property: fc.IProperty<Ts>,
+  params: fc.Parameters<Ts>,
+): void {
+  const details = fc.check(property, params);
+  if (!details.failed) return;
+  const replay = `FC_SEED=${details.seed} FC_PATH="${details.counterexamplePath ?? ''}"`;
+  console.error(
+    [
+      `fast-check: the property "${name}" failed after ${details.numRuns} run(s), ${details.numShrinks} shrink(s).`,
+      `  seed: ${details.seed}`,
+      `  path: ${details.counterexamplePath ?? '(none)'}`,
+      `  replay: ${replay} npx vitest run test/markdown -t ${JSON.stringify(name)}`,
+      `  counterexample (for examples): ${details.counterexample ? fc.stringify(details.counterexample) : '(none)'}`,
+    ].join('\n'),
+  );
+  throw new Error(`${fc.defaultReportMessage(details)}\n(${replay})`);
+}

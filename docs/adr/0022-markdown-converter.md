@@ -32,7 +32,10 @@ lose anything. It is a library (`src/markdown`) that later sessions wrap in tool
    at each container level they are aligned with the current blocks' projections (prefix and suffix, exact LCS up to
    4 million cells, patience anchors beyond). A match restores the current block **verbatim** (same object, id and
    attributes); a block written elsewhere at the same level is a move and keeps its id; remaining blocks of the same kind
-   in the same gap are paired as edits by similarity (a lone one of its kind on both sides always pairs). Once every
+   in the same gap are paired as edits by similarity (a lone one of its kind on both sides always pairs, and so does a
+   run of identical blocks with as many on each side). Identical neighbours make both steps ambiguous; ties go to the
+   pairing that keeps each block closest to its own place, so an in-place edit lands on the block edited and never
+   moves an id or attributes between twins (10 November 2026 hotfix). Once every
    level is aligned, a second pass looks across the whole page (outside an edited section's range excepted) for an
    unused block with the same projection as each block still new, so a block wrapped in a quote or secret, taken out of
    one, or under a container that changed kind keeps its id and settings. An edited
