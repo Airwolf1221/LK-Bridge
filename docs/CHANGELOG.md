@@ -29,7 +29,7 @@ The first v2 tools agents use ([ADR 0029](adr/0029-discover-and-read-tools.md); 
   world with the spike's asset library, a tree that is not ready or stale, result sizes, two projects, visibility), the
   tool-enumeration security test now covers the new tools and shows every tool to its attacker, and the tool-list tests
   count 31 tools (28 shown to a profile without the setting).
-- **Merged A4's branch** (PR #23, not yet on `main` when this was built) to build on the asset tree. Merge #23 first.
+- Built on A4's branch while PR #23 was open; `main` (with A4 squash-merged) has been merged in.
 - **For the owner:** ChatGPT keeps its own copy of the tool list. After deploying: Plugins, the bridge, **Refresh**.
 
 ## Unreleased: v2 A4 follow-up, the registry wiring and two deploy fixes (10 November 2026)

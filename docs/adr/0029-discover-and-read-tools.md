@@ -74,8 +74,6 @@ confirmed ("5 h ago"), note }`. `ready` and `stale` answer (stale says so); `not
 
 ## Consequences
 
-- Both A4 (PR #23) and this session are on the same branch history until A4 merges: this branch was started from `main`
-  without A4, so it merged A4's branch to build on it.
 - A change made in the LegendKeeper app shows in `search` and `browse_repository_tree` only after the next sweep (an
   hour by default); `get_resource` and `read_document` read live. Said in the bridge guide.
 - ChatGPT keeps its own copy of the tool list: after this change the owner uses Plugins, the bridge, Refresh.
