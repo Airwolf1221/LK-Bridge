@@ -6,6 +6,7 @@ import { PolicyError } from '../policy/index.js';
 import { TreeError } from '../tree/index.js';
 import { ProjectChangeError } from '../projects/registry.js';
 import { SecretStoreError } from '../secrets/store.js';
+import { RegistryError } from '../registry/index.js';
 
 /** An error with an HTTP status, for admin routes. The body is always `{ error: { code, message } }`. */
 export class AdminHttpError extends Error {
@@ -79,6 +80,15 @@ const PROJECT_CHANGE_STATUS: Readonly<Record<string, number>> = {
   LK_UNREACHABLE: 502,
 };
 
+// v2 A3: the type registry, taxonomy, resolver and planners. Refusals of a lookup or a plan are 409 (the request
+// was understood; the repository does not allow an answer), with every detail (candidates, available labels).
+const REGISTRY_STATUS: Readonly<Record<string, number>> = {
+  NOT_OWNER: 403,
+  INVALID_INPUT: 400,
+  NOT_FOUND: 404,
+  TEMPLATES_UNREADABLE: 502,
+};
+
 const JOBS_STATUS: Readonly<Record<string, number>> = {
   JOB_NOT_FOUND: 404,
   INVALID_CONTROL: 409,
@@ -117,6 +127,9 @@ export function describeError(err: unknown): { status: number; body: { error: Re
       status: TREE_STATUS[err.code] ?? 409,
       body: { error: { code: err.code, message: err.message } },
     };
+  }
+  if (err instanceof RegistryError) {
+    return { status: REGISTRY_STATUS[err.code] ?? 409, body: { error: err.toJSON() } };
   }
   if (err instanceof MaintenanceError) {
     return {

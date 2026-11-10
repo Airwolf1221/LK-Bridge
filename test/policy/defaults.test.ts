@@ -51,10 +51,10 @@ describe('migration 0300', () => {
     db.prepare(
       `INSERT INTO auth_pats (id, name, token_hash, token_hint, scope, created_at) VALUES ('pat_old', 'laptop', 'h', 'abcd', 'mcp', 1)`,
     ).run();
-    // Chunk 6 added migration 0400, chunk 8 0201, v1.0.1 0500, v1.0.2 0101, v2 A2 0700 and v2 A1 0600 (which needs no project id
+    // Chunk 6 added migration 0400, chunk 8 0201, v1.0.1 0500, v1.0.2 0101, v2 A2 0700, v2 A3 0800 and v2 A1 0600 (which needs no project id
     // here: this database holds no LegendKeeper data); the point here is that 0300 is applied on top of an older
     // database. (Later releases add more after these: OPS2's 1000, for one.)
-    expect(runMigrations(db).applied.slice(0, 7)).toEqual([
+    expect(runMigrations(db).applied.slice(0, 8)).toEqual([
       '0101_client_assertion_jti.sql',
       '0201_journal_every_write.sql',
       '0300_policy_init.sql',
@@ -62,6 +62,7 @@ describe('migration 0300', () => {
       '0500_governor_counters.sql',
       '0600_projects.sql',
       '0700_repository_tree.sql',
+      '0800_type_registry.sql',
     ]);
     const policy = createPolicy({ db, allowMemberAdmin: false });
     expect(policy.store.listProfiles()).toMatchObject([

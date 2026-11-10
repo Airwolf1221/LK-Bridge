@@ -16,6 +16,7 @@ export default defineConfig({
       'test/projects/**/*.test.ts', // v2 A1: several LegendKeeper projects in one bridge
       'test/tree/**/*.test.ts', // v2 A2: the repository tree
       'test/secrets/**/*.test.ts', // OPS2: the encrypted secret store, keys and the owner account on the dashboard
+      'test/registry/**/*.test.ts', // v2 A3: the type registry, taxonomy, resolution and ordering
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',
