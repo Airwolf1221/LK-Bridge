@@ -115,5 +115,6 @@ export { createOwnerCommands, type OwnerCommands, type BulkResult, type ProfileS
 export { createConsentProfiles, ensureProfile, suggestKind, DEFAULT_PAT_PROFILE } from './consent.js';
 export { createMcpAccessControl, mcpOrigin, proposalTools, type ProposalToolsOptions } from './mcp.js';
 export { PolicyError, type PolicyErrorCode } from './errors.js';
-export { canonicalJson, hashJson, isLiveApprovalToken } from './approval.js';
+export { canonicalJson, hashJson, isLiveApprovalToken, isCanonicalApproval } from './approval.js';
+export { buildPageSummary, type PageSummaryEntry } from './page-summary.js';
 export * from './types.js';

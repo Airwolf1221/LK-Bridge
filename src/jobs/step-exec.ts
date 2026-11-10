@@ -15,11 +15,33 @@ import { compareStoredBlocks, VERIFY_IGNORED_FIELDS } from './verify-blocks.js';
 import {
   JobsError,
   LkOperationError,
+  StateConflictError,
   UncertainOutcomeError,
   VersionConflictError,
   errorToJson,
   type JobRef,
 } from './errors.js';
+import {
+  EXPECT_STEP,
+  SIDEBAR_IGNORED_FIELDS,
+  VERIFY_STEP,
+  isInternalStep,
+  type ExpectCheck,
+  type TargetVerification,
+  type VerifyTarget,
+} from './internal-steps.js';
+import {
+  collectionState,
+  compareCollection,
+  compareRows,
+  rowsContentHash,
+  rowsState,
+  stableJson,
+  stateHash,
+  type RowState,
+  type StateDifference,
+} from './sidebar-state.js';
+import type { WriteGuard } from './write-guard.js';
 import { assertNoUnsupportedLoss } from './guards.js';
 import type { WriteJournal } from './journal.js';
 import { callOp, isNotFound, newCallStats, type CallStats } from './lk-call.js';
@@ -72,6 +94,8 @@ export interface StepExecDeps {
   readonly planner?: (name: string) => StepPlanner | undefined;
   /** v2 C1: a page write that did not land as planned (recorded in the errors table, with the job). */
   readonly recordVerifyMismatch?: (job: JobView, step: StepView, verification: WriteVerification) => void;
+  /** v2 C2a: the write guard (protected canonical facts), asked before each write is sent, inside its lock. */
+  readonly writeGuard?: () => WriteGuard | undefined;
 }
 
 /**
@@ -89,6 +113,10 @@ export interface WriteVerification {
   readonly journalId?: number | undefined;
   /** What LegendKeeper may change without it counting (listed explicitly). */
   readonly ignored: readonly string[];
+  /** v2 C2a (the generic verify step): each target's own result. */
+  readonly targets?: readonly TargetVerification[];
+  /** v2 C2a: the job's journal entries (what each write changed), for recovery. */
+  readonly journalIds?: readonly number[];
 }
 
 /** The value of a verified page-write step (instead of LegendKeeper's whole answer, which the verify read repeats). */
@@ -193,7 +221,7 @@ export class StepExecutor {
     job: JobView,
     step: StepView,
     signal: AbortSignal,
-    opts: { readonly storeResult?: boolean } = {},
+    opts: { readonly storeResult?: boolean; readonly heldLock?: string | null } = {},
   ): Promise<StepOutcome> {
     // A project taken out of service (its key failed a check) runs nothing more until it is back: the job is held. A
     // step being recovered waits too: verifying it needs the project's client.
@@ -202,6 +230,7 @@ export class StepExecutor {
     }
     const custom = this.d.customSteps?.[step.opId];
     if (custom) return this.runCustom(job, step, custom);
+    if (isInternalStep(step.opId)) return this.runInternal(job, step);
     const op = requireOperation(step.opId);
     const params = this.d.repo.stepParams(step);
     const ref = { jobId: job.id, stepNo: step.stepNo };
@@ -209,10 +238,24 @@ export class StepExecutor {
     if (op.kind === 'read') return this.runRead(job, step, op, params, store);
 
     const lockKey = projectLockKey(job.projectId, lockKeyFor(op, params));
+    // v2 C2a: the job already holds this lock for its whole run (BatchSubmit.holdLock); it is not taken again.
+    const ownLock = lockKey !== null && lockKey !== (opts.heldLock ?? null);
+    if (ownLock && opts.heldLock) {
+      return this.fail(
+        job,
+        step,
+        newCallStats(),
+        new JobsError(
+          'BRIDGE_ERROR',
+          `${op.operationId} takes lock ${lockKey}, but the job holds ${opts.heldLock}; nothing was sent`,
+          { jobId: job.id, stepNo: step.stepNo },
+        ),
+      );
+    }
     let releaseLock: (() => void) | undefined;
     let releaseSlot: () => void;
     try {
-      if (lockKey) {
+      if (lockKey && ownLock) {
         if (!this.d.locks.isFree(lockKey)) this.d.setJobWaiting(job.id, 'lock', { lockKey });
         releaseLock = await this.d.locks.acquire(
           lockKey,
@@ -298,6 +341,225 @@ export class StepExecutor {
     }
   }
 
+  // ------------------------------------------------------------------------------------------ v2 C2a: internal steps
+
+  /**
+   * The bridge's own steps (src/jobs/internal-steps.ts). Both only read, through the governor, inside the job's lock
+   * when it holds one. `bridge.expect` is held while writes are paused (it is the first step of a write); a difference
+   * fails it with `StateConflictError` and the job stops before any write. `bridge.verify` never fails: what it could
+   * not read is `not_checked`, a difference is `mismatch` (and an error row), and nothing is retried.
+   */
+  private async runInternal(job: JobView, step: StepView): Promise<StepOutcome> {
+    if (step.opId === EXPECT_STEP && step.status !== 'running') {
+      const hold = this.d.writeHold(job.projectId);
+      if (hold) return { kind: 'held', reason: hold };
+    }
+    const stats = newCallStats();
+    this.d.repo.updateStep(job.id, step.stepNo, {
+      status: 'running',
+      startedAt: step.startedAt ?? this.d.now(),
+    });
+    const params = this.d.repo.stepParams(step);
+    try {
+      if (step.opId === EXPECT_STEP) {
+        return this.succeed(job, step, stats, await this.runExpect(job, step, params, stats));
+      }
+      if (step.opId !== VERIFY_STEP) throw new JobsError('BRIDGE_ERROR', `Unknown bridge step ${step.opId}`);
+      const verification = await this.runVerify(job, step, params, stats);
+      if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
+      return this.succeed(job, step, stats, { verification });
+    } catch (e) {
+      return this.fail(job, step, stats, e);
+    }
+  }
+
+  /** `bridge.expect`: each property as the plan saw it, or a conflict. Returns the version each read gave. */
+  private async runExpect(
+    job: JobView,
+    step: StepView,
+    params: OpParams,
+    stats: CallStats,
+  ): Promise<{ checked: string[]; versions: Record<string, string | null> }> {
+    const checks = ((params.body ?? {}) as { checks?: ExpectCheck[] }).checks ?? [];
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const versions: Record<string, string | null> = {};
+    for (const c of checks) {
+      const path = { resourceId: c.resourceId, propertyId: c.propertyId };
+      const r = await this.readOp(
+        job,
+        step,
+        c.kind === 'propertyRows' ? 'listPropertyRows' : 'getProperty',
+        { path },
+        stats,
+      );
+      if (!r.exists) {
+        throw new StateConflictError(
+          EXPECT_STEP,
+          c.label,
+          [{ path: c.label, expected: 'present', actual: '(gone)' }],
+          c.version ?? null,
+          null,
+          ref,
+        );
+      }
+      const body = (r.body ?? {}) as { data?: unknown; version?: unknown };
+      const version = str(body.version) ?? null;
+      const diffs: StateDifference[] =
+        c.kind === 'propertyRows'
+          ? compareRows(c.label, c.rows ?? [], rowsState(body.data))
+          : compareCollection(c.label, c.collection ?? { items: [], filter: null }, collectionState(r.body));
+      if (c.version !== undefined && version !== null && c.version !== version) {
+        diffs.push({ path: `${c.label} version`, expected: c.version, actual: version });
+      }
+      if (diffs.length > 0) {
+        throw new StateConflictError(EXPECT_STEP, c.label, diffs, c.version ?? null, version, ref);
+      }
+      versions[c.label] = version;
+    }
+    return { checked: checks.map((c) => c.label), versions };
+  }
+
+  /** `bridge.verify`: each target read back and compared with the plan (see internal-steps.ts). Never throws. */
+  private async runVerify(
+    job: JobView,
+    step: StepView,
+    params: OpParams,
+    stats: CallStats,
+  ): Promise<WriteVerification> {
+    const targets = ((params.body ?? {}) as { targets?: VerifyTarget[] }).targets ?? [];
+    const results: TargetVerification[] = [];
+    const all: StateDifference[] = [];
+    let count = 0;
+    const resources = new Map<string, { exists: boolean; body: unknown }>();
+    const resource = async (id: string) => {
+      let r = resources.get(id);
+      if (!r) {
+        r = await this.readOp(job, step, 'getResource', { path: { resourceId: id } }, stats);
+        resources.set(id, r);
+      }
+      return r;
+    };
+    for (const t of targets) {
+      try {
+        const diffs: StateDifference[] = [];
+        let n = 0;
+        if (t.kind === 'blocks') {
+          const r = await this.readOp(
+            job,
+            step,
+            'getDocumentBlocks',
+            { path: { resourceId: t.resourceId, documentId: t.documentId } },
+            stats,
+          );
+          if (!r.exists) diffs.push({ path: `${t.label}`, expected: 'present', actual: '(gone)' });
+          else {
+            const cmp = compareStoredBlocks(
+              t.blocks,
+              (r.body as { blocks?: unknown } | undefined)?.blocks,
+              20,
+            );
+            for (const d of cmp.differences)
+              diffs.push({ path: `${t.label} blocks${d.path}`, expected: d.expected, actual: d.actual });
+            n = cmp.count;
+          }
+        } else {
+          const r = await resource(t.resourceId);
+          const res = (r.body ?? {}) as Record<string, unknown>;
+          if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
+          else if (t.kind === 'sidebar') {
+            const props = Array.isArray(res.properties) ? (res.properties as Record<string, unknown>[]) : [];
+            for (const p of t.properties) {
+              const actual = props.find((x) => x && x.id === p.id);
+              const label = `${t.label} ${p.title}`;
+              if (!actual) {
+                diffs.push({ path: label, expected: 'present', actual: '(gone)' });
+                continue;
+              }
+              if (p.rows) compareRows(label, p.rows, rowsState(actual.rows), diffs);
+              if (p.collection) compareCollection(label, p.collection, collectionState(actual), diffs);
+            }
+          } else {
+            for (const [k, v] of Object.entries(t.fields)) {
+              if (stableJson(res[k] ?? null) !== stableJson(v ?? null))
+                diffs.push({ path: `${t.label} ${k}`, expected: v ?? null, actual: res[k] ?? null });
+            }
+          }
+          n = diffs.length;
+        }
+        count += Math.max(n, diffs.length);
+        for (const d of diffs) if (all.length < 20) all.push(d);
+        results.push({
+          label: t.label,
+          kind: t.kind,
+          status: diffs.length > 0 ? 'mismatch' : 'verified',
+          ...(diffs.length > 0
+            ? { differences: diffs.slice(0, 10), differenceCount: Math.max(n, diffs.length) }
+            : {}),
+        });
+      } catch (e) {
+        results.push({
+          label: t.label,
+          kind: t.kind,
+          status: 'not_checked',
+          reason: `it could not be read back: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      }
+    }
+    const journalIds = this.d.repo
+      .steps(job.id)
+      .filter((s) => s.stepNo < step.stepNo && s.opKind !== 'read' && !isInternalStep(s.opId))
+      .map((s) => this.d.journal.entryIdForStep(job.id, s.stepNo))
+      .filter((x): x is number => typeof x === 'number');
+    const status = results.some((r) => r.status === 'mismatch')
+      ? 'mismatch'
+      : results.some((r) => r.status === 'not_checked')
+        ? 'not_checked'
+        : 'verified';
+    const notChecked = results.filter((r) => r.status === 'not_checked');
+    return {
+      status,
+      ...(status === 'mismatch' ? { differences: all, differenceCount: count } : {}),
+      ...(status === 'not_checked' && notChecked[0]?.reason
+        ? { reason: `${notChecked[0].label}: ${notChecked[0].reason}` }
+        : {}),
+      targets: results,
+      ...(journalIds.length > 0 ? { journalId: journalIds[journalIds.length - 1], journalIds } : {}),
+      ignored: targets.some((t) => t.kind === 'blocks')
+        ? [...VERIFY_IGNORED_FIELDS, ...SIDEBAR_IGNORED_FIELDS]
+        : SIDEBAR_IGNORED_FIELDS,
+    };
+  }
+
+  /** One governed read for the job's own work (a 404 is an answer, not an error row). */
+  private async readOp(
+    job: JobView,
+    step: StepView,
+    opId: string,
+    params: OpParams,
+    stats?: CallStats,
+  ): Promise<{ exists: boolean; body: unknown }> {
+    const readOp = requireOperation(opId);
+    const opts = this.callOptions(job, step, stats ?? newCallStats(), 'r');
+    try {
+      const body = await callOp(this.lk(job), readOp, params, {
+        ...opts,
+        onError: (err: BridgeLkError) => {
+          if (!isNotFound(err)) opts.onError(err);
+        },
+      });
+      return { exists: true, body };
+    } catch (e) {
+      if (isNotFound(e)) return { exists: false, body: undefined };
+      throw e;
+    }
+  }
+
+  /** The write guard's extra read inside the lock (undefined when the entity is not there). */
+  private async guardRead(job: JobView, step: StepView, opId: string, params: OpParams): Promise<unknown> {
+    const r = await this.readOp(job, step, opId, params);
+    return r.exists ? r.body : undefined;
+  }
+
   // ------------------------------------------------------------------------------------------ reads
 
   private async runRead(
@@ -357,6 +619,7 @@ export class StepExecutor {
         meta.reader !== undefined &&
         ((op.versioned && !callerVersion) ||
           meta.guard !== undefined ||
+          (step.options.expectCurrent !== undefined && !callerVersion) ||
           (meta.journal === 'pre-image' && !journalled));
 
       // ONE read serves the If-Match version, the unsupported-block guard and the journal pre-image.
@@ -425,6 +688,53 @@ export class StepExecutor {
         assertNoUnsupportedLoss(op.operationId, existing, incoming, step.options, ref);
       }
 
+      // v2 C2a: the bridge's own compare-and-swap for a write LegendKeeper does not version (a link collection's
+      // updateProperty): the read just made inside the lock must show the state the plan was built on.
+      const expect = step.options.expectCurrent;
+      if (expect && !resend && needRead) {
+        if (!current || (expect.state === 'collection' && !current.exists)) {
+          throw new StateConflictError(
+            op.operationId,
+            expect.label ?? op.operationId,
+            [{ path: expect.label ?? 'target', expected: 'present', actual: 'gone' }],
+            null,
+            null,
+            ref,
+          );
+        }
+        const now =
+          expect.state === 'rows'
+            ? rowsState(
+                (current.body as { data?: unknown } | undefined)?.data ??
+                  (current.entity as { rows?: unknown } | undefined)?.rows,
+              )
+            : collectionState(current.entity ?? current.body);
+        const hash = expect.state === 'rows' ? rowsContentHash(now as RowState[]) : stateHash(now);
+        if (hash !== expect.hash) {
+          throw new StateConflictError(
+            op.operationId,
+            expect.label ?? op.operationId,
+            [{ path: expect.label ?? 'state', expected: `state ${expect.hash.slice(0, 12)}…`, actual: now }],
+            null,
+            current.version ?? null,
+            ref,
+          );
+        }
+      }
+
+      // v2 C2a (ADR 0032): the write guard, inside the lock, on what is there now (protected canonical facts).
+      const guard = this.d.writeGuard?.();
+      if (guard?.inLock && !resend) {
+        await guard.inLock({
+          job,
+          step,
+          opId: op.operationId,
+          params,
+          current: current ? { body: current.body, entity: current.entity } : undefined,
+          read: (opId, p) => this.guardRead(job, step, opId, p),
+        });
+      }
+
       // Chunk 8 (required change A): EVERY write gets a journal entry before it is sent (outcome `pending`, settled
       // below), so agents can see each other's edits. Only destructive writes (`meta.journal`) keep a pre-image or ids.
       let journalId: number | undefined;
@@ -457,7 +767,11 @@ export class StepExecutor {
               }
             : {}),
           ...(created.length > 1 ? { targets: created } : {}),
-          ...(meta.journal === 'pre-image' && current ? { preImage: current.entity ?? current.body } : {}),
+          ...(meta.journal === 'pre-image' && current
+            ? { preImage: current.entity ?? current.body }
+            : step.options.journalPreImage !== undefined
+              ? { preImage: step.options.journalPreImage }
+              : {}),
         });
       }
 

@@ -11,6 +11,7 @@
 import * as z from 'zod';
 import type { AssetQueries } from '../../assets/index.js';
 import type { DocumentVersions } from '../../pages/versions.js';
+import type { TemplateKeys } from '../../facts/templates.js';
 import type { ToolsSettings } from '../../config/tools.js';
 import type { Registry } from '../../registry/index.js';
 import type { TreeQueries } from '../../tree/index.js';
@@ -55,6 +56,10 @@ export interface DiscoverServices {
    * what they read; write_page checks a section edit made from an older version against it.
    */
   readonly versions?: DocumentVersions;
+  /** v2 C2a: each project's settings (set_facts' default property, the canonical rules), read live. */
+  readonly projectSettings?: (projectId: string) => Readonly<Record<string, unknown>>;
+  /** v2 C2a: the templates' fact keys, cached (set_facts puts new template facts in template order). */
+  readonly templateKeys?: TemplateKeys;
 }
 
 /** What every tool handler needs. */
@@ -296,9 +301,31 @@ export function runResultBody(
         operationId: opId,
         proposalId: r.proposalId,
         ...(r.summary !== undefined ? { summary: r.summary } : {}),
-        hint: 'The change needs the owner’s approval and was not made. Never retry it; tell the user it is waiting for approval, and follow it with bridge_proposal_status.',
+        ...canonicalBody(r),
       };
   }
+}
+
+/**
+ * v2 C2a: the agent-facing part of a captured proposal: when the write touches protected canon, that it needs the
+ * owner's canonical approval (whatever the scope), and why.
+ */
+export function canonicalBody(
+  r: { readonly canonical?: { readonly reason: string } },
+  lead = 'The change needs the owner’s approval and was not made.',
+): Record<string, unknown> {
+  if (r.canonical) {
+    return {
+      requiresCanonicalApproval: true,
+      reason: r.canonical.reason,
+      hint:
+        'This touches protected canon, so it was NOT made and waits for the owner, who alone can accept it as canon (whatever your scope). ' +
+        'Never retry it or work around it; tell the user, and follow it with bridge_proposal_status.',
+    };
+  }
+  return {
+    hint: `${lead} Never retry it; tell the user it is waiting for approval, and follow it with bridge_proposal_status.`,
+  };
 }
 
 // ------------------------------------------------------------------------------------------------ summaries

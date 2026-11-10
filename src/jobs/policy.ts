@@ -81,6 +81,19 @@ export interface ProposalMeta {
   readonly paginate?: { readonly maxItems?: number; readonly maxPages?: number };
   /** v2 C1: what a high-level tool adds (its operation, a summary, the reads it already made). */
   readonly extras?: ProposalExtras;
+  /** v2 C2a: how the approved work is submitted besides its steps (the job-level lock, the bridge's own steps). */
+  readonly jobOptions?: ProposalJobOptions;
+  /**
+   * v2 C2a: the write guard found a protected canonical change: the proposal can only be approved with "Approve and
+   * accept as canon". `reason` and `changes` are shown to the owner and returned to the agent.
+   */
+  readonly canonical?: { readonly reason: string; readonly changes: readonly unknown[] };
+}
+
+/** v2 C2a: kept with a proposal and used again when the approved batch is submitted. */
+export interface ProposalJobOptions {
+  readonly holdLock?: { readonly resourceId: string };
+  readonly internal?: boolean;
 }
 
 /**
@@ -90,6 +103,12 @@ export interface ProposalMeta {
 export interface ProposalExtras {
   /** The high-level operation (for write_page: page, document, mode, section, the Markdown, the page before and after). */
   readonly operation?: Readonly<Record<string, unknown>>;
+  /**
+   * v2 C2a (PLAN-v2 10.2): the LIST of high-level operations the expansion carries out (for one tool call, normally
+   * one; a multi-page tool, several). Each names the `page` it affects (`{ id, name }`) and may give `pageParts`, the
+   * plain words of the proposal's page-level summary ("sidebar", "3 facts changed").
+   */
+  readonly operations?: readonly Readonly<Record<string, unknown>>[];
   /** A one-line summary to show instead of the generic one. */
   readonly summary?: string;
   /**

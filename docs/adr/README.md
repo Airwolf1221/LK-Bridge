@@ -35,3 +35,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0029](0029-discover-and-read-tools.md)                      | The Discover and Read tools, the guides, and hiding the low-level tools per profile   | Accepted |
 | [0030](0030-sandbox-scripts-find-keys-as-the-bridge-does.md) | The sandbox scripts find a project's key exactly as the bridge does                   | Accepted |
 | [0031](0031-write-page.md)                                   | write_page: planning, the compare-and-swap in the lock, verify, page-write proposals  | Accepted |
+| [0032](0032-set-facts-and-canon.md)                          | set_facts, the protected canonical facts, and the multi-page proposal groundwork      | Accepted |

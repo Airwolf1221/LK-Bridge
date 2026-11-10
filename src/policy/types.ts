@@ -111,6 +111,16 @@ export interface ProposalView {
    * counts), or null for a v1 proposal. The whole operation is in the detail.
    */
   readonly operation: Readonly<Record<string, unknown>> | null;
+  /**
+   * v2 C2a (ADR 0032): the expansion makes a protected canonical change: only "Approve and accept as canon" can run it;
+   * the ordinary approval is refused.
+   */
+  readonly requiresCanonicalApproval: boolean;
+  /** v2 C2a: who accepted it as canon, and when (set by "Approve and accept as canon" only). */
+  readonly canonicalApprovedBy: string | null;
+  readonly canonicalApprovedAt: number | null;
+  /** v2 C2a: the page-level summary, one plain line per page ("Asagiri Miyabi: sidebar, 2 facts changed"). */
+  readonly pages: readonly string[];
 }
 
 export interface ProposalConflict {

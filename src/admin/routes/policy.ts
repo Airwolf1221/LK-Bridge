@@ -98,6 +98,17 @@ export const registerPolicy: Register = (api, ctx) => {
     return { proposal: redactDeep(await actions.approve(project.id, id)) };
   });
 
+  /**
+   * v2 C2a (ADR 0032): the only approval of a proposal that makes a protected canonical change. A separate action, with
+   * its own confirmation in the body; audited as `proposal.approve_as_canon`, with who accepted it as canon.
+   */
+  api.post('/proposals/:id/approve-as-canon', async (req) => {
+    const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    parseInput(z.object({ confirm: z.literal(true) }), req.body);
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { proposal: redactDeep(await actions.approveAsCanon(project.id, id)) };
+  });
+
   api.post('/proposals/:id/reject', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ reason: z.string().max(1000).optional() }), req.body);

@@ -149,8 +149,66 @@ approves or rejects it. If the page changes before they approve, the proposal be
 applied, and you can propose again from the current page. Never submit a proposal twice; follow it with
 `bridge_proposal_status`.
 
-The other write tools (for resources, facts and links, maps and timelines) are being added; until they are in your
-tool list, the low-level `lk_api_write` and `lk_api_batch` are the way to make those changes, with every guard in place.
+## Editing facts and links
+
+A page's **facts** are the key-value rows of its sidebar property `PROPERTIES` (Reference Type, Scope, Status, …); its
+**links** are its link collections (Dependencies, Related Sources). Change both with `set_facts`.
+
+1. **Read first.** `get_resource` shows the page's facts and links as they are now.
+2. **Facts:** `facts` maps a key to its new value. A plain string is written exactly as text. For formatting or a
+   mention of another page, send `{ "markdown": "…" }`: inline Markdown only (`**bold**`, `*italic*`, links, `<br>`,
+   `[[Page Name]]`). `null` removes the row. Keys match without case, and an existing fact keeps its place.
+3. **New facts** go where the page's template puts them (between the template's neighbours); a fact the template does
+   not have goes at the bottom.
+4. **Links:** `links` maps a collection's title to `{ "add": [...], "remove": [...] }`. Each entry is a page name or id,
+   or `{ "page": "…", "document": "…" }` for one document of a page. Existing links keep their order and the
+   collection's filter; added ones go at the end; a page already linked is reported, not added twice.
+5. **Try it first when unsure.** `dryRun: true` shows what would change and writes nothing.
+
+```json
+{
+  "project": "test",
+  "page": "Asagiri Miyabi",
+  "facts": {
+    "Scope": "Foxian shrine maiden",
+    "Sister": { "markdown": "[[Asagiri Kaede]]" },
+    "Old Note": null
+  },
+  "links": { "Dependencies": { "add": ["Fourth Age - Table"] } }
+}
+```
+
+**The result** lists the facts added, changed and removed, the links added, removed and already there, and whether the
+bridge **verified** the change by reading the sidebar back. An edit that changes nothing writes nothing (`no_change`).
+
+**A conflict (`VERSION_CONFLICT`) wrote nothing:** the sidebar changed after you read it. Read the page again and redo
+the change; never send the same call again. **"written but not as planned"** means the change was made but the sidebar
+read back differs (usually someone edited it at the same moment): read the page and tell the person. `WRITTEN_IN_PART`
+lists the changes that were made before something stopped the rest: read the page before doing anything else.
+
+Other refusals name what to fix: `MENTION_AMBIGUOUS` (the candidates are listed: use a more exact name or the id),
+`MENTION_NOT_FOUND`, `FACT_VALUE_NOT_INLINE` (one line of inline text only), `FACT_KEY_DUPLICATED` (the page has two
+rows with that key: tell the owner), `LINK_COLLECTION_NOT_FOUND` (the page's collections are listed),
+`DOCUMENT_NOT_FOUND`.
+
+## Canon and approval
+
+Some facts are **protected canon**. By default:
+
+- setting a page's `Status` to `Authoritative`, or changing it from `Authoritative` to anything else;
+- changing an existing `Continuity Type` or `Continuity` (for example `CANON` to `AU`, or one AU to another). Setting
+  them where they are empty, as on a new page, is fine.
+
+**No connection can make these changes on its own, whatever its scope.** A write that would make one (through
+`set_facts`, `lk_api_write`, `lk_api_batch` or any other tool) becomes a **proposal**: the result is
+`proposal_captured` with `requiresCanonicalApproval: true` and the `reason`, and nothing is written. Only the owner can
+accept it, with a separate "Approve and accept as canon". Never retry such a write or look for another way to make it:
+tell the person it is waiting for the owner, and follow it with `bridge_proposal_status`. Only the owner makes a page
+`Authoritative`; the page-creation tools (when they are in your tool list) give new pages the Status `Working`.
+
+The other write tools (for resources, maps and timelines) are being added; until they are in your tool list, the
+low-level `lk_api_write` and `lk_api_batch` are the way to make those changes, with every guard in place (the canon rule
+included).
 
 ## Budget rules
 
@@ -202,5 +260,6 @@ Every refusal has a code and a plain message. The common ones:
 | `BUDGET_EXHAUSTED`                       | Wait until `retryAt`. Do not retry in a loop.                                          |
 | `PROJECT_REQUIRED`                       | A write did not name its project. Pass `project`.                                      |
 | `VERSION_CONFLICT`                       | The page changed since you read it. Nothing was written: read again and redo the edit. |
+| `requiresCanonicalApproval`              | The change touches protected canon: it waits for the owner. Never retry it.            |
 
 `bridge_errors_recent` lists recent failures with LegendKeeper's request ids when you need to report one.

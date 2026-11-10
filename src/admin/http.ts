@@ -37,6 +37,8 @@ const POLICY_STATUS: Readonly<Record<string, number>> = {
   DRAINING: 409,
   NO_ENGINE: 503,
   REREAD_FAILED: 502,
+  CANONICAL_APPROVAL_REQUIRED: 409,
+  NOT_CANONICAL: 409,
 };
 
 // Chunk 6: maintenance and mapping errors.

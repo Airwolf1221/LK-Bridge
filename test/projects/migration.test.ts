@@ -423,10 +423,30 @@ describe('migration 0600 on a v1.0.2 database', () => {
       // Every other value unchanged (governor_counters' old key 'lk' became the project id).
       if (t === 'governor_counters') {
         expect(without(now, 'project_id'), t).toEqual(without(rows, 'key'));
-      } else if (t === 'write_journal' || t === 'proposals') {
+      } else if (t === 'write_journal') {
         // v2 C1 (migration 1200) adds `operation`, NULL on every row written before it.
         for (const r of now) expect(r.operation, t).toBeNull();
         expect(without(without(now, 'project_id'), 'operation'), t).toEqual(rows);
+      } else if (t === 'proposals') {
+        // v2 C1 (1200) adds `operation`; v2 C2a (1300) the operations list, page summary, canonical approval, job
+        // options and verification: all empty on rows written before them.
+        const added = [
+          'operation',
+          'operations',
+          'page_summary',
+          'canonical_changes',
+          'canonical_approved_by',
+          'canonical_approved_at',
+          'job_options',
+          'verification',
+        ];
+        for (const r of now) {
+          for (const c of added) expect(r[c], `${t}.${c}`).toBeNull();
+          expect(r.requires_canonical, t).toBe(0);
+        }
+        let stripped = without(now, 'project_id');
+        for (const c of [...added, 'requires_canonical']) stripped = without(stripped, c);
+        expect(stripped, t).toEqual(rows);
       } else {
         expect(without(now, 'project_id'), t).toEqual(rows);
       }

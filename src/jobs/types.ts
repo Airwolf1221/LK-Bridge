@@ -62,6 +62,12 @@ export interface JobOrigin {
    * gate in `ctx.origin`. Only the policy layer can mint a valid one, and it serialises to `{ proposalId }` only.
    */
   readonly approval?: unknown;
+  /**
+   * v2 C2a (ADR 0032): who accepted this work as canon ("Approve and accept as canon"). Set only by the proposal service
+   * together with a live canonical approval token; the policy gate refuses it otherwise. The write guard lets a job that
+   * carries it make the protected changes it was approved for.
+   */
+  readonly canonicalApprovedBy?: string;
 }
 
 /** Caller-facing input of a registry operation: `{ path?, query?, ifMatch?, body? }` (see src/lk/registry). */
@@ -91,6 +97,32 @@ export interface StepOptions {
    * (src/jobs/planners.ts) to re-plan instead of refusing. Never stored for approved proposals.
    */
   readonly replan?: { readonly planner: string; readonly input: unknown };
+  /**
+   * v2 C2a (ADR 0032), set by bridge code only: take this step's `If-Match` from an earlier step of the same job just
+   * before it runs: that step's result `version` (a versioned write), or `versions[key]` (the `bridge.expect` step).
+   * The chain of a multi-write job: each write's new version is the next write's If-Match.
+   */
+  readonly ifMatchFrom?: { readonly step: number; readonly key?: string };
+  /**
+   * v2 C2a, set by bridge code only: the bridge's own compare-and-swap for a write LegendKeeper does not version
+   * (`updateProperty`): the in-lock read must show this state (`rows` or `collection`, normalised and hashed as in
+   * src/jobs/sidebar-state.ts), or nothing is sent (a conflict).
+   */
+  readonly expectCurrent?: {
+    readonly state: 'rows' | 'collection';
+    readonly hash: string;
+    readonly label?: string;
+  };
+  /**
+   * v2 C2a, set by bridge code only: the repository tree re-reads what this step changed once, when the job finishes,
+   * instead of after the step (a multi-write job on one page costs one re-read, not one per write).
+   */
+  readonly deferTreeReread?: boolean;
+  /**
+   * v2 C2a, set by bridge code only: kept as the journal entry's pre-image when the operation keeps none of its own
+   * (row writes): the property as the plan saw it, which the job's `bridge.expect` step confirmed inside the lock.
+   */
+  readonly journalPreImage?: unknown;
 }
 
 export interface StepSpec extends StepOptions {
@@ -119,6 +151,16 @@ export interface BatchSubmit {
   readonly priority?: PriorityClass;
   readonly origin: JobOrigin;
   readonly title?: string;
+  /**
+   * v2 C2a (ADR 0032), bridge code only: the job holds this resource's lock from its first step to its end (released
+   * while it waits for budget, is held or paused), so no other bridge write to the resource can come between its steps.
+   * Every write step must take that same lock (or none).
+   */
+  readonly holdLock?: { readonly resourceId: string };
+  /** v2 C2a, bridge code only: the steps may include the bridge's own `bridge.expect` and `bridge.verify`. */
+  readonly internal?: boolean;
+  /** v2 C2a: added to the proposal when the policy gate turns the batch into one (as `RunOptions.proposal`). */
+  readonly proposal?: ProposalExtras;
 }
 
 export interface PaginateSubmit {
@@ -187,6 +229,11 @@ export interface ProposalCaptured {
   readonly proposalId: string;
   /** One line describing what was proposed, when the sink gives one. */
   readonly summary?: string;
+  /**
+   * v2 C2a: the write makes a protected canonical change, so it became a proposal whatever the caller's scope, and only
+   * the owner's "Approve and accept as canon" can run it. `reason` says which change.
+   */
+  readonly canonical?: { readonly reason: string; readonly changes: readonly unknown[] };
 }
 
 export interface JobError {
@@ -356,6 +403,8 @@ export interface WriteStepInfo {
   /** The step's params as sent (client ids already minted into the body). */
   readonly params: OpParams;
   readonly priority: PriorityClass;
+  /** v2 C2a: the step's options (bridge-only ones included), e.g. `deferTreeReread`. */
+  readonly options?: StepOptions;
 }
 
 /** A write step's final outcome. */
@@ -377,6 +426,16 @@ export interface WriteStepResult extends WriteStepInfo {
 export interface WriteObserver {
   beforeWrite?(info: WriteStepInfo): void;
   afterWrite?(result: WriteStepResult): Promise<void> | void;
+  /**
+   * v2 C2a: the job has finished (or stopped for good): re-read now what its `deferTreeReread` steps changed. Awaited
+   * inside the job, before it is marked finished.
+   */
+  flushDeferred?(info: {
+    readonly projectId: string;
+    readonly jobId: string;
+    readonly priority: PriorityClass;
+    readonly signal: AbortSignal;
+  }): Promise<void> | void;
 }
 
 /** Options of `engine.internalRead`. */

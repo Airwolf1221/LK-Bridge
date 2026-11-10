@@ -9,6 +9,7 @@ import { getOperation, operations, type OperationDef } from '../../lk/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
 import { unknownOperationBody } from './discovery.js';
+import { canonicalBody } from './shape.js';
 import {
   costClass,
   detailSchema,
@@ -450,7 +451,7 @@ export function submitBody(
       status: 'proposal_captured',
       proposalId: r.proposalId,
       ...(r.summary !== undefined ? { summary: r.summary } : {}),
-      hint: 'The work needs the owner’s approval and was not started. Never retry it; tell the user it is waiting for approval, and follow it with bridge_proposal_status.',
+      ...canonicalBody(r, 'The work needs the owner’s approval and was not started.'),
     };
   }
   return {
