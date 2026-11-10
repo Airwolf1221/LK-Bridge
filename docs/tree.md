@@ -70,7 +70,8 @@ Every query answer states the status, why it is not ready, and when the tree was
 - **Structural sweep** (`tree-sweep`, hourly, can be switched off per project). One listing of the project (about one
   request per 100 resources): new pages, renames, moves (into, out of and within the root), deletions, tags, aliases
   and documents. It reads with getResource only the pages it has never read and the stale ones (a page missing from
-  the listing is read once: a 404 confirms the deletion).
+  the listing is read once: a 404 confirms the deletion; a page under a parent the tree does not know has that
+  parent's ancestors read until its place is certain).
 - **Daily consistency check** (`tree-check`, nightly at 02:30 London time, P3). The listing, then every page with
   getResource: it also finds property changes (Reference Type, Scope, Index Scope, Canonical Display Name, locked).
 - **The correction log** (Repository Tree page): each value a sweep or check corrected (old and new), each page it

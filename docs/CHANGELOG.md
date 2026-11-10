@@ -51,6 +51,8 @@ sessions (A3, B2) build on its query layer.
   mock's state; sweep detection of every outside change; the check's property detection and correction log; a sweep and
   a check that must not undo newer after-write updates; two projects with the same ids, fully isolated; status
   transitions; the dashboard and the CLI.
+- **Independent review:** eleven issues found by a read-only review of the tree code are fixed, with regression tests
+  in `test/tree/review.test.ts` (ADR 0024, "Review").
 - Existing tests that listed every migration or maintenance job now include 0700 and the two tree jobs.
 
 ## Unreleased: v2 session B1, the Markdown converter (9 November 2026)

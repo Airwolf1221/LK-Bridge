@@ -133,6 +133,11 @@ export class TreeService {
   private lastStamp = 0;
   private offProjects: (() => void) | null = null;
   private readonly suggesting = new Set<string>();
+  /** Owed re-reads being done right now (by their job, or by the retry loop). */
+  private readonly rereading = new Set<number>();
+  private processing = false;
+  /** Set by `stopPasses` during shutdown: no new retries or passes; writes are still followed. */
+  private retriesStopped = false;
 
   constructor(private readonly o: TreeServiceOptions) {
     const now = () => o.clock.now();
@@ -168,6 +173,7 @@ export class TreeService {
     if (this.started) return;
     this.started = true;
     this.stopped = false;
+    this.retriesStopped = false;
     this.stopAll = new AbortController();
     for (const p of this.store.activePasses()) {
       if (p.kind === 'build') {
@@ -216,7 +222,20 @@ export class TreeService {
     this.track(this.suggestRoot(projectId).catch(() => undefined));
   }
 
-  /** Stops passes (a build resumes at the next start), retries and background work. */
+  /**
+   * The first half of a shutdown: stops passes (a build resumes at the next start), retries and background work, but
+   * keeps following the engine's writes, so writes that finish while the engine drains are still re-read (or owed).
+   */
+  async stopPasses(): Promise<void> {
+    this.retriesStopped = true;
+    this.stopAll.abort(new CancelledError());
+    for (const r of this.running.values()) r.abort.abort(new CancelledError());
+    if (this.retryTimer) this.o.clock.clearTimeout(this.retryTimer);
+    this.retryTimer = null;
+    await Promise.allSettled([...[...this.running.values()].map((r) => r.done), ...this.background]);
+  }
+
+  /** Stops passes (a build resumes at the next start), retries and background work, and stops following writes. */
   async stop(): Promise<void> {
     this.stopped = true;
     this.started = false;
@@ -322,9 +341,15 @@ export class TreeService {
         'the AI REPOSITORY root changed: the tree was discarded',
       );
     }
+    // The names the catalogue fields were derived with are stored with the tree, so a change made while the bridge
+    // was stopped (the CLI) is caught too.
     const key = catalogueSettingsKey(s);
-    const known = this.catalogueKeys.get(projectId);
-    if (known !== undefined && known !== key) this.store.recomputeCatalogue(projectId, s);
+    if (this.catalogueKeys.get(projectId) === key) return;
+    const stored = this.store.state(projectId)?.catalogue_key ?? null;
+    if (stored !== key) {
+      if (stored !== null || this.store.count(projectId) > 0) this.store.recomputeCatalogue(projectId, s);
+      this.store.setCatalogueKey(projectId, key);
+    }
     this.catalogueKeys.set(projectId, key);
   }
 
@@ -480,6 +505,7 @@ export class TreeService {
   private launch(pass: PassView, o: { reconcileFirst?: boolean } = {}): { done: Promise<void> } {
     const existing = this.running.get(pass.id);
     if (existing) return existing;
+    if (this.retriesStopped || this.stopped) return { done: Promise.resolve() }; // shutting down: resumes at start
     const abort = new AbortController();
     const onStop = () => abort.abort(new CancelledError());
     this.stopAll.signal.addEventListener('abort', onStop, { once: true });
@@ -522,7 +548,9 @@ export class TreeService {
         reconcileFirst = true;
         this.store.updatePass(passId, { status: 'reading' });
       }
-      if (reconcileFirst) await this.reconcilePhase(this.store.pass(passId)!);
+      // A listing still staged means its reconciliation has not completed (a restart can come between the two).
+      if (reconcileFirst || this.hasListing(passId))
+        await this.reconcilePhase(this.store.pass(passId)!, signal);
       if (!this.stillActive(passId, signal)) return;
       await this.readPhase(this.store.pass(passId)!, signal);
       if (!this.stillActive(passId, signal)) return;
@@ -578,6 +606,7 @@ export class TreeService {
               signal,
               passId: pass.id,
               waitForBudget: true,
+              waitForProject: pass.kind === 'build',
             },
           )
         ).value;
@@ -658,7 +687,7 @@ export class TreeService {
   }
 
   /** Brings the stored tree in line with the listing (snapshot T); newer after-write updates are kept. */
-  private async reconcilePhase(pass: PassView): Promise<void> {
+  private async reconcilePhase(pass: PassView, signal: AbortSignal): Promise<void> {
     const ctx = this.ctx(pass.projectId, pass.rootId, pass.kind, pass);
     // The root must be there. A listing that does not show it is checked with a read: a 404 fails the pass, and
     // nothing changes (the owner decides what the root is now).
@@ -671,7 +700,9 @@ export class TreeService {
           priority: 'P3',
           jobId: pass.id,
           passId: pass.id,
+          signal,
           waitForBudget: true,
+          waitForProject: pass.kind === 'build',
         },
       );
       const obs = r.gone ? null : observationFromResource(r.value);
@@ -711,19 +742,25 @@ export class TreeService {
   private async passRead(pass: PassView, ctx: ApplyContext, id: string, signal: AbortSignal): Promise<void> {
     const projectId = pass.projectId;
     let r: ReadResult;
+    let ancestors: { obs: Observation; t: number }[] = [];
+    let placeUnknown = false;
     try {
-      r = await this.read(
-        projectId,
-        'getResource',
-        { path: { resourceId: id } },
-        {
-          priority: 'P3',
-          jobId: pass.id,
-          signal,
-          passId: pass.id,
-          waitForBudget: true,
-        },
-      );
+      const ro: ReadOptions = {
+        priority: 'P3',
+        jobId: pass.id,
+        signal,
+        passId: pass.id,
+        waitForBudget: true,
+        waitForProject: pass.kind === 'build',
+      };
+      r = await this.read(projectId, 'getResource', { path: { resourceId: id } }, ro);
+      const seen = r.gone ? null : observationFromResource(r.value);
+      if (seen && this.parentUnknown(projectId, pass.rootId, seen)) {
+        // Moved under a parent the tree does not hold: find out where that is before deciding.
+        const a = await this.ancestry(projectId, pass.rootId, seen, ro);
+        ancestors = a.ancestors;
+        placeUnknown = a.verdict === 'unknown';
+      }
     } catch (e) {
       if (signal.aborted || e instanceof CancelledError) throw e;
       const message = errorText(e);
@@ -758,8 +795,16 @@ export class TreeService {
         const removed = this.store.applyGone(ctx, id, r.t, 'deleted');
         if (removed > 0) this.store.bumpPass(pass.id, { removed });
         structural = removed > 0;
+      } else if (placeUnknown) {
+        this.store.markStale(projectId, [id], 'its place under the root could not be established');
       } else {
         const obs = observationFromResource(r.value);
+        for (const a of ancestors) {
+          if (this.store.applyObservation(ctx, a.obs, a.t) === 'added') {
+            this.store.bumpPass(pass.id, { added: 1 });
+            structural = true;
+          }
+        }
         if (obs) {
           const size = node ? this.store.subtreeIds(projectId, id).length : 0;
           const outcome = this.store.applyObservation(ctx, obs, r.t);
@@ -791,11 +836,18 @@ export class TreeService {
     const projectId = pass.projectId;
     const T = pass.snapshotAt ?? this.o.clock.now();
     await this.serial(projectId, () => {
+      if (!this.store.has(projectId, pass.rootId)) {
+        throw new PassError(
+          `The AI REPOSITORY root ${pass.rootId} is not in the tree at the end of the ${pass.kind}; it was not completed.`,
+        );
+      }
       this.store.recomputePaths(projectId, pass.rootId);
       this.store.setConfirmed(projectId, T, pass.kind);
-      // Re-reads owed by writes made before T are settled: the pass observed everything after them.
+      // Failed re-reads last tried before T are settled: the pass observed everything they would have.
       for (const row of this.store.pending(projectId)) {
-        if (row.status === 'retry' && row.created_at <= T) this.store.deletePending(row.id);
+        if (row.status === 'retry' && row.attempted_at !== null && row.attempted_at < T) {
+          this.store.deletePending(row.id);
+        }
       }
     });
     if (pass.kind !== 'build') this.store.updatePass(pass.id, { corrected: this.correctedNodes(pass.id) });
@@ -926,24 +978,75 @@ export class TreeService {
       return;
     }
     const ids = targetIds(r.opId, r.params, r.value);
-    const ok = await this.reread(r.projectId, r.opId, ids, flagsOf(r.opId, r.params), {
-      priority: r.priority,
-      jobId: r.jobId,
-      signal: r.signal,
-      waitForBudget: false,
-      pendingId: pending?.id ?? null,
-    });
-    if (ok && pending) {
-      // Every row of the step (a recovered step may have written one per attempt).
-      for (const p of this.store.pending(r.projectId)) {
-        if (p.job_id === r.jobId && p.step_no === r.stepNo) this.store.deletePending(p.id);
+    // While the job re-reads, the retry loop leaves this step's row alone (it would re-read the same thing).
+    if (pending) this.rereading.add(pending.id);
+    try {
+      const ok = await this.reread(r.projectId, r.opId, ids, flagsOf(r.opId, r.params), {
+        priority: r.priority,
+        jobId: r.jobId,
+        signal: r.signal,
+        waitForBudget: false,
+        pendingId: pending?.id ?? null,
+      });
+      if (ok && pending) {
+        // Every row of the step (a recovered step may have written one per attempt).
+        for (const p of this.store.pending(r.projectId)) {
+          if (p.job_id === r.jobId && p.step_no === r.stepNo) this.store.deletePending(p.id);
+        }
+      }
+    } finally {
+      if (pending) {
+        this.rereading.delete(pending.id);
+        this.scheduleRetries(RETRY_FIRST_MS); // a failed re-read is now the retry loop's
       }
     }
   }
 
   /**
+   * Where a resource whose parent the tree does not know really is: its ancestors are read one by one (getResource)
+   * until one is the root or a stored node (`inside`, with the ancestors to add, top first), or a top-level resource
+   * (`outside`). A parent the listing skipped, or a new folder under the root, is never mistaken for "outside".
+   * `unknown` when the walk is too deep or an ancestor cannot be found.
+   */
+  private async ancestry(
+    projectId: string,
+    rootId: string,
+    obs: Observation,
+    o: ReadOptions,
+  ): Promise<{ verdict: 'inside' | 'outside' | 'unknown'; ancestors: { obs: Observation; t: number }[] }> {
+    const chain: { obs: Observation; t: number }[] = [];
+    let parent = obs.parentId;
+    const seen = new Set<string>([obs.id]);
+    for (let i = 0; i < 32; i++) {
+      if (parent === null) return { verdict: 'outside', ancestors: [] };
+      if (parent === rootId || this.store.has(projectId, parent)) {
+        return { verdict: 'inside', ancestors: chain.reverse() };
+      }
+      if (seen.has(parent)) break;
+      seen.add(parent);
+      const r = await this.read(projectId, 'getResource', { path: { resourceId: parent } }, o);
+      const p = r.gone ? null : observationFromResource(r.value);
+      if (!p) break;
+      chain.push({ obs: p, t: r.t });
+      parent = p.parentId;
+    }
+    return { verdict: 'unknown', ancestors: [] };
+  }
+
+  /** Whether a read resource's place needs `ancestry` (its parent is neither the root nor a stored node). */
+  private parentUnknown(projectId: string, rootId: string, obs: Observation): boolean {
+    return (
+      obs.id !== rootId &&
+      obs.parentId !== null &&
+      obs.parentId !== rootId &&
+      !this.store.has(projectId, obs.parentId)
+    );
+  }
+
+  /**
    * Re-reads the resources a write affected and updates the tree from what LegendKeeper answers. Returns false when a
-   * read failed: the nodes concerned are marked stale, the failure is logged and the pending row is kept for a retry.
+   * read failed (or was interrupted): the nodes concerned are marked stale, the failure is logged and the pending row
+   * is kept for a retry.
    */
   private async reread(
     projectId: string,
@@ -960,6 +1063,7 @@ export class TreeService {
   ): Promise<boolean> {
     const s = this.settings(projectId);
     if (!s.rootId) return true;
+    const rootId = s.rootId;
     const meta = this.meta(projectId);
     const listing = this.store.activePass(projectId);
     const listingNow = listing !== undefined && listing.status !== 'reading';
@@ -970,77 +1074,135 @@ export class TreeService {
         ? ids
         : ids.filter((id) => this.store.has(projectId, id) || (listingNow && this.inListing(listing.id, id)));
     if (relevant.length === 0) return true;
-    const ctx = this.ctx(projectId, s.rootId, 'write');
+    const attemptedAt = this.stamp();
+    const ctx = this.ctx(projectId, rootId, 'write');
+    const ro: ReadOptions = { ...o, waitForProject: false };
     const failures: { id: string; error: string }[] = [];
     let discover: string[] = [];
-    const results: { id: string; r: ReadResult }[] = [];
-    for (const id of relevant) {
-      try {
-        results.push({ id, r: await this.read(projectId, 'getResource', { path: { resourceId: id } }, o) });
-      } catch (e) {
-        if (o.signal?.aborted) return false;
-        failures.push({ id, error: errorText(e) });
-      }
-    }
-    await this.serial(projectId, () => {
-      for (const { id, r } of results) {
-        const wasInTree = this.store.has(projectId, id);
-        if (r.gone) {
-          this.store.applyGone(ctx, id, r.t, kind === 'delete' ? 'deleted' : 'not found when re-read');
-          continue;
-        }
-        const obs = observationFromResource(r.value);
-        if (!obs) continue;
-        this.store.applyObservation(ctx, obs, r.t);
-        if (listingNow) this.store.stageIfListing(projectId, obs, r.t);
-        const nowInTree = this.store.has(projectId, id);
-        // Descendants the tree cannot know yet: a template copy with its children, a restored subtree, or a
-        // resource moved in from outside the root.
-        if (
-          nowInTree &&
-          (flags.includeChildren === true || kind === 'restore' || (kind === 'move' && !wasInTree))
-        ) {
-          discover.push(id);
-        }
-      }
-      this.store.recomputePaths(projectId, s.rootId!);
-    });
-    // Descendants: list each level's children, then read each one.
-    while (discover.length > 0 && failures.length === 0) {
-      const next: string[] = [];
-      for (const parent of discover) {
-        let children: Observation[];
+    let structural = false;
+    const fail = (id: string, e: unknown, what = '') =>
+      failures.push({
+        id,
+        error: o.signal?.aborted ? 'the re-read was interrupted' : `${what}${errorText(e)}`,
+      });
+    try {
+      const results: {
+        id: string;
+        r: ReadResult;
+        ancestors: { obs: Observation; t: number }[];
+        skip: boolean;
+      }[] = [];
+      for (const id of relevant) {
         try {
-          children = await this.listChildren(projectId, parent, o);
+          const r = await this.read(projectId, 'getResource', { path: { resourceId: id } }, ro);
+          const obs = r.gone ? null : observationFromResource(r.value);
+          let ancestors: { obs: Observation; t: number }[] = [];
+          let skip = false;
+          if (obs && listingNow && !this.store.has(projectId, rootId)) {
+            // The first build's listing is still running: the listing places it.
+          } else if (obs && this.parentUnknown(projectId, rootId, obs)) {
+            const a = await this.ancestry(projectId, rootId, obs, ro);
+            if (a.verdict === 'unknown') {
+              failures.push({ id, error: 'its place under the root could not be established' });
+              skip = true;
+            }
+            ancestors = a.ancestors;
+          }
+          results.push({ id, r, ancestors, skip });
         } catch (e) {
-          if (o.signal?.aborted) return false;
-          failures.push({ id: parent, error: `its children could not be listed: ${errorText(e)}` });
-          break;
+          fail(id, e);
         }
-        for (const c of children) {
-          let r: ReadResult;
-          try {
-            r = await this.read(projectId, 'getResource', { path: { resourceId: c.id } }, o);
-          } catch (e) {
-            if (o.signal?.aborted) return false;
-            failures.push({ id: c.id, error: errorText(e) });
+      }
+      await this.serial(projectId, () => {
+        for (const { id, r, ancestors, skip } of results) {
+          if (skip) continue;
+          const before = this.store.node(projectId, id);
+          if (r.gone) {
+            if (id === rootId) {
+              // Never wipe the tree on one read: the root is marked stale and the next pass decides (it fails, so the
+              // owner sees it).
+              this.store.markStale(projectId, [id], 'the AI REPOSITORY root was not found when re-read');
+              continue;
+            }
+            if (
+              this.store.applyGone(ctx, id, r.t, kind === 'delete' ? 'deleted' : 'not found when re-read') > 0
+            ) {
+              structural = true;
+            }
             continue;
           }
-          await this.serial(projectId, () => {
-            if (r.gone) return;
-            const obs = observationFromResource(r.value);
-            if (!obs) return;
-            this.store.applyObservation(ctx, obs, r.t);
-            if (listingNow) this.store.stageIfListing(projectId, obs, r.t);
-            if (this.store.has(projectId, obs.id)) next.push(obs.id);
-          });
+          const obs = observationFromResource(r.value);
+          if (!obs) continue;
+          for (const a of ancestors) {
+            if (this.store.applyObservation(ctx, a.obs, a.t) === 'added') structural = true;
+            if (listingNow) this.store.stageIfListing(projectId, a.obs, a.t);
+          }
+          const outcome = this.store.applyObservation(ctx, obs, r.t);
+          if (listingNow) this.store.stageIfListing(projectId, obs, r.t);
+          const after = this.store.node(projectId, id);
+          if (
+            outcome === 'added' ||
+            outcome === 'removed' ||
+            (before &&
+              after &&
+              (before.parent_id !== after.parent_id || before.display_name !== after.display_name))
+          ) {
+            structural = true;
+          }
+          // Descendants the tree cannot know yet: a template copy with its children, a restored subtree, or a
+          // resource moved in from outside the root.
+          if (
+            after &&
+            (flags.includeChildren === true ||
+              kind === 'restore' ||
+              (kind === 'move' && before === undefined))
+          ) {
+            discover.push(id);
+          }
         }
+        if (structural) this.store.recomputePaths(projectId, rootId);
+      });
+      // Descendants: list each level's children, then read each one.
+      while (discover.length > 0 && failures.length === 0) {
+        const next: string[] = [];
+        for (const parent of discover) {
+          let children: Observation[];
+          try {
+            children = await this.listChildren(projectId, parent, ro);
+          } catch (e) {
+            fail(parent, e, 'its children could not be listed: ');
+            break;
+          }
+          for (const c of children) {
+            let r: ReadResult;
+            try {
+              r = await this.read(projectId, 'getResource', { path: { resourceId: c.id } }, ro);
+            } catch (e) {
+              fail(c.id, e);
+              continue;
+            }
+            await this.serial(projectId, () => {
+              if (r.gone) return;
+              const obs = observationFromResource(r.value);
+              if (!obs) return;
+              if (this.store.applyObservation(ctx, obs, r.t) === 'added') structural = true;
+              if (listingNow) this.store.stageIfListing(projectId, obs, r.t);
+              if (this.store.has(projectId, obs.id)) next.push(obs.id);
+            });
+          }
+        }
+        discover = next;
       }
-      discover = next;
+      if (discover.length === 0 && structural) {
+        await this.serial(projectId, () => this.store.recomputePaths(projectId, rootId));
+      }
+    } catch (e) {
+      // Anything unexpected is a failed re-read too: never silently wrong.
+      fail(relevant[0]!, e);
     }
-    await this.serial(projectId, () => this.store.recomputePaths(projectId, s.rootId!));
     if (failures.length === 0) return true;
     await this.serial(projectId, () => {
+      if (structural) this.store.recomputePaths(projectId, rootId);
       const reason = `a re-read after ${op} failed: ${failures[0]!.error}`;
       this.store.markStale(
         projectId,
@@ -1077,10 +1239,17 @@ export class TreeService {
         row,
         reason,
         this.o.clock.now() + Math.min(RETRY_FIRST_MS * 2 ** attempts, RETRY_MAX_MS),
+        attemptedAt,
       );
     });
     this.scheduleRetries(RETRY_FIRST_MS);
     return false;
+  }
+
+  private hasListing(passId: string): boolean {
+    return (
+      this.o.db.prepare('SELECT 1 FROM tree_listing WHERE pass_id = ? LIMIT 1').get(passId) !== undefined
+    );
   }
 
   private inListing(passId: string, id: string): boolean {
@@ -1090,11 +1259,7 @@ export class TreeService {
     );
   }
 
-  private async listChildren(
-    projectId: string,
-    parentId: string,
-    o: { priority: PriorityClass; jobId?: string; signal?: AbortSignal; waitForBudget: boolean },
-  ): Promise<Observation[]> {
+  private async listChildren(projectId: string, parentId: string, o: ReadOptions): Promise<Observation[]> {
     const out: Observation[] = [];
     let cursor: string | null = null;
     for (;;) {
@@ -1118,20 +1283,21 @@ export class TreeService {
 
   // ============================================================================================ retries
 
-  /** Arms one timer for the re-reads that are owed (failed ones at their retry time; leftovers from a crash now). */
+  /**
+   * Arms one timer for the re-reads that are owed (failed ones at their retry time; leftovers from a crash now). Rows
+   * of a project that is not served now are left until it is (`projectServed` arms the timer again).
+   */
   private scheduleRetries(delayMs: number): void {
-    if (!this.started || this.stopped) return;
+    if (!this.started || this.stopped || this.retriesStopped) return;
     if (this.retryTimer) this.o.clock.clearTimeout(this.retryTimer);
-    const rows = this.store.pending();
-    if (rows.length === 0) {
-      this.retryTimer = null;
-      return;
-    }
+    this.retryTimer = null;
     const now = this.o.clock.now();
     let at = Number.POSITIVE_INFINITY;
-    for (const r of rows) {
-      at = Math.min(at, r.status === 'retry' ? (r.next_at ?? now) : now + delayMs);
+    for (const r of this.store.pending()) {
+      if (!this.o.projects.client(r.project_id) || this.rereading.has(r.id)) continue;
+      at = Math.min(at, r.status === 'retry' ? Math.max(r.next_at ?? now, now + 1000) : now + delayMs);
     }
+    if (!Number.isFinite(at)) return;
     this.retryTimer = this.o.clock.setTimeout(
       () => {
         this.retryTimer = null;
@@ -1143,36 +1309,46 @@ export class TreeService {
 
   /**
    * Re-reads owed: failed ones whose time has come, and rows left `in_flight` whose step has finished (a crash or a
-   * stop between the write and its re-read). Rows whose step has not finished are left to the engine.
+   * stop between the write and its re-read). Rows whose step has not finished, or whose job is re-reading them now,
+   * are left to the engine. One run at a time.
    */
   async processPending(): Promise<void> {
-    const now = this.o.clock.now();
-    for (const row of this.store.pending()) {
-      if (this.stopped) return;
-      if (!this.o.projects.client(row.project_id)) continue;
-      if (row.status === 'retry' && (row.next_at ?? 0) > now) continue;
-      if (row.status === 'in_flight') {
-        const state = this.stepState(row.project_id, row.job_id, row.step_no);
-        if (state === 'open') continue;
-        if (state === 'not_applied') {
-          this.store.deletePending(row.id);
-          continue;
+    if (this.processing) return;
+    this.processing = true;
+    try {
+      const now = this.o.clock.now();
+      for (const row of this.store.pending()) {
+        if (this.stopped || this.retriesStopped) return;
+        if (!this.o.projects.client(row.project_id) || this.rereading.has(row.id)) continue;
+        if (row.status === 'retry' && (row.next_at ?? 0) > now) continue;
+        if (row.status === 'in_flight') {
+          const state = this.stepState(row.project_id, row.job_id, row.step_no);
+          if (state === 'open') continue;
+          if (state === 'not_applied') {
+            this.store.deletePending(row.id);
+            continue;
+          }
+        }
+        const ids = parseIds(row.resource_ids);
+        const flags = parseFlags(row.flags);
+        this.rereading.add(row.id);
+        try {
+          const ok = await this.reread(row.project_id, row.op, ids, flags, {
+            priority: 'P3',
+            signal: this.stopAll.signal,
+            waitForBudget: true,
+            pendingId: row.id,
+            ...(row.job_id ? { jobId: row.job_id } : {}),
+          });
+          if (ok) this.store.deletePending(row.id);
+        } catch (e) {
+          this.o.log?.warn({ err: e, pending: row.id }, 'a repository tree re-read failed');
+        } finally {
+          this.rereading.delete(row.id);
         }
       }
-      const ids = parseIds(row.resource_ids);
-      const flags = parseFlags(row.flags);
-      try {
-        const ok = await this.reread(row.project_id, row.op, ids, flags, {
-          priority: 'P3',
-          signal: this.stopAll.signal,
-          waitForBudget: true,
-          pendingId: row.id,
-          ...(row.job_id ? { jobId: row.job_id } : {}),
-        });
-        if (ok) this.store.deletePending(row.id);
-      } catch (e) {
-        this.o.log?.warn({ err: e, pending: row.id }, 'a repository tree re-read failed');
-      }
+    } finally {
+      this.processing = false;
     }
     this.scheduleRetries(RETRY_FIRST_MS);
   }
@@ -1258,18 +1434,7 @@ export class TreeService {
    * One governed read (the engine's `internalRead`, the project's governor). A 404 is an answer (`gone`). With
    * `waitForBudget`, an exhausted budget is waited out on the clock instead of failing.
    */
-  private async read(
-    projectId: string,
-    op: string,
-    params: OpParams,
-    o: {
-      priority: PriorityClass;
-      jobId?: string | undefined;
-      signal?: AbortSignal | undefined;
-      passId?: string;
-      waitForBudget: boolean;
-    },
-  ): Promise<ReadResult> {
+  private async read(projectId: string, op: string, params: OpParams, o: ReadOptions): Promise<ReadResult> {
     for (;;) {
       if (o.signal?.aborted) throw new CancelledError();
       const t = this.stamp(); // the observation time: unique and increasing
@@ -1291,8 +1456,9 @@ export class TreeService {
           await sleep(this.o.clock, Math.max(1000, e.retryAtMs - this.o.clock.now()), o.signal);
           continue;
         }
-        if (e instanceof JobsError && e.code === 'PROJECT_UNAVAILABLE' && o.waitForBudget) {
-          // The project is not served for now (its key is being checked again): background work waits for it.
+        if (e instanceof JobsError && e.code === 'PROJECT_UNAVAILABLE' && o.waitForProject === true) {
+          // The project is not served for now (its key is being checked again): a build waits for it (until stopped
+          // or cancelled). A sweep, check or retry fails instead, so nothing stays stuck behind it.
           await sleep(this.o.clock, 15_000, o.signal);
           continue;
         }
@@ -1306,6 +1472,17 @@ export interface PassOutcome {
   readonly summary: string;
   readonly changed?: boolean;
   readonly skipped?: boolean;
+}
+
+interface ReadOptions {
+  readonly priority: PriorityClass;
+  readonly jobId?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
+  readonly passId?: string;
+  /** Wait out an exhausted budget on the clock instead of failing. */
+  readonly waitForBudget: boolean;
+  /** Wait while the project is not served (builds only). */
+  readonly waitForProject?: boolean;
 }
 
 interface ReadResult {

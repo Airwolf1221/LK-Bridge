@@ -245,7 +245,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     config,
     envConfig,
     async shutdown(drainTimeoutMs = 20_000) {
-      await tree.stop(); // a build resumes at the next start; a sweep or check in flight ends as interrupted
+      // A build resumes at the next start; a sweep or check in flight ends as interrupted. Writes are still followed
+      // while the engine drains, so their re-reads are made (or owed) before the tree stops.
+      await tree.stopPasses();
       await maintenance.stop(); // stops cleanly, before the engine and database wind down
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
@@ -257,6 +259,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       clearTimeout(timer);
       detachPolicy();
       await engine.stop();
+      await tree.stop();
       projects.close(); // every governor saves its counts
       guard?.release();
     },

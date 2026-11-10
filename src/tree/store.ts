@@ -67,6 +67,7 @@ export interface StateRow {
   confirmed_at: number | null;
   confirmed_by: PassKind | null;
   suggestion: string | null;
+  catalogue_key: string | null;
   updated_at: number;
 }
 
@@ -110,6 +111,7 @@ export interface PendingRow {
   attempts: number;
   last_error: string | null;
   next_at: number | null;
+  attempted_at: number | null;
   created_at: number;
   updated_at: number;
 }
@@ -228,6 +230,12 @@ export class TreeStore {
       .run(at, by, by, now, now, projectId);
   }
 
+  setCatalogueKey(projectId: string, key: string): void {
+    this.db
+      .prepare('UPDATE tree_state SET catalogue_key = ?, updated_at = ? WHERE project_id = ?')
+      .run(key, this.now(), projectId);
+  }
+
   setSuggestion(projectId: string, s: RootSuggestion): void {
     const at = this.now();
     this.db
@@ -331,7 +339,12 @@ export class TreeStore {
    * outside it: if it was a node, it and its subtree are removed (it was moved out).
    */
   applyObservation(ctx: ApplyContext, obs: Observation, t: number): ApplyOutcome {
-    return this.db.transaction(() => this.applyOne(ctx, obs, t))();
+    return this.db.transaction(() => (this.rootChanged(ctx) ? 'skipped' : this.applyOne(ctx, obs, t)))();
+  }
+
+  /** A read made for another root than the stored tree's (the setting changed meanwhile) changes nothing. */
+  private rootChanged(ctx: ApplyContext): boolean {
+    return this.state(ctx.projectId)?.root_id !== ctx.rootId;
   }
 
   private applyOne(ctx: ApplyContext, obs: Observation, t: number): ApplyOutcome {
@@ -495,6 +508,7 @@ export class TreeStore {
    */
   applyGone(ctx: ApplyContext, id: string, t: number, reason: string): number {
     return this.db.transaction(() => {
+      if (this.rootChanged(ctx)) return 0;
       const existing = this.node(ctx.projectId, id);
       if (!existing) {
         this.tombstoneAt(ctx.projectId, id, t, reason);
@@ -628,8 +642,8 @@ export class TreeStore {
     if (root) {
       computed.set(rootId, { ids: [rootId], names: [root.display_name] });
       const queue = [rootId];
-      while (queue.length > 0) {
-        const id = queue.shift()!;
+      for (let qi = 0; qi < queue.length; qi++) {
+        const id = queue[qi]!;
         const p = computed.get(id)!;
         for (const c of children.get(id) ?? []) {
           if (computed.has(c)) continue; // a cycle cannot happen at LK; never loop on bad data
@@ -731,6 +745,9 @@ export class TreeStore {
     | { ok: false; error: string } {
     return this.db.transaction(() => {
       const { projectId, rootId } = ctx;
+      if (this.rootChanged(ctx)) {
+        return { ok: false as const, error: 'The AI REPOSITORY root changed while this pass was running.' };
+      }
       const staged = this.db.prepare('SELECT * FROM tree_listing WHERE pass_id = ?').all(passId) as {
         id: string;
         name: string;
@@ -795,8 +812,8 @@ export class TreeStore {
       }
       const inSubtree = new Set<string>([rootId]);
       const queue = [rootId];
-      while (queue.length > 0) {
-        const id = queue.shift()!;
+      for (let qi = 0; qi < queue.length; qi++) {
+        const id = queue[qi]!;
         for (const c of children.get(id) ?? []) {
           if (inSubtree.has(c)) continue;
           inSubtree.add(c);
@@ -804,6 +821,17 @@ export class TreeStore {
         }
       }
 
+      /** The merged view shows the chain of parents from `id` up to a top-level resource, without the root. */
+      const provenOutside = (id: string): boolean => {
+        let cur: string | null | undefined = id;
+        for (let i = 0; i < 64; i++) {
+          if (cur === rootId) return false;
+          if (cur === null) return true;
+          if (cur === undefined || !parentOf.has(cur)) return false; // a parent the listing did not show
+          cur = parentOf.get(cur);
+        }
+        return false;
+      };
       const added: string[] = [];
       // Parents first, so membership tests in applyOne see them.
       const order = [...inSubtree];
@@ -827,11 +855,13 @@ export class TreeStore {
         if (inSubtree.has(n.id)) continue;
         const row = this.node(projectId, n.id);
         if (!row) continue; // removed with an ancestor already
-        if (row.struct_observed_at > T || !fromListing.has(n.id)) {
+        if (row.struct_observed_at > T || !fromListing.has(n.id) || !provenOutside(n.id)) {
+          // Newer than the listing, or under a parent the listing did not show (it may have skipped one): the pass
+          // reads it and finds out where it is.
           this.markStaleRow(projectId, n.id, 'not under the root in the last listing; being checked');
           continue;
         }
-        // The listing shows it (or an ancestor) under a parent outside the root: positive evidence of a move out.
+        // The listing shows its whole chain of parents up to a top-level resource that is not the root: it moved out.
         removed += this.removeSubtree(ctx, n.id, T, 'moved outside the root');
       }
       for (const id of unconfirmed) {
@@ -1109,13 +1139,14 @@ export class TreeStore {
     this.db.prepare('DELETE FROM tree_pending WHERE id = ?').run(id);
   }
 
-  failPending(id: number, error: string, nextAt: number): void {
+  /** A re-read failed: retried at `nextAt`; `attemptedAt` is the stamp taken when it was tried. */
+  failPending(id: number, error: string, nextAt: number, attemptedAt: number): void {
     this.db
       .prepare(
-        `UPDATE tree_pending SET status = 'retry', attempts = attempts + 1, last_error = ?, next_at = ?, updated_at = ?
-         WHERE id = ?`,
+        `UPDATE tree_pending SET status = 'retry', attempts = attempts + 1, last_error = ?, next_at = ?,
+           attempted_at = ?, updated_at = ? WHERE id = ?`,
       )
-      .run(error.slice(0, 1000), nextAt, this.now(), id);
+      .run(error.slice(0, 1000), nextAt, attemptedAt, this.now(), id);
   }
 
   // ============================================================================================== correction log

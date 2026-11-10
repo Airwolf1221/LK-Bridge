@@ -54,25 +54,44 @@ in the middle of a 1,500-read build.
    re-read. Page content writes never touch the tree.
 5. **A re-read that fails is never silent.** The node is marked stale (with the reason), the failure is written to the
    correction log and the errors table, the tree's status becomes `stale`, and the re-read is retried at P3 (one
-   minute, doubling to an hour). The owed re-read is written to `tree_pending` **before** the write is sent and removed
-   only once the tree is updated, so a crash between a write and its re-read is caught up at the next start (once the
-   step is known to have finished). A completed sweep or check settles every owed re-read older than its snapshot.
+   minute, doubling to an hour; only while the project is served, so nothing spins for a stopped project). An
+   interrupted re-read (the job cancelled, the engine stopping) counts as failed. The owed re-read is written to
+   `tree_pending` **before** the write is sent and removed only once the tree is updated, so a crash between a write
+   and its re-read is caught up at the next start (once the step is known to have finished). A completed sweep or check
+   settles every failed re-read whose last attempt was stamped before its snapshot. On shutdown the tree stops its
+   passes first but keeps following writes until the engine has drained. A root that reads as 404 after a write is
+   marked stale, never removed with the whole tree (the next pass then fails, so the owner sees it).
 6. **Absence from a listing is not proof of deletion.** A stored node that a pass's listing does not show is kept,
    marked stale, and read by the same pass: only a 404 removes it. A node the listing shows under a parent outside the
-   root (positive evidence) is removed with its subtree. The root itself missing (404) fails the pass and changes
-   nothing.
+   root is removed with its subtree only when the listing shows that parent's whole chain up to a top-level resource;
+   otherwise it is marked stale and read. Whenever a read shows a resource under a parent the tree does not hold, the
+   parent's ancestors are read one by one until the root or a stored node (inside: they are added) or a top-level
+   resource (outside) is reached, so a new folder the listing skipped is never taken for "outside". The root itself
+   missing (404) fails the pass and changes nothing; a build whose root is not in the tree at its end does not complete.
 7. **Passes run at P3, through the governor.** All reads are the engine's governed `internalRead` (the project's own
    governor; the system principal; LegendKeeper errors recorded, 404s as answers). A long budget wait is waited out
-   on the clock instead of failing; the governor's P3 floor (half of every tier by default) and its class order (P3
+   on the clock instead of failing (a build also waits while its project is not served; a sweep, check or retry fails
+   instead, so nothing stays stuck); the governor's P3 floor (half of every tier by default) and its class order (P3
    only while nothing of P1 or P2 waits) keep agents' work first. The build is resumable: the listing's cursor and the
    staged listing are persisted per page, and each node's read is marked with the pass that read it, so a restart
-   continues where it stopped (a stale cursor restarts the listing with a new snapshot). A build always stops after its
+   continues where it stopped (a stale cursor restarts the listing with a new snapshot; a listing still staged is
+   reconciled before reading, whatever the pass's status says). A build always stops after its
    listing and shows the estimate (`bridge_estimate`'s arithmetic, at P3) until the owner confirms. Sweeps and checks
    interrupted by a stop end as `interrupted`; the next one starts afresh.
 8. **Designed for later sessions (PLAN-v2 10.2).** Nodes are updated in place, never deleted and re-inserted for a
    refresh, so later tables can hang rows on `(project_id, id)`. A3 adds type and taxonomy links in `tree_node_links`
    and builds name resolution on the exact-name helpers (`tree_names`: raw, display, alias, canonical; every match);
    C2 records the template a page came from in `template_id`.
+
+## Review
+
+An independent review (same session, read-only) found eleven ways the first version could end up wrong, stuck or
+busy; all are fixed, most with regression tests (`test/tree/review.test.ts`): a retry timer spinning for a project that
+is not served; a restart between confirming a build and applying its listing; a pass waiting for ever on a project that
+is not served; a subtree removed because the listing skipped its new parent; writes during shutdown not re-read; an
+interrupted re-read dropped; owed re-reads settled by the wrong time; the root's 404 after a write wiping the tree;
+paths recomputed after every write (now only when the structure changed); a changed root or catalogue names applied
+late (in-flight reads for an old root change nothing; the names in use are stored); duplicate re-reads of one write.
 
 ## Consequences
 

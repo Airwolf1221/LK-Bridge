@@ -20,6 +20,7 @@ CREATE TABLE tree_state (
   confirmed_at   INTEGER,                       -- snapshot time T of the last pass that completed
   confirmed_by   TEXT CHECK (confirmed_by IS NULL OR confirmed_by IN ('build', 'sweep', 'check')),
   suggestion     TEXT,                          -- JSON: the last AI REPOSITORY root suggestion
+  catalogue_key  TEXT,                          -- the property and row names the catalogue fields were derived with
   updated_at     INTEGER NOT NULL
 );
 
@@ -163,6 +164,7 @@ CREATE TABLE tree_pending (
   attempts     INTEGER NOT NULL DEFAULT 0,
   last_error   TEXT,
   next_at      INTEGER,
+  attempted_at INTEGER,                         -- the observation stamp of the last failed attempt
   created_at   INTEGER NOT NULL,
   updated_at   INTEGER NOT NULL
 );

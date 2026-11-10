@@ -76,6 +76,8 @@ export class TreeModel {
    * LegendKeeper answers, not what the request asked for.
    */
   nameFilter: (name: string) => string = (n) => n;
+  /** Resources a listing leaves out (as a listing paged during changes can skip one); reads still find them. */
+  readonly hiddenFromListing = new Set<string>();
 
   constructor(private readonly now: () => number) {}
 
@@ -366,6 +368,7 @@ export class TreeModel {
         const parentId = req.query.parentId;
         const all = [...this.res.values()]
           .filter((r) => r.deletedAt === null && (parentId === undefined || r.parentId === parentId))
+          .filter((r) => !this.hiddenFromListing.has(r.id))
           .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
         const limit = Number(req.query.limit ?? 50);
         const offset = Number(req.query.cursor ?? 0);
