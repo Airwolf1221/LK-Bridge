@@ -6,6 +6,7 @@
  * Every tool works only inside the project's AI REPOSITORY root, and every answer from the tree states the tree's
  * status and when it was last confirmed.
  */
+import { factsVersionFrom } from '../../facts/version.js';
 import * as z from 'zod';
 import type { AssetFolder, AssetItem, AssetMeta } from '../../assets/index.js';
 import {
@@ -337,7 +338,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
       'Scope and Canonical Display Name; and from a live read its whole sidebar: the facts (key-value rows) in template order, ' +
       'each link collection with its items (an item can point at one document of a page), and any other sidebar properties ' +
       '(named, marked read-only). Pass the page by name or id. Example: { "resource": "Asagiri Miyabi" }. ' +
-      'Cost: 1 read (a live getResource); pass live: false for the tree’s data alone at no cost. A name that matches several pages ' +
+      'With a live read it gives the page’s factsVersion: pass it to set_facts as baseFactsVersion. Cost: 1 read (a live getResource); pass live: false for the tree’s data alone at no cost. A name that matches several pages ' +
       'is refused with the candidates and their paths. Sidebar properties carry their `version` where LegendKeeper gives one, ' +
       'for the write tools to use.',
     inputSchema: z.object({
@@ -510,7 +511,12 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
             asked: e.asked,
             ok: true,
             ...nodeBody(ctx, e.node),
-            ...(live === false ? {} : { sidebar: sidebarOf(ctx, sidebars.get(e.node.id), level) }),
+            ...(live === false
+              ? {}
+              : {
+                  factsVersion: factsVersionOfRead(ctx, e.node.id, sidebars.get(e.node.id)),
+                  sidebar: sidebarOf(ctx, sidebars.get(e.node.id), level),
+                }),
             ...(live === false ? {} : { liveRead: liveStamp(sidebars.get(e.node.id)) }),
           });
         }
@@ -967,6 +973,16 @@ function blocksText(blocks: unknown): string {
     .join('\n');
 }
 
+/**
+ * v2 C2b: the page's `factsVersion` from a live getResource answer (remembered, so a stale `baseFactsVersion` passed to
+ * set_facts later is answered with what changed).
+ */
+export function factsVersionOfRead(ctx: RepoCtx, resourceId: string, resource: unknown): string {
+  const { version, state } = factsVersionFrom(resource);
+  ctx.pd.services?.factsVersions?.store(ctx.projectId, resourceId, version, state);
+  return version;
+}
+
 /** The sidebar of a getResource answer, as facts, link collections and named read-only properties. */
 export function sidebarOf(
   ctx: RepoCtx,
@@ -1079,7 +1095,12 @@ async function describe(
   if (!r.ok) return r;
   return {
     ok: true,
-    body: { ...body, sidebar: sidebarOf(ctx, r.value, level), liveRead: liveStamp(r.value) },
+    body: {
+      ...body,
+      factsVersion: factsVersionOfRead(ctx, node.id, r.value),
+      sidebar: sidebarOf(ctx, r.value, level),
+      liveRead: liveStamp(r.value),
+    },
   };
 }
 

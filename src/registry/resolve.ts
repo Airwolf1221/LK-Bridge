@@ -5,7 +5,7 @@
  */
 import type { ResolveMention } from '../markdown/index.js';
 import type { TreeNode } from '../tree/index.js';
-import { cleanPrefixes, key } from './names.js';
+import { cleanPrefixes, key, subjectOf } from './names.js';
 import type { RegistryStore } from './store.js';
 import type { ProjectTree } from './tree-view.js';
 import {
@@ -16,6 +16,24 @@ import {
   type ResolveOptions,
   type ResolveResult,
 } from './types.js';
+
+/** v2 C2b: a character page's role, and the order a mention prefers them in. */
+export type CharacterRole = 'core' | 'compact' | 'index';
+const ROLE_ORDER: readonly CharacterRole[] = ['core', 'compact', 'index'];
+export const ROLE_LABEL: Readonly<Record<CharacterRole, string>> = {
+  core: 'Character Core',
+  compact: 'Character Reference',
+  index: 'character index',
+};
+
+/** v2 C2b: the page a mention of one character's pages went to, and why. */
+export interface MentionChoice {
+  readonly chosen: NodeRef;
+  readonly role: CharacterRole;
+  readonly subject: string;
+  readonly candidates: readonly (NodeRef & { readonly role: string })[];
+  readonly why: string;
+}
 
 const FIELD_RANK: Readonly<Record<MatchField, number>> = {
   id: 0,
@@ -200,14 +218,86 @@ export class NameResolver {
   }
 
   /**
+   * v2 C2b: a page's character role, from the registry: a Character Core or Compact Character Reference by its Reference
+   * Type (a character type's), or a character index (an index under a character type's root whose name is the subject:
+   * not the root, not a taxonomy category, not the unknown-race index). Null for any other page. With its subject.
+   */
+  characterRole(id: string): { readonly role: CharacterRole; readonly subject: string } | null {
+    const n = this.tree.node(id);
+    if (!n) return null;
+    for (const t of this.store.listTypes()) {
+      const p = t.placement;
+      if (t.placementKind !== 'character' || !p) continue;
+      if (n.kind === 'bsrc' && n.referenceType) {
+        const ref = key(n.referenceType);
+        const role: CharacterRole | null =
+          ref === key(p.referenceTypes.core)
+            ? 'core'
+            : ref === key(p.referenceTypes.compact)
+              ? 'compact'
+              : null;
+        if (role) return { role, subject: subjectOf(n.displayName, this.tree.rowValue(n.id, p.subjectRow)) };
+        continue;
+      }
+      if (
+        n.kind !== 'index' ||
+        !t.rootIndexId ||
+        n.id === t.rootIndexId ||
+        !n.path.ids.includes(t.rootIndexId)
+      )
+        continue;
+      if (key(n.displayName) === key(p.unknownIndexName)) continue;
+      if (this.store.entries(t.id).some((e) => e.sourceNodeId === n.id)) continue;
+      return { role: 'index', subject: n.displayName };
+    }
+    return null;
+  }
+
+  /**
+   * v2 C2b (decided by the owner on 10 November 2026): among several pages a MENTION matches, the one to link when they
+   * all belong to the same character (the same subject, each with a character role): its Core, else its Reference, else
+   * its index. Null when they do not (different subjects, a page with no character role, or two of the best role).
+   */
+  preferredMention(candidates: readonly NodeRef[]): MentionChoice | null {
+    if (candidates.length < 2) return null;
+    const roles = candidates.map((c) => ({ c, r: this.characterRole(c.id) }));
+    if (roles.some((x) => x.r === null)) return null;
+    const subject = key(roles[0]!.r!.subject);
+    if (roles.some((x) => key(x.r!.subject) !== subject)) return null;
+    for (const role of ROLE_ORDER) {
+      const hits = roles.filter((x) => x.r!.role === role);
+      if (hits.length > 1) return null;
+      if (hits.length === 1) {
+        return {
+          chosen: hits[0]!.c,
+          role,
+          subject: roles[0]!.r!.subject,
+          candidates: roles.map((x) => ({ ...x.c, role: ROLE_LABEL[x.r!.role] })),
+          why: `the names match pages of one character (${roles[0]!.r!.subject}); a mention goes to its ${ROLE_LABEL[role]} (Core, then Reference, then index)`,
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
    * The mention resolver the Markdown converter takes (`ctx.resolveMention`, B1): `[[Name]]` resolves to exactly one
    * page. A tree that cannot answer, or a bad scope, throws its typed `RegistryError` rather than claiming "not found".
+   * v2 C2b: several pages of ONE character resolve to its Core, else its Reference, else its index (`preferredMention`);
+   * `onChoice` is told which page was chosen and why.
    */
-  mentionResolver(o: ResolveOptions = {}): ResolveMention {
+  mentionResolver(
+    o: ResolveOptions & { readonly onChoice?: (c: MentionChoice & { name: string }) => void } = {},
+  ): ResolveMention {
     return (name) => {
       const r = this.resolve(name, o);
       if (r.status === 'resolved') return { status: 'resolved', resourceId: r.node.id };
       if (r.status === 'ambiguous') {
+        const pick = this.preferredMention(r.candidates);
+        if (pick) {
+          o.onChoice?.({ ...pick, name });
+          return { status: 'resolved', resourceId: pick.chosen.id };
+        }
         return {
           status: 'ambiguous',
           candidates: r.candidates.map((c) => ({ resourceId: c.id, name: c.rawName, path: c.path })),

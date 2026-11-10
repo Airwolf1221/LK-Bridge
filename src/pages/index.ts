@@ -5,7 +5,7 @@
  */
 import { mintClientId } from '../jobs/ids.js';
 import type { FromMarkdownContext } from '../markdown/index.js';
-import type { Registry } from '../registry/index.js';
+import { ROLE_LABEL, type MentionChoice, type Registry } from '../registry/index.js';
 import type { TreeQueries } from '../tree/index.js';
 
 export {
@@ -55,11 +55,36 @@ export function pageConverterContext(
     readonly registry: Pick<Registry, 'forProject'>;
   },
   projectId: string,
+  o: {
+    /** v2 C2b: told when a mention of several pages of one character went to its Core, Reference or index. */
+    readonly onMentionChoice?: (c: MentionChoice & { name: string }) => void;
+  } = {},
 ): FromMarkdownContext | undefined {
   const status = services.tree.queries.status(projectId).status;
   if (status !== 'ready' && status !== 'stale') return undefined;
   return {
-    resolveMention: services.registry.forProject(projectId).mentionResolver(),
+    resolveMention: services.registry
+      .forProject(projectId)
+      .mentionResolver(o.onMentionChoice ? { onChoice: o.onMentionChoice } : {}),
     mintBlockId: mintClientId,
   };
+}
+
+/** v2 C2b: the mentions resolved by the character rule, as a result lists them (once per name). */
+export function mentionChoices(
+  choices: readonly (MentionChoice & { name: string })[],
+): Record<string, unknown>[] {
+  const seen = new Set<string>();
+  const out: Record<string, unknown>[] = [];
+  for (const c of choices) {
+    if (seen.has(c.name)) continue;
+    seen.add(c.name);
+    out.push({
+      name: c.name,
+      chosen: { id: c.chosen.id, name: c.chosen.rawName, role: ROLE_LABEL[c.role] },
+      why: c.why,
+      candidates: c.candidates.map((x) => ({ id: x.id, name: x.rawName, role: x.role })),
+    });
+  }
+  return out;
 }

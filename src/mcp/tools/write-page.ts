@@ -20,6 +20,7 @@ import { MarkdownError, toMarkdown, type EditMode } from '../../markdown/index.j
 import {
   markdownDiff,
   pageConverterContext,
+  mentionChoices,
   PageVersionConflictError,
   planPageWrite,
   SECTION_MODES,
@@ -259,7 +260,10 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         }
-        const converter = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
+        const choices: Parameters<typeof mentionChoices>[0][number][] = [];
+        const converter = pd.services
+          ? pageConverterContext(pd.services, ctx.projectId, { onMentionChoice: (c) => choices.push(c) })
+          : undefined;
         if (!converter) {
           return errorResult(
             { code: 'TOOL_UNAVAILABLE', message: 'The repository tree cannot resolve names now.' },
@@ -334,6 +338,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           document: { id: doc.id, name: doc.name },
           mode,
           ...(plan.section ? { section: plan.section.path } : args.section ? { section: args.section } : {}),
+          ...(choices.length > 0 ? { mentions: mentionChoices(choices) } : {}),
         };
         const warnings =
           plan.warnings.length > 0

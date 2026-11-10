@@ -384,7 +384,11 @@ export class World {
     // ---- resources
     if (route('GET', '/resources')) {
       const parent = req.query.parentId;
-      if (parent !== undefined && this.o.failChildListing) return err(500, 'INTERNAL', 'mock failure');
+      // The spike's own listings fail; the bridge's internal reads (`lkb.t…`, such as the canonical guard listing a
+      // cascade's pages before the clean-up delete, v2 C2b) do not, so the clean-up is still judged and made.
+      const internal = (req.headers['x-request-id'] ?? '').startsWith('lkb.t');
+      if (parent !== undefined && this.o.failChildListing && !internal)
+        return err(500, 'INTERNAL', 'mock failure');
       const all = [...this.resources.values()].filter((r) =>
         parent === undefined ? true : r.parentId === parent,
       );

@@ -338,6 +338,13 @@ export class TreeStore {
    * applied only where nothing newer is stored. A resource whose parent is neither the root nor a node of the tree is
    * outside it: if it was a node, it and its subtree are removed (it was moved out).
    */
+  /** v2 C2b: records the template the bridge created a page from (kept by later observations; only C2b sets it). */
+  setTemplate(projectId: string, id: string, templateId: string): void {
+    this.db
+      .prepare('UPDATE tree_nodes SET template_id = ? WHERE project_id = ? AND id = ?')
+      .run(templateId, projectId, id);
+  }
+
   applyObservation(ctx: ApplyContext, obs: Observation, t: number): ApplyOutcome {
     return this.db.transaction(() => (this.rootChanged(ctx) ? 'skipped' : this.applyOne(ctx, obs, t)))();
   }

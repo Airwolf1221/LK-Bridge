@@ -184,12 +184,27 @@ canon (`proposal.approve_as_canon` in the audit log) and is shown on the proposa
 disabled for it, and bulk approval skips it (the bulk result names it). **Reject** works as normal. See
 [policy.md](policy.md#protected-canonical-facts-v2-c2a).
 
+## Proposals: new pages, moves and deletes (v2 C2b)
+
+A proposal from the resource, document and character tools opens with one line per page in **Pages affected**: a page
+it creates reads `New page [BSRC] Asagiri Ren - Character Core under [INDEX] Asagiri Ren: 6 facts` (marked _(new)_);
+a rename lists what changes; a move `moved to [INDEX] …`; a delete `deleted` or `deleted with 3 pages under it`. The
+ids of the pages it creates are fixed in the proposal (a child shows under the new index it will be made under) and
+used exactly at approval. A **delete of protected canon** (a page whose Status is Authoritative, or a cascade holding
+one) is marked **canon** like a protected fact change, its banner naming each protected page ("deleting “Inae Mikumo”,
+whose Status is Authoritative"); only **Approve and accept as canon** runs it. A restore needs no canonical approval.
+Once a proposal has run, the panel says whether every page read back was as planned (names, parents, places among
+their siblings, facts).
+
 ## Canon (Projects page, v2 C2a)
 
 The **Canon** section of the Projects page lists each project's protected facts as plain sentences ("Status =
 Authoritative: setting it to, or changing it from, this value needs canonical approval"), and the Status of pages
-agents create (`Working` until changed). **Remove** takes a rule out, **Add** puts one in (a fact, and either "these
-values, both ways" with the values, or "any change of a set value"); nothing is stored until **Save**, which asks for a
+agents create (`Working` until changed; the creation tools write it on every page made from a template with a Status
+row). **Remove** takes a rule out, **Add** puts one in (a fact, and either "these values, both ways" with the values, "any
+change of a set value", or, since v2 C2b, "deleting a page with these values": the rule that makes deleting an
+Authoritative page need canonical approval, seeded by default as "Status = Authoritative: deleting such a page (or a
+subtree holding one) needs canonical approval; restoring does not"); nothing is stored until **Save**, which asks for a
 confirmation (marked as dangerous when it protects fewer facts than before). **Restore the defaults** brings back the
 seeded rules. Every save is audited as `project.set_canonical_rules` with the rules before and after. With no rule at
 all the section warns that agents with scope "write" can change any fact. Changes apply to the next write; nothing

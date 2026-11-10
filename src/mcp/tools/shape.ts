@@ -12,6 +12,8 @@ import * as z from 'zod';
 import type { AssetQueries } from '../../assets/index.js';
 import type { DocumentVersions } from '../../pages/versions.js';
 import type { TemplateKeys } from '../../facts/templates.js';
+import type { FactsVersions } from '../../facts/version.js';
+import type { RequestRegistry } from '../../resources/requests.js';
 import type { ToolsSettings } from '../../config/tools.js';
 import type { Registry } from '../../registry/index.js';
 import type { TreeQueries } from '../../tree/index.js';
@@ -60,6 +62,10 @@ export interface DiscoverServices {
   readonly projectSettings?: (projectId: string) => Readonly<Record<string, unknown>>;
   /** v2 C2a: the templates' fact keys, cached (set_facts puts new template facts in template order). */
   readonly templateKeys?: TemplateKeys;
+  /** v2 C2b: the sidebar state at each `factsVersion` handed out (a stale `baseFactsVersion` says what changed). */
+  readonly factsVersions?: FactsVersions;
+  /** v2 C2b: the create tools' `operation_id` store and duplicate-request claims (src/resources/requests.ts). */
+  readonly requests?: RequestRegistry;
 }
 
 /** What every tool handler needs. */

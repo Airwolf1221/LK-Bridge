@@ -123,6 +123,12 @@ other sites' URLs are refused.
 - **`[[Name]]`** finds the page by name, exactly as the bridge's name search does (display name, full name with its
   prefix, an alias, or the canonical display name). It must match exactly one page: otherwise the write is refused,
   listing the candidates. The mention shows the page's current name, and follows it if the page is renamed.
+- **One character, several pages.** A character usually has pages that share its name: its `[INDEX] {name}`, its
+  Character Core, perhaps a Compact Character Reference. When `[[Name]]` matches several pages and they all belong to
+  the SAME character (the same subject, each one of those three kinds), the mention goes to the **Character Core**, else
+  the **Character Reference**, else the **character index**, with no ambiguity error; the write's result lists it under
+  `mentions` (the name, the page chosen, its role and why). Pages of different subjects, or a match that is not a
+  character page, stay ambiguous: use a more exact name or link by id.
 - **`[[Name|label]]`** does the same with your own label.
 - **`[label](lk://resources/<id>)`** mentions a page by id; **`[label](lk://resources/<id>/docs/<documentId>)`** one of
   its documents. This is how pages are shown when you read them.

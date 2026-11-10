@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased: v2 C2b, resources, documents and characters (10 November 2026)
+
+The resource, document and character tools, request coordination, a base version for facts, and mention targets for
+characters ([ADR 0034](adr/0034-resources-documents-characters.md); the tools in
+[tools.md](tools.md#resources-documents-and-characters-v2-c2b); the rule in [policy.md](policy.md); the agent guide's
+"Creating and changing pages" in [bridge-guide.md](bridge-guide.md)). Migration 1500. Deploy normally; `--update-self`
+is not needed. ChatGPT: refresh the bridge's tools (Plugins, the bridge, Refresh); claude.ai: disconnect and reconnect
+the connector to see the new tools.
+
+- **Twelve tools** (`access: write`): `create_index`, `create_resource`, `create_bare_resource`,
+  `create_many_resources` (up to 100, nested with `key` / `parent_key`), `create_character` (core or compact, by the old
+  bridge's rules), `update_resource` (a rename keeps the prefix and re-places the page), `move_resource`,
+  `delete_resource` (`confirm`, and `cascade` for children; lists every page removed), `restore_resource`,
+  `create_document`, `update_document` (settings only), `delete_document` (never the last or only page document).
+- **One shape for all of them:** inside the AI REPOSITORY only; ONE job, or ONE proposal under `propose` (ids minted at
+  capture and kept at approval; the page-level summary first, `New page [BSRC] X - Character Core under [INDEX] X: 6
+facts`); every guard again at execution; `dryRun` everywhere; each new or moved page in its alphabetical place in the
+  same write; nothing else moved or reclassified; Status `Working` on pages made from a template with a Status row; the
+  template recorded in the tree at once; every write verified (pages by their parent's listing, facts by a read).
+- **`create_character`:** reuses an existing `[INDEX] {name}` or makes it; `{name} - Character Core` beneath it, or
+  `{name} - Character Reference` under the race; an existing page is returned, not duplicated; Reference Type, Subject,
+  Canonical Display Name, Race / Species (exactly as given, `Unestablished` for an unknown race) and Status written in the
+  same job; an unknown race goes to Undetermined / Unknown, a declared one that does not resolve fails; nothing is
+  ever invented.
+- **`operation_id`** on every create (kept per project and connection with a hash of the normalised request): a repeat
+  returns the earlier result (the job or its outcome, or the proposal), a different request with the same id is
+  `OPERATION_ID_REUSED`. **Duplicate characters:** a second overlapping request for one character, from any connection,
+  is `DUPLICATE_REQUEST` naming the first's job or proposal.
+- **Failed work is never replayed:** `WRITTEN_IN_PART` lists what was written, what was not, and the journal entries.
+- **Canon:** deleting a page whose Status is Authoritative (or a cascade holding one) needs canonical approval: a new
+  canon rule kind, `delete`, seeded by default and added once by migration 1500 to projects that store their own rules
+  (Projects page, Canon: "deleting a page with these values"). Restoring needs none. A create that sets Status
+  Authoritative becomes a canonical proposal (the guard judges a new page's facts on its template's copy).
+- **`factsVersion`:** the bridge's own version of a page's sidebar facts (rows by rank and id, link collections), on
+  `get_resource`, `get_resources`, `set_facts` (before and after) and the creates. **`set_facts` `baseFactsVersion`:**
+  any change to the sidebar since is `VERSION_CONFLICT` with what changed, nothing written, checked at planning and
+  inside the lock (not kept in a proposal: its captured state protects it).
+- **Mentions of a character:** `[[Name]]` matching several pages of one character goes to its Character Core, else its
+  Reference, else its index, and `write_page` and `set_facts` say which (`mentions`). Different subjects stay ambiguous;
+  a write target is never chosen this way (an ambiguous `page` lists each candidate's role).
+- **Engine** (bridge code only): `bindIds`; `bridge.expect` checks `copy` and `sidebar` (`directOnly`); `bridge.verify`
+  targets `facts`, `gone`, `document` and a `resource` `placement`; proposal capture leaves out direct-only checks and
+  pages an earlier operation creates. **Tree:** `setTemplate`, a `tombstone` query, one deferred re-read per page.
+  **Registry:** `characterRole`, `preferredMention`; the character page names default to `{name} - Character Core`
+  and `{name} - Character Reference`.
+- **Flagged for the owner:** deleting a map, timeline or board of an Authoritative page is not guarded (the result
+  notes it).
+- Tests: `test/resources/` (each tool, placement and ranks, names and prefixes, Status, template ids, verify, dry runs,
+  proposals with minted ids, 100 nested pages and the 101st refused, a bad parent_key refused before anything is sent,
+  every character case, operation_id, duplicates from two connections, canon on create, delete and restore, factsVersion
+  across endpoints and in the lock, mentions, documents, measured costs, and unit tests of the planner and stores).
+
 ## Unreleased: hotfix, sidebar rows compared in rank order by id (10 November 2026)
 
 `set_facts` on Asagiri Miyabi - Biography failed with `VERSION_CONFLICT` every time (fresh read or not, one fact or

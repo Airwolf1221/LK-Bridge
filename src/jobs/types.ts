@@ -123,6 +123,13 @@ export interface StepOptions {
    * (row writes): the property as the plan saw it, which the job's `bridge.expect` step confirmed inside the lock.
    */
   readonly journalPreImage?: unknown;
+  /**
+   * v2 C2b (ADR 0034), set by bridge code only: this step writes to a page the same job created from a template, and
+   * its params name the TEMPLATE's sidebar ids (properties, rows, items). Just before it runs they are replaced by the
+   * copy's ids, from the `ids` map of the `bridge.expect` step it names (a `copy` check, made inside the job). Only
+   * `path.propertyId`, `path.rowId`, `body.after`, `body.before` and `body.items[].id` are bound.
+   */
+  readonly bindIds?: { readonly step: number };
 }
 
 export interface StepSpec extends StepOptions {

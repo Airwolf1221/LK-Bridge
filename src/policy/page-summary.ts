@@ -84,6 +84,8 @@ interface Group {
   resourceId: string | null;
   page: string;
   isNew: boolean;
+  /** v2 C2b: the label a high-level operation gave (`summaryLabel`), used as it is. */
+  label?: string;
   sidebar: boolean;
   parts: string[];
   counts: Map<string, number>;
@@ -125,6 +127,8 @@ export function buildPageSummary(
     if (!id || parts.length === 0) continue;
     const g = group(id, str(page?.name), o.isNew === true);
     for (const p of parts) if (!g.parts.includes(p)) g.parts.push(p);
+    const summaryLabel = str(o.summaryLabel);
+    if (summaryLabel !== undefined && g.label === undefined) g.label = summaryLabel;
     described.add(id);
   }
   for (const { op, params } of ops) {
@@ -162,6 +166,12 @@ export function buildPageSummary(
       parts.push(forms ? plural(n, forms[0], forms[1]) : n > 1 ? `${effect} (${n})` : effect);
     }
     const page = g.isNew && !/\(new\)$/.test(g.page) ? `${g.page} (new)` : g.page;
-    return { resourceId: g.resourceId, page, isNew: g.isNew, parts, label: `${page}: ${parts.join(', ')}` };
+    return {
+      resourceId: g.resourceId,
+      page,
+      isNew: g.isNew,
+      parts,
+      label: g.label ?? `${page}: ${parts.join(', ')}`,
+    };
   });
 }

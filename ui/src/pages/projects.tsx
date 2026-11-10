@@ -800,7 +800,9 @@ function SettingsCard({ data, onChanged }: { data: ProjectsResponse; onChanged: 
 const ruleText = (r: CanonRule) =>
   r.kind === 'value'
     ? `${r.key} = ${(r.values ?? []).join(' or ')}: setting it to, or changing it from, this value needs canonical approval`
-    : `${r.key}: changing an existing value needs canonical approval (setting it where empty is allowed)`;
+    : r.kind === 'delete'
+      ? `${r.key} = ${(r.values ?? []).join(' or ')}: deleting such a page (or a subtree holding one) needs canonical approval; restoring does not`
+      : `${r.key}: changing an existing value needs canonical approval (setting it where empty is allowed)`;
 
 /**
  * v2 C2a (ADR 0032): each project's protected canonical facts. A change that touches one becomes a proposal only the
@@ -830,7 +832,7 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
   const [draft, setDraft] = useState<CanonRule[] | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [key, setKey] = useState('');
-  const [kind, setKind] = useState<'value' | 'change'>('value');
+  const [kind, setKind] = useState<'value' | 'change' | 'delete'>('value');
   const [values, setValues] = useState('');
   if (!c.data) return c.error ? <ErrorNote error={c.error} onRetry={c.reload} /> : <Loading />;
   const rules = draft ?? c.data.rules;
@@ -875,7 +877,7 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '') || 'rule';
     const rule: CanonRule =
-      kind === 'value'
+      kind === 'value' || kind === 'delete'
         ? {
             id,
             key: k,
@@ -886,8 +888,9 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
               .filter(Boolean),
           }
         : { id, key: k, kind };
-    if (rule.kind === 'value' && (rule.values ?? []).length === 0) return;
-    setDraft([...rules.filter((r) => r.id !== id), rule]);
+    if (rule.kind !== 'change' && (rule.values ?? []).length === 0) return;
+    const ruleId = rule.kind === 'delete' ? `delete-${id}` : id;
+    setDraft([...rules.filter((r) => r.id !== ruleId), { ...rule, id: ruleId }]);
     setKey('');
     setValues('');
   };
@@ -928,12 +931,15 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
         <select
           id={`canon-kind-${p.name}`}
           value={kind}
-          onChange={(e) => setKind(e.target.value === 'change' ? 'change' : 'value')}
+          onChange={(e) =>
+            setKind(e.target.value === 'change' ? 'change' : e.target.value === 'delete' ? 'delete' : 'value')
+          }
         >
           <option value="value">these values, both ways</option>
           <option value="change">any change of a set value</option>
+          <option value="delete">deleting a page with these values</option>
         </select>
-        {kind === 'value' && (
+        {kind !== 'change' && (
           <>
             <label htmlFor={`canon-values-${p.name}`}>Values</label>
             <input

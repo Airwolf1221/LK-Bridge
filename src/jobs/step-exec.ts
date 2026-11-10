@@ -35,12 +35,17 @@ import {
   compareCollection,
   compareRows,
   rowsContentHash,
+  compareSidebarStates,
+  factsVersionOf,
+  normaliseContent,
   rowsState,
+  sidebarState,
   stableJson,
   stateHash,
   type RowState,
   type StateDifference,
 } from './sidebar-state.js';
+import { inRankOrder } from '../lk/row-order.js';
 import type { WriteGuard } from './write-guard.js';
 import { assertNoUnsupportedLoss } from './guards.js';
 import type { WriteJournal } from './journal.js';
@@ -379,11 +384,51 @@ export class StepExecutor {
     step: StepView,
     params: OpParams,
     stats: CallStats,
-  ): Promise<{ checked: string[]; versions: Record<string, string | null> }> {
+  ): Promise<{ checked: string[]; versions: Record<string, string | null>; ids?: Record<string, string> }> {
     const checks = ((params.body ?? {}) as { checks?: ExpectCheck[] }).checks ?? [];
     const ref = { jobId: job.id, stepNo: step.stepNo };
     const versions: Record<string, string | null> = {};
+    const ids: Record<string, string> = {};
     for (const c of checks) {
+      // v2 C2b: a page this job created from a template (its ids mapped for `bindIds`), or the whole sidebar.
+      if (c.kind === 'copy' || c.kind === 'sidebar') {
+        const r = await this.readOp(
+          job,
+          step,
+          'listProperties',
+          { path: { resourceId: c.resourceId } },
+          stats,
+        );
+        if (!r.exists) {
+          throw new StateConflictError(
+            EXPECT_STEP,
+            c.label,
+            [{ path: c.label, expected: 'present', actual: '(gone)' }],
+            c.kind === 'sidebar' ? c.factsVersion : null,
+            null,
+            ref,
+          );
+        }
+        if (c.kind === 'copy') {
+          const m = matchCopy(c.label, c.properties, r.body);
+          if (m.differences.length > 0) {
+            throw new StateConflictError(EXPECT_STEP, c.label, m.differences, null, null, ref);
+          }
+          Object.assign(ids, m.ids);
+        } else {
+          const now = sidebarState(r.body);
+          const diffs = compareSidebarStates(c.properties, now);
+          const version = factsVersionOf(now);
+          if (diffs.length === 0 && version !== c.factsVersion) {
+            diffs.push({ path: `${c.label} factsVersion`, expected: c.factsVersion, actual: version });
+          }
+          if (diffs.length > 0) {
+            throw new StateConflictError(EXPECT_STEP, c.label, diffs, c.factsVersion, version, ref);
+          }
+        }
+        versions[c.label] = null;
+        continue;
+      }
       const path = { resourceId: c.resourceId, propertyId: c.propertyId };
       const r = await this.readOp(
         job,
@@ -418,7 +463,11 @@ export class StepExecutor {
       }
       versions[c.label] = version;
     }
-    return { checked: checks.map((c) => c.label), versions };
+    return {
+      checked: checks.map((c) => c.label),
+      versions,
+      ...(Object.keys(ids).length > 0 ? { ids } : {}),
+    };
   }
 
   /** `bridge.verify`: each target read back and compared with the plan (see internal-steps.ts). Never throws. */
@@ -433,6 +482,7 @@ export class StepExecutor {
     const all: StateDifference[] = [];
     let count = 0;
     const resources = new Map<string, { exists: boolean; body: unknown }>();
+    const siblings = new Map<string, SiblingItem[] | null>();
     const resource = async (id: string) => {
       let r = resources.get(id);
       if (!r) {
@@ -445,6 +495,7 @@ export class StepExecutor {
       try {
         const diffs: StateDifference[] = [];
         let n = 0;
+        let factsVersion: string | undefined;
         if (t.kind === 'blocks') {
           const r = await this.readOp(
             job,
@@ -464,11 +515,81 @@ export class StepExecutor {
               diffs.push({ path: `${t.label} blocks${d.path}`, expected: d.expected, actual: d.actual });
             n = cmp.count;
           }
+        } else if (t.kind === 'document') {
+          const r = await this.readOp(
+            job,
+            step,
+            'listDocuments',
+            { path: { resourceId: t.resourceId } },
+            stats,
+          );
+          const docs = (
+            Array.isArray((r.body as { data?: unknown } | undefined)?.data)
+              ? ((r.body as { data: unknown[] }).data as Record<string, unknown>[])
+              : []
+          ).filter((d) => d && typeof d === 'object' && !d.deletedAt);
+          const hits = t.documentId
+            ? docs.filter((d) => d.id === t.documentId)
+            : docs.filter((d) => d.name === t.match?.name && d.type === t.match?.type);
+          if (t.gone) {
+            if (r.exists && hits.length > 0)
+              diffs.push({ path: t.label, expected: '(deleted)', actual: 'still there' });
+          } else if (!r.exists || hits.length === 0) {
+            diffs.push({ path: t.label, expected: 'present', actual: '(not found)' });
+          } else if (hits.length > 1) {
+            diffs.push({ path: t.label, expected: 'one document', actual: `${hits.length} documents` });
+          } else {
+            for (const [k, v] of Object.entries(t.fields ?? {})) {
+              if (stableJson(hits[0]![k] ?? null) !== stableJson(v ?? null))
+                diffs.push({ path: `${t.label} ${k}`, expected: v ?? null, actual: hits[0]![k] ?? null });
+            }
+          }
+          n = diffs.length;
+        } else if (
+          t.kind === 'resource' &&
+          t.placement &&
+          Object.keys(t.fields).every((k) => LISTING_FIELDS.has(k))
+        ) {
+          // v2 C2b: a page with a place to check, and only fields a listing shows: checked from its parent's listing
+          // (one read per 100 siblings, shared by every page under that parent), not one getResource per page.
+          const list = await this.siblingList(job, step, t.placement.parentId, siblings, stats);
+          const item = list?.find((x) => x.id === t.resourceId);
+          if (list === null) {
+            diffs.push({
+              path: `${t.label} place`,
+              expected: 'checked',
+              actual: '(too many siblings to list)',
+            });
+          } else if (!item) {
+            // Not among the parent's children: gone, or somewhere else.
+            const r = await resource(t.resourceId);
+            const res = (r.body ?? {}) as Record<string, unknown>;
+            diffs.push(
+              r.exists
+                ? {
+                    path: `${t.label} parentId`,
+                    expected: t.placement.parentId,
+                    actual: res.parentId ?? null,
+                  }
+                : { path: t.label, expected: 'present', actual: '(gone)' },
+            );
+          } else {
+            compareFields(t.label, t.fields, item.raw, diffs);
+            placementDiffs(t, list, diffs);
+          }
+          n = diffs.length;
         } else {
           const r = await resource(t.resourceId);
           const res = (r.body ?? {}) as Record<string, unknown>;
-          if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
-          else if (t.kind === 'sidebar') {
+          if (t.kind === 'gone') {
+            if (r.exists && typeof res.deletedAt !== 'string')
+              diffs.push({ path: t.label, expected: '(deleted)', actual: 'still there' });
+          } else if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
+          else if (t.kind === 'facts') {
+            compareFacts(t, res, diffs);
+            factsVersion = factsVersionOf(sidebarState(res));
+          } else if (t.kind === 'sidebar') {
+            factsVersion = factsVersionOf(sidebarState(res));
             const props = Array.isArray(res.properties) ? (res.properties as Record<string, unknown>[]) : [];
             for (const p of t.properties) {
               const actual = props.find((x) => x && x.id === p.id);
@@ -482,9 +603,16 @@ export class StepExecutor {
               if (p.collection) compareCollection(label, p.collection, collectionState(actual), diffs);
             }
           } else {
-            for (const [k, v] of Object.entries(t.fields)) {
-              if (stableJson(res[k] ?? null) !== stableJson(v ?? null))
-                diffs.push({ path: `${t.label} ${k}`, expected: v ?? null, actual: res[k] ?? null });
+            compareFields(t.label, t.fields, res, diffs);
+            if (t.placement) {
+              const list = await this.siblingList(job, step, t.placement.parentId, siblings, stats);
+              if (list === null)
+                diffs.push({
+                  path: `${t.label} place`,
+                  expected: 'checked',
+                  actual: '(too many siblings to list)',
+                });
+              else placementDiffs(t, list, diffs);
             }
           }
           n = diffs.length;
@@ -495,6 +623,7 @@ export class StepExecutor {
           label: t.label,
           kind: t.kind,
           status: diffs.length > 0 ? 'mismatch' : 'verified',
+          ...(factsVersion ? { factsVersion } : {}),
           ...(diffs.length > 0
             ? { differences: diffs.slice(0, 10), differenceCount: Math.max(n, diffs.length) }
             : {}),
@@ -531,6 +660,44 @@ export class StepExecutor {
         ? [...VERIFY_IGNORED_FIELDS, ...SIDEBAR_IGNORED_FIELDS]
         : SIDEBAR_IGNORED_FIELDS,
     };
+  }
+
+  /**
+   * v2 C2b: a parent's children, listed (100 a page, at most 20 pages) and put in rank order, once per parent per verify
+   * step. Null when there are too many to list.
+   */
+  private async siblingList(
+    job: JobView,
+    step: StepView,
+    parentId: string,
+    siblings: Map<string, SiblingItem[] | null>,
+    stats: CallStats,
+  ): Promise<SiblingItem[] | null> {
+    const had = siblings.get(parentId);
+    if (had !== undefined) return had;
+    const all: SiblingItem[] = [];
+    let cursor: string | undefined;
+    let list: SiblingItem[] | null = [];
+    for (let page = 0; page < 20; page++) {
+      const r = await this.readOp(
+        job,
+        step,
+        'listResources',
+        { query: { parentId, limit: 100, ...(cursor ? { cursor } : {}) } },
+        stats,
+      );
+      const body = (r.body ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+      for (const x of Array.isArray(body.data) ? (body.data as Record<string, unknown>[]) : []) {
+        if (x && typeof x.id === 'string')
+          all.push({ id: x.id, rank: typeof x.rank === 'string' ? x.rank : '', raw: x });
+      }
+      if (body.hasMore !== true || typeof body.nextCursor !== 'string') break;
+      cursor = body.nextCursor;
+      if (page === 19) list = null;
+    }
+    if (list !== null) list = inRankOrder(all);
+    siblings.set(parentId, list);
+    return list;
   }
 
   /** One governed read for the job's own work (a 404 is an answer, not an error row). */
@@ -1257,3 +1424,175 @@ function targetIdOf(op: OperationDef, params: OpParams): string | null {
 }
 
 export { errorToJson };
+
+// ============================================================================================ v2 C2b helpers
+
+type Obj = Record<string, unknown>;
+const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+const titleKey = (t: unknown) => (typeof t === 'string' ? t.trim().toLocaleLowerCase('en-GB') : '');
+
+/**
+ * A page created from a template, matched to the template's layout: each template property to the copy's property of
+ * the same kind and title (in order, when several share both), its rows by key and value in rank order, its items in
+ * order. Returns the template id → copy id map, or every difference (then nothing is bound or written).
+ */
+export function matchCopy(
+  label: string,
+  expected: readonly {
+    readonly id: string;
+    readonly kind: string;
+    readonly title: string;
+    readonly rows?: readonly {
+      readonly id: string;
+      readonly key: string;
+      readonly content: readonly Obj[];
+    }[];
+    readonly items?: readonly string[];
+  }[],
+  body: unknown,
+): { ids: Record<string, string>; differences: StateDifference[] } {
+  const props = (
+    isObj(body) && Array.isArray(body.data)
+      ? body.data
+      : isObj(body) && Array.isArray(body.properties)
+        ? body.properties
+        : []
+  ).filter(isObj);
+  const used = new Set<Obj>();
+  const ids: Record<string, string> = {};
+  const differences: StateDifference[] = [];
+  for (const e of expected) {
+    const a = props.find((p) => !used.has(p) && p.kind === e.kind && titleKey(p.title) === titleKey(e.title));
+    const where = `${label} ${e.title || e.kind}`;
+    if (!a || typeof a.id !== 'string') {
+      differences.push({ path: where, expected: `a ${e.kind} property`, actual: '(not in the copy)' });
+      continue;
+    }
+    used.add(a);
+    ids[e.id] = a.id;
+    if (e.rows) {
+      const got = rowsState(a.rows);
+      const want = e.rows.map((r) => ({ key: r.key, content: normaliseContent(r.content) }));
+      if (got.length !== want.length) {
+        differences.push({ path: `${where} rows`, expected: want.length, actual: got.length });
+        continue;
+      }
+      want.forEach((w, i) => {
+        const g = got[i]!;
+        if (g.key !== w.key || stableJson(g.content) !== stableJson(w.content)) {
+          differences.push({
+            path: `${where} rows[${i}]`,
+            expected: w,
+            actual: { key: g.key, content: g.content },
+          });
+        } else if (g.id) ids[e.rows![i]!.id] = g.id;
+      });
+    }
+    if (e.items) {
+      const got = collectionState(a).items;
+      if (got.length !== e.items.length) {
+        differences.push({ path: `${where} items`, expected: e.items.length, actual: got.length });
+        continue;
+      }
+      e.items.forEach((tid, i) => {
+        const g = got[i]!;
+        if (g.id) ids[tid] = g.id;
+      });
+    }
+  }
+  return { ids, differences };
+}
+
+/** A `facts` verify target: the key-value property's rows by key and value in rank order, and collections' pages. */
+function compareFacts(t: Extract<VerifyTarget, { kind: 'facts' }>, res: Obj, diffs: StateDifference[]): void {
+  const props = Array.isArray(res.properties) ? res.properties.filter(isObj) : [];
+  if (t.property) {
+    const hits = props.filter(
+      (p) => p.kind === 'keyValue' && titleKey(p.title) === titleKey(t.property!.title),
+    );
+    if (hits.length !== 1) {
+      diffs.push({
+        path: `${t.label} ${t.property.title}`,
+        expected: 'one property',
+        actual: `${hits.length}`,
+      });
+    } else {
+      const got = rowsState(hits[0]!.rows).map((r) => ({ key: r.key, content: r.content }));
+      const want = t.property.rows.map((r) => ({ key: r.key, content: normaliseContent(r.content) }));
+      const n = Math.max(got.length, want.length);
+      for (let i = 0; i < n; i++) {
+        const g = got[i];
+        const w = want[i];
+        if (!g || !w || g.key !== w.key || stableJson(g.content) !== stableJson(w.content)) {
+          diffs.push({
+            path: `${t.label} ${t.property.title} rows[${i}]${w ? ` “${w.key}”` : ''}`,
+            expected: w ?? '(no row)',
+            actual: g ?? '(no row)',
+          });
+        }
+      }
+    }
+  }
+  for (const c of t.collections ?? []) {
+    const hits = props.filter(
+      (p) =>
+        (p.kind === 'resourceCollection' || p.kind === 'resourceLink') &&
+        titleKey(p.title) === titleKey(c.title),
+    );
+    if (hits.length !== 1) {
+      diffs.push({ path: `${t.label} ${c.title}`, expected: 'one collection', actual: `${hits.length}` });
+      continue;
+    }
+    const got = collectionState(hits[0]).items.map((i) => ({
+      resourceId: i.resourceId,
+      documentId: i.documentId,
+    }));
+    if (stableJson(got) !== stableJson(c.items))
+      diffs.push({ path: `${t.label} ${c.title} items`, expected: c.items, actual: got });
+  }
+}
+
+/** A child as a parent's listing shows it (v2 C2b's placement check). */
+interface SiblingItem {
+  readonly id: string;
+  readonly rank: string;
+  readonly raw: Record<string, unknown>;
+}
+
+/** The fields a `listResources` item carries, so a resource target with only these is checked from the listing. */
+const LISTING_FIELDS: ReadonlySet<string> = new Set(['name', 'parentId', 'tags', 'aliases', 'isHidden']);
+
+/** A resource's fields as planned (tags and aliases compared as sets: LegendKeeper may keep another order). */
+function compareFields(
+  label: string,
+  fields: Readonly<Record<string, unknown>>,
+  actual: Record<string, unknown>,
+  diffs: StateDifference[],
+): void {
+  for (const [k, v] of Object.entries(fields)) {
+    const norm = (x: unknown) =>
+      (k === 'tags' || k === 'aliases') && Array.isArray(x) ? [...(x as string[])].sort() : (x ?? null);
+    if (stableJson(norm(actual[k])) !== stableJson(norm(v)))
+      diffs.push({ path: `${label} ${k}`, expected: v ?? null, actual: actual[k] ?? null });
+  }
+}
+
+/** Where a page stands among its siblings (by rank): its neighbours must be the planned ones (null: none). */
+function placementDiffs(
+  t: Extract<VerifyTarget, { kind: 'resource' }>,
+  list: readonly SiblingItem[],
+  diffs: StateDifference[],
+): void {
+  const pl = t.placement!;
+  const i = list.findIndex((x) => x.id === t.resourceId);
+  if (i < 0) {
+    diffs.push({ path: `${t.label} parent`, expected: pl.parentId, actual: '(not among its children)' });
+    return;
+  }
+  const prev = list[i - 1]?.id ?? null;
+  const next = list[i + 1]?.id ?? null;
+  if (pl.after !== undefined && pl.after !== prev)
+    diffs.push({ path: `${t.label} place (after)`, expected: pl.after ?? 'first', actual: prev ?? 'first' });
+  if (pl.before !== undefined && pl.before !== next)
+    diffs.push({ path: `${t.label} place (before)`, expected: pl.before ?? 'last', actual: next ?? 'last' });
+}

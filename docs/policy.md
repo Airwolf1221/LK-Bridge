@@ -171,11 +171,12 @@ be rejected". `bulkReject` follows the same rule.
 canonical approval, by any route. It is configuration, per project (Projects page, _Canon_; audited as
 `project.set_canonical_rules`), a list of rules seeded with these defaults:
 
-| Rule                       | Protected                                                                                                                        |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `Status` = `Authoritative` | Both directions: setting a page's Status TO Authoritative, or changing it FROM Authoritative to anything else (removing it too). |
-| `Continuity Type`          | CHANGING an existing non-empty value (for example CANON ↔ AU). Setting it where it is empty (as on a new page) is allowed.       |
-| `Continuity`               | CHANGING an existing non-empty value (for example one AU to another). Setting it where it is empty is allowed.                   |
+| Rule                                        | Protected                                                                                                                        |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `Status` = `Authoritative`                  | Both directions: setting a page's Status TO Authoritative, or changing it FROM Authoritative to anything else (removing it too). |
+| `Continuity Type`                           | CHANGING an existing non-empty value (for example CANON ↔ AU). Setting it where it is empty (as on a new page) is allowed.       |
+| `Continuity`                                | CHANGING an existing non-empty value (for example one AU to another). Setting it where it is empty is allowed.                   |
+| Delete: `Status` = `Authoritative` (v2 C2b) | DELETING a page whose Status is Authoritative; with a cascade, any page of the subtree that is. Restoring needs no approval.     |
 
 Facts are every key-value row of the page's sidebar; keys match without case and with spaces trimmed, `value` rules
 match values without case, a `change` rule compares a value's text and the pages it mentions (marks do not count). A
@@ -212,23 +213,43 @@ the engine's write guard, src/jobs/write-guard.ts):
 
 **Every write path that can reach sidebar facts, and its guard:**
 
-| Path                                                                                                                                                    | Guarded by                                                                                             |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `set_facts`                                                                                                                                             | entry (with the plan's own read), execution, inside the lock                                           |
-| `lk_api_write` with `createProperty`, `updateProperty` (rows), `deleteProperty`                                                                         | entry, execution, inside the lock                                                                      |
-| `lk_api_write` with `createPropertyRow`, `updatePropertyRow` (key or value), `deletePropertyRow`                                                        | entry, execution, inside the lock (or LegendKeeper's If-Match, see above)                              |
-| `lk_api_batch` with any of those, in any order                                                                                                          | entry (the whole sequence), execution, inside the lock                                                 |
-| `lk_op_createProperty`, `lk_op_updateProperty`, `lk_op_deleteProperty`, `lk_op_createPropertyRow`, `lk_op_updatePropertyRow`, `lk_op_deletePropertyRow` | entry, execution, inside the lock                                                                      |
-| `createResourceFromTemplate` (any tool): it copies the template's properties                                                                            | entry (the template's facts are read and judged as a new page's)                                       |
-| C2b's tools (resources, documents, characters)                                                                                                          | the same engine guard, whatever they submit; `assessFactChange` for their own checks before they write |
-| An approved proposal's batch                                                                                                                            | execution (canonical approval token required for a protected change), inside the lock                  |
+| Path                                                                                                                                                    | Guarded by                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `set_facts`                                                                                                                                             | entry (with the plan's own read), execution, inside the lock                                                                                             |
+| `lk_api_write` with `createProperty`, `updateProperty` (rows), `deleteProperty`                                                                         | entry, execution, inside the lock                                                                                                                        |
+| `lk_api_write` with `createPropertyRow`, `updatePropertyRow` (key or value), `deletePropertyRow`                                                        | entry, execution, inside the lock (or LegendKeeper's If-Match, see above)                                                                                |
+| `lk_api_batch` with any of those, in any order                                                                                                          | entry (the whole sequence), execution, inside the lock                                                                                                   |
+| `lk_op_createProperty`, `lk_op_updateProperty`, `lk_op_deleteProperty`, `lk_op_createPropertyRow`, `lk_op_updatePropertyRow`, `lk_op_deletePropertyRow` | entry, execution, inside the lock                                                                                                                        |
+| `createResourceFromTemplate` (any tool): it copies the template's properties                                                                            | entry (the template's facts are read and judged as a new page's)                                                                                         |
+| C2b's tools (resources, documents, characters)                                                                                                          | the same engine guard, whatever they submit (a new page's facts judged on its template's copy); `assessFactChange` and `assessDelete` for their dry runs |
+| `deleteResource` (any tool, v2 C2b)                                                                                                                     | entry (the page, and with `cascade` its subtree), execution, inside the lock (the page)                                                                  |
+| An approved proposal's batch                                                                                                                            | execution (canonical approval token required for a protected change), inside the lock                                                                    |
 
 Operations that cannot write sidebar facts are not checked: `createResource` and `createManyResources` (their bodies
 carry no properties), `updateResource` (name, tags, aliases, icon, flags), `saveResourceAsTemplate` (it copies a page
 into a template; the page does not change, and a template's facts are judged when a page is made from it), block and
-infobox operations (page content, not the sidebar), and `deleteResource` / `restoreResource` (they remove or bring
-back a page whole, without changing its facts; whether deleting or restoring an Authoritative page should need
-canonical approval is an open question for the owner, ADR 0032).
+infobox operations (page content, not the sidebar), `restoreResource` (restoring brings back what was approved, and is
+how a mistaken delete is undone), and document operations (deleting a map, timeline or board of an Authoritative page
+is not guarded: an open question for the owner, ADR 0034).
+
+**Deleting protected canon** (decided by the owner on 10 November 2026; ADR 0034). A rule of kind `delete` (the
+default: `{ "id": "delete-authoritative", "key": "Status", "kind": "delete", "values": ["Authoritative"] }`) makes a
+`deleteResource` whose page holds one of the values (without case) need canonical approval, by the same machinery and
+on every path (`delete_resource`, `lk_api_write`, `lk_api_batch`, `lk_op_deleteResource`, an approved proposal):
+
+- **at entry** the page's sidebar is read live; with `cascade` so is every page under it (listed from the repository
+  tree, or live, level by level, when the tree cannot answer). At most 101 pages are read; a larger cascade, a sidebar
+  that cannot be read, or a subtree that cannot be listed counts as protected. The canonical proposal lists every
+  protected page (`deleting “Inae Mikumo”, whose Status is Authoritative`);
+- **inside the lock** the page itself is read again before the delete is sent (one read), so a page made Authoritative
+  in the app since the entry check is not deleted without canonical approval;
+- under scope `write` it becomes a canonical proposal, as for a protected fact change; "Approve and accept as canon"
+  runs it.
+
+The rule shows in the dashboard's Canon section with the others and is edited there (kind "deleting a page with these
+values"); migration 1500 added it once to every project that stores its own rule list. The Status of the pages the
+creation tools make (`agentDefaultStatus`, `Working`) is written in the same job as the create; a create that sets
+`Authoritative` becomes a canonical proposal (the guard judges a new page's facts on its template's copy).
 
 **The shared function.** `assessFactChange(rules, before, after)` (src/facts/index.ts) is pure: given a page's facts
 before and after a change, it lists the protected changes. C2b's tools call it to tell an agent in a dry run; the engine

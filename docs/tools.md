@@ -50,42 +50,54 @@ budget (arkona): writes 0/120·min …
 
 `access` (`read` or `write`) is what the policy layer filters on: a connection whose profile has scope `read` sees only `read` tools, and a direct call to a hidden `write` tool is refused with the read-only message; the engine's policy gate refuses the write in any case ([policy.md](policy.md)). Annotations are what Claude and ChatGPT use to decide what to auto-approve: read tools are `readOnlyHint: true`; write tools are `readOnlyHint: false`.
 
-| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                                      |
-| --------------------------- | ------ | --------------------------------------------------------------- | ----------------------------------------- |
-| `list_projects`             | read   | true / false / true / false                                     | none                                      |
-| `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                           |
-| `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                     |
-| `search`                    | read   | true / false / true / false                                     | none; 1 read with `content: true`         |
-| `get_resource`              | read   | true / false / true / false                                     | 1 read (none with `live: false`)          |
-| `get_resources`             | read   | true / false / true / false                                     | 1 read per page, one job                  |
-| `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                           |
-| `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates         |
-| `list_calendars`            | read   | true / false / true / false                                     | 1 read                                    |
-| `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                     |
-| `read_document`             | read   | true / false / true / false                                     | 1 read (a timeline: 2 + 1 per 100 events) |
-| `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read         |
-| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)   |
-| `get_markdown_guide`        | read   | true / false / true / false                                     | none                                      |
-| `get_bridge_guide`          | read   | true / false / true / false                                     | none                                      |
-| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                      |
-| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                                      |
-| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                                    |
-| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)          |
-| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority         |
-| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                    |
-| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)          |
-| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)             |
-| `bridge_budget`             | read   | true / false / true / false                                     | none                                      |
-| `bridge_estimate`           | read   | true / false / true / false                                     | none                                      |
-| `bridge_job_status`         | read   | true / false / true / false                                     | none                                      |
-| `bridge_job_wait`           | read   | true / false / true / false                                     | none (waits at most 25 s)                 |
-| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                      |
-| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                      |
-| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                      |
-| `bridge_result_page`        | read   | true / false / true / false                                     | none                                      |
-| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                                      |
-| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                                      |
-| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                     |
+| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                                                  |
+| --------------------------- | ------ | --------------------------------------------------------------- | ----------------------------------------------------- |
+| `list_projects`             | read   | true / false / true / false                                     | none                                                  |
+| `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                                       |
+| `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                                 |
+| `search`                    | read   | true / false / true / false                                     | none; 1 read with `content: true`                     |
+| `get_resource`              | read   | true / false / true / false                                     | 1 read (none with `live: false`)                      |
+| `get_resources`             | read   | true / false / true / false                                     | 1 read per page, one job                              |
+| `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                                       |
+| `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                     |
+| `list_calendars`            | read   | true / false / true / false                                     | 1 read                                                |
+| `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                                 |
+| `read_document`             | read   | true / false / true / false                                     | 1 read (a timeline: 2 + 1 per 100 events)             |
+| `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read                     |
+| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)               |
+| `create_index`              | write  | false / false / false / false                                   | see [C2b](#resources-documents-and-characters-v2-c2b) |
+| `create_resource`           | write  | false / false / false / false                                   | see C2b                                               |
+| `create_bare_resource`      | write  | false / false / false / false                                   | 1 write + 1 listing + the tree’s re-read              |
+| `create_many_resources`     | write  | false / false / false / false                                   | see C2b                                               |
+| `create_character`          | write  | false / false / false / false                                   | see C2b                                               |
+| `update_resource`           | write  | false / **true** / false / false                                | 1 read + 1 write (+1 to re-place) + verify            |
+| `move_resource`             | write  | false / **true** / false / false                                | 1 write + 1 listing + the tree’s re-read              |
+| `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + 1 write + 1 read               |
+| `restore_resource`          | write  | false / false / false / false                                   | 1 write + 1 read + the tree’s re-read                 |
+| `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                      |
+| `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read                            |
+| `delete_document`           | write  | false / **true** / false / false                                | 1 write + 1 read                                      |
+| `get_markdown_guide`        | read   | true / false / true / false                                     | none                                                  |
+| `get_bridge_guide`          | read   | true / false / true / false                                     | none                                                  |
+| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                                  |
+| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                                                  |
+| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                                                |
+| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)                      |
+| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority                     |
+| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                                |
+| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)                      |
+| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                         |
+| `bridge_budget`             | read   | true / false / true / false                                     | none                                                  |
+| `bridge_estimate`           | read   | true / false / true / false                                     | none                                                  |
+| `bridge_job_status`         | read   | true / false / true / false                                     | none                                                  |
+| `bridge_job_wait`           | read   | true / false / true / false                                     | none (waits at most 25 s)                             |
+| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                                  |
+| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                                  |
+| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                  |
+| `bridge_result_page`        | read   | true / false / true / false                                     | none                                                  |
+| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                                                  |
+| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                                                  |
+| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                                 |
 
 `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*` are **low-level tools**: since v2 B2 they are left out of the tool list of a profile whose **show low-level tools** setting is off (the default; [below](#visibility-of-the-low-level-tools)).
 
@@ -130,7 +142,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (120 tools in all, 122 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (132 tools in all, 134 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -221,10 +233,12 @@ and, from one live `getResource`, its `sidebar` in order: `facts` (key and value
 (collections and links, each item with the page's name and, for a link to one document, `documentId` and the document's
 name; `hasFilter` when LegendKeeper adds items by a filter), `text`, and any other property named with `readOnly: true`
 (`unsupported: true` for what the API cannot show, such as the TAGS block). A property's `version` is included where
-LegendKeeper's answer has one. Cost: 1 read; `live: false` makes none.
+LegendKeeper's answer has one. With a live read it also gives **`factsVersion`** (v2 C2b): the bridge's own version of
+the page's sidebar facts (the key-value rows by rank and id, and the link collections' items and filters), the same from
+every read of an unchanged sidebar; pass it to `set_facts` as `baseFactsVersion`. Cost: 1 read; `live: false` makes none.
 
 **`get_resources`** `{ resources, live?, detail?, confirm? }`: up to 25 pages as one `batch_ops` job. Each entry is `ok`
-with the same data (summarised unless `detail: "full"`) or has its own `error`. More than 10 live reads return
+with the same data (summarised unless `detail: "full"`, with each page's `factsVersion`) or has its own `error`. More than 10 live reads return
 `{ status: "estimate", reads, wallClockSeconds, tightestTier, fitsToday }` and run only on `confirm: true`. Cost: 1 read per page.
 
 **`list_tags`** `{ query?, limit? }`: the tags in use under the root with counts, most used first. Cost: none.
@@ -372,10 +386,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                              |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (30 for a profile with scope `propose` or `write`; a `read` profile does not see the six write tools `write_page`, `set_facts`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                          |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (42 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -385,17 +399,18 @@ lock, chained version by version, and read back. Design: [ADR 0032](adr/0032-set
 guide's "Editing facts and links" and "Canon and approval" sections ([bridge-guide.md](bridge-guide.md)) are the short
 version.
 
-**`set_facts`** `{ page, facts?, links?, property?, dryRun?, project }`: `access: write`, annotations
+**`set_facts`** `{ page, facts?, links?, property?, baseFactsVersion?, dryRun?, project }`: `access: write`, annotations
 `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`. A `read` profile
 neither sees nor may call it. `project` follows A1's rule: required while the bridge serves several projects.
 
-| Argument   | Meaning                                                                                                                                                         |
-| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `page`     | A page name or id, resolved by A3's resolver inside the AI REPOSITORY only.                                                                                     |
-| `facts`    | Key → value. A string is plain text, written exactly (a line break becomes a line-break run); `{ "markdown": "…" }` is inline Markdown; `null` removes the row. |
-| `links`    | Collection title → `{ add?, remove? }`; each entry a page name or id, or `{ "page": …, "document": … }` for one document of a page.                             |
-| `property` | The key-value property's title. Default: the project's setting `factsPropertyName` (`PROPERTIES` until set).                                                    |
-| `dryRun`   | Plan only: what would change, the writes, and whether it touches protected canon. Nothing is written, queued or proposed.                                       |
+| Argument           | Meaning                                                                                                                                                                                                                                                                                           |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page`             | A page name or id, resolved by A3's resolver inside the AI REPOSITORY only.                                                                                                                                                                                                                       |
+| `facts`            | Key → value. A string is plain text, written exactly (a line break becomes a line-break run); `{ "markdown": "…" }` is inline Markdown; `null` removes the row.                                                                                                                                   |
+| `links`            | Collection title → `{ add?, remove? }`; each entry a page name or id, or `{ "page": …, "document": … }` for one document of a page.                                                                                                                                                               |
+| `property`         | The key-value property's title. Default: the project's setting `factsPropertyName` (`PROPERTIES` until set).                                                                                                                                                                                      |
+| `dryRun`           | Plan only: what would change, the writes, and whether it touches protected canon. Nothing is written, queued or proposed.                                                                                                                                                                         |
+| `baseFactsVersion` | v2 C2b: the `factsVersion` `get_resource` (or an earlier `set_facts`) gave when you read the page. If ANY sidebar row or link collection has changed since, nothing is written: `VERSION_CONFLICT` with `differences` (which rows or collections). Checked at planning and again inside the lock. |
 
 **Facts.** Keys match existing rows without case and with outer spaces ignored; an existing row keeps its key (as
 written), its id and its place. The same value writes nothing. A key that occurs twice in the property is refused
@@ -410,7 +425,12 @@ and the result says so in `notes`.
 **Inline Markdown** (B1's inline subset, [markdown.md](markdown.md)): `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``,
 `<u>`, `<sub>`, `<sup>`, links, `<br>`, and mentions: `[[Name]]` and `[[Name|label]]` resolved through A3 inside the AI
 REPOSITORY (exactly one page, or `MENTION_AMBIGUOUS` with the candidates / `MENTION_NOT_FOUND`), and
-`[label](lk://resources/<id>/docs/<docId>)` for a document. Anything that is not one line of inline text (a heading, a
+`[label](lk://resources/<id>/docs/<docId>)` for a document. **A character's pages** (v2 C2b, decided by the owner on 10
+November 2026): when a mention matches several pages of ONE character (the same subject, each a Character Core, a
+Compact Character Reference or the character's `[INDEX]`), it goes to the Core, else the Reference, else the index, and
+the result's `mentions` says which page was chosen and why. Pages of different subjects, or a page with no character
+role among them, stay `MENTION_AMBIGUOUS`. The same rule applies to `write_page`. It never applies to the page a tool
+writes to (`page`): a name that matches several pages is `AMBIGUOUS`, each candidate with its `role`. Anything that is not one line of inline text (a heading, a
 list, two paragraphs, an image) is `FACT_VALUE_NOT_INLINE`. Values are converted before anything is read.
 
 **Links.** The collection is found by its title (`resourceCollection` or `resourceLink`; `LINK_COLLECTION_NOT_FOUND`
@@ -474,7 +494,9 @@ budget (test): writes 3/120·min …
 
 `status` is `written` (with `verified`: `true`, `false` with a `warning` and `verification`, or `null` when the read
 back could not be made), `no_change`, `dry_run` (with `writes` and `summary`), `proposal_captured`, `queued` or
-`waiting_budget` (follow the job; never send it again). `facts` lists `added`, `changed`, `removed`, `unchanged` and
+`waiting_budget` (follow the job; never send it again). Every result carries `factsVersion` (v2 C2b): the version the
+plan was built on, and for `written` `{ before, after }` (`after` from the verify step's read). `mentions` lists any
+`[[Name]]` resolved by the character rule (below). `facts` lists `added`, `changed`, `removed`, `unchanged` and
 `notPresent` (a removal of a key that is not there); `links` lists per collection `added`, `removed`, `alreadyLinked`,
 `notLinked`, and a note when the collection has a filter. `notes` says when the template could not be determined.
 
@@ -498,6 +520,182 @@ step, exactly as a direct write runs them. The dashboard shows the page-level su
 the links, then each operation. On approval the usual re-read applies (a property that changed since capture makes
 the proposal **conflicted**), and the approved job runs the same check inside the lock (a change after the approval's
 re-read makes it conflicted too, nothing written).
+
+## Resources, documents and characters (v2 C2b)
+
+Twelve write tools for pages and documents: `create_index`, `create_resource`, `create_bare_resource`,
+`create_many_resources`, `create_character`, `update_resource`, `move_resource`, `delete_resource`, `restore_resource`,
+`create_document`, `update_document` and `delete_document`. Design: [ADR 0034](adr/0034-resources-documents-characters.md).
+The agent guide's "Creating and changing pages" section ([bridge-guide.md](bridge-guide.md)) is the short version.
+
+### What every one of them does
+
+- **One job, or one proposal.** At scope `write` the call runs as ONE job (the creates, each new page's facts, then the
+  verify step); at scope `propose` it becomes ONE proposal holding the high-level operation(s) and their expansion, with
+  the page-level summary first (`New page [BSRC] X - Character Core under [INDEX] X: 6 facts`). Every new page's id is
+  minted when the plan is made (at capture for a proposal) and used exactly at approval, so a child under a new index,
+  and a link to a new page, are fixed in the proposal. Every guard runs again when the job runs.
+- **`dryRun: true`** shows the plan (pages, names, parents, places, facts, links, the canon assessment) and writes
+  nothing.
+- **Inside the AI REPOSITORY only.** Every page and every parent is resolved inside the root (`NOT_IN_REPOSITORY`,
+  `NOT_FOUND`, `AMBIGUOUS` with each candidate and, for a character's pages, its role). New pages go under an index (or
+  the root itself): `PARENT_NOT_INDEX` otherwise.
+- **Alphabetical place in the same write.** `[INDEX]` pages first, then `[BSRC]`, each alphabetical (A3's rule): a
+  created or moved page gets its `after` / `before` neighbour in the create or move itself. A rename that changes a
+  page's place adds one `moveResource` to the same job (LegendKeeper's `updateResource` takes no place). Nothing else is
+  ever moved or reclassified.
+- **Status `Working`.** A page created from a template gets Status = the project's `agentDefaultStatus` (`Working`)
+  when its template has a Status row, in the same job. Templates carry no defaults. Pass `facts: { "Status": … }` to
+  choose another; `Authoritative` is protected canon (below).
+- **The template is recorded** on the new page's tree node at once, so `set_facts` finds its template order later.
+- **Verified.** A verify step reads back every page made or changed: a created or moved page by its parent's listing
+  (its name, parent and exact neighbours, one read per 100 siblings, shared by every page under that parent), its facts
+  by one `getResource`, a deleted page as gone, a document by the page's document list. `verified: true`, `false` (with
+  `warning` and `verification`: written but not as planned, never retried), or `null` (not read back).
+- **Never replayed.** A job that stops part-way answers `WRITTEN_IN_PART` with `written`, `notWritten` and the
+  `journal` entries; nothing is retried, and the same request with the same `operation_id` returns that result rather
+  than running again. Make a new, smaller request for what was not written.
+
+### `operation_id` (every create tool)
+
+An optional id of your own (1 to 128 of `A-Z a-z 0-9 - _ . :`), kept per project and connection with a hash of the
+normalised request (spacing and key order do not count; `project`, `dryRun` and the id itself are left out):
+
+- the **same id with the same request** returns the earlier result (`repeated: true`): the job as it stands now (its
+  outcome once finished), or the proposal (`proposalState`). It never creates anything twice;
+- the **same id with a different request** is refused: `OPERATION_ID_REUSED`; nothing is done;
+- an id whose first call is still being planned answers `OPERATION_IN_PROGRESS`;
+- a dry run or a refused call does not use the id up. Ids are kept at least as long as the journal (30 days by default).
+
+### Creating pages
+
+**`create_index`** `{ name, parent?, type?, category?, dryRun?, operation_id?, project }`: `[INDEX] {name}` from the
+type's Index template. Give `parent`, or `type` and `category` (the category's index is then the parent; for example
+`{ "type": "Character", "category": "Foxians" }`), or both (the parent must then be the category's index or under it).
+Without `type`, the type is the one whose root index holds the parent. Refusals: `UNKNOWN_TYPE` (with `types`),
+`UNKNOWN_CATEGORY` (with `categories`), `CATEGORY_AMBIGUOUS`, `CATEGORY_MISMATCH`, `TYPE_MISMATCH`,
+`TEMPLATE_NOT_CONFIGURED`, `INDEX_EXISTS` (an index of that name under the parent).
+
+**`create_resource`** `{ name, template, parent, facts?, links?, tags?, aliases?, dryRun?, operation_id?, project }`: a
+`[BSRC]` page from a template (name or id; see `list_templates`) under an index. The name follows the template role's
+pattern (`{name}` by default). `facts` and `links` are as in `set_facts` (a new page has no links to remove), written in
+the same job in the template's order. Refusals: `TEMPLATE_NOT_FOUND` (with `templates`), `TEMPLATE_AMBIGUOUS`,
+`CHARACTER_TEMPLATE` (use `create_character`), `INDEX_TEMPLATE` (use `create_index`), `PAGE_EXISTS`, the facts and
+links codes of `set_facts`.
+
+**`create_bare_resource`** `{ name, parent, tags?, aliases?, dryRun?, operation_id?, project }`: a page with no
+template. The name is used as given and must start with exactly `[INDEX] ` or `[BSRC] ` (`INVALID_NAME` otherwise,
+including a doubled prefix). `PAGE_EXISTS` for a sibling of the same kind and name.
+
+**`create_many_resources`** `{ items[1..100], dryRun?, operation_id?, project }`, each item
+`{ key, name, parent | parent_key, template?, facts?, links?, tags?, aliases? }`: up to 100 pages in one request, nested
+by `parent_key` (a parent made in the same request works). Each item follows the single-create rules above. Pages
+without a template go in `createManyResources` calls (one write for up to 100; children of a parent made in the same
+call are created in sorted order, as LegendKeeper places them after their earlier siblings); each page from a template
+is its own write. Parents always come first. More than 100 items, a `parent_key` that names no item
+(`PARENT_KEY_NOT_FOUND`), a loop (`PARENT_KEY_LOOP`), a key used twice or two items with one name under one parent
+(`INVALID_ITEMS`) are refused before anything is read or sent. Canon is judged per item; under `propose` the whole batch
+is one proposal.
+
+**`create_character`** `{ kind: "core" | "compact", name, race?, type?, facts?, links?, dryRun?, operation_id?, project }`
+(the old bridge's rules, PLAN-v2 section 9, on A3's `planCharacterPlacement`):
+
+- **core**: an existing unique `[INDEX] {name}` under the race index is reused, else made from the Index template; then
+  `[BSRC] {name} - Character Core` beneath it from the Core template;
+- **compact**: `[BSRC] {name} - Character Reference` directly under the race index, with no index;
+- an existing Core or Reference is **returned, not duplicated** (`status: "existing"`, with a note and its
+  `factsVersion`);
+- in the same job: Reference Type (exactly `Character Core` or `Compact Character Reference`), Subject and Canonical
+  Display Name (the name), Race / Species (exactly as given, or `Unestablished` for an unknown or omitted race), Status
+  `Working`, then your `facts` and `links` (a fact that contradicts one of the first four is refused);
+- an unknown or omitted race (`null`, blank, `Unknown`, `Undetermined`, `Unestablished`, `Undetermined / Unknown`) goes
+  to `[INDEX] Undetermined / Unknown`; a race given that does not resolve fails (`RACE_NOT_FOUND`, with the labels
+  available); and A3's other refusals (`RACE_AMBIGUOUS`, `RACE_NEEDS_REVIEW`, `CHARACTER_TYPE_AMBIGUOUS`, …);
+- never automatic: no race or classification index is made, nothing is moved or reclassified, no tag is inferred;
+- **duplicates**: a request for a character (same name without case, stray prefixes or extra spaces) while another
+  request for it is being planned, queued, running or a pending proposal, from any connection, is refused
+  (`DUPLICATE_REQUEST`, naming the other's `jobId` or `proposalId`). Once that one has finished, a new request finds the
+  page it made (`existing`).
+
+The page names come from the type's page-name patterns (`{name} - Character Core` and `{name} - Character Reference` by
+default; the owner can change them on the Repository Mappings page).
+
+Every create answers with `pages` (each `id`, `name`, `parent`, `after` / `before`, `template`, `facts`, `links`),
+`writes`, `status`, `verified`, `jobId` and `factsVersions` (each new page's `factsVersion` after the job, by name).
+
+### Changing, moving, deleting and restoring
+
+**`update_resource`** `{ page, name?, tags?: { add?, remove? }, aliases?: { add?, remove? }, icon?: { glyph?, color?,
+shape?, size? }, banner?: { url?, yPosition?, enabled? }, hidden?, locked?, dryRun?, project }`: one read of the page,
+then one `updateResource` (and, after a rename that changes the page's place, one `moveResource` among the same
+siblings), under the page's lock, journalled with the page as it was. A rename keeps the page's prefix (`PREFIX_CHANGE`
+for a name with another prefix; never a reclassification) and refuses a sibling's name (`NAME_TAKEN`). Tags and aliases
+are compared without case. An unchanged request sends nothing (`no_change`).
+
+**`move_resource`** `{ page, to, dryRun?, project }`: the page and everything under it, to a new parent index inside
+the repository, in its alphabetical place there (one `moveResource`, journalled with the page as it was).
+`MOVE_CYCLE` for a move under itself or a descendant; `NOT_IN_REPOSITORY` for a destination outside; `NAME_TAKEN` for a
+sibling of the same kind and name there.
+
+**`delete_resource`** `{ page, confirm: true, cascade?: true, dryRun?, project }`: `confirm: true` is required; a page
+with pages under it is refused (`HAS_CHILDREN`, listing them) unless `cascade: true` is passed too. The result lists
+every page removed (`removed`). The journal keeps the page (its `getResource`) and the subtree's ids, names and parents.
+LegendKeeper's deletes are soft: `restore_resource` brings them back. **Protected canon** (decided by the owner on 10
+November 2026): deleting a page whose Status is `Authoritative`, or with `cascade` any page of the subtree that is,
+needs the owner's canonical approval, whatever the scope: the call becomes a proposal (`proposal_captured`,
+`requiresCanonicalApproval`, the `reason` naming each page). The guard reads each page's sidebar live (up to 101; a
+larger cascade, or a sidebar it cannot read, counts as protected), and reads the page again inside its lock. A dry run
+says what the tree last read.
+
+**`restore_resource`** `{ page, dryRun?, project }`: `page` is the deleted page's id (a deleted page has no name the tree
+can find; `delete_resource`'s result and `bridge_journal_lookup` show it). Restores it and whatever was deleted with it
+in the same cascade, and adds it back to the tree. **No canonical approval**: restoring brings back what was approved.
+Refused: an id the bridge has no record of deleting from the repository (`NOT_IN_REPOSITORY`), a page that is not
+deleted (`NOT_DELETED`), a page whose parent is deleted too (`PARENT_DELETED`: restore the parent).
+
+### Documents
+
+**`create_document`** `{ page, name, type: "map" | "timeline" | "board", calendar?, hidden?, fullWidth?, dryRun?,
+operation_id?, project }`: a map, timeline (optionally in a calendar, by name or id) or board on a page.
+`DOCUMENT_EXISTS` for a document of the same name on the page. Page text is `write_page`'s.
+
+**`update_document`** `{ page, document, name?, hidden?, fullWidth?, calendar?, mapImage?, dryRun?, project }`: a
+document's settings only, never its content. Page and blank documents are refused (`DOCUMENT_IS_PAGE`: use
+`write_page`). Only what changes is sent.
+
+**`delete_document`** `{ page, document, confirm: true, dryRun?, project }`: refused for the page's last document
+(`DOCUMENT_LAST`) and for its only page-type document (`DOCUMENT_ONLY_PAGE`): that is the page's content (use
+`write_page` or `delete_resource`). Not guarded by canonical approval (an open question for the owner: the result notes
+when the page is Authoritative).
+
+### Costs (reads and writes, typical)
+
+Measured against the mock LegendKeeper (test/resources/costs.test.ts), every read the call causes included: planning
+reads, the job's checks, the canon guard's in-lock read, the verify step and the repository tree's re-reads.
+
+| Call                                                    | Reads | Writes |
+| ------------------------------------------------------- | ----- | ------ |
+| `create_character` core with a new index, 1 caller fact | 14    | 9      |
+| `create_character` compact, no caller facts             | 7     | 6      |
+| `create_character` that returns an existing page        | 1     | 0      |
+| `create_resource` with 2 facts and 1 link               | 8     | 5      |
+| `create_bare_resource`                                  | 2     | 1      |
+| `update_resource` rename (re-placed among its siblings) | 6     | 2      |
+| `move_resource`                                         | 3     | 1      |
+| `delete_resource`, one page                             | 4     | 1      |
+| `restore_resource`                                      | 3     | 1      |
+| `create_document`                                       | 2     | 1      |
+| `update_document`                                       | 4     | 1      |
+| `delete_document`                                       | 2     | 1      |
+| `set_facts`, 2 facts (unchanged from C2a)               | 4     | 2      |
+
+Where they go, for a Core with a new index: 2 template sidebars (planning), 2 creates; per page, 1 copy check, 1
+in-lock read of the rows and 1 canon check of the sidebar, then 1 write per fact (Status included: 1 on the index, 6 on
+the Core); the verify step's 2 facts reads and 2 listings (the race's children, the new index's); the tree's 2 re-reads,
+one per page, at the end of the job. `create_many_resources` with 100 pages without templates: 1 write, 1–2 listings to
+verify, and the tree's 100 re-reads. A dry run costs the template reads only (none for the other tools); a proposal
+costs the planning reads, then the job when approved (capture reads nothing for pages it creates). A cascade delete
+adds 1 read per page under it (the canon check).
 
 ## Image upload
 

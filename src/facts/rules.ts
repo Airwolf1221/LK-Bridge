@@ -9,6 +9,10 @@
  * - `change`: CHANGING an existing non-empty value needs canonical approval (another value, or removing it); setting
  *   the fact where it is empty (or absent, as on a new page) is allowed.
  *
+ * - `delete` (v2 C2b, decided by the owner on 10 November 2026): DELETING a page whose fact holds one of the listed values
+ *   (without case) needs canonical approval; with a cascade, any page of the subtree that holds one. Restoring needs
+ *   none: it brings back what was approved.
+ *
  * The rules are configuration (project settings `canonicalRules`), edited on the dashboard and audited. A project with
  * none stored uses the defaults below. The default status for pages agents create (`agentDefaultStatus`, "Working")
  * is kept here for C2b's creation tools; templates carry no fact defaults (the owner confirmed), so nothing is inherited.
@@ -23,7 +27,23 @@ export type CanonicalRule =
       readonly values: readonly string[];
       readonly note?: string;
     }
-  | { readonly id: string; readonly key: string; readonly kind: 'change'; readonly note?: string };
+  | { readonly id: string; readonly key: string; readonly kind: 'change'; readonly note?: string }
+  | {
+      readonly id: string;
+      readonly key: string;
+      readonly kind: 'delete';
+      readonly values: readonly string[];
+      readonly note?: string;
+    };
+
+/** v2 C2b (decided by the owner on 10 November 2026): deleting an Authoritative page needs canonical approval. */
+export const DEFAULT_DELETE_RULE: CanonicalRule = Object.freeze({
+  id: 'delete-authoritative',
+  key: 'Status',
+  kind: 'delete',
+  values: ['Authoritative'],
+  note: 'Deleting a page whose Status is Authoritative (or, with a cascade, any page of the subtree) needs canonical approval; restoring needs none.',
+});
 
 export const DEFAULT_CANONICAL_RULES: readonly CanonicalRule[] = Object.freeze([
   {
@@ -45,6 +65,7 @@ export const DEFAULT_CANONICAL_RULES: readonly CanonicalRule[] = Object.freeze([
     kind: 'change',
     note: 'Changing an existing Continuity (for example one AU to another) needs canonical approval; setting it where empty is allowed.',
   },
+  DEFAULT_DELETE_RULE,
 ]);
 
 /** The Status agents' new pages get (C2b), unless the project says otherwise. */
@@ -67,6 +88,15 @@ export const canonicalRuleSchema = z.discriminatedUnion('kind', [
       id: text(64).regex(/^[a-z0-9][a-z0-9_-]*$/, 'lowercase letters, digits, - or _'),
       key: text(256),
       kind: z.literal('change'),
+      note: z.string().max(500).optional(),
+    })
+    .strict(),
+  z
+    .object({
+      id: text(64).regex(/^[a-z0-9][a-z0-9_-]*$/, 'lowercase letters, digits, - or _'),
+      key: text(256),
+      kind: z.literal('delete'),
+      values: z.array(text(256)).min(1).max(20),
       note: z.string().max(500).optional(),
     })
     .strict(),

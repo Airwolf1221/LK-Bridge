@@ -14,6 +14,9 @@ import type { ToolDeps } from './shape.js';
 import { uploadTools } from './upload.js';
 import { writePageTool } from './write-page.js';
 import { setFactsTool } from './set-facts.js';
+import { resourceTools } from './resources.js';
+import { createCharacterTool } from './create-character.js';
+import { documentTools } from './documents.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -38,6 +41,9 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     readDocumentTool(deps),
     writePageTool(deps),
     setFactsTool(deps),
+    ...resourceTools(deps),
+    createCharacterTool(deps),
+    ...documentTools(deps),
     ...guideTools(deps),
     ...lkApiTools(deps),
     ...uploadTools(deps),

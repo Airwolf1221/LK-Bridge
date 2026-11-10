@@ -126,6 +126,7 @@ describe('set_facts with two projects', () => {
       'Status',
       'Continuity Type',
       'Continuity',
+      'Status', // v2 C2b: deleting an Authoritative page
     ]);
     const bad = await t.admin.put('/projects/alpha/canon', {
       rules: [{ id: 'x', key: 'Status', kind: 'value' }],

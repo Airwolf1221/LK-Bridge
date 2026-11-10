@@ -58,7 +58,7 @@ among the project's templates as last read.
 the placement rule itself): `unknownIndexName` (`Undetermined / Unknown`), `unknownRaceValues` (`Unknown`,
 `Undetermined`, `Unestablished`, `Undetermined / Unknown`; blank and null always count), `unknownSpeciesValue`
 (`Unestablished`), `referenceTypes` (`Character Core`, `Compact Character Reference`), `subjectRow` (`Subject`),
-`speciesRow` (`Race / Species`), `pageNames` (`{name}` for both).
+`speciesRow` (`Race / Species`), `pageNames` (`{name} - Character Core` and `{name} - Character Reference` since v2 C2b; `{name}` for both before; a pattern the owner saved is kept).
 
 ## The taxonomy
 

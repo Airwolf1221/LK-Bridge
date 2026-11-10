@@ -13,6 +13,8 @@ to the short version below.
    read as `baseVersion`.
 4. Budgets are finite. Never loop on an error; wait for the time it states.
 5. A write that was `queued`, `waiting_budget` or `proposal_captured` is not lost and is never retried.
+6. Make pages with the creation tools (`create_character`, `create_resource`, `create_index`, …), never by hand; pass an
+   `operation_id` when you might have to repeat a call.
 
 ## What the bridge is
 
@@ -154,7 +156,10 @@ applied, and you can propose again from the current page. Never submit a proposa
 A page's **facts** are the key-value rows of its sidebar property `PROPERTIES` (Reference Type, Scope, Status, …); its
 **links** are its link collections (Dependencies, Related Sources). Change both with `set_facts`.
 
-1. **Read first.** `get_resource` shows the page's facts and links as they are now.
+1. **Read first.** `get_resource` shows the page's facts and links as they are now, and their `factsVersion`. **Pass
+   it back as `baseFactsVersion`** whenever a value is based on what you read, above all when you rewrite or replace an
+   existing value: if anything in the sidebar changed since, nothing is written (`VERSION_CONFLICT`, listing what
+   changed) and you redo the change on what is there now.
 2. **Facts:** `facts` maps a key to its new value. A plain string is written exactly as text. For formatting or a
    mention of another page, send `{ "markdown": "…" }`: inline Markdown only (`**bold**`, `*italic*`, links, `<br>`,
    `[[Page Name]]`). `null` removes the row. Keys match without case, and an existing fact keeps its place.
@@ -186,6 +191,12 @@ the change; never send the same call again. **"written but not as planned"** mea
 read back differs (usually someone edited it at the same moment): read the page and tell the person. `WRITTEN_IN_PART`
 lists the changes that were made before something stopped the rest: read the page before doing anything else.
 
+**Mentions of a character.** A character often has several pages with its name: its `[INDEX]`, its Character Core,
+perhaps a Compact Character Reference. `[[Name]]` matching several pages of ONE character links its **Core**, else its
+**Reference**, else its **index**, and the result's `mentions` says which page was chosen and why. If the matches belong
+to different subjects, or one of them is not a character page, the mention stays ambiguous: name the page by id. This
+never applies to the page you write to: a `page` that matches several pages is refused with each candidate and its role.
+
 Other refusals name what to fix: `MENTION_AMBIGUOUS` (the candidates are listed: use a more exact name or the id),
 `MENTION_NOT_FOUND`, `FACT_VALUE_NOT_INLINE` (one line of inline text only), `FACT_KEY_DUPLICATED` (the page has two
 rows with that key: tell the owner), `LINK_COLLECTION_NOT_FOUND` (the page's collections are listed),
@@ -197,18 +208,49 @@ Some facts are **protected canon**. By default:
 
 - setting a page's `Status` to `Authoritative`, or changing it from `Authoritative` to anything else;
 - changing an existing `Continuity Type` or `Continuity` (for example `CANON` to `AU`, or one AU to another). Setting
-  them where they are empty, as on a new page, is fine.
+  them where they are empty, as on a new page, is fine;
+- **deleting** a page whose `Status` is `Authoritative` (with `cascade`, any page under it that is). Restoring a deleted
+  page needs no approval.
 
 **No connection can make these changes on its own, whatever its scope.** A write that would make one (through
 `set_facts`, `lk_api_write`, `lk_api_batch` or any other tool) becomes a **proposal**: the result is
 `proposal_captured` with `requiresCanonicalApproval: true` and the `reason`, and nothing is written. Only the owner can
 accept it, with a separate "Approve and accept as canon". Never retry such a write or look for another way to make it:
 tell the person it is waiting for the owner, and follow it with `bridge_proposal_status`. Only the owner makes a page
-`Authoritative`; the page-creation tools (when they are in your tool list) give new pages the Status `Working`.
+`Authoritative`; the page-creation tools give new pages the Status `Working`.
 
-The other write tools (for resources, maps and timelines) are being added; until they are in your tool list, the
-low-level `lk_api_write` and `lk_api_batch` are the way to make those changes, with every guard in place (the canon rule
-included).
+## Creating and changing pages
+
+All of these work inside the AI REPOSITORY only, put a new or moved page in its alphabetical place (indexes first) in
+the same write, never move or reclassify anything else, verify what they did, and take `dryRun: true` to show the plan
+(pages, names, parents, places, facts) without writing. Under scope `propose` each call is one proposal; the ids of its
+new pages are fixed in the proposal.
+
+- **A character:** `create_character` `{ kind: "core" | "compact", name, race?, facts?, links? }`. Core: the
+  character's `[INDEX] {name}` (an existing one is reused) with `{name} - Character Core` beneath it. Compact:
+  `{name} - Character Reference` directly under the race. An existing Core or Reference is **returned, not duplicated**
+  (`status: "existing"`). The bridge writes Reference Type, Subject, Canonical Display Name, Race / Species (exactly as
+  you give it; `Unestablished` when the race is unknown or omitted) and Status `Working`, then your facts. An unknown or
+  omitted race goes to `Undetermined / Unknown`; a race given that does not resolve is refused, never guessed or
+  created. If another request for the same character is still under way (from you or another agent), you get
+  `DUPLICATE_REQUEST` naming it: follow that one.
+- **A page from a template:** `create_resource` `{ name, template, parent, facts?, links? }` (see `list_templates`).
+- **An index:** `create_index` `{ name, parent }`, or `{ name, type, category }` (for example a category of a race).
+- **Many pages at once:** `create_many_resources` `{ items }` (up to 100; nest them with `key` and `parent_key`).
+- **A page with no template:** `create_bare_resource` `{ name: "[BSRC] …" or "[INDEX] …", parent }`.
+- **Rename, tags, aliases, icon, banner, hidden, locked:** `update_resource` (a rename keeps the prefix and re-places
+  the page). **Move:** `move_resource` `{ page, to }`.
+- **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
+  lists every page removed). **Undo a delete:** `restore_resource` `{ page: "<id>" }`.
+- **Maps, timelines, boards:** `create_document`, `update_document` (settings only) and `delete_document`.
+
+**`operation_id`.** Every create tool takes an optional `operation_id` of your own. If a call times out or you are not
+sure it went through, send the SAME request with the SAME `operation_id`: you get the first call's result
+(`repeated: true`), and nothing is created twice. The same id with a different request is refused
+(`OPERATION_ID_REUSED`): use a new id for a new request.
+
+**A failed job is never replayed.** `WRITTEN_IN_PART` lists what was written, what was not, and the journal entries.
+Read the pages, then make a new, smaller request for what is missing.
 
 ## Budget rules
 
@@ -261,5 +303,9 @@ Every refusal has a code and a plain message. The common ones:
 | `PROJECT_REQUIRED`                       | A write did not name its project. Pass `project`.                                      |
 | `VERSION_CONFLICT`                       | The page changed since you read it. Nothing was written: read again and redo the edit. |
 | `requiresCanonicalApproval`              | The change touches protected canon: it waits for the owner. Never retry it.            |
+| `DUPLICATE_REQUEST`                      | Another request for the same character is under way. Follow it (its job or proposal).  |
+| `OPERATION_ID_REUSED`                    | That `operation_id` was used for a different request. Use a new id.                    |
+| `WRITTEN_IN_PART`                        | Some writes were made, then it stopped. Read the pages; make a new, smaller request.   |
+| `HAS_CHILDREN`                           | The page has pages under it: add `cascade: true` to delete them all.                   |
 
 `bridge_errors_recent` lists recent failures with LegendKeeper's request ids when you need to report one.

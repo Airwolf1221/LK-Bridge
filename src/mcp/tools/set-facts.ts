@@ -17,7 +17,9 @@ import { expandFacts, planCounts } from '../../facts/expand.js';
 import { FactsPlanError, planFacts, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
 import { templateFor, templateKeysFrom } from '../../facts/templates.js';
 import { factValueRuns, FactValueError } from '../../facts/values.js';
-import { pageConverterContext } from '../../pages/index.js';
+import { factsDifferences, factsVersionFrom } from '../../facts/version.js';
+import type { SidebarPropertyState } from '../../jobs/sidebar-state.js';
+import { mentionChoices, pageConverterContext } from '../../pages/index.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import { defineTool } from './define.js';
@@ -43,26 +45,26 @@ export const SET_FACTS_ANNOTATIONS = {
 const DEFAULT_PROPERTY = 'PROPERTIES';
 const WAIT_MS = 25_000;
 
-const factValue = z.union([
+export const factValue = z.union([
   z.string().max(100_000),
   z.object({ markdown: z.string().max(100_000) }).strict(),
   z.null(),
 ]);
-const pageRef = z.string().min(1).max(500);
-const linkRef = z.union([
+export const pageRef = z.string().min(1).max(500);
+export const linkRef = z.union([
   pageRef,
   z.object({ page: pageRef, document: z.string().min(1).max(500) }).strict(),
 ]);
-const linkEdit = z
+export const linkEdit = z
   .object({ add: z.array(linkRef).max(256).optional(), remove: z.array(linkRef).max(256).optional() })
   .strict();
 
-type LinkRef = z.infer<typeof linkRef>;
+export type LinkRef = z.infer<typeof linkRef>;
 
 const refText = (r: LinkRef) => (typeof r === 'string' ? r : `${r.page} / ${r.document}`);
 
 /** A link reference to one page (or one of its documents) inside the AI REPOSITORY. */
-function resolveLink(
+export function resolveLink(
   ctx: RepoCtx,
   ref: LinkRef,
   o: { allowRawId?: (id: string) => boolean } = {},
@@ -155,7 +157,10 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
       'remove the row. Keys match existing rows without case; an existing row keeps its place; a new template fact goes in the template’s order; ' +
       'any other new fact goes at the bottom. `links` maps a collection’s title to { add, remove }: each a page name or id, or { page, document } ' +
       'for one document of a page. Existing links keep their order, ids and the collection’s filter; added ones go at the end; a page already ' +
-      'linked is reported, not doubled. Read the page first with get_resource. `dryRun: true` shows the plan and writes nothing. ' +
+      'linked is reported, not doubled. Read the page first with get_resource, and pass its factsVersion as `baseFactsVersion` ' +
+      'whenever a value is based on what you read: if anything in the sidebar changed since, nothing is written. A [[Name]] ' +
+      'matching several pages of one character links its Character Core (else Reference, else index); the result says which. ' +
+      '`dryRun: true` shows the plan and writes nothing. ' +
       'PROTECTED CANON: setting Status to Authoritative or changing it from Authoritative, or changing an existing Continuity Type or ' +
       'Continuity, needs the owner’s canonical approval: such a call becomes a proposal (proposal_captured with requiresCanonicalApproval), ' +
       'whatever your scope; never retry it. A conflict (VERSION_CONFLICT) wrote nothing: read the page again and redo the change. ' +
@@ -180,6 +185,14 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
         .max(256)
         .optional()
         .describe('The key-value property’s title. Default: the project’s setting (normally "PROPERTIES").'),
+      baseFactsVersion: z
+        .string()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe(
+          'The factsVersion get_resource (or an earlier set_facts) gave when you read the page. Pass it whenever a value is based on what you read: if ANY sidebar fact or link changed since, nothing is written (VERSION_CONFLICT, with what changed).',
+        ),
       dryRun: z.boolean().optional().describe('Show the plan; write nothing.'),
       project: projectArg,
     }),
@@ -200,7 +213,10 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
         const resolved = resolvePage(ctx, args.page);
         if (!resolved.ok) return resolved.result;
         const node = resolved.node;
-        const converter = pd.services ? pageConverterContext(pd.services, ctx.projectId) : undefined;
+        const choices: Parameters<typeof mentionChoices>[0][number][] = [];
+        const converter = pd.services
+          ? pageConverterContext(pd.services, ctx.projectId, { onMentionChoice: (c) => choices.push(c) })
+          : undefined;
         if (!converter) {
           return errorResult(
             { code: 'TOOL_UNAVAILABLE', message: 'The repository tree cannot resolve names now.' },
@@ -234,6 +250,12 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
         const read = await liveRead(pd, mctx, 'set_facts', 'listProperties', { path });
         if (!read.ok) return read.result;
         const sidebar = sidebarFrom(read.value);
+        // v2 C2b: the bridge's own version of the whole sidebar, checked against the agent's base before anything else.
+        const before = factsVersionFrom(read.value);
+        pd.services?.factsVersions?.store(ctx.projectId, node.id, before.version, before.state);
+        if (args.baseFactsVersion !== undefined && args.baseFactsVersion !== before.version) {
+          return staleBase(pd, node, args.baseFactsVersion, before);
+        }
 
         // 3. Links: every page resolved inside the AI REPOSITORY.
         const links = [];
@@ -299,7 +321,13 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
           factRows(sidebar).map((r) => ({ key: r.key, content: r.content })),
           factRows(plan.sidebarAfter).map((r) => ({ key: r.key, content: r.content })),
         );
-        const head = { page, ...changesBody(plan), ...(notes.length ? { notes } : {}) };
+        const head = {
+          page,
+          factsVersion: before.version,
+          ...changesBody(plan),
+          ...(choices.length > 0 ? { mentions: mentionChoices(choices) } : {}),
+          ...(notes.length ? { notes } : {}),
+        };
         if (plan.empty) {
           return render(
             {
@@ -340,10 +368,15 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
         }
 
         // 6. Write: one job under the page's lock (check, chained writes, verify).
-        const job = expandFacts(plan, page, sidebar, {
-          facts: args.facts ?? {},
-          links: args.links ?? {},
-        });
+        const job = expandFacts(
+          plan,
+          page,
+          sidebar,
+          { facts: args.facts ?? {}, links: args.links ?? {} },
+          args.baseFactsVersion !== undefined
+            ? { wholeSidebar: { factsVersion: before.version, state: before.state } }
+            : {},
+        );
         let r;
         try {
           r = await pd.engine.submit({
@@ -404,6 +437,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
           const res = (view.result ?? {}) as { verified?: unknown; verification?: Record<string, unknown> };
           const verified = typeof res.verified === 'boolean' ? res.verified : null;
           const ver = res.verification ?? {};
+          const after = factsVersionAfter(ver);
           return finish(
             pd,
             mctx,
@@ -413,6 +447,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
               status: 'written',
               verified,
               jobId: view.id,
+              factsVersion: { before: before.version, ...(after ? { after } : {}) },
               ...(verified === false
                 ? {
                     warning:
@@ -460,10 +495,12 @@ function failedBody(
     .filter((s) => s.status === 'succeeded' && s.stepNo > 1 && s.stepNo < labels.length)
     .map((s) => labels[s.stepNo - 1]!);
   if (written.length === 0 && err.code === 'VERSION_CONFLICT') {
+    const differences = (view.lastError as { differences?: unknown } | null)?.differences;
     return errorResult(
       {
         code: 'VERSION_CONFLICT',
         message: why ?? 'The sidebar changed since it was read.',
+        ...(Array.isArray(differences) ? { differences } : {}),
         jobId: view.id,
         hint: 'Nothing was written. Do not retry the same call: read the page again with get_resource, and redo the change on what it holds now.',
         ...head,
@@ -495,6 +532,41 @@ function failedBody(
     },
     pd,
   );
+}
+
+/** v2 C2b: a `baseFactsVersion` that is not the sidebar's version now: nothing written, with what changed when known. */
+function staleBase(
+  pd: ProjectDeps,
+  node: TreeNode,
+  base: string,
+  now: { readonly version: string; readonly state: readonly SidebarPropertyState[] },
+): McpToolResult {
+  const remembered = pd.services?.factsVersions?.recall(pd.project.id, node.id, base) ?? null;
+  const differences = remembered ? factsDifferences(remembered, now.state) : null;
+  return errorResult(
+    {
+      code: 'VERSION_CONFLICT',
+      reason: remembered ? 'changed_since_base' : 'base_unknown',
+      message: remembered
+        ? `The sidebar of “${node.displayName}” changed since factsVersion ${base} (${differences!.length} difference(s)). Nothing was written.`
+        : `The sidebar of “${node.displayName}” is not at factsVersion ${base} (the bridge does not remember that version, so it cannot say what changed). Nothing was written.`,
+      page: { id: node.id, name: node.displayName },
+      baseFactsVersion: base,
+      factsVersion: now.version,
+      ...(differences ? { differences: differences.slice(0, 20) } : {}),
+      hint: 'Read the page again with get_resource, redo the change on what it holds now, and pass the new factsVersion.',
+    },
+    pd,
+  );
+}
+
+/** v2 C2b: the factsVersion the verify step read back (its sidebar or facts target), if it read one. */
+export function factsVersionAfter(verification: Record<string, unknown>): string | null {
+  const targets = Array.isArray(verification.targets)
+    ? (verification.targets as Record<string, unknown>[])
+    : [];
+  for (const t of targets) if (typeof t.factsVersion === 'string') return t.factsVersion;
+  return null;
 }
 
 /** The template's fact keys (cached for a day), or null with the reason as a note. */
