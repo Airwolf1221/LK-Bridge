@@ -328,3 +328,48 @@ export interface JobFilter {
   readonly before?: number;
   readonly limit?: number;
 }
+
+// ============================================================================================ v2 A2: write observers
+
+/** A write step about to be sent (or re-verified after a restart): what a write observer is told before it runs. */
+export interface WriteStepInfo {
+  readonly projectId: string;
+  readonly jobId: string;
+  readonly stepNo: number;
+  readonly opId: string;
+  /** The step's params as sent (client ids already minted into the body). */
+  readonly params: OpParams;
+  readonly priority: PriorityClass;
+}
+
+/** A write step's final outcome. */
+export interface WriteStepResult extends WriteStepInfo {
+  readonly outcome: 'succeeded' | 'failed';
+  /** A failure that may have applied (the step is `uncertain`). */
+  readonly uncertain: boolean;
+  /** LegendKeeper's response to a successful step (undefined for a failure). */
+  readonly value: unknown;
+  /** Aborted when the engine stops: an observer stops its own reads then. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * v2 A2: told about every write step a job runs (inline writes included), so the repository tree can re-read what a
+ * write changed in the same job. `beforeWrite` is synchronous and runs before the step is sent; `afterWrite` is awaited
+ * before the job moves on. An observer that throws is logged and never fails the job.
+ */
+export interface WriteObserver {
+  beforeWrite?(info: WriteStepInfo): void;
+  afterWrite?(result: WriteStepResult): Promise<void> | void;
+}
+
+/** Options of `engine.internalRead`. */
+export interface InternalReadOptions {
+  readonly priority: PriorityClass;
+  /** The job the read belongs to (fair share in the governor, and the error record). */
+  readonly jobId?: string;
+  readonly stepNo?: number;
+  readonly signal?: AbortSignal;
+  /** A 404 is an answer ("it is gone"), not an error: it is not recorded in the errors table. */
+  readonly notFoundIsAnswer?: boolean;
+}

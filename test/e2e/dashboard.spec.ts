@@ -48,6 +48,8 @@ test('signs in, comes back to where it was going, and every page renders under t
     ['Settings', 'Settings'],
     ['Maintenance Jobs', 'Maintenance Jobs'],
     ['Repository Mappings', 'Repository Mappings'],
+    ['Projects', 'Projects'],
+    ['Repository Tree', 'Repository Tree'], // v2 A2
   ] as const) {
     await page
       .getByRole('navigation', { name: 'Main' })

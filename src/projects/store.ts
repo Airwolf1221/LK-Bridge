@@ -103,6 +103,33 @@ export class ProjectStore {
     return this.byId(id);
   }
 
+  /**
+   * v2 A2: sets (or, with `null`, removes) one key of the JSON settings, keeping every other key as it is (unknown keys
+   * included). Read and written in one transaction. Returns the record afterwards (undefined for an unknown project).
+   */
+  setSetting(id: string, key: string, value: unknown): ProjectRecord | undefined {
+    return this.db.transaction(() => {
+      const r = this.db.prepare('SELECT settings FROM projects WHERE id = ?').get(id) as
+        { settings: string } | undefined;
+      if (!r) return undefined;
+      let current: Record<string, unknown> = {};
+      try {
+        const parsed: unknown = JSON.parse(r.settings || '{}');
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          current = parsed as Record<string, unknown>;
+        }
+      } catch {
+        current = {};
+      }
+      if (value === null || value === undefined) delete current[key];
+      else current[key] = value;
+      this.db
+        .prepare('UPDATE projects SET settings = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify(current), this.now(), id);
+      return this.byId(id);
+    })();
+  }
+
   setSandbox(id: string, sandbox: boolean): ProjectRecord | undefined {
     this.db
       .prepare('UPDATE projects SET is_sandbox = ?, updated_at = ? WHERE id = ?')

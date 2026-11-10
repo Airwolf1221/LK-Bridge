@@ -14,6 +14,7 @@ export const registerProjects: Register = (api, ctx) => {
   const { projects, config } = ctx.deps.runtime;
 
   api.get('/projects', () => {
+    projects.refresh(); // settings changed with `npm run projects -- set` while the bridge runs
     const def = projects.defaultProject();
     return {
       default: def.name,
@@ -49,6 +50,19 @@ export const registerProjects: Register = (api, ctx) => {
     if (!p?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${name} with stored data`);
     const after = ctx.actions.setProjectReadOnly(p.id, b.value);
     return { project: after };
+  });
+
+  /** v2 A2: one setting of a project (`value: null` clears it). Audited as `project.set_setting`. */
+  api.put('/projects/:name/settings', (req) => {
+    const { name } = parseInput(nameParam, req.params);
+    const b = parseInput(
+      z.object({
+        key: z.string().min(1).max(64),
+        value: z.union([z.string().max(256), z.boolean(), z.null()]),
+      }),
+      req.body,
+    );
+    return { project: ctx.actions.setProjectSetting(name, b.key, b.value) };
   });
 
   api.post('/projects/:name/verify', async (req) => {

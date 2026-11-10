@@ -36,7 +36,7 @@ import { UPLOAD_PUT_STEP, type CustomStepHandlers } from './custom-steps.js';
 import { checkSubmitGuards, isWriteOp } from './guards.js';
 import { isClientId, mintClientId, newJobId } from './ids.js';
 import { WriteJournal, journalLookup, type JournalFilter } from './journal.js';
-import { callOp, newCallStats } from './lk-call.js';
+import { callOp, isNotFound, newCallStats } from './lk-call.js';
 import { LockManager } from './locks.js';
 import { opMeta } from './op-meta.js';
 import {
@@ -56,6 +56,9 @@ import {
   TERMINAL_JOB_STATUSES,
   type BatchSubmit,
   type ControlsView,
+  type InternalReadOptions,
+  type WriteObserver,
+  type WriteStepInfo,
   type JobKind,
   type JobOrigin,
   type JobStatus,
@@ -150,6 +153,8 @@ export class JobEngine {
   private readonly drainWaiters: (() => void)[] = [];
   /** Pending `wait` calls; `stop()` answers them at once (chunk 8, F-13), so a shutdown never waits for a long poll. */
   private readonly jobWaiters = new Set<() => void>();
+  /** v2 A2: told about every write step (the repository tree). */
+  private readonly writeObservers = new Set<WriteObserver>();
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -350,6 +355,113 @@ export class JobEngine {
       if (e instanceof BridgeLkError) throw new LkOperationError(e);
       if (e instanceof JobsError) throw e;
       throw new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), {}, { cause: e });
+    }
+  }
+
+  // ============================================================================================ v2 A2
+
+  /**
+   * Registers a write observer (the repository tree): told before each write step is sent and after its final
+   * outcome, inside the job. Returns an unsubscribe function.
+   */
+  observeWrites(observer: WriteObserver): () => void {
+    this.writeObservers.add(observer);
+    return () => this.writeObservers.delete(observer);
+  }
+
+  /**
+   * One governed READ for the bridge's own bookkeeping (the repository tree's passes and its re-reads after writes),
+   * through the project's governor at the given priority. It is the system's own work, not an agent's: not put to the
+   * policy gate, not queued as a job when the budget is slow (a long wait throws `BudgetExhaustedError` with
+   * `retryAtMs`, and the caller decides how to wait), and not recorded as a job. LegendKeeper errors are recorded in
+   * the errors table (a 404 is not, with `notFoundIsAnswer`). Throws only `JobsError` subclasses.
+   */
+  async internalRead(
+    projectId: string,
+    opId: string,
+    params: OpParams,
+    opts: InternalReadOptions,
+  ): Promise<unknown> {
+    const project = this.requireProject(projectId);
+    const def = this.validate(opId, params);
+    if (isWriteOp(def)) {
+      throw new InvalidParamsError(opId, [{ path: 'op', message: 'internalRead only reads' }]);
+    }
+    try {
+      return await callOp(this.clientOf(project), def, params, {
+        priority: opts.priority,
+        jobId: opts.jobId,
+        signal: opts.signal,
+        requestIdPrefix: `lkb.t${randomBytes(6).toString('hex')}`,
+        onError: (err) => {
+          if (opts.notFoundIsAnswer && isNotFound(err)) return;
+          this.recordLkError(err, {
+            projectId: project,
+            opId: def.operationId,
+            ...(opts.jobId !== undefined ? { jobId: opts.jobId } : {}),
+            ...(opts.stepNo !== undefined ? { stepNo: opts.stepNo } : {}),
+            principalId: SYSTEM_PRINCIPAL.principalId,
+            profile: SYSTEM_PRINCIPAL.profile,
+          });
+        },
+      });
+    } catch (e) {
+      if (e instanceof BudgetWaitError)
+        throw new BudgetExhaustedError(def.operationId, e.tier, e.retryAtMs, e);
+      if (e instanceof BridgeLkError) throw new LkOperationError(e);
+      if (e instanceof JobsError) throw e;
+      throw new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), {}, { cause: e });
+    }
+  }
+
+  private writeInfo(job: JobView, step: StepView): WriteStepInfo | null {
+    if (this.writeObservers.size === 0 || step.opKind === 'read') return null;
+    let params: OpParams;
+    try {
+      params = this.repo.stepParams(step);
+    } catch {
+      return null;
+    }
+    return {
+      projectId: job.projectId,
+      jobId: job.id,
+      stepNo: step.stepNo,
+      opId: step.opId,
+      params,
+      priority: job.priority,
+    };
+  }
+
+  private notifyBeforeWrite(info: WriteStepInfo | null): void {
+    if (!info) return;
+    for (const o of [...this.writeObservers]) {
+      try {
+        o.beforeWrite?.(info);
+      } catch (e) {
+        this.log.warn({ err: e, jobId: info.jobId, stepNo: info.stepNo }, 'a write observer failed');
+      }
+    }
+  }
+
+  private async notifyAfterWrite(
+    info: WriteStepInfo | null,
+    outcome: StepOutcome,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (!info || (outcome.kind !== 'succeeded' && outcome.kind !== 'failed')) return;
+    const result = {
+      ...info,
+      outcome: outcome.kind,
+      uncertain: outcome.kind === 'failed' && outcome.uncertain,
+      value: outcome.kind === 'succeeded' ? outcome.value : undefined,
+      signal,
+    };
+    for (const o of [...this.writeObservers]) {
+      try {
+        await o.afterWrite?.(result);
+      } catch (e) {
+        this.log.warn({ err: e, jobId: info.jobId, stepNo: info.stepNo }, 'a write observer failed');
+      }
     }
   }
 
@@ -930,9 +1042,13 @@ export class JobEngine {
       }
       entry.current = new AbortController();
       this.repo.updateJob(jobId, { currentStep: step.stepNo });
+      const writeInfo = this.writeInfo(job, step);
+      this.notifyBeforeWrite(writeInfo);
       const outcome = await this.executor.execute(job, step, entry.current.signal, {
         storeResult: job.kind !== 'paginate_all',
       });
+      // v2 A2: the repository tree re-reads what the write changed, in this job, before it moves on.
+      await this.notifyAfterWrite(writeInfo, outcome, entry.current.signal);
       if (outcome.kind !== 'aborted' && outcome.kind !== 'held') last = outcome;
       if (outcome.kind === 'succeeded') values.push(outcome.value);
       switch (outcome.kind) {

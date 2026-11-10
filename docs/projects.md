@@ -43,7 +43,7 @@ Every MCP tool takes an optional `project` (a name, any case, or a LegendKeeper 
 - **Project switcher** (top bar): Overview, Jobs, Errors, Budgets, Journal, Proposals and Mappings show the selected project. The choice is kept per browser. Job, proposal and error actions act within the page's project; another project's ids are "not found".
 - **Budgets**: one project's tiers and history, and every project's side by side.
 - **Writers**: the pool is shared, so it shows every project's writes, each with its project.
-- **Projects page**: every project with its flags (default, sandbox, read-only), its LegendKeeper id and name, whether its key is configured (the variable's name) and valid, its status and reason, when it was last verified, and its settings (read-only in this release). **Read-only** can be switched per project here (with a confirmation; audited as `project.set_read_only`). **Check again** re-runs a project's start-up check (audited as `project.verify`).
+- **Projects page**: every project with its flags (default, sandbox, read-only), its LegendKeeper id and name, whether its key is configured (the variable's name) and valid, its status and reason, when it was last verified, and its settings (editable since v2 A2, audited). **Read-only** can be switched per project here (with a confirmation; audited as `project.set_read_only`). **Check again** re-runs a project's start-up check (audited as `project.verify`).
 
 Clients, policy and settings pages are bridge-wide: a connection's profile and scope apply to every project.
 
@@ -67,11 +67,23 @@ The scripts then take `--project test` and refuse any project not marked (`deplo
 
 ## Project settings
 
-Stored as JSON on the project row and read through `projectSetting()` (`src/projects/settings.ts`): `aiRepositoryRootId`, `charactersRootId`, `chronologyResourceId`, `templateIds`. Later v2 sessions read them; this release shows them read-only.
+Stored as JSON on the project row and read through `projectSetting()` (`src/projects/settings.ts`): `aiRepositoryRootId`, `charactersRootId`, `chronologyResourceId`, `templateIds`, and (v2 A2) the repository tree's `treePropertiesName`, `treeReferenceTypeRow`, `treeScopeRow`, `treeIndexScopeRow`, `treeCanonicalNameRow` and `treeSweepEnabled` ([tree.md](tree.md#settings-per-project)).
+
+**Editing (v2 A2).** Every setting but `templateIds` can be changed, one key at a time, on the Projects page (audited as `project.set_setting`, with the old and new value) or from the server's shell:
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- settings test
+```
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- set test aiRepositoryRootId h0gczxh7
+```
+
+`-` as the value clears a setting (its default applies again). Values are validated (a resource id must look like one; names are 1 to 256 characters; the sweep switch is `on` or `off`). The running bridge reads the tree settings from the database each time, so a change from the shell applies without a restart.
 
 ## Data
 
-Every table holding LegendKeeper data has a required `project_id` (migration 0600): jobs and their steps and artefacts, errors, budget samples, the write journal and its targets, proposals and their operations, governor counters, maintenance runs (`*` for a bridge-wide run) and mapping sets with their rules and field maps. Child rows reference their parent by `(id, project_id)`. In code, every query takes a project id or the explicit `ALL_PROJECTS` value.
+Every table holding LegendKeeper data has a required `project_id` (migration 0600; the repository tree's tables, migration 0700, too): jobs and their steps and artefacts, errors, budget samples, the write journal and its targets, proposals and their operations, governor counters, maintenance runs (`*` for a bridge-wide run) and mapping sets with their rules and field maps. Child rows reference their parent by `(id, project_id)`. In code, every query takes a project id or the explicit `ALL_PROJECTS` value.
 
 ## One bridge process per project
 

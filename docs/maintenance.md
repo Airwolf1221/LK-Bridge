@@ -18,12 +18,20 @@ its last run (time, outcome, duration, engine job id) and next run. The schedule
 | `proposal-expiry`        | every 5 minutes         | `ProposalService.expireDue()`. The service's own timer is switched off (see below). The interval follows `POLICY_EXPIRY_SWEEP_SECONDS`.                                                                                                        |
 | `proposal-prune`         | daily at 03:45 (London) | `ProposalService.pruneFinished()` (v1.0.1): deletes `executed`, `rejected`, `expired` and `failed` proposals that finished more than `POLICY_PROPOSAL_RETENTION_DAYS` (90) days ago, with their operations and stored before-state. See below. |
 | `sqlite-optimise`        | weekly (every 7 days)   | `PRAGMA optimize` and a passive WAL checkpoint.                                                                                                                                                                                                |
+| `tree-sweep`             | hourly                  | v2 A2, per project: the repository tree's structural sweep ([tree.md](tree.md)). Skips a project whose tree is not configured or not built, or whose sweep is switched off.                                                                    |
+| `tree-check`             | daily at 02:30 (London) | v2 A2, per project: the repository tree's daily consistency check, every page's properties included ([tree.md](tree.md)).                                                                                                                      |
 | `assign-block-ids-sweep` | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
-| `tree-snapshot`          | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
 | `orphan-and-link-audit`  | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
 | `tag-audit`              | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
 
-**Projects (v2 A1).** Each job has a _scope_. A **bridge-wide** job runs once for the whole bridge: all five implemented
+**v2 A2.** Chunk 6's `tree-snapshot` placeholder became the real `tree-sweep` and `tree-check` jobs (migration 0700
+removes its old rows). Both are per project, call LegendKeeper at P3 through the tree service's governed reads (the
+engine's `internalRead`; a long budget wait is waited out), and are **background** jobs: a full pass takes minutes, so
+their scheduled runs go alongside the other jobs instead of holding up the scheduler (the 10-second sampler keeps
+sampling during a nightly check). A run that decided not to work (tree not configured, not built, sweep switched off,
+a pass already running) is recorded as **skipped** with the reason, and is not recorded as a job.
+
+**Projects (v2 A1).** Each job has a _scope_. A **bridge-wide** job runs once for the whole bridge: the first five implemented
 jobs are bridge-wide (`budget-sampler` stores one snapshot per project, from each project's own governor;
 `journal-prune`, `proposal-expiry`, `proposal-prune` and `sqlite-optimise` cover every project's rows). Their runs are
 recorded with project `*` and are **not** engine jobs (an engine job belongs to one project). A **per-project** job (the
@@ -37,7 +45,7 @@ A placeholder found enabled in the database is switched off at start-up.
 ## How the scheduler behaves
 
 - **Persistence.** Enabled flags, edited schedules, last runs and next runs are in `maintenance_jobs`; run history
-  (the last 50 per job, `MAINTENANCE_HISTORY_RUNS`) is in `maintenance_runs`. A new install enables the five implemented
+  (the last 50 per job, `MAINTENANCE_HISTORY_RUNS`) is in `maintenance_runs`. A new install enables the implemented
   jobs, with their next run one interval (or the next daily time) away. A job a release adds (such as `proposal-prune`
   in v1.0.1) is registered the same way on an existing install, at its first start after the upgrade.
 - **No backlog.** A next run is always computed from _now_, never from a missed slot. After a restart a job that is
@@ -52,19 +60,21 @@ A placeholder found enabled in the database is switched off at start-up.
   **P3**, with the `system` principal and an origin `{ kind: 'maintenance', client: 'maintenance', tool: <job id>,
 detail: <name> }`, so the governor's P3 floor (default: keep 50% of each tier) applies and the policy gate treats it
   as internal work. A job that calls LegendKeeper (`usesLk`) also waits while P1 or P2 work is queued (looking again
-  after `MAINTENANCE_DEFER_SECONDS`, 15 s); that wait is not recorded as a skip. The five implemented jobs touch only
+  after `MAINTENANCE_DEFER_SECONDS`, 15 s); that wait is not recorded as a skip. The five bridge-wide jobs touch only
   the bridge's own database, so they are not held back (the sampler would otherwise leave gaps in the sparklines
   exactly when the budget is busiest).
 - **Skipped, and the skip recorded.** A job that **writes to LegendKeeper** (`writes`) is skipped, with the reason on
   its last run and in its history, while read-only mode is on or writes are paused, and while the bridge is draining.
-  None of the five implemented jobs writes to LegendKeeper (`journal-prune`, `proposal-prune` and `sqlite-optimise` write only the bridge's
+  None of the implemented jobs writes to LegendKeeper (the tree jobs only read) (`journal-prune`, `proposal-prune` and `sqlite-optimise` write only the bridge's
   own database, so they keep running under read-only mode); the rule is exercised by a test job and applies to
   `assign-block-ids-sweep` when it is built.
 - **Runs are jobs** (per-project jobs only, since v2 A1). A per-project run is recorded as an engine job in its project
   (origin `maintenance`, priority P3, visible on the Jobs page and linked from the last-run column) when its record
-  policy says so. Bridge-wide runs (all five implemented jobs) are in the run history only. Every run, recorded as a job
+  policy says so. Bridge-wide runs (the five bridge-wide jobs) are in the run history only; the tree jobs' runs are jobs of their
+  project when they failed or (the check, always) did their work. Every run, recorded as a job
   or not, is in the run history.
-- **One timer.** The scheduler arms a single timer for the earliest due job, on the engine's clock.
+- **One timer.** The scheduler arms a single timer for the earliest due job, on the engine's clock. Due jobs run one
+  after another, except **background** jobs (v2 A2: `tree-sweep`, `tree-check`), whose runs go alongside.
 
 ## `proposal-prune` (v1.0.1)
 
@@ -118,4 +128,5 @@ for ever.
 
 Add a `MaintenanceJobDef` to `builtinJobs` (`src/maintenance/jobs.ts`), set `implemented: true`, give it a `run`, and say
 whether it `writes` and `usesLk`. Reach LegendKeeper only through `ctx.run(op, params)`: it is P3 and governed. Never call
-`lk` directly from a job.
+`lk` directly from a job. A job that runs for minutes sets `background: true`; a run may return `skipped: true` with its
+reason. (The tree jobs reach LegendKeeper through the tree service, which reads through the engine at P3 too.)

@@ -3,6 +3,7 @@ import { JobsError } from '../jobs/index.js';
 import { MaintenanceError } from '../maintenance/scheduler.js';
 import { MappingError } from '../mappings/types.js';
 import { PolicyError } from '../policy/index.js';
+import { TreeError } from '../tree/index.js';
 
 /** An error with an HTTP status, for admin routes. The body is always `{ error: { code, message } }`. */
 export class AdminHttpError extends Error {
@@ -51,6 +52,14 @@ const MAPPING_STATUS: Readonly<Record<string, number>> = {
   NOT_OWNER: 403,
 };
 
+// v2 A2: repository tree errors are all "not now" conflicts.
+const TREE_STATUS: Readonly<Record<string, number>> = {
+  NOT_CONFIGURED: 409,
+  PASS_RUNNING: 409,
+  NOTHING_TO_CONFIRM: 409,
+  NOTHING_TO_CANCEL: 409,
+};
+
 const JOBS_STATUS: Readonly<Record<string, number>> = {
   JOB_NOT_FOUND: 404,
   INVALID_CONTROL: 409,
@@ -67,6 +76,12 @@ export function describeError(err: unknown): { status: number; body: { error: Re
   if (err instanceof PolicyError) {
     return {
       status: POLICY_STATUS[err.code] ?? 400,
+      body: { error: { code: err.code, message: err.message } },
+    };
+  }
+  if (err instanceof TreeError) {
+    return {
+      status: TREE_STATUS[err.code] ?? 409,
       body: { error: { code: err.code, message: err.message } },
     };
   }

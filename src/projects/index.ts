@@ -18,10 +18,13 @@ export { StaticProjects, type StaticProject } from './static.js';
 export { InstanceGuard, InstanceLockError, type InstanceGuardOptions } from './instance.js';
 export {
   PROJECT_SETTING_KEYS,
+  SettingValueError,
+  parseSettingValue,
   parseProjectSettings,
   projectSetting,
   projectSettingsSchema,
   type ProjectSettings,
+  type SettingKind,
 } from './settings.js';
 export {
   ALL_PROJECTS,

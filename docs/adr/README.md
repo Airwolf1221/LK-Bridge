@@ -28,3 +28,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0022](0022-markdown-converter.md)                     | The Markdown converter (v2 session B1)                                                | Accepted |
 | [0023](0023-project-model.md)                          | Several LegendKeeper projects in one bridge; exactly one bridge process per project   | Accepted |
 | [0024](0024-env-sync.md)                               | env-sync keeps the env file in step with the template; the deploy checks itself first | Accepted |
+| [0025](0025-repository-tree.md)                        | The repository tree: observation order, per-project serialisation                     | Accepted |

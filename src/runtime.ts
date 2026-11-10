@@ -27,6 +27,7 @@ import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
+import { createTree, type TreeService } from './tree/index.js';
 import {
   InstanceGuard,
   ProjectSelector,
@@ -59,6 +60,8 @@ export interface Runtime {
   readonly maintenance: Maintenance;
   /** Repository mappings: data model and owner commands (chunk 6). */
   readonly mappings: Mappings;
+  /** v2 A2: the repository tree of each project's AI REPOSITORY (build, after-write updates, sweep, check, queries). */
+  readonly tree: TreeService;
   readonly tools: readonly McpToolProvider[];
   readonly instructions: string;
   /** The configuration the components were built from: the environment plus the dashboard's stored settings. */
@@ -176,6 +179,18 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // Follows approved proposals' jobs, reconciles proposals left mid-approval by a crash, runs the expiry sweep.
   const detachPolicy = policy.attach(engine);
 
+  // v2 A2: the repository tree. It follows the engine's writes (a re-read after each write that can change the tree,
+  // in the same job), resumes a build a restart interrupted, and runs the sweep and check for the scheduler.
+  const tree = createTree({
+    db: o.db,
+    engine,
+    projects,
+    clock: o.clock ?? systemClock,
+    log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  tree.attach();
+  tree.start();
+
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
   const maintenance = createMaintenance({
@@ -188,6 +203,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     expirySweepMs: policySettings.expirySweepMs,
     proposalRetentionMs: policySettings.proposalRetentionMs,
     log: { warn: (obj, msg) => log.warn(obj, msg) },
+    tree,
   });
   maintenance.start();
   const mappings = createMappings({
@@ -223,11 +239,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     policy,
     maintenance,
     mappings,
+    tree,
     tools,
     instructions: BRIDGE_INSTRUCTIONS,
     config,
     envConfig,
     async shutdown(drainTimeoutMs = 20_000) {
+      // A build resumes at the next start; a sweep or check in flight ends as interrupted. Writes are still followed
+      // while the engine drains, so their re-reads are made (or owed) before the tree stops.
+      await tree.stopPasses();
       await maintenance.stop(); // stops cleanly, before the engine and database wind down
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
@@ -239,6 +259,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       clearTimeout(timer);
       detachPolicy();
       await engine.stop();
+      await tree.stop();
       projects.close(); // every governor saves its counts
       guard?.release();
     },

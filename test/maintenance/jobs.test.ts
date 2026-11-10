@@ -198,12 +198,8 @@ describe('placeholders', () => {
       const v = m.maintenance.scheduler.get(id);
       expect(v).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
     }
-    expect(PLACEHOLDER_IDS).toEqual([
-      'assign-block-ids-sweep',
-      'tree-snapshot',
-      'orphan-and-link-audit',
-      'tag-audit',
-    ]);
+    // v2 A2: `tree-snapshot` became the real `tree-sweep` and `tree-check` jobs.
+    expect(PLACEHOLDER_IDS).toEqual(['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit']);
   });
 });
 

@@ -5,6 +5,7 @@ import type { ProjectRegistry } from '../projects/index.js';
 import type { Maintenance } from '../maintenance/index.js';
 import type { Mappings } from '../mappings/index.js';
 import type { Policy } from '../policy/index.js';
+import type { TreeService } from '../tree/index.js';
 
 /**
  * What the admin API needs from the running bridge. `Runtime` (src/runtime.ts) satisfies it; tests may build their own.
@@ -18,6 +19,8 @@ export interface AdminRuntime {
   readonly maintenance: Maintenance;
   /** Repository mappings store and owner commands (chunk 6). */
   readonly mappings: Mappings;
+  /** v2 A2: the repository tree of each project. */
+  readonly tree: TreeService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */
