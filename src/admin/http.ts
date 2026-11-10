@@ -4,6 +4,8 @@ import { MaintenanceError } from '../maintenance/scheduler.js';
 import { MappingError } from '../mappings/types.js';
 import { PolicyError } from '../policy/index.js';
 import { TreeError } from '../tree/index.js';
+import { ProjectChangeError } from '../projects/registry.js';
+import { SecretStoreError } from '../secrets/store.js';
 
 /** An error with an HTTP status, for admin routes. The body is always `{ error: { code, message } }`. */
 export class AdminHttpError extends Error {
@@ -60,6 +62,23 @@ const TREE_STATUS: Readonly<Record<string, number>> = {
   NOTHING_TO_CANCEL: 409,
 };
 
+// OPS2: managing projects and their keys.
+const PROJECT_CHANGE_STATUS: Readonly<Record<string, number>> = {
+  INVALID_NAME: 400,
+  NAME_TAKEN: 409,
+  ALREADY_SERVED: 409,
+  RESTORE_UNDER_NAME: 409,
+  NOT_FOUND: 404,
+  NOT_REGISTERED: 409,
+  KEY_WRONG_PROJECT: 409,
+  STORE_UNAVAILABLE: 503,
+  KEY_REFUSED: 422,
+  PAID_PLAN_REQUIRED: 422,
+  KEY_SEES_SEVERAL: 422,
+  KEY_CHECK_FAILED: 422,
+  LK_UNREACHABLE: 502,
+};
+
 const JOBS_STATUS: Readonly<Record<string, number>> = {
   JOB_NOT_FOUND: 404,
   INVALID_CONTROL: 409,
@@ -77,6 +96,20 @@ export function describeError(err: unknown): { status: number; body: { error: Re
     return {
       status: POLICY_STATUS[err.code] ?? 400,
       body: { error: { code: err.code, message: err.message } },
+    };
+  }
+  if (err instanceof ProjectChangeError) {
+    return {
+      status: PROJECT_CHANGE_STATUS[err.code] ?? 409,
+      body: { error: { code: err.code, message: err.message } },
+    };
+  }
+  if (err instanceof SecretStoreError) {
+    return {
+      status: err.code === 'UNAVAILABLE' ? 503 : 409,
+      body: {
+        error: { code: err.code === 'UNAVAILABLE' ? 'STORE_UNAVAILABLE' : err.code, message: err.message },
+      },
     };
   }
   if (err instanceof TreeError) {

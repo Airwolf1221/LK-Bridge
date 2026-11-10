@@ -40,6 +40,7 @@ import { type BridgeInfo, type McpToolProvider, bridgeInfoStub } from './mcp/ser
 import { mcpMaxBodyBytes, mcpTransportPlugin } from './mcp/transport.js';
 import { type Policy, createPolicy } from './policy/index.js';
 import { createRuntime, type Runtime, type RuntimeOptions } from './runtime.js';
+import type { SecretStore } from './secrets/store.js';
 
 /**
  * Composition root. Chunk 4 wires the authorization server and the MCP transport; later chunks
@@ -69,6 +70,8 @@ export interface BuildServerOptions {
   readonly pruneIntervalMs?: number;
   /** The policy layer (profiles, scopes, proposals). Defaults to one on `db`, without a job engine attached. */
   readonly policy?: Policy;
+  /** OPS2: the encrypted secret store (the owner's credentials live there). Without it, the env file's values only. */
+  readonly secrets?: SecretStore;
   /** The dashboard and its admin API (chunk 5). Without it, `/ui` and `/api/admin` do not exist. */
   readonly admin?: {
     readonly runtime: AdminRuntime;
@@ -169,8 +172,13 @@ export async function buildServer(
     db: o.db,
     log: app.log,
     profiles: policy.consent,
+    ...(o.secrets ? { secrets: o.secrets } : {}),
     ...o.authOverrides,
   });
+  // OPS2: the owner's credentials imported from the env file at this start, audited by name only.
+  for (const variable of services.importedCredentials) {
+    policy.store.audit('system', 'owner.credential_import', variable);
+  }
   await app.register(authPlugin, {
     services,
     ...(o.pruneIntervalMs !== undefined ? { pruneIntervalMs: o.pruneIntervalMs } : {}),
@@ -271,6 +279,7 @@ export async function createBridge(
     instructions: runtime.instructions,
     mcpMaxBodyBytes: mcpMaxBodyBytes(o.toolsSettings.upload.maxBytes),
     policy: runtime.policy,
+    secrets: runtime.secrets,
     admin: {
       runtime,
       ...(o.adminSettings ? { settings: o.adminSettings } : {}),

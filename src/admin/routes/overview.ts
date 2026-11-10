@@ -9,8 +9,8 @@ const ACTIVE = ['queued', 'running', 'waiting_budget', 'waiting_lock', 'paused']
 
 export const registerOverview: Register = (api, ctx) => {
   const { deps, now } = ctx;
-  const { engine, projects, policy } = deps.runtime;
-  const { owner, config } = deps.services;
+  const { engine, projects, policy, secrets } = deps.runtime;
+  const { owner, config, credentials } = deps.services;
 
   /** Who is signed in, and the two tokens the dashboard needs: CSRF for its requests, and for the sign-out form. */
   api.get('/session', (req) => {
@@ -23,6 +23,7 @@ export const registerOverview: Register = (api, ctx) => {
       logoutPath: '/oauth/logout',
       version: deps.version,
       publicUrl: config.publicUrl,
+      totpEnabled: credentials.totpRequired(),
     };
   });
 
@@ -91,6 +92,29 @@ export const registerOverview: Register = (api, ctx) => {
             gauges: headline.map((t) => budget.snapshot.tiers[t]),
           }
         : null,
+      // OPS2: keys can now be changed from here, so the owner's own sign-in matters more: the page recommends the
+      // authenticator strongly while it is off, and shows any secret-store problem and env/store key differences.
+      security: (() => {
+        const store = secrets.state();
+        return {
+          totpEnabled: credentials.totpRequired(),
+          canManageKeys: projects.canManageKeys,
+          storeProblem: store.problem,
+          warnings: [
+            ...credentials.warnings(),
+            ...projects.notes,
+            ...projects
+              .list()
+              .filter((p) => p.keyConflict !== null)
+              .map((p) => `${p.name}: ${p.keyConflict}`),
+            ...(store.underPrevious > 0
+              ? [
+                  `${store.underPrevious} secret(s) are still sealed with the previous master key: run the rotation command (runbook, "Rotating the master key").`,
+                ]
+              : []),
+          ],
+        };
+      })(),
     };
   });
 

@@ -32,7 +32,8 @@ describe('parseTemplate', () => {
     const kinds = Object.fromEntries(t.vars.map((v) => [v.name, v.marker.kind]));
     expect(kinds.SESSION_SECRET).toBe('generate');
     expect(kinds.OWNER_PASSWORD_HASH).toBe('secret');
-    expect(kinds.LK_PROJECT_TEST_API_KEY).toBe('secret');
+    expect(kinds.SECRETS_MASTER_KEY).toBe('generate');
+    expect(kinds.LK_PROJECTS).toBe('optional');
     expect(kinds.BRIDGE_PUBLIC_URL).toBe('default');
     expect(kinds.MAINTENANCE_ENABLED).toBe('optional');
   });
@@ -186,10 +187,37 @@ describe('planSync: the project variables (v2 A1)', () => {
     );
   });
 
-  it('gives a new file (neither form) the template project lines like any other', () => {
+  it('gives a new file (neither form) the template project lines like any other: commented out (OPS2)', () => {
     const p = plan(shipped, '');
-    expect(p.add).toEqual(expect.arrayContaining(['LK_PROJECTS', 'LK_DEFAULT_PROJECT']));
-    expect(p.placeholders).toContain('LK_PROJECT_TEST_API_KEY');
+    expect(p.addOptional).toEqual(expect.arrayContaining(['LK_PROJECTS', 'LK_DEFAULT_PROJECT']));
+    expect(p.text).toMatch(/^# LK_PROJECTS=$/m);
+    // No project key placeholder, so no ACTION NEEDED for a project a new install may never have.
+    expect(p.placeholders.filter((n) => /^LK_PROJECT_/.test(n))).toEqual([]);
+    expect(p.generate).toContain('SECRETS_MASTER_KEY');
+    expect(Buffer.from(/^SECRETS_MASTER_KEY=(.*)$/m.exec(p.text)?.[1] ?? '', 'base64')).toHaveLength(32);
+  });
+
+  it('OPS2: a listed project whose key line is commented out (retired) or blank needs nothing; one never mentioned does', () => {
+    const live = `LK_PROJECTS=test,arkona\nLK_DEFAULT_PROJECT=test\n# LK_PROJECT_TEST_API_KEY='${KEY}'\nLK_PROJECT_ARKONA_API_KEY=\n`;
+    const p = plan(shipped, live);
+    expect(p.needs.map((n) => n.name).filter((n) => n.startsWith('LK_'))).toEqual([]);
+    expect(p.notes.join('\n')).toMatch(
+      /LK_PROJECT_TEST_API_KEY is not set: project test is served with its key from/,
+    );
+    const q = plan(shipped, 'LK_PROJECTS=test\nLK_DEFAULT_PROJECT=test\n');
+    expect(q.placeholders).toContain('LK_PROJECT_TEST_API_KEY');
+    expect(q.needs.map((n) => n.name).filter((n) => n.startsWith('LK_'))).toEqual([
+      'LK_PROJECT_TEST_API_KEY',
+    ]);
+  });
+
+  it('OPS2: a file whose LK_PROJECTS is commented out leaves the projects to the dashboard (nothing added)', () => {
+    const live = `# LK_PROJECTS=test\n# LK_PROJECT_TEST_API_KEY=x\nLK_DEFAULT_PROJECT=test\n`;
+    const p = plan(shipped, live);
+    expect(
+      [...p.add, ...p.addOptional, ...p.placeholders].filter((n) => /^LK_(PROJECT|DEFAULT)/.test(n)),
+    ).toEqual([]);
+    expect(p.needs.filter((n) => /^LK_/.test(n.name))).toEqual([]);
   });
 
   it('migrates without reading the key out: the moved line keeps its exact text', () => {
@@ -197,6 +225,101 @@ describe('planSync: the project variables (v2 A1)', () => {
     const p = plan(shipped, live, { migrateProjects: true });
     expect(p.text).toContain(`LK_PROJECT_TEST_API_KEY= "${KEY}"  \n`);
     expect(p.text.indexOf('LK_PROJECTS=test')).toBeLessThan(p.text.indexOf('LK_PROJECT_TEST_API_KEY='));
+  });
+});
+
+describe('planSync: retiring imported keys (OPS2)', () => {
+  const live = [
+    'LK_PROJECTS=test,arkona',
+    'LK_DEFAULT_PROJECT=test',
+    `LK_PROJECT_TEST_API_KEY='${KEY}'`,
+    `LK_PROJECT_ARKONA_API_KEY=${KEY2}`,
+    "OWNER_PASSWORD_HASH='$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA'",
+    '',
+  ].join('\n');
+
+  it('comments out exactly the names it is given, keeping each value text, with a note; never reads a value', () => {
+    const p = plan(shipped, live, { retireEqual: ['LK_PROJECT_TEST_API_KEY', 'OWNER_PASSWORD_HASH'] });
+    expect(p.retire).toEqual(['LK_PROJECT_TEST_API_KEY', 'OWNER_PASSWORD_HASH']);
+    expect(p.text).toMatch(
+      /^# retired by env-sync \(v9\.9\.9, 2026-11-09\): the bridge keeps LK_PROJECT_TEST_API_KEY in its encrypted store/m,
+    );
+    expect(p.text).toContain(`# LK_PROJECT_TEST_API_KEY='${KEY}'`);
+    expect(p.text).toMatch(/^LK_PROJECT_ARKONA_API_KEY=/m); // not given: untouched
+    expect(p.text).toMatch(/^LK_PROJECTS=test,arkona$/m); // arkona still keeps its key here
+    expect(p.needs.filter((n) => n.name.startsWith('LK_'))).toEqual([]);
+    const summary = summarise(p).join('\n');
+    expect(summary).toMatch(
+      /will retire \(in the encrypted store now; values are never shown\): LK_PROJECT_TEST_API_KEY, OWNER_PASSWORD_HASH/,
+    );
+    expect(summary).not.toContain(KEY);
+  });
+
+  it('retires LK_PROJECTS too once no listed project keeps a key in the file; superseded values get their own note', () => {
+    const p = plan(shipped, live, {
+      retireEqual: ['LK_PROJECT_TEST_API_KEY'],
+      retireSuperseded: ['LK_PROJECT_ARKONA_API_KEY'],
+    });
+    expect(p.text).toMatch(/^# LK_PROJECTS=test,arkona$/m);
+    expect(p.text).toMatch(
+      /LK_PROJECT_ARKONA_API_KEY is no longer in use|LK_PROJECT_ARKONA_API_KEY was replaced on the dashboard/,
+    );
+    expect(p.retire).toContain('LK_PROJECTS (no listed project keeps a key in this file)');
+    expect(p.text).toMatch(/^LK_DEFAULT_PROJECT=test$/m);
+    // Running again with the same names: nothing left to do.
+    const again = plan(shipped, p.text, {
+      retireEqual: ['LK_PROJECT_TEST_API_KEY'],
+      retireSuperseded: ['LK_PROJECT_ARKONA_API_KEY'],
+    });
+    expect(again.retire).toEqual([]);
+    expect(again.notes.join('\n')).toMatch(
+      /LK_PROJECT_TEST_API_KEY is not set in the file: nothing to retire/,
+    );
+  });
+
+  it('refuses any other name, and the single-project form', () => {
+    expect(planSync({ template: shipped, live, retireEqual: ['SESSION_SECRET'] })).toEqual({
+      error: expect.stringMatching(/refusing to retire: SESSION_SECRET cannot be retired/),
+    });
+    expect(
+      planSync({
+        template: shipped,
+        live: `LK_API_KEY=${KEY}\nLK_PROJECT_ID=p\n`,
+        retireEqual: ['OWNER_PASSWORD_HASH'],
+      }),
+    ).toEqual({ error: expect.stringMatching(/single-project form/) });
+  });
+});
+
+describe('planSync: rotating the master key (OPS2)', () => {
+  const OLD = 'TESTMASTER-0123456789-0123456789-0123456789';
+  it('moves the current key to SECRETS_MASTER_KEY_PREVIOUS (value text moved) and generates a new one', () => {
+    const p = plan(shipped, `PORT=1\nSECRETS_MASTER_KEY=${OLD}\n`, { rotateMasterKey: true });
+    expect(p.text).toContain(`SECRETS_MASTER_KEY_PREVIOUS=${OLD}\n`);
+    const fresh = /^SECRETS_MASTER_KEY=(.*)$/m.exec(p.text)?.[1] ?? '';
+    expect(fresh).toBe(Buffer.alloc(32, 7).toString('base64'));
+    expect(p.rotate).toEqual([
+      'SECRETS_MASTER_KEY -> SECRETS_MASTER_KEY_PREVIOUS (the value is moved, never shown)',
+      'generate a new SECRETS_MASTER_KEY (random; never shown)',
+    ]);
+    expect(summarise(p).join('\n')).not.toContain(OLD);
+    // A second rotation keeps the older previous key, commented out, rather than losing it.
+    const twice = plan(shipped, p.text, { rotateMasterKey: true, random: (n) => Buffer.alloc(n, 9) });
+    expect(twice.text).toContain(`# SECRETS_MASTER_KEY_PREVIOUS=${OLD}`);
+    expect(twice.text).toContain(`SECRETS_MASTER_KEY_PREVIOUS=${fresh}\n`);
+  });
+
+  it('refuses without a master key, or with two', () => {
+    expect(planSync({ template: shipped, live: 'PORT=1\n', rotateMasterKey: true })).toEqual({
+      error: expect.stringMatching(/nothing to rotate/),
+    });
+    expect(
+      planSync({
+        template: shipped,
+        live: `SECRETS_MASTER_KEY=${OLD}\nSECRETS_MASTER_KEY=${OLD}\n`,
+        rotateMasterKey: true,
+      }),
+    ).toEqual({ error: expect.stringMatching(/set more than once/) });
   });
 });
 

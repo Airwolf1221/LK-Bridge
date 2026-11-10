@@ -33,7 +33,9 @@ describe('loadConfig', () => {
   });
 
   it('rejects bad input and names variables without echoing values', () => {
-    expect(() => loadConfig({})).toThrow(/LK_API_KEY/);
+    expect(() => loadConfig({})).toThrow(/BRIDGE_PUBLIC_URL/);
+    // OPS2: projects are optional in the env file; an incomplete single-project form is still refused.
+    expect(() => loadConfig({ ...base, LK_API_KEY: '', LK_PROJECT_ID: 'proj_x' })).toThrow(/LK_API_KEY/);
     expect(() => loadConfig({ ...base, WRITERS_MAX: '9' })).toThrow(/WRITERS_MAX/);
     expect(() => loadConfig({ ...base, LK_TIER_LIMITS: '{bad' })).toThrow(/LK_TIER_LIMITS/);
     expect(() => loadConfig({ ...base, LK_TIER_LIMITS: '{"nope":1}' })).toThrow(/LK_TIER_LIMITS/);

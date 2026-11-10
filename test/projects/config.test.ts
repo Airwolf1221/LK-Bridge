@@ -14,6 +14,7 @@ const KEY_A = 'key-a-not-real';
 const KEY_B = 'key-b-not-real';
 const multi = {
   ...base,
+  SECRETS_MASTER_KEY: 'k'.repeat(44),
   LK_PROJECTS: 'arkona, Sandbox',
   LK_PROJECT_ARKONA_API_KEY: KEY_A,
   LK_PROJECT_SANDBOX_API_KEY: KEY_B,
@@ -45,6 +46,7 @@ describe('LK_PROJECTS', () => {
     expect(c.lk.singleProjectForm).toBe(false);
     expect(c.lk.requireProjectForWrites).toBe(true);
     expect(c.warnings).toEqual([]);
+    expect(c.secrets).toEqual({ masterKey: 'k'.repeat(44) });
   });
 
   it('a single listed project is the default without LK_DEFAULT_PROJECT', () => {
@@ -63,10 +65,42 @@ describe('LK_PROJECTS', () => {
     expect(projectKeyVariable('test_2')).toBe('LK_PROJECT_TEST_2_API_KEY');
   });
 
-  it('refuses a missing key, a bad or repeated name, and a missing or unlisted default, naming variables only', () => {
-    expect(issues({ ...multi, LK_PROJECT_SANDBOX_API_KEY: '' })).toMatch(
-      /LK_PROJECT_SANDBOX_API_KEY: required for project "sandbox"/,
+  it('OPS2: a listed project without an env key is a warning (its key may be in the encrypted store), never a value', () => {
+    const c = loadConfig({ ...multi, LK_PROJECT_SANDBOX_API_KEY: '' });
+    expect(c.lk.projects.map((p) => p.name)).toEqual(['arkona']);
+    expect(c.warnings.join('\n')).toMatch(
+      /LK_PROJECT_SANDBOX_API_KEY is not set: project "sandbox" is served with the key in the encrypted store/,
     );
+    expect(c.warnings.join('\n')).not.toContain(KEY_A);
+    expect(projectsFrom({ ...multi, LK_PROJECT_SANDBOX_API_KEY: '' }).listedWithoutKey).toEqual(['sandbox']);
+  });
+
+  it('OPS2: with neither form, there are no env projects (they are managed on the dashboard); a default may be named', () => {
+    const c = loadConfig({ ...base });
+    expect(c.lk.projects).toEqual([]);
+    expect(c.lk.defaultProject).toBe('');
+    expect(c.lk.singleProjectForm).toBe(false);
+    expect(loadConfig({ ...base, LK_DEFAULT_PROJECT: 'Arkona' }).lk.defaultProject).toBe('arkona');
+    expect(issues({ ...base, LK_DEFAULT_PROJECT: 'no spaces' })).toMatch(/LK_DEFAULT_PROJECT: not a valid/);
+  });
+
+  it('OPS2: reads SECRETS_MASTER_KEY leniently (a warning, never an issue), and never shows it', () => {
+    expect(loadConfig({ ...multi, SECRETS_MASTER_KEY: '' }).warnings.join('\n')).toMatch(
+      /SECRETS_MASTER_KEY is not set/,
+    );
+    const short = loadConfig({ ...multi, SECRETS_MASTER_KEY: 'short-master-key' });
+    expect(short.warnings.join('\n')).toMatch(/shorter than 32/);
+    expect(short.warnings.join('\n')).not.toContain('short-master-key');
+    const ok = loadConfig({
+      ...multi,
+      SECRETS_MASTER_KEY: 'm'.repeat(44),
+      SECRETS_MASTER_KEY_PREVIOUS: 'p'.repeat(44),
+    });
+    expect(ok.secrets).toEqual({ masterKey: 'm'.repeat(44), previousMasterKey: 'p'.repeat(44) });
+    expect(ok.warnings.join('\n')).not.toMatch(/SECRETS_MASTER_KEY/);
+  });
+
+  it('refuses a bad or repeated name, and a missing or unlisted default, naming variables only', () => {
     expect(issues({ ...multi, LK_PROJECTS: 'arkona,9lives' })).toMatch(
       /"9lives" is not a valid project name/,
     );
@@ -108,7 +142,9 @@ describe('the single-project form (v1, backwards compatible)', () => {
   });
 
   it('refuses without a key or a project id, with a bad name, or with a different default', () => {
-    expect(issues({ ...base })).toMatch(/LK_API_KEY: required \(or set LK_PROJECTS/);
+    expect(issues({ ...base, LK_PROJECT_ID: 'proj_live' })).toMatch(
+      /LK_API_KEY: required \(or set LK_PROJECTS/,
+    );
     expect(issues({ ...base, LK_API_KEY: KEY_A })).toMatch(/LK_PROJECT_ID: required/);
     expect(issues({ ...single, LK_PROJECT_NAME: 'no spaces' })).toMatch(
       /LK_PROJECT_NAME: not a valid project name/,
@@ -118,7 +154,9 @@ describe('the single-project form (v1, backwards compatible)', () => {
 
   it('projectsFrom reports issues instead of throwing', () => {
     const r = projectsFrom({ LK_PROJECTS: 'a,b', LK_PROJECT_A_API_KEY: KEY_A });
-    expect(r.issues.length).toBe(2);
+    // OPS2: b's missing key is a warning; the missing default (two listed) is the one issue.
+    expect(r.issues.length).toBe(1);
+    expect(r.warnings.join('\n')).toMatch(/LK_PROJECT_B_API_KEY is not set/);
     expect(r.projects.map((p) => p.name)).toEqual(['a']);
   });
 });

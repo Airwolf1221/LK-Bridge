@@ -5,6 +5,8 @@ import { BearerGuard } from './bearer.js';
 import { CimdFetcher } from './cimd.js';
 import { ClientAssertionVerifier, JwksCache, createJwksFetcher } from './client-assertion.js';
 import { ClientService } from './clients.js';
+import { OwnerCredentials } from './credentials.js';
+import type { SecretStore } from '../secrets/store.js';
 import { type KeyRing, deriveKeys, hashSecret, randomToken } from './crypto.js';
 import { type AuthEventLogger, createAuthEventLogger } from './events.js';
 import { type LoginLimits, OwnerAuth } from './owner.js';
@@ -139,6 +141,10 @@ export interface AuthServices {
   readonly clients: ClientService;
   readonly tokens: TokenService;
   readonly owner: OwnerAuth;
+  /** OPS2: the owner's password hash, authenticator secret and recovery codes (encrypted store, or the env file). */
+  readonly credentials: OwnerCredentials;
+  /** OPS2: the owner's env variables imported into the encrypted store at this start (names only). */
+  readonly importedCredentials: readonly string[];
   readonly pats: PatService;
   readonly bearer: BearerGuard;
   readonly consents: PendingConsents;
@@ -164,6 +170,11 @@ export interface CreateAuthServicesOptions {
   readonly registrationLimit?: { readonly limit: number; readonly windowMs: number };
   /** The policy layer's consent hooks (profiles and scopes). */
   readonly profiles?: ConsentProfiles;
+  /**
+   * OPS2: the encrypted secret store. With it, the owner's credentials live there (imported from the env file once);
+   * without it (tests of the auth surface alone), the env file's values are used, as in v1.
+   */
+  readonly secrets?: SecretStore;
 }
 
 export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
@@ -198,12 +209,22 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
   });
   const clients = new ClientService({ store, config, cimd, assertions, event, now });
   const tokens = new TokenService({ store, config, keys, event, now });
+  const credentials = new OwnerCredentials({
+    db: o.db,
+    store: o.secrets,
+    env: { passwordHash: config.owner.passwordHash, totpSecret: config.owner.totpSecret },
+    now,
+  });
+  // OPS2: OWNER_PASSWORD_HASH and OWNER_TOTP_SECRET move into the encrypted store on the first start with a master key.
+  const imported = credentials.importFromEnv();
+  if (imported.length > 0) event('secrets.imported', { variables: imported.join(',') });
   const owner = new OwnerAuth({
     store,
     config,
     keys,
     event,
     now,
+    credentials,
     ...(o.loginLimits ? { limits: o.loginLimits } : {}),
   });
   const profiles = o.profiles;
@@ -224,6 +245,8 @@ export function createAuthServices(o: CreateAuthServicesOptions): AuthServices {
     clients,
     tokens,
     owner,
+    credentials,
+    importedCredentials: imported,
     pats,
     bearer,
     consents: new PendingConsents(config.ttl.consentSeconds, now),

@@ -9,18 +9,28 @@
  *   that project: it is not served, the reason shows on the dashboard and in the log. The others keep working.
  * - When LegendKeeper cannot be asked (unreachable, 5xx, budget), the project is `unverified` and checked again with a
  *   growing delay (15 s up to 10 minutes). It is not served meanwhile.
- * Keys are never logged, stored or shown: only the name of the variable that holds one.
+ * Keys are never logged or shown: only the name of the variable that holds one, or the last four characters.
+ *
+ * OPS2 (ADR 0028): keys live in the encrypted secret store. The projects served are those listed in the env file plus
+ * those stored (and not archived) with a key in the store. An env key is imported into the store once (by name in the
+ * log); when the env file and the store disagree, the stored key wins and the project shows the conflict. Projects are
+ * added, given a new key, drained and removed (archived) at runtime from the dashboard, without a restart: each added
+ * project gets its own governor at once; a replaced key keeps the project's governor, so its counts (the project tier
+ * above all, which every key of the project shares) carry on.
  */
-import type { Config, ProjectKeyConfig } from '../config/index.js';
+import { safeEqual } from '../auth/crypto.js';
+import { PROJECT_NAME_PATTERN, type Config, type ProjectKeyConfig } from '../config/index.js';
 import { lkSettingsFor } from '../config/lk.js';
 import type { Db } from '../db/open.js';
 import { callOp } from '../jobs/lk-call.js';
 import { BridgeLkError, BudgetWaitError } from '../lk/errors.js';
 import { createLkClient, type LkClient } from '../lk/client.js';
 import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
-import type { Transport } from '../lk/governor/governor.js';
+import type { Governor, Transport } from '../lk/governor/governor.js';
 import { createSqliteCounterStore } from '../lk/governor/persist.js';
 import { requireOperation } from '../lk/registry.js';
+import { keyHint } from '../secrets/crypto.js';
+import type { SecretStore } from '../secrets/store.js';
 import type { SelectableProjects } from './selection.js';
 import { ProjectStore } from './store.js';
 import type { ProjectRecord, ProjectStatus, ProjectView } from './types.js';
@@ -51,6 +61,46 @@ export interface ProjectsRuntime {
   activeIds(): string[];
   /** Calls `cb` whenever a project's status or flags change. Returns an unsubscribe function. */
   onChange(cb: (view: ProjectView) => void): () => void;
+  /**
+   * OPS2: why the project takes no NEW work now although it is served (paused and draining before its removal), or
+   * null. Work already queued or running carries on.
+   */
+  admissionRefusal?(projectId: string): string | null;
+}
+
+/** OPS2: what a candidate key proved (the bridge asks LegendKeeper before anything is stored). */
+export interface KeyProbe {
+  /** The LegendKeeper project id the key belongs to. */
+  readonly id: string;
+  readonly displayName: string | null;
+  /** From listMembers: LegendKeeper shows member emails to ADMIN keys only. */
+  readonly role: 'ADMIN' | 'MEMBER' | 'unknown';
+}
+
+export type ProjectChangeCode =
+  | 'INVALID_NAME'
+  | 'NAME_TAKEN'
+  | 'ALREADY_SERVED'
+  | 'RESTORE_UNDER_NAME'
+  | 'NOT_FOUND'
+  | 'NOT_REGISTERED'
+  | 'KEY_WRONG_PROJECT'
+  | 'STORE_UNAVAILABLE'
+  | 'KEY_REFUSED'
+  | 'PAID_PLAN_REQUIRED'
+  | 'KEY_SEES_SEVERAL'
+  | 'LK_UNREACHABLE'
+  | 'KEY_CHECK_FAILED';
+
+/** OPS2: a refused project change or key check. The message never contains a key. */
+export class ProjectChangeError extends Error {
+  override readonly name = 'ProjectChangeError';
+  constructor(
+    readonly code: ProjectChangeCode,
+    message: string,
+  ) {
+    super(message);
+  }
 }
 
 export interface CreateProjectRegistryOptions {
@@ -65,10 +115,22 @@ export interface CreateProjectRegistryOptions {
   readonly persistCounters?: boolean;
   /** First and largest delay before an `unverified` project is checked again. */
   readonly retryMs?: { readonly first: number; readonly max: number };
+  /**
+   * OPS2: the encrypted secret store holding each project's key. Without it (tools and tests that pass keys directly)
+   * the env file's keys are the only ones, as in v2 A1, and projects cannot be added or re-keyed at runtime.
+   */
+  readonly secrets?: SecretStore;
 }
 
 interface Entry {
-  readonly config: ProjectKeyConfig;
+  /** The key in use is `config.apiKey` (from the store when one is stored, else from the env file). */
+  config: ProjectKeyConfig;
+  source: 'env' | 'store';
+  keyHint: string | null;
+  keyConflict: string | null;
+  /** Why this project cannot be served at all (its stored key cannot be read); the check stops it with this. */
+  blocked: string | null;
+  draining: boolean;
   id: string | null;
   client: LkClient | null;
   status: ProjectStatus;
@@ -82,41 +144,82 @@ interface Entry {
 
 export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
   readonly store: ProjectStore;
-  readonly defaultName: string;
   private readonly entries = new Map<string, Entry>();
   private readonly clock: Clock;
   private readonly log: RegistryLogger;
   private readonly listeners = new Set<(v: ProjectView) => void>();
   private records = new Map<string, ProjectRecord>();
   private closed = false;
+  /** OPS2: keys imported from the env file at this start (names only), for the audit log. */
+  readonly imports: { readonly project: string; readonly variable: string; readonly hint: string }[] = [];
+  /** OPS2: start-up notes about the env file's project lines (names only). */
+  readonly notes: string[] = [];
 
   constructor(private readonly o: CreateProjectRegistryOptions) {
     this.clock = o.clock ?? systemClock;
     this.log = o.log ?? quiet;
     this.store = new ProjectStore(o.db, () => this.clock.now());
-    this.defaultName = o.config.lk.defaultProject;
     this.reload();
-    // The default flag follows LK_DEFAULT_PROJECT at once, even before the check (a stored project keeps its row).
-    this.store.setDefault(this.defaultName);
-    this.reload();
+    const envNames = new Set(o.config.lk.projects.map((p) => p.name));
     for (const p of o.config.lk.projects) {
       const stored = this.byName(p.name);
-      const entry: Entry = {
-        config: p,
-        id: stored?.id ?? null,
-        client: null,
-        status: 'verifying',
-        reason: 'The key has not been checked yet.',
-        keyValid: null,
-        checkedAt: null,
-        retryTimer: null,
-        retryDelay: o.retryMs?.first ?? 15_000,
-        checking: null,
-      };
+      if (stored?.archivedAt != null) {
+        const note = `${p.keyVariable ?? 'The env file'} lists project "${p.name}", which was removed on the dashboard (archived), so it is not served. Remove its lines from the env file (env-sync.sh --retire-imported-keys).`;
+        this.notes.push(note);
+        this.log.warn({ project: p.name }, note);
+        continue;
+      }
+      const entry = this.newEntry(p, 'env', stored?.id ?? null);
+      if (stored) this.adoptStoredKey(entry, stored.id);
       // A stored project gets its governor at once, so its saved counts are restored before anything is sent.
-      if (entry.id !== null) entry.client = this.newClient(p, entry.id);
+      if (entry.id !== null && entry.blocked === null) entry.client = this.newClient(entry.config, entry.id);
       this.entries.set(p.name, entry);
     }
+    // OPS2: stored projects the env file does not list, served with their key from the encrypted store.
+    for (const r of this.records.values()) {
+      if (r.archivedAt !== null || envNames.has(r.name) || !o.secrets) continue;
+      const key = o.secrets.read(r.id, 'lk_api_key');
+      if (key.ok) {
+        const entry = this.newEntry(
+          { name: r.name, apiKey: key.value, expectedProjectId: null, keyVariable: null },
+          'store',
+          r.id,
+        );
+        entry.client = this.newClient(entry.config, r.id);
+        this.entries.set(r.name, entry);
+      } else if (key.reason !== 'not_stored') {
+        const entry = this.newEntry(
+          { name: r.name, apiKey: '', expectedProjectId: null, keyVariable: null },
+          'store',
+          r.id,
+        );
+        entry.blocked = `Its key is kept in the encrypted store, which cannot be read: ${key.message}`;
+        this.entries.set(r.name, entry);
+      }
+      // Nothing stored: a project with data and no key (shown as such; "Replace key" gives it one).
+    }
+    const wanted = o.config.lk.defaultProject;
+    if (wanted && !this.entries.has(wanted)) {
+      const note = `LK_DEFAULT_PROJECT names "${wanted}", which this bridge does not serve; the stored default applies.`;
+      this.notes.push(note);
+      this.log.warn({}, note);
+    }
+    // The default flag follows LK_DEFAULT_PROJECT at once, even before the check (a stored project keeps its row).
+    if (this.defaultName) this.store.setDefault(this.defaultName);
+    this.reload();
+  }
+
+  /**
+   * The default project's name: LK_DEFAULT_PROJECT when it names a served project, else the stored default, else the
+   * first project. Empty when the bridge serves no project at all (OPS2: projects are then added on the dashboard).
+   */
+  get defaultName(): string {
+    const env = this.o.config.lk.defaultProject;
+    if (env && this.entries.has(env)) return env;
+    for (const r of this.records.values()) {
+      if (r.isDefault && r.archivedAt === null && this.entries.has(r.name)) return r.name;
+    }
+    return this.entries.keys().next().value ?? '';
   }
 
   // ============================================================================================ queries
@@ -163,9 +266,13 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     );
   }
 
-  /** The default project (LK_DEFAULT_PROJECT). */
+  /**
+   * The default project (LK_DEFAULT_PROJECT, or the stored default). With no project at all (OPS2), a placeholder with
+   * no id, whose reason says to add one on the dashboard.
+   */
   defaultProject(): ProjectView {
-    return this.view(this.entries.get(this.defaultName)!);
+    const e = this.entries.get(this.defaultName);
+    return e ? this.view(e) : NO_PROJECT;
   }
 
   client(projectId: string): LkClient | undefined {
@@ -186,15 +293,18 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
   }
 
   readOnly(projectId: string): boolean {
-    return this.records.get(projectId)?.readOnly === true;
+    const r = this.records.get(projectId);
+    return r?.readOnly === true || (r !== undefined && r.archivedAt !== null);
   }
 
   unavailableReason(projectId: string): string | null {
     const e = this.entryById(projectId);
     if (!e) {
-      return this.records.has(projectId)
-        ? `project "${this.nameOf(projectId)}" is not configured in the env file, so it is not served`
-        : `there is no project with id ${projectId}`;
+      const r = this.records.get(projectId);
+      if (!r) return `there is no project with id ${projectId}`;
+      return r.archivedAt !== null
+        ? `project "${r.name}" was removed on the dashboard (its history is kept, read-only), so it is not served`
+        : `project "${r.name}" has no key, so it is not served`;
     }
     if (e.status === 'active') return null;
     return `project "${e.config.name}" is not available (${e.status}): ${e.reason ?? 'unknown reason'}`;
@@ -202,6 +312,13 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
 
   activeIds(): string[] {
     return [...this.entries.values()].filter((e) => e.status === 'active' && e.id).map((e) => e.id!);
+  }
+
+  admissionRefusal(projectId: string): string | null {
+    const e = this.entryById(projectId);
+    return e?.draining
+      ? `project "${e.config.name}" is paused and draining before its removal, so it takes no new work (the owner can resume it on the dashboard's Projects page)`
+      : null;
   }
 
   /** Every configured project that has a governor, with its client (budget views, the budget sampler). */
@@ -247,6 +364,256 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     this.reload();
   }
 
+  // ============================================================================================ OPS2: keys at runtime
+
+  /** Whether projects can be added or re-keyed now (the encrypted store needs SECRETS_MASTER_KEY). */
+  get canManageKeys(): boolean {
+    return this.o.secrets?.available === true;
+  }
+
+  /**
+   * Asks LegendKeeper which project a candidate key belongs to and its role, through a throwaway governor of its own
+   * (two reads at P0: listProjects, then listMembers). Nothing is stored. Throws `ProjectChangeError`.
+   */
+  async probeKey(apiKey: string): Promise<KeyProbe> {
+    const cfg: ProjectKeyConfig = { name: 'new-key', apiKey, expectedProjectId: null, keyVariable: null };
+    const probe = this.newClient(cfg, '', false);
+    const prefix = `lkb.keycheck.${this.clock.now().toString(36)}`;
+    try {
+      let projects: { id?: unknown; name?: unknown }[];
+      try {
+        const r = (await callOp(
+          probe,
+          requireOperation('listProjects'),
+          {},
+          {
+            priority: 'P0',
+            requestIdPrefix: prefix,
+          },
+        )) as { data?: { id?: unknown; name?: unknown }[] } | undefined;
+        projects = Array.isArray(r?.data) ? r.data : [];
+      } catch (err) {
+        throw keyCheckError(err);
+      }
+      if (projects.length !== 1 || typeof projects[0]?.id !== 'string' || projects[0].id === '') {
+        throw new ProjectChangeError(
+          'KEY_SEES_SEVERAL',
+          `This key sees ${projects.length} LegendKeeper projects; a project key sees exactly one, its own. Create the key in the project's own settings (Developers, API keys).`,
+        );
+      }
+      const id = projects[0].id;
+      const displayName = typeof projects[0].name === 'string' ? projects[0].name.slice(0, 200) : null;
+      let role: KeyProbe['role'] = 'unknown';
+      try {
+        const scoped = this.newClient(cfg, id, false, probe.governor);
+        const m = (await callOp(
+          scoped,
+          requireOperation('listMembers'),
+          {},
+          {
+            priority: 'P0',
+            requestIdPrefix: `${prefix}.m`,
+          },
+        )) as { data?: { email?: unknown }[] } | undefined;
+        const members = Array.isArray(m?.data) ? m.data : [];
+        if (members.some((x) => typeof x?.email === 'string')) role = 'ADMIN';
+        else if (members.length > 0) role = 'MEMBER';
+      } catch {
+        role = 'unknown';
+      }
+      return { id, displayName, role };
+    } finally {
+      probe.governor.close();
+    }
+  }
+
+  /**
+   * Adds a project whose key `probeKey` has just checked: registers it (or brings back an archived project of the same
+   * LegendKeeper project, under its old name), stores the key encrypted, and starts serving it with a new governor at
+   * once. All database changes are one transaction. Throws `ProjectChangeError`.
+   */
+  addProject(input: {
+    readonly name: string;
+    readonly apiKey: string;
+    readonly probe: KeyProbe;
+  }): ProjectView {
+    const secrets = this.requireSecrets();
+    const name = input.name.trim().toLowerCase();
+    const { probe } = input;
+    if (!PROJECT_NAME_PATTERN.test(name)) {
+      throw new ProjectChangeError(
+        'INVALID_NAME',
+        'A project name is a lowercase letter, then lowercase letters, digits or underscores; at most 32 characters.',
+      );
+    }
+    this.reload();
+    const byName = this.byName(name);
+    const byId = this.records.get(probe.id);
+    if (this.entries.has(name)) {
+      throw new ProjectChangeError('NAME_TAKEN', `There is already a project called "${name}".`);
+    }
+    for (const x of this.entries.values()) {
+      if (x.id === probe.id) {
+        throw new ProjectChangeError(
+          'ALREADY_SERVED',
+          `This key belongs to LegendKeeper project ${probe.id}, which this bridge already serves as "${x.config.name}". To change that project's key, use Replace key.`,
+        );
+      }
+    }
+    if (byId && byId.name !== name) {
+      throw new ProjectChangeError(
+        byId.archivedAt !== null ? 'RESTORE_UNDER_NAME' : 'ALREADY_SERVED',
+        byId.archivedAt !== null
+          ? `This key belongs to LegendKeeper project ${probe.id}, which this bridge served before as "${byId.name}" (removed, its history kept). Add it as "${byId.name}" to bring it back.`
+          : `This key belongs to LegendKeeper project ${probe.id}, which is registered here as "${byId.name}". Use Replace key on that project.`,
+      );
+    }
+    if (byName && byName.id !== probe.id) {
+      throw new ProjectChangeError(
+        'NAME_TAKEN',
+        `The name "${name}" belongs to another LegendKeeper project${byName.archivedAt !== null ? ' (removed, its history kept)' : ''}. Choose another name.`,
+      );
+    }
+    const now = this.clock.now();
+    const hint = keyHint(input.apiKey);
+    this.o.db.transaction(() => {
+      if (!byId) this.store.insert({ id: probe.id, name, displayName: probe.displayName, verifiedAt: now });
+      else {
+        this.store.unarchive(probe.id);
+        this.store.markVerified(probe.id, probe.displayName, now);
+      }
+      secrets.write(probe.id, 'lk_api_key', input.apiKey, { source: 'dashboard', hint });
+    })();
+    this.reload();
+    const entry = this.newEntry(
+      { name, apiKey: input.apiKey, expectedProjectId: null, keyVariable: null },
+      'store',
+      probe.id,
+    );
+    entry.client = this.newClient(entry.config, probe.id);
+    this.markActive(entry, now);
+    this.entries.set(name, entry);
+    if (this.defaultName) this.store.setDefault(this.defaultName);
+    this.reload();
+    this.log.info({ project: name, lkProjectId: probe.id, keyHint: hint }, 'project added');
+    const v = this.view(entry);
+    this.emit(v);
+    return v;
+  }
+
+  /**
+   * Replaces a project's key with one `probeKey` has just checked, which must belong to the SAME LegendKeeper project.
+   * The stored key is replaced in one statement and the project's client swapped at once (new calls use the new key;
+   * a call already sent finishes with the old one). The project keeps its governor. Throws `ProjectChangeError`.
+   */
+  replaceKey(input: { readonly name: string; readonly apiKey: string; readonly probe: KeyProbe }): {
+    readonly view: ProjectView;
+    readonly oldHint: string | null;
+  } {
+    const secrets = this.requireSecrets();
+    const name = input.name.trim().toLowerCase();
+    this.reload();
+    const rec = this.byName(name);
+    if (!rec || rec.archivedAt !== null) {
+      const e = this.entries.get(name);
+      throw new ProjectChangeError(
+        e ? 'NOT_REGISTERED' : 'NOT_FOUND',
+        e
+          ? `Project "${name}" has not been verified yet, so it has no LegendKeeper id to check a key against. Fix its env key, or remove it from the env file and add it here.`
+          : `There is no project "${name}".`,
+      );
+    }
+    if (input.probe.id !== rec.id) {
+      throw new ProjectChangeError(
+        'KEY_WRONG_PROJECT',
+        `This key belongs to LegendKeeper project ${input.probe.id}, not to "${name}" (LegendKeeper project ${rec.id}). Nothing was changed. Create the new key in that project's own settings.`,
+      );
+    }
+    const e = this.entries.get(name);
+    const oldHint = e
+      ? (e.keyHint ?? keyHint(e.config.apiKey))
+      : (secrets.meta(rec.id, 'lk_api_key')?.hint ?? null);
+    const hint = keyHint(input.apiKey);
+    const now = this.clock.now();
+    this.o.db.transaction(() => {
+      secrets.write(rec.id, 'lk_api_key', input.apiKey, { source: 'dashboard', hint });
+      this.store.markVerified(rec.id, input.probe.displayName ?? rec.displayName, now);
+    })();
+    this.reload();
+    let entry = e;
+    if (!entry) {
+      entry = this.newEntry(
+        { name, apiKey: input.apiKey, expectedProjectId: null, keyVariable: null },
+        'store',
+        rec.id,
+      );
+      entry.client = this.newClient(entry.config, rec.id);
+      this.entries.set(name, entry);
+    } else {
+      const governor = entry.client?.governor;
+      entry.config = { ...entry.config, apiKey: input.apiKey, expectedProjectId: null };
+      entry.id = rec.id;
+      entry.client = this.newClient(entry.config, rec.id, true, governor);
+      entry.source = 'store';
+      entry.keyHint = hint;
+      entry.blocked = null;
+      entry.keyConflict = entry.config.keyVariable
+        ? `${entry.config.keyVariable} in the env file still holds the old key; the key stored on the dashboard is used. Retire the env line with \`env-sync.sh --retire-imported-keys\`.`
+        : null;
+    }
+    this.markActive(entry, now);
+    this.log.info({ project: name, keyHint: hint, oldKeyHint: oldHint }, 'project key replaced');
+    const v = this.view(entry);
+    this.emit(v);
+    return { view: v, oldHint };
+  }
+
+  /** OPS2: pauses a project for removal: it takes no new work; queued and running work carries on. */
+  setDraining(name: string, value: boolean): ProjectView {
+    const e = this.entries.get(name.trim().toLowerCase());
+    if (!e) throw new ProjectChangeError('NOT_FOUND', `There is no served project "${name}".`);
+    e.draining = value;
+    const v = this.view(e);
+    this.emit(v);
+    return v;
+  }
+
+  /**
+   * Removes a project: archives its row (its history stays, read-only), deletes its stored key, stops its retries and
+   * closes its governor (saving its counts). The caller has checked that nothing is pending. Throws
+   * `ProjectChangeError`.
+   */
+  removeProject(name: string): ProjectView {
+    const n = name.trim().toLowerCase();
+    this.reload();
+    const rec = this.byName(n);
+    const e = this.entries.get(n);
+    if (!rec || rec.archivedAt !== null) {
+      throw new ProjectChangeError(
+        e ? 'NOT_REGISTERED' : 'NOT_FOUND',
+        e
+          ? `Project "${n}" has never been verified, so it has no data to archive. Remove its lines from the env file instead.`
+          : `There is no project "${n}" to remove.`,
+      );
+    }
+    this.o.db.transaction(() => {
+      this.store.archive(rec.id);
+      this.o.secrets?.remove(rec.id, 'lk_api_key');
+    })();
+    if (e) {
+      if (e.retryTimer) this.clock.clearTimeout(e.retryTimer);
+      e.retryTimer = null;
+      e.client?.governor.close();
+      this.entries.delete(n);
+    }
+    if (this.defaultName) this.store.setDefault(this.defaultName);
+    this.reload();
+    this.log.info({ project: n, lkProjectId: rec.id }, 'project removed (archived)');
+    const v = this.viewById(rec.id)!;
+    this.emit(v);
+    return v;
+  }
+
   // ============================================================================================ checks
 
   /** Checks every configured project's key (in parallel). Never throws: a failure stops only that project. */
@@ -268,6 +635,10 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
   }
 
   private async check(e: Entry): Promise<void> {
+    if (e.blocked !== null) {
+      e.checkedAt = this.clock.now();
+      return this.stop(e, e.blocked);
+    }
     const p = e.config;
     // The project's own governor when its id is known; otherwise a throwaway one, only to ask which project it is.
     const probe = e.client ?? this.newClient(p, '', false);
@@ -303,29 +674,29 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     if (p.expectedProjectId !== null && p.expectedProjectId !== id) {
       return this.stop(
         e,
-        `${p.keyVariable} belongs to LegendKeeper project ${id}, not ${p.expectedProjectId} (LK_PROJECT_ID)`,
+        `${keyLabel(e)} belongs to LegendKeeper project ${id}, not ${p.expectedProjectId} (LK_PROJECT_ID)`,
       );
     }
     const stored = this.byName(p.name);
     if (stored && stored.id !== id) {
       return this.stop(
         e,
-        `${p.keyVariable} belongs to LegendKeeper project ${id}, but project "${p.name}" is LegendKeeper project ` +
-          `${stored.id} in this bridge's database. Put that project's key in ${p.keyVariable}`,
+        `${keyLabel(e)} belongs to LegendKeeper project ${id}, but project "${p.name}" is LegendKeeper project ` +
+          `${stored.id} in this bridge's database. Give it that project's key (Replace key on the Projects page)`,
       );
     }
     const other = this.records.get(id);
     if (!stored && other && other.name !== p.name) {
       return this.stop(
         e,
-        `${p.keyVariable} belongs to LegendKeeper project ${id}, which this bridge already serves as "${other.name}"`,
+        `${keyLabel(e)} belongs to LegendKeeper project ${id}, which this bridge ${other.archivedAt !== null ? 'served' : 'already serves'} as "${other.name}"${other.archivedAt !== null ? ' (removed, its history kept)' : ''}`,
       );
     }
     for (const x of this.entries.values()) {
       if (x !== e && x.id === id && x.status !== 'stopped') {
         return this.stop(
           e,
-          `${p.keyVariable} belongs to the same LegendKeeper project as "${x.config.name}" (${id}); a project can be ` +
+          `${keyLabel(e)} belongs to the same LegendKeeper project as "${x.config.name}" (${id}); a project can be ` +
             'registered once',
         );
       }
@@ -336,6 +707,8 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     else this.store.insert({ id, name: p.name, displayName, verifiedAt: now });
     if (p.name === this.defaultName) this.store.setDefault(p.name);
     this.reload();
+    // OPS2: a new env project's key moves into the encrypted store once its project id is known.
+    if (!stored && e.source === 'env') this.importEnvKey(e, id);
     if (e.id === null || e.client === null) {
       e.id = id;
       e.client = this.newClient(p, id);
@@ -353,10 +726,7 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     const status = lk?.status;
     if (status === 401 || status === 403) {
       e.keyValid = false;
-      return this.stop(
-        e,
-        `LegendKeeper refused ${e.config.keyVariable} (${status} ${lk?.code ?? ''})`.trim(),
-      );
+      return this.stop(e, `LegendKeeper refused ${keyLabel(e)} (${status} ${lk?.code ?? ''})`.trim());
     }
     if (status === 402) {
       e.keyValid = true;
@@ -405,9 +775,102 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
 
   // ============================================================================================ internals
 
-  private newClient(p: ProjectKeyConfig, projectId: string, persist = true): LkClient {
+  private newEntry(config: ProjectKeyConfig, source: 'env' | 'store', id: string | null): Entry {
+    return {
+      config,
+      source,
+      keyHint: config.apiKey ? keyHint(config.apiKey) : null,
+      keyConflict: null,
+      blocked: null,
+      draining: false,
+      id,
+      client: null,
+      status: 'verifying',
+      reason: 'The key has not been checked yet.',
+      keyValid: null,
+      checkedAt: null,
+      retryTimer: null,
+      retryDelay: this.o.retryMs?.first ?? 15_000,
+      checking: null,
+    };
+  }
+
+  /**
+   * An env project already stored: the stored key wins (with a conflict note when the env key differs); with nothing
+   * stored, the env key is imported once; a stored key that cannot be read blocks the project (never the env key
+   * instead: that one may be the old, revoked key the dashboard replaced).
+   */
+  private adoptStoredKey(e: Entry, id: string): void {
+    const secrets = this.o.secrets;
+    if (!secrets) return;
+    const r = secrets.read(id, 'lk_api_key');
+    const variable = e.config.keyVariable ?? 'the env file';
+    if (r.ok) {
+      e.source = 'store';
+      e.keyHint = keyHint(r.value);
+      if (!safeEqual(r.value, e.config.apiKey)) {
+        e.keyConflict = `${variable} in the env file is not the key in use: the key stored on the dashboard wins. Retire the env line with \`env-sync.sh --retire-imported-keys\`.`;
+        e.config = { ...e.config, apiKey: r.value };
+        this.log.warn(
+          { project: e.config.name, variable },
+          'env key differs from the stored key; the stored key is used',
+        );
+      }
+      return;
+    }
+    if (r.reason === 'not_stored') {
+      this.importEnvKey(e, id);
+      return;
+    }
+    e.blocked = `Its key is kept in the encrypted store, which cannot be read: ${r.message}`;
+  }
+
+  /** Imports an env project's key into the store, once per variable (never again after a removal or a replacement). */
+  private importEnvKey(e: Entry, id: string): void {
+    const secrets = this.o.secrets;
+    const variable = e.config.keyVariable;
+    if (!secrets?.available || !variable || secrets.imported(variable) !== undefined) return;
+    if (secrets.has(id, 'lk_api_key')) return;
+    const hint = keyHint(e.config.apiKey);
+    this.o.db.transaction(() => {
+      secrets.write(id, 'lk_api_key', e.config.apiKey, { source: 'env_import', hint });
+      secrets.recordImport(variable, id, 'lk_api_key', e.config.apiKey);
+    })();
+    e.source = 'store';
+    e.keyHint = hint;
+    this.imports.push({ project: e.config.name, variable, hint });
+    this.log.info(
+      { project: e.config.name, variable },
+      'project key imported from the env file into the encrypted store',
+    );
+  }
+
+  private markActive(e: Entry, now: number): void {
+    if (e.retryTimer) this.clock.clearTimeout(e.retryTimer);
+    e.retryTimer = null;
+    e.status = 'active';
+    e.reason = null;
+    e.keyValid = true;
+    e.checkedAt = now;
+    e.retryDelay = this.o.retryMs?.first ?? 15_000;
+  }
+
+  private requireSecrets(): SecretStore {
+    const s = this.o.secrets;
+    if (!s?.available) {
+      throw new ProjectChangeError(
+        'STORE_UNAVAILABLE',
+        s?.state().problem ??
+          'This bridge has no encrypted secret store (SECRETS_MASTER_KEY is missing), so keys cannot be managed on the dashboard.',
+      );
+    }
+    return s;
+  }
+
+  private newClient(p: ProjectKeyConfig, projectId: string, persist = true, governor?: Governor): LkClient {
     return createLkClient({
       ...lkSettingsFor(this.o.config, { apiKey: p.apiKey, projectId }),
+      ...(governor ? { governorInstance: governor } : {}),
       ...(this.o.clock ? { clock: this.o.clock } : {}),
       ...(this.o.transport ? { transport: this.o.transport } : {}),
       ...(this.o.random ? { random: this.o.random } : {}),
@@ -462,27 +925,42 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
       checkedAt: e.checkedAt,
       settings: r?.settings ?? {},
       settingsProblem: r?.settingsProblem ?? null,
+      keySource: e.blocked !== null ? null : e.source,
+      keyHint: e.blocked !== null ? null : e.keyHint,
+      keyConflict: e.keyConflict,
+      draining: e.draining,
+      archivedAt: null,
     };
   }
 
   private storedOnlyView(r: ProjectRecord): ProjectView {
+    const archived = r.archivedAt !== null;
     return {
       name: r.name,
       id: r.id,
       displayName: r.displayName,
       isDefault: false,
       isSandbox: r.isSandbox,
-      readOnly: r.readOnly,
+      readOnly: archived || r.readOnly,
       configured: false,
       registered: true,
-      status: 'not_configured',
-      reason: 'Not listed in the env file, so it is not served. Its stored data is kept.',
+      status: archived ? 'archived' : 'not_configured',
+      reason: archived
+        ? 'Removed on the dashboard: not served. Its history is kept and shown read-only.'
+        : this.o.secrets
+          ? 'It has no key, so it is not served. Its stored data is kept. Give it a key with Replace key, or remove it.'
+          : 'Not listed in the env file, so it is not served. Its stored data is kept.',
       keyVariable: null,
       keyValid: null,
       verifiedAt: r.verifiedAt,
       checkedAt: null,
       settings: r.settings,
       settingsProblem: r.settingsProblem,
+      keySource: null,
+      keyHint: null,
+      keyConflict: null,
+      draining: false,
+      archivedAt: r.archivedAt,
     };
   }
 
@@ -496,6 +974,68 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     }
   }
 }
+
+/** The key's name for messages: its env variable, or "the stored key". Never the key. */
+function keyLabel(e: Entry): string {
+  return e.config.keyVariable && e.source === 'env'
+    ? e.config.keyVariable
+    : `the stored key of "${e.config.name}"`;
+}
+
+/** OPS2: a key check that LegendKeeper refused or could not answer, in the owner's terms. */
+function keyCheckError(err: unknown): ProjectChangeError {
+  const lk = err instanceof BridgeLkError ? err : undefined;
+  const status = lk?.status;
+  if (status === 401 || status === 403) {
+    return new ProjectChangeError(
+      'KEY_REFUSED',
+      `LegendKeeper refused this key (${status}${lk?.code ? ` ${lk.code}` : ''}). Check that it was copied whole and has not been revoked.`,
+    );
+  }
+  if (status === 402) {
+    return new ProjectChangeError(
+      'PAID_PLAN_REQUIRED',
+      'LegendKeeper says the project owner needs a paid plan (402), so the key cannot be used.',
+    );
+  }
+  if (typeof status === 'number' && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+    return new ProjectChangeError(
+      'KEY_CHECK_FAILED',
+      `LegendKeeper answered the key check with ${status}${lk?.code ? ` ${lk.code}` : ''}.`,
+    );
+  }
+  return new ProjectChangeError(
+    'LK_UNREACHABLE',
+    err instanceof BudgetWaitError
+      ? 'The key could not be checked: the request budget is exhausted for now. Try again shortly.'
+      : 'LegendKeeper could not be reached to check the key. Nothing was stored. Try again shortly.',
+  );
+}
+
+/** OPS2: what `defaultProject()` returns when the bridge serves no project at all. */
+const NO_PROJECT: ProjectView = Object.freeze({
+  name: '',
+  id: null,
+  displayName: null,
+  isDefault: true,
+  isSandbox: false,
+  readOnly: false,
+  configured: false,
+  registered: false,
+  status: 'not_configured',
+  reason: "This bridge serves no project yet: the owner adds one on the dashboard's Projects page.",
+  keyVariable: null,
+  keyValid: null,
+  verifiedAt: null,
+  checkedAt: null,
+  settings: {},
+  settingsProblem: null,
+  keySource: null,
+  keyHint: null,
+  keyConflict: null,
+  draining: false,
+  archivedAt: null,
+});
 
 export function createProjectRegistry(o: CreateProjectRegistryOptions): ProjectRegistry {
   return new ProjectRegistry(o);

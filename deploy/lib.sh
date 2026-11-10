@@ -154,8 +154,9 @@ _env_project_drift() {
       fi
       names+=("$name")
       var="LK_PROJECT_${name^^}_API_KEY"
-      if ! grep -qxF "$var" <<<"$active"; then
-        warn "${live}: LK_PROJECTS lists project ${name} but the file does not set ${var}. The bridge will refuse to start."
+      # OPS2: a key line commented out (retired into the encrypted store) is fine; one never mentioned is worth a word.
+      if ! grep -qxF "$var" <<<"$active" && ! grep -qxF "$var" <<<"$(env_names "$live")"; then
+        warn "${live}: LK_PROJECTS lists project ${name} but the file does not set ${var}. The bridge serves it only if its key is in the encrypted store (added on the dashboard)."
         n=$((n + 1))
       fi
     done
@@ -278,6 +279,22 @@ lkb_config_check() {
 
 # lkb_has_config_check: succeeds when the built app has the configuration check (releases from OPS1 on).
 lkb_has_config_check() { [[ -f "${LKB_APP_DIR}/dist/config/check.js" ]]; }
+
+# lkb_secrets_tool MODE ENV_FILE: the bridge's own view of its encrypted store (OPS2, dist/secrets/env-tool.js), run as
+# the service user with an empty environment, like the configuration check. MODE `compare` prints one
+# `<verdict> <NAME>` line per env value the store can hold (equal, superseded, differs, not_stored, unreadable); MODE
+# `status` prints `stored=<n> available=<yes|no>`. Names and verdicts only, never a value.
+lkb_secrets_tool() {
+  local mode="$1" file="$2" home
+  home="$(getent passwd "$LKB_SERVICE_USER" | cut -d: -f6 || true)"
+  # shellcheck disable=SC2016 # the inner script's $1, $2 and $3 belong to the inner bash
+  ${LKB_RUNAS:-runuser -u} "$LKB_SERVICE_USER" -- env -i HOME="${home:-/}" USER="$LKB_SERVICE_USER" \
+    LOGNAME="$LKB_SERVICE_USER" PATH="${LKB_NODE_DIR}/bin:/usr/bin:/bin" LANG=C.UTF-8 \
+    bash -c 'umask 077 && cd "$1" && exec node dist/secrets/env-tool.js --file "$2" "$3"' lkb-secrets-tool "$LKB_APP_DIR" "$file" "$mode"
+}
+
+# lkb_has_secrets_tool: succeeds when the built app has the secret store's tool (releases from OPS2 on).
+lkb_has_secrets_tool() { [[ -f "${LKB_APP_DIR}/dist/secrets/env-tool.js" ]]; }
 
 # lkb_release_version FILE: the "version" of a package.json (text read as data, never run), as vX.Y.Z; "unknown" if none.
 lkb_release_version() {

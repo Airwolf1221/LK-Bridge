@@ -450,7 +450,6 @@ describe('auth configuration (requirement 15)', () => {
     [{ BRIDGE_PUBLIC_URL: 'https://lk.example.com/bridge' }, /no path/],
     [{ BRIDGE_PUBLIC_URL: 'https://lk.example.com/?x=1' }, /query/],
     [{ BRIDGE_PUBLIC_URL: 'not a url' }, /absolute URL/],
-    [{ OWNER_PASSWORD_HASH: undefined }, /setup:owner/],
     [{ OWNER_PASSWORD_HASH: '$2b$10$abcdefghijklmnopqrstuv' }, /Argon2id/],
     [{ OWNER_PASSWORD_HASH: '$argon2i$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA' }, /Argon2id/],
     [{ SESSION_SECRET: undefined }, /SESSION_SECRET is required/],

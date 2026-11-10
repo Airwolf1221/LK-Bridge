@@ -17,6 +17,7 @@ interface Row {
   created_at: number;
   updated_at: number;
   verified_at: number | null;
+  archived_at: number | null;
 }
 
 function toRecord(r: Row): ProjectRecord {
@@ -33,6 +34,7 @@ function toRecord(r: Row): ProjectRecord {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     verifiedAt: r.verified_at,
+    archivedAt: r.archived_at ?? null,
   };
 }
 
@@ -94,6 +96,28 @@ export class ProjectStore {
         this.db.prepare('UPDATE projects SET is_default = 1, updated_at = ? WHERE name = ?').run(at, name);
       }
     })();
+  }
+
+  /**
+   * OPS2: archives a project removed on the dashboard. Its row (and so every stored row that names it) stays, read-only;
+   * it is no longer the default. Its name stays taken, so its history is never confused with a new project's.
+   */
+  archive(id: string): ProjectRecord | undefined {
+    const at = this.now();
+    this.db
+      .prepare(
+        'UPDATE projects SET archived_at = ?, is_default = 0, updated_at = ? WHERE id = ? AND archived_at IS NULL',
+      )
+      .run(at, at, id);
+    return this.byId(id);
+  }
+
+  /** OPS2: brings an archived project back (added again on the dashboard with a key of the same LegendKeeper project). */
+  unarchive(id: string): ProjectRecord | undefined {
+    this.db
+      .prepare('UPDATE projects SET archived_at = NULL, updated_at = ? WHERE id = ?')
+      .run(this.now(), id);
+    return this.byId(id);
   }
 
   setReadOnly(id: string, readOnly: boolean): ProjectRecord | undefined {

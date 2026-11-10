@@ -1,10 +1,15 @@
 /**
  * The Projects page (v2 A1): every project this bridge knows, its flags, its LegendKeeper id, whether its key is
- * configured and valid, and its settings (read-only in this release). The per-project read-only flag is the one thing
- * editable here (audited, with a confirmation). Keys are never shown: only the name of the variable that holds one.
+ * configured and valid, and its settings. Keys are never shown: only the name of the variable that holds one, or
+ * (OPS2) the last four characters of the key in use.
+ *
+ * OPS2: projects are added, re-keyed, paused and drained, and removed here, at runtime. A key goes in once, through a
+ * write-only field: the bridge checks it with LegendKeeper and shows what it found (project, id, the key's role); only
+ * after the owner confirms is it stored, encrypted. Adding, replacing and removing need a fresh re-authentication.
  */
 import * as z from 'zod';
 import { PROJECT_SETTING_KEYS } from '../../projects/index.js';
+import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { parseInput, type Register } from './util.js';
 
@@ -39,8 +44,65 @@ export const registerProjects: Register = (api, ctx) => {
         checkedAt: p.checkedAt,
         settings: p.settings,
         settingsProblem: p.settingsProblem,
+        keySource: p.keySource,
+        keyHint: p.keyHint,
+        keyConflict: p.keyConflict,
+        draining: p.draining,
+        archived: p.status === 'archived',
+        archivedAt: p.archivedAt,
+        pending:
+          p.id !== null && p.status !== 'archived'
+            ? ctx.actions.projectPending(p.id)
+            : { jobs: 0, proposals: 0 },
       })),
+      canManageKeys: projects.canManageKeys,
+      notes: projects.notes,
     };
+  });
+
+  // ------------------------------------------------------------------------------------------ OPS2: keys
+
+  /** Step 1 of adding a project: check the key with LegendKeeper. Nothing is stored. */
+  api.post('/projects/check', async (req) => {
+    const token = requireReauth(ctx.deps.services, req);
+    const b = parseInput(
+      z.object({ name: z.string().min(1).max(64), apiKey: z.string().min(1).max(1024) }),
+      req.body,
+    );
+    return ctx.actions.checkNewProjectKey(ctx.deps.services.sessionHash(token), b.name, b.apiKey);
+  });
+
+  /** Step 1 of replacing a key: check it, and that it belongs to the same LegendKeeper project. Nothing is stored. */
+  api.post('/projects/:name/key/check', async (req) => {
+    const token = requireReauth(ctx.deps.services, req);
+    const { name } = parseInput(nameParam, req.params);
+    const b = parseInput(z.object({ apiKey: z.string().min(1).max(1024) }), req.body);
+    return ctx.actions.checkReplacementKey(ctx.deps.services.sessionHash(token), name, b.apiKey);
+  });
+
+  /** Step 2: the owner confirmed what the check showed. The key is stored, encrypted, and served at once. */
+  api.post('/projects/confirm', (req) => {
+    const token = requireReauth(ctx.deps.services, req);
+    const b = parseInput(
+      z.object({ checkId: z.string().min(1).max(64), confirm: z.literal(true) }),
+      req.body,
+    );
+    return ctx.actions.confirmKeyCheck(ctx.deps.services.sessionHash(token), b.checkId);
+  });
+
+  /** Pause and drain before removal (`value: false` resumes). */
+  api.put('/projects/:name/draining', (req) => {
+    const { name } = parseInput(nameParam, req.params);
+    const b = parseInput(z.object({ value: z.boolean() }), req.body);
+    return ctx.actions.setProjectDraining(name, b.value);
+  });
+
+  /** Removes (archives) a project and deletes its stored key. Refused while work is pending. */
+  api.post('/projects/:name/remove', (req) => {
+    requireReauth(ctx.deps.services, req);
+    const { name } = parseInput(nameParam, req.params);
+    parseInput(z.object({ confirm: z.literal(true) }), req.body);
+    return ctx.actions.removeProject(name);
   });
 
   api.put('/projects/:name/read-only', (req) => {

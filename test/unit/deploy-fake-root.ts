@@ -44,7 +44,28 @@ export const SECRETS = {
   jwt: 'TESTJWT-abcdefghij-abcdefghij-abcdefghij-abcd',
   totp: 'TESTTOTPJBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
   old: 'TESTOLD-a-removed-secret-value-1234567890',
+  // OPS2: the secret store's master key (and the one before a rotation).
+  master: 'TESTMASTER-0123456789-0123456789-0123456789',
+  master2: 'TESTMASTERTWO-9876543210-9876543210-98765432',
 } as const;
+
+/**
+ * OPS2: a stand-in for the built bridge's secret-store tool (dist/secrets/env-tool.js). It answers from
+ * `data/stub-secrets.json`: `{ "compare": { "NAME": "equal" | "superseded" | ... }, "stored": n }`, as the real one
+ * answers from the database (tested in test/secrets/env-tool.test.ts). Names and verdicts only.
+ */
+export const STUB_SECRETS_TOOL = `import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+const here = dirname(fileURLToPath(import.meta.url));
+const data = join(here, '..', '..', '..', 'data', 'stub-secrets.json');
+const stub = existsSync(data) ? JSON.parse(readFileSync(data, 'utf8')) : {};
+if (process.argv.includes('status')) {
+  console.log('stored=' + (stub.stored ?? 0) + ' available=yes');
+} else {
+  for (const [name, verdict] of Object.entries(stub.compare ?? {})) console.log(verdict + ' ' + name);
+}
+`;
 
 export const STUB_CHECK = `import { readFileSync } from 'node:fs';
 const i = process.argv.indexOf('--file');
@@ -72,6 +93,8 @@ export interface FakeRoot {
   readonly app: string;
   readonly envFile: string;
   readonly env: NodeJS.ProcessEnv;
+  /** OPS2: what the stand-in secret-store tool answers (`compare` verdicts by name, `stored` count). */
+  setStore(stub: { compare?: Record<string, string>; stored?: number }): void;
   /** Writes the live env file (mode 0640). */
   writeEnv(text: string): void;
   readEnv(): string;
@@ -85,12 +108,18 @@ export interface FakeRoot {
 /** Values env-sync generated in `text` (SESSION_SECRET and JWT_SIGNING_KEY lines that are not test secrets). */
 export function generatedValues(text: string): string[] {
   const known = new Set<string>(Object.values(SECRETS));
-  return [...text.matchAll(/^(?:SESSION_SECRET|JWT_SIGNING_KEY|[A-Z_]*GENERATED[A-Z_]*)=(.+)$/gm)]
+  return [
+    ...text.matchAll(
+      /^(?:SESSION_SECRET|JWT_SIGNING_KEY|SECRETS_MASTER_KEY(?:_PREVIOUS)?|[A-Z_]*GENERATED[A-Z_]*)=(.+)$/gm,
+    ),
+  ]
     .map((m) => m[1] ?? '')
     .filter((v) => v !== '' && !known.has(v));
 }
 
-export function makeFakeRoot(o: { template?: string; checkScript?: string } = {}): FakeRoot {
+export function makeFakeRoot(
+  o: { template?: string; checkScript?: string; secretsTool?: boolean } = {},
+): FakeRoot {
   const dir = mkdtempSync(join(tmpdir(), 'lkb-fake-root-'));
   chmodSync(dir, 0o755);
   const bin = join(dir, 'bin');
@@ -102,6 +131,7 @@ export function makeFakeRoot(o: { template?: string; checkScript?: string } = {}
     bin,
     join(app, 'deploy'),
     join(app, 'dist', 'config'),
+    join(app, 'dist', 'secrets'),
     nodeBin,
     stubs,
     join(dir, 'data'),
@@ -138,6 +168,7 @@ export function makeFakeRoot(o: { template?: string; checkScript?: string } = {}
   );
   writeFileSync(join(app, 'package.json'), '{ "name": "lk-bridge", "version": "9.9.9", "type": "module" }\n');
   writeFileSync(join(app, 'dist', 'config', 'check.js'), o.checkScript ?? STUB_CHECK);
+  if (o.secretsTool !== false) writeFileSync(join(app, 'dist', 'secrets', 'env-tool.js'), STUB_SECRETS_TOOL);
   const envFile = join(etc, 'lk-bridge.env');
   const me = userInfo().username;
   const env: NodeJS.ProcessEnv = {
@@ -168,6 +199,7 @@ export function makeFakeRoot(o: { template?: string; checkScript?: string } = {}
       chmodSync(envFile, 0o640);
     },
     readEnv: () => readFileSync(envFile, 'utf8'),
+    setStore: (stub) => writeFileSync(join(dir, 'data', 'stub-secrets.json'), JSON.stringify(stub)),
     backups: () =>
       readdirSync(etc)
         .filter((f) => f.startsWith('lk-bridge.env.bak.'))
@@ -231,13 +263,16 @@ export function inStepEnv(
   root: FakeRoot,
   template = readFileSync(join(repoDeployDir, 'env.template'), 'utf8'),
 ): string {
+  // As on the live server: one project with its key in the env file, the owner hash set, and (OPS2) the master key.
   return template
     .split('\n')
     .filter((l) => !/^#\s*@/.test(l))
     .join('\n')
-    .replace(/^LK_PROJECT_TEST_API_KEY=$/m, `LK_PROJECT_TEST_API_KEY=${SECRETS.key}`)
+    .replace(/^# LK_PROJECTS=$/m, `LK_PROJECTS=test\nLK_PROJECT_TEST_API_KEY=${SECRETS.key}`)
+    .replace(/^# LK_DEFAULT_PROJECT=$/m, 'LK_DEFAULT_PROJECT=test')
     .replace(/^SESSION_SECRET=$/m, `SESSION_SECRET=${SECRETS.session}`)
     .replace(/^JWT_SIGNING_KEY=$/m, `JWT_SIGNING_KEY=${SECRETS.jwt}`)
-    .replace(/^OWNER_PASSWORD_HASH=$/m, `OWNER_PASSWORD_HASH='${SECRETS.hash}'`)
+    .replace(/^SECRETS_MASTER_KEY=$/m, `SECRETS_MASTER_KEY=${SECRETS.master}`)
+    .replace(/^(?:# )?OWNER_PASSWORD_HASH=$/m, `OWNER_PASSWORD_HASH='${SECRETS.hash}'`)
     .replace(/^DB_PATH=.*$/m, `DB_PATH=${join(root.dir, 'data', 'bridge.db')}`);
 }

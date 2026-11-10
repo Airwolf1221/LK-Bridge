@@ -97,9 +97,7 @@ const PRODUCTION_DEFAULTS: Readonly<Record<string, string>> = {
   WRITERS_MAX: '1',
   MCP_EXPOSE_PER_OP_TOOLS: 'false',
   OWNER_USERNAME: 'owner',
-  // v2 A1: the projects (names, not secrets); each project's key line stays blank.
-  LK_PROJECTS: 'test',
-  LK_DEFAULT_PROJECT: 'test',
+  // OPS2: no project lines are set: projects are added on the dashboard (or listed by the owner).
 };
 
 describe('deploy/env.template', () => {
@@ -107,23 +105,25 @@ describe('deploy/env.template', () => {
   // v2 A1: the template uses the multi-project form, so what it must set is derived with its own LK_PROJECTS (which
   // makes each project's LK_PROJECT_<NAME>_API_KEY required). What the loaders read is collected in both forms: the
   // single-project form's names (LK_API_KEY, LK_PROJECT_ID, LK_PROJECT_NAME) must still be mentioned, commented out.
+  // OPS2: the template sets no project (they are added on the dashboard), so what it must set is derived with nothing
+  // set. What the loaders read is collected in every form: the single-project form's names (LK_API_KEY, LK_PROJECT_ID,
+  // LK_PROJECT_NAME) must still be mentioned, commented out; per-project key names are documented in prose.
   const multi = inspectLoaders({ LK_PROJECTS: parsed.active.get('LK_PROJECTS') ?? '' });
-  const single = inspectLoaders();
+  const single = inspectLoaders({ LK_PROJECT_ID: 'proj_x' });
   const required = multi.required;
   const read = new Set([...multi.read, ...single.read]);
 
   it('the derivation finds the variables we know are required (guards against an empty list)', () => {
-    for (const name of [
-      'BRIDGE_PUBLIC_URL',
-      'LK_PROJECT_TEST_API_KEY',
-      'SESSION_SECRET',
-      'JWT_SIGNING_KEY',
-      'OWNER_PASSWORD_HASH',
-    ]) {
+    for (const name of ['BRIDGE_PUBLIC_URL', 'SESSION_SECRET', 'JWT_SIGNING_KEY']) {
       expect(required, name).toContain(name);
     }
-    // The single-project form is still recognised: without LK_PROJECTS, its key and id are what is required.
-    for (const name of ['LK_API_KEY', 'LK_PROJECT_ID']) expect(single.required, name).toContain(name);
+    // OPS2: the owner hash and the project keys are optional (the encrypted store keeps them once imported).
+    for (const name of ['OWNER_PASSWORD_HASH', 'LK_PROJECTS', 'SECRETS_MASTER_KEY'])
+      expect(required, name).not.toContain(name);
+    for (const name of ['SECRETS_MASTER_KEY', 'SECRETS_MASTER_KEY_PREVIOUS', 'OWNER_PASSWORD_HASH'])
+      expect(read, name).toContain(name);
+    // The single-project form is still recognised: once begun, its key and id are what is required.
+    for (const name of ['LK_API_KEY']) expect(single.required, name).toContain(name);
     for (const name of [
       'LK_PROJECTS',
       'LK_DEFAULT_PROJECT',
@@ -155,7 +155,11 @@ describe('deploy/env.template', () => {
 
   it('mentions every variable in .env.example', () => {
     const example = parse(envExample);
-    const names = [...example.active.keys(), ...example.commented];
+    // Per-project key names (LK_PROJECT_<NAME>_API_KEY) are made from the project's name: the template documents the
+    // pattern in prose (OPS2: a line there would ask every new install for a test key).
+    const names = [...example.active.keys(), ...example.commented].filter(
+      (n) => !/^LK_PROJECT_[A-Z0-9_]+_API_KEY$/.test(n),
+    );
     const missing = names.filter((n) => !parsed.active.has(n) && !parsed.commented.has(n));
     expect(missing).toEqual([]);
   });
@@ -167,10 +171,14 @@ describe('deploy/env.template', () => {
     expect(parsed.active.get('WRITERS_MAX')).toBe('1');
     expect(parsed.active.get('DB_PATH')).toBe('/var/lib/lk-bridge/bridge.db');
     expect(parsed.active.get('HOST')).toBe('127.0.0.1');
-    // v2 A1: the projects, one key line each (blank), and no sandbox settings any more.
-    expect(parsed.active.get('LK_PROJECTS')).toBe('test');
-    expect(parsed.active.get('LK_DEFAULT_PROJECT')).toBe('test');
-    expect(parsed.active.get('LK_PROJECT_TEST_API_KEY')).toBe('');
+    // OPS2: projects are added on the dashboard: the project lines are documented, commented out; no sandbox settings.
+    expect(parsed.commented.has('LK_PROJECTS')).toBe(true);
+    expect(parsed.commented.has('LK_DEFAULT_PROJECT')).toBe(true);
+    expect(parsed.active.has('LK_PROJECTS')).toBe(false);
+    // OPS2: the secret store's master key is generated; the owner hash is optional (it moves into the store).
+    expect(parsed.active.get('SECRETS_MASTER_KEY')).toBe('');
+    expect(parsed.commented.has('SECRETS_MASTER_KEY_PREVIOUS')).toBe(true);
+    expect(parsed.commented.has('OWNER_PASSWORD_HASH')).toBe(true);
     expect(parsed.active.has('LK_SANDBOX_API_KEY')).toBe(false);
     expect(parsed.active.has('LK_SANDBOX_PROJECT_ID')).toBe(false);
     expect(parsed.commented.has('LK_SANDBOX_API_KEY')).toBe(false);
@@ -211,7 +219,7 @@ describe('deploy/env.template', () => {
 describe('deploy/env.template markers (OPS1, env-sync)', () => {
   const parsed = parse(template);
   const multi = inspectLoaders({ LK_PROJECTS: parsed.active.get('LK_PROJECTS') ?? '' });
-  const single = inspectLoaders();
+  const single = inspectLoaders({ LK_PROJECT_ID: 'proj_x' });
   const read = [...new Set([...multi.read, ...single.read])].filter((n) => /^[A-Z][A-Z0-9_]*$/.test(n));
   const lines = template.split('\n');
   /** name -> the markers on the lines directly above its variable line (a marker belongs to the next line only). */
@@ -254,12 +262,20 @@ describe('deploy/env.template markers (OPS1, env-sync)', () => {
     }
     // The ones the owner named: the LegendKeeper keys, the owner hash and the TOTP secret are owner-only; the session
     // and JWT secrets are generated (48 random bytes, base64).
-    for (const n of ['LK_PROJECT_TEST_API_KEY', 'LK_API_KEY', 'OWNER_PASSWORD_HASH', 'OWNER_TOTP_SECRET']) {
+    for (const n of ['LK_API_KEY', 'OWNER_PASSWORD_HASH', 'OWNER_TOTP_SECRET']) {
       expect(kind.get(n), n).toBe('secret');
     }
     for (const n of ['SESSION_SECRET', 'JWT_SIGNING_KEY']) {
       expect(markersOf.get(n), n).toEqual(['# @generate:base64:48']);
     }
+    // OPS2: env-sync creates the secret store's master key (32 random bytes, base64: AES-256 strength). The key from
+    // before a rotation is only ever moved there by env-sync, so the template only shows it, commented out.
+    expect(markersOf.get('SECRETS_MASTER_KEY')).toEqual(['# @generate:base64:32']);
+    expect(markersOf.get('SECRETS_MASTER_KEY_PREVIOUS')).toEqual(['# @optional']);
+    // OPS2: the owner hash and the project list are optional: once in the store, env-sync can retire them.
+    expect(markersOf.get('OWNER_PASSWORD_HASH')).toEqual(['# @secret']);
+    expect(vars.find((v) => v.name === 'OWNER_PASSWORD_HASH')?.active).toBe(false);
+    expect(markersOf.get('LK_PROJECTS')).toEqual(['# @optional']);
   });
 
   it('marks the production defaults @default and everything commented out @optional or @secret', () => {

@@ -87,6 +87,17 @@ export function registerLoginRoutes(app: FastifyInstance, s: AuthServices): void
           `Too many failed attempts. Try again in ${Math.ceil(result.retryAfterSeconds / 60)} minute(s).`,
         );
       }
+      if (result.reason === 'unavailable') {
+        // OPS2: the stored credentials cannot be read (SECRETS_MASTER_KEY missing or wrong). Say so: only the server
+        // can fix it, and retrying the password would not help.
+        return loginForm(
+          reply,
+          nonce,
+          returnTo ?? '',
+          503,
+          `Signing in is not possible right now. ${result.message}`,
+        );
+      }
       return loginForm(reply, nonce, returnTo ?? '', 401, 'Those details were not recognised.');
     }
     reply.setCookie(owner.sessionCookie, result.sessionToken, owner.cookieOptions(config.ttl.sessionSeconds));
