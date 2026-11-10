@@ -21,7 +21,6 @@ import type {
   CanonConfig,
   CanonRule,
   KeyCheck,
-  LifecycleConfigView,
   LifecycleIndexLookup,
   LifecycleView,
   ProjectInfo,
@@ -838,13 +837,12 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<CanonRule[] | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
   const [key, setKey] = useState('');
   const [kind, setKind] = useState<'value' | 'change' | 'delete'>('value');
   const [values, setValues] = useState('');
   if (!c.data) return c.error ? <ErrorNote error={c.error} onRetry={c.reload} /> : <Loading />;
   const rules = draft ?? c.data.rules;
-  const editing = draft !== null || status !== null;
+  const editing = draft !== null;
   const save = (next: CanonRule[] | null, label: string) =>
     void confirm({
       title: `${label} for ${p.name}?`,
@@ -866,14 +864,12 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
         () =>
           api.put(`/projects/${encodeURIComponent(p.name)}/canon`, {
             rules: next,
-            ...(status !== null ? { agentDefaultStatus: status.trim() === '' ? null : status.trim() } : {}),
             confirm: true,
           }),
         'Canon rules saved.',
       ).then((r) => {
         if (r) {
           setDraft(null);
-          setStatus(null);
           c.reload();
         }
       });
@@ -976,14 +972,10 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
           Add
         </button>
       </form>
-      <div className="row mt">
-        <label htmlFor={`canon-status-${p.name}`}>Status of pages agents create</label>
-        <input
-          id={`canon-status-${p.name}`}
-          value={status ?? c.data.agentDefaultStatus}
-          onChange={(e) => setStatus(e.target.value)}
-        />
-      </div>
+      <p className="muted small-text">
+        The Status of pages agents create follows the page lifecycle (Working by default): see Lifecycle
+        below.
+      </p>
       <div className="row mt">
         <Button
           variant="primary"
@@ -994,14 +986,7 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
           Save
         </Button>
         {editing && (
-          <button
-            type="button"
-            className="small"
-            onClick={() => {
-              setDraft(null);
-              setStatus(null);
-            }}
-          >
+          <button type="button" className="small" onClick={() => setDraft(null)}>
             Discard changes
           </button>
         )}
@@ -1209,11 +1194,7 @@ function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
             busy={busy}
             disabled={!edited}
             onClick={() =>
-              put(
-                draft as Partial<LifecycleConfigView>,
-                'Save the lifecycle values',
-                'The lifecycle tools use them from the next call.',
-              )
+              put(draft, 'Save the lifecycle values', 'The lifecycle tools use them from the next call.')
             }
           >
             Save

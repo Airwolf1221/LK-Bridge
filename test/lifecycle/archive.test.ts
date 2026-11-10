@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * archive_page (v2 C2c, ADR 0035) end to end through the REAL server, the official MCP client at scope `write`, the
  * policy layer and the owner's "Approve and accept as canon": from Authoritative and from Working, the exact note texts,

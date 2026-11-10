@@ -308,8 +308,6 @@ describe('the Archive and lifecycle page', () => {
     // Read-only: the only button of the page is Refresh.
     const main =
       screen.getByRole('heading', { name: 'Archive and lifecycle' }).closest('main') ?? document.body;
-    expect(
-      within(main as HTMLElement).queryByRole('button', { name: /archive|unarchive|promote|delete/i }),
-    ).toBeNull();
+    expect(within(main).queryByRole('button', { name: /archive|unarchive|promote|delete/i })).toBeNull();
   });
 });

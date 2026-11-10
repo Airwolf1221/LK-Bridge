@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
 /**
  * move_to_working and promote_page (v2 C2c, ADR 0035): move_to_working changes only the place, prefix, Status and tag
  * and remembers where the page was; promote_page needs a destination (suggesting the remembered one), sets Last Major

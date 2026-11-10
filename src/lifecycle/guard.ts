@@ -325,7 +325,7 @@ export class LifecycleGuard implements WriteGuard {
             if (ch && id)
               out.push({
                 resourceId: id,
-                page: `${String(body.name ?? id)} (new)`,
+                page: `${typeof body.name === 'string' ? body.name : id} (new)`,
                 what: 'status',
                 to: ch.to,
                 text: ch.text,

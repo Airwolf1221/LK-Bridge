@@ -23,6 +23,7 @@ its last run (time, outcome, duration, engine job id) and next run. The schedule
 | `tree-check`             | daily at 02:30 (London) | v2 A2, per project: the repository tree's daily consistency check, every page's properties included ([tree.md](tree.md)).                                                                                                                                                                                                                                                                                                            |
 | `asset-refresh`          | every 6 hours           | v2 A4, per project: the asset tree's regular refresh, a paced walk of every folder ([assets.md](assets.md)). Skips a project whose asset tree is not built, or whose refresh is switched off (`assetRefreshEnabled`); a manual run goes ahead.                                                                                                                                                                                       |
 | `asset-check`            | daily at 02:50 (London) | v2 A4, per project: the asset tree's nightly check, the same walk plus an audit of the cached folder paths ([assets.md](assets.md)). Runs even when the refresh is switched off.                                                                                                                                                                                                                                                     |
+| `link-sweep`             | daily at 01:15 (London) | v2 C2c, per project: the link index's paced refresh, for the related pages `archive_page` and `move_to_working` report ([below](#link-sweep-v2-c2c)). Skips a project whose tree is not built.                                                                                                                                                                                                                                       |
 | `assign-block-ids-sweep` | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `orphan-and-link-audit`  | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `tag-audit`              | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -97,6 +98,41 @@ for ever.
 - **Schedule:** daily at 03:45 London time, a quarter of an hour after `journal-prune` (03:30) and before the nightly
   backup (04:15). After a prune the owner's proposal list and an agent's `bridge_proposal_status` answer for that id as
   for any unknown id.
+
+## `link-sweep` (v2 C2c)
+
+The **link index** (`link_index`, migration 1600; ADR 0035) records which page links to which: a link collection on
+a page's sidebar (`kind: collection`, with the collection's title) and a mention in a page document's text (`kind:
+mention`, with the document). `archive_page` and `move_to_working` read it to list the pages related to the page they
+change ([tools.md](tools.md#the-page-lifecycle-v2-c2c)).
+
+- **Kept up to date from the bridge's own writes.** A write observer on the engine updates the index after every
+  successful write the bridge makes (`set_facts`, `write_page`, the creates, the low-level tools, the lifecycle tools):
+  a collection written replaces that collection's links, a document written replaces its mentions (a partial block
+  write that might remove a mention costs one read of the document), a deleted page or document takes its links away.
+  It never holds a write up, and a failure to follow one is logged, not raised.
+- **Refreshed by the sweep**, for what changed in the LegendKeeper app: a walk of every page and index of the
+  project's repository tree, in id order: one `getResource` per page (its sidebar's collections and its documents),
+  then one `getDocumentBlocks` per page document (mentions). Links the pass did not see again are removed at the end.
+- **Paced, and gives way to agents.** Every read is at priority **P3**, so the governor's P3 floor keeps half of each
+  tier for agents; before each page the sweep waits (up to a minute) while P1 or P2 work is queued for the project; a
+  budget wait is waited out, not failed. It is a **background** job: its run goes alongside the other jobs.
+- **Resumable.** Progress is stored after every page (`link_sweeps`: the cursor, pages, documents, requests, links);
+  a run that stops (a restart, an error) leaves the pass running, and the next run continues after the last page done.
+  A pass is never restarted from the start while one is running.
+- **Freshness.** Results say `link index as of <the last complete sweep's start> (the last complete sweep), with the
+bridge's own writes since`, or that no sweep has finished yet. The dashboard's **Archive and lifecycle** page shows
+  the same, and a sweep in progress.
+- **Schedule.** Daily at 01:15 London time (a quiet hour, before the tree's nightly check at 02:30), editable on the
+  Maintenance Jobs page like any job; switch it off there to rely on the bridge's own writes alone. Every run is a P3
+  job of its project (record: always).
+
+**Cost.** About one read per page and index, plus one per page document: on the 1,452-resource test world roughly
+2,500 to 2,900 reads a pass; on Arkona (about 3,500 pages) roughly 6,500 to 7,000. No writes. With the default limits
+and P3 floor (P3 may use half of each tier: 150 of the 300 reads a minute, 3,000 of the 6,000 an hour), a pass on an
+idle test world takes about 20 minutes; on Arkona the hourly half is the limit, so a pass takes about 2¼ to 2½ hours
+and shares the P3 half with the tree's nightly check at 02:30 (both continue where they are; agents' work always goes
+first). The daily tier (60,000) is not a concern.
 
 ## Owner commands
 

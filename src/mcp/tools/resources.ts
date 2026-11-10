@@ -1144,7 +1144,7 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
               pd,
             );
           // The page's own prefix, kept (v2 C2c: [BWRK] and [BARC] too).
-          const rawName = `${KIND_PREFIX[node.kind as 'index' | 'bsrc' | 'bwrk' | 'barc']}${name}`;
+          const rawName = `${KIND_PREFIX[node.kind]}${name}`;
           if (rawName !== node.rawName) {
             const twin = node.parentId ? sibling(ctx, node.parentId, node.kind, name, node.id) : null;
             if (twin) {

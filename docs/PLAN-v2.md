@@ -342,6 +342,14 @@ documents; `delete_document` refuses a page's last document and its only page do
 is a `delete` canon rule; the character page names default to `{name} - Character Core` and
 `{name} - Character Reference` ([ADR 0034](adr/0034-resources-documents-characters.md)).
 
+**C2c notes (decided by the owner on 10 November 2026; built in C2c, [ADR 0035](adr/0035-page-lifecycle.md)):** three
+lifecycle states, each a prefix, a Status, a status tag and a place; new pages Working by default (a change from C2b);
+four lifecycle tools, always canonical; every other route to a lifecycle change refused by an engine guard; a permanent
+lifecycle record that `unarchive_page` and `promote_page` read; related pages from a link index refreshed by a paced
+`link-sweep` maintenance job; two recommended, switchable canon rules (deleting a `[BARC]` page; deleting a map,
+timeline or board of an Authoritative page). An index has no lifecycle state and gets no Status any more; the
+`agentDefaultStatus` setting is superseded by the lifecycle settings.
+
 **Note for ChatGPT:** after the tools change, open ChatGPT's **Plugins** page, open the bridge, and use **Refresh**. ChatGPT keeps its own copy of the tool list.
 
 ---
@@ -353,7 +361,7 @@ Phase 0 ── spike (verify assumptions on the test world)
 Phase A ── A1 multi-project ──► A2 repository tree ──► A3 registry, resolution, ordering
                                         └───────────► A4 asset tree
 Phase B ── B1 Markdown converter (library; starts alongside A1) ──► B2 Discover and Read tools (after A3)
-Phase C ── C1 write_page ──► C2a facts, links and canon ──► C2b resources, documents, characters ──► CR mid-point review
+Phase C ── C1 write_page ──► C2a facts, links and canon ──► C2b resources, documents, characters ──► C2c page lifecycle ──► CR mid-point review
 Phase D ── D1 calendar and chronology   D2 maps   D3 image pipeline   (in parallel, after CR)
 Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool review and guides ─► E4 independent hardening ─► E5 Arkona go-live
 ```
@@ -370,12 +378,13 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 | **C1** | **`write_page`:** modes, sections, keep-region refusals, version conflicts with retry when the section is unchanged, Markdown-diff proposals                                                                                                                                                                                                                             | **Opus 5.5 · xhigh** | B2                      | The main way agents will change your pages                                                                                                 |
 | **C2a** | **`set_facts` and the protected canonical facts,** plus the proposal and job groundwork for multi-page operations: high-level operation lists, ids minted at capture, the page-level summary, the generic verify step (ADR 0032)                                                                                                                                         | **Opus 5.5 · xhigh** | C1                      | The first multi-write tool, and the guard that keeps canon in the owner's hands on every write path                                        |
 | **C2b** | **Resource, document and character tools,** including `operation_id` and duplicate detection, built on C2a's groundwork and calling its canonical guard. **Built (10 November 2026, ADR 0034, migration 1500):** the twelve tools; one job or one proposal each, ids minted at capture, the page-level summary first; placement in the same write; Status `Working`; the template recorded in the tree at once; every write verified (pages by their parent's listing); `operation_id` and `DUPLICATE_REQUEST`; failed work reported, never replayed; deleting Authoritative pages as protected canon; `factsVersion` and `baseFactsVersion`; mentions of a character's pages to its Core, Reference, then index | **Opus 5.5 · xhigh** | C2a                     | Many writes with placement, taxonomy and guards; multi-page proposals with ids minted at capture                                           |
-| **CR** | **Mid-point independent review of the write layer** (C1, C2a and C2b): a fresh session that trusts no earlier report, reviews `write_page`, the proposal path, the version checks inside the lock, protected facts and the verify step, then fixes what it finds, before phase D builds on them                                                                        | **Opus 5.5 · xhigh** | C2b                     | The write layer is where data could be lost; catching problems before D, E and the setting packs build on it is far cheaper (added on Max) |
+| **C2c** | **The page lifecycle** (added and decided by the owner on 10 November 2026): Authoritative `[BSRC]`, Working `[BWRK]` and Archived `[BARC]` pages; `status` on the creation tools (Working by default); `archive_page`, `unarchive_page`, `move_to_working` and `promote_page`, always with the owner's canonical approval; the lifecycle guard on every write path; the lifecycle record; related pages from a link index and its paced sweep. **Built (10 November 2026, ADR 0035, migration 1600)** | **Opus 5.5 · xhigh** | C2b | Moves canon in and out of the owner's hands; every side route must be closed |
+| **CR** | **Mid-point independent review of the write layer** (C1, C2a, C2b and C2c): a fresh session that trusts no earlier report, reviews `write_page`, the proposal path, the version checks inside the lock, protected facts, the lifecycle guard and tools, and the verify step, then fixes what it finds, before phase D builds on them | **Opus 5.5 · xhigh** | C2b, C2c                | The write layer is where data could be lost; catching problems before D, E and the setting packs build on it is far cheaper (added on Max) |
 | **D1** | **Calendar engine and chronology sync,** plus the timeline tools                                                                                                                                                                                                                                                                                                         | Opus 5.5 · high      | C2b                     | Date arithmetic, plus a three-part write that must stay consistent                                                                         |
 | **D2** | **Map tools,** including pixel coordinates                                                                                                                                                                                                                                                                                                                               | Sonnet 5.5 · medium  | C2b                     | Straightforward                                                                                                                            |
 | **D3** | **Image pipeline:** three ways in, the single-use endpoint, WebP, destinations                                                                                                                                                                                                                                                                                           | Opus 5.5 · high      | C2b, A4                 | A new public endpoint that must be secure                                                                                                  |
 | **E1** | **Snapshots, Google Drive copy with rclone, restore tools, rehearsal**. The Google Drive connection is made **through the dashboard** (Google's sign-in flow), with its token kept in the encrypted secret store (OPS2, ADR 0028), rather than by configuring rclone by hand | Opus 5.5 · high      | C2b, D3                 | Backups only matter if restores are right (raised to Opus on Max)                                                                          |
-| **E2** | **Audits:** rules, the new checks, findings view. **Added by C2b (10 November 2026):** a check for paragraphs with embedded line breaks (32 on the test world, kept as keep regions, ADR 0031 decision 12) and one for pages holding inline icons (which `write_page` cannot write back) | Sonnet 5.5 · medium  | A3, D1                  | Read-only, rule-driven                                                                                                                     |
+| **E2** | **Audits:** rules, the new checks, findings view. **Added by C2b (10 November 2026):** a check for paragraphs with embedded line breaks (32 on the test world, kept as keep regions, ADR 0031 decision 12) and one for pages holding inline icons (which `write_page` cannot write back). **Added by C2c (10 November 2026):** a **lifecycle-consistency audit**: every page's prefix, Status, status tag and location agree (`[BSRC]` / Authoritative / CANON / normal place; `[BWRK]` / Working / Working / directly under `[INDEX] Working`; `[BARC]` / Archived / Archived / directly under `[INDEX] Archived`), and an incomplete lifecycle record is reported; it reports and never fixes (the lifecycle tools refuse an inconsistent page with `LIFECYCLE_INCONSISTENT`, and legacy pages such as a `[BSRC]` page with Status Working have no tool path until the owner makes them agree) | Sonnet 5.5 · medium  | A3, D1                  | Read-only, rule-driven                                                                                                                     |
 | **E3** | **Tool review (with you):** final visible tool list, descriptions, both guides, the server instructions, a check that ChatGPT and Claude each pick the right tool                                                                                                                                                                                                        | Sonnet 5.5 · high    | All of the above        | Mostly wording and judgement; you take part                                                                                                |
 | **E4** | **Independent hardening review:** a fresh session that trusts no earlier report. **Added by C2b (10 November 2026):** a block-by-block fallback for `write_page` on pages holding content the API cannot write back, such as inline icons (`PAGE_NOT_WRITABLE` today). Tested on 10 November: `insertBlock`, `replaceBlock` and `deleteBlock` work beside an icon paragraph; `deleteBlock` returns no new version; the fallback is not atomic, so it needs journal-based undo | **Opus 5.5 · xhigh** | E3                      | Same reasoning as v1's chunk 8                                                                                                             |
 | **E5** | **Moving to Arkona:** a runbook and a Claude Code session on the server (section 7)                                                                                                                                                                                                                                                                                      | Sonnet 5.5 · medium  | E4                      | Operational                                                                                                                                |
@@ -385,7 +394,7 @@ Phase E ── E1 snapshots, backup and restore ─► E2 audits ─► E3 tool 
 
 **Parallel sessions:** A1 and B1; A3 and A4; D1, D2 and D3. Each pair or group has its own branch and a clear split of which files it owns, as in v1. **Ground rules carried over from v1:** never force-push; merge `main` in rather than rebasing; squash merge; I write each handoff when its turn comes, from the previous session's report.
 
-**Rough effort:** 19 sessions, 12 of them on Opus (7 at xhigh), sized for the Max plan: the sessions that protect your data (A1, B1, C1, C2a, C2b, the mid-point review and E4) get the most depth. That's a few weeks of steady work at your pace; there's no deadline. The four parallel groups (A1 with B1, A3 with A4, D1 with D2 and D3) are where Max's extra quota saves the most time.
+**Rough effort:** 20 sessions, 13 of them on Opus (8 at xhigh), sized for the Max plan: the sessions that protect your data (A1, B1, C1, C2a, C2b, C2c, the mid-point review and E4) get the most depth. That's a few weeks of steady work at your pace; there's no deadline. The four parallel groups (A1 with B1, A3 with A4, D1 with D2 and D3) are where Max's extra quota saves the most time.
 
 ---
 
@@ -479,8 +488,9 @@ Arkona records each page's standing in its sidebar facts:
   changing it FROM Authoritative to anything else (removing it too), needs canonical approval.
 - **`Continuity Type` and `Continuity`:** CHANGING an existing non-empty value needs canonical approval (for example
   CANON ↔ AU, or one AU to another). Setting them where they are empty, new pages included, is allowed.
-- The default Status of pages agents create is **`Working`** (project configuration, for C2b). **Templates carry no fact
-  defaults** (the owner confirmed), so nothing is inherited.
+- The default Status of pages agents create is **`Working`** (since C2c by the page lifecycle: new pages are `[BWRK]`
+  under `[INDEX] Working` unless created as `status: "authoritative"`, ADR 0035). **Templates carry no fact defaults**
+  (the owner confirmed), so nothing is inherited.
 - The rules are a list per project (dashboard, audited), seeded with these defaults.
 - **Every write path** is guarded, not only `set_facts`: the low-level `lk_api_write`, `lk_api_batch` and every
   `lk_op_*` for the property and property-row operations, a template copy, and C2b's tools (the guard is in the job
@@ -495,8 +505,13 @@ Arkona records each page's standing in its sidebar facts:
   is. It is a per-project canon rule (kind `delete`), on every path, and at `write` scope it becomes a canonical
   proposal listing the protected pages. **Restoring** needs none: it brings back what was approved, and is how a
   mistaken delete is undone.
-- Open for the owner (flagged by C2b): whether deleting a map, timeline or board of an Authoritative page should need
-  canonical approval (not guarded; the result notes it).
+- Deleting a map, timeline or board of an Authoritative page, and deleting an Archived `[BARC]` page, need canonical
+  approval since C2c (two recommended rules, on by default, which the owner can switch off per project; flagged by C2b,
+  settled in C2c, ADR 0035).
+- **Lifecycle changes** (C2c, ADR 0035): Status to or from Working or Archived, a `[BWRK]` / `[BARC]` prefix change, and
+  a move into, out of or between the lifecycle indexes happen only through `archive_page`, `unarchive_page`,
+  `move_to_working` and `promote_page` (always the owner's canonical approval) and the creation tools' `status`; the
+  lifecycle guard refuses every other route, naming the tool.
 
 ### 10.4 Owner planning is explicit
 

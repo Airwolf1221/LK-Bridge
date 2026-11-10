@@ -77,6 +77,10 @@ budget (arkona): writes 0/120·min …
 | `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                      |
 | `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read                            |
 | `delete_document`           | write  | false / **true** / false / false                                | 1 write + 1 read                                      |
+| `archive_page`              | write  | false / **true** / false / false                                | see [C2c](#the-page-lifecycle-v2-c2c)                 |
+| `unarchive_page`            | write  | false / **true** / false / false                                | see C2c                                               |
+| `move_to_working`           | write  | false / **true** / false / false                                | see C2c                                               |
+| `promote_page`              | write  | false / **true** / false / false                                | see C2c                                               |
 | `get_markdown_guide`        | read   | true / false / true / false                                     | none                                                  |
 | `get_bridge_guide`          | read   | true / false / true / false                                     | none                                                  |
 | `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                                  |
@@ -142,7 +146,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (132 tools in all, 134 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (136 tools in all, 138 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -194,7 +198,7 @@ project's budget line. Design: [ADR 0029](adr/0029-discover-and-read-tools.md). 
 ### Finding things
 
 **`browse_repository_tree`** `{ path?, depth?, kinds?, limit?, offset? }`: a subtree, nested. Each page: `id`, `name`
-(display), `kind` (`index` / `bsrc` / `unclassified`), `type` (Reference Type), `scope` (shortened to 60 characters),
+(display), `kind` (`index` / `bsrc` / `bwrk` / `barc` / `unclassified`), `type` (Reference Type), `scope` (shortened to 60 characters),
 `tags`, `childCount`, and `children` down to `depth` (default 2, at most 6; 0 is the page alone). `path` is a name, an id
 or `"Characters / Beastkin / Foxians"` (default: the root). `kinds` leaves out other kinds (and their subtrees; `matchingChildren` says how many matched).
 `limit` (default 150, at most 400) cuts the listing level by level and says so (`truncated`, `nextOffset`); `offset`
@@ -211,7 +215,7 @@ or a path (`"Characters / Beastkin / Qishen"`); a name shared by several folders
 
 **`search`** `{ query, content?, limit?, offset? }`. Syntax: words (all must match), `"quoted phrases"`, `OR`, `NOT` or a
 leading `-`, `( )`, and the filters `name:` `tag:` `type:` (Reference Type, whole words) `kind:` (`index` / `bsrc` /
-`unclassified`) `under:` (a page name or id; pages below it) `scope:`. `NOT` binds tightest, then `AND` (spaces), then
+`bwrk` / `barc` / `unclassified`) `under:` (a page name or id; pages below it) `scope:`. `NOT` binds tightest, then `AND` (spaces), then
 `OR`; `OR`, `AND` and `NOT` are operators only in capitals. A word without a filter matches the display name, aliases,
 Canonical Display Name and Scope. Results are ranked exact name, name prefix, a word of the name, text inside the name,
 alias or Canonical Display Name, then Scope, and each result's `matched` says why. A malformed query is `SEARCH_SYNTAX`
@@ -386,10 +390,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (42 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (46 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                              |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -544,9 +548,11 @@ The agent guide's "Creating and changing pages" section ([bridge-guide.md](bridg
   created or moved page gets its `after` / `before` neighbour in the create or move itself. A rename that changes a
   page's place adds one `moveResource` to the same job (LegendKeeper's `updateResource` takes no place). Nothing else is
   ever moved or reclassified.
-- **Status `Working`.** A page created from a template gets Status = the project's `agentDefaultStatus` (`Working`)
-  when its template has a Status row, in the same job. Templates carry no defaults. Pass `facts: { "Status": … }` to
-  choose another; `Authoritative` is protected canon (below).
+- **A lifecycle status (since v2 C2c).** Every page create takes `status: "working" | "authoritative"` (default
+  `working`): a Working page is `[BWRK]`, directly under `[INDEX] Working`, with Status `Working` and the `Working`
+  tag; an Authoritative page is `[BSRC]` in its normal place, with Status `Authoritative` and the `CANON` tag, and is
+  always a canonical proposal. See [The page lifecycle](#the-page-lifecycle-v2-c2c). An index gets no Status and no
+  status tag. A Status in `facts` must agree with `status` (`INVALID_FACTS` otherwise). Templates carry no defaults.
 - **The template is recorded** on the new page's tree node at once, so `set_facts` finds its template order later.
 - **Verified.** A verify step reads back every page made or changed: a created or moved page by its parent's listing
   (its name, parent and exact neighbours, one read per 100 siblings, shared by every page under that parent), its facts
@@ -583,9 +589,11 @@ the same job in the template's order. Refusals: `TEMPLATE_NOT_FOUND` (with `temp
 `CHARACTER_TEMPLATE` (use `create_character`), `INDEX_TEMPLATE` (use `create_index`), `PAGE_EXISTS`, the facts and
 links codes of `set_facts`.
 
-**`create_bare_resource`** `{ name, parent, tags?, aliases?, dryRun?, operation_id?, project }`: a page with no
-template. The name is used as given and must start with exactly `[INDEX] ` or `[BSRC] ` (`INVALID_NAME` otherwise,
-including a doubled prefix). `PAGE_EXISTS` for a sibling of the same kind and name.
+**`create_bare_resource`** `{ name, parent?, status?, tags?, aliases?, dryRun?, operation_id?, project }`: a page
+with no template. The name is used as given and must start with exactly `[INDEX] `, `[BSRC] ` or `[BWRK] `
+(`INVALID_NAME` otherwise, including a doubled prefix and `[BARC] `, which only `archive_page` makes); a page's prefix
+must agree with `status` (`[BWRK] ` for Working, the default; `[BSRC] ` for Authoritative). An index takes no status
+and is refused under the lifecycle indexes. `PAGE_EXISTS` for a sibling of the same kind and name.
 
 **`create_many_resources`** `{ items[1..100], dryRun?, operation_id?, project }`, each item
 `{ key, name, parent | parent_key, template?, facts?, links?, tags?, aliases? }`: up to 100 pages in one request, nested
@@ -607,7 +615,11 @@ is one proposal.
   `factsVersion`);
 - in the same job: Reference Type (exactly `Character Core` or `Compact Character Reference`), Subject and Canonical
   Display Name (the name), Race / Species (exactly as given, or `Unestablished` for an unknown or omitted race), Status
-  `Working`, then your `facts` and `links` (a fact that contradicts one of the first four is refused);
+  (by `status`), then your `facts` and `links` (a fact that contradicts one of the first four is refused);
+- **`status`** (since v2 C2c; default `working`): a Working Core goes under its own `[INDEX] {name}` directly under
+  `[INDEX] Working` as `[BWRK] {name} - Character Core`; a Working compact page goes directly under `[INDEX] Working`.
+  The race is still validated (and recorded), and `promote_page` later takes the character to its race index. An
+  existing Core or Reference is looked for in both places;
 - an unknown or omitted race (`null`, blank, `Unknown`, `Undetermined`, `Unestablished`, `Undetermined / Unknown`) goes
   to `[INDEX] Undetermined / Unknown`; a race given that does not resolve fails (`RACE_NOT_FOUND`, with the labels
   available); and A3's other refusals (`RACE_AMBIGUOUS`, `RACE_NEEDS_REVIEW`, `CHARACTER_TYPE_AMBIGUOUS`, …);
@@ -665,8 +677,8 @@ document's settings only, never its content. Page and blank documents are refuse
 
 **`delete_document`** `{ page, document, confirm: true, dryRun?, project }`: refused for the page's last document
 (`DOCUMENT_LAST`) and for its only page-type document (`DOCUMENT_ONLY_PAGE`): that is the page's content (use
-`write_page` or `delete_resource`). Not guarded by canonical approval (an open question for the owner: the result notes
-when the page is Authoritative).
+`write_page` or `delete_resource`). Since v2 C2c the switchable canon rule `delete-document-authoritative` (on by
+default) makes deleting a map, timeline or board of an Authoritative page a canonical proposal.
 
 ### Costs (reads and writes, typical)
 
@@ -675,27 +687,203 @@ reads, the job's checks, the canon guard's in-lock read, the verify step and the
 
 | Call                                                    | Reads | Writes |
 | ------------------------------------------------------- | ----- | ------ |
-| `create_character` core with a new index, 1 caller fact | 14    | 9      |
-| `create_character` compact, no caller facts             | 7     | 6      |
+| `create_character` core with a new index, 1 caller fact | 11    | 9      |
+| `create_character` compact, no caller facts             | 8     | 7      |
 | `create_character` that returns an existing page        | 1     | 0      |
-| `create_resource` with 2 facts and 1 link               | 8     | 5      |
+| `create_resource` with 2 facts and 1 link               | 10    | 6      |
 | `create_bare_resource`                                  | 2     | 1      |
-| `update_resource` rename (re-placed among its siblings) | 6     | 2      |
+| `update_resource` rename (re-placed among its siblings) | 4     | 1      |
 | `move_resource`                                         | 3     | 1      |
 | `delete_resource`, one page                             | 4     | 1      |
 | `restore_resource`                                      | 3     | 1      |
 | `create_document`                                       | 2     | 1      |
 | `update_document`                                       | 4     | 1      |
-| `delete_document`                                       | 2     | 1      |
+| `delete_document`                                       | 4     | 1      |
 | `set_facts`, 2 facts (unchanged from C2a)               | 4     | 2      |
 
-Where they go, for a Core with a new index: 2 template sidebars (planning), 2 creates; per page, 1 copy check, 1
-in-lock read of the rows and 1 canon check of the sidebar, then 1 write per fact (Status included: 1 on the index, 6 on
-the Core); the verify step's 2 facts reads and 2 listings (the race's children, the new index's); the tree's 2 re-reads,
-one per page, at the end of the job. `create_many_resources` with 100 pages without templates: 1 write, 1–2 listings to
-verify, and the tree's 100 re-reads. A dry run costs the template reads only (none for the other tools); a proposal
-costs the planning reads, then the job when approved (capture reads nothing for pages it creates). A cascade delete
-adds 1 read per page under it (the canon check).
+These are the v2 C2c numbers: the creates are Working by default, so an index gets no Status (fewer reads and writes)
+and a page from a template gets its status tag in one more write; the measured rename is of the only page under
+`[INDEX] Working` (no re-placing); a document delete reads the page's facts and the document for the
+delete-document canon rule.
+
+Where they go, for a Working Core with a new index: 2 template sidebars (planning), 2 creates; for the Core, 1 copy
+check, 1 in-lock read of the rows and 1 canon check of the sidebar, then 1 write per fact (Status included) and 1 for
+its status tag; the verify step's facts read and listings (the Working index's children, the new index's); the tree's
+re-reads, one per page, at the end of the job. `create_many_resources` with 100 pages without templates: 1 write, 1–2
+listings to verify, and the tree's 100 re-reads. A dry run costs the template reads only (none for the other tools); a
+proposal costs the planning reads, then the job when approved (capture reads nothing for pages it creates). A cascade
+delete adds 1 read per page under it (the canon check).
+
+## The page lifecycle (v2 C2c)
+
+Every page is in one of three lifecycle states, each with a prefix, a Status, a status tag and a place (decided by the
+owner on 10 November 2026). Design: [ADR 0035](adr/0035-page-lifecycle.md).
+
+| State         | Prefix   | Status          | Tag        | Place                                                    |
+| ------------- | -------- | --------------- | ---------- | -------------------------------------------------------- |
+| Authoritative | `[BSRC]` | `Authoritative` | `CANON`    | its normal place (the registry's placement rules)        |
+| Working       | `[BWRK]` | `Working`       | `Working`  | directly under `[INDEX] Working`, flat and alphabetical  |
+| Archived      | `[BARC]` | `Archived`      | `Archived` | directly under `[INDEX] Archived`, flat and alphabetical |
+
+The values are per project and the owner can change them (dashboard, Projects page, Lifecycle); the defaults above are
+the owner's. The two indexes are found **by name** through the tree, never by a fixed id or position, and stored once
+the owner confirms them. Until then, or when a confirmed index has gone, been renamed or stopped being an index, every
+lifecycle tool and every Working create is refused with `LIFECYCLE_NOT_CONFIGURED`, `LIFECYCLE_INDEX_MISSING` or
+`LIFECYCLE_INDEX_CHANGED`, saying what the owner has to do.
+
+`[BWRK]` and `[BARC]` pages are pages like `[BSRC]` ones everywhere: `browse_repository_tree` and `search` show their
+kind (`kind: "bwrk"` / `"barc"` filters them), `get_resource` resolves their names without the prefix, and the
+dashboard's tree counts them. When one name could be several pages of the same subject, a mention prefers the current
+`[BSRC]` page (or an index), then the `[BWRK]` page, then the `[BARC]` page; `AMBIGUOUS` lists each with its role.
+
+### Creating Working and Authoritative pages
+
+`create_resource`, `create_bare_resource`, `create_many_resources` (per item) and `create_character` take
+`status: "working" | "authoritative"`. **The default is `working`**, which changes C2b's behaviour: a page created
+without a status is now a `[BWRK]` page under `[INDEX] Working`, not a `[BSRC]` page under the given parent.
+
+- **`working`**: `[BWRK] {name}` directly under `[INDEX] Working` (alphabetical), Status `Working`, the `Working` tag
+  added and `CANON` removed. Leave `parent` out, or give `[INDEX] Working` itself (`WORKING_PARENT` otherwise).
+- **`authoritative`**: `[BSRC] {name}` in its normal place, Status `Authoritative`, the `CANON` tag. This is canon:
+  the call is always a canonical proposal (`proposal_captured`, `requiresCanonicalApproval`), whatever the scope. A
+  parent in a lifecycle area is refused (`LIFECYCLE_AREA`).
+- **Characters**: a Working Core gets its own `[INDEX] {name}` directly under `[INDEX] Working`, with the Core,
+  `[BWRK] {name} - Character Core`, beneath it; a Working compact page goes directly under `[INDEX] Working`. The race
+  is still validated (and written as Race / Species). When the race index already holds an `[INDEX] {name}`, a
+  Working Core is refused (`CHARACTER_INDEX_ELSEWHERE`: it would clash when promoted; create the Core as authoritative
+  there). Return-existing and the duplicate check look in both places.
+- **`create_index`** takes no status: an index has no lifecycle state and gets no Status. It is refused under
+  `[INDEX] Working` or `[INDEX] Archived` (`LIFECYCLE_AREA`; a Working character's own index is made by
+  `create_character`).
+- **`create_many_resources`**: a Working item's parent must be `[INDEX] Working` (or left out) or, for a character, a
+  character index directly under it; nothing goes under a Working item (`WORKING_PARENT`: Working pages are flat). A
+  batch may mix Working and Authoritative items; any Authoritative item makes the whole batch one canonical proposal.
+
+A Status in `facts` must agree with `status` (`INVALID_FACTS`). No lifecycle record is written for a create.
+
+### The four lifecycle tools
+
+`archive_page`, `unarchive_page`, `move_to_working` and `promote_page` are the only way a page changes state. Each:
+
+- **always needs the owner's canonical approval**, at every scope (a profile with scope `write` too): the call returns
+  `proposal_captured` with `requiresCanonicalApproval`; the dashboard's ordinary Approve is refused, only "Approve and
+  accept as canon" runs it. Never retry the call; follow it with `bridge_proposal_status`;
+- shows the **full plan** in the proposal and with `dryRun: true`: the move and new name, every fact as a table (before
+  and after), the tags removed and added, the archive note as a Markdown diff, and (for `archive_page` and
+  `move_to_working`) the related pages;
+- is **checked again when it runs**: a page changed after capture conflicts, and nothing is written;
+- refuses an index (`INDEX_PAGE` / `LIFECYCLE_INDEX`), a page with pages under it (`HAS_SUBPAGES`, listing them), a
+  page whose prefix and Status disagree (`LIFECYCLE_INCONSISTENT`: make them agree by hand first), a page already as
+  the tool would leave it (`NOTHING_TO_DO`), and a name already taken in the destination (`NAME_TAKEN`);
+- refuses a second request for the same page while one waits or runs (`DUPLICATE_REQUEST`, `LIFECYCLE_IN_PROGRESS`).
+
+**`archive_page`** `{ page, dryRun?, project }`: an Authoritative `[BSRC]` or Working `[BWRK]` page becomes
+`[BARC] {name}` directly under `[INDEX] Archived` (alphabetical), in one job:
+
+- a **dated note**, one paragraph, as a new first block of its main page document (the page document named Main,
+  else the first), with `{date}` today in ISO form (London time) and `{source}` the page's display name. Nothing else
+  in the document changes. A page with no page document is refused (`NO_PAGE_DOCUMENT`). From Authoritative:
+
+  > Archived - {date}. The author retired {source} and its applications from Main CANON. The text below records the
+  > former design for provenance.
+
+  From Working:
+
+  > Archived - {date}. The author retired {source}, a Working concept, without adopting it into Main CANON. The text
+  > below records the former design for provenance.
+
+- **facts**: Status `Archived`, Continuity Type `NON-CURRENT`, Scope `Archived record of the retired` plus one space
+  and the original Scope (the prefix alone when there was none), Temporal Scope `Former Main CANON. Retired on {date}.`
+  (from Authoritative) or `Former Working concept. Retired on {date}.` (from Working), Last Major Revision today. A
+  missing row is added;
+- **tags**: the outgoing status tag (`CANON` or `Working`) removed and `Archived` added; other tags untouched.
+
+**`unarchive_page`** `{ page, destination?, previousState?, restore?, dryRun?, project }`: reverses an archiving
+**from its lifecycle record**. A formerly Authoritative page goes back under its previous parent (alphabetical) as
+`[BSRC]`, with its recorded Status, Continuity Type, Scope and Temporal Scope and the `CANON` tag; a formerly Working
+page goes back under `[INDEX] Working` as `[BWRK]` with Status `Working`, the `Working` tag and its other recorded
+values. Last Major Revision becomes today (a recorded fact that was absent is removed again). The archive note is
+removed **only if it is still exactly as inserted**; otherwise it stays and the result flags it. A Scope edited since
+archiving is flagged (the recorded original is restored). When the previous parent has gone, is outside the repository
+or is in a lifecycle area, give `destination` (`DESTINATION_REQUIRED` otherwise). A page **archived by hand** has no
+record: give `previousState`, `restore: { continuityType, scope, temporalScope, status? }` and (for an Authoritative
+page) `destination`; without them the call is refused with `NO_LIFECYCLE_RECORD`, naming what is missing. Refused for
+anything but a `[BARC]` page (`NOT_ARCHIVED`).
+
+**`move_to_working`** `{ page, dryRun?, project }`: an Authoritative `[BSRC]` page becomes `[BWRK]` directly under
+`[INDEX] Working`, Status `Working`, `CANON` swapped for `Working`. Nothing else changes; the record keeps where it was.
+Only from `[BSRC]` (`NOT_AUTHORITATIVE`). A Character Core under its own character index moves **alone** (the index and
+its other pages stay; the result flags it, and `promote_page` takes it back).
+
+**`promote_page`** `{ page, destination, dryRun?, project }`: a Working `[BWRK]` page becomes `[BSRC]` under
+`destination` (required; alphabetical), Status `Authoritative`, Last Major Revision today, Continuity Type kept when
+`CANON` or `AU` and otherwise set to `CANON`, `Working` swapped for `CANON`. Without `destination` it is refused with
+`DESTINATION_REQUIRED` and, when the page came from `move_to_working`, `suggestedDestination`: the place it was in
+(never used unless you pass it). A Working character's Core (or compact page) under its own `[INDEX] {name}` takes
+that index with it to the destination (normally its race index); other pages under the index keep their state and are
+listed. Only from `[BWRK]` (`NOT_WORKING`); a destination in a lifecycle area is refused (`LIFECYCLE_AREA`).
+
+### Order, failures and resuming
+
+The steps are ordered so that a failure part-way never leaves a page that claims a state it is not in: leaving canon
+(`archive_page` from Authoritative, `move_to_working`), the rename and tags come first, then the facts, the note and
+the move; entering a state (`unarchive_page`, `promote_page`), the move comes first, then the facts and the note, and
+the rename and tags last. Every write goes through the page's lock, compare-and-swap (If-Match) and the journal, and the
+job ends with a verify step.
+
+A job that stops part-way marks the page's **lifecycle record** `incomplete` and the result says which steps ran
+(`WRITTEN_IN_PART`). **Calling the same tool on the page again resumes it**: the bridge plans again from the page as it
+is now and proposes only what is left (a new canonical proposal; nothing is replayed). Another lifecycle tool on that
+page is refused until then (`LIFECYCLE_INCOMPLETE`, naming the tool to call).
+
+### What a result says
+
+`page`, `action`, `newName`, `newParent`, `place` (`after` / `before`), `facts` (each `{ field, before, after }`),
+`tags` (`remove`, `add`), `note` (with its Markdown `diff`), `characterIndex` (when one moves), `flags` (what the owner
+should know), `resumes` (a resumed record), `relatedPages`, and, once the job runs, `verified` and the lifecycle
+record's `recordId`. The dashboard's "Archive and lifecycle" page lists every record, linked to the journal.
+
+**Related pages** (`archive_page` and `move_to_working`): the pages that link to the page (a link collection, named)
+or mention it in their text (the document named), from the **link index**, with `freshness` ("link index as of …":
+the last complete sweep, plus the bridge's own writes since); then the hits of **one** LegendKeeper content search for
+the page's display name that the index does not hold, each marked `found by text search (may be incomplete)`.
+Related pages are reported, never edited. The link index is kept up to date from the bridge's own writes and refreshed
+by the paced link sweep ([maintenance.md](maintenance.md)).
+
+### The side routes are refused
+
+The lifecycle guard (in the engine, on every write path: `set_facts`, the create tools, `update_resource`,
+`move_resource`, `lk_api_write`, `lk_api_batch`, the `lk_op_*` tools and an approved proposal) refuses with
+`POLICY_DENIED`, naming the tool to use:
+
+- a Status change to or from `Working` or `Archived`, and `Working` → `Authoritative` (a Status in a create body
+  included);
+- a rename that adds, removes or changes `[BWRK]` or `[BARC]` (`update_resource` answers `PREFIX_CHANGE`), and a page
+  created with one by hand;
+- a move into, out of or between the lifecycle indexes, and a page created under one by hand.
+
+Only the four tools' own steps pass, through a marker only bridge code can set (an agent's request body can never carry
+it); approved work that should carry it and does not is refused when it runs. Even at scope `propose` these routes are
+refused, not proposed.
+
+### Costs (reads and writes, typical)
+
+Measured against the mock LegendKeeper (test/lifecycle/costs.test.ts), every read included: to capture the proposal
+(planning, the note's place, the content search), then the job the owner's acceptance runs (its checks, the canon and
+lifecycle guards' reads, the in-lock reads before each write, the verify step and the tree's re-read).
+
+| Call                               | Capture reads | Job reads | Job writes |
+| ---------------------------------- | ------------- | --------- | ---------- |
+| `archive_page`, from Authoritative | 6             | 19        | 8          |
+| `archive_page`, from Working       | 5             | 19        | 8          |
+| `unarchive_page`, to Authoritative | 4             | 19        | 7          |
+| `unarchive_page`, to Working       | 4             | 19        | 7          |
+| `move_to_working`                  | 3             | 15        | 3          |
+| `promote_page`                     | 2             | 15        | 5          |
+
+The writes: `archive_page` 1 rename-and-tags, 5 facts (one added), 1 note, 1 move; `unarchive_page` 1 move, 4 facts,
+1 note removal, 1 rename-and-tags; `move_to_working` 1 rename-and-tags, 1 fact, 1 move; `promote_page` 1 move, 3 facts,
+1 rename-and-tags (plus 1 move for a character index that goes with it). A dry run costs the capture reads.
 
 ## Image upload
 

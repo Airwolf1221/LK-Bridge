@@ -178,7 +178,7 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
 
   const find: Lifecycle['find'] = (projectId) => {
     const c = config(projectId);
-    let indexes: TreeNode[] = [];
+    let indexes: TreeNode[];
     try {
       indexes = d.tree.queries.byKind(projectId, 'index', { limit: 100_000 }).data;
     } catch {
@@ -318,7 +318,7 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
       try {
         switch (r.opId) {
           case 'replaceDocumentBlocks': {
-            const blocks = Array.isArray(value?.blocks) ? value!.blocks : body.blocks;
+            const blocks = Array.isArray(value?.blocks) ? value.blocks : body.blocks;
             const docName = node(pid, rid)?.documents.find((x) => x.id === path.documentId)?.name ?? null;
             store.replaceLinks(
               pid,

@@ -352,7 +352,7 @@ async function build(
       propertyId: factsPlan.property.id,
       rows: rowStates(factsPlan.rowsBefore),
     });
-    const preImage = page.sidebar.find((p) => p.id === factsPlan!.property!.id)?.raw;
+    const preImage = page.sidebar.find((p) => p.id === factsPlan.property!.id)?.raw;
     factWrites.forEach((w, i) => {
       factSteps.push({
         step: {
@@ -364,7 +364,7 @@ async function build(
           expectCurrent: {
             state: 'rows',
             hash: rowsContentHash(rowStates(w.rowsBefore ?? [])),
-            label: factsPlan!.property!.title,
+            label: factsPlan.property!.title,
           },
           deferTreeReread: true,
           journalOperation: journal(w.label),
@@ -437,7 +437,7 @@ async function build(
           resourceId: page.node.id,
           documentId: note.documentId,
           blockId: note.blockId,
-          content: note.block as Obj,
+          content: note.block,
         });
         noteSteps.push({
           step: {
@@ -450,7 +450,7 @@ async function build(
           label: 'remove the archive note',
         });
         holdDocument = { documentId: note.documentId };
-        noteHead = { action: 'remove', blockId: note.blockId, diff: `- ${noteText(note.block!)}` };
+        noteHead = { action: 'remove', blockId: note.blockId, diff: `- ${noteText(note.block)}` };
         verify.push({
           kind: 'block',
           label: `${page.name} note`,
@@ -709,7 +709,7 @@ async function runLifecycle(
     idx: { working: TreeNode; archived: TreeNode },
     page: PageNow,
     o: { readonly propertyTitle: string; readonly date: string; readonly incomplete: LifecycleRecord | null },
-  ) => Promise<Plan | Answer>,
+  ) => Plan | Answer,
 ): Promise<McpToolResult> {
   const tool = TOOL[action];
   return withProject(deps, args.project, 'write', async (pd) => {
@@ -766,7 +766,7 @@ async function runLifecycle(
             ? settings.factsPropertyName
             : 'PROPERTIES';
         const date = incomplete?.date ?? isoDate(Date.now());
-        const planned = await planFor(pd, ctx, c, idx, read.value, { propertyTitle, date, incomplete });
+        const planned = planFor(pd, ctx, c, idx, read.value, { propertyTitle, date, incomplete });
         if ('kind' in planned) return planned;
         const o2 = { resume: planned.record.resumeOf !== undefined };
         const built = await build(pd, mctx, ctx, c, propertyTitle, planned);
@@ -929,8 +929,8 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
       'index, a [BARC] page, or a page with pages under it (listed). Lists the pages that link to or mention it (never ' +
       'edited). ' +
       CANON_NOTE +
-      ' Cost: 1 read to plan, 1 for the note’s place, 1 content search; the job: 4 reads to check, 1 write to rename and tag, ' +
-      '1 per fact changed (with 1 read in the lock), 1 for the note, 1 to move, then the verify step.',
+      ' Cost: about 6 reads to plan (1 of them a content search); the job about 19 reads (checks, in-lock reads, verify) ' +
+      'and up to 8 writes: 1 to rename and tag, 1 per fact changed, 1 for the note, 1 to move.',
     inputSchema: z.object({
       page: pageRef.describe('The page to archive (name or id).'),
       dryRun: dryRunArg,
@@ -938,7 +938,7 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'archive', args, async (pd, ctx, c, idx, page, o) => {
+      runLifecycle(deps, mctx, 'archive', args, (pd, ctx, c, idx, page, o) => {
         const facts = factsOf(c, o.propertyTitle, page.sidebar);
         const rec = o.incomplete;
         if (!rec) {
@@ -1029,8 +1029,8 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
       'needs `destination` (for an Authoritative page), `previousState` and `restore` (continuityType, scope, ' +
       'temporalScope); without them it is refused, saying what is missing. ' +
       CANON_NOTE +
-      ' Cost: 1 read to plan, 1 to check the note; the job: 4 reads to check, 1 write to move, 1 per fact changed, 1 to ' +
-      'remove the note, 1 to rename and tag, then the verify step.',
+      ' Cost: about 4 reads to plan; the job about 19 reads (checks, in-lock reads, verify) and up to 8 writes: 1 to ' +
+      'move, 1 per fact changed, 1 to remove the note, 1 to rename and tag.',
     inputSchema: z.object({
       page: pageRef.describe('The [BARC] page (name or id).'),
       destination: pageRef
@@ -1057,7 +1057,7 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'unarchive', args, async (pd, ctx, c, idx, page, o) => {
+      runLifecycle(deps, mctx, 'unarchive', args, (pd, ctx, c, idx, page, o) => {
         const lc = pd.services!.lifecycle!;
         const flags: string[] = [];
         const facts = factsOf(c, o.propertyTitle, page.sidebar);
@@ -1141,9 +1141,9 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
               );
               if ('result' in d) return d;
               parentId = d.id;
-              if (usable && d.id !== prev!.id)
-                flags.push(`returns under ${d.rawName}, not its previous parent ${prev!.rawName}, as asked`);
-            } else parentId = prev!.id;
+              if (usable && d.id !== prev.id)
+                flags.push(`returns under ${d.rawName}, not its previous parent ${prev.rawName}, as asked`);
+            } else parentId = prev.id;
           }
           // The note: removed only if it is still exactly what was inserted.
           const noteDoc = rec.target.note?.documentId ?? null;
@@ -1258,8 +1258,8 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
       'it; a Character Core under its own character index moves alone (the index and its other pages stay). Lists the ' +
       'pages that link to or mention it (never edited). ' +
       CANON_NOTE +
-      ' Cost: 1 read to plan, 1 content search; the job: 3 reads to check, 1 write to rename and tag, 1 for Status, 1 to ' +
-      'move, then the verify step.',
+      ' Cost: about 3 reads to plan (1 of them a content search); the job about 15 reads (checks, in-lock reads, verify) ' +
+      'and 3 writes: rename and tag, Status, move.',
     inputSchema: z.object({
       page: pageRef.describe('The [BSRC] page (name or id).'),
       dryRun: dryRunArg,
@@ -1267,7 +1267,7 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'move_to_working', args, async (pd, ctx, c, idx, page, o) => {
+      runLifecycle(deps, mctx, 'move_to_working', args, (pd, ctx, c, idx, page, o) => {
         const facts = factsOf(c, o.propertyTitle, page.sidebar);
         const rec = o.incomplete;
         if (!rec) {
@@ -1355,8 +1355,8 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
       'move_to_working, if any. A Working character’s Core (or compact page) takes its [INDEX] {name} with it to the ' +
       'destination (normally its race index); other pages under that index keep their state and are listed. ' +
       CANON_NOTE +
-      ' Cost: 1 read to plan; the job: 2 reads to check, 1 write to move, 1 per fact changed, 1 to rename and tag, then ' +
-      'the verify step.',
+      ' Cost: about 2 reads to plan; the job about 15 reads (checks, in-lock reads, verify) and up to 5 writes: 1 to ' +
+      'move, 1 per fact changed (up to 3), 1 to rename and tag; a character index that moves with it adds 1 move.',
     inputSchema: z.object({
       page: pageRef.describe('The [BWRK] page (name or id).'),
       destination: pageRef
@@ -1367,7 +1367,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'promote', args, async (pd, ctx, c, idx, page, o) => {
+      runLifecycle(deps, mctx, 'promote', args, (pd, ctx, c, idx, page, o) => {
         const lc = pd.services!.lifecycle!;
         const facts = factsOf(c, o.propertyTitle, page.sidebar);
         const rec = o.incomplete;
@@ -1459,9 +1459,9 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
             .children(ctx.projectId, dest.id)
             .data.find(
               (x) =>
-                x.id !== mover!.id &&
+                x.id !== mover.id &&
                 x.kind === 'index' &&
-                key(x.displayName) === key(mover!.name.replace(/^\[INDEX\]\s*/, '')),
+                key(x.displayName) === key(mover.name.replace(/^\[INDEX\]\s*/, '')),
             );
           if (twinIdx)
             return refuse(pd, 'NAME_TAKEN', `“${dest.displayName}” already holds “${twinIdx.rawName}”.`);

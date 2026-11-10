@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
 /**
  * The page kinds of the lifecycle (v2 C2c, ADR 0035; Part 0): `[BWRK]` (bwrk) and `[BARC]` (barc) beside `[INDEX]`,
  * `[BSRC]` and unclassified, in classification and stray-prefix clean-up, the tree, search (`kind:`),

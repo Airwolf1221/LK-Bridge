@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
 /**
  * unarchive_page (v2 C2c, ADR 0035): both previous states from the lifecycle record; the note removed only when
  * unchanged, kept and flagged when edited; an edited Scope flagged (the recorded original restored); a missing previous

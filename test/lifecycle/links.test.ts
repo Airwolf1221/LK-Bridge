@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
 /**
  * Related pages (v2 C2c, ADR 0035; Part 4): the link index kept up to date from the bridge's own writes as they happen,
  * refreshed by the paced, resumable `link-sweep`; archive_page and move_to_working list the pages that link to or mention
@@ -34,7 +34,7 @@ const LIMITS = {
 };
 
 beforeAll(async () => {
-  w = await lifecycleWorld({ env: { LK_TIER_LIMITS: JSON.stringify(LIMITS) }, limits: LIMITS as never });
+  w = await lifecycleWorld({ env: { LK_TIER_LIMITS: JSON.stringify(LIMITS) }, limits: LIMITS });
   w.sidebars.page(L.ferry, [
     ...w.sidebars.pages.get(L.ferry)!.props,
     SidebarModel.links('depferr1', 'Dependencies', []),
@@ -135,8 +135,9 @@ describe('the link sweep', () => {
       audit: () => undefined,
       now: () => Date.now(),
       busy: () => busyCalls++ < 3,
-      sleep: async () => {
+      sleep: () => {
         slept++;
+        return Promise.resolve();
       },
     });
     const r = await paced.sweep(PROJECT);

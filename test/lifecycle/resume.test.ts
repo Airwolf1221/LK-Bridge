@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
 /**
  * Failure and resume (v2 C2c, ADR 0035, the shared rules): a fault injected at each write of a lifecycle change leaves
  * the record incomplete, the result saying which steps ran, and no misleading page (never [BSRC] while reading
@@ -31,7 +30,7 @@ const PAGES = ['rsma0001', 'rsmb0001', 'rsmc0001', 'rsmd0001', 'rsme0001', 'rsmf
 beforeAll(async () => {
   w = await lifecycleWorld({
     env: { LK_TIER_LIMITS: JSON.stringify(LIMITS) },
-    limits: LIMITS as never,
+    limits: LIMITS,
     seed: (world) => {
       PAGES.forEach((id, i) =>
         world.repo.seed({

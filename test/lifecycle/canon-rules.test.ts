@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
 /**
  * The two recommended canon rules (v2 C2c, ADR 0035; Part 3, not yet decided by the owner, each a per-project rule that
  * can be switched off on the dashboard): deleting a [BARC] page needs canonical approval (the archive is provenance), and

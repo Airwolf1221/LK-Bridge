@@ -35,15 +35,15 @@ the tree is built (Maintenance Jobs page).
 
 ## What each node holds
 
-| Field                                                                | From                                                                                                                           |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| id, raw name, display name, kind                                     | the name: `[INDEX] ` → `index`, `[BSRC] ` → `bsrc` (exact prefix, its space included), else `unclassified`; the root is `root` |
-| parentId, rank, depth, path (ids and display names, cached)          | the structure (depth 0 is the root, 1 its children)                                                                            |
-| tags, aliases, documents (id, name, type), hidden                    | a listing or getResource                                                                                                       |
-| locked, Reference Type, Scope, Index Scope, Canonical Display Name   | getResource: the key-value property titled `PROPERTIES` and its rows (names configurable, below)                               |
-| sidebar summary                                                      | getResource: every sidebar property's kind and title, and key-value rows as text (for later audits)                            |
-| template id                                                          | recorded for pages the bridge creates from a template, by the create's re-read (v2 C2b; empty for others)                      |
-| last read (when, and by `build`, `write`, `sweep` or `check`); stale | the tree itself                                                                                                                |
+| Field                                                                | From                                                                                                                                                                           |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| id, raw name, display name, kind                                     | the name: `[INDEX] ` → `index`, `[BSRC] ` → `bsrc`, `[BWRK] ` → `bwrk`, `[BARC] ` → `barc` (v2 C2c; exact prefix, its space included), else `unclassified`; the root is `root` |
+| parentId, rank, depth, path (ids and display names, cached)          | the structure (depth 0 is the root, 1 its children)                                                                                                                            |
+| tags, aliases, documents (id, name, type), hidden                    | a listing or getResource                                                                                                                                                       |
+| locked, Reference Type, Scope, Index Scope, Canonical Display Name   | getResource: the key-value property titled `PROPERTIES` and its rows (names configurable, below)                                                                               |
+| sidebar summary                                                      | getResource: every sidebar property's kind and title, and key-value rows as text (for later audits)                                                                            |
+| template id                                                          | recorded for pages the bridge creates from a template, by the create's re-read (v2 C2b; empty for others)                                                                      |
+| last read (when, and by `build`, `write`, `sweep` or `check`); stale | the tree itself                                                                                                                                                                |
 
 ## Status
 

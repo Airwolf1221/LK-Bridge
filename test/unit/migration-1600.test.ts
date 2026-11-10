@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { openDatabase } from '../../src/db/open.js';
 import { runMigrations, loadMigrations } from '../../src/db/migrate.js';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -25,10 +25,9 @@ describe('migration 1600 (v2 C2c)', () => {
     runMigrations(db, undefined, { context: {} });
     expect(db.prepare('SELECT COUNT(*) n FROM tree_names').get()).toEqual({ n: 1 });
     db.prepare("UPDATE tree_nodes SET kind='bwrk' WHERE id='n1'").run();
-    const rules = JSON.parse(
-      (db.prepare('SELECT settings FROM projects').get() as any).settings,
-    ).canonicalRules;
-    expect(rules.map((r: any) => r.id)).toEqual(['x', 'delete-archived', 'delete-document-authoritative']);
+    const row = db.prepare('SELECT settings FROM projects').get() as { settings: string };
+    const rules = (JSON.parse(row.settings) as { canonicalRules: { id: string }[] }).canonicalRules;
+    expect(rules.map((r) => r.id)).toEqual(['x', 'delete-archived', 'delete-document-authoritative']);
     db.prepare("DELETE FROM tree_nodes WHERE id='n1'").run();
     expect(db.prepare('SELECT COUNT(*) n FROM tree_names').get()).toEqual({ n: 0 });
   });

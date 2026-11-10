@@ -371,7 +371,7 @@ export async function planNewPageFacts(
   }
   const hasStatusRow = templateKeys?.some((k) => factKey(k) === factKey(statusKey)) ?? false;
   const writeStatus = input.status !== null && !callerStatus && hasStatusRow;
-  if (writeStatus) facts.push({ key: statusKey, value: [{ text: input.status! }] });
+  if (writeStatus) facts.push({ key: statusKey, value: [{ text: input.status }] });
   for (const [k, v] of callerFacts) {
     if (identity.some((f) => factKey(f.key) === factKey(k))) continue;
     if (v === null) {
