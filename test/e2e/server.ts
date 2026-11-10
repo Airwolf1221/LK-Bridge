@@ -15,7 +15,8 @@ import { openDatabase } from '../../src/db/open.js';
 import { systemClock } from '../../src/lk/index.js';
 import { createBridge } from '../../src/server.js';
 import { randomBytes } from 'node:crypto';
-import { MockLk } from '../contract/mock-lk.js';
+import { MockLk, type MockRequest, type MockResponse } from '../contract/mock-lk.js';
+import { SidebarModel } from '../facts/sidebar-model.js';
 import { LkModel } from '../jobs/lk-model.js';
 import { mintClientId } from '../../src/jobs/index.js';
 import { getSection, toMarkdown } from '../../src/markdown/index.js';
@@ -46,6 +47,23 @@ model.seedResource('res2', {
     { id: 'mun1', kind: 'unsupported' },
   ],
 });
+// v2 C2a: a page whose sidebar is modelled (versions, If-Match, rows), for a proposal that touches protected canon.
+model.seedResource('res3', { name: 'Inae Mikumo', blocks: [] });
+const sidebars = new SidebarModel(() => undefined);
+sidebars.page('res3', [
+  SidebarModel.kv('kvres301', 'PROPERTIES', [
+    ['Reference Type', 'Character Core'],
+    ['Status', 'Working'],
+    ['Continuity Type', 'CANON'],
+  ]),
+]);
+type Route = (req: MockRequest, parts: string[]) => MockResponse | undefined;
+const lkRouter = model as unknown as { route: Route };
+const ownRoute: Route = lkRouter.route.bind(model);
+lkRouter.route = (req, parts) =>
+  sidebars.respond(req, (id) =>
+    id === 'res3' ? { id, name: 'Inae Mikumo', tags: [], documents: [] } : undefined,
+  ) ?? ownRoute(req, parts);
 const mock = new MockLk({ clock: systemClock, apiKey: API_KEY, respond: model.respond });
 const lkUrl = await mock.start();
 
@@ -184,6 +202,26 @@ async function proposePageWrite(): Promise<string> {
   return r.status === 'proposal_captured' ? r.proposalId : 'none';
 }
 
+/** v2 C2a: an agent at scope propose sets Inae's Status to Authoritative: a proposal only "accept as canon" can run. */
+async function proposeCanon(): Promise<string> {
+  const r = await engine.run(
+    'updatePropertyRow',
+    {
+      path: { resourceId: 'res3', propertyId: 'kvres301', rowId: 'kvres301r2' },
+      body: { content: [{ text: 'Authoritative' }] },
+    },
+    {
+      project: PROJECT,
+      origin: {
+        kind: 'mcp',
+        tool: 'lk_api_write',
+        principal: { principalId: proposer?.id ?? 'unknown', profile: profile.label, label: 'e2e proposer' },
+      },
+    },
+  );
+  return r.status === 'proposal_captured' && r.canonical ? r.proposalId : 'none';
+}
+
 // Control server: the test starts work here. Loopback only.
 createServer((req, res) => {
   void (async () => {
@@ -207,6 +245,12 @@ createServer((req, res) => {
       res.end(JSON.stringify(r));
     } else if (url.pathname === '/proposal') {
       res.end(JSON.stringify({ proposalId: await propose(url.searchParams.get('text') ?? 'Proposed text') }));
+    } else if (url.pathname === '/canon-proposal') {
+      res.end(JSON.stringify({ proposalId: await proposeCanon() }));
+    } else if (url.pathname === '/canon-status') {
+      res.end(
+        JSON.stringify({ status: sidebars.rows('res3').find((r) => r.key === 'Status')?.text ?? null }),
+      );
     } else if (url.pathname === '/page-proposal') {
       res.end(JSON.stringify({ proposalId: await proposePageWrite() }));
     } else if (url.pathname === '/ready') {

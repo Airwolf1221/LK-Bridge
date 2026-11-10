@@ -149,6 +149,42 @@ differenceCount?, reason?, journalId, ignored }, replanned? }`; the job's result
 `RunOptions.proposal` (`ProposalExtras`: `operation`, `summary`, `prefetched` reads) is handed to the proposal sink
 when the gate turns the write into a proposal. `WriteJournal.entryIdForStep(jobId, stepNo)` gives a step's entry.
 
+## Multi-step writes and the write guard (v2 C2a)
+
+[ADR 0032](../../docs/adr/0032-set-facts-and-canon.md). All set by bridge code only (the tools never pass an agent's
+input into them; proposals keep them and approval submits them as stored):
+
+- **`BatchSubmit.holdLock: { resourceId }`**: the job takes `res:<id>` before its first step and holds it until it
+  stops (finished, or parked for budget, held, paused or cancelled; taken again on resume). Every write step must take
+  that same lock or none (`INVALID_PARAMS` at submit otherwise); steps with it do not take it again. The job shows
+  `waiting_lock` (with `job: true`) while it waits.
+- **`BatchSubmit.internal: true`** allows the bridge's own steps (src/jobs/internal-steps.ts), both reads, put to the
+  policy gate as reads and covered by approval tokens like any step:
+  - `bridge.expect` `{ body: { checks: [{ label, kind: 'propertyRows' | 'collection', resourceId, propertyId, rows |
+collection, version? }] } }`: reads each property inside the lock (`listPropertyRows` / `getProperty`) and compares it
+    with the planned state (src/jobs/sidebar-state.ts); a difference is `StateConflictError` (`VERSION_CONFLICT`) and the
+    job stops. Held while writes are paused. Its value is `{ checked, versions: { [label]: version } }`.
+  - `bridge.verify` `{ body: { targets: [{ kind: 'sidebar' | 'blocks' | 'resource', label, … }] } }`: reads each target
+    back and compares it with the plan; never fails, never retries. Its value is `{ verification }` (a
+    `WriteVerification` with `targets` and the job's `journalIds`); a mismatch is an error row (`VERIFY_MISMATCH`).
+- **`BatchSubmit.proposal`**: as `RunOptions.proposal`, for a batch (now also `operations`, a list of high-level
+  operations, each with its `page` and `pageParts`).
+- Step options: **`ifMatchFrom: { step, key? }`** (the If-Match is bound from that step's result `version`, or
+  `versions[key]`, just before the step runs and stored; with nothing to chain from, a step with `expectCurrent` reads
+  in the lock instead, any other fails with nothing sent); **`expectCurrent: { state: 'rows' | 'collection', hash,
+label? }`** (the in-lock read must show that state, or `StateConflictError` and nothing is sent; rows are compared by
+  key and value in order, a collection whole); **`deferTreeReread`** (the observers re-read once at the job's end:
+  `WriteObserver.flushDeferred`); **`journalPreImage`** (the entry's pre-image when the operation keeps none).
+- The job's `result.verification` / `verified` gather every verify step's result (`bridge.verify` as well as C1's
+  `verifyAfterWrite`), read whole from the result artefact when the summary was cut.
+- **`engine.setWriteGuard(guard)`** (or `writeGuard` at creation; src/jobs/write-guard.ts): `entry(...)` is asked once
+  per `run` / `submit` with every operation, after the gate let them through, and returns `allow`, `deny` (nothing is
+  queued) or `propose_canonical` (the request becomes a proposal with `ProposalMeta.canonical`, whatever the gate said;
+  `RunResult` `proposal_captured` then carries `canonical`); `inLock(...)` is asked before each write step is sent, inside
+  its lock, with the read made there, and throws to refuse (`CanonicalApprovalRequiredError`,
+  `CANONICAL_APPROVAL_REQUIRED`). A guard that throws at entry counts as a deny. `JobOrigin.canonicalApprovedBy` is set
+  only by the proposal service with a canonical approval token (the gate refuses it otherwise).
+
 ## Model
 
 **Job** (`jobs`): `kind` (`single_op`, `batch_ops`, `paginate_all`; `upload_image`, chunk 3), `title`,

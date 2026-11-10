@@ -16,7 +16,15 @@ import { PROJECT_STATUS_LABELS, fmtAgo, prettyJson } from '../format';
 import { useNow } from '../hooks';
 import { useProject } from '../project';
 import { useReauth } from '../reauth';
-import type { KeyCheck, ProjectInfo, ProjectSettingKey, ProjectsResponse } from '../types';
+import { useApi } from '../hooks';
+import type {
+  CanonConfig,
+  CanonRule,
+  KeyCheck,
+  ProjectInfo,
+  ProjectSettingKey,
+  ProjectsResponse,
+} from '../types';
 
 /**
  * Projects (v2 A1): every LegendKeeper project the bridge knows, its flags and status, and whether its key is configured
@@ -91,6 +99,7 @@ export function ProjectsPage() {
             </table>
           </section>
           <SettingsCard data={data} onChanged={reload} />
+          <CanonCard data={data} />
         </>
       )}
     </>
@@ -609,17 +618,19 @@ function SettingsList({
   const extra = Object.keys(project.settings ?? {}).filter((k) => !known.has(k));
   return (
     <dl className="settings-list">
-      {keys.map((k) => (
-        <div key={k.key} data-setting={k.key}>
-          <dt>
-            {k.label} <span className="muted small-text">({k.kind})</span>
-          </dt>
-          <dd>
-            <SettingEditor project={project} setting={k} onChanged={onChanged} />
-            {k.help && <div className="muted small-text">{k.help}</div>}
-          </dd>
-        </div>
-      ))}
+      {keys
+        .filter((k) => k.kind !== 'rules')
+        .map((k) => (
+          <div key={k.key} data-setting={k.key}>
+            <dt>
+              {k.label} <span className="muted small-text">({k.kind})</span>
+            </dt>
+            <dd>
+              <SettingEditor project={project} setting={k} onChanged={onChanged} />
+              {k.help && <div className="muted small-text">{k.help}</div>}
+            </dd>
+          </div>
+        ))}
       {extra.map((k) => (
         <div key={k}>
           <dt className="mono">{k}</dt>
@@ -782,6 +793,196 @@ function SettingsCard({ data, onChanged }: { data: ProjectsResponse; onChanged: 
             <SettingsList project={p} keys={data.settingKeys} onChanged={onChanged} />
           </section>
         ))}
+    </section>
+  );
+}
+
+const ruleText = (r: CanonRule) =>
+  r.kind === 'value'
+    ? `${r.key} = ${(r.values ?? []).join(' or ')}: setting it to, or changing it from, this value needs canonical approval`
+    : `${r.key}: changing an existing value needs canonical approval (setting it where empty is allowed)`;
+
+/**
+ * v2 C2a (ADR 0032): each project's protected canonical facts. A change that touches one becomes a proposal only the
+ * owner's "Approve and accept as canon" can run, whatever the agent's scope. Every change here is audited.
+ */
+function CanonCard({ data }: { data: ProjectsResponse }) {
+  const projects = data.projects.filter((p) => p.status !== 'archived' && p.id !== null);
+  if (projects.length === 0) return null;
+  return (
+    <section className="card" aria-labelledby="canon-h">
+      <h2 id="canon-h">Canon</h2>
+      <p className="muted small-text">
+        The facts that are protected canon. An agent can never make, or undo, these changes on its own: they
+        become proposals that only “Approve and accept as canon” can run, whatever the agent’s scope.
+      </p>
+      {projects.map((p) => (
+        <CanonEditor key={p.name} project={p} />
+      ))}
+    </section>
+  );
+}
+
+function CanonEditor({ project: p }: { project: ProjectInfo }) {
+  const c = useApi<CanonConfig>(`/projects/${encodeURIComponent(p.name)}/canon`);
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const [draft, setDraft] = useState<CanonRule[] | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+  const [key, setKey] = useState('');
+  const [kind, setKind] = useState<'value' | 'change'>('value');
+  const [values, setValues] = useState('');
+  if (!c.data) return c.error ? <ErrorNote error={c.error} onRetry={c.reload} /> : <Loading />;
+  const rules = draft ?? c.data.rules;
+  const editing = draft !== null || status !== null;
+  const save = (next: CanonRule[] | null, label: string) =>
+    void confirm({
+      title: `${label} for ${p.name}?`,
+      message: (
+        <p>
+          {next === null
+            ? 'The default rules apply again.'
+            : `${next.length} rule${next.length === 1 ? '' : 's'} will protect canon. Anything not listed can be changed by agents with scope “write”.`}
+        </p>
+      ),
+      confirmLabel: 'Save',
+      danger: next !== null && next.length < c.data!.rules.length,
+    }).then((ok) => {
+      if (!ok) return;
+      void run(
+        () =>
+          api.put(`/projects/${encodeURIComponent(p.name)}/canon`, {
+            rules: next,
+            ...(status !== null ? { agentDefaultStatus: status.trim() === '' ? null : status.trim() } : {}),
+            confirm: true,
+          }),
+        'Canon rules saved.',
+      ).then((r) => {
+        if (r) {
+          setDraft(null);
+          setStatus(null);
+          c.reload();
+        }
+      });
+    });
+  const addRule = (e: FormEvent) => {
+    e.preventDefault();
+    const k = key.trim();
+    if (!k) return;
+    const id =
+      k
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '') || 'rule';
+    const rule: CanonRule =
+      kind === 'value'
+        ? {
+            id,
+            key: k,
+            kind,
+            values: values
+              .split(',')
+              .map((v) => v.trim())
+              .filter(Boolean),
+          }
+        : { id, key: k, kind };
+    if (rule.kind === 'value' && (rule.values ?? []).length === 0) return;
+    setDraft([...rules.filter((r) => r.id !== id), rule]);
+    setKey('');
+    setValues('');
+  };
+  return (
+    <section aria-label={`Canon of ${p.name}`} data-canon={p.name}>
+      <h3>
+        {p.name} {c.data.defaults && <span className="muted small-text">(the default rules)</span>}
+      </h3>
+      {c.data.problem && <p className="note note-warn small-text">{c.data.problem}</p>}
+      {rules.length === 0 ? (
+        <p className="note note-warn">No fact is protected: agents with scope “write” can change any fact.</p>
+      ) : (
+        <ul className="plain" aria-label={`Protected facts of ${p.name}`}>
+          {rules.map((r) => (
+            <li key={r.id} data-rule={r.id}>
+              {ruleText(r)}{' '}
+              <button
+                type="button"
+                className="small"
+                aria-label={`Remove the rule ${r.key} of ${p.name}`}
+                onClick={() => setDraft(rules.filter((x) => x.id !== r.id))}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form className="row" onSubmit={addRule} aria-label={`Add a protected fact to ${p.name}`}>
+        <label htmlFor={`canon-key-${p.name}`}>Fact</label>
+        <input
+          id={`canon-key-${p.name}`}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder="Status"
+        />
+        <label htmlFor={`canon-kind-${p.name}`}>Protect</label>
+        <select
+          id={`canon-kind-${p.name}`}
+          value={kind}
+          onChange={(e) => setKind(e.target.value === 'change' ? 'change' : 'value')}
+        >
+          <option value="value">these values, both ways</option>
+          <option value="change">any change of a set value</option>
+        </select>
+        {kind === 'value' && (
+          <>
+            <label htmlFor={`canon-values-${p.name}`}>Values</label>
+            <input
+              id={`canon-values-${p.name}`}
+              value={values}
+              onChange={(e) => setValues(e.target.value)}
+              placeholder="Authoritative"
+            />
+          </>
+        )}
+        <button type="submit" className="small">
+          Add
+        </button>
+      </form>
+      <div className="row mt">
+        <label htmlFor={`canon-status-${p.name}`}>Status of pages agents create</label>
+        <input
+          id={`canon-status-${p.name}`}
+          value={status ?? c.data.agentDefaultStatus}
+          onChange={(e) => setStatus(e.target.value)}
+        />
+      </div>
+      <div className="row mt">
+        <Button
+          variant="primary"
+          busy={busy}
+          disabled={!editing}
+          onClick={() => save(rules, 'Save the canon rules')}
+        >
+          Save
+        </Button>
+        {editing && (
+          <button
+            type="button"
+            className="small"
+            onClick={() => {
+              setDraft(null);
+              setStatus(null);
+            }}
+          >
+            Discard changes
+          </button>
+        )}
+        {!c.data.defaults && (
+          <Button busy={busy} onClick={() => save(null, 'Restore the default rules')}>
+            Restore the defaults
+          </Button>
+        )}
+      </div>
     </section>
   );
 }

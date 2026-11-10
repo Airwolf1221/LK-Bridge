@@ -51,6 +51,8 @@ export interface OwnerCommands {
   listProposals(actor: OwnerActor, filter: ProposalFilter): ProposalView[];
   getProposal(actor: OwnerActor, id: string): ProposalDetail;
   approve(actor: OwnerActor, id: string): Promise<ProposalView>;
+  /** v2 C2a: "Approve and accept as canon", the only approval of a proposal flagged requiresCanonicalApproval. */
+  approveAsCanon(actor: OwnerActor, id: string): Promise<ProposalView>;
   reject(actor: OwnerActor, id: string, reason?: string): ProposalView;
   bulkApprove(actor: OwnerActor, ids: readonly string[]): Promise<BulkResult[]>;
   bulkReject(actor: OwnerActor, ids: readonly string[], reason?: string): BulkResult[];
@@ -191,6 +193,11 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
     approve(actor, id) {
       assertOwner(actor);
       return proposals.approve(actor, id);
+    },
+
+    approveAsCanon(actor, id) {
+      assertOwner(actor);
+      return proposals.approveAsCanon(actor, id);
     },
 
     reject(actor, id, reason) {

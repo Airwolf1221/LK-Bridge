@@ -16,6 +16,12 @@ import { WRITERS_LIMIT, WRITERS_MIN } from '../config/jobs.js';
 import type { ControlsView, JobView } from '../jobs/index.js';
 import type { Profile, Scope } from '../policy/index.js';
 import { SettingValueError, parseSettingValue } from '../projects/index.js';
+import {
+  canonConfigFrom,
+  canonicalRulesSchema,
+  DEFAULT_CANONICAL_RULES,
+  type CanonicalRule,
+} from '../facts/index.js';
 import { AdminHttpError } from './http.js';
 import {
   SETTING_KEYS,
@@ -273,6 +279,46 @@ export function createAdminActions(d: AdminDeps) {
       audit('project.set_setting', before.name, { key, value: old ?? null }, { key, value: parsed });
       tree.onSettingsChanged(before.id);
       return after;
+    },
+
+    /**
+     * v2 C2a (ADR 0032): a project's protected canonical facts rules and the Status of pages agents create. `rules: null`
+     * restores the defaults. Validated here; audited as `project.set_canonical_rules` with the old and new values.
+     */
+    setCanonRules(ref: string, input: { rules: unknown; agentDefaultStatus?: string | null }) {
+      const before = projects.find(ref);
+      if (!before?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${ref} with stored data`);
+      if (before.status === 'archived') throw archivedError(before.name);
+      let rules: CanonicalRule[] | null = null;
+      if (input.rules !== null) {
+        const parsed = canonicalRulesSchema.safeParse(input.rules);
+        if (!parsed.success) {
+          throw new AdminHttpError(
+            400,
+            'INVALID_RULES',
+            parsed.error.issues.map((i) => `${i.path.join('.') || 'rules'}: ${i.message}`).join('; '),
+          );
+        }
+        rules = parsed.data as CanonicalRule[];
+      }
+      const old = canonConfigFrom(before.settings);
+      projects.setSetting(before.id, 'canonicalRules', rules);
+      let after = projects.find(before.name);
+      if (input.agentDefaultStatus !== undefined) {
+        const status = input.agentDefaultStatus === null ? null : input.agentDefaultStatus.trim();
+        if (status !== null && (status.length === 0 || status.length > 256)) {
+          throw new AdminHttpError(400, 'INVALID_SETTING', 'The default status must be 1 to 256 characters.');
+        }
+        after = projects.setSetting(before.id, 'agentDefaultStatus', status) ?? after;
+      }
+      const now = canonConfigFrom(after?.settings);
+      audit(
+        'project.set_canonical_rules',
+        before.name,
+        { rules: old.rules, defaults: old.defaults, agentDefaultStatus: old.agentDefaultStatus },
+        { rules: now.rules, defaults: now.defaults, agentDefaultStatus: now.agentDefaultStatus },
+      );
+      return { project: before.name, ...now, defaultRules: DEFAULT_CANONICAL_RULES };
     },
 
     // ------------------------------------------------------------------------- OPS2: projects and their keys
@@ -731,6 +777,11 @@ export function createAdminActions(d: AdminDeps) {
     approve: (projectId: string, id: string) => {
       proposalIn(projectId, id);
       return cmd.approve(OWNER, id);
+    },
+    /** v2 C2a: "Approve and accept as canon" (audited as proposal.approve_as_canon by the proposal service). */
+    approveAsCanon: (projectId: string, id: string) => {
+      proposalIn(projectId, id);
+      return cmd.approveAsCanon(OWNER, id);
     },
     reject: (projectId: string, id: string, reason?: string) => {
       proposalIn(projectId, id);

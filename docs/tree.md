@@ -66,7 +66,10 @@ Every query answer states the status, why it is not ready, and when the tree was
   job and at its priority, and the tree stores what LegendKeeper answered. A move into the root, a restore and a
   template copy with children also list and read the descendants. Page content (block) writes do not touch the tree.
   A re-read that fails marks the node stale, is logged, and is retried (one minute, doubling to an hour); the next
-  sweep settles it in any case. A crash between a write and its re-read is caught up at the next start.
+  sweep settles it in any case. A crash between a write and its re-read is caught up at the next start. **v2 C2a:** a
+  write step marked `deferTreeReread` (set_facts' several writes to one page) is re-read once, when its job ends
+  (`flushDeferred`: one getResource for the page, whatever the number of writes); its row stays owed until then, so a
+  job that never ends is still caught by the retry loop.
 - **Structural sweep** (`tree-sweep`, hourly, can be switched off per project). One listing of the project (about one
   request per 100 resources): new pages, renames, moves (into, out of and within the root), deletions, tags, aliases
   and documents. It reads with getResource only the pages it has never read and the stale ones (a page missing from

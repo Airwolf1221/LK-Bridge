@@ -210,6 +210,43 @@ test('v2 C1: a write_page proposal shows its Markdown diff, keep regions as plac
   expect(problems).toEqual([]);
 });
 
+test('v2 C2a: a proposal that touches protected canon is approved only with "Approve and accept as canon"', async ({
+  page,
+  request,
+}) => {
+  const problems = watch(page);
+  const { proposalId } = (await (await request.get(`${CONTROL}/canon-proposal`)).json()) as {
+    proposalId: string;
+  };
+  expect(proposalId).toMatch(/^prop_/);
+  await signIn(page, `/ui/proposals?id=${proposalId}`);
+  await expect(page.getByRole('region', { name: 'Pages affected' })).toContainText('sidebar, 1 fact changed');
+  const banner = page.getByRole('alert', { name: 'Protected canon' });
+  await expect(banner).toContainText('This changes protected canon.');
+  await expect(banner).toContainText('Status would be set to Authoritative');
+  await expect(page.getByRole('button', { name: 'Approve', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Approve and accept as canon' }).click();
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toContainText('protected canon');
+  await dialog.getByRole('button', { name: 'Approve and accept as canon' }).click();
+  await expect(page.getByRole('alert', { name: 'Protected canon' })).toContainText(
+    'Accepted as canon by owner',
+    {
+      timeout: 15_000,
+    },
+  );
+  await expect
+    .poll(
+      async () =>
+        ((await (await request.get(`${CONTROL}/canon-status`)).json()) as { status: string }).status,
+      {
+        timeout: 15_000,
+      },
+    )
+    .toBe('Authoritative');
+  expect(problems).toEqual([]);
+});
+
 test('is usable on a phone, in the dark', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 800 }, colorScheme: 'dark' });
   const page = await context.newPage();

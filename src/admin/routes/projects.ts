@@ -8,6 +8,7 @@
  * after the owner confirms is it stored, encrypted. Adding, replacing and removing need a fresh re-authentication.
  */
 import * as z from 'zod';
+import { canonConfigFrom, DEFAULT_CANONICAL_RULES } from '../../facts/index.js';
 import { PROJECT_SETTING_KEYS } from '../../projects/index.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
@@ -125,6 +126,35 @@ export const registerProjects: Register = (api, ctx) => {
       req.body,
     );
     return { project: ctx.actions.setProjectSetting(name, b.key, b.value) };
+  });
+
+  /** v2 C2a: the project's protected canonical facts rules and the Status of pages agents create. */
+  api.get('/projects/:name/canon', (req) => {
+    const { name } = parseInput(nameParam, req.params);
+    const p = projects.find(name);
+    if (!p?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${name} with stored data`);
+    return {
+      project: p.name,
+      ...canonConfigFrom(p.settings),
+      defaultRules: DEFAULT_CANONICAL_RULES,
+    };
+  });
+
+  /** v2 C2a: replaces the rules (`rules: null` restores the defaults); `confirm: true` required. Audited. */
+  api.put('/projects/:name/canon', (req) => {
+    const { name } = parseInput(nameParam, req.params);
+    const b = parseInput(
+      z.object({
+        rules: z.union([z.array(z.unknown()).max(50), z.null()]),
+        agentDefaultStatus: z.union([z.string().max(256), z.null()]).optional(),
+        confirm: z.literal(true),
+      }),
+      req.body,
+    );
+    return ctx.actions.setCanonRules(name, {
+      rules: b.rules,
+      ...(b.agentDefaultStatus !== undefined ? { agentDefaultStatus: b.agentDefaultStatus } : {}),
+    });
   });
 
   api.post('/projects/:name/verify', async (req) => {

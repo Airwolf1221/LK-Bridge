@@ -64,6 +64,7 @@ budget (arkona): writes 0/120·min …
 | `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                     |
 | `read_document`             | read   | true / false / true / false                                     | 1 read (a timeline: 2 + 1 per 100 events) |
 | `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read         |
+| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)   |
 | `get_markdown_guide`        | read   | true / false / true / false                                     | none                                      |
 | `get_bridge_guide`          | read   | true / false / true / false                                     | none                                      |
 | `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                      |
@@ -129,7 +130,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (119 tools in all, 121 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (120 tools in all, 122 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -149,9 +150,9 @@ budget (arkona): writes 0/120·min …
 
 **`bridge_errors_recent`** `{ grouped?, limit?, sinceMinutes?, jobId? }`: failures grouped by operation, code and path (default), or one row each, with LegendKeeper `requestId`s.
 
-**`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, principalId?, profile?, outcome?, withPreImage?, before?, sinceMinutes?, limit?, includePreImage? }`: the write journal, newest first. Since chunk 8 it holds **every** write the bridge sends (creates, inserts, patches, deletes), each with operation, target, time, outcome (`applied`, `not_applied`, `unknown`, `pending`), principal, profile and approver; destructive writes also keep their pre-image. Since v2 C1 an entry made by a high-level tool also has `operation`: for `write_page` the tool, mode, section, a SHA-256 of the Markdown (`markdownSha256`) and its length, the version the plan was built on (`plannedOn`), the agent's `baseVersion`, `dropRegions`, and `replannedInLock` when the bridge re-planned a section edit inside the lock. `targetId` also matches every resource a `createManyResources` created. Pages hold `limit` entries (default 10, at most 100); when a page is full, `nextBefore` is the cursor for the next, older page (`before`).
+**`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, principalId?, profile?, outcome?, withPreImage?, before?, sinceMinutes?, limit?, includePreImage? }`: the write journal, newest first. Since chunk 8 it holds **every** write the bridge sends (creates, inserts, patches, deletes), each with operation, target, time, outcome (`applied`, `not_applied`, `unknown`, `pending`), principal, profile and approver; destructive writes also keep their pre-image. Since v2 C1 an entry made by a high-level tool also has `operation`: for `write_page` the tool, mode, section, a SHA-256 of the Markdown (`markdownSha256`) and its length, the version the plan was built on (`plannedOn`), the agent's `baseVersion`, `dropRegions`, and `replannedInLock` when the bridge re-planned a section edit inside the lock. Since v2 C2a, `set_facts` entries have the tool, the page, the property, the counts and the write (`Status: changed`); the first write to the key-value property keeps the property as the plan saw it as its pre-image. `targetId` also matches every resource a `createManyResources` created. Pages hold `limit` entries (default 10, at most 100); when a page is full, `nextBefore` is the cursor for the next, older page (`before`).
 
-**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)). Since v2 C1 a proposal made by a high-level tool also has `operation`, briefly (for `write_page`: the tool, page, document, mode, section, the version it was planned on and the counts; never the Markdown).
+**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)). Since v2 C1 a proposal made by a high-level tool also has `operation`, briefly (for `write_page`: the tool, page, document, mode, section, the version it was planned on and the counts; never the Markdown). Since v2 C2a each also has `pages`, the page-level summary (one plain line per page, for example `Asagiri Miyabi: sidebar, 2 facts changed`), and `requiresCanonicalApproval` with `canonicalReason` when the change touches protected canon (only the owner's "Approve and accept as canon" can run it).
 
 **`bridge_result_page`** `{ handle, offset?, limit?, detail? }`: for a paginate handle `offset` and `limit` count items (the page is trimmed to the output budget; use `nextOffset`); for a stored oversized result `offset` counts characters of the JSON text and slices must be concatenated in order.
 
@@ -371,10 +372,130 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                            |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| off     | the 12 above, `write_page` (v2 C1), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (29 for a profile with scope `propose` or `write`; a `read` profile does not see the five write tools `write_page`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                        |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                              |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (30 for a profile with scope `propose` or `write`; a `read` profile does not see the six write tools `write_page`, `set_facts`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                          |
+
+## Facts and links: `set_facts` (v2 C2a)
+
+Changes a page's sidebar **facts** (the key-value rows of its `PROPERTIES` property) and its relationship **links** (the
+link collections, such as Dependencies and Related Sources), as ONE job under the page's lock, checked inside the
+lock, chained version by version, and read back. Design: [ADR 0032](adr/0032-set-facts-and-canon.md). The agent
+guide's "Editing facts and links" and "Canon and approval" sections ([bridge-guide.md](bridge-guide.md)) are the short
+version.
+
+**`set_facts`** `{ page, facts?, links?, property?, dryRun?, project }`: `access: write`, annotations
+`readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`. A `read` profile
+neither sees nor may call it. `project` follows A1's rule: required while the bridge serves several projects.
+
+| Argument   | Meaning                                                                                                                                                         |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page`     | A page name or id, resolved by A3's resolver inside the AI REPOSITORY only.                                                                                     |
+| `facts`    | Key → value. A string is plain text, written exactly (a line break becomes a line-break run); `{ "markdown": "…" }` is inline Markdown; `null` removes the row. |
+| `links`    | Collection title → `{ add?, remove? }`; each entry a page name or id, or `{ "page": …, "document": … }` for one document of a page.                             |
+| `property` | The key-value property's title. Default: the project's setting `factsPropertyName` (`PROPERTIES` until set).                                                    |
+| `dryRun`   | Plan only: what would change, the writes, and whether it touches protected canon. Nothing is written, queued or proposed.                                       |
+
+**Facts.** Keys match existing rows without case and with outer spaces ignored; an existing row keeps its key (as
+written), its id and its place. The same value writes nothing. A key that occurs twice in the property is refused
+(`FACT_KEY_DUPLICATED`): the bridge does not guess which row. A **new template fact** goes in the template's order:
+after its nearest existing preceding template fact, else before its nearest following one, else above the facts that
+are not in the template. The template is the one the repository tree recorded for the page (C2b records it when it
+creates a page), or else the page's Reference Type mapped through the type registry to a type and role (for
+characters: `Character Core` → the type's `core` template). The template's keys are read once and kept for a day. **Any
+other new fact** goes at the bottom, in the order given. When no template can be determined, new facts go at the bottom
+and the result says so in `notes`.
+
+**Inline Markdown** (B1's inline subset, [markdown.md](markdown.md)): `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``,
+`<u>`, `<sub>`, `<sup>`, links, `<br>`, and mentions: `[[Name]]` and `[[Name|label]]` resolved through A3 inside the AI
+REPOSITORY (exactly one page, or `MENTION_AMBIGUOUS` with the candidates / `MENTION_NOT_FOUND`), and
+`[label](lk://resources/<id>/docs/<docId>)` for a document. Anything that is not one line of inline text (a heading, a
+list, two paragraphs, an image) is `FACT_VALUE_NOT_INLINE`. Values are converted before anything is read.
+
+**Links.** The collection is found by its title (`resourceCollection` or `resourceLink`; `LINK_COLLECTION_NOT_FOUND`
+with the titles there are, or `LINK_COLLECTION_AMBIGUOUS`). Adds resolve through A3 inside the root; a document must
+exist on its page (`DOCUMENT_NOT_FOUND` / `DOCUMENT_AMBIGUOUS`). Adds go after the existing items; a page (or document)
+already linked is reported in `alreadyLinked`, not doubled. A remove matches by page (every item of that page) and, when
+a document is given, by document; one that matches nothing is reported in `notLinked`. A remove may also name an item
+by the page id it holds, even when that page is no longer in the tree. **Existing items keep their ids, ranks and
+order, and the collection's filter is never sent, so LegendKeeper keeps it** (the old bridge's rule). LegendKeeper has
+no item-level operations for collections, so a changed collection is ONE `updateProperty` with the full items list:
+every kept item exactly as read (`id`, `rank`, `resourceId`, `documentId`), then the new ones (page and document only).
+
+**Examples**
+
+```json
+{ "project": "test", "page": "[BSRC] Asagiri Miyabi", "facts": { "Status": "Working", "Scope": "Foxian shrine maiden" } }
+{ "project": "test", "page": "miyabi01", "facts": { "Old Note": null } }
+{ "project": "test", "page": "miyabi01", "facts": { "Sister": { "markdown": "**Elder** sister of [[Asagiri Kaede]]" } } }
+{ "project": "test", "page": "miyabi01", "links": { "Dependencies": { "add": ["Fourth Age - Table", { "page": "Universal Chronology", "document": "Main" }], "remove": ["Asagiri Kaede"] } } }
+{ "project": "test", "page": "miyabi01", "facts": { "Mood": "Calm" }, "links": { "Related Sources": { "add": ["Inae Mikumo"] } }, "dryRun": true }
+```
+
+**How a write runs** (one job, holding the page's lock from its first step to its last)
+
+1. **Plan** (before anything is queued): one `listProperties` (each property with its rows, items and filter), the
+   values, the links, the template's order when a new fact needs it. **An empty plan writes nothing**
+   (`status: "no_change"`, no job). A `dryRun` stops here.
+2. **Check, inside the lock** (`bridge.expect`): every property the plan changes is read again (`listPropertyRows` for
+   the key-value property, which gives the version row writes check; `getProperty` for each collection) and compared
+   with the state the plan was built on: rows by id, key and value in order; items by id, page and document in order;
+   the filter whole; a property's version where both reads give one. Any difference is a conflict (`VERSION_CONFLICT`)
+   and **nothing is written**. LegendKeeper's If-Match is not an atomic compare-and-swap (PLAN-v2 10.6), so this check
+   is the bridge's own.
+3. **The writes**, in order: changes, additions, removals (additions are anchored to rows that stay), then each
+   collection. Each row write chains its If-Match from the write before it (the first from the check). A write with
+   nothing to chain from (after a removal, which LegendKeeper answers without a version) reads the rows inside the lock
+   and compares them with the plan first. A collection write (`updateProperty`, which LegendKeeper does not version)
+   reads the collection inside the lock and compares it with the plan first.
+4. **Verify** (`bridge.verify`): the sidebar is read back and compared with the planned state (keys, values, order,
+   links, the filter). A difference is **"written but not as planned"**: recorded on the job, in the errors table
+   (`VERIFY_MISMATCH`) and in the result, and never retried. The job's journal entries hold what each write changed.
+5. **The tree** re-reads the page once, when the job ends (Reference Type, Scope and the other catalogue fields).
+
+**Cost.** Planning: 1 read (plus 1 the first time a template's order is needed). The job: 1 read to check (plus 1 per
+collection changed), 1 write per fact changed, added or removed, 1 read and 1 write per collection changed, 1 read to
+verify and 1 for the tree. Changing two facts: 4 reads and 2 writes. Two facts and one link: 6 reads and 3 writes. A
+dry run, or a proposal: the planning read (a proposal adds 1 read per property to capture it, and runs the job when
+approved).
+
+**Results** (each names its project and ends with its budget line):
+
+```json
+{"project":"test","page":{"id":"miyabi01","name":"Asagiri Miyabi","path":"AI REPOSITORY / Characters / …"},"property":"PROPERTIES",
+ "facts":{"changed":[{"key":"Status","before":"Draft","after":"Working"}],"added":[{"key":"Mood","value":"Calm"}]},
+ "links":{"Dependencies":{"added":["Fourth Age - Table"],"removed":[],"alreadyLinked":["Asagiri Kaede"]}},
+ "status":"written","verified":true,"jobId":"j…"}
+budget (test): writes 3/120·min …
+```
+
+`status` is `written` (with `verified`: `true`, `false` with a `warning` and `verification`, or `null` when the read
+back could not be made), `no_change`, `dry_run` (with `writes` and `summary`), `proposal_captured`, `queued` or
+`waiting_budget` (follow the job; never send it again). `facts` lists `added`, `changed`, `removed`, `unchanged` and
+`notPresent` (a removal of a key that is not there); `links` lists per collection `added`, `removed`, `alreadyLinked`,
+`notLinked`, and a note when the collection has a filter. `notes` says when the template could not be determined.
+
+**Refusals** (typed, nothing is written): `INVALID_PARAMS` (nothing to do), `INVALID_FACTS` (an empty key, or one key
+twice), `FACT_KEY_DUPLICATED`, `FACTS_PROPERTY_NOT_FOUND` (with `available`), `FACTS_PROPERTY_AMBIGUOUS`,
+`FACT_VALUE_NOT_INLINE`, the mention codes, `INVALID_LINKS` (a collection named twice, the same page added and removed,
+more than 256 items), `LINK_COLLECTION_NOT_FOUND`, `LINK_COLLECTION_AMBIGUOUS`, `DOCUMENT_NOT_FOUND`,
+`DOCUMENT_AMBIGUOUS`, `VERSION_CONFLICT` (the check in the lock; read the page again and redo the change), and the name
+and tree codes of the read tools (`NOT_FOUND`, `NOT_IN_REPOSITORY`, `AMBIGUOUS`, `TREE_NOT_READY`). A job that stops
+after some writes reports `WRITTEN_IN_PART` with the writes that were made; read the page before anything else.
+
+**Protected canon.** A change that touches a protected fact (by default: `Status` set to or changed from
+`Authoritative`; an existing `Continuity Type` or `Continuity` changed) becomes a proposal **whatever the connection's
+scope**: `status: "proposal_captured"`, `requiresCanonicalApproval: true` and the `reason`. Only the owner's "Approve and
+accept as canon" can run it ([policy.md](policy.md)). A `dryRun` says `requiresCanonicalApproval` with the
+`protectedChanges`.
+
+**At scope `propose`** the same plan is captured as ONE proposal that holds the high-level operation (the page, the
+facts table before and after, the links added and removed) and its expansion: the check, the writes and the verify
+step, exactly as a direct write runs them. The dashboard shows the page-level summary first, then the facts table and
+the links, then each operation. On approval the usual re-read applies (a property that changed since capture makes
+the proposal **conflicted**), and the approved job runs the same check inside the lock (a change after the approval's
+re-read makes it conflicted too, nothing written).
 
 ## Image upload
 

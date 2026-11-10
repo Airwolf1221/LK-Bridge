@@ -143,7 +143,87 @@ fails with `VERSION_CONFLICT` before any step succeeded (the compare-and-swap in
 made after the approval's re-read), the proposal becomes `conflicted` (`executing → conflicted`), not `failed`: nothing
 was written. v1 proposals are unchanged.
 
+**Multi-page groundwork (v2 C2a, [ADR 0032](adr/0032-set-facts-and-canon.md)).** A proposal stores a **list** of
+high-level operations (`proposals.operations`; C1's single `operation` stays as the first), each naming the page it
+affects and, optionally, its `pageParts`. Every client id the expansion needs is **minted at capture** and stored (a
+planner mints the ids it cross-references itself; capture mints any still missing, for example a `createResource`
+proposed through `lk_api_write`), so a child "under" a new index and a link "to" a new page are fixed in the proposal,
+and approval runs with exactly those ids. Every proposal has a **page-level summary** (`page_summary`, made at capture):
+its operations grouped by the page they affect, in plain labels such as `Asagiri Miyabi: sidebar, 3 facts changed, 1
+link added`; the dashboard shows it first. An expansion may hold the bridge's own steps (`bridge.expect`, the check
+inside the lock; `bridge.verify`, the generic verify) and a job-level lock (`job_options`); approval submits it with
+both. What the verify step found is kept on the proposal (`verification`) as well as on the job.
+
 **Reject** (owner only) takes an optional reason, which the agent can read.
+
+## Protected canonical facts (v2 C2a)
+
+**The rule** (decided by the owner; PLAN-v2 10.3 as refined): canon never changes without the owner's explicit
+canonical approval, by any route. It is configuration, per project (Projects page, _Canon_; audited as
+`project.set_canonical_rules`), a list of rules seeded with these defaults:
+
+| Rule                       | Protected                                                                                                                        |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `Status` = `Authoritative` | Both directions: setting a page's Status TO Authoritative, or changing it FROM Authoritative to anything else (removing it too). |
+| `Continuity Type`          | CHANGING an existing non-empty value (for example CANON ↔ AU). Setting it where it is empty (as on a new page) is allowed.       |
+| `Continuity`               | CHANGING an existing non-empty value (for example one AU to another). Setting it where it is empty is allowed.                   |
+
+Facts are every key-value row of the page's sidebar; keys match without case and with spaces trimmed, `value` rules
+match values without case, a `change` rule compares a value's text and the pages it mentions (marks do not count). A
+second value added next to an existing one is a change. The Status of pages agents create is `Working`
+(`agentDefaultStatus`, kept for C2b's creation tools); templates carry no fact defaults (the owner confirmed), so
+nothing is inherited.
+
+**What happens.** A write that would make a protected change becomes a **proposal flagged
+`requiresCanonicalApproval`, whatever the caller's scope** (`write` or `propose`), and the agent's result says
+`requiresCanonicalApproval: true` with the reason. A `read` connection is refused as before. Writes that touch nothing
+protected behave exactly as before. The dashboard shows such a proposal with a banner listing the protected changes;
+the only approval is **"Approve and accept as canon"** (`approveAsCanon`, `POST /api/admin/proposals/:id/approve-as-canon`
+with `{ confirm: true }`), a separate action audited as `proposal.approve_as_canon` that records `canonicalApprovedBy`
+(and when). The ordinary Approve, and bulk approval, are refused for it (`CANONICAL_APPROVAL_REQUIRED`); "accept as
+canon" is refused for a proposal that is not canonical (`NOT_CANONICAL`). Reject works as normal.
+
+**Where it is enforced.** In the job engine, on every request and every write, not in each tool (src/facts/canonical.ts,
+the engine's write guard, src/jobs/write-guard.ts):
+
+1. **At entry**, once per `run` / `submit`, after the policy gate let every operation through: the request's sidebar
+   writes are simulated in order on the page's sidebar as it is now (the tool's own read when it made one, else one
+   `listProperties`), and the facts after each write are compared with those before it. A batch is judged as the
+   sequence it is, so a protected change made in two harmless-looking steps is caught. A sidebar that cannot be read
+   counts as protected (refuse rather than guess).
+2. **At execution of an approved proposal**: the approved batch passes the same entry check. With a canonical approval
+   token (minted only by "Approve and accept as canon") it runs; without one, an expansion that carries a protected
+   change is refused there, the proposal fails, and **nothing is written** (a forged or stale expansion).
+3. **Inside the lock**, before each sidebar write is sent: the check is made again on what is there now (the read the
+   engine makes there, or one more read when the write touches a protected fact). A job that does not carry canonical
+   approval is refused (`CANONICAL_APPROVAL_REQUIRED`); nothing is sent. A versioned row write sent with an `If-Match`
+   the bridge did not read there is left to LegendKeeper's version check, which refuses it if the rows changed since.
+4. **The system principal** (the bridge's own work, the dashboard) is refused a protected change too: the bridge never
+   makes one on its own.
+
+**Every write path that can reach sidebar facts, and its guard:**
+
+| Path                                                                                                                                                    | Guarded by                                                                                             |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `set_facts`                                                                                                                                             | entry (with the plan's own read), execution, inside the lock                                           |
+| `lk_api_write` with `createProperty`, `updateProperty` (rows), `deleteProperty`                                                                         | entry, execution, inside the lock                                                                      |
+| `lk_api_write` with `createPropertyRow`, `updatePropertyRow` (key or value), `deletePropertyRow`                                                        | entry, execution, inside the lock (or LegendKeeper's If-Match, see above)                              |
+| `lk_api_batch` with any of those, in any order                                                                                                          | entry (the whole sequence), execution, inside the lock                                                 |
+| `lk_op_createProperty`, `lk_op_updateProperty`, `lk_op_deleteProperty`, `lk_op_createPropertyRow`, `lk_op_updatePropertyRow`, `lk_op_deletePropertyRow` | entry, execution, inside the lock                                                                      |
+| `createResourceFromTemplate` (any tool): it copies the template's properties                                                                            | entry (the template's facts are read and judged as a new page's)                                       |
+| C2b's tools (resources, documents, characters)                                                                                                          | the same engine guard, whatever they submit; `assessFactChange` for their own checks before they write |
+| An approved proposal's batch                                                                                                                            | execution (canonical approval token required for a protected change), inside the lock                  |
+
+Operations that cannot write sidebar facts are not checked: `createResource` and `createManyResources` (their bodies
+carry no properties), `updateResource` (name, tags, aliases, icon, flags), `saveResourceAsTemplate` (it copies a page
+into a template; the page does not change, and a template's facts are judged when a page is made from it), block and
+infobox operations (page content, not the sidebar), and `deleteResource` / `restoreResource` (they remove or bring
+back a page whole, without changing its facts; whether deleting or restoring an Authoritative page should need
+canonical approval is an open question for the owner, ADR 0032).
+
+**The shared function.** `assessFactChange(rules, before, after)` (src/facts/index.ts) is pure: given a page's facts
+before and after a change, it lists the protected changes. C2b's tools call it to tell an agent in a dry run; the engine
+guard enforces it whatever they call.
 
 **Retention (v1.0.1).** `executed`, `rejected`, `expired` and `failed` proposals are deleted, with their operations and
 pre-state, `POLICY_PROPOSAL_RETENTION_DAYS` (90) days after they finished, by the `proposal-prune` maintenance job
@@ -155,10 +235,10 @@ never pruned. Jobs, journal entries and audit rows keep the proposal id as text.
 Both are read tools (`access: 'read'`, `readOnlyHint: true`) restricted to the caller's own proposals (by principal);
 another principal's proposal is reported exactly as if it did not exist.
 
-| Tool                     | Input                                          | Returns                                                                                                             |
-| ------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `bridge_proposal_status` | `{ proposalId, project? }`                     | state, summary, operation count, times, the rejection reason, the job id, the conflicting operation, the error text |
-| `bridge_proposals_mine`  | `{ state?, limit? (1-50, def. 20), project? }` | the same, newest first                                                                                              |
+| Tool                     | Input                                          | Returns                                                                                                                                                                                                     |
+| ------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridge_proposal_status` | `{ proposalId, project? }`                     | state, summary, operation count, times, the rejection reason, the job id, the conflicting operation, the error text; since v2 C2a the pages affected and `requiresCanonicalApproval` with `canonicalReason` |
+| `bridge_proposals_mine`  | `{ state?, limit? (1-50, def. 20), project? }` | the same, newest first                                                                                                                                                                                      |
 
 No MCP tool can change a scope, approve or reject a proposal, or create or revoke a token
 (`test/policy/no-agent-escalation.test.ts` calls every registered tool with hostile arguments and checks).
@@ -170,21 +250,22 @@ authenticate the owner (session cookie and CSRF) first. Each takes `actor: 'owne
 checked at run time). Every change writes an `audit_log` row (`at`, `actor`, `action`, `target`, `before`, `after`) and
 emits a `policy` event on the engine's event emitter; proposal state changes also emit `proposal` events.
 
-| Command                                                      | What it does                                                                              | Audit action                                     |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `listProfiles(actor)`                                        | Profiles with their count of active connections                                           | –                                                |
-| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                  | `profile.create`                                 |
-| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                             | `profile.set_scope`                              |
-| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                | `policy.set_default_scope`                       |
-| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                  | –                                                |
-| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                     | `connection.set_profile`                         |
-| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                  | `connection.revoke`                              |
-| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                        | –                                                |
-| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks | –                                                |
-| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`)                        | `proposal.approve` (then `proposal.executed`, …) |
-| `reject(actor, id, reason?)`                                 |                                                                                           | `proposal.reject`                                |
-| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id                                                  | as above                                         |
-| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                               | –                                                |
+| Command                                                      | What it does                                                                                            | Audit action                                     |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `listProfiles(actor)`                                        | Profiles with their count of active connections                                                         | –                                                |
+| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                                | `profile.create`                                 |
+| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                                           | `profile.set_scope`                              |
+| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                              | `policy.set_default_scope`                       |
+| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                                | –                                                |
+| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                                   | `connection.set_profile`                         |
+| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                                | `connection.revoke`                              |
+| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                                      | –                                                |
+| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks               | –                                                |
+| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`). Refused for a canonical proposal    | `proposal.approve` (then `proposal.executed`, …) |
+| `approveAsCanon(actor, id)` (v2 C2a)                         | "Approve and accept as canon": the only approval of a canonical proposal; records `canonicalApprovedBy` | `proposal.approve_as_canon`                      |
+| `reject(actor, id, reason?)`                                 |                                                                                                         | `proposal.reject`                                |
+| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id                                                                | as above                                         |
+| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                                             | –                                                |
 
 The system writes its own rows with actor `system`: `proposal.conflicted`, `proposal.executed`, `proposal.failed`,
 `proposal.expired`, `proposal.approval_reverted` and `proposal.approval_interrupted`. Read-only commands are not
@@ -192,7 +273,7 @@ audited.
 
 Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PROFILE_EXISTS`, `PROFILE_NOT_FOUND`,
 `CONNECTION_NOT_FOUND`, `PROPOSAL_NOT_FOUND`, `INVALID_TRANSITION`, `PROPOSAL_EXPIRED`, `BRIDGE_READ_ONLY`,
-`WRITES_PAUSED`, `DRAINING`, `NO_ENGINE`, `REREAD_FAILED`.
+`WRITES_PAUSED`, `DRAINING`, `NO_ENGINE`, `REREAD_FAILED`, `CANONICAL_APPROVAL_REQUIRED` and `NOT_CANONICAL` (v2 C2a).
 
 ## Consent and PATs
 

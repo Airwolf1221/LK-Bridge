@@ -14,7 +14,9 @@ export type PolicyErrorCode =
   | 'NO_ENGINE'
   | 'CAPTURE_FAILED'
   | 'REREAD_FAILED'
-  | 'PROJECT_UNAVAILABLE';
+  | 'PROJECT_UNAVAILABLE'
+  | 'CANONICAL_APPROVAL_REQUIRED'
+  | 'NOT_CANONICAL';
 
 export class PolicyError extends Error {
   override readonly name = 'PolicyError';

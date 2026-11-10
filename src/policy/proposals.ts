@@ -31,6 +31,8 @@ import {
 } from '../jobs/errors.js';
 import { assertNoUnsupportedLoss, checkSubmitGuards, unsupportedLoss } from '../jobs/guards.js';
 import { READERS, opMeta } from '../jobs/op-meta.js';
+import { internalStepIssues, isInternalStep } from '../jobs/internal-steps.js';
+import { mintClientId } from '../jobs/ids.js';
 import type { ProposalMeta, ProposalSink, ProposedOp } from '../jobs/policy.js';
 import {
   TERMINAL_JOB_STATUSES,
@@ -47,6 +49,7 @@ import { projectWhere } from '../jobs/repo.js';
 import type { OperationDef } from '../lk/registry-types.js';
 import { markdownDiff, type MarkdownDiff } from '../pages/diff.js';
 import { canonicalJson, hashJson, issueApprovalToken } from './approval.js';
+import { buildPageSummary, type PageSummaryEntry } from './page-summary.js';
 import { PolicyError } from './errors.js';
 import type { PolicyStore } from './store.js';
 import {
@@ -92,6 +95,8 @@ export interface ProposalServiceOptions {
    * job calls `expireDue()` instead. Expiry is also enforced lazily (approving an expired proposal expires it).
    */
   readonly externalExpirySweep?: boolean;
+  /** v2 C2a: a page's name from the repository tree, for the page-level summary (also settable later). */
+  readonly pageName?: (projectId: string, resourceId: string) => string | null;
 }
 
 interface Snapshot {
@@ -125,6 +130,12 @@ export interface ProposalDetail extends ProposalView {
   readonly markdownDiff: MarkdownDiff | null;
   /** v2 C1: what the read after the write found, once the approved job ran (from the job). */
   readonly execution: { readonly verified: boolean | null; readonly verification: unknown } | null;
+  /** v2 C2a: every high-level operation of the proposal (C1's `operationDetail` is the first of them). */
+  readonly operations: readonly Readonly<Record<string, unknown>>[];
+  /** v2 C2a: the operations grouped by the page they affect (shown first). */
+  readonly pageSummary: readonly PageSummaryEntry[];
+  /** v2 C2a: the protected canonical changes, when the proposal needs canonical approval. */
+  readonly canonical: { readonly reason: string; readonly changes: readonly unknown[] } | null;
 }
 
 /** v2 C1: the high-level operation kept with a proposal: each text field at most this long. */
@@ -146,6 +157,14 @@ export interface AgentProposalView {
   readonly error: string | null;
   /** v2 C1: the high-level operation, briefly (tool, page, document, mode, section), or null. */
   readonly operation: Readonly<Record<string, unknown>> | null;
+  /**
+   * v2 C2a: the change is protected canon: only the owner's "Approve and accept as canon" can run it; `reason` says
+   * which change.
+   */
+  readonly requiresCanonicalApproval: boolean;
+  readonly canonicalReason: string | null;
+  /** v2 C2a: the pages it affects, one plain line each. */
+  readonly pages: readonly string[];
 }
 
 export function newProposalId(): string {
@@ -187,14 +206,35 @@ function toView(r: Row, opCount: number): ProposalView {
     finishedAt: r.finished_at === null ? null : Number(r.finished_at),
     opCount,
     operation: operationBrief(parseJson<Record<string, unknown> | null>(r.operation, null)),
+    requiresCanonicalApproval: Number(r.requires_canonical ?? 0) === 1,
+    canonicalApprovedBy: (r.canonical_approved_by as string | null) ?? null,
+    canonicalApprovedAt: r.canonical_approved_at == null ? null : Number(r.canonical_approved_at),
+    pages: parseJson<PageSummaryEntry[]>(r.page_summary, []).map((e) => e.label),
   };
+}
+
+/** v2 C2a: how a proposal's approved batch is submitted besides its steps. */
+interface StoredJobOptions {
+  readonly holdLock?: { readonly resourceId: string };
+  readonly internal?: boolean;
 }
 
 /** The part of a high-level operation a list shows (never the Markdown or the page). */
 function operationBrief(op: Record<string, unknown> | null): Readonly<Record<string, unknown>> | null {
   if (!op) return null;
   const out: Record<string, unknown> = {};
-  for (const k of ['tool', 'page', 'document', 'mode', 'section', 'plannedOn', 'baseVersion', 'counts'])
+  for (const k of [
+    'tool',
+    'page',
+    'document',
+    'mode',
+    'section',
+    'plannedOn',
+    'baseVersion',
+    'counts',
+    'property',
+    'pageParts',
+  ])
     if (op[k] !== undefined) out[k] = op[k];
   return out;
 }
@@ -302,6 +342,21 @@ export class ProposalService implements ProposalSink {
     this.engine = undefined;
   }
 
+  private pageNames: ((projectId: string, resourceId: string) => string | null) | undefined;
+
+  /** v2 C2a: where the page-level summary gets page names (the repository tree; set once the tree exists). */
+  setPageNames(fn: (projectId: string, resourceId: string) => string | null): void {
+    this.pageNames = fn;
+  }
+
+  private pageName(projectId: string, resourceId: string): string | null {
+    try {
+      return (this.pageNames ?? this.o.pageName)?.(projectId, resourceId) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   private requireEngine(): JobEngine {
     if (!this.engine)
       throw new PolicyError('NO_ENGINE', 'The proposal service is not attached to a job engine');
@@ -324,9 +379,12 @@ export class ProposalService implements ProposalSink {
 
   async capture(
     principal: Principal,
-    ops: readonly ProposedOp[],
+    proposed: readonly ProposedOp[],
     meta: ProposalMeta,
   ): Promise<{ proposalId: string; summary: string }> {
+    // v2 C2a (PLAN-v2 10.2): every client id the expansion needs is minted NOW and stored, so a child "under" a new
+    // index and a link "to" a new page are fixed in the proposal, and approval runs with exactly these ids.
+    const ops = proposed.map(withMintedIds);
     const engine = this.requireEngine();
     if (meta.kind !== 'single_op' && meta.kind !== 'batch_ops') {
       throw new PolicyDeniedError(
@@ -354,7 +412,18 @@ export class ProposalService implements ProposalSink {
     }
 
     // 1. Validate, and dry-run the guards that do not write.
-    const defs: OperationDef[] = ops.map((o, i) => {
+    const defs: (OperationDef | null)[] = ops.map((o, i) => {
+      // v2 C2a: the bridge's own check and verify steps, only in an expansion bridge code built.
+      if (meta.jobOptions?.internal === true && isInternalStep(o.op)) {
+        const issues = internalStepIssues(o.op, o.params);
+        if (issues.length > 0) {
+          throw new InvalidParamsError(
+            o.op,
+            issues.map((x) => ({ path: `${batch ? `steps[${i}].` : ''}${x.path}`, message: x.message })),
+          );
+        }
+        return null;
+      }
       const def = getOperation(o.op);
       if (!def) throw new UnknownOperationError(o.op);
       const parsed = operationInputSchema(o.op).safeParse(o.params);
@@ -382,10 +451,11 @@ export class ProposalService implements ProposalSink {
       principal,
     };
     const seen = new Map<string, Snapshot>();
+    const reads = new Map<string, Promise<{ readonly found: boolean; readonly body: unknown }>>();
     const captured: { target: CapturedTarget | null; snap: Snapshot | null }[] = [];
     for (let i = 0; i < ops.length; i++) {
       const o = ops[i]!;
-      const target = readerTarget(o.op, o.params);
+      const target = defs[i] ? readerTarget(o.op, o.params) : null;
       if (!target) {
         captured.push({ target: null, snap: null });
         continue;
@@ -399,7 +469,7 @@ export class ProposalService implements ProposalSink {
         );
         snap = pre
           ? this.snapshotOf(target, pre.body)
-          : await this.snapshot(engine, meta.project, target, readOrigin, meta.priority);
+          : await this.snapshot(engine, meta.project, target, readOrigin, meta.priority, reads);
         seen.set(key, snap);
       }
       // v2 C1: a high-level write planned on a version must be captured on that version, or it is a conflict.
@@ -422,12 +492,26 @@ export class ProposalService implements ProposalSink {
     const summary = meta.extras?.summary ? meta.extras.summary.slice(0, SUMMARY_MAX) : proposalSummary(ops);
     const origin = sanitiseOrigin(meta.origin);
     const operation = meta.extras?.operation ? JSON.stringify(capOperation(meta.extras.operation)) : null;
+    // v2 C2a: the list of high-level operations, the page-level summary, canonical approval and the job's shape.
+    const opList = meta.extras?.operations ?? (meta.extras?.operation ? [meta.extras.operation] : undefined);
+    const operations = opList ? JSON.stringify(opList.map(capOperation)) : null;
+    const pages = buildPageSummary(ops, opList, (rid) => this.pageName(meta.project, rid));
+    const jobOptions: StoredJobOptions | null =
+      meta.jobOptions && (meta.jobOptions.holdLock || meta.jobOptions.internal)
+        ? {
+            ...(meta.jobOptions.holdLock
+              ? { holdLock: { resourceId: meta.jobOptions.holdLock.resourceId } }
+              : {}),
+            ...(meta.jobOptions.internal ? { internal: true } : {}),
+          }
+        : null;
     this.store.tx(() => {
       this.store.db
         .prepare(
           `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
-             priority, on_error, summary, state, created_at, updated_at, expires_at, operation)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+             priority, on_error, summary, state, created_at, updated_at, expires_at, operation, operations,
+             page_summary, requires_canonical, canonical_changes, job_options)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -445,6 +529,11 @@ export class ProposalService implements ProposalSink {
           now,
           now + this.o.settings.proposalExpiryMs,
           operation,
+          operations,
+          JSON.stringify(pages),
+          meta.canonical ? 1 : 0,
+          meta.canonical ? JSON.stringify(meta.canonical) : null,
+          jobOptions ? JSON.stringify(jobOptions) : null,
         );
       const insert = this.store.db.prepare(
         `INSERT INTO proposal_ops (proposal_id, project_id, idx, op_id, op_kind, params, params_hash, options,
@@ -463,7 +552,7 @@ export class ProposalService implements ProposalSink {
           meta.project,
           i,
           o.op,
-          defs[i]!.kind,
+          defs[i]?.kind ?? 'read',
           JSON.stringify(o.params),
           hashJson(o.params),
           JSON.stringify(stepOptions(o)),
@@ -495,7 +584,39 @@ export class ProposalService implements ProposalSink {
     target: CapturedTarget,
     origin: JobOrigin,
     priority: ProposalMeta['priority'],
+    reads?: Map<string, Promise<{ readonly found: boolean; readonly body: unknown }>>,
   ): Promise<Snapshot> {
+    const missing: Snapshot = {
+      exists: false,
+      version: null,
+      fingerprint: hashJson(null),
+      state: null,
+      body: undefined,
+    };
+    // v2 C2a: one read per target READ (operation and path), shared by every operation it selects from (several row
+    // writes to one property read its rows once).
+    if (reads) {
+      const key = canonicalJson({ op: target.op, path: target.path });
+      let read = reads.get(key);
+      if (!read) {
+        read = this.readTarget(engine, project, target, origin, priority);
+        reads.set(key, read);
+      }
+      const got = await read;
+      return got.found ? this.snapshotOf(target, got.body) : missing;
+    }
+    const got = await this.readTarget(engine, project, target, origin, priority);
+    return got.found ? this.snapshotOf(target, got.body) : missing;
+  }
+
+  /** One read of a target (a 404 is an answer: not there). */
+  private async readTarget(
+    engine: JobEngine,
+    project: string,
+    target: CapturedTarget,
+    origin: JobOrigin,
+    priority: ProposalMeta['priority'],
+  ): Promise<{ readonly found: boolean; readonly body: unknown }> {
     let body: unknown;
     try {
       // Chunk 6: a reader with no path parameters (listMembers, listInvites, listCalendars) must get `{}`: the registry
@@ -513,12 +634,10 @@ export class ProposalService implements ProposalSink {
       }
       body = r.result;
     } catch (e) {
-      if (e instanceof LkOperationError && e.lk.status === 404) {
-        return { exists: false, version: null, fingerprint: hashJson(null), state: null, body: undefined };
-      }
+      if (e instanceof LkOperationError && e.lk.status === 404) return { found: false, body: undefined };
       throw e;
     }
-    return this.snapshotOf(target, body);
+    return { found: true, body };
   }
 
   /** What a target read's body says: whether the entity exists, its version, fingerprint and state. */
@@ -552,6 +671,20 @@ export class ProposalService implements ProposalSink {
    * then stays `pending`.
    */
   async approve(actor: OwnerActor, id: string): Promise<ProposalView> {
+    return this.approveWith(actor, id, false);
+  }
+
+  /**
+   * v2 C2a (ADR 0032): "Approve and accept as canon" (owner command layer only): the one way to approve a proposal
+   * flagged `requiresCanonicalApproval`. A separate, audited action (`proposal.approve_as_canon`) that records
+   * `canonicalApprovedBy`; the approved work carries a canonical approval token, the only thing that lets the write
+   * guard pass its protected changes. Everything else is as `approve`.
+   */
+  async approveAsCanon(actor: OwnerActor, id: string): Promise<ProposalView> {
+    return this.approveWith(actor, id, true);
+  }
+
+  private async approveWith(actor: OwnerActor, id: string, canonical: boolean): Promise<ProposalView> {
     assertOwner(actor);
     const engine = this.requireEngine();
     const p = this.require(id);
@@ -561,6 +694,18 @@ export class ProposalService implements ProposalSink {
     }
     if (p.state !== 'pending') {
       throw new PolicyError('INVALID_TRANSITION', `Proposal ${id} is ${p.state}, not pending`);
+    }
+    if (p.requiresCanonicalApproval && !canonical) {
+      throw new PolicyError(
+        'CANONICAL_APPROVAL_REQUIRED',
+        `Proposal ${id} makes a protected canonical change; only "Approve and accept as canon" can approve it`,
+      );
+    }
+    if (!p.requiresCanonicalApproval && canonical) {
+      throw new PolicyError(
+        'NOT_CANONICAL',
+        `Proposal ${id} makes no protected canonical change; approve it with the ordinary Approve`,
+      );
     }
     // v2 A1: the proposal's own project, and only that one: its read-only flag, its availability, its data.
     const controls = engine.queries.controls(p.projectId);
@@ -585,10 +730,31 @@ export class ProposalService implements ProposalSink {
       throw new PolicyError('DRAINING', 'The bridge is draining; the proposal stays pending');
     }
     // Compare-and-set: only one approval can ever win.
-    if (!this.transition(id, ['pending'], 'approved', { decided_at: this.now(), decided_by: 'owner' })) {
+    if (
+      !this.transition(id, ['pending'], 'approved', {
+        decided_at: this.now(),
+        decided_by: 'owner',
+        ...(canonical ? { canonical_approved_by: 'owner', canonical_approved_at: this.now() } : {}),
+      })
+    ) {
       throw new PolicyError('INVALID_TRANSITION', `Proposal ${id} is no longer pending`);
     }
-    this.store.audit('owner', 'proposal.approve', id, { state: 'pending' }, { state: 'approved' });
+    if (canonical) {
+      const changes = this.canonicalOf(id);
+      this.store.audit(
+        'owner',
+        'proposal.approve_as_canon',
+        id,
+        { state: 'pending' },
+        { state: 'approved', canonicalApprovedBy: 'owner', canonical: changes },
+      );
+    } else this.store.audit('owner', 'proposal.approve', id, { state: 'pending' }, { state: 'approved' });
+    const unapprove = {
+      decided_at: null,
+      decided_by: null,
+      canonical_approved_by: null,
+      canonical_approved_at: null,
+    };
 
     // Re-read every target; any change since capture means conflict, and nothing runs.
     const ops = this.opRows(id);
@@ -599,13 +765,14 @@ export class ProposalService implements ProposalSink {
       detail: `proposal:${id}`,
     };
     const current = new Map<string, Snapshot>();
+    const reads = new Map<string, Promise<{ readonly found: boolean; readonly body: unknown }>>();
     try {
       for (const op of ops) {
         if (!op.target) continue;
         const key = canonicalJson(op.target);
         let snap = current.get(key);
         if (!snap) {
-          snap = await this.snapshot(engine, p.projectId, op.target, systemOrigin, 'P0');
+          snap = await this.snapshot(engine, p.projectId, op.target, systemOrigin, 'P0', reads);
           current.set(key, snap);
         }
         const changed =
@@ -638,7 +805,7 @@ export class ProposalService implements ProposalSink {
         }
       }
     } catch (e) {
-      this.transition(id, ['approved'], 'pending', { decided_at: null, decided_by: null });
+      this.transition(id, ['approved'], 'pending', unapprove);
       this.store.audit(
         'system',
         'proposal.approval_reverted',
@@ -660,7 +827,9 @@ export class ProposalService implements ProposalSink {
       p.projectId,
       steps.map((s) => ({ op: s.op, paramsHash: hashJson(s.params ?? {}) })),
       this.now(),
+      canonical,
     );
+    const jobOptions = this.jobOptionsOf(id);
     const principal: Principal = { principalId: p.principalId, profile: p.profile, label: p.principalLabel };
     let result: Awaited<ReturnType<JobEngine['submit']>>;
     try {
@@ -671,12 +840,20 @@ export class ProposalService implements ProposalSink {
         onError: 'stop',
         priority: p.priority as ProposalMeta['priority'],
         title: `Approved ${id}: ${p.title}`.slice(0, 500),
-        origin: { ...systemOrigin, principal, approvedBy: 'owner', approval: token },
+        origin: {
+          ...systemOrigin,
+          principal,
+          approvedBy: 'owner',
+          approval: token,
+          ...(canonical ? { canonicalApprovedBy: 'owner' } : {}),
+        },
+        ...(jobOptions?.holdLock ? { holdLock: jobOptions.holdLock } : {}),
+        ...(jobOptions?.internal ? { internal: true } : {}),
       });
     } catch (e) {
       token.consume();
       if (e instanceof ReadOnlyError || e instanceof DrainingError) {
-        this.transition(id, ['approved'], 'pending', { decided_at: null, decided_by: null });
+        this.transition(id, ['approved'], 'pending', unapprove);
         this.store.audit(
           'system',
           'proposal.approval_reverted',
@@ -813,6 +990,17 @@ export class ProposalService implements ProposalSink {
       .prepare(`SELECT id FROM proposals WHERE job_id = ? AND project_id = ? AND state = 'executing'`)
       .get(job.id, job.projectId) as { id: string } | undefined;
     if (!row) return;
+    // v2 C2a: what the job's verify read found is kept on the proposal too (the job may be pruned before it).
+    const ver = (job.result ?? {}) as { verified?: unknown; verification?: unknown };
+    if (ver.verification !== undefined) {
+      this.store.db.prepare('UPDATE proposals SET verification = ? WHERE id = ?').run(
+        JSON.stringify({
+          verified: typeof ver.verified === 'boolean' ? ver.verified : null,
+          verification: ver.verification,
+        }),
+        row.id,
+      );
+    }
     if (job.status === 'succeeded') {
       if (this.transition(row.id, ['executing'], 'executed', { finished_at: this.now() })) {
         this.store.audit(
@@ -845,7 +1033,9 @@ export class ProposalService implements ProposalSink {
         index: typeof le.stepNo === 'number' ? le.stepNo - 1 : 0,
         op: typeof le.opId === 'string' ? le.opId : 'replaceDocumentBlocks',
         reason:
-          'the page changed between the approval’s check and the write (the bridge’s own version check inside the page’s lock); nothing was written',
+          typeof (le as { label?: unknown }).label === 'string'
+            ? `${String((le as { label?: unknown }).label)} changed between the approval’s check and the write (the bridge’s own check inside the page’s lock); nothing was written`
+            : 'the page changed between the approval’s check and the write (the bridge’s own version check inside the page’s lock); nothing was written',
         capturedVersion: typeof le.sentVersion === 'string' ? le.sentVersion : null,
         currentVersion: typeof le.currentVersion === 'string' ? le.currentVersion : null,
       };
@@ -916,7 +1106,14 @@ export class ProposalService implements ProposalSink {
           )
           .get(r.principal_id, r.project_id, `proposal:${r.id}`) as { id: string } | undefined;
         if (!found) {
-          if (this.transition(r.id, ['approved'], 'pending', { decided_at: null, decided_by: null })) {
+          if (
+            this.transition(r.id, ['approved'], 'pending', {
+              decided_at: null,
+              decided_by: null,
+              canonical_approved_by: null,
+              canonical_approved_at: null,
+            })
+          ) {
             this.store.audit(
               'system',
               'proposal.approval_interrupted',
@@ -1006,6 +1203,17 @@ export class ProposalService implements ProposalSink {
       const truncated = Number(r.pre_state_truncated) === 1;
       const pre = truncated ? ((r.pre_state as string | null) ?? '') : parseJson<unknown>(r.pre_state, null);
       const params = base.params as OpParams;
+      // v2 C2a: the bridge's own check and verify steps change nothing; they show their parameters only.
+      if (isInternalStep(base.op)) {
+        return {
+          ...base,
+          preState: null,
+          preStateTruncated: false,
+          proposed: params.body ?? null,
+          changes: [],
+          unsupportedLoss: [],
+        };
+      }
       const meta = opMeta(base.op);
       const proposed = meta.intent ? meta.intent(params) : params.body;
       const before = !truncated && meta.actual && pre !== null ? meta.actual(pre, pre) : pre;
@@ -1027,11 +1235,47 @@ export class ProposalService implements ProposalSink {
     const before = operationDetail?.before;
     const after = operationDetail?.after;
     const md = typeof before === 'string' && typeof after === 'string' ? markdownDiff(before, after) : null;
-    return { ...p, ops, operationDetail, markdownDiff: md, execution: this.execution(p) };
+    const extra = this.store.db
+      .prepare('SELECT operations, page_summary FROM proposals WHERE id = ?')
+      .get(id) as { operations: string | null; page_summary: string | null } | undefined;
+    const operations =
+      parseJson<Record<string, unknown>[] | null>(extra?.operations, null) ??
+      (operationDetail ? [operationDetail] : []);
+    return {
+      ...p,
+      ops,
+      operationDetail,
+      markdownDiff: md,
+      execution: this.execution(p),
+      operations,
+      pageSummary: parseJson<PageSummaryEntry[]>(extra?.page_summary, []),
+      canonical: p.requiresCanonicalApproval ? this.canonicalOf(id) : null,
+    };
+  }
+
+  /** v2 C2a: the protected changes a proposal was flagged for. */
+  private canonicalOf(id: string): { reason: string; changes: readonly unknown[] } | null {
+    const r = this.store.db.prepare('SELECT canonical_changes FROM proposals WHERE id = ?').get(id) as
+      { canonical_changes: string | null } | undefined;
+    return parseJson<{ reason: string; changes: unknown[] } | null>(r?.canonical_changes, null);
+  }
+
+  /** v2 C2a: the job-level lock and internal steps the approved batch is submitted with. */
+  private jobOptionsOf(id: string): StoredJobOptions | null {
+    const r = this.store.db.prepare('SELECT job_options FROM proposals WHERE id = ?').get(id) as
+      { job_options: string | null } | undefined;
+    return parseJson<StoredJobOptions | null>(r?.job_options, null);
   }
 
   /** v2 C1: the verify result of the approved job, once it ran (from the job's own record). */
   private execution(p: ProposalView): ProposalDetail['execution'] {
+    const stored = this.store.db.prepare('SELECT verification FROM proposals WHERE id = ?').get(p.id) as
+      { verification: string | null } | undefined;
+    const kept = parseJson<{ verified: boolean | null; verification: unknown } | null>(
+      stored?.verification,
+      null,
+    );
+    if (kept) return kept;
     if (!p.jobId || !this.engine) return null;
     const job = this.engine.queries.getJob(p.projectId, p.jobId);
     const r = (job?.result ?? null) as { verified?: unknown; verification?: unknown } | null;
@@ -1057,6 +1301,9 @@ export class ProposalService implements ProposalSink {
         : null,
       error: p.error ? errorText(p.error) : null,
       operation: p.operation,
+      requiresCanonicalApproval: p.requiresCanonicalApproval,
+      canonicalReason: p.requiresCanonicalApproval ? (this.canonicalOf(p.id)?.reason ?? null) : null,
+      pages: p.pages,
     };
   }
 
@@ -1144,11 +1391,15 @@ function executionSteps(ops: readonly ProposalOpView[]): StepSpec[] {
   const touched = new Set<string>();
   return ops.map((op) => {
     const params = op.params as OpParams;
+    // v2 C2a: the bridge's own check and verify steps are submitted exactly as stored.
+    if (isInternalStep(op.op)) return { op: op.op, params, ...stepOptions(op.options) };
     const def = requireOperation(op.op);
     const keys = [params.path?.resourceId, params.path?.documentId].filter((k): k is string => !!k);
     let p: OpParams = params;
+    const chained = (op.options as StepOptions).ifMatchFrom !== undefined; // v2 C2a: bound in the job
     if (
       def.versioned &&
+      !chained &&
       params.ifMatch === undefined &&
       op.version !== null &&
       !keys.some((k) => touched.has(k))
@@ -1156,8 +1407,25 @@ function executionSteps(ops: readonly ProposalOpView[]): StepSpec[] {
       p = { ...params, ifMatch: op.version };
     }
     if (def.kind !== 'read') for (const k of keys) touched.add(k);
-    return { op: op.op, params: p, ...(op.options as StepOptions) };
+    return { op: op.op, params: p, ...stepOptions(op.options) };
   });
+}
+
+/** v2 C2a: a create's client id(s), minted now where the operation takes one and none was given. */
+function withMintedIds(o: ProposedOp): ProposedOp {
+  if (isInternalStep(o.op) || !getOperation(o.op)) return o;
+  const meta = opMeta(o.op);
+  const body = o.params.body as Record<string, unknown> | undefined;
+  if (meta.clientId === 'body.id' && body && body.id === undefined) {
+    return { ...o, params: { ...o.params, body: { ...body, id: mintClientId() } } };
+  }
+  if (meta.clientId === 'body.resources[].id' && body && Array.isArray(body.resources)) {
+    const resources = (body.resources as Record<string, unknown>[]).map((r) =>
+      r && typeof r === 'object' && r.id === undefined ? { ...r, id: mintClientId() } : r,
+    );
+    return { ...o, params: { ...o.params, body: { ...body, resources } } };
+  }
+  return o;
 }
 
 function stepOptions(o: StepOptions): StepOptions {
@@ -1168,6 +1436,11 @@ function stepOptions(o: StepOptions): StepOptions {
     // re-planned (`replan` is not kept): the owner approves exactly the expansion they saw.
     ...(o.verifyAfterWrite === true ? { verifyAfterWrite: true } : {}),
     ...(o.journalOperation ? { journalOperation: o.journalOperation } : {}),
+    // v2 C2a: a multi-step write's chain, in-step check, tree re-read and pre-image, exactly as planned.
+    ...(o.ifMatchFrom ? { ifMatchFrom: o.ifMatchFrom } : {}),
+    ...(o.expectCurrent ? { expectCurrent: o.expectCurrent } : {}),
+    ...(o.deferTreeReread === true ? { deferTreeReread: true } : {}),
+    ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
   };
 }
 

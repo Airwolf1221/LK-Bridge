@@ -24,6 +24,7 @@ export type JobsErrorCode =
   | 'CANCELLED'
   | 'UNKNOWN_PROJECT'
   | 'PROJECT_UNAVAILABLE'
+  | 'CANONICAL_APPROVAL_REQUIRED'
   | 'BRIDGE_ERROR';
 
 export interface JobRef {
@@ -255,6 +256,59 @@ export class VersionConflictError extends JobsError {
       sentVersion: this.sentVersion,
       currentVersion: this.currentVersion,
     };
+  }
+}
+
+/**
+ * v2 C2a (ADR 0032): the state a multi-step write was planned on changed before it was written: the bridge's own
+ * compare-and-swap inside the lock (`bridge.expect`, or `expectCurrent` on an unversioned write). Nothing was sent.
+ * A `VersionConflictError`, so every caller that handles conflicts handles it.
+ */
+export class StateConflictError extends VersionConflictError {
+  override readonly name = 'VersionConflictError';
+  constructor(
+    opId: string,
+    readonly label: string,
+    readonly differences: readonly { path: string; expected: unknown; actual: unknown }[],
+    sentVersion: string | null,
+    currentVersion: string | null,
+    ref: JobRef = {},
+  ) {
+    super(opId, sentVersion, currentVersion, ref);
+    this.message =
+      `${label} changed since the write was planned (${differences.length} difference(s)` +
+      `${differences[0] ? `, first at ${differences[0].path}` : ''}); nothing was written. Read it again and redo the change.`;
+  }
+  override toJSON() {
+    return {
+      ...super.toJSON(),
+      reason: 'changed_since_planned',
+      label: this.label,
+      differences: this.differences.slice(0, 20),
+    };
+  }
+}
+
+/**
+ * v2 C2a (ADR 0032): a write would make a protected canonical change (for example set a page's Status to
+ * Authoritative) and the work does not carry the owner's canonical approval. Nothing was sent.
+ */
+export class CanonicalApprovalRequiredError extends JobsError {
+  override readonly name = 'CanonicalApprovalRequiredError';
+  constructor(
+    readonly opId: string,
+    readonly reason: string,
+    readonly changes: readonly unknown[],
+    ref: JobRef = {},
+  ) {
+    super(
+      'CANONICAL_APPROVAL_REQUIRED',
+      `${opId}: ${reason}. Only the owner's "Approve and accept as canon" can make this change; nothing was written.`,
+      ref,
+    );
+  }
+  override toJSON() {
+    return { ...super.toJSON(), opId: this.opId, reason: this.reason, changes: this.changes };
   }
 }
 

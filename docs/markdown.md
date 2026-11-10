@@ -287,6 +287,13 @@ Warnings do not stop the write: `KEEP_REGION_EDITED`, `KEEP_REGION_KIND`, `HTML_
 plain quote), `FORMATTING_IGNORED` (in an expand title), `TASK_LIST_NUMBERING`, `IMAGE_URL_UNCHECKED`,
 `LK_BLOCK_VERSION_STRIPPED`, `DROP_REGION_NOT_MISSING`, and on reading, `RENDERED_AS_KEEP_REGION`.
 
+## Inline Markdown in facts (`set_facts`)
+
+A sidebar fact's value is one line of inline text. `set_facts` writes a plain string exactly as it is; send
+`{ "markdown": "…" }` to use inline Markdown: `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``, `<u>`, `<sub>`,
+`<sup>`, links, `<br>` and mentions (`[[Name]]`, `[[Name|label]]`, `[label](lk://resources/<id>)`). Headings, lists,
+quotes, tables, images and blank lines are refused (`FACT_VALUE_NOT_INLINE`); the mention rules are those above.
+
 ## Maps, timelines and boards
 
 These are read-only as Markdown:

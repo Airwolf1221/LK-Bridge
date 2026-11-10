@@ -13,6 +13,7 @@ import { perOpTools } from './per-op.js';
 import type { ToolDeps } from './shape.js';
 import { uploadTools } from './upload.js';
 import { writePageTool } from './write-page.js';
+import { setFactsTool } from './set-facts.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -36,6 +37,7 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     ...discoverTools(deps),
     readDocumentTool(deps),
     writePageTool(deps),
+    setFactsTool(deps),
     ...guideTools(deps),
     ...lkApiTools(deps),
     ...uploadTools(deps),

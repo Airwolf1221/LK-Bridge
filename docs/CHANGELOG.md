@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased: v2 C2a, set_facts, protected canon and the multi-page groundwork (10 November 2026)
+
+Sidebar facts and relationship links, the protected canonical facts rule on every write path, and the proposal and job
+groundwork C2b's multi-page tools build on ([ADR 0032](adr/0032-set-facts-and-canon.md); the tool in
+[tools.md](tools.md#facts-and-links-set_facts-v2-c2a); the rule in [policy.md](policy.md#protected-canonical-facts-v2-c2a);
+the agent guide's "Editing facts and links" and "Canon and approval" in [bridge-guide.md](bridge-guide.md)). Migration 1300.
+
+- **`set_facts`** (`access: write`, `destructiveHint: true`): `facts` (key → plain text, `{ "markdown": "…" }` inline
+  Markdown with `[[mentions]]` resolved through A3, or `null` to remove), `links` (collection title → `{ add, remove }`
+  of pages or `{ page, document }`), `property` (default the project's `factsPropertyName`, `PROPERTIES`), `dryRun`.
+  Existing rows keep their key, id and place; new template facts go in template order (the tree's recorded template, or
+  the Reference Type mapped through the type registry; keys cached a day), others at the bottom (with a note when no
+  template can be determined). Collections keep every item's id, rank and order and their filter; adds are appended,
+  "already linked" reported; one `updateProperty` with the full items list per collection. Typed refusals throughout;
+  an empty plan writes nothing.
+- **One job under the page's lock**: the bridge's own check of every property it changes (`bridge.expect`, inside the
+  lock: any difference is a conflict and nothing is written), the row writes chaining each new version into the next
+  If-Match (a write with nothing to chain from, or an unversioned `updateProperty`, compares what it reads in the lock
+  with the plan first), then the generic verify step (`bridge.verify`): "written but not as planned" is recorded on the
+  job, the errors table and the proposal, never retried. The journal keeps every write with the high-level operation,
+  and the key-value property's pre-image on the first; the tree re-reads the page once per job.
+- **Protected canonical facts** (PLAN-v2 10.3 as refined): per-project rules (Projects page, _Canon_; audited
+  `project.set_canonical_rules`), seeded with `Status` = `Authoritative` (both directions), and changing an existing
+  `Continuity Type` or `Continuity` (setting them where empty is allowed); the default status for pages agents create
+  is `Working` (`agentDefaultStatus`, for C2b). Enforced by a write guard in the engine on EVERY path: at entry (a
+  request's sidebar writes simulated in order: set_facts, `lk_api_write`, `lk_api_batch`, every `lk_op_*` property and
+  property-row operation, `createResourceFromTemplate`, C2b's tools), again when an approved proposal's batch is
+  submitted (a protected change without canonical approval is refused, nothing written), and inside the lock before each
+  sidebar write. A protected change becomes a proposal flagged `requiresCanonicalApproval` whatever the scope, with the
+  reason in the agent's result; a `read` connection is refused as before. `assessFactChange` is the shared function.
+- **"Approve and accept as canon"**: the only approval of such a proposal (dashboard banner listing the protected
+  changes; `POST /api/admin/proposals/:id/approve-as-canon` with `{ confirm: true }`; audited
+  `proposal.approve_as_canon`; records `canonicalApprovedBy`). The ordinary Approve and bulk approval refuse it
+  (`CANONICAL_APPROVAL_REQUIRED`); Reject works as normal.
+- **Proposal groundwork** (PLAN-v2 10.2): a list of high-level operations per proposal; client ids minted at capture
+  and used exactly at approval; a page-level summary of every proposal, shown first on the dashboard
+  (`Asagiri Miyabi: sidebar, 3 facts changed, 1 link added`); set_facts proposals show a before/after facts table and
+  the links added and removed; `bridge_proposal_status` shows the pages and `requiresCanonicalApproval`.
+- **Engine** (bridge code only, src/jobs/README.md): `BatchSubmit.holdLock` (a job-level lock), `internal` (the bridge's
+  own steps `bridge.expect` and `bridge.verify`), `proposal` (extras for a batch); step options `ifMatchFrom`,
+  `expectCurrent`, `deferTreeReread`, `journalPreImage`; `engine.setWriteGuard`; `StateConflictError`,
+  `CanonicalApprovalRequiredError`; generic verification gathered on the job from every verify step; observers'
+  `flushDeferred`.
+- Settings: `factsPropertyName`, `canonicalRules`, `agentDefaultStatus` (project settings).
+- Tests: `test/facts/` (every fact and link case, template order at first, middle and last positions, unknown template,
+  inline Markdown and mention errors, empty plan, dry run; the check in the lock, chained versions, the fallback after a
+  removal, verify matching and mangled; the journal and the tree; protected canon through set_facts, `lk_api_write`,
+  `lk_api_batch` and the per-op tools at write and propose scope, ordinary Approve refused, accept as canon, the
+  re-check refusing a forged expansion, the backstop in the lock; ids minted at capture, the page-level summary, generic
+  verification recording a difference; two projects isolated, the admin routes), `test/ui/canon.test.tsx`, and the
+  Playwright smoke test's canonical approval.
+
 ## Unreleased: v2 C1, write_page (10 November 2026)
 
 The main way agents change the owner's pages ([ADR 0031](adr/0031-write-page.md); the tool in

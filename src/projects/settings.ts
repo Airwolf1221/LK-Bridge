@@ -33,12 +33,21 @@ export const projectSettingsSchema = z
     treeSweepEnabled: z.boolean().optional(),
     /** v2 A4: whether the regular asset-tree refresh (every 6 hours by default) runs for this project (default on). */
     assetRefreshEnabled: z.boolean().optional(),
+    /** v2 C2a: the title of the key-value property set_facts writes facts to when the call names none. */
+    factsPropertyName: label.optional(),
+    /**
+     * v2 C2a (ADR 0032): the protected canonical facts rules (src/facts/rules.ts). Absent: the defaults. Validated by
+     * the facts module when used (an invalid list falls back to the defaults), so it is kept loose here.
+     */
+    canonicalRules: z.array(z.unknown()).max(50).optional(),
+    /** v2 C2a: the Status of pages agents create (C2b uses it). Default "Working". */
+    agentDefaultStatus: label.optional(),
   })
   .loose();
 
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>;
 
-export type SettingKind = 'resource id' | 'name' | 'on/off' | 'role → template id';
+export type SettingKind = 'resource id' | 'name' | 'on/off' | 'role → template id' | 'rules';
 
 /** The settings the dashboard and later sessions may rely on, by key, with what each is for. */
 export const PROJECT_SETTING_KEYS: readonly {
@@ -98,6 +107,29 @@ export const PROJECT_SETTING_KEYS: readonly {
     default: true,
     editable: true,
     help: 'Off: the hourly sweep skips this project; the daily consistency check still runs.',
+  },
+  {
+    key: 'factsPropertyName',
+    label: 'Facts: key-value property',
+    kind: 'name',
+    default: 'PROPERTIES',
+    editable: true,
+    help: 'The title of the key-value sidebar property set_facts writes to when a call names none.',
+  },
+  {
+    key: 'agentDefaultStatus',
+    label: 'Canon: Status of pages agents create',
+    kind: 'name',
+    default: 'Working',
+    editable: true,
+    help: 'The Status the creation tools give a new page. Setting a page to a protected Status still needs canonical approval.',
+  },
+  {
+    key: 'canonicalRules',
+    label: 'Canon: protected facts',
+    kind: 'rules',
+    editable: false,
+    help: 'Edited in the Canon section of this page (each change is audited).',
   },
   {
     key: 'assetRefreshEnabled',
