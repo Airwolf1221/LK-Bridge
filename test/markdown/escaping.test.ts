@@ -333,7 +333,8 @@ describe('escaping: marks, whitespace and scripts', () => {
     expect(parsedProjection(r.markdown)).toEqual(projectDocument(page));
     expect(fromMarkdown(r.markdown, page).plan.empty).toBe(true);
   });
-  it('very long paragraphs (100,000 characters with syntax all through)', () => {
+  // A stress test: about 3 s alone, so the default 5 s is too tight on a loaded CI runner (it timed out on PR #30).
+  it('very long paragraphs (100,000 characters with syntax all through)', { timeout: 30_000 }, () => {
     const chunk = 'Lorem *ipsum* _dolor_ [sit] `amet` <consectetur> #adipiscing & elit | 1. ~sed~ \\ do! ';
     const long = chunk.repeat(Math.ceil(100_000 / chunk.length)).slice(0, 100_000);
     const md = assertExact([
