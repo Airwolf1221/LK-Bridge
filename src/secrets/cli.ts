@@ -1,5 +1,5 @@
 /**
- * `npm run secrets -- <status | rotate-master-key> [--env-file FILE] [--yes]` (OPS2, ADR 0028): the encrypted secret
+ * `npm run secrets -- <status | rotate-master-key | reset-owner --yes> [--env-file FILE]` (OPS2, ADR 0028): the encrypted secret
  * store from the server's shell, as the service user:
  *
  *   sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run secrets -- status
@@ -14,6 +14,9 @@
  * takes a backup of the database (SQLite's online backup, checked, 0600, in the backups directory), then re-seals every
  * secret with the new key in one transaction. It refuses while the bridge runs (its heartbeat is fresh), and changes
  * nothing if any secret opens with neither key.
+ *
+ * `reset-owner --yes` is the way back in when the owner's stored credentials cannot be read or are forgotten: it deletes
+ * them (and the recovery codes), so sign-in uses OWNER_PASSWORD_HASH from the env file again (audited).
  */
 import { chmodSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -142,7 +145,30 @@ export async function runSecretsCli(
         throw e;
       }
     }
-    out('usage: npm run secrets -- status | rotate-master-key [--env-file FILE]');
+    if (cmd === 'reset-owner') {
+      // The way back in when the owner's stored credentials cannot be read (SECRETS_MASTER_KEY lost) or are forgotten:
+      // the stored password hash, authenticator and recovery codes are deleted, so the env file's OWNER_PASSWORD_HASH
+      // (from `npm run setup:owner`) is used again. The service user can read every secret anyway: no new power here.
+      if (!argv.includes('--yes')) {
+        out(
+          'This deletes the owner password, the authenticator and the recovery codes kept in the encrypted store. Sign-in then uses OWNER_PASSWORD_HASH from the env file (run `npm run setup:owner` and put its line there first). Run again with --yes to do it.',
+        );
+        return 1;
+      }
+      const removed = db.transaction(() => {
+        const n = db.prepare("DELETE FROM secrets WHERE scope = '*'").run().changes;
+        db.prepare('DELETE FROM owner_recovery_codes').run();
+        db.prepare(
+          'INSERT INTO audit_log (at, actor, action, target, before, after) VALUES (?, ?, ?, ?, ?, ?)',
+        ).run(Date.now(), 'shell', 'owner.credentials_reset', null, null, JSON.stringify({ removed: n }));
+        return n;
+      })();
+      out(
+        `Removed ${removed} stored owner credential(s) and the recovery codes. Sign-in now uses OWNER_PASSWORD_HASH from the env file. Restart the bridge: sudo systemctl restart lk-bridge`,
+      );
+      return 0;
+    }
+    out('usage: npm run secrets -- status | rotate-master-key | reset-owner --yes [--env-file FILE]');
     return 2;
   } finally {
     db.close();

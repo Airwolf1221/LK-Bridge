@@ -256,3 +256,29 @@ describe('at rest', () => {
     for (const v of values) expect(bytes.includes(Buffer.from(v, 'utf8'))).toBe(false);
   });
 });
+
+describe('getting back in', () => {
+  it('`reset-owner --yes` deletes the stored owner credentials (asking first), and audits it', async () => {
+    const { db, path } = freshDb();
+    const key = master();
+    const s = new SecretStore(db, { masterKey: key });
+    s.write('*', 'owner_password_hash', secret('HASH'), { source: 'dashboard' });
+    s.write('*', 'owner_totp_secret', secret('TOTP'), { source: 'dashboard' });
+    s.write('lkp_a', 'lk_api_key', secret('A'), { source: 'dashboard' });
+    db.close();
+    const out: string[] = [];
+    expect(await runSecretsCli(['reset-owner'], { env: {}, dbPath: path, out: (x) => out.push(x) })).toBe(1);
+    expect(out.join('\n')).toMatch(/Run again with --yes/);
+    expect(
+      await runSecretsCli(['reset-owner', '--yes'], { env: {}, dbPath: path, out: (x) => out.push(x) }),
+    ).toBe(0);
+    const after = openDatabase(path);
+    expect(after.prepare('SELECT scope, purpose FROM secrets').all()).toEqual([
+      { scope: 'lkp_a', purpose: 'lk_api_key' },
+    ]);
+    expect(
+      after.prepare("SELECT actor, action FROM audit_log WHERE action = 'owner.credentials_reset'").all(),
+    ).toEqual([{ actor: 'shell', action: 'owner.credentials_reset' }]);
+    after.close();
+  });
+});

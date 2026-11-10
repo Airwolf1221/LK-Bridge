@@ -50,6 +50,7 @@ test('signs in, comes back to where it was going, and every page renders under t
     ['Repository Mappings', 'Repository Mappings'],
     ['Projects', 'Projects'],
     ['Repository Tree', 'Repository Tree'], // v2 A2
+    ['Account', 'Account'], // OPS2
   ] as const) {
     await page
       .getByRole('navigation', { name: 'Main' })
@@ -65,6 +66,37 @@ test('signs in, comes back to where it was going, and every page renders under t
   expect(csp).toContain("script-src 'self'");
   expect(csp).toContain("frame-ancestors 'none'");
   expect(problems).toEqual([]);
+});
+
+test('OPS2: the Account page asks for the password again, then draws the authenticator QR code under the CSP', async ({
+  page,
+}) => {
+  const problems = watch(page);
+  await signIn(page, '/ui/account');
+  await expect(page.getByRole('heading', { level: 1, name: 'Account' })).toBeVisible();
+  await page.getByRole('button', { name: 'Set up the authenticator…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Confirm it’s you' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Password').fill(PASSWORD);
+  await dialog.getByRole('button', { name: 'Confirm' }).click();
+  const qr = page.getByRole('img', { name: 'QR code for your authenticator app' });
+  await expect(qr).toBeVisible();
+  expect(Number(await qr.getAttribute('data-modules'))).toBeGreaterThanOrEqual(33);
+  // Nothing was fetched for it: the code is drawn in the page.
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(qr).toBeHidden();
+  // The Projects page offers to add a project with a write-only key field.
+  await page
+    .getByRole('navigation', { name: 'Main' })
+    .getByRole('link', { name: /^Projects/ })
+    .click();
+  await page.getByRole('button', { name: 'Add a project…' }).click();
+  await expect(page.getByLabel('API key')).toHaveAttribute('type', 'password');
+  // The one refusal is the bridge asking for the password again (403 REAUTH_REQUIRED), which opened the dialog.
+  const expected = (p: string) =>
+    /HTTP 403 POST .*\/api\/admin\/security\/totp\/enrol$/.test(p) || /status of 403 \(Forbidden\)$/.test(p);
+  expect(problems.filter((p) => /HTTP 403 POST/.test(p))).toHaveLength(1);
+  expect(problems.filter((p) => !expected(p))).toEqual([]);
 });
 
 test('a job runs while the Jobs, Budgets and Writers pages update live', async ({ page, request }) => {
