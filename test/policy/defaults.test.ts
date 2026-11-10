@@ -63,7 +63,6 @@ describe('migration 0300', () => {
       '0600_projects.sql',
       '0700_repository_tree.sql',
       '0800_type_registry.sql',
-      '0900_asset_tree.sql',
     ]);
     const policy = createPolicy({ db, allowMemberAdmin: false });
     expect(policy.store.listProfiles()).toMatchObject([

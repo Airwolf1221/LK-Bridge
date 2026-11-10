@@ -19,6 +19,7 @@
  * Names match exactly (Unicode NFC, ignoring case, like the repository tree's lookups): "inae mikumo" is the folder
  * "Inae Mikumo". The plan says so in its notes when the case differs.
  */
+import { RACE_SEARCH_DEPTH } from '../registry/classify.js';
 import type { TreeQueries } from '../tree/queries.js';
 import type { TreeNode } from '../tree/types.js';
 import { nameKey } from './classify.js';
@@ -31,7 +32,7 @@ export const UNKNOWN_RACE_FOLDER = 'Undetermined / Unknown';
 export const DEFAULT_CHARACTER_ASSET_ROOT = 'Characters';
 /** LegendKeeper's folder-name limit. */
 const NAME_MAX = 200;
-const CORE_REFERENCE_TYPE = 'Character Core';
+const DEFAULT_CORE_REFERENCE_TYPE = 'Character Core';
 
 export type PlanRequest =
   | {
@@ -49,6 +50,38 @@ export type PlanRequest =
       readonly subfolders?: undefined;
     };
 
+/** The parts of A3's character type that placement planning uses. */
+export interface CharacterTypeInfo {
+  /** The asset root folder (default "Characters"). */
+  readonly assetRootFolder?: string | null;
+  /** The Characters index page of the repository tree (used when the project has no `charactersRootId` setting). */
+  readonly rootIndexId?: string | null;
+  /** The index (and asset folder) unknown races go to (default "Undetermined / Unknown"). */
+  readonly unknownIndexName?: string | null;
+  /** The Reference Type of a Character Core page (default "Character Core"). */
+  readonly coreReferenceType?: string | null;
+}
+
+/** What the plan goes by, resolved once from the type registry and the old bridge's literals. */
+interface Rules {
+  readonly rootName: string;
+  readonly unknownFolder: string;
+  readonly coreReferenceType: string;
+  readonly typeRootId: string | null;
+}
+
+const clean = (v: string | null | undefined): string | null => (v?.trim() ? v.trim() : null);
+
+function rulesFor(projectId: string, deps: PlanDeps): Rules {
+  const t = deps.characterType?.(projectId) ?? null;
+  return {
+    rootName: clean(t?.assetRootFolder) ?? DEFAULT_CHARACTER_ASSET_ROOT,
+    unknownFolder: clean(t?.unknownIndexName) ?? UNKNOWN_RACE_FOLDER,
+    coreReferenceType: clean(t?.coreReferenceType) ?? DEFAULT_CORE_REFERENCE_TYPE,
+    typeRootId: clean(t?.rootIndexId),
+  };
+}
+
 export interface PlanDeps {
   readonly assets: Pick<
     AssetQueries,
@@ -58,10 +91,10 @@ export interface PlanDeps {
   /** The Characters root page (the project's `charactersRootId` setting), or null to look for it by name. */
   readonly charactersRootId?: (projectId: string) => string | null;
   /**
-   * The type registry's asset root folder for characters (A3), or null. The runtime wires it to A3's character type; without one the
-   * literal "Characters" is used.
+   * What the type registry (A3) says about the project's character type, or null when it has none: the runtime wires
+   * it. Every field is optional; what is missing falls back to the old bridge's literals.
    */
-  readonly assetRootFolderName?: (projectId: string) => string | null;
+  readonly characterType?: (projectId: string) => CharacterTypeInfo | null;
 }
 
 export interface PlanStep {
@@ -136,7 +169,11 @@ const fail = (code: PlanErrorCode, message: string, details?: Record<string, unk
 });
 
 /** A name as a folder name: spaces at the ends removed; empty, too long, control characters and slashes refused. */
-function cleanName(raw: unknown, what: string): { ok: true; name: string } | { ok: false; error: PlanError } {
+function cleanName(
+  raw: unknown,
+  what: string,
+  slashOk: string,
+): { ok: true; name: string } | { ok: false; error: PlanError } {
   if (typeof raw !== 'string') {
     return { ok: false, error: { code: 'INVALID_NAME', message: `${what} must be text.` } };
   }
@@ -154,7 +191,7 @@ function cleanName(raw: unknown, what: string): { ok: true; name: string } | { o
       error: { code: 'INVALID_NAME', message: `${what} must not contain control characters.` },
     };
   }
-  if (name.includes('/') && name !== UNKNOWN_RACE_FOLDER) {
+  if (name.includes('/') && name !== slashOk) {
     return {
       ok: false,
       error: {
@@ -180,6 +217,7 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
   }
   const assetTree = { status: meta.status, reason: meta.reason, confirmedAt: meta.confirmedAt };
   const notes: string[] = [];
+  const rules = rulesFor(projectId, deps);
   if (meta.status === 'stale')
     notes.push(`The asset tree is stale: ${meta.reason ?? 'it has not been confirmed lately'}`);
 
@@ -200,7 +238,7 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
     }
     const names: string[] = [];
     for (const [i, raw] of request.folderPath.entries()) {
-      const c = cleanName(raw, `folderPath[${i}]`);
+      const c = cleanName(raw, `folderPath[${i}]`, rules.unknownFolder);
       if (!c.ok) return { ok: false, error: c.error };
       names.push(c.name);
     }
@@ -220,22 +258,21 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
   }
   const subfolders: string[] = [];
   for (const [i, raw] of (request.subfolders ?? []).entries()) {
-    const c = cleanName(raw, `subfolders[${i}]`);
+    const c = cleanName(raw, `subfolders[${i}]`, rules.unknownFolder);
     if (!c.ok) return { ok: false, error: c.error };
     subfolders.push(c.name);
   }
-  const rootName = deps.assetRootFolderName?.(projectId) ?? DEFAULT_CHARACTER_ASSET_ROOT;
 
   // The character's name, and (when the request names a page) the race labels from its ancestry.
   let name: string;
   let page: PageRace | null = null;
   if (hasId) {
-    const r = characterFromPage(projectId, deps, request.characterResourceId, rootName);
+    const r = characterFromPage(projectId, deps, request.characterResourceId, rules);
     if (!r.ok) return r.result;
     page = r.value;
     name = page.name;
   } else {
-    const c = cleanName(request.characterName, 'characterName');
+    const c = cleanName(request.characterName, 'characterName', rules.unknownFolder);
     if (!c.ok) return { ok: false, error: c.error };
     name = c.name;
   }
@@ -279,21 +316,21 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
 
   // Rule 2 and 3: Characters / Group / Race / Character, or the unknown-race folder.
   if (page === null) {
-    const r = characterFromName(projectId, deps, name, rootName);
+    const r = characterFromName(projectId, deps, name, rules);
     if (!r.ok) return r.result;
     page = r.value;
   }
   let labels: string[];
   let raceSource: 'page_ancestry' | 'unknown_race';
   if (page.chain === null) {
-    labels = [UNKNOWN_RACE_FOLDER];
+    labels = [rules.unknownFolder];
     raceSource = 'unknown_race';
     notes.push(page.reason ?? 'The race is unknown.');
   } else if (page.chain.length === 0) {
-    labels = [UNKNOWN_RACE_FOLDER];
+    labels = [rules.unknownFolder];
     raceSource = 'unknown_race';
     notes.push('The character page sits directly under the Characters index, so no race is known.');
-  } else if (page.chain.length <= 2) {
+  } else if (page.chain.length <= RACE_SEARCH_DEPTH) {
     labels = [...page.chain];
     raceSource = 'page_ancestry';
   } else {
@@ -303,10 +340,10 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
       { chain: page.chain },
     );
   }
-  const walk = walkPath(projectId, deps, null, [], [rootName, ...labels, name, ...subfolders], notes);
+  const walk = walkPath(projectId, deps, null, [], [rules.rootName, ...labels, name, ...subfolders], notes);
   if (!walk.ok) return walk.result;
   const group = raceSource === 'page_ancestry' && labels.length === 2 ? labels[0]! : null;
-  const race = raceSource === 'page_ancestry' ? labels.at(-1)! : UNKNOWN_RACE_FOLDER;
+  const race = raceSource === 'page_ancestry' ? labels.at(-1)! : rules.unknownFolder;
   return done(
     projectId,
     'character_path',
@@ -445,8 +482,10 @@ function treeUsable(deps: PlanDeps, projectId: string): PlanResult | null {
 }
 
 /** The Characters index page: the `charactersRootId` setting, or the one `[INDEX]` page of that name under the root. */
-function charactersRoot(projectId: string, deps: PlanDeps, rootName: string): Found<TreeNode> {
-  const id = deps.charactersRootId?.(projectId) ?? null;
+function charactersRoot(projectId: string, deps: PlanDeps, rules: Rules): Found<TreeNode> {
+  const rootName = rules.rootName;
+  // The project's own setting wins; then the type registry's root index page; then the one [INDEX] page of that name.
+  const id = deps.charactersRootId?.(projectId) ?? rules.typeRootId;
   if (id) {
     const n = deps.tree.node(projectId, id).data;
     if (!n) {
@@ -454,7 +493,7 @@ function charactersRoot(projectId: string, deps: PlanDeps, rootName: string): Fo
         ok: false,
         result: fail(
           'CHARACTERS_ROOT_UNKNOWN',
-          `The Characters root ${id} (a project setting) is not in the repository tree.`,
+          `The Characters root ${id} (the project's charactersRootId setting, or the character type's root index) is not in the repository tree.`,
         ),
       };
     }
@@ -484,13 +523,19 @@ function charactersRoot(projectId: string, deps: PlanDeps, rootName: string): Fo
  * A character page's name and the labels between the Characters index and the character, from the page's ancestry.
  * A Character Core page sits below the character's own `[INDEX]` page: that index gives the name and is not a label.
  */
-function raceOfPage(projectId: string, deps: PlanDeps, node: TreeNode, rootId: string): PageRace | null {
+function raceOfPage(
+  projectId: string,
+  deps: PlanDeps,
+  node: TreeNode,
+  rootId: string,
+  rules: Rules,
+): PageRace | null {
   const at = node.path.ids.indexOf(rootId);
   if (at < 0 || node.id === rootId) return null;
   const below = node.path.names.slice(at + 1); // ends with the page itself
   let name = node.displayName;
   let chain = below.slice(0, -1);
-  if (node.referenceType === CORE_REFERENCE_TYPE && chain.length > 0 && node.parentId !== null) {
+  if (node.referenceType === rules.coreReferenceType && chain.length > 0 && node.parentId !== null) {
     const parent = deps.tree.node(projectId, node.parentId).data;
     if (parent && parent.kind === 'index') {
       name = parent.displayName;
@@ -504,7 +549,7 @@ function characterFromPage(
   projectId: string,
   deps: PlanDeps,
   resourceId: string,
-  rootName: string,
+  rules: Rules,
 ): Found<PageRace> {
   const unusable = treeUsable(deps, projectId);
   if (unusable) return { ok: false, result: unusable };
@@ -515,9 +560,9 @@ function characterFromPage(
       result: fail('CHARACTER_NOT_FOUND', `No page ${resourceId} is in the repository tree of this project.`),
     };
   }
-  const root = charactersRoot(projectId, deps, rootName);
+  const root = charactersRoot(projectId, deps, rules);
   if (!root.ok) return root;
-  const r = raceOfPage(projectId, deps, node, root.value.id);
+  const r = raceOfPage(projectId, deps, node, root.value.id, rules);
   if (!r) {
     return {
       ok: false,
@@ -537,19 +582,14 @@ function characterFromPage(
  * The race labels for a character known by name only: every page under the Characters index that answers to the name
  * (exactly, by any of its names) is looked at; all must agree. No page at all means the race is unknown.
  */
-function characterFromName(
-  projectId: string,
-  deps: PlanDeps,
-  name: string,
-  rootName: string,
-): Found<PageRace> {
+function characterFromName(projectId: string, deps: PlanDeps, name: string, rules: Rules): Found<PageRace> {
   const unusable = treeUsable(deps, projectId);
   if (unusable) return { ok: false, result: unusable };
-  const root = charactersRoot(projectId, deps, rootName);
+  const root = charactersRoot(projectId, deps, rules);
   if (!root.ok) return root;
   const seen = new Map<string, PageRace>();
   for (const m of deps.tree.findByName(projectId, name).data) {
-    const r = raceOfPage(projectId, deps, m.node, root.value.id);
+    const r = raceOfPage(projectId, deps, m.node, root.value.id, rules);
     if (r && r.chain) seen.set(JSON.stringify(r.chain), { ...r, name });
   }
   if (seen.size === 0) {

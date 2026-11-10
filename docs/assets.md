@@ -126,14 +126,22 @@ The old bridge's rules, exactly (PLAN-v2 section 9):
 
 1. A folder named exactly after the character is reused **wherever it already is**, if there is exactly one.
 2. Otherwise the destination is `Characters / Group / Race / Character`, or `Characters / Race / Character` when the
-   race sits directly under Characters. The labels come from the character page's ancestry in the repository tree
-   (display names, so the `[INDEX]` and `[BSRC]` prefixes are gone). A Character Core page sits below the character's
-   own `[INDEX]` page: that index gives the name and is not a label. "Characters" is the asset root folder name from
-   the type registry when A3's data exists (`PlanDeps.assetRootFolderName`; the runtime wires it to the project's character type, whose root index page is also the Characters index when `charactersRootId` is not set), otherwise the
-   literal "Characters". The Characters index is the project's `charactersRootId` setting, or the one `[INDEX]` page of
-   that name directly under the AI REPOSITORY.
+   race sits directly under Characters. The labels come from the character page's **real ancestry** in the repository
+   tree (display names, so the `[INDEX]` and `[BSRC]` prefixes are gone), as the old bridge did; they are never taken
+   from the type registry. A Character Core page sits below the character's own `[INDEX]` page: that index gives the
+   name and is not a label. At most a group and a race are allowed (the registry's race search depth, two).
+   Four things come from **A3's type registry** (the project's `character` type), each falling back to the old
+   bridge's literal when the project has no such type or leaves it empty (`PlanDeps.characterType`, wired by the
+   runtime):
+   - the **asset root folder name** (the type's `assetRootFolder`), else "Characters";
+   - the **Characters index page** (the type's `rootIndexId`), used when the project has no `charactersRootId` setting
+     (which wins), and otherwise the one `[INDEX]` page named like the asset root directly under the AI REPOSITORY;
+   - the **unknown-race folder** (the placement setting `unknownIndexName`), else "Undetermined / Unknown";
+   - the **Core Reference Type** (`referenceTypes.core`) that tells a Core page from the character's own index, else
+     "Character Core".
+
 3. An unknown race (no page under Characters answers to the name, or the page sits directly under Characters) uses the
-   literal folder `Undetermined / Unknown`. The plan says so in its notes.
+   unknown-race folder, by default the literal `Undetermined / Unknown`. The plan says so in its notes.
 4. Then the literal `subfolders`: a list of plain names, **never a slash path** (`"a/b"` is refused; the one name with
    a slash that is allowed is `Undetermined / Unknown`). Surrounding spaces are removed; empty, over-long (200) and
    control-character names are refused.

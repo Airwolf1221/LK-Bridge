@@ -91,9 +91,12 @@ app, which the bridge cannot see.
    - **No plan while the asset tree is `not_built` or `building`**: nothing could be told from a missing folder.
    - **Names are literal**: surrounding spaces are removed; empty, over-long (200), control-character and slash-path
      names are refused, except the literal `Undetermined / Unknown`.
-   - **The asset root folder name** comes from the type registry (A3): the runtime wires
-     `PlanDeps.assetRootFolderName` and the Characters index fallback to the project's `character` type; otherwise
-     "Characters".
+   - **A3's type registry supplies four values, the folder labels stay the page's real ancestry**: the runtime wires
+     `PlanDeps.characterType` to the project's `character` type for the asset root folder name, the Characters index
+     page (below the project's `charactersRootId` setting), the unknown-race folder name (`unknownIndexName`) and the
+     Core Reference Type; each falls back to the old bridge's literal (and an empty value counts as unset). A3's own
+     `planCharacterPlacement` is not used: it plans where a page goes from a declared race, while here the race is read
+     from where the character page already is. The allowed depth is A3's race search depth (two).
 10. **Stays in its area.** No MCP tools, no uploads or image processing (D3), no writes to LegendKeeper. The migration,
     the `src/assets` folder, one maintenance file, one admin route file and one page; the shared files it touches
     (runtime, maintenance registry, admin plugin, project settings, the dashboard's navigation) take one small addition
@@ -109,4 +112,5 @@ app, which the bridge cannot see.
 - An outside move of an image to another folder is seen by that folder's listing (the row moves; no extra read). An
   outside deletion costs one confirming read in the next refresh; a deleted folder is confirmed by the folder alone.
 - D3 can create exactly what a plan says, and E1 can fill the hash and size columns without a migration.
-- A3's registry plugs into one hook; until then characters' images go to the folder "Characters".
+- A3's registry feeds the planner four values through one hook (`characterType`); a project without a character type
+  gets the old bridge's literals.

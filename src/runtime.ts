@@ -246,8 +246,17 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
     tree: tree.queries,
     // The type registry (A3) says where characters live: their asset root folder and their Characters index page.
-    assetRootFolderName: (projectId) => characterType(projectId)?.assetRootFolder?.trim() || null,
-    charactersRootId: (projectId) => characterType(projectId)?.rootIndexId ?? null,
+    characterType: (projectId) => {
+      const t = characterType(projectId);
+      return t
+        ? {
+            assetRootFolder: t.assetRootFolder,
+            rootIndexId: t.rootIndexId,
+            unknownIndexName: t.placement?.unknownIndexName ?? null,
+            coreReferenceType: t.placement?.referenceTypes.core ?? null,
+          }
+        : null;
+    },
   });
   assets.attach();
   assets.start();

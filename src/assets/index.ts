@@ -34,6 +34,7 @@ export {
   UNKNOWN_RACE_FOLDER,
   planAssetDestination,
   type AssetPlan,
+  type CharacterTypeInfo,
   type PlanDeps,
   type PlanError,
   type PlanErrorCode,

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased: v2 A4 follow-up, the registry wiring and two deploy fixes (10 November 2026)
+
+- **The planner uses A3's type registry** ([docs/assets.md](assets.md#placement-planning), ADR 0027). The project's
+  `character` type supplies the **asset root folder name**, the **Characters index page** (below the project's own
+  `charactersRootId` setting), the **unknown-race folder** (`unknownIndexName`) and the **Core Reference Type**; each
+  falls back to the old bridge's literal ("Characters", "Undetermined / Unknown", "Character Core") when the project has
+  no such type or leaves it empty. The folder labels still come from the character page's real ancestry in the tree,
+  limited to A3's race search depth (two). Tests: both unset and set (`test/assets/plan.test.ts`), and on the real
+  runtime with the real registry (`test/assets/registry.test.ts`).
+- **`healthcheck.sh` waits for the bridge.** Before its first check it retries `http://127.0.0.1:<PORT>/healthz` every
+  second for up to 30 seconds (`--wait SECONDS` or `LKB_HEALTH_WAIT`; 0 does not wait), so a check straight after a
+  restart does not report false failures, and prints one line saying how long it waited. A bridge that never answers is
+  still reported by the first check.
+- **`deploy.sh --update-self` covers the systemd unit.** If `/etc/systemd/system/lk-bridge.service` differs from the
+  release's `deploy/lk-bridge.service`, it shows the difference and asks, then (just before the start, so an earlier
+  failure leaves the unit untouched) backs up the installed copy as `lk-bridge.service.bak.<time>`, installs the
+  release's (`root:root`, 0644) and runs `systemctl daemon-reload`; the deploy's own start uses it, and a deploy with
+  nothing else to do still restarts. Without the flag the end-of-deploy warning is unchanged. New setting
+  `LKB_UNIT_DIR` (default `/etc/systemd/system`) for tests. Tests in the fake-root harness
+  (`test/unit/deploy-env-gate.test.ts`, `deploy-health-wait.test.ts`); shellcheck is clean (its test now has a 30 s
+  timeout; it takes about 4 s).
+- Merged `main` (A3, then OPS2): the conflicts were the ADR index, the e2e navigation list and the proposal-prune test
+  (main's 20 s timeout replaces mine).
+
 ## Unreleased: OPS2, projects, keys and the owner's sign-in on the dashboard (10 November 2026)
 
 Projects and their API keys, the owner password and the authenticator app are managed on the dashboard; the env file
@@ -124,7 +148,7 @@ tools) build on its query layer and planner.
   the group when the race sits directly under Characters) from the character page's ancestry, `Undetermined / Unknown`
   for an unknown race, then the literal `subfolders`. It lists the folders reused and those that would be created, in
   order. A non-folder asset in the way is `ASSET_NAME_CONFLICT`, several folders of the name `AMBIGUOUS_FOLDER`; folders
-  are never moved. The asset root folder name and the Characters index come from A3's character type (default "Characters").
+  are never moved. The asset root folder name, the Characters index, the unknown-race folder and the Core Reference Type come from A3's character type (defaults: the old bridge's literals); the labels are the page's real ancestry.
 - **Dashboard.** An **Asset Tree** page per project (status, counts, build with estimate and progress, last build,
   refresh and check, stale rows, failed re-reads, correction log, a folder browser, **Refresh now** and a read-only
   **Try it** panel for placement) and `GET|POST /api/admin/asset-tree/…` (build, confirm, cancel and refresh are

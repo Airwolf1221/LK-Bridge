@@ -92,6 +92,8 @@ export interface FakeRoot {
   readonly bin: string;
   readonly app: string;
   readonly envFile: string;
+  /** The stand-in for /etc/systemd/system, holding an installed copy of the repository's lk-bridge.service. */
+  readonly unitDir: string;
   readonly env: NodeJS.ProcessEnv;
   /** OPS2: what the stand-in secret-store tool answers (`compare` verdicts by name, `stored` count). */
   setStore(stub: { compare?: Record<string, string>; stored?: number }): void;
@@ -127,7 +129,9 @@ export function makeFakeRoot(
   const etc = join(dir, 'etc');
   const nodeBin = join(dir, 'node', 'bin');
   const stubs = join(dir, 'stubs');
+  const unitDir = join(dir, 'units');
   for (const d of [
+    unitDir,
     bin,
     join(app, 'deploy'),
     join(app, 'dist', 'config'),
@@ -138,6 +142,8 @@ export function makeFakeRoot(
   ]) {
     mkdirSync(d, { recursive: true, mode: 0o755 });
   }
+  copyFileSync(join(repoDeployDir, 'lk-bridge.service'), join(unitDir, 'lk-bridge.service'));
+  chmodSync(join(unitDir, 'lk-bridge.service'), 0o644);
   mkdirSync(etc, { mode: 0o750 });
   chmodSync(etc, 0o750);
   for (const f of INSTALLED) {
@@ -179,6 +185,7 @@ export function makeFakeRoot(
     LKB_NODE_DIR: join(dir, 'node'),
     LKB_RUNTIME_DIR: join(dir, 'node'),
     LKB_ENV_FILE: envFile,
+    LKB_UNIT_DIR: unitDir,
     LKB_APP_DIR: app,
     LKB_BIN_DIR: bin,
     LKB_DATA_DIR: join(dir, 'data'),
@@ -193,6 +200,7 @@ export function makeFakeRoot(
     bin,
     app,
     envFile,
+    unitDir,
     env,
     writeEnv(text) {
       writeFileSync(envFile, text, { mode: 0o640 });

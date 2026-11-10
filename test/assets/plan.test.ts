@@ -8,6 +8,7 @@ import {
   UNKNOWN_RACE_FOLDER,
   planAssetDestination,
   type AssetPlan,
+  type CharacterTypeInfo,
   type PlanDeps,
   type PlanRequest,
   type PlanResult,
@@ -265,24 +266,6 @@ describe('rule 2: Characters / Group / Race / Character, from the character page
     expect(p.destination.path).toEqual(['Characters', 'Beastkin', 'Foxians', 'Kitsu', 'Portraits', 'Casual']);
   });
 
-  it('the asset root folder name comes from the type registry when A3’s data exists', () => {
-    const deps: PlanDeps = {
-      assets: rig.i.assets.queries,
-      tree: rig.i.tree.queries,
-      charactersRootId: () => page.chars,
-      assetRootFolderName: () => 'Dramatis Personae',
-    };
-    const p = ok(planAssetDestination(P().id, { characterName: 'Kitsu' }, deps));
-    expect(lines(p)).toEqual([
-      'create Dramatis Personae',
-      'create Beastkin',
-      'create Foxians',
-      'create Kitsu',
-    ]);
-    // Without it: the literal "Characters".
-    expect(ok(plan({ characterName: 'Kitsu' })).steps[0]!.name).toBe('Characters');
-  });
-
   it('the Characters root can be named by the project’s charactersRootId', () => {
     rig.setSetting('alpha', 'charactersRootId', page.chars);
     expect(ok(plan({ characterName: 'Kitsu' })).destination.path).toEqual([
@@ -291,6 +274,97 @@ describe('rule 2: Characters / Group / Race / Character, from the character page
       'Foxians',
       'Kitsu',
     ]);
+  });
+});
+
+describe('the type registry (A3): set, and unset', () => {
+  const withType = (info: CharacterTypeInfo | null, root: string | null = null): PlanDeps => ({
+    assets: rig.i.assets.queries,
+    tree: rig.i.tree.queries,
+    charactersRootId: () => root,
+    characterType: () => info,
+  });
+  const plan2 = (deps: PlanDeps, r: PlanRequest) => planAssetDestination(P().id, r, deps);
+
+  it('unset: the old bridge’s literals (Characters, Undetermined / Unknown, Character Core)', () => {
+    for (const deps of [
+      withType(null),
+      withType({}),
+      withType({ assetRootFolder: '  ', unknownIndexName: null }),
+    ]) {
+      expect(lines(ok(plan2(deps, { characterName: 'Kitsu' })))[0]).toBe('reuse Characters');
+      expect(ok(plan2(deps, { characterName: 'Nobody Known' })).destination.path).toEqual([
+        'Characters',
+        UNKNOWN_RACE_FOLDER,
+        'Nobody Known',
+      ]);
+      // A Core page is told by the default Reference Type: the character's own [INDEX] is not a label.
+      expect(ok(plan2(deps, { characterResourceId: page.brenna })).destination.path).toEqual([
+        'Characters',
+        'Dwarves',
+        'Brenna Stonehand',
+      ]);
+    }
+  });
+
+  it('set: the asset root folder name replaces “Characters”', () => {
+    const deps = withType({ assetRootFolder: 'Dramatis Personae', rootIndexId: page.chars });
+    const p = ok(plan2(deps, { characterName: 'Kitsu' }));
+    expect(lines(p)).toEqual([
+      'create Dramatis Personae',
+      'create Beastkin',
+      'create Foxians',
+      'create Kitsu',
+    ]);
+    // The labels still come from the page's real ancestry in the tree.
+    expect(p.character).toMatchObject({ group: 'Beastkin', race: 'Foxians', raceSource: 'page_ancestry' });
+    // A folder of that name is reused.
+    P().model.folder('Dramatis Personae');
+    return refresh().then(() => {
+      expect(lines(ok(plan2(deps, { characterName: 'Kitsu' })))[0]).toBe('reuse Dramatis Personae');
+    });
+  });
+
+  it('set: the type’s root index is the Characters index when the project sets none; the project’s setting wins', () => {
+    // No index is named “Dramatis Personae”, so without the type’s root index the Characters page cannot be found.
+    expect(
+      bad(plan2(withType({ assetRootFolder: 'Dramatis Personae' }), { characterName: 'Kitsu' })).code,
+    ).toBe('CHARACTERS_ROOT_UNKNOWN');
+    const viaType = withType({ assetRootFolder: 'Dramatis Personae', rootIndexId: page.chars });
+    expect(ok(plan2(viaType, { characterName: 'Kitsu' })).character).toMatchObject({ race: 'Foxians' });
+    // The project’s own charactersRootId (here the Humans race index, so Kitsu is not under it) takes precedence.
+    const humans = [...P().repo.res.values()].find((r) => r.name === '[INDEX] Humans')!.id;
+    const bySetting = withType({ rootIndexId: page.chars }, humans);
+    expect(bad(plan2(bySetting, { characterResourceId: page.kitsu })).code).toBe('NOT_A_CHARACTER');
+  });
+
+  it('set: the type’s unknown-race index names the unknown-race folder, and its Core Reference Type finds the index', () => {
+    const deps = withType({
+      assetRootFolder: 'Characters',
+      unknownIndexName: 'Race Unknown',
+      coreReferenceType: 'Character Core',
+    });
+    const p = ok(plan2(deps, { characterName: 'Nobody Known' }));
+    expect(lines(p)).toEqual(['reuse Characters', 'create Race Unknown', 'create Nobody Known']);
+    expect(p.character).toMatchObject({ race: 'Race Unknown', raceSource: 'unknown_race' });
+    // The name with a slash that is allowed follows the type: “Race / Unknown” could be used as a plain name now.
+    const slashy = withType({ unknownIndexName: 'Race / Unknown' });
+    expect(ok(plan2(slashy, { folderPath: ['Characters', 'Race / Unknown'] })).wouldCreate).toHaveLength(1);
+    expect(bad(plan2(slashy, { folderPath: ['Characters', UNKNOWN_RACE_FOLDER] })).code).toBe('INVALID_NAME');
+    // A different Reference Type for Core pages: the registry says what a Core page is.
+    const other = withType({ coreReferenceType: 'Hero Sheet' });
+    expect(ok(plan2(other, { characterResourceId: page.brenna })).destination.path).toEqual([
+      'Characters',
+      'Dwarves',
+      'Brenna Stonehand',
+      'Brenna Stonehand',
+    ]);
+  });
+
+  it('three levels below the type root stay refused (the registry’s race search depth is two)', () => {
+    expect(bad(plan2(withType({ rootIndexId: page.chars }), { characterResourceId: page.voss })).code).toBe(
+      'ANCESTRY_TOO_DEEP',
+    );
   });
 });
 

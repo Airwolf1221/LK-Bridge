@@ -403,7 +403,6 @@ describe('migration 0600 on a v1.0.2 database', () => {
       '0600_projects.sql',
       '0700_repository_tree.sql',
       '0800_type_registry.sql',
-      '0900_asset_tree.sql',
     ]);
 
     // The registry holds the legacy project, as the default.
@@ -485,7 +484,6 @@ describe('migration 0600 on a v1.0.2 database', () => {
       '0600_projects.sql',
       '0700_repository_tree.sql',
       '0800_type_registry.sql',
-      '0900_asset_tree.sql',
     ]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM projects').get()).toEqual({ n: 0 });
     db.close();
@@ -576,7 +574,6 @@ describe('npm run db:migrate finds the legacy project id', () => {
       '0600_projects.sql',
       '0700_repository_tree.sql',
       '0800_type_registry.sql',
-      '0900_asset_tree.sql',
     ]);
     expect(db.prepare('SELECT id, name FROM projects').all()).toEqual([
       { id: 'proj_from_file', name: 'campaign' },

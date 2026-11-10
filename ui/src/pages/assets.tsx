@@ -726,7 +726,7 @@ function PlanResult({ result }: { result: AssetPlanResponse }) {
       ? 'An existing folder named after the character is used, wherever it is.'
       : p.mode === 'character_path'
         ? p.character?.raceSource === 'unknown_race'
-          ? 'The race is unknown, so the literal folder “Undetermined / Unknown” is used.'
+          ? `The race is unknown, so the folder “${p.character.race ?? ''}” is used.`
           : `From the character’s page: ${[p.character?.group, p.character?.race].filter(Boolean).join(' / ')}.`
         : 'The folder path you gave.';
   return (
