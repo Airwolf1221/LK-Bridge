@@ -8,6 +8,7 @@ import type { LkClient } from '../lk/index.js';
 import type { ProjectsRuntime } from '../projects/registry.js';
 import type { Db } from '../db/open.js';
 import type { ProposalService } from '../policy/proposals.js';
+import { assetJobs, type AssetMaintenance } from './asset-jobs.js';
 import type { MaintenanceJobDef, MaintenanceResult } from './types.js';
 
 /** v2 A2: what the tree jobs need from the repository tree (src/tree). */
@@ -30,6 +31,8 @@ export interface BuiltinJobDeps {
   readonly expirySweepMs: number;
   /** v2 A2: the repository tree (its sweep and check). Without it the two tree jobs skip, saying why. */
   readonly tree?: TreeMaintenance;
+  /** v2 A4: the asset tree (its refresh and check). Without it the two asset jobs skip, saying why. */
+  readonly assets?: AssetMaintenance;
 }
 
 const NOT_IMPLEMENTED = 'Not implemented yet';
@@ -215,6 +218,8 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       false,
     ),
     placeholder('tag-audit', 'Tag audit', 'Will report unused, duplicate and near-duplicate tags.', false),
+    // v2 A4: the asset tree's refresh and check (kept after the placeholders so earlier positions do not move).
+    ...assetJobs(d.assets),
   ];
 }
 

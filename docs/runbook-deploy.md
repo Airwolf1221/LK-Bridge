@@ -402,6 +402,11 @@ as shipped imports nothing. If you ever need to undo this step, restore the back
 sudo -u lkbridge /opt/lk-bridge/app/deploy/healthcheck.sh        # 🔒 sudo
 ```
 
+It first waits for the bridge to answer on `127.0.0.1:8787/healthz` (retrying every second for up to 30 seconds, so a
+check straight after a restart does not report false failures) and prints one line saying how long it waited, for
+example `Waited 3 s for the bridge to answer on 127.0.0.1:8787 (ready).` `--wait SECONDS` or `LKB_HEALTH_WAIT` changes the
+30 seconds; `0` does not wait. A bridge that never answers is reported by the first check below.
+
 Expected: twelve lines starting `PASS` and `All checks passed.`:
 
 - the bridge answers on `127.0.0.1:8787/healthz`;
@@ -552,14 +557,24 @@ message says so.
 
 Options: `--current` (deploy the checked-out commit without fetching; used for rollback), `--force`, `--local-health`
 (skip the public checks), `--sync-env` (update the env file instead of stopping), `--update-self` (install the release's
-deploy scripts instead of stopping), `--yes` (answer the questions `--sync-env` and `--update-self` ask).
+deploy scripts, and the systemd unit, instead of stopping), `--yes` (answer the questions `--sync-env` and
+`--update-self` ask).
+
+**The systemd unit with `--update-self`.** If `/etc/systemd/system/lk-bridge.service` differs from the release's
+`deploy/lk-bridge.service`, `--update-self` shows the difference and asks. On a yes, just before the service is started
+again (after the migrations, so a deploy that fails earlier leaves the unit as it was), it backs the installed unit up
+as `lk-bridge.service.bak.<UTC time>` beside it, installs the release's (`root:root`, `0644`), and runs
+`systemctl daemon-reload`; the deploy's own start then uses the new unit. If the code is already at `origin/main` but
+the unit differs, the service is still restarted to apply it. A unit that is not installed is not installed by the
+deploy. Without `--update-self` the script only warns at the end, as before.
 
 **Env drift warnings (chunk 8).** `healthcheck.sh` still compares the env file with the checkout's `deploy/env.template`
 by name and prints a `WARNING:` line (never a value; never a failure) for each difference; since v2 A1 the project
 variables follow their own rules there too. `deploy.sh` no longer prints these warnings: it runs env-sync against the
 release being deployed instead (above).
 
-The unit files, the sudoers file and the Caddy block are **not** updated by `deploy.sh`. If a release changes one, the
+The sudoers file, the Caddy block and the backup unit and timer are **not** updated by `deploy.sh` (the main unit
+`lk-bridge.service` is, with `--update-self`: above). If a release changes one, the
 script warns after a successful deploy ("… differs from deploy/…"); an administrator then repeats step 8 (and
 `sudo systemctl restart lk-bridge`) or step 10 for that file. To upgrade Node:
 `sudo NODE_VERSION=v24.x.y /opt/lk-bridge/app/deploy/install-node.sh`, then `sudo systemctl restart lk-bridge`.

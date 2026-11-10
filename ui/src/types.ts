@@ -698,3 +698,175 @@ export interface TreeOverview {
   suggesting: boolean;
   now: number;
 }
+
+// ------------------------------------------------------------------------------------- asset tree (v2 A4)
+
+export type AssetTreeStatusName = 'not_built' | 'building' | 'ready' | 'stale';
+
+export interface AssetMetaView {
+  projectId: string;
+  status: AssetTreeStatusName;
+  reason: string | null;
+  confirmedAt: number | null;
+  confirmedBy: 'build' | 'refresh' | 'check' | null;
+  staleRows: number;
+  pendingRereads: number;
+}
+
+export interface AssetFolderView {
+  id: string;
+  name: string;
+  parentId: string | null;
+  depth: number;
+  path: { ids: string[]; names: string[] };
+  isHidden: boolean;
+  lastReadAt: number;
+  lastReadBy: 'build' | 'write' | 'refresh' | 'check';
+  stale: boolean;
+  staleReason: string | null;
+}
+
+export interface AssetItemView {
+  id: string;
+  name: string;
+  folderId: string | null;
+  type: string;
+  url: string | null;
+  width: number | null;
+  height: number | null;
+  size: number | null;
+  sha256: string | null;
+  isHidden: boolean;
+  createdAt: string | null;
+  lastReadAt: number;
+  lastReadBy: 'build' | 'write' | 'refresh' | 'check';
+  stale: boolean;
+  staleReason: string | null;
+}
+
+export interface AssetPass {
+  id: string;
+  projectId: string;
+  kind: 'build' | 'refresh' | 'check';
+  trigger: string;
+  status:
+    'preparing' | 'awaiting_confirmation' | 'walking' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
+  snapshotAt: number | null;
+  foldersFound: number;
+  foldersDone: number;
+  foldersFailed: number;
+  listed: number;
+  pages: number;
+  requests: number;
+  verified: number;
+  added: number;
+  removed: number;
+  corrected: number;
+  estimate: {
+    rootFolders: number;
+    rootAssets: number;
+    requestsSoFar: number;
+    minRequestsRemaining: number;
+    likelyRequestsRemaining: number;
+    basis: 'root level only' | 'the previous inventory';
+    previousFolders: number | null;
+    previousAssets: number | null;
+    wallClockMs: number;
+    fitsInDailyBudget: boolean;
+    tightestTier: string | null;
+    at: number;
+  } | null;
+  summary: string | null;
+  error: string | null;
+  jobId: string | null;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+}
+
+export interface AssetCorrection {
+  id: number;
+  at: number;
+  source: 'build' | 'refresh' | 'check' | 'write';
+  passId: string | null;
+  itemId: string;
+  itemName: string | null;
+  itemKind: 'folder' | 'asset';
+  change: 'added' | 'removed' | 'updated' | 'reread_failed';
+  field: string | null;
+  oldValue: unknown;
+  newValue: unknown;
+  detail: string | null;
+}
+
+export interface AssetOverview {
+  project: { id: string; name: string };
+  tree: AssetMetaView;
+  settings: { refreshEnabled: boolean; charactersRootId: string | null };
+  counts: {
+    folders: number;
+    assets: number;
+    byType: Record<string, number>;
+    maxDepth: number;
+    stale: number;
+    withHash: number;
+  };
+  stale: { folders: AssetFolderView[]; assets: AssetItemView[] };
+  activePass: AssetPass | null;
+  lastBuild: AssetPass | null;
+  lastRefresh: AssetPass | null;
+  lastCheck: AssetPass | null;
+  recentPasses: AssetPass[];
+  rereads: {
+    inFlight: number;
+    failed: {
+      id: number;
+      op: string;
+      jobId: string | null;
+      assetIds: string[];
+      attempts: number;
+      lastError: string | null;
+      nextAt: number | null;
+      createdAt: number;
+    }[];
+  };
+  now: number;
+}
+
+export interface AssetChildren {
+  tree: AssetMetaView;
+  folder: AssetFolderView | null;
+  path: AssetFolderView[];
+  folders: AssetFolderView[];
+  assets: { assets: AssetItemView[]; total: number };
+}
+
+export interface AssetPlanStep {
+  name: string;
+  action: 'reuse' | 'create';
+  folderId: string | null;
+  parentFolderId: string | null;
+  path: string[];
+}
+
+export interface AssetPlanView {
+  project: string;
+  mode: 'existing_character_folder' | 'character_path' | 'folder_path';
+  character: {
+    name: string;
+    resourceId: string | null;
+    group: string | null;
+    race: string | null;
+    raceSource: 'page_ancestry' | 'unknown_race' | 'not_needed';
+  } | null;
+  steps: AssetPlanStep[];
+  reused: AssetPlanStep[];
+  wouldCreate: AssetPlanStep[];
+  destination: { path: string[]; folderId: string | null; exists: boolean };
+  notes: string[];
+  assetTree: { status: AssetTreeStatusName; reason: string | null; confirmedAt: number | null };
+}
+
+export type AssetPlanResponse =
+  | { ok: true; plan: AssetPlanView }
+  | { ok: false; error: { code: string; message: string; details?: Record<string, unknown> } };

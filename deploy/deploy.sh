@@ -17,7 +17,12 @@
 #                   (after the build, with a backup and a boot check) instead of stopping. Asks first unless --yes.
 #   --update-self   if the installed deploy scripts differ from this release's, install the release's copies into
 #                   /opt/lk-bridge/bin (root:root, 0755 and 0644) and run the new deploy.sh with the same options.
-#                   Shows the difference and asks first unless --yes.
+#                   Shows the difference and asks first unless --yes. It also covers the systemd unit: if
+#                   /etc/systemd/system/lk-bridge.service differs from this release's deploy/lk-bridge.service, the
+#                   difference is shown, the installed copy is backed up (lk-bridge.service.bak.<time>), the release's
+#                   is installed (root:root, 0644) and `systemctl daemon-reload` is run, just before the service is
+#                   started again, so the deploy's own restart starts it from the new unit (and a deploy with nothing
+#                   else to do still restarts). Without --update-self a difference is only warned about, at the end.
 #   --yes           answer yes to the questions --sync-env and --update-self ask.
 #
 # Who does what. Root only orchestrates: it never runs git, npm, node or a script from the checkout itself. Every phase
@@ -282,7 +287,30 @@ if ((${#differs[@]} > 0)); then
   fi
 fi
 
-if [[ "$mode" == "fetch" && "$prev_sha" == "$new_sha" && $force -eq 0 && -f "${app_dir}/dist/server.js" ]]; then
+# ---------------------------------------------------------------- 1b2. the systemd unit (--update-self only)
+# The unit is installed by this script only when asked. It is compared with the release's copy here (nothing changes),
+# and installed in step 5, between the migrations and the start, so everything before it can still fail with the old
+# unit and the old version untouched. The unit holds no secrets, so the difference is shown in full.
+unit_name="lk-bridge.service"
+unit_installed="${LKB_UNIT_DIR}/${unit_name}"
+unit_update=0
+if ((update_self)) && [[ -f "$unit_installed" ]] \
+  && as_build git cat-file -e "${new_sha}:deploy/${unit_name}" 2>/dev/null; then
+  step="checking the installed systemd unit"
+  as_build git show "${new_sha}:deploy/${unit_name}" >"${work_dir}/${unit_name}"
+  if ! cmp -s "${work_dir}/${unit_name}" "$unit_installed"; then
+    log "The installed ${unit_installed} differs from the one in ${new_sha:0:9}:"
+    diff -u --label "installed ${unit_installed}" --label "release ${new_sha:0:9} deploy/${unit_name}" "$unit_installed" "${work_dir}/${unit_name}" || true
+    confirm "Install the release's ${unit_name} (backing up the installed one) and reload systemd when the service is started again?" \
+      || die "Nothing was installed or changed."
+    unit_update=1
+    if [[ "$mode" == "fetch" && "$prev_sha" == "$new_sha" && $force -eq 0 ]]; then
+      log "Already at origin/${branch}, but the unit changes: the service is restarted to apply it."
+    fi
+  fi
+fi
+
+if [[ "$mode" == "fetch" && "$prev_sha" == "$new_sha" && $force -eq 0 && $unit_update -eq 0 && -f "${app_dir}/dist/server.js" ]]; then
   log "Already at origin/${branch} (${prev_sha:0:9}). Nothing to deploy. Use --force to rebuild and restart anyway."
   rm -rf -- "$work_dir"
   trap - EXIT
@@ -397,6 +425,22 @@ legacy_project_name="$(env_file_get LK_PROJECT_NAME)"
 as_service env DB_PATH="$db_path" LK_PROJECT_ID="$legacy_project_id" LK_PROJECT_NAME="$legacy_project_name" node dist/db/migrate.js
 
 # ---------------------------------------------------------------- 5. start
+if ((unit_update)); then
+  step="installing the systemd unit"
+  unit_backup="${unit_installed}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+  cp --preserve=mode,ownership,timestamps -- "$unit_installed" "$unit_backup"
+  log "Backed up ${unit_installed} to ${unit_backup}."
+  if [[ -z "${LKB_RUNAS:-}" ]]; then
+    install -o root -g root -m 0644 -- "${work_dir}/${unit_name}" "${unit_installed}.new"
+  else
+    install -m 0644 -- "${work_dir}/${unit_name}" "${unit_installed}.new"
+  fi
+  mv -f -- "${unit_installed}.new" "$unit_installed"
+  log "Installed ${unit_installed}."
+  "$systemctl_bin" daemon-reload
+  log "Reloaded systemd (daemon-reload); the start below uses the new unit."
+fi
+
 step="starting the service"
 log "Starting ${LKB_SERVICE} ..."
 svc start
@@ -421,8 +465,8 @@ as_service "${app_dir}/deploy/healthcheck.sh" "${health_args[@]}"
 # The unit files and the sudoers file are installed by hand, not by this script. Say so if this release changed one
 # (compare only; nothing from the checkout is run or installed). The deploy scripts themselves were compared in step 1b.
 for unit in lk-bridge.service lk-bridge-backup.service lk-bridge-backup.timer; do
-  if [[ -f "/etc/systemd/system/${unit}" ]] && ! cmp -s "${app_dir}/deploy/${unit}" "/etc/systemd/system/${unit}"; then
-    warn "/etc/systemd/system/${unit} differs from deploy/${unit}. An administrator should reinstall it (runbook, 'Updating')."
+  if [[ -f "${LKB_UNIT_DIR}/${unit}" ]] && ! cmp -s "${app_dir}/deploy/${unit}" "${LKB_UNIT_DIR}/${unit}"; then
+    warn "${LKB_UNIT_DIR}/${unit} differs from deploy/${unit}. An administrator should reinstall it (runbook, 'Updating')."
   fi
 done
 

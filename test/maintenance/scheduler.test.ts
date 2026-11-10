@@ -61,6 +61,8 @@ describe('the registry', () => {
       'assign-block-ids-sweep',
       'orphan-and-link-audit',
       'tag-audit',
+      'asset-refresh',
+      'asset-check',
     ]);
     const now = m.rig.h.clock.now();
     expect(view('budget-sampler')).toMatchObject({
@@ -94,6 +96,19 @@ describe('the registry', () => {
       enabled: true,
       scope: 'project',
       scheduleText: 'Daily at 02:30 (London time)',
+    });
+    // v2 A4: the asset tree's regular refresh (every 6 hours) and its nightly check, next to the tree's.
+    expect(view('asset-refresh')).toMatchObject({
+      implemented: true,
+      enabled: true,
+      scope: 'project',
+      scheduleText: 'Every 6 hours',
+    });
+    expect(view('asset-check')).toMatchObject({
+      implemented: true,
+      enabled: true,
+      scope: 'project',
+      scheduleText: 'Daily at 02:50 (London time)',
     });
     for (const id of ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit']) {
       expect(view(id)).toMatchObject({
@@ -503,7 +518,7 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(10);
+    expect(m.maintenance.scheduler.list()).toHaveLength(12);
   });
 });
 

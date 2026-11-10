@@ -5,6 +5,7 @@ import type { ProjectRegistry } from '../projects/index.js';
 import type { Maintenance } from '../maintenance/index.js';
 import type { Mappings } from '../mappings/index.js';
 import type { Policy } from '../policy/index.js';
+import type { AssetService } from '../assets/index.js';
 import type { TreeService } from '../tree/index.js';
 import type { SecretStore } from '../secrets/store.js';
 import type { Registry } from '../registry/index.js';
@@ -27,6 +28,8 @@ export interface AdminRuntime {
   readonly tree: TreeService;
   /** v2 A3: the type registry and taxonomy of each project. */
   readonly registry: Registry;
+  /** v2 A4: the asset tree of each project. */
+  readonly assets: AssetService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

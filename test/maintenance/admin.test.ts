@@ -85,6 +85,8 @@ describe('the registry', () => {
       'assign-block-ids-sweep',
       'orphan-and-link-audit',
       'tag-audit',
+      'asset-refresh',
+      'asset-check',
     ]);
     expect(r.json.jobs[0]).toMatchObject({
       name: 'Budget sampler',
