@@ -175,6 +175,11 @@ export interface BatchSubmit {
    */
   readonly holdDocument?: { readonly documentId: string };
   /**
+   * v2 C2c, bridge code only: one more resource the job holds the lock of from start to end (promote_page of a Working
+   * character writes the page and its character index). Requires `holdLock`; all are taken in sorted key order.
+   */
+  readonly holdAlso?: { readonly resourceId: string };
+  /**
    * v2 C2c (ADR 0035), bridge code only: the job IS a lifecycle change (or a create with a lifecycle status) and makes
    * exactly these changes, which the lifecycle guard then allows. Nothing an agent sends reaches it (the tools build it;
    * `lk_api_batch` never sets it).

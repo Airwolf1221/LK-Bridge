@@ -21,7 +21,8 @@ export default defineConfig({
       'test/discover/**/*.test.ts', // v2 B2: the Discover and Read tools
       'test/pages/**/*.test.ts', // v2 C1: write_page
       'test/facts/**/*.test.ts',
-      'test/resources/**/*.test.ts', // v2 C2b: resources, documents, characters, operation_id, factsVersion, mentions
+      'test/resources/**/*.test.ts',
+      'test/lifecycle/**/*.test.ts', // v2 C2c: the page lifecycle
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

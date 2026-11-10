@@ -570,7 +570,7 @@ export function factsVersionAfter(verification: Record<string, unknown>): string
 }
 
 /** The template's fact keys (cached for a day), or null with the reason as a note. */
-async function templateKeysFor(
+export async function templateKeysFor(
   pd: ProjectDeps,
   mctx: McpToolContext,
   ctx: RepoCtx,

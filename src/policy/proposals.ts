@@ -226,6 +226,7 @@ interface StoredJobOptions {
   readonly internal?: boolean;
   /** v2 C2c: the second job-level lock, and the lifecycle change the job makes. */
   readonly holdDocument?: { readonly documentId: string };
+  readonly holdAlso?: { readonly resourceId: string };
   readonly lifecycle?: LifecycleMarker;
 }
 
@@ -528,6 +529,9 @@ export class ProposalService implements ProposalSink {
             ...(meta.jobOptions.internal ? { internal: true } : {}),
             ...(meta.jobOptions.holdDocument
               ? { holdDocument: { documentId: meta.jobOptions.holdDocument.documentId } }
+              : {}),
+            ...(meta.jobOptions.holdAlso
+              ? { holdAlso: { resourceId: meta.jobOptions.holdAlso.resourceId } }
               : {}),
             ...(meta.jobOptions.lifecycle ? { lifecycle: meta.jobOptions.lifecycle } : {}),
           }
@@ -880,6 +884,7 @@ export class ProposalService implements ProposalSink {
         ...(jobOptions?.holdLock ? { holdLock: jobOptions.holdLock } : {}),
         ...(jobOptions?.internal ? { internal: true } : {}),
         ...(jobOptions?.holdDocument ? { holdDocument: jobOptions.holdDocument } : {}),
+        ...(jobOptions?.holdAlso ? { holdAlso: jobOptions.holdAlso } : {}),
         ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
       });
     } catch (e) {

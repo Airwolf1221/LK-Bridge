@@ -24,7 +24,8 @@ export interface LifecycleFacts {
 export interface LifecycleTarget {
   readonly name: string;
   readonly parentId: string;
-  readonly facts: Readonly<Partial<Record<keyof LifecycleFacts, string>>>;
+  /** Each fact's value to write: text, or null to remove the row (a restore of a fact the page did not have). */
+  readonly facts: Readonly<Partial<Record<keyof LifecycleFacts, string | null>>>;
   readonly tagsRemove: readonly string[];
   readonly tagsAdd: readonly string[];
   /** Archive: the note to insert. Unarchive: the note to remove (only if unchanged). */

@@ -26,6 +26,7 @@ export interface WriteJobSpec {
   readonly holdLock?: { readonly resourceId: string };
   /** v2 C2c: the second job-level lock (a document of the held page). */
   readonly holdDocument?: { readonly documentId: string };
+  readonly holdAlso?: { readonly resourceId: string };
   /** v2 C2c: the lifecycle change the job makes (the lifecycle guard allows exactly that). */
   readonly lifecycle?: LifecycleMarker | undefined;
   readonly proposal: ProposalExtras;
@@ -68,6 +69,7 @@ export async function runWriteJob(
       title: spec.title.slice(0, 300),
       ...(spec.holdLock ? { holdLock: spec.holdLock } : {}),
       ...(spec.holdDocument ? { holdDocument: spec.holdDocument } : {}),
+      ...(spec.holdAlso ? { holdAlso: spec.holdAlso } : {}),
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
       internal: true,
       proposal: spec.proposal,

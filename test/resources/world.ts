@@ -212,6 +212,7 @@ export async function asCanon(w: FactsWorld, r: ToolCall): Promise<ToolCall> {
       jobId: p.jobId,
       proposalId: id,
       ...(job?.lastError ? { error: job.lastError } : {}),
+      ...(res.verified === false ? { verification: res.verification } : {}),
     },
   };
 }

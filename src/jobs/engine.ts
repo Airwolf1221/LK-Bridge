@@ -175,8 +175,11 @@ const authItem = (def: OperationDef, params: OpParams, options: StepOptions): Au
 
 /** A job-level lock (`BatchSubmit.holdLock`), stored in the job's options. */
 const HELD_LOCK = 'heldLock';
-/** v2 C2c: the second job-level lock (`BatchSubmit.holdDocument`), taken after `heldLock`. */
-const HELD_DOC_LOCK = 'heldDocLock';
+/**
+ * v2 C2c: the further job-level locks (`BatchSubmit.holdDocument`, `holdAlso`), stored with `heldLock` as one list. A job
+ * holding several takes them in sorted key order, so two such jobs can never wait on each other.
+ */
+const HELD_MORE = 'heldMore';
 /** v2 C2c: the lifecycle marker (`BatchSubmit.lifecycle`), stored in the job's options for the guard inside the lock. */
 export const LIFECYCLE_OPTION = 'lifecycle';
 
@@ -648,25 +651,30 @@ export class JobEngine {
       }
     });
     // v2 C2a: a job-level lock covers every write step: each must take that same lock (or none). v2 C2c: a job may
-    // hold a second one, on a document of the same page (`holdDocument`), always taken after the page's.
+    // hold more: a document of the page (`holdDocument`) and one more resource (`holdAlso`), all taken at its start.
     const heldLock = req.holdLock ? projectLockKey(project, `res:${req.holdLock.resourceId}`) : null;
-    if (req.holdDocument && !heldLock) {
+    if ((req.holdDocument || req.holdAlso) && !heldLock) {
       throw new InvalidParamsError('batch_ops', [
-        { path: 'holdDocument', message: 'a document lock is held only with the page lock (holdLock)' },
+        {
+          path: 'holdDocument',
+          message: 'further job-level locks are held only with the page lock (holdLock)',
+        },
       ]);
     }
-    const heldDocLock = req.holdDocument
-      ? projectLockKey(project, `doc:${req.holdDocument.documentId}`)
-      : null;
+    const heldMore = [
+      ...(req.holdDocument ? [projectLockKey(project, `doc:${req.holdDocument.documentId}`)!] : []),
+      ...(req.holdAlso ? [projectLockKey(project, `res:${req.holdAlso.resourceId}`)!] : []),
+    ];
+    const heldKeys = heldLock ? [heldLock, ...heldMore] : [];
     if (heldLock) {
       validated.forEach((v, i) => {
         if (!v.def || v.def.kind === 'read') return;
         const key = projectLockKey(project, lockKeyFor(v.def, v.params));
-        if (key !== null && key !== heldLock && key !== heldDocLock) {
+        if (key !== null && !heldKeys.includes(key)) {
           throw new InvalidParamsError(v.opId, [
             {
               path: `steps[${i}]`,
-              message: `takes lock ${key}, but the job holds ${[heldLock, heldDocLock].filter(Boolean).join(' and ')}: a job-level lock must cover every write`,
+              message: `takes lock ${key}, but the job holds ${heldKeys.join(' and ')}: a job-level lock must cover every write`,
             },
           ]);
         }
@@ -681,6 +689,7 @@ export class JobEngine {
             ...(req.holdLock ? { holdLock: { resourceId: req.holdLock.resourceId } } : {}),
             ...(req.internal ? { internal: true } : {}),
             ...(req.holdDocument ? { holdDocument: { documentId: req.holdDocument.documentId } } : {}),
+            ...(req.holdAlso ? { holdAlso: { resourceId: req.holdAlso.resourceId } } : {}),
             ...(req.lifecycle ? { lifecycle: req.lifecycle } : {}),
           }
         : undefined;
@@ -719,7 +728,7 @@ export class JobEngine {
       heldLock || req.lifecycle
         ? {
             ...(heldLock ? { [HELD_LOCK]: heldLock } : {}),
-            ...(heldDocLock ? { [HELD_DOC_LOCK]: heldDocLock } : {}),
+            ...(heldMore.length > 0 ? { [HELD_MORE]: heldMore } : {}),
             ...(req.lifecycle ? { [LIFECYCLE_OPTION]: req.lifecycle } : {}),
           }
         : undefined,
@@ -1336,14 +1345,17 @@ export class JobEngine {
     // v2 C2c: a second job-level lock (a document of the same page), always taken after the page's, so two jobs holding
     // both can never wait on each other (every job takes them in this one order; no other job holds a lock while it
     // waits for another).
-    const heldDocLock = typeof opts[HELD_DOC_LOCK] === 'string' ? opts[HELD_DOC_LOCK] : null;
+    const more = Array.isArray(opts[HELD_MORE])
+      ? (opts[HELD_MORE] as unknown[]).filter((x): x is string => typeof x === 'string')
+      : [];
+    const keys = [heldLock, ...more].sort();
     const job = this.requireJob(jobId);
     const releases: (() => void)[] = [];
     const release = () => {
       for (const r of releases.splice(0).reverse()) r();
     };
     try {
-      for (const key of heldDocLock ? [heldLock, heldDocLock] : [heldLock]) {
+      for (const key of keys) {
         if (!this.locks.isFree(key)) this.setWaitingLock(jobId, 'lock', { lockKey: key, job: true });
         releases.push(
           await this.locks.acquire(
@@ -1369,7 +1381,7 @@ export class JobEngine {
       return { last: undefined };
     }
     try {
-      return await this.runSteps(jobId, entry, heldDocLock ? [heldLock, heldDocLock] : heldLock);
+      return await this.runSteps(jobId, entry, keys.length > 1 ? keys : heldLock);
     } finally {
       release();
     }
