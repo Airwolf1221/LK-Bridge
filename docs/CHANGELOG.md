@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased: v2 A2, the repository tree (10 November 2026)
+
+The bridge's own model of each project's AI REPOSITORY ([docs/PLAN-v2.md](PLAN-v2.md) 4.2; design and concurrency rules
+in [ADR 0024](adr/0024-repository-tree.md); how to use it in [docs/tree.md](tree.md)). No MCP tools yet: later
+sessions (A3, B2) build on its query layer.
+
+- **Storage (migration 0700).** One row per page under the project's root (the root included), every row with
+  `project_id`: id, raw and display name, kind (`[INDEX] ` → `index`, `[BSRC] ` → `bsrc`, otherwise `unclassified`;
+  the root is `root`), parent, rank, depth, path (ids and display names), tags, aliases, documents, hidden and locked,
+  Reference Type, Scope, Index Scope, Canonical Display Name, a sidebar summary, the template id (for C2), when and how
+  it was last read, and a stale flag. Also: every name a node answers to (for exact lookups), links for later sessions
+  (A3's types and taxonomy), tombstones, passes with their progress, the listing a pass is working from, owed
+  re-reads, and the correction log. The `tree-snapshot` placeholder's rows are removed.
+- **Project settings are editable** (`src/projects/settings.ts`): the AI REPOSITORY root, the key-value property and the
+  four row names the tree reads, and a per-project switch for the hourly sweep. On the Projects page (audited
+  `project.set_setting`) and with `npm run projects -- set <project> <key> <value>` (and `settings <project>`).
+  `parseSettingValue` validates both. Until a root is set the tree is `not_configured` and does nothing. When no root
+  is set, the Repository Tree page looks by itself (once, one listing at P3) for exactly one top-level page named
+  "AI REPOSITORY" and offers it.
+- **First build.** A resumable background job at P3: it lists every resource (paged, the cursor persisted), stops to show
+  the estimate (`bridge_estimate`'s arithmetic), then reads each node under the root with getResource once the owner
+  confirms. A restart continues where it stopped. It never runs below the governor's P3 floor, and P1 work is served at
+  once while it runs. A finished build is recorded as a job.
+- **Updates after the bridge's own writes.** The job engine tells write observers before each write step and after its
+  outcome (`engine.observeWrites`, awaited inside the job). For the 17 operations that can change the tree, the tree
+  re-reads the affected resource(s) with getResource in the same job (descendants too for moves into the root, restores
+  and template copies with children) and stores LegendKeeper's answer, never a prediction. A failed re-read marks the
+  node stale, is logged and retried; a crash between a write and its re-read is caught up at the next start. Page
+  content writes do not touch the tree.
+- **Structural sweep** (`tree-sweep`, hourly, per project, can be switched off) and **daily consistency check**
+  (`tree-check`, 02:30 London time, P3) replace the `tree-snapshot` placeholder. Each correction (old and new value,
+  which pass) goes to the correction log. A page missing from a listing is read once before it is removed (a listing
+  paged during changes can skip one).
+- **Concurrency.** Observations are ordered by a strictly increasing stamp taken when each read is sent; an observation
+  never replaces a later one, so a sweep or check never undoes a newer after-write update. Updates for one project are
+  serialised; projects are fully isolated.
+- **Query layer** (`runtime.tree.queries`): node, root, children (sibling order), subtree with a depth limit, path,
+  documents, nodes by kind, unclassified and stale nodes, counts, and exact-name lookups (raw, display, alias,
+  Canonical Display Name; every match). Every answer states the tree's status and when it was last confirmed.
+- **Dashboard:** a **Repository Tree** page per project (status, counts by kind, depth, unclassified list, build
+  progress and estimate, last build, sweep and check, failed re-reads, correction log, a browsable tree); editable
+  settings on the Projects page. Admin routes under `/api/admin/tree` and `PUT /api/admin/projects/:name/settings`.
+- **Job engine** (additive): `observeWrites` and `internalRead` (one governed read for the bridge's own bookkeeping,
+  not policy-gated, never queued as a job), documented in `src/jobs/README.md`.
+- **Maintenance:** a job may be `background` (its scheduled runs go alongside the others, so a long check never holds up
+  the 10-second sampler) and may report `skipped` with its reason.
+- **Tests** (`test/tree/`, `test/ui/tree.test.tsx`): a 2,000-node world nine levels deep with resources outside the root;
+  resuming after a crash in the listing and in the reading; budget priority; every followed operation compared with the
+  mock's state; sweep detection of every outside change; the check's property detection and correction log; a sweep and
+  a check that must not undo newer after-write updates; two projects with the same ids, fully isolated; status
+  transitions; the dashboard and the CLI.
+- Existing tests that listed every migration or maintenance job now include 0700 and the two tree jobs.
+
 ## Unreleased: v2 session B1, the Markdown converter (9 November 2026)
 
 The library every v2 Markdown read and write goes through ([docs/PLAN-v2.md](PLAN-v2.md) 4.7; decisions in

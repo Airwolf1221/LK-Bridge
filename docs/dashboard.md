@@ -57,6 +57,14 @@ valid, its status and reason, and its settings (read-only); it can switch a proj
 confirmation, audited) and **Check again** a project's key. The sandbox flag is shown but only set from the server's
 shell (`npm run projects`).
 
+## Repository Tree (v2 A2)
+
+The **Repository Tree** page shows the selected project's tree: status, counts by kind and depth, the running build's
+progress and its estimate (confirmed before anything is read page by page), the last build, sweep and check, the
+unclassified and stale pages, failed re-reads, the correction log and a simple browser. Its routes and behaviour are in
+[tree.md](tree.md#dashboard-and-admin-api). Project settings (the AI REPOSITORY root and the names the tree reads) are
+edited on the Projects page.
+
 ## Admin API
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take
@@ -76,7 +84,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                                                                              |
 | Maintenance | `GET /maintenance`, `GET /maintenance/:id` (with history), `POST /maintenance/:id/enable\|disable\|run`, `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md))                                                                                                                                                                                                |
 | Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md)) |
-| Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1)                                                                                                                                                                                                                                                                     |
+| Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1), `PUT /projects/:name/settings` (`{ key, value }`, v2 A2)                                                                                                                                                                                                           |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                       |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409

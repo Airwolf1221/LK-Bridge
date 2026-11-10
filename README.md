@@ -21,4 +21,7 @@ The owner dashboard (`/ui`), its admin API and live stream are described in [`do
 
 Connecting Claude, the OAuth endpoints and personal access tokens are described in [`docs/auth.md`](docs/auth.md).
 
+Several LegendKeeper projects in one bridge: [`docs/projects.md`](docs/projects.md). The repository tree (each project's
+AI REPOSITORY, kept current by the bridge): [`docs/tree.md`](docs/tree.md).
+
 Never commit secrets. Copy `.env.example` for local values; `.env` is git-ignored.

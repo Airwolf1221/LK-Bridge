@@ -285,7 +285,7 @@ describe('Projects page', () => {
     expect(document.body.innerHTML).not.toContain('lk_live_SECRET_VALUE_1234');
   });
 
-  it('shows each project’s settings read-only, with their labels and any problem reading them', async () => {
+  it('shows each project’s settings, with their labels and any problem reading them', async () => {
     installApi({ ...baseRoutes(), 'GET /projects': projects() });
     renderApp('/ui/projects');
     const main = await screen.findByRole('region', { name: 'Settings of baisheng' });
@@ -296,11 +296,12 @@ describe('Projects page', () => {
     expect(screen.getByRole('region', { name: 'Settings of test' })).toHaveTextContent(
       'the stored settings are not valid JSON',
     );
-    expect(screen.getByRole('region', { name: 'Settings' })).toHaveTextContent(
-      /editing them comes in a later release/,
-    );
-    // Read-only: no field to edit a setting.
+    // v2 A2: settings are editable (audited); these keys are not marked editable, so they are only shown.
+    expect(screen.getByRole('region', { name: 'Settings' })).toHaveTextContent(/Changes are audited/);
     expect(within(screen.getByRole('region', { name: 'Settings' })).queryByRole('textbox')).toBeNull();
+    expect(
+      within(screen.getByRole('region', { name: 'Settings' })).queryByRole('button', { name: /^Edit/ }),
+    ).toBeNull();
   });
 
   it('makes a project read-only only after a confirmation, sending { value, confirm: true }', async () => {

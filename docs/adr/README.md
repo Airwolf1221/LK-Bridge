@@ -27,3 +27,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0021](0021-private-key-jwt-client-authentication.md)  | private_key_jwt client authentication for metadata-document clients                 | Accepted |
 | [0022](0022-markdown-converter.md)                     | The Markdown converter (v2 session B1)                                              | Accepted |
 | [0023](0023-project-model.md)                          | Several LegendKeeper projects in one bridge; exactly one bridge process per project | Accepted |
+| [0024](0024-repository-tree.md)                        | The repository tree: observation order, per-project serialisation                   | Accepted |

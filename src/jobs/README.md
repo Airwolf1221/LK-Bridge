@@ -113,6 +113,21 @@ All have `code`, `message`, and `jobId` / `stepNo` when a job recorded the work;
   `single_op` job with a `result` artefact (oversized MCP results; maintenance runs, chunk 6, with `failure` for a failed
   run); returns `{ jobId, artifactId, bytes }`.
 
+## Write observers and internal reads (v2 A2)
+
+- `engine.observeWrites({ beforeWrite?, afterWrite? })` (returns an unsubscribe function). For every write step a job
+  runs (inline writes included): `beforeWrite(info)` is called synchronously before the step is sent (or re-verified
+  after a restart), and `afterWrite(result)` after its final outcome, **awaited inside the job** before it moves on.
+  `info` is `{ projectId, jobId, stepNo, opId, params (client ids minted), priority }`; `result` adds `outcome`
+  (`succeeded` | `failed`), `uncertain`, `value` (LegendKeeper's response) and an abort `signal` (the engine stopping).
+  An observer that throws is logged and never fails the job. The repository tree (`src/tree`) uses it to re-read what
+  each write changed.
+- `engine.internalRead(projectId, opId, params, { priority, jobId?, stepNo?, signal?, notFoundIsAnswer? })`: one governed
+  READ for the bridge's own bookkeeping, through the project's governor. Not put to the policy gate (it is the system's
+  own work, never an agent's), never queued as a job (a long budget wait throws `BudgetExhaustedError` with
+  `retryAtMs`, for the caller to wait out), not recorded as a job; LegendKeeper errors go to the errors table (a 404
+  does not, with `notFoundIsAnswer`). Throws only `JobsError` subclasses.
+
 ## Model
 
 **Job** (`jobs`): `kind` (`single_op`, `batch_ops`, `paginate_all`; `upload_image`, chunk 3), `title`,
