@@ -247,6 +247,8 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
         'sqlite-optimise',
         'journal-prune',
         'proposal-prune',
+        'asset-refresh', // v2 A4: not under test here
+        'asset-check',
       ])
         m.maintenance.commands.disable('owner', id);
 

@@ -5,7 +5,17 @@
  * check and migrations (stubs), starts and health-checks (stubs). No secret may appear in any output.
  */
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -46,7 +56,7 @@ function makeServer(): Server {
   const origin = join(root.dir, 'origin.git');
   mkdirSync(join(work, 'deploy'), { recursive: true });
   mkdirSync(join(work, 'stub'), { recursive: true });
-  for (const f of [...INSTALLED, 'env.template'])
+  for (const f of [...INSTALLED, 'env.template', 'lk-bridge.service'])
     copyFileSync(join(repoDeployDir, f), join(work, 'deploy', f));
   for (const f of ['deploy.sh', 'env-sync.sh']) chmodSync(join(work, 'deploy', f), 0o755);
   writeFileSync(
@@ -314,5 +324,129 @@ describe('deploy.sh self-check of the installed scripts (OPS1)', () => {
     expect(r.status).toBe(0);
     expect(r.err).toMatch(/Carrying on with the installed ones \(--current\)/);
     expect(readFileSync(join(s.bin, 'lib.sh'), 'utf8')).not.toMatch(/release marker/);
+  });
+});
+
+describe('deploy.sh --update-self and the systemd unit', () => {
+  const UNIT = 'lk-bridge.service';
+  /** The release's unit, changed (a comment is enough: the file is compared byte for byte). */
+  const changedUnit = () => `${readFileSync(join(repoDeployDir, UNIT), 'utf8')}# release marker 9.9.10\n`;
+  const installed = (s: Server) => join(s.unitDir, UNIT);
+  const backupsOf = (s: Server) => readdirSync(s.unitDir).filter((f) => f.startsWith(`${UNIT}.bak.`));
+  const calls = (s: Server) => s.systemctlLog().trim().split('\n').filter(Boolean);
+
+  it('without the flag, only warns at the end: the installed unit is not touched, systemd is not reloaded', () => {
+    const s = (server = makeServer());
+    s.release({ 'deploy/lk-bridge.service': changedUnit() });
+    const r = deploy(s, '--local-health');
+    expect(r.status).toBe(0);
+    expect(r.err).toMatch(
+      /lk-bridge\.service differs from deploy\/lk-bridge\.service\. An administrator should reinstall it/,
+    );
+    expect(readFileSync(installed(s), 'utf8')).not.toMatch(/release marker/);
+    expect(backupsOf(s)).toEqual([]);
+    expect(calls(s)).toEqual(['stop lk-bridge', 'start lk-bridge']);
+  });
+
+  it('--update-self shows the difference, backs up the installed copy, installs the release’s (0644), reloads systemd, then starts', () => {
+    const s = (server = makeServer());
+    const before = readFileSync(installed(s), 'utf8');
+    s.release({ 'deploy/lk-bridge.service': changedUnit() });
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.err).not.toMatch(/ERROR|WARNING/);
+    expect(r.status).toBe(0);
+    expect(r.out).toMatch(/The installed .*lk-bridge\.service differs from the one in/);
+    expect(r.out).toMatch(/^\+# release marker 9\.9\.10$/m); // the diff, in full
+    expect(r.out).toMatch(/Backed up .*lk-bridge\.service to .*lk-bridge\.service\.bak\.\d{8}T\d{6}Z\./);
+    expect(r.out).toMatch(/Installed .*lk-bridge\.service\./);
+    expect(r.out).toMatch(/Reloaded systemd \(daemon-reload\)/);
+    expect(r.out).toMatch(/DEPLOY SUCCEEDED/);
+    expect(readFileSync(installed(s), 'utf8')).toBe(changedUnit());
+    const [backup, ...more] = backupsOf(s);
+    expect(more).toEqual([]);
+    expect(readFileSync(join(s.unitDir, backup!), 'utf8')).toBe(before);
+    expect(statSync(installed(s)).mode & 0o7777).toBe(0o644);
+    // The deploy's own restart picks it up: the unit is installed and systemd reloaded after the stop and before the start.
+    expect(calls(s)).toEqual(['stop lk-bridge', 'daemon-reload', 'start lk-bridge']);
+    expect(r.out.indexOf('Reloaded systemd')).toBeLessThan(r.out.indexOf('Starting lk-bridge'));
+    expect(readdirSync(s.unitDir).filter((f) => f.endsWith('.new'))).toEqual([]);
+  });
+
+  it('asks first; "no" installs nothing and changes nothing', () => {
+    const s = (server = makeServer());
+    s.release({ 'deploy/lk-bridge.service': changedUnit() });
+    const r = run(s, 'deploy.sh', ['--update-self'], 'n\n');
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/^\+# release marker 9\.9\.10$/m);
+    expect(r.err).toMatch(/Nothing was installed or changed/);
+    expect(readFileSync(installed(s), 'utf8')).not.toMatch(/release marker/);
+    expect(backupsOf(s)).toEqual([]);
+    expect(calls(s)).toEqual([]); // the service was never touched
+  });
+
+  it('with the code already at origin/main it still restarts, to apply the unit', () => {
+    const s = (server = makeServer());
+    // First deploy of the only release; then the administrator's installed unit is out of date.
+    expect(deploy(s, '--local-health').status).toBe(0);
+    writeFileSync(installed(s), `${readFileSync(installed(s), 'utf8')}# an old local edit\n`);
+    writeFileSync(join(s.dir, 'systemctl.log'), '');
+    const nothing = deploy(s, '--local-health');
+    expect(nothing.out).toMatch(/Nothing to deploy/);
+    expect(calls(s)).toEqual([]);
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.status).toBe(0);
+    expect(r.out).toMatch(/Already at origin\/main, but the unit changes: the service is restarted/);
+    expect(r.out).not.toMatch(/Nothing to deploy/);
+    expect(readFileSync(installed(s), 'utf8')).toBe(readFileSync(join(repoDeployDir, UNIT), 'utf8'));
+    expect(calls(s)).toEqual(['stop lk-bridge', 'daemon-reload', 'start lk-bridge']);
+  });
+
+  it('a unit that is already the release’s is left alone: no backup, no reload', () => {
+    const s = (server = makeServer());
+    s.release({ 'README.md': 'new\n' });
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.status).toBe(0);
+    expect(r.out).not.toMatch(/systemd/);
+    expect(backupsOf(s)).toEqual([]);
+    expect(calls(s)).toEqual(['stop lk-bridge', 'start lk-bridge']);
+  });
+
+  it('a unit that is not installed at all is not installed by the deploy', () => {
+    const s = (server = makeServer());
+    rmSync(installed(s));
+    s.release({ 'deploy/lk-bridge.service': changedUnit() });
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.status).toBe(0);
+    expect(existsSync(installed(s))).toBe(false);
+    expect(calls(s)).toEqual(['stop lk-bridge', 'start lk-bridge']);
+  });
+
+  it('a deploy that fails before the start leaves the installed unit exactly as it was', () => {
+    const s = (server = makeServer());
+    const before = readFileSync(installed(s), 'utf8');
+    s.release({ 'deploy/lk-bridge.service': changedUnit() });
+    // The new build would refuse the env file (the boot check), after the stop and before the migrations.
+    s.writeEnv(`${s.readEnv()}\nWRITERS_MAX=invalid\n`);
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.status).toBe(1);
+    expect(readFileSync(installed(s), 'utf8')).toBe(before);
+    expect(backupsOf(s)).toEqual([]);
+    expect(calls(s)).not.toContain('daemon-reload');
+  });
+
+  it('a changed deploy script and a changed unit together: the new deploy.sh installs the unit, once', () => {
+    const s = (server = makeServer());
+    s.release({
+      'deploy/lib.sh': `${readFileSync(join(repoDeployDir, 'lib.sh'), 'utf8')}# release marker 9.9.10\n`,
+      'deploy/lk-bridge.service': changedUnit(),
+    });
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.err).not.toMatch(/ERROR/);
+    expect(r.status).toBe(0);
+    expect(r.out).toMatch(/Running the new .*\/deploy\.sh with the same options/);
+    expect(readFileSync(installed(s), 'utf8')).toBe(changedUnit());
+    expect(backupsOf(s)).toHaveLength(1);
+    expect(calls(s).filter((c) => c === 'daemon-reload')).toHaveLength(1);
+    expect(r.out.match(/differs from the one in/g)).toHaveLength(1);
   });
 });

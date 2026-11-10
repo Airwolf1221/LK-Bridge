@@ -86,6 +86,14 @@ categories with the review queue; seed once, "add missing", edit singular, alias
 **drift** report (with links into the Repository Tree) and a read-only **Try it** panel (resolve a name, plan a
 character placement, compute an ordering slot). How to use it: [registry.md](registry.md).
 
+## Asset Tree (v2 A4)
+
+The **Asset Tree** page shows the selected project's asset library as the bridge knows it: status, counts, the build
+(the root level is listed first and the estimate shown; nothing more is read until you confirm), the last build, refresh
+and check, stale rows, failed re-reads, the correction log, a folder browser, **Refresh now**, and a read-only **Try it**
+panel that shows where a character's images would go. Its routes and behaviour are in
+[assets.md](assets.md#dashboard-and-admin-api).
+
 ## Admin API
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take

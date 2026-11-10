@@ -5,7 +5,7 @@ REPOSITORY page, with its kind, place, tags, aliases, documents and catalogue fi
 ordering, the Discover tools) answer from it, so most questions cost no LegendKeeper request. Pages outside the root
 are never stored.
 
-Design and concurrency rules: [ADR 0025](adr/0025-repository-tree.md). Source: `src/tree/`. Migration:
+Its asset-library twin, which reuses these rules: [assets.md](assets.md). Design and concurrency rules: [ADR 0025](adr/0025-repository-tree.md). Source: `src/tree/`. Migration:
 `0700_repository_tree.sql`. Tests: `test/tree/`, `test/ui/tree.test.tsx`.
 
 ## Setting it up on the server

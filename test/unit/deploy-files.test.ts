@@ -53,13 +53,17 @@ describe('deploy scripts', () => {
     expect(statSync(join(deployDir, name)).mode & 0o111, 'executable bit').not.toBe(0);
   });
 
-  it.skipIf(!haveShellcheck)('passes shellcheck', () => {
-    const r = spawnSync('shellcheck', ['-x', ...scripts.map((s) => join(deployDir, s))], {
-      encoding: 'utf8',
-    });
-    expect(r.stdout + r.stderr).toBe('');
-    expect(r.status).toBe(0);
-  });
+  it.skipIf(!haveShellcheck)(
+    'passes shellcheck',
+    () => {
+      const r = spawnSync('shellcheck', ['-x', ...scripts.map((s) => join(deployDir, s))], {
+        encoding: 'utf8',
+      });
+      expect(r.stdout + r.stderr).toBe('');
+      expect(r.status).toBe(0);
+    },
+    30_000,
+  ); // about 4 s alone: close to the 5 s default when the whole suite runs
 
   it('never prints or traces secrets', () => {
     for (const name of scripts) {
@@ -224,6 +228,32 @@ describe('deploy.sh, env-sync and the self-check: order and separation (OPS1)', 
     );
     expect(code).toMatch(/exec "\$\{here\}\/deploy\.sh" "\$\{orig_args\[@\]\}"/);
     expect(code).toMatch(/LKB_SELF_UPDATED/); // never a loop
+  });
+
+  it('installs the systemd unit only with --update-self: backup first, root:root 0644, daemon-reload, all before the start', () => {
+    expect(code).toMatch(/if \(\(update_self\)\) && \[\[ -f "\$unit_installed" \]\]/);
+    const backup = code.indexOf(
+      'cp --preserve=mode,ownership,timestamps -- "$unit_installed" "$unit_backup"',
+    );
+    const install = code.indexOf(
+      'install -o root -g root -m 0644 -- "${work_dir}/${unit_name}" "${unit_installed}.new"',
+    );
+    const rename = code.indexOf('mv -f -- "${unit_installed}.new" "$unit_installed"');
+    const reload = code.indexOf('"$systemctl_bin" daemon-reload');
+    const start = code.indexOf('step="starting the service"');
+    expect(backup).toBeGreaterThan(0);
+    expect(install).toBeGreaterThan(backup);
+    expect(rename).toBeGreaterThan(install);
+    expect(reload).toBeGreaterThan(rename);
+    expect(start).toBeGreaterThan(reload);
+    // The release's copy is read out of git by the build user as text (like the other self files), never run.
+    expect(code).toMatch(
+      /as_build git show "\$\{new_sha\}:deploy\/\$\{unit_name\}" >"\$\{work_dir\}\/\$\{unit_name\}"/,
+    );
+    // Without the flag the existing warning stays.
+    expect(code).toMatch(
+      /warn "\$\{LKB_UNIT_DIR\}\/\$\{unit\} differs from deploy\/\$\{unit\}\. An administrator should reinstall it/,
+    );
   });
 
   it('env-sync.sh writes atomically beside the file after a backup, and checks with the bridge as the service user', () => {

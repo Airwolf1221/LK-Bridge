@@ -14,6 +14,8 @@
 : "${LKB_RUNTIME_DIR:=${LKB_ROOT}/runtime}"
 : "${LKB_APP_DIR:=${LKB_ROOT}/app}"
 : "${LKB_BIN_DIR:=${LKB_ROOT}/bin}"
+# Where the systemd unit files are installed (tests point it at a temporary directory).
+: "${LKB_UNIT_DIR:=/etc/systemd/system}"
 # v1.0.1 (ADR 0020): two users. LKB_BUILD_USER owns the checkout and builds it, and cannot read the secrets;
 # LKB_SERVICE_USER runs the bridge, reads the env file and the app, and writes only the data directory.
 : "${LKB_BUILD_USER:=lkbuild}"
