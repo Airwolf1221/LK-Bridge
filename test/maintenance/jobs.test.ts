@@ -243,6 +243,8 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       'sqlite-optimise',
       'journal-prune',
       'proposal-prune',
+      'asset-refresh', // v2 A4: not under test here
+      'asset-check',
     ])
       m.maintenance.commands.disable('owner', id);
 
@@ -311,7 +313,7 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
     // The owner's views no longer list them; the agent's own view answers "not found" like any unknown id.
     expect(r.policy.proposals.get(executed)).toBeUndefined();
     expect(writesAtMock().filter((c) => c.method !== 'PATCH')).toEqual([]); // only the approved update was sent
-  });
+  }, 30_000); // it moves virtual time through 91 days of hourly jobs: close to the 5 s default on a slow machine
 
   it('never prunes pending, approved, executing or conflicted proposals, however old', async () => {
     m = await maintenanceRig();

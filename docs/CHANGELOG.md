@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased: v2 A4, the asset tree (10 November 2026)
+
+The bridge's own model of each project's asset library, and the old bridge's folder placement rules as a pure planning
+function ([docs/PLAN-v2.md](PLAN-v2.md) 4.6 and section 9; design in [ADR 0027](adr/0027-asset-tree.md); how to use it
+in [docs/assets.md](assets.md)). No MCP tools, no uploads and no writes to LegendKeeper: D3 (images) and B2 (Discover
+tools) build on its query layer and planner.
+
+- **Storage (migration 0900).** Per project: folders (id, name, parent, depth, cached path) and assets (id, name,
+  folder, type, url, width, height, size, SHA-256, hidden, created), each with when and how it was last read and a
+  stale flag; an asset and a child folder reference their folder by `(project_id, id)`, so nothing can cross projects.
+  Also tombstones, passes with their progress, the walk queue, the staged listing of a folder in progress, owed
+  re-reads and the correction log. **Size** stays empty (LegendKeeper's `Asset` carries none) and the **SHA-256** is
+  left empty for E1; a recorded hash survives a refresh and is dropped when the image's `url` changes.
+- **Build.** `listAssets` returns one folder level at a time, so the build walks every folder, paged, at P3: it lists
+  the root level, **shows an estimate** (a minimum of one request per folder found so far; a rebuild also a figure from
+  the last inventory) and walks the rest once the owner confirms. A folder's pages are staged and applied together; a
+  restart continues where it stopped (finished folders are not listed again, an interrupted one continues from its
+  cursor). The test world (18 folders, 559 images) costs **22 requests**.
+- **Regular refresh** (`asset-refresh`, every 6 hours, per project, background, can be switched off with the new
+  project setting `assetRefreshEnabled`) and **nightly check** (`asset-check`, 02:50 London time, always runs, also
+  audits the cached paths): the same walk, paced (250 ms after each request) and at P3 so it gives way to agents' work.
+  What they correct goes to the correction log. A row a listing does not show is read with `getAsset` before it is
+  removed (absence is not proof of deletion); a refresh never undoes what the bridge's own write changed after the
+  folder was listed (the repository tree's observation order, ADR 0025).
+- **Updates after the bridge's own asset writes.** `createAssetFolder`, `createImageAsset`, `updateAsset` and
+  `deleteAsset` are each followed, in the same job, by a `getAsset` of what changed; the model stores LegendKeeper's
+  answer, never a prediction (a create with no id in the response lists its folder; a deleted folder goes with
+  everything inside it, as LegendKeeper documents). Failed re-reads are marked stale, logged and retried; a crash
+  between a write and its re-read is caught up at the next start.
+- **Query layer** (`runtime.assets.queries`): a folder by id or path (`foldersByPath`), children, the subtree with a
+  depth limit, the assets in a folder (paged, by type), and exact-name lookups of folders and assets that return **all**
+  matches (case ignored unless asked), each answer stating the model's status.
+- **Placement** (`planAssetDestination`, `runtime.assets.plan`): pure, reads only the two stored trees. Reuses a folder
+  named after the character wherever it is (exactly one); otherwise `Characters / Group / Race / Character` (or without
+  the group when the race sits directly under Characters) from the character page's ancestry, `Undetermined / Unknown`
+  for an unknown race, then the literal `subfolders`. It lists the folders reused and those that would be created, in
+  order. A non-folder asset in the way is `ASSET_NAME_CONFLICT`, several folders of the name `AMBIGUOUS_FOLDER`; folders
+  are never moved. The type registry's asset root name is a hook for A3 (default "Characters").
+- **Dashboard.** An **Asset Tree** page per project (status, counts, build with estimate and progress, last build,
+  refresh and check, stale rows, failed re-reads, correction log, a folder browser, **Refresh now** and a read-only
+  **Try it** panel for placement) and `GET|POST /api/admin/asset-tree/…` (build, confirm, cancel and refresh are
+  audited; the planner is read-only).
+- **Tests** (`test/assets/`, `test/ui/assets.test.tsx`): a mock library shaped like the test world; build, estimate,
+  resume after a crash; refresh detecting outside changes and never undoing newer writes; every write followed; every
+  placement case; two projects isolated; the maintenance jobs; the admin API and page.
+- Two existing tests changed: the lists of maintenance jobs and of applied migrations name the new job and migration,
+  and the proposal-prune test (91 virtual days, close to the 5 s default on a slow machine) has a 30 s timeout.
+
 ## Unreleased: v2 A2, the repository tree (10 November 2026)
 
 The bridge's own model of each project's AI REPOSITORY ([docs/PLAN-v2.md](PLAN-v2.md) 4.2; design and concurrency rules

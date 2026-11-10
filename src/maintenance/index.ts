@@ -15,6 +15,7 @@ import type { Clock } from '../lk/index.js';
 import type { ProjectRegistry, ProjectsRuntime } from '../projects/registry.js';
 import type { Policy } from '../policy/index.js';
 import { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
+import type { AssetMaintenance } from './asset-jobs.js';
 import { builtinJobs, type TreeMaintenance } from './jobs.js';
 import { MaintenanceScheduler } from './scheduler.js';
 import type { MaintenanceJobDef } from './types.js';
@@ -41,6 +42,8 @@ export interface CreateMaintenanceOptions {
   readonly log?: { warn(o: Record<string, unknown>, m: string): void };
   /** v2 A2: the repository tree, for the `tree-sweep` and `tree-check` jobs. */
   readonly tree?: TreeMaintenance;
+  /** v2 A4: the asset tree, for the `asset-refresh` and `asset-check` jobs. */
+  readonly assets?: AssetMaintenance;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -61,6 +64,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         expirySweepMs: o.expirySweepMs,
         proposalRetentionMs: o.proposalRetentionMs ?? 90 * 86_400_000,
         ...(o.tree ? { tree: o.tree } : {}),
+        ...(o.assets ? { assets: o.assets } : {}),
       }),
       ...(o.extraJobs ?? []),
     ],
@@ -77,6 +81,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
 export { MaintenanceScheduler, MaintenanceError, type MaintenanceErrorCode } from './scheduler.js';
 export { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
 export { builtinJobs, PLACEHOLDER_IDS, type TreeMaintenance } from './jobs.js';
+export { assetJobs, type AssetMaintenance } from './asset-jobs.js';
 export {
   scheduleSchema,
   parseSchedule,

@@ -67,7 +67,7 @@ The scripts then take `--project test` and refuse any project not marked (`deplo
 
 ## Project settings
 
-Stored as JSON on the project row and read through `projectSetting()` (`src/projects/settings.ts`): `aiRepositoryRootId`, `charactersRootId`, `chronologyResourceId`, `templateIds`, and (v2 A2) the repository tree's `treePropertiesName`, `treeReferenceTypeRow`, `treeScopeRow`, `treeIndexScopeRow`, `treeCanonicalNameRow` and `treeSweepEnabled` ([tree.md](tree.md#settings-per-project)).
+Stored as JSON on the project row and read through `projectSetting()` (`src/projects/settings.ts`): `aiRepositoryRootId`, `charactersRootId`, `chronologyResourceId`, `templateIds`, and (v2 A2) the repository tree's `treePropertiesName`, `treeReferenceTypeRow`, `treeScopeRow`, `treeIndexScopeRow`, `treeCanonicalNameRow` and `treeSweepEnabled` ([tree.md](tree.md#settings-per-project)), and (v2 A4) the asset tree's `assetRefreshEnabled` (default on; [assets.md](assets.md#how-it-stays-current)).
 
 **Editing (v2 A2).** Every setting but `templateIds` can be changed, one key at a time, on the Projects page (audited as `project.set_setting`, with the old and new value) or from the server's shell:
 

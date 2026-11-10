@@ -31,6 +31,8 @@ export const projectSettingsSchema = z
     treeCanonicalNameRow: label.optional(),
     /** v2 A2: whether the hourly structural sweep runs for this project (default on). */
     treeSweepEnabled: z.boolean().optional(),
+    /** v2 A4: whether the regular asset-tree refresh (every 6 hours by default) runs for this project (default on). */
+    assetRefreshEnabled: z.boolean().optional(),
   })
   .loose();
 
@@ -96,6 +98,14 @@ export const PROJECT_SETTING_KEYS: readonly {
     default: true,
     editable: true,
     help: 'Off: the hourly sweep skips this project; the daily consistency check still runs.',
+  },
+  {
+    key: 'assetRefreshEnabled',
+    label: 'Asset tree: regular refresh',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'Off: the regular asset-tree refresh (every 6 hours by default) skips this project; the nightly asset check still runs.',
   },
 ];
 

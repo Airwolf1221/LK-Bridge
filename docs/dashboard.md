@@ -65,6 +65,14 @@ unclassified and stale pages, failed re-reads, the correction log and a simple b
 [tree.md](tree.md#dashboard-and-admin-api). Project settings (the AI REPOSITORY root and the names the tree reads) are
 edited on the Projects page.
 
+## Asset Tree (v2 A4)
+
+The **Asset Tree** page shows the selected project's asset library as the bridge knows it: status, counts, the build
+(the root level is listed first and the estimate shown; nothing more is read until you confirm), the last build, refresh
+and check, stale rows, failed re-reads, the correction log, a folder browser, **Refresh now**, and a read-only **Try it**
+panel that shows where a character's images would go. Its routes and behaviour are in
+[assets.md](assets.md#dashboard-and-admin-api).
+
 ## Admin API
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take

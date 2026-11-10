@@ -398,7 +398,7 @@ describe('migration 0600 on a v1.0.2 database', () => {
     const result = runMigrations(db, undefined, {
       context: migrationContextFromEnv({ LK_PROJECT_ID: LEGACY, LK_PROJECT_NAME: 'Test' }),
     });
-    expect(result.applied).toEqual(['0600_projects.sql', '0700_repository_tree.sql']);
+    expect(result.applied).toEqual(['0600_projects.sql', '0700_repository_tree.sql', '0900_asset_tree.sql']);
 
     // The registry holds the legacy project, as the default.
     expect(
@@ -475,7 +475,11 @@ describe('migration 0600 on a v1.0.2 database', () => {
   it('an empty v1.0.2 database upgrades without a legacy id (the projects are registered at start-up)', () => {
     const db = openDatabase(join(tempDir(), 'bridge.db'));
     runMigrations(db, v1MigrationsDir());
-    expect(runMigrations(db).applied).toEqual(['0600_projects.sql', '0700_repository_tree.sql']);
+    expect(runMigrations(db).applied).toEqual([
+      '0600_projects.sql',
+      '0700_repository_tree.sql',
+      '0900_asset_tree.sql',
+    ]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM projects').get()).toEqual({ n: 0 });
     db.close();
   });
@@ -564,6 +568,7 @@ describe('npm run db:migrate finds the legacy project id', () => {
     expect(runMigrations(db, undefined, { context }).applied).toEqual([
       '0600_projects.sql',
       '0700_repository_tree.sql',
+      '0900_asset_tree.sql',
     ]);
     expect(db.prepare('SELECT id, name FROM projects').all()).toEqual([
       { id: 'proj_from_file', name: 'campaign' },

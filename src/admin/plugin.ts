@@ -16,6 +16,7 @@ import { registerOverview } from './routes/overview.js';
 import { registerPolicy } from './routes/policy.js';
 import { registerProjects } from './routes/projects.js';
 import { registerSettings } from './routes/settings.js';
+import { registerAssets } from './routes/assets.js';
 import { registerTree } from './routes/tree.js';
 import type { RouteContext } from './routes/util.js';
 import { StreamHub } from './stream.js';
@@ -88,6 +89,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerMappings(api, ctx); // chunk 6
       registerProjects(api, ctx); // v2 A1
       registerTree(api, ctx); // v2 A2
+      registerAssets(api, ctx); // v2 A4
 
       /** The one live stream (docs/dashboard.md › Stream). */
       api.get('/stream', (req, reply) => {

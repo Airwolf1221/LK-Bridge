@@ -29,7 +29,7 @@ const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write
 export type AdminActions = ReturnType<typeof createAdminActions>;
 
 export function createAdminActions(d: AdminDeps) {
-  const { engine, projects, policy, tree } = d.runtime;
+  const { engine, projects, policy, tree, assets } = d.runtime;
   const store = policy.store;
   const cmd = policy.commands;
   const audit = (action: string, target: string | null, before?: unknown, after?: unknown) =>
@@ -161,6 +161,32 @@ export function createAdminActions(d: AdminDeps) {
     async treeSuggestRoot(projectId: string) {
       audit('tree.suggest_root', projects.nameOf(projectId));
       return tree.suggestRoot(projectId);
+    },
+
+    // ------------------------------------------------------------------------------------- asset tree
+    /** v2 A4: starts an asset-tree build's root-level listing; it then waits for the owner to confirm its estimate. */
+    assetsPrepareBuild(projectId: string) {
+      const pass = assets.prepareBuild(projectId, { trigger: 'owner' });
+      audit('assets.build_prepare', projects.nameOf(projectId), undefined, { pass: pass.id });
+      return pass;
+    },
+    assetsConfirmBuild(projectId: string) {
+      const pass = assets.confirmBuild(projectId);
+      audit('assets.build_start', projects.nameOf(projectId), undefined, {
+        pass: pass.id,
+        estimate: pass.estimate,
+      });
+      return pass;
+    },
+    assetsCancelBuild(projectId: string) {
+      const pass = assets.cancelBuild(projectId);
+      audit('assets.build_cancel', projects.nameOf(projectId), undefined, { pass: pass.id });
+      return pass;
+    },
+    /** Runs a refresh now (the same walk as the scheduled one), in the background. */
+    assetsRefreshNow(projectId: string) {
+      audit('assets.refresh_now', projects.nameOf(projectId));
+      return assets.refresh(projectId, 'owner');
     },
 
     // -------------------------------------------------------------------------------------------- writers

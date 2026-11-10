@@ -20,6 +20,8 @@ its last run (time, outcome, duration, engine job id) and next run. The schedule
 | `sqlite-optimise`        | weekly (every 7 days)   | `PRAGMA optimize` and a passive WAL checkpoint.                                                                                                                                                                                                |
 | `tree-sweep`             | hourly                  | v2 A2, per project: the repository tree's structural sweep ([tree.md](tree.md)). Skips a project whose tree is not configured or not built, or whose sweep is switched off.                                                                    |
 | `tree-check`             | daily at 02:30 (London) | v2 A2, per project: the repository tree's daily consistency check, every page's properties included ([tree.md](tree.md)).                                                                                                                      |
+| `asset-refresh`          | every 6 hours           | v2 A4, per project: the asset tree's regular refresh, a paced walk of every folder ([assets.md](assets.md)). Skips a project whose asset tree is not built, or whose refresh is switched off (`assetRefreshEnabled`); a manual run goes ahead. |
+| `asset-check`            | daily at 02:50 (London) | v2 A4, per project: the asset tree's nightly check, the same walk plus an audit of the cached folder paths ([assets.md](assets.md)). Runs even when the refresh is switched off.                                                               |
 | `assign-block-ids-sweep` | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
 | `orphan-and-link-audit`  | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
 | `tag-audit`              | not implemented         | Placeholder.                                                                                                                                                                                                                                   |
@@ -74,7 +76,7 @@ detail: <name> }`, so the governor's P3 floor (default: keep 50% of each tier) a
   project when they failed or (the check, always) did their work. Every run, recorded as a job
   or not, is in the run history.
 - **One timer.** The scheduler arms a single timer for the earliest due job, on the engine's clock. Due jobs run one
-  after another, except **background** jobs (v2 A2: `tree-sweep`, `tree-check`), whose runs go alongside.
+  after another, except **background** jobs (v2 A2: `tree-sweep`, `tree-check`), whose runs go alongside (v2 A4 added `asset-refresh` and `asset-check`, also background).
 
 ## `proposal-prune` (v1.0.1)
 

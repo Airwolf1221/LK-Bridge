@@ -50,6 +50,7 @@ test('signs in, comes back to where it was going, and every page renders under t
     ['Repository Mappings', 'Repository Mappings'],
     ['Projects', 'Projects'],
     ['Repository Tree', 'Repository Tree'], // v2 A2
+    ['Asset Tree', 'Asset Tree'], // v2 A4
   ] as const) {
     await page
       .getByRole('navigation', { name: 'Main' })
