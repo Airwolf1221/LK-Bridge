@@ -364,6 +364,17 @@ export interface NewPage extends CreateItem {
   readonly templateName: string | null;
 }
 
+/** The template sidebars this call read, as the write guard can use them instead of reading again. */
+export function prefetchedTemplates(
+  cc: CreateCtx,
+): { op: string; path: Record<string, string>; body: unknown }[] {
+  return [...cc.sidebars.entries()].map(([resourceId, sb]) => ({
+    op: 'listProperties',
+    path: { resourceId },
+    body: { data: sb.map((p) => p.raw) },
+  }));
+}
+
 export interface CreateJob {
   readonly steps: StepSpec[];
   readonly labels: string[];
@@ -447,6 +458,8 @@ export function planCreateJob(
           },
         },
         journalOperation: journalOperation(s.item),
+        // A page that gets facts in this job is re-read by the tree once, when the job ends.
+        ...(s.item.facts && !s.item.facts.plan.empty ? { deferTreeReread: true } : {}),
       });
       labels.push(`create ${s.item.rawName}`);
       afterCreate(s.item);

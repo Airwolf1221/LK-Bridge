@@ -338,7 +338,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
       'Scope and Canonical Display Name; and from a live read its whole sidebar: the facts (key-value rows) in template order, ' +
       'each link collection with its items (an item can point at one document of a page), and any other sidebar properties ' +
       '(named, marked read-only). Pass the page by name or id. Example: { "resource": "Asagiri Miyabi" }. ' +
-      'Cost: 1 read (a live getResource); pass live: false for the tree’s data alone at no cost. A name that matches several pages ' +
+      'With a live read it gives the page’s factsVersion: pass it to set_facts as baseFactsVersion. Cost: 1 read (a live getResource); pass live: false for the tree’s data alone at no cost. A name that matches several pages ' +
       'is refused with the candidates and their paths. Sidebar properties carry their `version` where LegendKeeper gives one, ' +
       'for the write tools to use.',
     inputSchema: z.object({

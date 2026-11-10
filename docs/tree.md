@@ -42,7 +42,7 @@ the tree is built (Maintenance Jobs page).
 | tags, aliases, documents (id, name, type), hidden                    | a listing or getResource                                                                                                       |
 | locked, Reference Type, Scope, Index Scope, Canonical Display Name   | getResource: the key-value property titled `PROPERTIES` and its rows (names configurable, below)                               |
 | sidebar summary                                                      | getResource: every sidebar property's kind and title, and key-value rows as text (for later audits)                            |
-| template id                                                          | recorded by C2 for pages the bridge creates from a template (empty until then)                                                 |
+| template id                                                          | recorded for pages the bridge creates from a template, by the create's re-read (v2 C2b; empty for others)                      |
 | last read (when, and by `build`, `write`, `sweep` or `check`); stale | the tree itself                                                                                                                |
 
 ## Status
@@ -68,7 +68,7 @@ Every query answer states the status, why it is not ready, and when the tree was
   A re-read that fails marks the node stale, is logged, and is retried (one minute, doubling to an hour); the next
   sweep settles it in any case. A crash between a write and its re-read is caught up at the next start. **v2 C2a:** a
   write step marked `deferTreeReread` (set_facts' several writes to one page) is re-read once, when its job ends
-  (`flushDeferred`: one getResource for the page, whatever the number of writes); its row stays owed until then, so a
+  (`flushDeferred`: one getResource for the page, whatever the number of writes; v2 C2b: a page created from a template and given its facts in the same job is re-read once, as a create, which records its template); its row stays owed until then, so a
   job that never ends is still caught by the retry loop.
 - **Structural sweep** (`tree-sweep`, hourly, can be switched off per project). One listing of the project (about one
   request per 100 resources): new pages, renames, moves (into, out of and within the root), deletions, tags, aliases

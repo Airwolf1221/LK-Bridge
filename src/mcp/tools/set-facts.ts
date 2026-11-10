@@ -157,7 +157,10 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
       'remove the row. Keys match existing rows without case; an existing row keeps its place; a new template fact goes in the template’s order; ' +
       'any other new fact goes at the bottom. `links` maps a collection’s title to { add, remove }: each a page name or id, or { page, document } ' +
       'for one document of a page. Existing links keep their order, ids and the collection’s filter; added ones go at the end; a page already ' +
-      'linked is reported, not doubled. Read the page first with get_resource. `dryRun: true` shows the plan and writes nothing. ' +
+      'linked is reported, not doubled. Read the page first with get_resource, and pass its factsVersion as `baseFactsVersion` ' +
+      'whenever a value is based on what you read: if anything in the sidebar changed since, nothing is written. A [[Name]] ' +
+      'matching several pages of one character links its Character Core (else Reference, else index); the result says which. ' +
+      '`dryRun: true` shows the plan and writes nothing. ' +
       'PROTECTED CANON: setting Status to Authoritative or changing it from Authoritative, or changing an existing Continuity Type or ' +
       'Continuity, needs the owner’s canonical approval: such a call becomes a proposal (proposal_captured with requiresCanonicalApproval), ' +
       'whatever your scope; never retry it. A conflict (VERSION_CONFLICT) wrote nothing: read the page again and redo the change. ' +

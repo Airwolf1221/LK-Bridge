@@ -1044,28 +1044,24 @@ export class TreeService {
       .pending(info.projectId)
       .filter((p) => p.job_id === info.jobId && p.status === 'in_flight' && !this.rereading.has(p.id));
     if (rows.length === 0) return;
+    // One re-read per set of pages (v2 C2b: a page created from a template and then given its facts in the same job
+    // is re-read once, as a create, with the template recorded).
     const groups = new Map<string, PendingRow[]>();
-    for (const r of rows) {
-      const key = `${r.resource_ids}|${r.flags}`;
-      groups.set(key, [...(groups.get(key) ?? []), r]);
-    }
+    for (const r of rows) groups.set(r.resource_ids, [...(groups.get(r.resource_ids) ?? []), r]);
+    const strength = (op: string) =>
+      ({ create: 0, restore: 1, move: 2, delete: 3, update: 4 })[TREE_OPS[op] ?? 'update'];
     for (const group of groups.values()) {
-      const first = group[0]!;
+      const first = [...group].sort((a, b) => strength(a.op) - strength(b.op))[0]!;
+      const flags = group.reduce<RereadFlags>((acc, g) => ({ ...acc, ...parseFlags(g.flags) }), {});
       for (const g of group) this.rereading.add(g.id);
       try {
-        const ok = await this.reread(
-          info.projectId,
-          first.op,
-          parseIds(first.resource_ids),
-          parseFlags(first.flags),
-          {
-            priority: info.priority,
-            jobId: info.jobId,
-            signal: info.signal,
-            waitForBudget: false,
-            pendingId: first.id,
-          },
-        );
+        const ok = await this.reread(info.projectId, first.op, parseIds(first.resource_ids), flags, {
+          priority: info.priority,
+          jobId: info.jobId,
+          signal: info.signal,
+          waitForBudget: false,
+          pendingId: first.id,
+        });
         if (ok) for (const g of group) this.store.deletePending(g.id);
       } finally {
         for (const g of group) this.rereading.delete(g.id);

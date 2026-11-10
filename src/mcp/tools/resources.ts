@@ -32,6 +32,7 @@ import {
   newPage,
   planCreateJob,
   planNewPageFacts,
+  prefetchedTemplates,
   resolveParent,
   resolveTemplate,
   withRequest,
@@ -154,7 +155,7 @@ export async function finishCreate(
     steps: job.steps,
     labels: job.labels,
     title: o.summary,
-    proposal: { operations: job.operations, summary: o.summary },
+    proposal: { operations: job.operations, summary: o.summary, prefetched: prefetchedTemplates(cc) },
     head,
     preview,
   });
