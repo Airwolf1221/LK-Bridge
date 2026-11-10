@@ -16,6 +16,7 @@ import { writePageTool } from './write-page.js';
 import { setFactsTool } from './set-facts.js';
 import { resourceTools } from './resources.js';
 import { createCharacterTool } from './create-character.js';
+import { lifecycleTools } from './lifecycle.js';
 import { documentTools } from './documents.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
@@ -43,6 +44,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     setFactsTool(deps),
     ...resourceTools(deps),
     createCharacterTool(deps),
+    // v2 C2c (ADR 0035): the page lifecycle.
+    ...lifecycleTools(deps),
     ...documentTools(deps),
     ...guideTools(deps),
     ...lkApiTools(deps),

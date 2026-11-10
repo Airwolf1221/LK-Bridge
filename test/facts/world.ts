@@ -50,7 +50,7 @@ export const CORE_KEYS = [
  */
 export const RHEASHIRA = { page: 'kzwy5zrs', property: 'hnocyl8o', template: 'tplbio01' } as const;
 export const RHEASHIRA_ROWS: [string, string, string, string][] = [
-  ['Status', 'Working', 'O', 'rhea0001'],
+  ['Status', 'Outline', 'O', 'rhea0001'],
   ['Continuity Type', 'CANON', 'V', 'rhea0002'],
   ['Continuity', 'Main', 'X', 'rhea0003'],
   ['Inheritance', 'Paternal', '\\', 'rhea0004'],
@@ -103,8 +103,16 @@ export const P = {
   ashgate: 'ashg0001',
 } as const;
 
-export async function factsWorld(o: Parameters<typeof discoverWorld>[0] = {}): Promise<FactsWorld> {
+export interface FactsWorldOptions {
+  /** v2 C2c: more pages for the models, seeded before the tree is built from them. */
+  readonly seed?: (world: DiscoverWorld) => void;
+}
+
+export async function factsWorld(
+  o: Parameters<typeof discoverWorld>[0] & FactsWorldOptions = {},
+): Promise<FactsWorld> {
   const world = (await discoverWorld({ bulk: 20, ageRows: 20, ...o, build: false })) as FactsWorld;
+  o.seed?.(world);
   // Rheashira Aela, under Moon Elves, before the tree is built from the models.
   world.repo.seed({
     id: RHEASHIRA.page,
@@ -127,7 +135,9 @@ export async function factsWorld(o: Parameters<typeof discoverWorld>[0] = {}): P
     SidebarModel.kv('kvmiya01', 'PROPERTIES', [
       ['Reference Type', 'Character Core'],
       ['Subject', 'Asagiri Miyabi'],
-      ['Status', 'Working'],
+      // v2 C2c: a Status that is no lifecycle state, so the C2a tests change facts freely (a Working page's Status is
+      // the lifecycle tools' to change; test/lifecycle covers that).
+      ['Status', 'Outline'],
       ['Continuity Type', 'CANON'],
       ['Continuity', 'Main'],
       ['Scope', 'Foxian shrine maiden of the Hollow Court'],
@@ -146,7 +156,7 @@ export async function factsWorld(o: Parameters<typeof discoverWorld>[0] = {}): P
   sb.page(P.mehrana, [
     SidebarModel.kv('kvmehr01', 'PROPERTIES', [
       ['Reference Type', 'Character Core'],
-      ['Status', 'Working'],
+      ['Status', 'Outline'],
       ['Scope', 'Qishen scholar'],
       ['Notes', 'Loose'],
     ]),

@@ -192,7 +192,7 @@ describe('the tool list', () => {
     const tools = stack.runtime.tools;
     // chunk 3's 16, chunk 2b's two proposal tools, v2 A1's list_projects, v2 B2's twelve (nine Discover tools,
     // read_document and two guides), v2 C1's write_page, v2 C2a's set_facts and v2 C2b's twelve
-    expect(tools).toHaveLength(45);
+    expect(tools).toHaveLength(49);
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');
@@ -210,7 +210,7 @@ describe('the tool list', () => {
       );
       const c = await on.connect();
       const { tools } = await c.listTools();
-      expect(tools).toHaveLength(45 + 89);
+      expect(tools).toHaveLength(49 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));

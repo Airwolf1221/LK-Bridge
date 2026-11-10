@@ -42,6 +42,12 @@ export const projectSettingsSchema = z
     canonicalRules: z.array(z.unknown()).max(50).optional(),
     /** v2 C2a: the Status of pages agents create (C2b uses it). Default "Working". */
     agentDefaultStatus: label.optional(),
+    /**
+     * v2 C2c (ADR 0035): the page lifecycle's settings (src/lifecycle/settings.ts): the Working and Archive indexes the
+     * owner confirmed, the status values, tags, field names, Continuity Types and archive texts. Validated by the
+     * lifecycle module when used (an invalid value falls back to the defaults, with the indexes unconfirmed).
+     */
+    lifecycle: z.record(z.string(), z.unknown()).optional(),
   })
   .loose();
 
@@ -130,6 +136,13 @@ export const PROJECT_SETTING_KEYS: readonly {
     kind: 'rules',
     editable: false,
     help: 'Edited in the Canon section of this page (each change is audited).',
+  },
+  {
+    key: 'lifecycle',
+    label: 'Lifecycle: indexes, statuses, tags and texts',
+    kind: 'rules',
+    editable: false,
+    help: 'Edited in the Lifecycle section of this page (each change is audited).',
   },
   {
     key: 'assetRefreshEnabled',

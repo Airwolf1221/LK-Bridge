@@ -253,7 +253,7 @@ describe('the canonical guard on Rheashira', () => {
       requiresCanonicalApproval: true,
     });
     expect(writesSince()).toHaveLength(0);
-    expect(row('Status').text).toBe('Working');
+    expect(row('Status').text).toBe('Outline');
   });
   it('changing Scope does not, and neither is confused by the order', async () => {
     const dry = await call(writer, { facts: { Scope: 'Moon elf envoy' }, dryRun: true });

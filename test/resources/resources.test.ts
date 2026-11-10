@@ -9,7 +9,7 @@
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
-import { childNames, facts, resourcesWorld, T, type ResourcesWorld } from './world.js';
+import { asCanon, childNames, facts, LIFECYCLE, resourcesWorld, T, type ResourcesWorld } from './world.js';
 
 let w: ResourcesWorld;
 let client: Client;
@@ -31,7 +31,7 @@ beforeAll(async () => {
 afterAll(async () => w.close());
 
 describe('create_index', () => {
-  it('makes [INDEX] {name} from the type’s Index template under the category’s index, in alphabetical place, Status Working', async () => {
+  it('makes [INDEX] {name} from the type’s Index template under the category’s index, in alphabetical place, with no Status (v2 C2c)', async () => {
     const r = await call('create_index', { name: 'Shrine Families', type: 'Character', category: 'Foxians' });
     expect(r.body, r.text).toMatchObject({
       status: 'written',
@@ -50,7 +50,8 @@ describe('create_index', () => {
       '[INDEX] Shrine Families',
       '[BSRC] Asagiri Kaede',
     ]);
-    expect(facts(w, p.id)).toEqual(['Reference Type=', 'Index Scope=', 'Status=Working']);
+    // v2 C2c: an index has no lifecycle, so the bridge writes no Status to it.
+    expect(facts(w, p.id)).toEqual(['Reference Type=', 'Index Scope=', 'Status=']);
     expect(node(p.id)).toMatchObject({ kind: 'index', templateId: T.index, parentId: 'foxian01' });
   });
 
@@ -69,16 +70,20 @@ describe('create_index', () => {
 });
 
 describe('create_resource and create_bare_resource', () => {
-  it('a page from a template under an index: name, place, facts and links in the same job, Status Working', async () => {
+  it('a page from a template under an index (Authoritative, accepted as canon): name, place, facts and links in the same job', async () => {
     const before = writes().length;
-    const r = await call('create_resource', {
-      name: 'Hollow Court',
-      template: '[BSRC] AI General Source',
-      parent: 'Kumikas',
-      facts: { Scope: 'A court of the Foxians', 'Reference Type': 'General Source' },
-      links: { Dependencies: { add: ['ashg0001'] } },
-      tags: ['draft'],
-    });
+    const r = await asCanon(
+      w,
+      await call('create_resource', {
+        name: 'Hollow Court',
+        template: '[BSRC] AI General Source',
+        parent: 'Kumikas',
+        status: 'authoritative',
+        facts: { Scope: 'A court of the Foxians', 'Reference Type': 'General Source' },
+        links: { Dependencies: { add: ['ashg0001'] } },
+        tags: ['draft'],
+      }),
+    );
     expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
     const p = r.body.pages[0];
     expect(p).toMatchObject({ name: '[BSRC] Hollow Court', parent: { id: 'kumi_idx' }, after: 'ashg0001' });
@@ -86,11 +91,11 @@ describe('create_resource and create_bare_resource', () => {
     expect(facts(w, p.id)).toEqual([
       'Reference Type=General Source',
       'Scope=A court of the Foxians',
-      'Status=Working',
+      'Status=Authoritative',
       'Continuity Type=',
     ]);
     expect(w.sidebars.items(p.id, 'Dependencies').map((i) => i.resourceId)).toEqual(['ashg0001']);
-    expect(w.repo.res.get(p.id)!.tags).toEqual(['draft']);
+    expect(w.repo.res.get(p.id)!.tags).toEqual(['draft', 'CANON']);
     expect(node(p.id)).toMatchObject({ templateId: T.general, referenceType: 'General Source' });
     // One template copy, one updateResource (tags), 3 row writes, 1 collection write.
     const ws = writes().slice(before);
@@ -99,39 +104,43 @@ describe('create_resource and create_bare_resource', () => {
     expect(ws.filter((l) => /\/rows\//.test(l))).toHaveLength(3);
   });
 
-  it('no Status row in the template: no Status is written', async () => {
+  it('no Status row in the template: no Status is written (a Working page under [INDEX] Working, by default)', async () => {
     const r = await call('create_resource', {
       name: 'Margin Note',
       template: T.note,
-      parent: 'Kumikas',
       facts: { Scope: 'A note' },
     });
     expect(r.body, r.text).toMatchObject({ status: 'written', verified: true });
+    expect(r.body.pages[0]).toMatchObject({ name: '[BWRK] Margin Note', parent: { id: LIFECYCLE.working } });
     expect(facts(w, r.body.pages[0].id)).toEqual(['Reference Type=', 'Scope=A note']);
-    expect(r.body.pages[0].statusNote).toBeUndefined();
+    expect(w.repo.res.get(r.body.pages[0].id)!.tags).toEqual(['Working']);
   });
 
   it('refuses a character template, an index template, a duplicate, a page that is not an index, and a parent outside', async () => {
+    const a = { status: 'authoritative' };
     expect(
-      (await call('create_resource', { name: 'X', template: T.core, parent: 'Humans' })).body.error.code,
+      (await call('create_resource', { name: 'X', template: T.core, parent: 'Humans', ...a })).body.error
+        .code,
     ).toBe('CHARACTER_TEMPLATE');
     expect(
-      (await call('create_resource', { name: 'X', template: T.index, parent: 'Humans' })).body.error.code,
+      (await call('create_resource', { name: 'X', template: T.index, parent: 'Humans', ...a })).body.error
+        .code,
     ).toBe('INDEX_TEMPLATE');
     expect(
-      (await call('create_resource', { name: 'hollow court', template: T.general, parent: 'Kumikas' })).body
-        .error.code,
+      (await call('create_resource', { name: 'hollow court', template: T.general, parent: 'Kumikas', ...a }))
+        .body.error.code,
     ).toBe('PAGE_EXISTS');
     expect(
-      (await call('create_resource', { name: 'X', template: T.general, parent: 'World Maps' })).body.error
-        .code,
+      (await call('create_resource', { name: 'X', template: T.general, parent: 'World Maps', ...a })).body
+        .error.code,
     ).toBe('PARENT_NOT_INDEX');
     expect(
-      (await call('create_resource', { name: 'X', template: T.general, parent: 'outside1' })).body.error.code,
+      (await call('create_resource', { name: 'X', template: T.general, parent: 'outside1', ...a })).body.error
+        .code,
     ).toBe('NOT_IN_REPOSITORY');
     expect(
-      (await call('create_resource', { name: 'X', template: 'No Such Template', parent: 'Kumikas' })).body
-        .error.code,
+      (await call('create_resource', { name: 'X', template: 'No Such Template', parent: 'Kumikas', ...a }))
+        .body.error.code,
     ).toBe('TEMPLATE_NOT_FOUND');
   });
 
@@ -152,6 +161,7 @@ describe('create_resource and create_bare_resource', () => {
       '[BSRC]Coasts',
       '[BSRC] [BSRC] Coasts',
       '[INDEX] ',
+      '[BARC] Coasts', // v2 C2c: only archive_page archives
     ])
       expect(
         (await call('create_bare_resource', { name: bad, parent: 'Locations' })).body.error.code,
@@ -164,30 +174,34 @@ describe('create_resource and create_bare_resource', () => {
     const r = await call('create_resource', {
       name: 'Dry Court',
       template: T.general,
-      parent: 'Kumikas',
       dryRun: true,
     });
-    expect(r.body).toMatchObject({ status: 'dry_run', pages: [{ name: '[BSRC] Dry Court' }] });
+    expect(r.body).toMatchObject({ status: 'dry_run', pages: [{ name: '[BWRK] Dry Court' }] });
     expect(writes().length).toBe(before);
   });
 });
 
 describe('create_many_resources', () => {
-  it('templates and nesting together: a template page under a new index, a bare page under it', async () => {
-    const r = await call('create_many_resources', {
-      items: [
-        { key: 'idx', name: '[INDEX] Mixed Batch', parent: 'Sources' },
-        {
-          key: 'src',
-          name: 'Mixed Source',
-          template: T.general,
-          parent_key: 'idx',
-          facts: { Scope: 'Mixed' },
-        },
-        { key: 'leaf', name: '[BSRC] Mixed Leaf', parent_key: 'src' },
-        { key: 'b', name: '[BSRC] Another Leaf', parent_key: 'idx' },
-      ],
-    });
+  it('templates and nesting together: a template page under a new index, a bare page under it (Authoritative, as canon)', async () => {
+    const a = { status: 'authoritative' };
+    const r = await asCanon(
+      w,
+      await call('create_many_resources', {
+        items: [
+          { key: 'idx', name: '[INDEX] Mixed Batch', parent: 'Sources' },
+          {
+            key: 'src',
+            name: 'Mixed Source',
+            template: T.general,
+            parent_key: 'idx',
+            facts: { Scope: 'Mixed' },
+            ...a,
+          },
+          { key: 'leaf', name: '[BSRC] Mixed Leaf', parent_key: 'src', ...a },
+          { key: 'b', name: '[BSRC] Another Leaf', parent_key: 'idx', ...a },
+        ],
+      }),
+    );
     expect(r.body, r.text.slice(0, 3000)).toMatchObject({ status: 'written', verified: true });
     const byName = Object.fromEntries(r.body.pages.map((p: { name: string; id: string }) => [p.name, p.id]));
     expect(childNames(w, byName['[INDEX] Mixed Batch'])).toEqual([
@@ -195,7 +209,7 @@ describe('create_many_resources', () => {
       '[BSRC] Mixed Source',
     ]);
     expect(childNames(w, byName['[BSRC] Mixed Source'])).toEqual(['[BSRC] Mixed Leaf']);
-    expect(facts(w, byName['[BSRC] Mixed Source'])).toContain('Status=Working');
+    expect(facts(w, byName['[BSRC] Mixed Source'])).toContain('Status=Authoritative');
     expect(node(byName['[BSRC] Mixed Source'])).toMatchObject({ templateId: T.general });
   });
 
@@ -204,7 +218,6 @@ describe('create_many_resources', () => {
     const many = Array.from({ length: 101 }, (_, i) => ({
       key: `k${i}`,
       name: `[BSRC] Too Many ${i}`,
-      parent: 'Sources',
     }));
     const r = await call('create_many_resources', { items: many });
     expect(r.isError).toBe(true);
@@ -212,7 +225,7 @@ describe('create_many_resources', () => {
     const bad = await call('create_many_resources', {
       items: [
         { key: 'a', name: 'Child', template: T.general, parent_key: 'nope' },
-        { key: 'b', name: '[BSRC] B', parent: 'Sources' },
+        { key: 'b', name: '[BSRC] B' },
       ],
     });
     expect(bad.body.error).toMatchObject({ code: 'PARENT_KEY_NOT_FOUND', parent_key: 'nope' });
@@ -298,7 +311,11 @@ describe('delete_resource and restore_resource', () => {
     const kids = await call('delete_resource', { page: 'Mixed Batch', confirm: true });
     expect(kids.body.error).toMatchObject({ code: 'HAS_CHILDREN' });
     expect(kids.body.error.under).toHaveLength(3);
-    const r = await call('delete_resource', { page: 'Mixed Batch', confirm: true, cascade: true });
+    // v2 C2c: the subtree holds an Authoritative page, so the cascade is canon to delete: accepted as canon here.
+    const r = await asCanon(
+      w,
+      await call('delete_resource', { page: 'Mixed Batch', confirm: true, cascade: true }),
+    );
     expect(r.body, r.text).toMatchObject({ status: 'written', verified: true, cascade: true });
     expect(r.body.removed.map((x: { name: string }) => x.name)).toEqual([
       '[INDEX] Mixed Batch',
@@ -356,18 +373,18 @@ describe('delete_resource and restore_resource', () => {
     expect(r.body, r.text).toMatchObject({
       status: 'written',
       verified: true,
-      removed: [{ name: '[BSRC] Margin Note' }],
+      removed: [{ name: '[BWRK] Margin Note' }],
     });
   });
 });
 
 describe('Status and canon on create', () => {
-  it('a create with Status Authoritative is a canonical proposal; accepted as canon it is written with its ids', async () => {
+  it('a create with status authoritative is a canonical proposal; accepted as canon it is written with its ids', async () => {
     const r = await call('create_resource', {
       name: 'Canon Court',
       template: T.general,
       parent: 'Kumikas',
-      facts: { Status: 'Authoritative' },
+      status: 'authoritative',
     });
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     const planned = r.body.pages[0].id;
@@ -380,14 +397,25 @@ describe('Status and canon on create', () => {
     expect(facts(w, planned)).toContain('Status=Authoritative');
   });
 
-  it('another Status the agent passes is written as given', async () => {
-    const r = await call('create_resource', {
-      name: 'Archive Court',
+  it('v2 C2c: Status comes from `status`; another Status in facts is refused, and nothing is sent', async () => {
+    const before = w.seen.length;
+    for (const v of ['Archived', 'Authoritative', 'Draft']) {
+      const r = await call('create_resource', {
+        name: 'Archive Court',
+        template: T.general,
+        facts: { Status: v },
+      });
+      expect(r.body.error, r.text).toMatchObject({ code: 'INVALID_FACTS' });
+      expect(r.body.error.message).toMatch(/set by `status`/);
+    }
+    // The same value as the status is accepted.
+    const same = await call('create_resource', {
+      name: 'Same Court',
       template: T.general,
-      parent: 'Kumikas',
-      facts: { Status: 'Archived' },
+      facts: { Status: 'Working' },
+      dryRun: true,
     });
-    expect(r.body, r.text).toMatchObject({ status: 'written' });
-    expect(facts(w, r.body.pages[0].id)).toContain('Status=Archived');
+    expect(same.body, same.text).toMatchObject({ status: 'dry_run' });
+    expect(w.seen.slice(before).filter((l) => !l.startsWith('GET'))).toHaveLength(0);
   });
 });

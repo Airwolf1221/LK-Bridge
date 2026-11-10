@@ -16,7 +16,7 @@ import type { ProjectRegistry, ProjectsRuntime } from '../projects/registry.js';
 import type { Policy } from '../policy/index.js';
 import { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
 import type { AssetMaintenance } from './asset-jobs.js';
-import { builtinJobs, type TreeMaintenance } from './jobs.js';
+import { builtinJobs, type TreeMaintenance, type LinkMaintenance } from './jobs.js';
 import { MaintenanceScheduler } from './scheduler.js';
 import type { MaintenanceJobDef } from './types.js';
 
@@ -44,6 +44,8 @@ export interface CreateMaintenanceOptions {
   readonly tree?: TreeMaintenance;
   /** v2 A4: the asset tree, for the `asset-refresh` and `asset-check` jobs. */
   readonly assets?: AssetMaintenance;
+  /** v2 C2c: the link index, for the `link-sweep` job. */
+  readonly links?: LinkMaintenance;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -66,6 +68,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         proposalRetentionMs: o.proposalRetentionMs ?? 90 * 86_400_000,
         ...(o.tree ? { tree: o.tree } : {}),
         ...(o.assets ? { assets: o.assets } : {}),
+        ...(o.links ? { links: o.links } : {}),
       }),
       ...(o.extraJobs ?? []),
     ],

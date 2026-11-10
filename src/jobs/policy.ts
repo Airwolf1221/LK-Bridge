@@ -14,6 +14,7 @@ import { PolicyDeniedError } from './errors.js';
 import type {
   JobKind,
   JobOrigin,
+  LifecycleMarker,
   OnError,
   OpParams,
   Principal,
@@ -94,6 +95,11 @@ export interface ProposalMeta {
 export interface ProposalJobOptions {
   readonly holdLock?: { readonly resourceId: string };
   readonly internal?: boolean;
+  /** v2 C2c: the second job-level lock (a document of the held page). */
+  readonly holdDocument?: { readonly documentId: string };
+  readonly holdAlso?: { readonly resourceId: string };
+  /** v2 C2c: the lifecycle change the job makes (bridge code only). */
+  readonly lifecycle?: LifecycleMarker;
 }
 
 /**

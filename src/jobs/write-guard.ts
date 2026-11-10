@@ -12,7 +12,16 @@
  *
  * A guard that throws at entry counts as a deny (fail closed).
  */
-import type { JobKind, JobOrigin, JobView, OpParams, Principal, StepOptions, StepView } from './types.js';
+import type {
+  JobKind,
+  JobOrigin,
+  JobView,
+  LifecycleMarker,
+  OpParams,
+  Principal,
+  StepOptions,
+  StepView,
+} from './types.js';
 import type { ProposalExtras } from './policy.js';
 
 export interface WriteGuardEntry {
@@ -29,6 +38,8 @@ export interface WriteGuardEntry {
   readonly prefetched?: ProposalExtras['prefetched'];
   /** The policy gate's verdict for the request: `allow` (scope write, or approved work) or `propose`. */
   readonly gate: 'allow' | 'propose';
+  /** v2 C2c: the lifecycle change the request declares (bridge code only: `BatchSubmit.lifecycle`). */
+  readonly lifecycle?: LifecycleMarker;
 }
 
 export type WriteGuardVerdict =
@@ -42,6 +53,8 @@ export interface WriteGuardInLock {
   readonly step: StepView;
   readonly opId: string;
   readonly params: OpParams;
+  /** v2 C2c: the job's stored options (its lifecycle marker, when it is a lifecycle job). */
+  readonly jobOptions?: Readonly<Record<string, unknown>>;
   /** The read the engine made inside the lock for this step (its reader), when it made one. */
   readonly current: { readonly body: unknown; readonly entity: unknown } | undefined;
   /** One more governed read, inside the lock, for the job (counted against its budget). */
@@ -51,4 +64,31 @@ export interface WriteGuardInLock {
 export interface WriteGuard {
   entry(input: WriteGuardEntry): Promise<WriteGuardVerdict> | WriteGuardVerdict;
   inLock?(input: WriteGuardInLock): Promise<void> | void;
+}
+
+/**
+ * v2 C2c (ADR 0035): several guards as one. At entry, the first deny wins; otherwise any `propose_canonical` makes the
+ * request a canonical proposal (the reasons and changes of all of them together); otherwise allow. Inside the lock each
+ * guard is asked in turn (the first to throw refuses).
+ */
+export function combineGuards(...guards: readonly WriteGuard[]): WriteGuard {
+  return {
+    async entry(input) {
+      const proposals: { reason: string; changes: readonly unknown[] }[] = [];
+      for (const g of guards) {
+        const v = await g.entry(input);
+        if (v.decision === 'deny') return v;
+        if (v.decision === 'propose_canonical') proposals.push({ reason: v.reason, changes: v.changes });
+      }
+      if (proposals.length === 0) return { decision: 'allow' };
+      return {
+        decision: 'propose_canonical',
+        reason: proposals.map((p) => p.reason).join('; and '),
+        changes: proposals.flatMap((p) => p.changes),
+      };
+    },
+    async inLock(input) {
+      for (const g of guards) await g.inLock?.(input);
+    },
+  };
 }

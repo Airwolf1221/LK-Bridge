@@ -106,24 +106,50 @@ Each finding links to the page on the Repository Tree page (`/ui/tree?node=<id>`
 
 `runtime.registry.forProject(projectId)` (`ProjectTypes`), all synchronous and answering from the stored tree:
 
-- `resolve(query, { scope?: { under: nodeId } | { type: typeName }, kinds?: ['index' | 'bsrc' | 'unclassified'] })` →
-  `{ status: 'resolved', node, matchedBy }` | `{ status: 'ambiguous', candidates }` | `{ status: 'not_found', near }`.
-  A query is an id (or `lk://resources/<id>`), a raw name, a display name, an alias or a Canonical Display Name, any
-  case; stray leading `[INDEX]` / `[BSRC]` prefixes are removed (repeats collapse) and, when they tell matches apart,
-  used. Scope below a node excludes the node itself. `resolveOne` throws `RegistryError` `AMBIGUOUS` / `NOT_FOUND`
+- `resolve(query, { scope?: { under: nodeId } | { type: typeName }, kinds?: ['index' | 'bsrc' | 'bwrk' | 'barc' |
+'unclassified'] })` → `{ status: 'resolved', node, matchedBy }` | `{ status: 'ambiguous', candidates }` |
+  `{ status: 'not_found', near }`. A query is an id (or `lk://resources/<id>`), a raw name, a display name, an alias or
+  a Canonical Display Name, any case; stray leading `[INDEX]` / `[BSRC]` / `[BWRK]` / `[BARC]` prefixes are removed
+  (repeats collapse) and, when they tell matches apart, used. Scope below a node excludes the node itself. `resolveOne` throws `RegistryError` `AMBIGUOUS` / `NOT_FOUND`
   instead. A tree that is not built throws `TREE_NOT_READY`.
 - `mentionResolver(options?)` → B1's `ctx.resolveMention` for `[[Name]]`.
 - `placementFor(parentId, newDisplayName, kind, { excludeId? })` → `{ after }`, `{ before }` or `{}` (empty parent), for
   createResource, createResourceFromTemplate and moveResource. `outOfOrder(parentId?)` → the siblings that break the
   rule, per parent, each with where it belongs.
-- `planCharacterPlacement({ characterName, race?, kind: 'core' | 'compact', type? })` → the race index, the species
+- `planCharacterPlacement({ characterName, race?, kind: 'core' | 'compact', type?, working?: { indexId }, lookUnder? })`
+  → the race index, the species
   value to write (`species.row`, `species.value`), the character index (`reuse` or `create` with its name, template and
   slot; core only), the page (`return_existing`, or `create` with its parent, name, template, Reference Type and slot;
   `parentId: null` means the index this plan creates), existing Core and Compact pages, and warnings. Refusals are
   `RegistryError`s: `NO_CHARACTER_TYPE`, `TYPE_ROOT_MISSING`, `UNKNOWN_INDEX_MISSING`, `UNKNOWN_INDEX_AMBIGUOUS`,
   `RACE_NOT_FOUND` (with `available`), `RACE_AMBIGUOUS` (with `candidates`), `RACE_NEEDS_REVIEW`,
-  `RACE_SOURCE_MISSING`, `CHARACTER_INDEX_AMBIGUOUS`, `EXISTING_PAGE_AMBIGUOUS`, `TEMPLATE_NOT_CONFIGURED`.
+  `RACE_SOURCE_MISSING`, `CHARACTER_INDEX_AMBIGUOUS`, `EXISTING_PAGE_AMBIGUOUS`, `TEMPLATE_NOT_CONFIGURED`, and for
+  a Working plan `WORKING_INDEX_MISSING` and `CHARACTER_INDEX_ELSEWHERE` (below).
 - `commands` (owner, audited) and `store` (the tables).
+
+## The page lifecycle (v2 C2c)
+
+ADR 0035; the tools are in [tools.md](tools.md#the-page-lifecycle-v2-c2c).
+
+- **Kinds.** The tree classifies `[BWRK] ` (kind `bwrk`, Working) and `[BARC] ` (kind `barc`, Archived) pages as it
+  does `[BSRC] ` ones: same name handling (exactly one prefix, then the display name), same group in the sibling order
+  (`[INDEX]` first, then `[BSRC]`, `[BWRK]` and `[BARC]` together, each alphabetical). A tree built before v2 C2c
+  re-derives every node's kind from its stored name once (the catalogue key carries a classification version), so
+  existing `[BWRK]` / `[BARC]` pages stop being `unclassified` without a full walk.
+- **Which page a name means.** When a mention or a page argument matches several pages of the SAME subject, the
+  resolver prefers the current page: `[BSRC]` (or an index), then `[BWRK]`, then `[BARC]`; then, among a character's
+  pages, A3's role order (Core, Reference, index). Matches of different subjects stay `AMBIGUOUS`, each candidate with
+  its role (`current [BSRC] page`, `Working [BWRK] page`, `Archived [BARC] page`).
+- **Working characters.** `planCharacterPlacement` with `working: { indexId }` plans the character's pages under
+  `[INDEX] Working` instead of the race (`[BWRK]` names), still validating the race and planning its Race / Species
+  value. A Core gets its own `[INDEX] {name}` directly under Working (reused when it exists); a compact page goes
+  directly under Working. Existing Core and Reference pages are looked for under both the race and Working
+  (`lookUnder` gives an Authoritative plan the Working index to look in too), so an existing page is returned, never
+  duplicated. When the race already holds an `[INDEX] {name}`, a Working Core is refused (`CHARACTER_INDEX_ELSEWHERE`:
+  promoting it would clash). `WORKING_INDEX_MISSING`: the stored Working index is not an index in the tree.
+- **The two lifecycle indexes** are not registry entries: they are found by name (`[INDEX] Working`,
+  `[INDEX] Archived`, or the names the owner set) and confirmed on the Projects page (Lifecycle), and placement never
+  sends a page into either except through the lifecycle tools and Working creates.
 
 ## Admin API
 

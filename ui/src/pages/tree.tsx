@@ -26,6 +26,8 @@ const KIND_LABEL: Record<string, string> = {
   root: 'root',
   index: 'INDEX',
   bsrc: 'BSRC',
+  bwrk: 'BWRK',
+  barc: 'BARC',
   unclassified: 'unclassified',
 };
 
@@ -131,6 +133,8 @@ function Counts({ data }: { data: TreeOverview }) {
     ['Pages', c.total],
     ['[INDEX]', c.byKind.index],
     ['[BSRC]', c.byKind.bsrc],
+    ['[BWRK] Working', c.byKind.bwrk ?? 0],
+    ['[BARC] Archived', c.byKind.barc ?? 0],
     ['Unclassified', c.byKind.unclassified],
     ['Deepest level', c.maxDepth],
     ['Stale', c.stale],

@@ -31,6 +31,7 @@ import {
   type RunResult,
 } from '../../jobs/index.js';
 import type { ProjectsRuntime } from '../../projects/registry.js';
+import type { Lifecycle } from '../../lifecycle/index.js';
 import type {
   ProjectSelector,
   ProjectSelectionError,
@@ -66,6 +67,8 @@ export interface DiscoverServices {
   readonly factsVersions?: FactsVersions;
   /** v2 C2b: the create tools' `operation_id` store and duplicate-request claims (src/resources/requests.ts). */
   readonly requests?: RequestRegistry;
+  /** v2 C2c: the page lifecycle (settings, records, the link index; src/lifecycle). */
+  readonly lifecycle?: Lifecycle;
 }
 
 /** What every tool handler needs. */

@@ -35,7 +35,10 @@ export type RegistryErrorCode =
   | 'CHARACTER_INDEX_AMBIGUOUS'
   | 'EXISTING_PAGE_AMBIGUOUS'
   | 'TEMPLATE_NOT_CONFIGURED'
-  | 'TEMPLATES_UNREADABLE';
+  | 'TEMPLATES_UNREADABLE'
+  // v2 C2c (ADR 0035): a Working character.
+  | 'WORKING_INDEX_MISSING'
+  | 'CHARACTER_INDEX_ELSEWHERE';
 
 /** Every refusal of the registry, resolver and planners: a code, a plain-language message, and details. */
 export class RegistryError extends Error {
@@ -173,7 +176,8 @@ export interface NodeRef {
   readonly path: string;
 }
 
-export type ResolveKind = 'index' | 'bsrc' | 'unclassified';
+/** v2 C2c: `bwrk` and `barc` (Working and Archived pages) beside `bsrc`. */
+export type ResolveKind = 'index' | 'bsrc' | 'bwrk' | 'barc' | 'unclassified';
 export type MatchField = 'id' | 'raw' | 'display' | 'alias' | 'canonical';
 
 export type ResolveScope = { readonly under: string } | { readonly type: string };

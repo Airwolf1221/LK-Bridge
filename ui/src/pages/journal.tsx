@@ -4,7 +4,7 @@ import { Badge, CopyButton, Empty, ErrorNote, Json, Loading, PageHeader } from '
 import { fmtBytes, fmtTime, principalText, type PrincipalNames } from '../format';
 import { useApi } from '../hooks';
 import { useProject, useScopedApi } from '../project';
-import { Link } from '../router';
+import { Link, useRoute } from '../router';
 import type { ClientsResponse, JournalEntry } from '../types';
 
 const SINCE: [string, string][] = [
@@ -20,12 +20,14 @@ const SINCE: [string, string][] = [
  * View only: nothing here changes anything. Pages of 100, older pages through the `before` cursor (chunk 8).
  */
 export function JournalPage() {
+  // v2 C2c: the Archive and lifecycle page links here with a job's id.
+  const { query } = useRoute();
   const [f, setF] = useState({
     opId: '',
     resourceId: '',
     documentId: '',
     targetId: '',
-    jobId: '',
+    jobId: query.get('jobId') ?? '',
     principalId: '',
     profile: '',
     outcome: '',

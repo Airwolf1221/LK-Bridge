@@ -315,7 +315,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
         }
         const page = { id: node.id, name: node.displayName, path: node.path.names.join(' / ') };
         const notes = [...(templateNote ? [templateNote] : []), ...plan.notes];
-        const rules = canonConfigFrom(settings).rules;
+        const rules = canonConfigFrom(settings).active;
         const canon = assessFactChange(
           rules,
           factRows(sidebar).map((r) => ({ key: r.key, content: r.content })),
@@ -570,7 +570,7 @@ export function factsVersionAfter(verification: Record<string, unknown>): string
 }
 
 /** The template's fact keys (cached for a day), or null with the reason as a note. */
-async function templateKeysFor(
+export async function templateKeysFor(
   pd: ProjectDeps,
   mctx: McpToolContext,
   ctx: RepoCtx,

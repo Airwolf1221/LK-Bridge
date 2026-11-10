@@ -16,7 +16,8 @@ import type { TreeNode } from '../tree/index.js';
 export const SEARCH_FIELDS = ['name', 'tag', 'type', 'kind', 'under', 'scope'] as const;
 export type SearchField = (typeof SEARCH_FIELDS)[number];
 
-export const SEARCH_KINDS = ['index', 'bsrc', 'unclassified'] as const;
+/** v2 C2c: `bwrk` (Working) and `barc` (Archived) pages beside `bsrc`. */
+export const SEARCH_KINDS = ['index', 'bsrc', 'bwrk', 'barc', 'unclassified'] as const;
 
 export type Expr =
   | { readonly t: 'text'; readonly value: string; readonly phrase: boolean }

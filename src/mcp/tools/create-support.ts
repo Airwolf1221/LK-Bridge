@@ -4,13 +4,7 @@
  * planned on its template's sidebar, the ONE job that creates the pages, writes their facts and verifies everything,
  * and `operation_id` with duplicate-request claims around it.
  */
-import {
-  DEFAULT_AGENT_STATUS,
-  canonConfigFrom,
-  factKey,
-  sidebarFrom,
-  type SidebarProperty,
-} from '../../facts/index.js';
+import { factKey, sidebarFrom, type SidebarProperty } from '../../facts/index.js';
 import { expandNewPageFacts } from '../../facts/expand.js';
 import { FactsPlanError, planFacts, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
 import { factValueRuns, FactValueError } from '../../facts/values.js';
@@ -30,6 +24,8 @@ import {
 import { requestHash } from '../../resources/requests.js';
 import { classifyName } from '../../tree/classify.js';
 import type { TreeNode } from '../../tree/index.js';
+import type { LifecycleMarker } from '../../jobs/index.js';
+import { lifecycleFrom, lifecycleIndexes, type LifecycleConfig } from '../../lifecycle/settings.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import { liveRead, resolvePage, type RepoCtx } from './repo.js';
 import { resolveLink, type LinkRef } from './set-facts.js';
@@ -175,20 +171,26 @@ export function namePatternOf(t: TemplateRef): string {
   return '{name}';
 }
 
-/** One governed read of a sidebar (a template's), cached for the call. */
+/**
+ * One governed read of a template (`getResource`: its sidebar and, v2 C2c, its tags), cached for the call. The tags are
+ * kept in `tags` (a new page's status tag replaces the template's).
+ */
 export async function readSidebar(
   pd: ProjectDeps,
   mctx: McpToolContext,
   tool: string,
   resourceId: string,
   cache: Map<string, SidebarProperty[]>,
+  tags?: Map<string, string[]>,
 ): Promise<Result<SidebarProperty[]>> {
   const had = cache.get(resourceId);
   if (had) return { ok: true, value: had };
-  const r = await liveRead(pd, mctx, tool, 'listProperties', { path: { resourceId } });
+  const r = await liveRead(pd, mctx, tool, 'getResource', { path: { resourceId } });
   if (!r.ok) return r;
   const sb = sidebarFrom(r.value);
   cache.set(resourceId, sb);
+  const t = (r.value as { tags?: unknown } | null)?.tags;
+  tags?.set(resourceId, Array.isArray(t) ? t.filter((x): x is string => typeof x === 'string') : []);
   return { ok: true, value: sb };
 }
 
@@ -200,8 +202,11 @@ export interface CreateCtx {
   readonly ctx: RepoCtx;
   readonly tool: string;
   readonly propertyTitle: string;
-  readonly agentStatus: string;
+  /** v2 C2c: the project's lifecycle settings (status values, tags, the Working index). */
+  readonly lifecycle: LifecycleConfig;
   readonly sidebars: Map<string, SidebarProperty[]>;
+  /** v2 C2c: each template's tags, as read with its sidebar. */
+  readonly templateTags: Map<string, string[]>;
 }
 
 export function createCtx(pd: ProjectDeps, mctx: McpToolContext, ctx: RepoCtx, tool: string): CreateCtx {
@@ -216,23 +221,86 @@ export function createCtx(pd: ProjectDeps, mctx: McpToolContext, ctx: RepoCtx, t
     ctx,
     tool,
     propertyTitle,
-    agentStatus: canonConfigFrom(settings).agentDefaultStatus || DEFAULT_AGENT_STATUS,
+    lifecycle: lifecycleFrom(settings),
     sidebars: new Map(),
+    templateTags: new Map(),
+  };
+}
+
+// ============================================================================================ v2 C2c: status
+
+/** A new page's lifecycle status (Part 1, decided by the owner): Working by default. */
+export type CreateStatus = 'working' | 'authoritative';
+
+export const STATUS_DESCRIPTION =
+  'The new page’s lifecycle status. "working" (the default): a [BWRK] page directly under [INDEX] Working, ' +
+  'alphabetically, with Status Working and the Working tag. "authoritative": a [BSRC] page in its normal place, with ' +
+  'Status Authoritative and the CANON tag: this is canon, so it always becomes a proposal only the owner can accept as ' +
+  'canon (proposal_captured with requiresCanonicalApproval), whatever your scope.';
+
+/** The Status value of a create status. */
+export function statusValue(c: LifecycleConfig, status: CreateStatus): string {
+  return status === 'working' ? c.status.working : c.status.authoritative;
+}
+
+/** `tags` with every status tag removed (any case) and the status's own added; tags of an index (null) as they are. */
+export function withStatusTag(
+  c: LifecycleConfig,
+  tags: readonly string[],
+  status: CreateStatus | 'archived' | null,
+): string[] {
+  if (status === null) return [...tags];
+  const all = [c.tags.canon, c.tags.working, c.tags.archived].map((t) => t.toLocaleLowerCase('en-GB'));
+  const keep = tags.filter((t) => !all.includes(t.toLocaleLowerCase('en-GB')));
+  const own = status === 'working' ? c.tags.working : status === 'archived' ? c.tags.archived : c.tags.canon;
+  const out: string[] = [];
+  for (const t of [...keep, own])
+    if (!out.some((x) => x.toLocaleLowerCase('en-GB') === t.toLocaleLowerCase('en-GB'))) out.push(t);
+  return out;
+}
+
+/** The project's Working index (confirmed by the owner, checked against the tree now), or a clear refusal. */
+export function workingIndex(cc: CreateCtx): Result<TreeNode> {
+  const r = lifecycleIndexes(cc.lifecycle, (id) => cc.ctx.tree.node(cc.ctx.projectId, id).data);
+  if (!r.ok) return fail(errorResult({ code: r.code, message: r.message }, cc.pd));
+  return { ok: true, value: r.working };
+}
+
+/** Whether a node is the Working or Archive index, or under either (by the stored ids; none when unconfigured). */
+export function lifecycleAreaOf(cc: CreateCtx, n: TreeNode): 'working' | 'archived' | null {
+  const { workingIndexId: w, archiveIndexId: a } = cc.lifecycle;
+  if (w && (n.id === w || n.path.ids.includes(w))) return 'working';
+  if (a && (n.id === a || n.path.ids.includes(a))) return 'archived';
+  return null;
+}
+
+/** The marker of a create job: the pages it gives a lifecycle state, and whether it makes canon. */
+export function createMarker(
+  tool: string,
+  pages: readonly { readonly id: string; readonly to: 'working' | 'authoritative' | null }[],
+): LifecycleMarker | undefined {
+  if (pages.length === 0) return undefined;
+  const canonical = pages.some((p) => p.to === 'authoritative');
+  return {
+    tool,
+    canonical,
+    pages,
+    ...(canonical ? { reason: 'creates an Authoritative page (canon)' } : {}),
   };
 }
 
 export interface NewPageFactsPlan {
   readonly plan: FactsPlan;
   readonly templateSidebar: readonly SidebarProperty[];
-  /** Whether Status `Working` was added by the bridge (the template has a Status row and the caller set none). */
-  readonly defaultStatus: boolean;
+  /** v2 C2c: the Status the bridge writes (the status's value, when the template has a Status row), or null. */
+  readonly status: string | null;
 }
 
 /**
  * The facts a page created from a template gets in the same job, planned on the template's sidebar (one read, cached
- * for the call): the `identity` facts first (exactly as given), then Status (the caller's, else the project's default
- * when the template has a Status row), then the caller's facts and links. A caller fact that contradicts an identity
- * fact is refused. Nothing is planned when there is nothing to write.
+ * for the call): the `identity` facts first (exactly as given), then Status (v2 C2c: the value of the page's lifecycle
+ * status, when the template has a Status row; a caller's Status must be the same), then the caller's facts and links. A
+ * caller fact that contradicts an identity fact is refused. Nothing is planned when there is nothing to write.
  */
 export async function planNewPageFacts(
   cc: CreateCtx,
@@ -243,11 +311,13 @@ export async function planNewPageFacts(
     readonly identity?: readonly { readonly key: string; readonly value: string }[];
     readonly facts?: Readonly<Record<string, FactInput>>;
     readonly links?: LinkEdits;
+    /** v2 C2c: the Status to write (the status's value), or null for none (an index). */
+    readonly status: string | null;
     readonly what: string;
   },
 ): Promise<Result<NewPageFactsPlan | null>> {
   const { pd } = cc;
-  const sbr = await readSidebar(pd, cc.mctx, cc.tool, input.templateId, cc.sidebars);
+  const sbr = await readSidebar(pd, cc.mctx, cc.tool, input.templateId, cc.sidebars, cc.templateTags);
   if (!sbr.ok) return sbr;
   const sidebar = sbr.value;
   const kv = sidebar.filter((p) => p.kind === 'keyValue' && factKey(p.title) === factKey(cc.propertyTitle));
@@ -282,10 +352,26 @@ export async function planNewPageFacts(
       }
     }
   }
-  const callerStatus = callerFacts.find(([k]) => factKey(k) === factKey('Status'));
-  const hasStatusRow = templateKeys?.some((k) => factKey(k) === factKey('Status')) ?? false;
-  const defaultStatus = !callerStatus && hasStatusRow;
-  if (defaultStatus) facts.push({ key: 'Status', value: [{ text: cc.agentStatus }] });
+  const statusKey = cc.lifecycle.fields.status;
+  const callerStatus = callerFacts.find(([k]) => factKey(k) === factKey(statusKey));
+  if (callerStatus && input.status !== null) {
+    const [, v] = callerStatus;
+    if (!(typeof v === 'string' && v.trim() === input.status)) {
+      return fail(
+        errorResult(
+          {
+            code: 'INVALID_FACTS',
+            message: `${input.what}: ${statusKey} is set by \`status\` (“${input.status}” here); leave it out of facts. Pass status "working" or "authoritative" instead.`,
+            key: callerStatus[0],
+          },
+          pd,
+        ),
+      );
+    }
+  }
+  const hasStatusRow = templateKeys?.some((k) => factKey(k) === factKey(statusKey)) ?? false;
+  const writeStatus = input.status !== null && !callerStatus && hasStatusRow;
+  if (writeStatus) facts.push({ key: statusKey, value: [{ text: input.status }] });
   for (const [k, v] of callerFacts) {
     if (identity.some((f) => factKey(f.key) === factKey(k))) continue;
     if (v === null) {
@@ -348,15 +434,27 @@ export async function planNewPageFacts(
     }
     return fail(errorFromThrown(e, pd));
   }
-  return { ok: true, value: { plan, templateSidebar: sidebar, defaultStatus } };
+  return {
+    ok: true,
+    value: {
+      plan,
+      templateSidebar: sidebar,
+      status: writeStatus || (callerStatus && input.status !== null) ? input.status : null,
+    },
+  };
 }
 
 // ============================================================================================ the job
 
 /** One page to create, with what the job does to it besides creating it. */
 export interface NewPage extends CreateItem {
-  /** Plain pages only (a template copy gets them with one updateResource after it). */
+  /**
+   * Its tags: in the create for a page without a template; a template copy gets them with one updateResource after it
+   * (v2 C2c: the full list, the template's own with its status tag replaced, so they are sent whenever they are set).
+   */
   readonly tags?: readonly string[];
+  /** v2 C2c: the page's lifecycle status, or null (an index). */
+  readonly status?: CreateStatus | null;
   readonly aliases?: readonly string[];
   readonly facts: NewPageFactsPlan | null;
   /** For summaries: the parent's name, and the template's. */
@@ -406,13 +504,13 @@ export function planCreateJob(
   const pagesOut: Obj[] = [];
   const journalOperation = (p: NewPage) => ({ tool: o.tool, page: { id: p.id, name: p.rawName } });
   const afterCreate = (p: NewPage) => {
-    if (p.templateId !== null && ((p.tags?.length ?? 0) > 0 || (p.aliases?.length ?? 0) > 0)) {
+    if (p.templateId !== null && (p.tags !== undefined || (p.aliases?.length ?? 0) > 0)) {
       steps.push({
         op: 'updateResource',
         params: {
           path: { resourceId: p.id },
           body: {
-            ...(p.tags?.length ? { tags: [...p.tags] } : {}),
+            ...(p.tags !== undefined ? { tags: [...p.tags] } : {}),
             ...(p.aliases?.length ? { aliases: [...p.aliases] } : {}),
           },
         },
@@ -440,7 +538,7 @@ export function planCreateJob(
     id: p.id,
     name: p.rawName,
     parentId,
-    ...(p.templateId === null && p.tags?.length ? { tags: [...p.tags] } : {}),
+    ...(p.templateId === null && p.tags !== undefined ? { tags: [...p.tags] } : {}),
     ...(p.templateId === null && p.aliases?.length ? { aliases: [...p.aliases] } : {}),
     ...slot,
   });
@@ -490,7 +588,11 @@ export function planCreateJob(
       kind: 'resource',
       label: p.rawName,
       resourceId: p.id,
-      fields: { name: p.rawName, parentId: where.parentId },
+      fields: {
+        name: p.rawName,
+        parentId: where.parentId,
+        ...(p.tags !== undefined ? { tags: [...p.tags] } : {}),
+      },
       placement: { parentId: where.parentId, after: where.after, before: where.before },
     });
     const f = p.facts?.plan;
@@ -531,7 +633,8 @@ export function planCreateJob(
               : {}),
           }
         : {}),
-      ...(p.facts?.defaultStatus ? { statusNote: 'Status set to the project’s default for new pages' } : {}),
+      ...(p.status ? { status: p.status } : {}),
+      ...(p.tags !== undefined ? { tags: [...p.tags] } : {}),
     });
   }
   steps.push({ op: VERIFY_STEP, params: { body: { targets } } });

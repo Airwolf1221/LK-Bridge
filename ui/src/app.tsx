@@ -21,6 +21,7 @@ import { ProposalsPage } from './pages/proposals';
 import { SettingsPage } from './pages/settings';
 import { AssetsPage } from './pages/assets';
 import { TreePage } from './pages/tree';
+import { LifecyclePage } from './pages/lifecycle';
 import { WritersPage } from './pages/writers';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -53,6 +54,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/journal', label: 'Journal' },
   { to: '/projects', label: 'Projects' },
   { to: '/tree', label: 'Repository Tree' },
+  { to: '/lifecycle', label: 'Archive and lifecycle' },
   { to: '/assets', label: 'Asset Tree' },
   { to: '/settings', label: 'Settings' },
   { to: '/account', label: 'Account' },
@@ -97,6 +99,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/journal') return <JournalPage />;
   if (path === '/projects') return <ProjectsPage />;
   if (path === '/tree') return <TreePage />;
+  if (path === '/lifecycle') return <LifecyclePage />;
   if (path === '/assets') return <AssetsPage />;
   if (path === '/settings') return <SettingsPage />;
   if (path === '/account') return <AccountPage />;

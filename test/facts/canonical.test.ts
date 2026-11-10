@@ -118,7 +118,7 @@ describe('through set_facts', () => {
     expect(no.text).toMatch(/read-only/);
   });
   it('Status from Authoritative, and a Continuity change, are canonical too', async () => {
-    const from = await w.stack.call(writer, 'set_facts', { page: P.inae, facts: { Status: 'Working' } });
+    const from = await w.stack.call(writer, 'set_facts', { page: P.inae, facts: { Status: 'Outline' } });
     expect(from.body).toMatchObject({ status: 'proposal_captured', requiresCanonicalApproval: true });
     expect(from.body.reason).toMatch(/Status would change from Authoritative/);
     const cont = await w.stack.call(writer, 'set_facts', { page: P.miyabi, facts: { Continuity: 'AU-1' } });
@@ -163,7 +163,7 @@ describe('through the low-level tools', () => {
       expect(r.body.reason).toMatch(/Status would be set to Authoritative/);
     }
     expect(writesSince()).toHaveLength(0);
-    expect(kvText(w.sidebars.rows(P.miyabi))).toContain('Status=Working');
+    expect(kvText(w.sidebars.rows(P.miyabi))).toContain('Status=Outline');
   });
   it('lk_api_batch: a protected change made in two harmless-looking steps is judged as the sequence it is', async () => {
     const r = await w.stack.call(writer, 'lk_api_batch', {
@@ -278,7 +278,7 @@ describe('approval', () => {
     expect((await settle(String(plain.body.proposalId), ['executed', 'failed'])).state).toBe('executed');
   });
   it('bulk approve skips canonical proposals; Reject works as normal', async () => {
-    const r = await w.stack.call(proposer, 'set_facts', { page: P.inae, facts: { Status: 'Archived' } });
+    const r = await w.stack.call(proposer, 'set_facts', { page: P.inae, facts: { Status: 'Outline' } });
     const id = r.body.proposalId as string;
     const [res] = await w.stack.runtime.policy.commands.bulkApprove('owner', [id]);
     expect(res).toMatchObject({ ok: false, error: { code: 'CANONICAL_APPROVAL_REQUIRED' } });
@@ -297,7 +297,7 @@ describe('approval', () => {
     // Tampered in the database: the stored expansion now changes the Authoritative Status.
     w.stack.db
       .prepare('UPDATE proposal_ops SET params = ? WHERE proposal_id = ?')
-      .run(JSON.stringify({ path: rowPath(P.inae, 'Status'), body: { content: [{ text: 'Working' }] } }), id);
+      .run(JSON.stringify({ path: rowPath(P.inae, 'Status'), body: { content: [{ text: 'Outline' }] } }), id);
     mark = w.sidebars.requests.length;
     await w.stack.runtime.policy.commands.approve('owner', id);
     const p = await settle(id, ['failed', 'executed', 'conflicted']);

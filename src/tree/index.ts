@@ -22,10 +22,15 @@ export {
 export { TreeQueries, type SubtreeEntry, type TreeCounts } from './queries.js';
 export { TreeStore } from './store.js';
 export {
+  BARC_PREFIX,
   BSRC_PREFIX,
+  BWRK_PREFIX,
   INDEX_PREFIX,
+  KIND_PREFIX,
+  PAGE_KINDS,
   catalogueFrom,
   classifyName,
+  isPageKind,
   nameKey,
   observationFromListItem,
   observationFromResource,

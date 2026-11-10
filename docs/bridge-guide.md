@@ -38,9 +38,11 @@ One bridge serves several LegendKeeper projects (for example `arkona`, the live 
 The bridge's **repository tree** is its copy of everything under the project's `AI REPOSITORY` page: every page's
 name, kind, place, tags, aliases, Reference Type, Scope and documents.
 
-- **Kinds.** `[INDEX]` pages (kind `index`) organise; `[BSRC]` pages (kind `bsrc`) hold the content; anything else
-  is `unclassified` and is reported. Display names have the prefix removed: the page `[BSRC] Asagiri Miyabi` is
-  "Asagiri Miyabi".
+- **Kinds.** `[INDEX]` pages (kind `index`) organise; `[BSRC]` pages (kind `bsrc`, Authoritative), `[BWRK]` pages
+  (kind `bwrk`, Working) and `[BARC]` pages (kind `barc`, Archived) hold the content (see
+  [The page lifecycle](#the-page-lifecycle)); anything else is `unclassified` and is reported. Display names have the
+  prefix removed: the page `[BSRC] Asagiri Miyabi` is "Asagiri Miyabi". When a name matches several pages of the same
+  subject, the current `[BSRC]` page (or an index) is preferred, then `[BWRK]`, then `[BARC]`.
 - **Status.** Every answer from the tree states its status and when it was last confirmed. `ready` means it was
   checked within the last day. `stale` means something could not be confirmed; the answer is still the best the bridge
   has, and it says so. `not_built` and `building` mean it cannot answer yet. The tools say so and spend nothing.
@@ -210,14 +212,18 @@ Some facts are **protected canon**. By default:
 - changing an existing `Continuity Type` or `Continuity` (for example `CANON` to `AU`, or one AU to another). Setting
   them where they are empty, as on a new page, is fine;
 - **deleting** a page whose `Status` is `Authoritative` (with `cascade`, any page under it that is). Restoring a deleted
-  page needs no approval.
+  page needs no approval;
+- **deleting** an Archived `[BARC]` page, and deleting a map, timeline or board of an Authoritative page (two rules the
+  owner can switch off per project);
+- **every lifecycle change**: creating an Authoritative page, and `archive_page`, `unarchive_page`, `move_to_working`
+  and `promote_page` (below).
 
 **No connection can make these changes on its own, whatever its scope.** A write that would make one (through
 `set_facts`, `lk_api_write`, `lk_api_batch` or any other tool) becomes a **proposal**: the result is
 `proposal_captured` with `requiresCanonicalApproval: true` and the `reason`, and nothing is written. Only the owner can
 accept it, with a separate "Approve and accept as canon". Never retry such a write or look for another way to make it:
 tell the person it is waiting for the owner, and follow it with `bridge_proposal_status`. Only the owner makes a page
-`Authoritative`; the page-creation tools give new pages the Status `Working`.
+`Authoritative`; the page-creation tools make Working pages unless you pass `status: "authoritative"`.
 
 ## Creating and changing pages
 
@@ -226,18 +232,29 @@ the same write, never move or reclassify anything else, verify what they did, an
 (pages, names, parents, places, facts) without writing. Under scope `propose` each call is one proposal; the ids of its
 new pages are fixed in the proposal.
 
-- **A character:** `create_character` `{ kind: "core" | "compact", name, race?, facts?, links? }`. Core: the
-  character's `[INDEX] {name}` (an existing one is reused) with `{name} - Character Core` beneath it. Compact:
-  `{name} - Character Reference` directly under the race. An existing Core or Reference is **returned, not duplicated**
-  (`status: "existing"`). The bridge writes Reference Type, Subject, Canonical Display Name, Race / Species (exactly as
-  you give it; `Unestablished` when the race is unknown or omitted) and Status `Working`, then your facts. An unknown or
-  omitted race goes to `Undetermined / Unknown`; a race given that does not resolve is refused, never guessed or
-  created. If another request for the same character is still under way (from you or another agent), you get
-  `DUPLICATE_REQUEST` naming it: follow that one.
-- **A page from a template:** `create_resource` `{ name, template, parent, facts?, links? }` (see `list_templates`).
-- **An index:** `create_index` `{ name, parent }`, or `{ name, type, category }` (for example a category of a race).
-- **Many pages at once:** `create_many_resources` `{ items }` (up to 100; nest them with `key` and `parent_key`).
-- **A page with no template:** `create_bare_resource` `{ name: "[BSRC] …" or "[INDEX] …", parent }`.
+**New pages are Working by default.** Every page create takes `status`: `"working"` (the default) makes a `[BWRK]`
+page directly under `[INDEX] Working` (leave `parent` out), with Status `Working` and the `Working` tag;
+`"authoritative"` makes a `[BSRC]` page in its normal place (give `parent`), with Status `Authoritative` and the
+`CANON` tag, and is always a proposal for the owner. Write new material as Working; the owner promotes it.
+
+- **A character:** `create_character` `{ kind: "core" | "compact", name, race?, status?, facts?, links? }`. Working
+  (the default): a Core gets its own `[INDEX] {name}` under `[INDEX] Working` with `[BWRK] {name} - Character Core`
+  beneath it; a compact page goes directly under `[INDEX] Working`. Authoritative: the Core's `[INDEX] {name}` (an
+  existing one is reused) under the race, or `{name} - Character Reference` directly under the race. An existing Core
+  or Reference, Working or not, is **returned, not duplicated** (`status: "existing"`). The bridge writes Reference
+  Type, Subject, Canonical Display Name, Race / Species (exactly as you give it; `Unestablished` when the race is
+  unknown or omitted) and Status, then your facts. The race is always checked: an unknown or omitted race means
+  `Undetermined / Unknown`; a race given that does not resolve is refused, never guessed or created. If another
+  request for the same character is still under way (from you or another agent), you get `DUPLICATE_REQUEST` naming it:
+  follow that one.
+- **A page from a template:** `create_resource` `{ name, template, parent?, status?, facts?, links? }` (see
+  `list_templates`).
+- **An index:** `create_index` `{ name, parent }`, or `{ name, type, category }` (for example a category of a race). An
+  index has no status, and none is made under `[INDEX] Working` or `[INDEX] Archived`.
+- **Many pages at once:** `create_many_resources` `{ items }` (up to 100; nest them with `key` and `parent_key`; each
+  item has its own `status`; Working items are flat, so nothing goes under one).
+- **A page with no template:** `create_bare_resource` `{ name, parent?, status? }`, the name with its prefix:
+  `[BWRK] …` (Working), `[BSRC] …` (Authoritative) or `[INDEX] …`.
 - **Rename, tags, aliases, icon, banner, hidden, locked:** `update_resource` (a rename keeps the prefix and re-places
   the page). **Move:** `move_resource` `{ page, to }`.
 - **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
@@ -251,6 +268,47 @@ sure it went through, send the SAME request with the SAME `operation_id`: you ge
 
 **A failed job is never replayed.** `WRITTEN_IN_PART` lists what was written, what was not, and the journal entries.
 Read the pages, then make a new, smaller request for what is missing.
+
+## The page lifecycle
+
+A page is in one of three states, and its prefix, Status, status tag and place always agree:
+
+| State         | Prefix   | Status          | Tag        | Where                                   |
+| ------------- | -------- | --------------- | ---------- | --------------------------------------- |
+| Authoritative | `[BSRC]` | `Authoritative` | `CANON`    | its normal place                        |
+| Working       | `[BWRK]` | `Working`       | `Working`  | directly under `[INDEX] Working`, flat  |
+| Archived      | `[BARC]` | `Archived`      | `Archived` | directly under `[INDEX] Archived`, flat |
+
+**Four tools change a page's state, and nothing else can.** Each one is always a proposal that only the owner can
+accept as canon, whatever your scope: you get `proposal_captured` with `requiresCanonicalApproval`. Never retry it;
+follow it with `bridge_proposal_status`. `dryRun: true` shows the whole plan (new name and place, every fact before and
+after, the tags, the archive note) and proposes nothing.
+
+- **`archive_page`** `{ page }`: retires an Authoritative or Working page to `[INDEX] Archived` as `[BARC]`, adds a
+  dated note at the top of its main page document, and sets Status `Archived`, Continuity Type `NON-CURRENT`, Scope,
+  Temporal Scope and Last Major Revision. Use it when a design is retired, not `delete_resource`.
+- **`unarchive_page`** `{ page }`: puts an archived page back as it was, from the bridge's record: its old place,
+  prefix, facts and tag. The note is removed if it was not edited. If the old place has gone, give `destination`; a
+  page archived by hand needs `previousState`, `restore` and (for an Authoritative page) `destination`.
+- **`move_to_working`** `{ page }`: takes an Authoritative page back to Working for rework (`[INDEX] Working`,
+  `[BWRK]`, Status `Working`). The bridge remembers where it was.
+- **`promote_page`** `{ page, destination }`: makes a Working page Authoritative under `destination` (`[BSRC]`, Status
+  `Authoritative`, Last Major Revision today). Without `destination` you are told where it was before
+  `move_to_working`, if anywhere. A Working character's index goes with its Core.
+
+**Related pages.** `archive_page` and `move_to_working` list the pages that link to or mention the page (from the
+bridge's link index, with how fresh it is, and one text search marked "may be incomplete"). They are never edited:
+tell the person, or change them yourself where a page should no longer depend on this one.
+
+**Side routes are refused.** Changing Status to or from `Working` or `Archived` (or `Working` to `Authoritative`) with
+`set_facts` or any low-level tool, renaming a page to or from `[BWRK]` or `[BARC]`, and moving a page into, out of or
+between `[INDEX] Working` and `[INDEX] Archived` are all refused (`POLICY_DENIED`), naming the tool to use instead.
+Other changes to Working and Archived pages (their text, other facts, links, tags) work as usual.
+
+**Stopped part-way.** If a lifecycle job stops part-way, the result says which steps ran. Call the same tool on the
+same page again: it plans what is left and proposes only that. Until then another lifecycle tool on that page is refused
+(`LIFECYCLE_INCOMPLETE`). Before the owner has confirmed the project's two indexes, the tools and Working creates are
+refused (`LIFECYCLE_NOT_CONFIGURED`): tell the person.
 
 ## Budget rules
 

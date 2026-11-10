@@ -41,13 +41,13 @@ it('reads and writes per typical call', async () => {
   await measure('create_resource, 2 facts, 1 link', 'create_resource', {
     name: 'Cost Res',
     template: T.general,
-    parent: 'Kumikas',
     facts: { Scope: 'a', 'Reference Type': 'General Source' },
     links: { Dependencies: { add: ['ashg0001'] } },
   });
-  await measure('bare', 'create_bare_resource', { name: '[BSRC] Cost Bare', parent: 'Kumikas' });
+  await measure('bare', 'create_bare_resource', { name: '[BSRC] Cost Bare' });
   await measure('rename, re-placed', 'update_resource', { page: 'Cost Bare', name: 'Aaa Cost Bare' });
-  await measure('move', 'move_resource', { page: 'Aaa Cost Bare', to: 'Isar' });
+  // v2 C2c: a Working page stays under [INDEX] Working (a move out is promote_page's), so the move is of an index.
+  await measure('move', 'move_resource', { page: '[INDEX] Isar', to: 'Kumikas' });
   const d = await measure('delete', 'delete_resource', { page: 'Aaa Cost Bare', confirm: true });
   await measure('restore', 'restore_resource', { page: d.body.page.id as string });
   await measure('create_document', 'create_document', { page: 'board001', name: 'Cost Map', type: 'map' });
@@ -62,19 +62,22 @@ it('reads and writes per typical call', async () => {
     confirm: true,
   });
   await measure('set_facts, 2 facts', 'set_facts', { page: 'mehran01', facts: { Notes: 'n', Scope: 's' } });
+  // v2 C2c: the creates are Working (the default): the index gets no Status (fewer reads and writes); a page from a
+  // template gets its status tag in one more write; the only Working page needs no re-placing after its rename; a
+  // document delete reads the page's facts and the document for the delete-document canon rule.
   expect(got).toEqual({
-    'core, new index, 1 fact': [14, 9],
-    'compact, no facts': [7, 6],
+    'core, new index, 1 fact': [11, 9],
+    'compact, no facts': [8, 7],
     existing: [1, 0],
-    'create_resource, 2 facts, 1 link': [8, 5],
+    'create_resource, 2 facts, 1 link': [10, 6],
     bare: [2, 1],
-    'rename, re-placed': [6, 2],
+    'rename, re-placed': [4, 1],
     move: [3, 1],
     delete: [4, 1],
     restore: [3, 1],
     create_document: [2, 1],
     update_document: [4, 1],
-    delete_document: [2, 1],
+    delete_document: [4, 1],
     'set_facts, 2 facts': [4, 2],
   });
 });

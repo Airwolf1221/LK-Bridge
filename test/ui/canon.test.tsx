@@ -183,9 +183,9 @@ describe('the Canon card on the Projects page', () => {
     const list = await within(card).findByRole('list', { name: 'Protected facts of baisheng' });
     expect(list).toHaveTextContent('Status = Authoritative');
     expect(list).toHaveTextContent('Continuity: changing an existing value needs canonical approval');
-    expect(within(card).getByRole('textbox', { name: 'Status of pages agents create' })).toHaveValue(
-      'Working',
-    );
+    // v2 C2c: the Status of new pages follows the page lifecycle (the Lifecycle section), not a canon setting.
+    expect(within(card).queryByRole('textbox', { name: 'Status of pages agents create' })).toBeNull();
+    expect(card).toHaveTextContent('follows the page lifecycle');
     await user.click(within(card).getByRole('button', { name: 'Remove the rule Continuity of baisheng' }));
     await user.click(within(card).getByRole('button', { name: 'Save' }));
     const dialog = screen.getByRole('alertdialog');

@@ -517,6 +517,49 @@ export class TreeModel {
         this.mutations.push({ op: 'replaceDocumentBlocks', id: doc.id });
         return { status: 200, body: view() };
       }
+      // v2 C2c: insertBlock, block-level (beside content the whole-document write cannot take back, an inline icon).
+      if (M === 'POST') {
+        const ifMatch = req.headers['if-match'];
+        if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
+        const block = structuredClone(body.block ?? {}) as Record<string, unknown>;
+        if (typeof block.id !== 'string') block.id = newId('b');
+        const ids = (b.blocks as { id?: unknown }[]).map((x) => x.id);
+        if (ids.includes(block.id)) return err(409, 'DUPLICATE_ID');
+        let at = b.blocks.length;
+        if (typeof body.before === 'string') {
+          at = ids.indexOf(body.before);
+          if (at < 0) return err(404, 'NOT_FOUND');
+        } else if (typeof body.after === 'string') {
+          at = ids.indexOf(body.after);
+          if (at < 0) return err(404, 'NOT_FOUND');
+          at++;
+        }
+        b.blocks.splice(at, 0, block);
+        b.version++;
+        doc.type = 'page';
+        this.mutations.push({ op: 'insertBlock', id: String(block.id) });
+        return { status: 201, body: { ...structuredClone(block), version: `v${b.version}` } };
+      }
+    }
+    // v2 C2c: one top-level block: getBlock and deleteBlock.
+    if (p.length === 6 && p[4] === 'blocks') {
+      const b = this.blocks.get(doc.id) ?? { version: 1, blocks: [] };
+      const at = (b.blocks as { id?: unknown }[]).findIndex((x) => x.id === p[5]);
+      if (at < 0) return err(404, 'NOT_FOUND');
+      if (M === 'GET') {
+        return {
+          status: 200,
+          body: { ...structuredClone(b.blocks[at] as object), version: `v${b.version}` },
+        };
+      }
+      if (M === 'DELETE') {
+        const ifMatch = req.headers['if-match'];
+        if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
+        b.blocks.splice(at, 1);
+        b.version++;
+        this.mutations.push({ op: 'deleteBlock', id: p[5]! });
+        return { status: 204 };
+      }
     }
     if (p.length === 4) {
       if (M === 'GET') return { status: 200, body: this.docView(doc) };

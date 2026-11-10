@@ -67,6 +67,7 @@ import {
   type StepOutcome,
   type WriteHold,
   type WriteVerification,
+  type RecordHandler,
 } from './step-exec.js';
 import type { StepPlanner, StepPlanners } from './planners.js';
 import {
@@ -79,6 +80,7 @@ import {
   type WriteStepInfo,
   type JobKind,
   type JobOrigin,
+  type LifecycleMarker,
   type JobStatus,
   type JobView,
   type LockView,
@@ -173,6 +175,13 @@ const authItem = (def: OperationDef, params: OpParams, options: StepOptions): Au
 
 /** A job-level lock (`BatchSubmit.holdLock`), stored in the job's options. */
 const HELD_LOCK = 'heldLock';
+/**
+ * v2 C2c: the further job-level locks (`BatchSubmit.holdDocument`, `holdAlso`), stored with `heldLock` as one list. A job
+ * holding several takes them in sorted key order, so two such jobs can never wait on each other.
+ */
+const HELD_MORE = 'heldMore';
+/** v2 C2c: the lifecycle marker (`BatchSubmit.lifecycle`), stored in the job's options for the guard inside the lock. */
+export const LIFECYCLE_OPTION = 'lifecycle';
 
 export class JobEngine {
   readonly events = new JobEventEmitter();
@@ -201,6 +210,8 @@ export class JobEngine {
   private readonly planners = new Map<string, StepPlanner>();
   /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
   private writeGuard: WriteGuard | undefined;
+  /** v2 C2c: the lifecycle record's handler (`bridge.record` steps). */
+  private recordHandler: RecordHandler | undefined;
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -244,6 +255,7 @@ export class JobEngine {
       planner: (name) => this.planners.get(name),
       recordVerifyMismatch: (job, step, v) => this.recordVerifyMismatch(job, step, v),
       writeGuard: () => this.writeGuard,
+      recordHandler: () => this.recordHandler,
     });
     for (const [name, fn] of Object.entries(o.planners ?? {})) this.planners.set(name, fn);
     this.writeGuard = o.writeGuard;
@@ -434,6 +446,23 @@ export class JobEngine {
     };
   }
 
+  /**
+   * v2 C2c (ADR 0035): sets the handler of `bridge.record` steps (the lifecycle record). A job that reaches such a step
+   * with no handler fails there, before its writes. Returns an unregister.
+   */
+  registerRecordHandler(handler: RecordHandler): () => void {
+    this.recordHandler = handler;
+    return () => {
+      if (this.recordHandler === handler) this.recordHandler = undefined;
+    };
+  }
+
+  /** v2 C2c: the stored options of a job (its lifecycle marker), or empty. */
+  jobOptions(projectId: string, jobId: string): Readonly<Record<string, unknown>> {
+    const job = this.repo.job(jobId);
+    return job && job.projectId === projectId ? this.repo.jobOptions(jobId) : {};
+  }
+
   /** A page write that did not land as planned: an error row with the job, so it shows on the Errors page. */
   private recordVerifyMismatch(job: JobView, step: StepView, v: WriteVerification): void {
     const first = v.differences?.[0];
@@ -621,17 +650,31 @@ export class JobEngine {
         throw e;
       }
     });
-    // v2 C2a: a job-level lock covers every write step: each must take that same lock (or none).
+    // v2 C2a: a job-level lock covers every write step: each must take that same lock (or none). v2 C2c: a job may
+    // hold more: a document of the page (`holdDocument`) and one more resource (`holdAlso`), all taken at its start.
     const heldLock = req.holdLock ? projectLockKey(project, `res:${req.holdLock.resourceId}`) : null;
+    if ((req.holdDocument || req.holdAlso) && !heldLock) {
+      throw new InvalidParamsError('batch_ops', [
+        {
+          path: 'holdDocument',
+          message: 'further job-level locks are held only with the page lock (holdLock)',
+        },
+      ]);
+    }
+    const heldMore = [
+      ...(req.holdDocument ? [projectLockKey(project, `doc:${req.holdDocument.documentId}`)!] : []),
+      ...(req.holdAlso ? [projectLockKey(project, `res:${req.holdAlso.resourceId}`)!] : []),
+    ];
+    const heldKeys = heldLock ? [heldLock, ...heldMore] : [];
     if (heldLock) {
       validated.forEach((v, i) => {
         if (!v.def || v.def.kind === 'read') return;
         const key = projectLockKey(project, lockKeyFor(v.def, v.params));
-        if (key !== null && key !== heldLock) {
+        if (key !== null && !heldKeys.includes(key)) {
           throw new InvalidParamsError(v.opId, [
             {
               path: `steps[${i}]`,
-              message: `takes lock ${key}, but the job holds ${heldLock}: a job-level lock must cover every write`,
+              message: `takes lock ${key}, but the job holds ${heldKeys.join(' and ')}: a job-level lock must cover every write`,
             },
           ]);
         }
@@ -641,21 +684,31 @@ export class JobEngine {
     const onError: OnError = req.onError ?? 'stop';
     const title = req.title ?? `batch of ${validated.length} operation(s)`;
     const jobOptions: ProposalJobOptions | undefined =
-      req.holdLock || req.internal
+      req.holdLock || req.internal || req.lifecycle
         ? {
             ...(req.holdLock ? { holdLock: { resourceId: req.holdLock.resourceId } } : {}),
             ...(req.internal ? { internal: true } : {}),
+            ...(req.holdDocument ? { holdDocument: { documentId: req.holdDocument.documentId } } : {}),
+            ...(req.holdAlso ? { holdAlso: { resourceId: req.holdAlso.resourceId } } : {}),
+            ...(req.lifecycle ? { lifecycle: req.lifecycle } : {}),
           }
         : undefined;
     // Every step is put to the policy gate before anything is queued: one deny denies the batch, one propose
     // turns the whole batch into one proposal.
-    const proposal = await this.authorize(validated, origin, 'batch_ops', project, {
-      title,
-      priority,
-      onError,
-      ...(req.proposal ? { extras: req.proposal } : {}),
-      ...(jobOptions ? { jobOptions } : {}),
-    });
+    const proposal = await this.authorize(
+      validated,
+      origin,
+      'batch_ops',
+      project,
+      {
+        title,
+        priority,
+        onError,
+        ...(req.proposal ? { extras: req.proposal } : {}),
+        ...(jobOptions ? { jobOptions } : {}),
+      },
+      req.lifecycle,
+    );
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
     const guard = this.guardContext(project);
@@ -672,7 +725,13 @@ export class JobEngine {
       onError,
       prepared,
       'queued',
-      heldLock ? { [HELD_LOCK]: heldLock } : undefined,
+      heldLock || req.lifecycle
+        ? {
+            ...(heldLock ? { [HELD_LOCK]: heldLock } : {}),
+            ...(heldMore.length > 0 ? { [HELD_MORE]: heldMore } : {}),
+            ...(req.lifecycle ? { [LIFECYCLE_OPTION]: req.lifecycle } : {}),
+          }
+        : undefined,
     );
     const estimate = this.estimateFor(
       project,
@@ -1283,17 +1342,32 @@ export class JobEngine {
     const opts = this.repo.jobOptions(jobId);
     const heldLock = typeof opts[HELD_LOCK] === 'string' ? opts[HELD_LOCK] : null;
     if (!heldLock) return this.runSteps(jobId, entry, null);
+    // v2 C2c: a second job-level lock (a document of the same page), always taken after the page's, so two jobs holding
+    // both can never wait on each other (every job takes them in this one order; no other job holds a lock while it
+    // waits for another).
+    const more = Array.isArray(opts[HELD_MORE])
+      ? (opts[HELD_MORE] as unknown[]).filter((x): x is string => typeof x === 'string')
+      : [];
+    const keys = [heldLock, ...more].sort();
     const job = this.requireJob(jobId);
-    let release: () => void;
+    const releases: (() => void)[] = [];
+    const release = () => {
+      for (const r of releases.splice(0).reverse()) r();
+    };
     try {
-      if (!this.locks.isFree(heldLock)) this.setWaitingLock(jobId, 'lock', { lockKey: heldLock, job: true });
-      release = await this.locks.acquire(
-        heldLock,
-        { jobId, stepNo: 0, principalId: job.principalId },
-        entry.current.signal,
-      );
+      for (const key of keys) {
+        if (!this.locks.isFree(key)) this.setWaitingLock(jobId, 'lock', { lockKey: key, job: true });
+        releases.push(
+          await this.locks.acquire(
+            key,
+            { jobId, stepNo: 0, principalId: job.principalId },
+            entry.current.signal,
+          ),
+        );
+      }
       this.setWaitingLock(jobId, null);
     } catch (e) {
+      release();
       this.setWaitingLock(jobId, null);
       if (!entry.current.signal.aborted) throw e;
       // Stopped, cancelled or paused while waiting for the lock: nothing ran.
@@ -1307,13 +1381,17 @@ export class JobEngine {
       return { last: undefined };
     }
     try {
-      return await this.runSteps(jobId, entry, heldLock);
+      return await this.runSteps(jobId, entry, keys.length > 1 ? keys : heldLock);
     } finally {
       release();
     }
   }
 
-  private async runSteps(jobId: string, entry: Active, heldLock: string | null): Promise<RunnerResult> {
+  private async runSteps(
+    jobId: string,
+    entry: Active,
+    heldLock: string | readonly string[] | null,
+  ): Promise<RunnerResult> {
     let job = this.requireJob(jobId);
     this.repo.updateJob(jobId, {
       status: 'running',
@@ -1948,6 +2026,7 @@ export class JobEngine {
     jobKind: JobKind,
     project: string,
     meta: Omit<ProposalMeta, 'kind' | 'origin' | 'project'>,
+    lifecycle?: LifecycleMarker,
   ): Promise<ProposalCaptured | null> {
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     const batch = jobKind === 'batch_ops';
@@ -1991,6 +2070,7 @@ export class JobEngine {
           items: items.map((it) => ({ op: it.opId, params: it.params, options: it.options })),
           ...(meta.extras?.prefetched ? { prefetched: meta.extras.prefetched } : {}),
           gate: propose ? 'propose' : 'allow',
+          ...(lifecycle ? { lifecycle } : {}),
         });
       } catch (e) {
         verdict = {

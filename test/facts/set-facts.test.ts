@@ -112,7 +112,7 @@ describe('set_facts: facts', () => {
   it('adds the first template fact before its nearest following one (a recorded template)', async () => {
     sb().page('kumi0001', [
       SidebarModel.kv('kvkumi01', 'PROPERTIES', [
-        ['Status', 'Working'],
+        ['Status', 'Outline'],
         ['Notes', 'x'],
       ]),
     ]);
@@ -179,7 +179,7 @@ describe('set_facts: facts', () => {
   });
 
   it('writes nothing for an empty plan, and a dry run shows the plan and writes nothing', async () => {
-    const same = await call({ page: P.miyabi, facts: { Status: 'Working' } });
+    const same = await call({ page: P.miyabi, facts: { Status: 'Outline' } });
     expect(same.body).toMatchObject({ status: 'no_change', facts: { unchanged: ['Status'] } });
     const dry = await call({
       page: P.miyabi,
@@ -347,7 +347,7 @@ describe('set_facts: the compare-and-swap inside the lock, chained versions, ver
     expect(r.body.error, r.text).toMatchObject({ code: 'VERSION_CONFLICT' });
     expect(r.body.error.hint).toMatch(/Nothing was written/);
     expect(since().filter((x) => x.method !== 'GET')).toHaveLength(0);
-    expect(kvText(sb().rows(P.miyabi))).toContain('Status=Working');
+    expect(kvText(sb().rows(P.miyabi))).toContain('Status=Outline');
   });
 
   it('a collection that changed before its write (in the lock) is a conflict too, before any write', async () => {
@@ -380,7 +380,7 @@ describe('set_facts: the compare-and-swap inside the lock, chained versions, ver
   });
 
   it('journals every write with the high-level operation, the property’s pre-image on the first', async () => {
-    const r = await call({ page: P.miyabi, facts: { Status: 'Working', Mood: 'Calm' } });
+    const r = await call({ page: P.miyabi, facts: { Status: 'Outline', Mood: 'Calm' } });
     expect(r.body.status, r.text).toBe('written');
     const entries = w.stack.runtime.engine.queries
       .journalLookup(PROJECT, { jobId: r.body.jobId, includePreImage: true })

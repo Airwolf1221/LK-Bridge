@@ -47,6 +47,7 @@ import {
   type Principal,
   type StepOptions,
   type StepSpec,
+  type LifecycleMarker,
 } from '../jobs/types.js';
 import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
 import { getOperation, operationInputSchema, requireOperation } from '../lk/registry.js';
@@ -223,6 +224,10 @@ function toView(r: Row, opCount: number): ProposalView {
 interface StoredJobOptions {
   readonly holdLock?: { readonly resourceId: string };
   readonly internal?: boolean;
+  /** v2 C2c: the second job-level lock, and the lifecycle change the job makes. */
+  readonly holdDocument?: { readonly documentId: string };
+  readonly holdAlso?: { readonly resourceId: string };
+  readonly lifecycle?: LifecycleMarker;
 }
 
 /** The part of a high-level operation a list shows (never the Markdown or the page). */
@@ -516,12 +521,19 @@ export class ProposalService implements ProposalSink {
     const operations = opList ? JSON.stringify(opList.map(capOperation)) : null;
     const pages = buildPageSummary(ops, opList, (rid) => this.pageName(meta.project, rid));
     const jobOptions: StoredJobOptions | null =
-      meta.jobOptions && (meta.jobOptions.holdLock || meta.jobOptions.internal)
+      meta.jobOptions && (meta.jobOptions.holdLock || meta.jobOptions.internal || meta.jobOptions.lifecycle)
         ? {
             ...(meta.jobOptions.holdLock
               ? { holdLock: { resourceId: meta.jobOptions.holdLock.resourceId } }
               : {}),
             ...(meta.jobOptions.internal ? { internal: true } : {}),
+            ...(meta.jobOptions.holdDocument
+              ? { holdDocument: { documentId: meta.jobOptions.holdDocument.documentId } }
+              : {}),
+            ...(meta.jobOptions.holdAlso
+              ? { holdAlso: { resourceId: meta.jobOptions.holdAlso.resourceId } }
+              : {}),
+            ...(meta.jobOptions.lifecycle ? { lifecycle: meta.jobOptions.lifecycle } : {}),
           }
         : null;
     this.store.tx(() => {
@@ -871,6 +883,9 @@ export class ProposalService implements ProposalSink {
         },
         ...(jobOptions?.holdLock ? { holdLock: jobOptions.holdLock } : {}),
         ...(jobOptions?.internal ? { internal: true } : {}),
+        ...(jobOptions?.holdDocument ? { holdDocument: jobOptions.holdDocument } : {}),
+        ...(jobOptions?.holdAlso ? { holdAlso: jobOptions.holdAlso } : {}),
+        ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
       });
     } catch (e) {
       token.consume();

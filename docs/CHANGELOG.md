@@ -1,5 +1,63 @@
 # Changelog
 
+## Unreleased: v2 C2c, the page lifecycle (10 November 2026)
+
+The page lifecycle as the owner decided it on 10 November 2026: Authoritative (`[BSRC]`), Working (`[BWRK]`) and
+Archived (`[BARC]`) pages, four tools to move a page between them, a guard that refuses every other route, and the
+related pages of a page leaving canon ([ADR 0035](adr/0035-page-lifecycle.md); the tools in
+[tools.md](tools.md#the-page-lifecycle-v2-c2c); the guard and rules in [policy.md](policy.md); the agent guide's "The
+page lifecycle" in [bridge-guide.md](bridge-guide.md); the link sweep in [maintenance.md](maintenance.md)). Migration 1600. Deploy normally; `--update-self` is not needed. Then, **before anything else, confirm each project's two indexes**
+on the dashboard (Projects page, Lifecycle: **Confirm these indexes**): until then the lifecycle tools and Working
+creates refuse. ChatGPT: refresh the bridge's tools (Plugins, the bridge, Refresh); claude.ai: disconnect and
+reconnect the connector to see the new tools.
+
+- **Behaviour change: new pages are Working by default.** `create_resource`, `create_bare_resource`,
+  `create_many_resources` (per item) and `create_character` take `status: "working" | "authoritative"`, default
+  `working`. A page created without a status is now `[BWRK] {name}` directly under `[INDEX] Working` (alphabetical),
+  with Status `Working` and the `Working` tag, where C2b made a `[BSRC]` page under the given parent. `authoritative`
+  makes the `[BSRC]` page in its normal place with Status `Authoritative` and the `CANON` tag, always as a canonical
+  proposal. Working characters: a Core under its own `[INDEX] {name}` under Working, a compact page directly under
+  Working; the race is still validated. `create_index` takes no status, gives an index no Status any more (C2b gave it
+  `Working`), and is refused under the lifecycle indexes. The canon section's `agentDefaultStatus` ("Status of pages
+  agents create") is superseded by the lifecycle settings and gone from the dashboard (the API still accepts it).
+- **Four tools** (`access: write`, always the owner's canonical approval at every scope): `archive_page` (to
+  `[INDEX] Archived` as `[BARC]`, with a dated note at the top of the page, Status `Archived`, Continuity Type
+  `NON-CURRENT`, the Scope and Temporal Scope texts, Last Major Revision, `Archived` tag), `unarchive_page` (back from
+  the lifecycle record: place, prefix, facts, tag; the note removed only if unchanged), `move_to_working` (an
+  Authoritative page back to Working; its place remembered) and `promote_page` (a Working page to Authoritative under a
+  destination, the remembered place suggested; a Working character's index goes with its Core). The proposal shows the
+  whole plan; `dryRun` shows it without proposing; every check runs again at execution; a change that stopped part-way
+  is resumed by calling the same tool again (only what is left, never replayed).
+- **New kinds everywhere:** `bwrk` and `barc` in the tree, `browse_repository_tree`, `search` (`kind:bwrk`,
+  `kind:barc`), `get_resource` and the dashboard's tree; names handled like `[BSRC]`; a name matching several pages of
+  one subject prefers `[BSRC]` (or an index), then `[BWRK]`, then `[BARC]`. A tree built before re-derives its kinds
+  from the stored names once, without a walk.
+- **The lifecycle guard** (in the engine, every write path): Status changes to or from Working or Archived (and Working
+  to Authoritative), renames that add, remove or change `[BWRK]` / `[BARC]`, and moves into, out of or between the
+  lifecycle indexes are refused (`POLICY_DENIED`), naming the tool to use, through `set_facts`, the resource tools,
+  `lk_api_write`, `lk_api_batch`, `lk_op_*` and approved proposals alike. Only the four tools' own steps pass, through a
+  marker an agent's request can never carry.
+- **Two recommended canon rules, switchable:** deleting an Archived `[BARC]` page, and deleting a map, timeline or board
+  of an Authoritative page, need canonical approval (`delete-archived`, `delete-document-authoritative`; on by default,
+  added by migration 1600 to projects that store their own rules). Every canon rule now has `enabled` and a **Switch
+  off / Switch on** button on the dashboard.
+- **Lifecycle settings per project** (dashboard, Projects page, Lifecycle; audited as `project.set_lifecycle`): the two
+  indexes found by name and confirmed by the owner, the Status values, tags, fact names, Continuity Types and archive
+  texts.
+- **The lifecycle record** (`lifecycle_records`, never pruned): every lifecycle change with its page, action, date,
+  principal, approver, jobs, state (complete or incomplete) and everything needed to reverse it (the previous state,
+  parent, rank, name, prefix, the five facts, the tags, the note's block id and exact content). The dashboard's new
+  **Archive and lifecycle** page lists it, each change linked to the journal.
+- **Related pages** of a page being archived or moved to Working: the pages that link to it or mention it, from a new
+  **link index** kept up to date from the bridge's own writes and refreshed by a new maintenance job, `link-sweep`
+  (daily at 01:15, P3, gives way to agents, resumable; about one read per page plus one per page document), with "link
+  index as of …"; plus one LegendKeeper content search, its hits marked "found by text search (may be incomplete)".
+  Related pages are reported, never edited.
+- **Dashboard:** a **Lifecycle change** panel on lifecycle proposals (the move and name, facts before and after, tags,
+  the note as a Markdown diff, flags, related pages); the Archive and lifecycle page; the Lifecycle section of the
+  Projects page; the Journal page takes `?jobId=`.
+- 47 bridge tools (136 with `MCP_EXPOSE_PER_OP_TOOLS=true`), 14 maintenance jobs.
+
 ## Unreleased: v2 C2b, resources, documents and characters (10 November 2026)
 
 The resource, document and character tools, request coordination, a base version for facts, and mention targets for

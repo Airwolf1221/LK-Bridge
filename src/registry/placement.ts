@@ -5,7 +5,7 @@
  * Refuses rather than guesses: an undeclared race goes to the one unknown-race index; a declared race that does not
  * resolve, or resolves twice, is a typed error.
  */
-import type { TreeNode } from '../tree/index.js';
+import { isPageKind, type TreeNode } from '../tree/index.js';
 import { RACE_SEARCH_DEPTH } from './classify.js';
 import { cleanPrefixes, fillName, key, subjectOf } from './names.js';
 import { slotAmong } from './ordering.js';
@@ -27,6 +27,18 @@ export interface CharacterPlacementInput {
   readonly kind: 'core' | 'compact';
   /** The type to place under, when the project has more than one `character` type. */
   readonly type?: string | undefined;
+  /**
+   * v2 C2c (ADR 0035): a Working character. The whole set goes under this index (the project's `[INDEX] Working`): a
+   * Core gets `[INDEX] {name}` there with `[BWRK] {name} - Character Core` beneath it; a compact page goes directly
+   * under it. The race is still resolved (a declared race that does not resolve fails) and Race / Species written as
+   * given; the page goes under the race index only when it is promoted. Existing pages are looked for under both.
+   */
+  readonly working?: { readonly indexId: string } | undefined;
+  /**
+   * v2 C2c: the project's `[INDEX] Working`, searched for an existing page of the character whatever the status (so an
+   * Authoritative request returns a Working page that exists, and the reverse).
+   */
+  readonly lookUnder?: string | undefined;
 }
 
 export type PagePlan =
@@ -69,6 +81,10 @@ export interface CharacterPlacementPlan {
   readonly species: { readonly row: string; readonly value: string };
   /** Core only: the character's own index. Null for a compact page. */
   readonly characterIndex: IndexPlan | null;
+  /** v2 C2c: where the set goes: the race index, or `[INDEX] Working` for a Working character. */
+  readonly home: NodeRef;
+  /** v2 C2c: the page's prefix: `[BSRC] ` normally, `[BWRK] ` for a Working character. */
+  readonly working: boolean;
   readonly page: PagePlan;
   readonly existing: { readonly core: NodeRef | null; readonly compact: NodeRef | null };
   readonly warnings: readonly string[];
@@ -171,23 +187,50 @@ export function planCharacterPlacement(
     }
   }
 
-  // What already exists for this character under the race (and under its index, when it has one).
-  const nameKey = key(characterName);
-  const raceKids = tree.children(raceNode.id);
-  const indexHits = raceKids.filter((c) => c.kind === 'index' && key(c.displayName) === nameKey);
-  if (indexHits.length > 1) {
-    throw new RegistryError(
-      'CHARACTER_INDEX_AMBIGUOUS',
-      `There are ${indexHits.length} indexes named “${characterName}” under ${raceNode.displayName}.`,
-      { candidates: indexHits.map((h) => tree.ref(h)) },
-    );
+  // v2 C2c: a Working character's set goes under [INDEX] Working instead of the race index.
+  let workingNode: TreeNode | null = null;
+  if (input.working) {
+    workingNode = tree.node(input.working.indexId);
+    if (!workingNode || workingNode.kind !== 'index') {
+      throw new RegistryError(
+        'WORKING_INDEX_MISSING',
+        `The project's Working index (${input.working.indexId}) is not an index in the repository tree; the owner confirms it again on the Projects page (Lifecycle).`,
+      );
+    }
   }
-  const charIndex = indexHits[0] ?? null;
-  const pool = [...raceKids, ...(charIndex ? tree.children(charIndex.id) : [])];
+  const home = workingNode ?? raceNode;
+  const prefix = workingNode ? '[BWRK] ' : '[BSRC] ';
+
+  // What already exists for this character under the race (and under its index, when it has one); v2 C2c: and under
+  // [INDEX] Working (and the character's index there), whichever status is asked for.
+  const nameKey = key(characterName);
+  const indexNamed = (parent: TreeNode) => {
+    const hits = tree.children(parent.id).filter((c) => c.kind === 'index' && key(c.displayName) === nameKey);
+    if (hits.length > 1) {
+      throw new RegistryError(
+        'CHARACTER_INDEX_AMBIGUOUS',
+        `There are ${hits.length} indexes named “${characterName}” under ${parent.displayName}.`,
+        { candidates: hits.map((h) => tree.ref(h)) },
+      );
+    }
+    return hits[0] ?? null;
+  };
+  const raceKids = tree.children(raceNode.id);
+  const raceCharIndex = indexNamed(raceNode);
+  const lookNode = workingNode ?? (input.lookUnder ? tree.node(input.lookUnder) : null);
+  const workingCharIndex = lookNode && lookNode.kind === 'index' ? indexNamed(lookNode) : null;
+  const charIndex = workingNode ? workingCharIndex : raceCharIndex;
+  const homeKids = tree.children(home.id);
+  const pool = [
+    ...raceKids,
+    ...(raceCharIndex ? tree.children(raceCharIndex.id) : []),
+    ...(lookNode && lookNode.kind === 'index' ? tree.children(lookNode.id) : []),
+    ...(workingCharIndex ? tree.children(workingCharIndex.id) : []),
+  ];
   const pagesOf = (referenceType: string) => {
     const hits = pool.filter(
       (c) =>
-        c.kind === 'bsrc' &&
+        isPageKind(c.kind) &&
         c.referenceType !== null &&
         key(c.referenceType) === key(referenceType) &&
         key(subjectOf(c.displayName, tree.rowValue(c.id, p.subjectRow))) === nameKey,
@@ -195,7 +238,7 @@ export function planCharacterPlacement(
     if (hits.length > 1) {
       throw new RegistryError(
         'EXISTING_PAGE_AMBIGUOUS',
-        `There are ${hits.length} ${referenceType} pages for “${characterName}” under ${raceNode.displayName}.`,
+        `There are ${hits.length} ${referenceType} pages for “${characterName}” under ${raceNode.displayName}${lookNode ? ` and ${lookNode.displayName}` : ''}.`,
         { candidates: hits.map((h) => tree.ref(h)) },
       );
     }
@@ -211,8 +254,8 @@ export function planCharacterPlacement(
       (m) =>
         m.node.path.ids.includes(root.id) &&
         m.node.parentId !== raceNode.id &&
-        m.node.parentId !== charIndex?.id &&
-        m.node.id !== charIndex?.id,
+        m.node.parentId !== raceCharIndex?.id &&
+        m.node.id !== raceCharIndex?.id,
     );
   if (elsewhere.length > 0) {
     warnings.push(
@@ -235,21 +278,37 @@ export function planCharacterPlacement(
 
   let characterIndex: IndexPlan | null = null;
   let page: PagePlan;
+  const pageKind = workingNode ? 'bwrk' : 'bsrc';
   if (input.kind === 'core') {
     if (existing.core) {
       page = { action: 'return_existing', node: existing.core };
-      characterIndex = charIndex ? { action: 'reuse', node: tree.ref(charIndex) } : null;
+      const parentId = tree.node(existing.core.id)?.parentId ?? null;
+      const holder = parentId ? tree.node(parentId) : null;
+      characterIndex =
+        holder && holder.kind === 'index' && key(holder.displayName) === nameKey
+          ? { action: 'reuse', node: tree.ref(holder) }
+          : charIndex
+            ? { action: 'reuse', node: tree.ref(charIndex) }
+            : null;
+    } else if (workingNode && raceCharIndex) {
+      // v2 C2c: the character already has an index under its race; a Working set under [INDEX] Working would clash
+      // with it at promotion. Refused rather than guessed (flagged for the owner).
+      throw new RegistryError(
+        'CHARACTER_INDEX_ELSEWHERE',
+        `“${characterName}” already has an index under ${raceNode.displayName} (${raceCharIndex.path.names.join(' / ')}), so a Working Core under ${workingNode.displayName} would clash with it when promoted. Create the Core as authoritative there, or ask the owner.`,
+        { existing: tree.ref(raceCharIndex) },
+      );
     } else if (charIndex) {
       characterIndex = { action: 'reuse', node: tree.ref(charIndex) };
       page = {
         action: 'create',
         parentId: charIndex.id,
-        rawName: `[BSRC] ${pageName}`,
+        rawName: `${prefix}${pageName}`,
         displayName: pageName,
         templateRole: 'core',
         templateId: template('core'),
         referenceType,
-        slot: slotAmong(tree.children(charIndex.id), pageName, 'bsrc'),
+        slot: slotAmong(tree.children(charIndex.id), pageName, pageKind),
       };
     } else {
       if (!type.indexTemplateId) {
@@ -260,16 +319,16 @@ export function planCharacterPlacement(
       }
       characterIndex = {
         action: 'create',
-        parentId: raceNode.id,
+        parentId: home.id,
         rawName: `[INDEX] ${characterName}`,
         displayName: characterName,
         templateId: type.indexTemplateId,
-        slot: slotAmong(raceKids, characterName, 'index'),
+        slot: slotAmong(homeKids, characterName, 'index'),
       };
       page = {
         action: 'create',
         parentId: null,
-        rawName: `[BSRC] ${pageName}`,
+        rawName: `${prefix}${pageName}`,
         displayName: pageName,
         templateRole: 'core',
         templateId: template('core'),
@@ -286,20 +345,20 @@ export function planCharacterPlacement(
     } else {
       page = {
         action: 'create',
-        parentId: raceNode.id,
-        rawName: `[BSRC] ${pageName}`,
+        parentId: home.id,
+        rawName: `${prefix}${pageName}`,
         displayName: pageName,
         templateRole: 'compact',
         templateId: template('compact'),
         referenceType,
-        slot: slotAmong(raceKids, pageName, 'bsrc'),
+        slot: slotAmong(homeKids, pageName, pageKind),
       };
     }
     if (existing.core)
       warnings.push(`“${characterName}” already has a Character Core: ${existing.core.path}.`);
     if (charIndex) {
       warnings.push(
-        `An index “${characterName}” exists under ${raceNode.displayName}; a compact reference still goes directly under the race.`,
+        `An index “${characterName}” exists under ${home.displayName}; a compact reference still goes directly under ${workingNode ? 'it' : 'the race'}.`,
       );
     }
   }
@@ -315,6 +374,8 @@ export function planCharacterPlacement(
       matchedBy,
     },
     raceIndex: tree.ref(raceNode),
+    home: tree.ref(home),
+    working: workingNode !== null,
     species: { row: p.speciesRow, value: unknown ? p.unknownSpeciesValue : given! },
     characterIndex,
     page,

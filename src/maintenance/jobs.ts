@@ -18,6 +18,11 @@ export interface TreeMaintenance {
   check(projectId: string, trigger: string): Promise<MaintenanceResult>;
 }
 
+/** v2 C2c: what the link sweep needs from the lifecycle module (src/lifecycle). */
+export interface LinkMaintenance {
+  sweep(projectId: string): Promise<MaintenanceResult>;
+}
+
 export interface BuiltinJobDeps {
   readonly engine: JobEngine;
   /** Every project with a governor (the budget sampler samples each, v2 A1). */
@@ -36,6 +41,8 @@ export interface BuiltinJobDeps {
   readonly tree?: TreeMaintenance;
   /** v2 A4: the asset tree (its refresh and check). Without it the two asset jobs skip, saying why. */
   readonly assets?: AssetMaintenance;
+  /** v2 C2c: the link index (its sweep). Without it the link sweep skips, saying why. */
+  readonly links?: LinkMaintenance;
 }
 
 const NOT_IMPLEMENTED = 'Not implemented yet';
@@ -248,6 +255,29 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
     placeholder('tag-audit', 'Tag audit', 'Will report unused, duplicate and near-duplicate tags.', false),
     // v2 A4: the asset tree's refresh and check (kept after the placeholders so earlier positions do not move).
     ...assetJobs(d.assets),
+    // v2 C2c (ADR 0035): the link index's sweep, for the related-pages report of archive_page and move_to_working.
+    {
+      id: 'link-sweep',
+      name: 'Link index sweep',
+      description:
+        'Reads every page of each project’s AI REPOSITORY (its sidebar, for link collections, and each page document, for ' +
+        'mentions) and refreshes the link index that archive_page and move_to_working use to list related pages. About ' +
+        'two requests per page (one per page document more), at the lowest priority: it waits while agents’ work is ' +
+        'queued, and a run that stops is continued by the next, never restarted. The bridge’s own writes keep the index ' +
+        'up to date between sweeps. Skips projects whose tree is not built.',
+      defaultSchedule: { kind: 'daily', time: '01:15' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: true,
+      record: 'always',
+      scope: 'project',
+      background: true,
+      run: (ctx) =>
+        d.links && ctx.project
+          ? d.links.sweep(ctx.project.id)
+          : { skipped: true, summary: 'Skipped: the link index is not running.' },
+    },
   ];
 }
 

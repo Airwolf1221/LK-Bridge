@@ -71,6 +71,11 @@ describe('the MCP surface with the official client', () => {
         'restore_resource',
         'update_document',
         'update_resource',
+        // v2 C2c
+        'archive_page',
+        'move_to_working',
+        'promote_page',
+        'unarchive_page',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));

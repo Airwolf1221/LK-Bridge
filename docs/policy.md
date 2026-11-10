@@ -171,18 +171,26 @@ be rejected". `bulkReject` follows the same rule.
 canonical approval, by any route. It is configuration, per project (Projects page, _Canon_; audited as
 `project.set_canonical_rules`), a list of rules seeded with these defaults:
 
-| Rule                                        | Protected                                                                                                                        |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `Status` = `Authoritative`                  | Both directions: setting a page's Status TO Authoritative, or changing it FROM Authoritative to anything else (removing it too). |
-| `Continuity Type`                           | CHANGING an existing non-empty value (for example CANON ↔ AU). Setting it where it is empty (as on a new page) is allowed.       |
-| `Continuity`                                | CHANGING an existing non-empty value (for example one AU to another). Setting it where it is empty is allowed.                   |
-| Delete: `Status` = `Authoritative` (v2 C2b) | DELETING a page whose Status is Authoritative; with a cascade, any page of the subtree that is. Restoring needs no approval.     |
+| Rule                                                               | Protected                                                                                                                        |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `Status` = `Authoritative`                                         | Both directions: setting a page's Status TO Authoritative, or changing it FROM Authoritative to anything else (removing it too). |
+| `Continuity Type`                                                  | CHANGING an existing non-empty value (for example CANON ↔ AU). Setting it where it is empty (as on a new page) is allowed.       |
+| `Continuity`                                                       | CHANGING an existing non-empty value (for example one AU to another). Setting it where it is empty is allowed.                   |
+| Delete: `Status` = `Authoritative` (v2 C2b)                        | DELETING a page whose Status is Authoritative; with a cascade, any page of the subtree that is. Restoring needs no approval.     |
+| Delete: kind `[BARC]` (v2 C2c, switchable)                         | DELETING an Archived `[BARC]` page, or a subtree holding one: the archive is provenance (`delete-archived`).                     |
+| Delete a document: `Status` = `Authoritative` (v2 C2c, switchable) | DELETING a map, timeline or board of a page whose Status is Authoritative (`delete-document-authoritative`).                     |
 
 Facts are every key-value row of the page's sidebar; keys match without case and with spaces trimmed, `value` rules
 match values without case, a `change` rule compares a value's text and the pages it mentions (marks do not count). A
-second value added next to an existing one is a change. The Status of pages agents create is `Working`
-(`agentDefaultStatus`, kept for C2b's creation tools); templates carry no fact defaults (the owner confirmed), so
-nothing is inherited.
+second value added next to an existing one is a change. Since v2 C2c the Status of pages agents create follows the
+page lifecycle (`status: "working"` by default; [below](#the-page-lifecycle-guard-v2-c2c)); the old
+`agentDefaultStatus` setting is still accepted by the API but no longer used. Templates carry no fact defaults (the
+owner confirmed), so nothing is inherited.
+
+**Switching a rule off** (v2 C2c). Every rule takes `enabled` (default `true`); `false` keeps it in the list, shown on
+the dashboard as off, and applies it nowhere. The dashboard's Canon section has a Switch on / Switch off button per
+rule, saved like any other edit (confirmed, audited as `project.set_canonical_rules`). The two v2 C2c rules are the
+owner's recommendations; migration 1600 added both, on, to every project that stores its own rule list.
 
 **What happens.** A write that would make a protected change becomes a **proposal flagged
 `requiresCanonicalApproval`, whatever the caller's scope** (`write` or `propose`), and the agent's result says
@@ -229,8 +237,8 @@ Operations that cannot write sidebar facts are not checked: `createResource` and
 carry no properties), `updateResource` (name, tags, aliases, icon, flags), `saveResourceAsTemplate` (it copies a page
 into a template; the page does not change, and a template's facts are judged when a page is made from it), block and
 infobox operations (page content, not the sidebar), `restoreResource` (restoring brings back what was approved, and is
-how a mistaken delete is undone), and document operations (deleting a map, timeline or board of an Authoritative page
-is not guarded: an open question for the owner, ADR 0034).
+how a mistaken delete is undone), and document operations other than a delete (since v2 C2c, deleting a map, timeline
+or board of an Authoritative page is guarded by the `delete-document-authoritative` rule, below).
 
 **Deleting protected canon** (decided by the owner on 10 November 2026; ADR 0034). A rule of kind `delete` (the
 default: `{ "id": "delete-authoritative", "key": "Status", "kind": "delete", "values": ["Authoritative"] }`) makes a
@@ -250,6 +258,15 @@ The rule shows in the dashboard's Canon section with the others and is edited th
 values"); migration 1500 added it once to every project that stores its own rule list. The Status of the pages the
 creation tools make (`agentDefaultStatus`, `Working`) is written in the same job as the create; a create that sets
 `Authoritative` becomes a canonical proposal (the guard judges a new page's facts on its template's copy).
+
+**Deleting an Archived page, and a document of an Authoritative page** (v2 C2c, ADR 0035; recommended, switchable).
+A rule of kind `deleteKind` (`{ "id": "delete-archived", "kind": "deleteKind", "kinds": ["barc"] }`) makes a
+`deleteResource` of a page of that kind (from the repository tree; with `cascade`, any page of the subtree) need
+canonical approval. A rule of kind `deleteDocument` (`{ "id": "delete-document-authoritative", "key": "Status",
+"kind": "deleteDocument", "values": ["Authoritative"], "documentTypes": ["map", "time", "board"] }`) does the same for
+`deleteDocument` of a document of those types on a page whose Status holds one of the values: at entry the page's
+sidebar and the document's type are read (from the tree, else live; a read that fails counts as protected), and inside
+the lock the page's sidebar is read again. Page documents are never deleted this way (`delete_document` refuses them).
 
 **The shared function.** `assessFactChange(rules, before, after)` (src/facts/index.ts) is pure: given a page's facts
 before and after a change, it lists the protected changes. C2b's tools call it to tell an agent in a dry run; the engine
@@ -272,6 +289,46 @@ another principal's proposal is reported exactly as if it did not exist.
 
 No MCP tool can change a scope, approve or reject a proposal, or create or revoke a token
 (`test/policy/no-agent-escalation.test.ts` calls every registered tool with hostile arguments and checks).
+
+## The page lifecycle guard (v2 C2c)
+
+Lifecycle changes (Authoritative, Working, Archived; [tools.md](tools.md#the-page-lifecycle-v2-c2c), ADR 0035) happen
+**only** through `archive_page`, `unarchive_page`, `move_to_working`, `promote_page` and the creation tools' `status`.
+A second engine guard, beside the canon guard and combined with it (src/lifecycle/guard.ts), judges every request and
+every write, on every path (`set_facts`, the creation and resource tools, `lk_api_write`, `lk_api_batch`, every
+`lk_op_*`, an approved proposal), with the project's lifecycle settings:
+
+| Refused                                                                                              | Names                              |
+| ---------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Status to `Archived`                                                                                 | `archive_page`                     |
+| Status from `Archived` to anything                                                                   | `unarchive_page`                   |
+| Status from `Authoritative` (or another value) to `Working`                                          | `move_to_working`                  |
+| Status from `Working` to `Authoritative` (or another value)                                          | `promote_page` (or `archive_page`) |
+| A rename that adds, removes or changes `[BWRK]` or `[BARC]`; a page created with one by hand         | the matching tool                  |
+| A move into, out of or between `[INDEX] Working` and `[INDEX] Archived`; a page created under either | the matching tool                  |
+
+The refusal is `POLICY_DENIED`, at every scope (a request at scope `propose` is refused, not proposed), with a message
+naming the tool to use. `update_resource` answers a prefix change with `PREFIX_CHANGE` before it reaches the guard.
+
+**Where it is enforced:** at entry (the request's sidebar writes simulated on the page's sidebar, as the canon guard
+does; renames and moves judged from the repository tree), at execution of an approved proposal, and inside the lock
+before each rename, move or sidebar write (one read of the page there). A versioned row write chained from the job's own
+earlier write (`ifMatch` set, no read in the lock) is left to LegendKeeper's version check, as for the canon guard.
+
+**The tools' own steps** pass through a **lifecycle marker** on the job (`BatchSubmit.lifecycle`): set only by bridge
+code, never parsed from an agent's request, stored with the job and with the proposal's job options, and naming exactly
+the pages, prefixes, Status values and places the job may change. A marker that does not cover a change is refused like
+a side route. A marker of the four lifecycle tools also makes the request a **canonical proposal at every scope**, which
+only "Approve and accept as canon" runs; approved work that should carry a marker and does not (a tampered proposal) is
+refused at execution and nothing is written. The creation tools' marker covers only the new pages' prefixes, Status and
+place.
+
+**Lifecycle settings** (per project, the dashboard's Projects page, Lifecycle; `GET|PUT /projects/:name/lifecycle`,
+audited as `project.set_lifecycle`): the two indexes as the owner confirmed them, the index names they are found by,
+the three Status values, the three status tags, the field names (Status, Continuity Type, Scope, Temporal Scope, Last
+Major Revision), the Continuity Type values (CANON, AU, NON-CURRENT) and the archive texts. Until the indexes are
+confirmed the guard still refuses Status and prefix changes (with the values above), but cannot tell a move into or out
+of a lifecycle index, and the four tools and Working creates refuse to run: confirm the indexes first.
 
 ## Owner commands
 

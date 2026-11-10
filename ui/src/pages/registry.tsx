@@ -1116,6 +1116,8 @@ function TryItCard({ types }: { types: TypeView[] }) {
             <select id="try-pkind" value={pageKind} onChange={(e) => setPageKind(e.target.value)}>
               <option value="index">[INDEX]</option>
               <option value="bsrc">[BSRC]</option>
+              <option value="bwrk">[BWRK]</option>
+              <option value="barc">[BARC]</option>
               <option value="unclassified">Unclassified</option>
             </select>
           </div>

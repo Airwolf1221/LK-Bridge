@@ -7,7 +7,7 @@
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
-import { childNames, resourcesWorld, type ResourcesWorld } from './world.js';
+import { asCanon, childNames, resourcesWorld, type ResourcesWorld } from './world.js';
 
 let w: ResourcesWorld;
 let client: Client;
@@ -30,10 +30,12 @@ describe('create_many_resources at 100', () => {
         key: `p${i}`,
         name: `[BSRC] Batch Page ${99 - i}`,
         parent_key: 'root',
+        // v2 C2c: Working pages are flat under [INDEX] Working, so nested pages are Authoritative (canon).
+        status: 'authoritative',
       })),
     ];
     const before = writes().length;
-    const r = await call('create_many_resources', { items });
+    const r = await asCanon(w, await call('create_many_resources', { items }));
     expect(r.body, r.text.slice(0, 2000)).toMatchObject({ status: 'written', verified: true });
     const ws = writes().slice(before);
     expect(ws.filter((l) => l === 'POST /resources/batch')).toHaveLength(1);
