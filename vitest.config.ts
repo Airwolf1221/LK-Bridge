@@ -19,6 +19,7 @@ export default defineConfig({
       'test/registry/**/*.test.ts', // v2 A3: the type registry, taxonomy, resolution and ordering
       'test/assets/**/*.test.ts', // v2 A4: the asset tree
       'test/discover/**/*.test.ts', // v2 B2: the Discover and Read tools
+      'test/pages/**/*.test.ts', // v2 C1: write_page
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

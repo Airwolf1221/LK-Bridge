@@ -423,6 +423,10 @@ describe('migration 0600 on a v1.0.2 database', () => {
       // Every other value unchanged (governor_counters' old key 'lk' became the project id).
       if (t === 'governor_counters') {
         expect(without(now, 'project_id'), t).toEqual(without(rows, 'key'));
+      } else if (t === 'write_journal' || t === 'proposals') {
+        // v2 C1 (migration 1200) adds `operation`, NULL on every row written before it.
+        for (const r of now) expect(r.operation, t).toBeNull();
+        expect(without(without(now, 'project_id'), 'operation'), t).toEqual(rows);
       } else {
         expect(without(now, 'project_id'), t).toEqual(rows);
       }

@@ -12,7 +12,9 @@ import { checkRoundTrip, firstDifference, minimalRepro } from '../../src/markdow
 import type { LkBlock } from '../../src/markdown/types.js';
 import {
   formatRoundTripReport,
+  offendingCharacters,
   runRoundTrip,
+  visibleEscape,
   writeRoundTripReport,
 } from '../../scripts/markdown-roundtrip-core.js';
 import { MockLk, type MockRequest, type MockResponse } from '../contract/mock-lk.js';
@@ -251,6 +253,117 @@ describe('the round-trip script (dry run against the mock)', () => {
     expect(out.interrupted).toBe(true);
     expect(out.pages).toEqual([]);
     expect(existsSync(join(dir, 'roundtrip-test-int'))).toBe(false);
+  });
+});
+
+describe('--list-keep (v2 C1): the read-only paragraphs, with the characters that made them so', () => {
+  const CTRL: Res = {
+    id: 'ctrl0001',
+    name: '[BSRC] Pasted notes',
+    parentId: 'fsbn0b7w',
+    docs: [
+      {
+        id: 'd0000007',
+        name: 'Main',
+        type: 'page',
+        blocks: [
+          { id: 'hctrl001', kind: 'heading', level: 1, content: [{ text: 'Pasted notes' }] },
+          {
+            id: 'pctrl001',
+            kind: 'paragraph',
+            content: [{ text: 'First line of a pasted note\nsecond line' }],
+          },
+          {
+            id: 'pctrl002',
+            kind: 'paragraph',
+            content: [{ text: 'A bell ' }, { text: 'ding\u0007dong', bold: true }],
+          },
+          { id: 'pctrl003', kind: 'paragraph', content: [{ text: 'Windows\r\nline end, and a NUL\u0000.' }] },
+          { id: 'pctrl004', kind: 'paragraph', content: [{ text: 'An ordinary paragraph.' }] },
+          { id: 'hctrl002', kind: 'heading', level: 2, content: [{ text: 'Two\nlines' }] },
+        ],
+      },
+    ],
+  };
+  beforeAll(() => {
+    WORLD.push(CTRL);
+  });
+  afterAll(() => {
+    WORLD.splice(WORLD.indexOf(CTRL), 1);
+  });
+
+  it('lists every keep region of the kind asked for, with page, document, block id and visible escapes; reads only', async () => {
+    const out = await runRoundTrip(target(), PROJECT, {
+      outDir: dir,
+      stamp: 'test-keep',
+      root: 'ctrl0001',
+      listKeep: 'paragraph',
+    });
+    expect(mock.calls.every((c) => c.method === 'GET')).toBe(true);
+    expect(out.keepListing).toEqual([
+      expect.objectContaining({
+        resourceId: 'ctrl0001',
+        resourceName: '[BSRC] Pasted notes',
+        documentId: 'd0000007',
+        documentName: 'Main',
+        blockId: 'pctrl001',
+        kind: 'paragraph',
+        characters: ['\\n'],
+        context: 'First line of a pasted note\\nsecond line',
+      }),
+      expect.objectContaining({ blockId: 'pctrl002', characters: ['\\u0007'], context: 'ding\\u0007dong' }),
+      expect.objectContaining({ blockId: 'pctrl003', characters: ['\\r', '\\n', '\\0'] }),
+    ]);
+    const report = formatRoundTripReport(out, {
+      generatedAt: '2026-11-10T00:00:00Z',
+      projectId: 'test (proj_mock)',
+      listKeep: 'paragraph',
+      requests: { total: 1, reads: 1, writes: 0 },
+      budgetFooter: 'budget',
+    });
+    expect(report).toContain('## Keep regions of kind `paragraph` (--list-keep)');
+    expect(report).toContain('3 block(s).');
+    expect(report).toContain(
+      '| [BSRC] Pasted notes (`ctrl0001`) | Main (`d0000007`) | `pctrl001` | paragraph | `\\n` |',
+    );
+    expect(report).toContain('`\\u0007`');
+    // `all` lists the heading too; without the flag nothing is listed and the section is absent.
+    const all = await runRoundTrip(target(), PROJECT, {
+      outDir: dir,
+      stamp: 'test-keep2',
+      root: 'ctrl0001',
+      listKeep: 'all',
+    });
+    expect(all.keepListing.map((k) => k.blockId)).toEqual(['pctrl001', 'pctrl002', 'pctrl003', 'hctrl002']);
+    const none = await runRoundTrip(target(), PROJECT, {
+      outDir: dir,
+      stamp: 'test-keep3',
+      root: 'ctrl0001',
+    });
+    expect(none.keepListing).toEqual([]);
+    expect(
+      formatRoundTripReport(none, {
+        generatedAt: 'x',
+        projectId: 'p',
+        requests: { total: 0, reads: 0, writes: 0 },
+        budgetFooter: 'b',
+      }),
+    ).not.toContain('--list-keep');
+  });
+
+  it('writes characters as visible escapes', () => {
+    expect(visibleEscape('\n')).toBe('\\n');
+    expect(visibleEscape('\u0007')).toBe('\\u0007');
+    expect(visibleEscape('\ufeff')).toBe('\\ufeff');
+    expect(offendingCharacters({ kind: 'paragraph', content: [{ text: 'plain' }] })).toEqual({
+      characters: [],
+    });
+    expect(
+      offendingCharacters({
+        kind: 'paragraph',
+        content: [{ mention: { resourceId: 'x', text: 'a\tb\u001fc' } }],
+      }),
+    ).toEqual({ characters: ['\\u001f'], context: 'a\tb\\u001fc' });
   });
 });
 

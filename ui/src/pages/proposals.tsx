@@ -18,7 +18,7 @@ import { fmtAgo, fmtTime, prettyJson } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useRoute } from '../router';
-import type { Proposal, ProposalCounts, ProposalDetail, ProposalOp } from '../types';
+import type { MarkdownDiff, Proposal, ProposalCounts, ProposalDetail, ProposalOp } from '../types';
 
 type Tab = 'pending' | 'conflicted' | 'history';
 
@@ -285,6 +285,102 @@ export function ChangeView({ change }: { change: { path: string; before: unknown
   );
 }
 
+/** v2 C1: a page write's Markdown diff, in hunks; keep regions are one labelled placeholder line each. */
+export function MarkdownDiffView({ diff, title }: { diff: MarkdownDiff; title: string }) {
+  return (
+    <div className="change" data-path="markdown">
+      <h4>{title}</h4>
+      <p className="muted small-text">
+        {diff.added} line{diff.added === 1 ? '' : 's'} added, {diff.removed} removed. Lines in square brackets
+        are keep regions: blocks Markdown cannot show, kept exactly as they are unless the agent dropped them.
+        {diff.coarse
+          ? ' The page is too large to align line by line here, so the changed part is shown whole.'
+          : ''}
+      </p>
+      {diff.hunks.length === 0 ? (
+        <p className="muted">No change to the page’s text.</p>
+      ) : (
+        diff.hunks.map((h, i) => (
+          <div key={i} className="diff" role="group" aria-label={`Markdown changes, part ${i + 1}`}>
+            <div className="diff-line muted mono small-text">
+              Lines {h.beforeStart}–{h.beforeStart + Math.max(0, h.beforeLines - 1)} before, {h.afterStart}–
+              {h.afterStart + Math.max(0, h.afterLines - 1)} after
+            </div>
+            {h.lines.map((l, j) => (
+              <div
+                key={j}
+                className={`diff-line ${l.kind === 'add' ? 'diff-add' : l.kind === 'del' ? 'diff-del' : ''}`}
+                data-kind={l.kind}
+              >
+                <span
+                  className="diff-mark"
+                  aria-label={l.kind === 'add' ? 'added' : l.kind === 'del' ? 'removed' : 'unchanged'}
+                >
+                  {l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}
+                </span>
+                <span className="mono">{l.text}</span>
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+/** v2 C1: what a high-level page write asks for, and its Markdown diff. */
+function PageWriteView({ p }: { p: ProposalDetail }) {
+  const o = p.operationDetail;
+  if (!o) return null;
+  return (
+    <section className="card" aria-label="Page write">
+      <div className="row row-between">
+        <h3>
+          <span className="mono">{o.tool ?? 'write'}</span>: {o.mode}
+          {o.section ? <> of “{o.section}”</> : null} on <strong>{o.page?.name ?? o.page?.id}</strong>
+          {o.document?.name ? <span className="muted"> ({o.document.name})</span> : null}
+        </h3>
+        {o.plannedOn && <span className="muted small-text mono">planned on {o.plannedOn}</span>}
+      </div>
+      {o.counts && (
+        <p className="small-text">
+          Blocks: {o.counts.kept ?? 0} kept, {o.counts.changed ?? 0} changed, {o.counts.added ?? 0} added,{' '}
+          {o.counts.removed ?? 0} removed. Keep regions: {o.counts.regionsKept ?? 0} kept
+          {o.counts.regionsDropped ? `, ${o.counts.regionsDropped} dropped` : ''}.
+        </p>
+      )}
+      {o.dropRegions && o.dropRegions.length > 0 && (
+        <p className="note note-warn">
+          The agent deliberately removes these keep regions:{' '}
+          <span className="mono">{o.dropRegions.join(', ')}</span>.
+        </p>
+      )}
+      <p className="muted small-text">
+        Approving runs exactly this change. If the page has changed since it was planned, the proposal becomes
+        conflicted instead and nothing is written.
+      </p>
+      {p.markdownDiff && (
+        <MarkdownDiffView diff={p.markdownDiff} title="Markdown diff (the page before and after)" />
+      )}
+      {p.execution && (
+        <p className={`note ${p.execution.verified === false ? 'note-bad' : ''}`} role="status">
+          {p.execution.verified === true
+            ? 'Written and verified: the page read back after the write is exactly what was planned.'
+            : p.execution.verified === false
+              ? 'Written but not as planned: the page read back after the write differs (see the job). The journal holds the page as it was before.'
+              : 'Written; the page could not be read back to verify it.'}
+        </p>
+      )}
+      {o.markdown !== undefined && (
+        <details>
+          <summary className="small-text">The agent’s Markdown</summary>
+          <pre>{o.markdown}</pre>
+        </details>
+      )}
+    </section>
+  );
+}
+
 function OpView({ op, conflict }: { op: ProposalOp; conflict: ProposalDetail['conflict'] }) {
   const isConflict = conflict?.index === op.index;
   return (
@@ -386,6 +482,7 @@ function ProposalReview({
               It failed: {typeof p.error.message === 'string' ? p.error.message : JSON.stringify(p.error)}
             </p>
           )}
+          <PageWriteView p={p} />
           {p.ops.map((op) => (
             <OpView key={op.index} op={op} conflict={p.conflict} />
           ))}

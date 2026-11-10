@@ -96,6 +96,71 @@ describe('Proposals', () => {
     expect(screen.getByRole('region', { name: 'Proposal review' })).toHaveTextContent('Proposed by Scribe');
   });
 
+  it('v2 C1: a write_page proposal shows the Markdown diff, keep regions as placeholders, beside the block diff', async () => {
+    const pageWrite = {
+      ...proposal({
+        title: 'write_page',
+        summary: 'write_page replace_section “Biography” on “Asagiri Miyabi” (Main)',
+      }),
+      ops: [op()],
+      operationDetail: {
+        tool: 'write_page',
+        page: { id: 'miyabi01', name: 'Asagiri Miyabi' },
+        document: { id: 'doc1', name: 'Main' },
+        mode: 'replace_section',
+        section: 'Asagiri Miyabi > Biography',
+        plannedOn: 'v3',
+        counts: { kept: 9, changed: 1, added: 0, removed: 0, regionsKept: 1, regionsDropped: 0 },
+        markdown: 'Born at dawn.',
+      },
+      markdownDiff: {
+        added: 1,
+        removed: 1,
+        hunks: [
+          {
+            beforeStart: 3,
+            beforeLines: 4,
+            afterStart: 3,
+            afterLines: 4,
+            lines: [
+              { kind: 'same', text: '## Biography' },
+              { kind: 'same', text: '' },
+              { kind: 'del', text: 'Born on Kumikas 1st.' },
+              { kind: 'add', text: 'Born at dawn.' },
+              { kind: 'same', text: '[keep region: infobox infobx01]' },
+            ],
+          },
+        ],
+      },
+      execution: null,
+    };
+    installApi({
+      ...baseRoutes(),
+      'GET /proposals': { proposals: [proposal()] },
+      'GET /proposals/prop_1': { proposal: pageWrite },
+    });
+    renderApp('/ui/proposals?id=prop_1');
+    const section = await screen.findByRole('region', { name: 'Page write' });
+    expect(section).toHaveTextContent(
+      'replace_section of “Asagiri Miyabi > Biography” on Asagiri Miyabi (Main)',
+    );
+    expect(section).toHaveTextContent('1 changed');
+    const md = within(section).getByRole('group', { name: 'Markdown changes, part 1' });
+    const lines = [...md.querySelectorAll('.diff-line[data-kind]')].map((l) => [
+      l.getAttribute('data-kind'),
+      l.textContent?.replace(/^[+−\s]+/, '').trim(),
+    ]);
+    expect(lines).toEqual([
+      ['same', '## Biography'],
+      ['same', ''],
+      ['del', 'Born on Kumikas 1st.'],
+      ['add', 'Born at dawn.'],
+      ['same', '[keep region: infobox infobx01]'],
+    ]);
+    // The block-level diff is still there.
+    expect(screen.getByRole('group', { name: 'Changes to blocks' })).toBeInTheDocument();
+  });
+
   it('shows property, resource and other changes as before and after fields', async () => {
     installApi({
       ...baseRoutes(),

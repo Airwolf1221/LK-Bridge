@@ -320,6 +320,11 @@ library, which has no AI REPOSITORY root; `get_resource` shows a sidebar propert
 `getResource` gives one (it does not; `set_facts` reads the version itself); the final visible list stays E3's decision
 ([ADR 0029](adr/0029-discover-and-read-tools.md)).
 
+**C1 notes (what built differs from the table):** `write_page` has no `allowUnsupportedLoss` (unsupported blocks are
+always kept; the low-level tools remain for a deliberate deletion); a page holding content LegendKeeper's write schema
+has no form for is refused as `PAGE_NOT_WRITABLE`; a page-write proposal whose version changes between the approval's
+check and the write becomes `conflicted` ([ADR 0031](adr/0031-write-page.md)).
+
 **Note for ChatGPT:** after the tools change, open ChatGPT's **Plugins** page, open the bridge, and use **Refresh**. ChatGPT keeps its own copy of the tool list.
 
 ---

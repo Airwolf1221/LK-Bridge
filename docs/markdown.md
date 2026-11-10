@@ -54,7 +54,8 @@ She was born on _Kumikas 1st, 4A 881_.<br>Her sister is [[Asagiri Kaede]].
 ```
 
 Each paragraph is one line. A line break you type inside a paragraph becomes a space; write `<br>` for a real line
-break. Leave a blank line between blocks.
+break. Leave a blank line between blocks. (A paragraph whose text itself holds a line break or a control character,
+which pages edited elsewhere sometimes do, is shown as a keep region: `<br>` would read back as a different block.)
 
 ### Lists and tasks
 
@@ -183,7 +184,7 @@ The text between the markers is there for you to read. On a write, the block is 
   region with an `lk-block` holding its new JSON (same `id`).
 - **Removing a region is refused** in a whole-page replace (`KEEP_REGIONS_MISSING`, listing the ids), unless you pass
   `dropRegions` with those ids. Removing an `unsupported` block also needs `allowUnsupportedLoss`: that content cannot
-  be recreated through the API.
+  be recreated through the API. `write_page` never allows that: an `unsupported` block is always kept.
 - **A region cannot appear twice**, nor in an append (the block is already on the page).
 
 ## Sections
@@ -211,6 +212,11 @@ example `Notes [1]`, `Notes [2]`): add `[n]` to the last part to choose.
 | `append_to_section` | Adds your Markdown at the end of a section (before the next heading of its level or higher).                                                                                                        |
 
 Blocks outside the section are never touched.
+
+With `write_page`, pass the `version` you read as `baseVersion`. If the page changed since, a section edit still goes
+ahead when its section is exactly as you read it (the rest of the page may have changed); a whole-page edit is refused.
+Either way nothing is merged silently: a refusal (`VERSION_CONFLICT`) gives the current version and, for a section,
+its current Markdown.
 
 ## What is kept, and what is new
 

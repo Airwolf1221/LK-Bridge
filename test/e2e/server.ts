@@ -17,6 +17,9 @@ import { createBridge } from '../../src/server.js';
 import { randomBytes } from 'node:crypto';
 import { MockLk } from '../contract/mock-lk.js';
 import { LkModel } from '../jobs/lk-model.js';
+import { mintClientId } from '../../src/jobs/index.js';
+import { getSection, toMarkdown } from '../../src/markdown/index.js';
+import { planPageWrite, sha256 } from '../../src/pages/index.js';
 
 const PORT = Number(process.env.E2E_PORT ?? 8799);
 export const OWNER_PASSWORD = 'e2e-password-not-a-secret';
@@ -30,6 +33,18 @@ const model = new LkModel(() => systemClock.now());
 model.seedResource('res1', {
   name: 'Kingdom',
   blocks: [{ kind: 'paragraph', content: [{ text: 'Hello' }] }],
+});
+// v2 C1: a page for a write_page proposal (an infobox and an unsupported block: keep regions in the Markdown diff).
+model.seedResource('res2', {
+  name: 'Asagiri Miyabi',
+  blocks: [
+    { id: 'mh1', kind: 'heading', level: 2, content: [{ text: 'Biography' }] },
+    { id: 'mp1', kind: 'paragraph', content: [{ text: 'Born on Kumikas 1st, 4A 881.' }] },
+    { id: 'mib1', kind: 'infobox', layout: 'wrapRight', width: 40, rows: [] },
+    { id: 'mh2', kind: 'heading', level: 2, content: [{ text: 'Relations' }] },
+    { id: 'mp2', kind: 'paragraph', content: [{ text: 'Sister of Kaede.' }] },
+    { id: 'mun1', kind: 'unsupported' },
+  ],
 });
 const mock = new MockLk({ clock: systemClock, apiKey: API_KEY, respond: model.respond });
 const lkUrl = await mock.start();
@@ -113,6 +128,62 @@ async function propose(text: string): Promise<string> {
   return r.status === 'proposal_captured' ? r.proposalId : 'none';
 }
 
+/**
+ * v2 C1: a write_page proposal, planned as the tool plans one (B1's converter, the high-level operation with the page's
+ * Markdown before and after), so the dashboard's Markdown diff can be seen in a real browser. The tool itself needs the
+ * repository tree, which this harness does not build; test/pages covers the tool end to end.
+ */
+async function proposePageWrite(): Promise<string> {
+  const path = { resourceId: 'res2', documentId: 'd_res2' };
+  const who = {
+    kind: 'mcp' as const,
+    tool: 'write_page',
+    principal: { principalId: proposer?.id ?? 'unknown', profile: profile.label, label: 'e2e proposer' },
+  };
+  const read = await engine.run('getDocumentBlocks', { path }, { project: PROJECT, origin: who });
+  if (read.status !== 'succeeded') return 'none';
+  const current = read.result as { version: string; blocks: never[] };
+  const section = getSection(toMarkdown({ blocks: current.blocks }).markdown, 'Biography').markdown;
+  const markdown = section.replace('Born on Kumikas 1st', 'Born at dawn on Kumikas 1st');
+  const plan = planPageWrite(
+    current,
+    { mode: 'replace_section', section: 'Biography', markdown },
+    { mintBlockId: mintClientId },
+  );
+  const r = await engine.run(
+    'replaceDocumentBlocks',
+    { path, ifMatch: plan.version, body: { blocks: plan.blocks } },
+    {
+      project: PROJECT,
+      origin: who,
+      verifyAfterWrite: true,
+      journalOperation: {
+        tool: 'write_page',
+        mode: 'replace_section',
+        section: 'Biography',
+        markdownSha256: sha256(markdown),
+      },
+      proposal: {
+        operation: {
+          tool: 'write_page',
+          page: { id: 'res2', name: 'Asagiri Miyabi' },
+          document: { id: 'd_res2', name: 'Main' },
+          mode: 'replace_section',
+          section: 'Biography',
+          markdown,
+          plannedOn: plan.version,
+          counts: plan.counts,
+          before: plan.before,
+          after: plan.after,
+        },
+        summary: 'write_page replace_section “Biography” on “Asagiri Miyabi” (Main)',
+        prefetched: [{ op: 'getDocumentBlocks', path, body: read.result }],
+      },
+    },
+  );
+  return r.status === 'proposal_captured' ? r.proposalId : 'none';
+}
+
 // Control server: the test starts work here. Loopback only.
 createServer((req, res) => {
   void (async () => {
@@ -136,6 +207,8 @@ createServer((req, res) => {
       res.end(JSON.stringify(r));
     } else if (url.pathname === '/proposal') {
       res.end(JSON.stringify({ proposalId: await propose(url.searchParams.get('text') ?? 'Proposed text') }));
+    } else if (url.pathname === '/page-proposal') {
+      res.end(JSON.stringify({ proposalId: await proposePageWrite() }));
     } else if (url.pathname === '/ready') {
       res.end('{"ready":true}');
     } else {

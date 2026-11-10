@@ -106,6 +106,11 @@ export interface ProposalView {
   readonly error: Record<string, unknown> | null;
   readonly finishedAt: number | null;
   readonly opCount: number;
+  /**
+   * v2 C1: the high-level operation, briefly (tool, page, document, mode, section, the version it was planned on, the
+   * counts), or null for a v1 proposal. The whole operation is in the detail.
+   */
+  readonly operation: Readonly<Record<string, unknown>> | null;
 }
 
 export interface ProposalConflict {

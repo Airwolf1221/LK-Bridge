@@ -263,6 +263,12 @@ export function JournalPage() {
                   <dd>{detail.data.entry.risk}</dd>
                 </div>
               </dl>
+              {detail.data.entry.operation !== null && detail.data.entry.operation !== undefined && (
+                <>
+                  <h3>Operation</h3>
+                  <Json value={detail.data.entry.operation} />
+                </>
+              )}
               <h3>
                 Pre-image (what was there before){' '}
                 <CopyButton

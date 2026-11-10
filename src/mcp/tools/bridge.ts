@@ -765,6 +765,8 @@ function otherTools(deps: ToolDeps) {
                 documentId: e.documentId,
               },
               version: e.version,
+              // v2 C1: the high-level operation (write_page: mode, section, a hash of the Markdown…).
+              ...(e.operation !== null && e.operation !== undefined ? { operation: e.operation } : {}),
               jobId: e.principalId === who ? e.jobId : null,
               principalId: e.principalId,
               profile: e.profile,

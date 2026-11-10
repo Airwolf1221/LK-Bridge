@@ -85,6 +85,9 @@ Tool handlers get `ctx.principal` (and `ctx.scope`). Every engine-backed tool bu
                 reject    │  │ expiry (timer)          │ a target changed             │ job failed / cancelled
                           ▼  ▼                         ▼                              ▼
                      rejected expired              conflicted                       failed
+                                                       ▲                              │
+                                                       └── v2 C1: a page write whose ─┘
+                                                           in-lock version check refused it
 ```
 
 **Capture** (the `ProposalSink`, when the gate returns `propose`):
@@ -128,6 +131,17 @@ function is not exported from `src/policy/index.ts`.
 **After a crash.** On start, a proposal left `approved` either reached the engine (its job is found by the origin it
 was submitted with, `detail: proposal:<id>`, and the proposal follows it; the engine resumes the job itself) or did
 not (it returns to `pending`; nothing was sent; the owner approves again). A proposal left `executing` follows its job.
+
+**High-level operations (v2 C1, [ADR 0031](adr/0031-write-page.md)).** A proposal made by a high-level tool
+(`write_page`) also stores the operation itself (`proposals.operation`): page, document, mode, section, the agent's
+Markdown, its `baseVersion`, and the page's Markdown before and after. The capture reuses the read the tool planned on
+(and refuses one made on another version). `getProposal` adds `operationDetail`, `markdownDiff` (the page before and
+after, line by line, keep regions as labelled placeholders, in hunks) and, once the job ran, `execution` (whether the
+read after the write matched); lists carry `operation`, briefly. The expansion keeps the step's `verifyAfterWrite` and
+`journalOperation` options, never a re-planner: the owner approves exactly what was shown. If the job of such a proposal
+fails with `VERSION_CONFLICT` before any step succeeded (the compare-and-swap inside the document's lock caught a change
+made after the approval's re-read), the proposal becomes `conflicted` (`executing → conflicted`), not `failed`: nothing
+was written. v1 proposals are unchanged.
 
 **Reject** (owner only) takes an optional reason, which the agent can read.
 

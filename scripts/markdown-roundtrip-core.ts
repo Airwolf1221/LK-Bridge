@@ -49,6 +49,26 @@ export interface RoundTripOptions {
   readonly check?: (blocks: readonly LkBlock[]) => RoundTripResult;
   /** How long to wait while the budget is paused or a read is queued (replaceable in tests). */
   readonly sleep?: (ms: number) => Promise<void>;
+  /**
+   * v2 C1: list every keep region of this kind (`paragraph`, `heading`…, or `all`) with its page, document, block id and
+   * the characters that made it read-only, written as visible escapes (`\n`, `\u0007`).
+   */
+  readonly listKeep?: string;
+}
+
+/** v2 C1: one keep region listed by `--list-keep`. */
+export interface KeepListing {
+  readonly resourceId: string;
+  readonly resourceName: string;
+  readonly documentId: string;
+  readonly documentName: string;
+  readonly blockId: string;
+  readonly kind: string;
+  readonly reason: string;
+  /** The characters Markdown cannot carry in a line, as visible escapes, each once, in order of appearance. */
+  readonly characters: readonly string[];
+  /** A short piece of the text around the first one, with every such character escaped. */
+  readonly context?: string;
 }
 
 export interface PageOutcome {
@@ -65,6 +85,8 @@ export interface PageOutcome {
 
 export interface RoundTripOutcome {
   readonly pages: readonly PageOutcome[];
+  /** v2 C1: the keep regions `listKeep` asked for (empty without it). */
+  readonly keepListing: readonly KeepListing[];
   readonly resources: number;
   readonly otherDocuments: number;
   readonly interrupted: boolean;
@@ -74,6 +96,70 @@ export interface RoundTripOutcome {
 }
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The characters the converter keeps out of a line of Markdown (src/markdown/model.ts: line breaks, control characters,
+ * a byte-order mark, lone surrogates): a text run holding one is shown read-only, as a keep region.
+ */
+const BAD_CHAR =
+  // eslint-disable-next-line no-control-regex -- matching control characters is the point
+  /[\n\r\0\x01-\x08\x0b\x0c\x0e-\x1f\ufeff]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+const NAMED_ESCAPES: Readonly<Record<string, string>> = {
+  '\n': '\\n',
+  '\r': '\\r',
+  '\0': '\\0',
+  '\b': '\\b',
+  '\f': '\\f',
+  '\v': '\\v',
+};
+
+/** A character as a visible escape: `\n`, `\r`, `\0`, or `\uXXXX`. */
+export function visibleEscape(ch: string): string {
+  return NAMED_ESCAPES[ch] ?? `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`;
+}
+
+/** Every string inside a block (its runs' text, mention labels, titles, cells…), in order. */
+function stringsIn(v: unknown, out: string[] = [], depth = 0): string[] {
+  if (depth > 100) return out;
+  if (typeof v === 'string') out.push(v);
+  else if (Array.isArray(v)) for (const x of v) stringsIn(x, out, depth + 1);
+  else if (v && typeof v === 'object')
+    for (const [k, x] of Object.entries(v as Obj))
+      if (k !== 'id' && k !== 'kind') stringsIn(x, out, depth + 1);
+  return out;
+}
+
+/** The offending characters of a block (escaped, each once) and a short context around the first. */
+export function offendingCharacters(block: unknown): { characters: string[]; context?: string } {
+  const characters: string[] = [];
+  let context: string | undefined;
+  for (const text of stringsIn(block)) {
+    for (const m of text.matchAll(BAD_CHAR)) {
+      const e = visibleEscape(m[0]);
+      if (!characters.includes(e)) characters.push(e);
+      if (context === undefined) {
+        const at = m.index ?? 0;
+        const piece = text.slice(Math.max(0, at - 30), at + 31);
+        context = `${at > 30 ? '…' : ''}${piece.replace(BAD_CHAR, visibleEscape)}${at + 31 < text.length ? '…' : ''}`;
+      }
+    }
+  }
+  return { characters, ...(context !== undefined ? { context } : {}) };
+}
+
+function findBlock(blocks: readonly unknown[], id: string): unknown {
+  for (const b of blocks) {
+    if (!b || typeof b !== 'object') continue;
+    if ((b as Obj).id === id) return b;
+    const children: unknown = (b as Obj).children;
+    if (Array.isArray(children)) {
+      const hit = findBlock(children, id);
+      if (hit !== undefined) return hit;
+    }
+  }
+  return undefined;
+}
 const arr = (v: unknown): Obj[] => (Array.isArray(v) ? (v as Obj[]) : []);
 
 class Reader {
@@ -179,6 +265,7 @@ export async function runRoundTrip(
 
   const reproDir = join(o.outDir, `roundtrip-${o.stamp}`);
   const pages: PageOutcome[] = [];
+  const keepListing: KeepListing[] = [];
   let interrupted = false;
   let truncated = false;
   for (const [i, { res, doc }] of queue.entries()) {
@@ -210,6 +297,19 @@ export async function runRoundTrip(
       continue;
     }
     const result = check(blocks);
+    if (o.listKeep !== undefined) {
+      for (const r of result.regions) {
+        if (o.listKeep !== 'all' && r.kind !== o.listKeep) continue;
+        const block = r.id.startsWith('anon-') ? undefined : findBlock(blocks, r.id);
+        keepListing.push({
+          ...base,
+          blockId: r.id,
+          kind: r.kind,
+          reason: r.reason,
+          ...(block !== undefined ? offendingCharacters(block) : { characters: [] }),
+        });
+      }
+    }
     let repro: string | undefined;
     if (!result.ok) {
       mkdirSync(reproDir, { recursive: true, mode: 0o750 });
@@ -244,6 +344,7 @@ export async function runRoundTrip(
   }
   return {
     pages,
+    keepListing,
     resources: resources.length,
     otherDocuments,
     interrupted,
@@ -257,6 +358,8 @@ export interface ReportMeta {
   readonly generatedAt: string;
   readonly projectId: string;
   readonly root?: string;
+  /** v2 C1: the kind `--list-keep` asked for. */
+  readonly listKeep?: string;
   readonly requests: { readonly total: number; readonly reads: number; readonly writes: number };
   readonly budgetFooter: string;
 }
@@ -322,6 +425,26 @@ export function formatRoundTripReport(out: RoundTripOutcome, meta: ReportMeta): 
       `- Reproduction: ${p.repro ? code(p.repro) : '(not written)'}`,
       '',
     );
+  }
+  if (meta.listKeep !== undefined) {
+    lines.push(
+      '',
+      `## Keep regions of kind ${code(meta.listKeep)} (--list-keep)`,
+      '',
+      `${out.keepListing.length} block(s). Characters are shown as escapes (\\n is a line break, \\uXXXX a control character).`,
+      '',
+    );
+    if (out.keepListing.length > 0) {
+      lines.push(
+        '| Page | Document | Block | Kind | Characters | Context | Why |',
+        '| --- | --- | --- | --- | --- | --- | --- |',
+      );
+      const cell = (s: string) => s.replace(/\|/g, '\\|').replace(/`/g, "'");
+      for (const k of out.keepListing)
+        lines.push(
+          `| ${cell(k.resourceName)} (${code(k.resourceId)}) | ${cell(k.documentName)} (${code(k.documentId)}) | ${code(k.blockId)} | ${k.kind} | ${k.characters.length > 0 ? k.characters.map(code).join(' ') : '–'} | ${k.context !== undefined ? code(cell(clip(k.context, 80))) : '–'} | ${cell(k.reason)} |`,
+        );
+    } else lines.push('- none');
   }
   if (unread.length > 0) {
     lines.push('## Pages that could not be read', '');

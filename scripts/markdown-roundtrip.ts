@@ -27,9 +27,11 @@ const USAGE = `usage: npm run roundtrip -- --project NAME [flags]
   --root ID        only pages of this resource and everything under it (default: the whole project)
   --max-pages N    stop after N pages (a quick trial)
   --out-dir DIR    where the report and reproductions go (default /var/lib/lk-bridge/roundtrip)
+  --list-keep KIND also list every keep region of this block kind (paragraph, heading, … or all): page, document,
+                   block id and the characters that made it read-only, as escapes (\n, \u0007). Still read-only.
 `;
 
-const VALUE_FLAGS = new Set(['--project', '--root', '--max-pages', '--out-dir']);
+const VALUE_FLAGS = new Set(['--project', '--root', '--max-pages', '--out-dir', '--list-keep']);
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -70,6 +72,9 @@ async function main(): Promise<void> {
     if (!Number.isInteger(maxPages) || maxPages < 1) fail('--max-pages must be a whole number of 1 or more');
   }
   const root = flags.get('--root');
+  const listKeep = flags.get('--list-keep');
+  if (listKeep !== undefined && !/^[A-Za-z]{1,40}$/.test(listKeep))
+    fail('--list-keep takes a block kind such as paragraph, or all');
   const outDir = flags.get('--out-dir') ?? '/var/lib/lk-bridge/roundtrip';
   try {
     mkdirSync(outDir, { recursive: true, mode: 0o750 });
@@ -107,6 +112,7 @@ async function main(): Promise<void> {
       {
         ...(root !== undefined ? { root } : {}),
         ...(maxPages !== undefined ? { maxPages } : {}),
+        ...(listKeep !== undefined ? { listKeep } : {}),
         outDir,
         stamp,
         signal: abort.signal,
@@ -117,6 +123,7 @@ async function main(): Promise<void> {
       generatedAt: started.toISOString(),
       projectId: `${target.name} (${target.projectId})`,
       ...(root !== undefined ? { root } : {}),
+      ...(listKeep !== undefined ? { listKeep } : {}),
       requests: { total: rt.counters.requests, reads: rt.counters.reads, writes: rt.counters.writes },
       budgetFooter: rt.lk.budgetFooter(target.name),
     });
