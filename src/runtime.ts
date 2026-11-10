@@ -140,11 +140,18 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const secrets = new SecretStore(o.db, config.secrets, () => (o.clock ?? systemClock).now());
   const storeState = secrets.state();
   if (storeState.problem) log.warn({ keyId: storeState.keyId }, storeState.problem);
+  // Env keys imported into the store are audited once the policy layer (which holds the audit log) exists; an import
+  // made later, at a project's first key check, is audited as it happens.
+  const importsToAudit: { project: string; variable: string; hint: string }[] = [];
+  let auditImport = (i: { project: string; variable: string; hint: string }): void => {
+    importsToAudit.push(i);
+  };
   const projects = createProjectRegistry({
     db: o.db,
     config,
     transport,
     secrets,
+    onImport: (i) => auditImport(i),
     log: {
       info: (obj, msg) => log.info(obj, msg),
       warn: (obj, msg) => log.warn(obj, msg),
@@ -185,13 +192,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     autoStart: false,
   });
   engine.start(); // restart-resume: jobs left running by a crash are verified and continued
-  // OPS2: keys imported from the env file at this start, audited by name and last four characters only.
-  for (const i of projects.imports) {
+  // OPS2: keys imported from the env file, audited by name and last four characters only.
+  auditImport = (i) =>
     policy.store.audit('system', 'project.key_import', i.project, undefined, {
       variable: i.variable,
       keyHint: i.hint,
     });
-  }
+  for (const i of importsToAudit.splice(0)) auditImport(i);
   // Follows approved proposals' jobs, reconciles proposals left mid-approval by a crash, runs the expiry sweep.
   const detachPolicy = policy.attach(engine);
 

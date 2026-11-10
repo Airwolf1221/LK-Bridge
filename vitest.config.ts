@@ -15,6 +15,7 @@ export default defineConfig({
       'test/markdown/**/*.test.ts', // v2 B1: the Markdown converter
       'test/projects/**/*.test.ts', // v2 A1: several LegendKeeper projects in one bridge
       'test/tree/**/*.test.ts', // v2 A2: the repository tree
+      'test/secrets/**/*.test.ts', // OPS2: the encrypted secret store, keys and the owner account on the dashboard
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

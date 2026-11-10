@@ -120,6 +120,12 @@ export interface CreateProjectRegistryOptions {
    * the env file's keys are the only ones, as in v2 A1, and projects cannot be added or re-keyed at runtime.
    */
   readonly secrets?: SecretStore;
+  /** OPS2: called whenever an env key is imported into the store (names and last four characters only), to audit it. */
+  readonly onImport?: (i: {
+    readonly project: string;
+    readonly variable: string;
+    readonly hint: string;
+  }) => void;
 }
 
 interface Entry {
@@ -838,7 +844,9 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     })();
     e.source = 'store';
     e.keyHint = hint;
-    this.imports.push({ project: e.config.name, variable, hint });
+    const record = { project: e.config.name, variable, hint };
+    this.imports.push(record);
+    this.o.onImport?.(record);
     this.log.info(
       { project: e.config.name, variable },
       'project key imported from the env file into the encrypted store',
