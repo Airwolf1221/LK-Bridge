@@ -138,6 +138,8 @@ export class TreeService {
   private processing = false;
   /** Set by `stopPasses` during shutdown: no new retries or passes; writes are still followed. */
   private retriesStopped = false;
+  /** v2 A3: told when a pass completes (the registry's taxonomy drift report follows the daily check). */
+  private readonly passListeners = new Set<(pass: PassView) => void>();
 
   constructor(private readonly o: TreeServiceOptions) {
     const now = () => o.clock.now();
@@ -248,6 +250,15 @@ export class TreeService {
     await Promise.allSettled([...[...this.running.values()].map((r) => r.done), ...this.background]);
     this.detach?.();
     this.detach = null;
+  }
+
+  /**
+   * v2 A3: calls `fn` with each pass that completes successfully (build, sweep or check), after the tree is updated
+   * and the pass recorded. A listener that throws is logged and never fails the pass. Returns an unsubscribe function.
+   */
+  onPassFinished(fn: (pass: PassView) => void): () => void {
+    this.passListeners.add(fn);
+    return () => this.passListeners.delete(fn);
   }
 
   /** Resolves when no pass, re-read or background task is running (tests). */
@@ -867,6 +878,14 @@ export class TreeService {
     this.store.prune(projectId);
     if (pass.kind === 'build') this.recordPassJob(this.store.pass(pass.id)!);
     this.scheduleRetries(0);
+    const finished = this.store.pass(pass.id)!;
+    for (const fn of this.passListeners) {
+      try {
+        fn(finished);
+      } catch (e) {
+        this.o.log?.warn({ err: e, passId: pass.id, projectId }, 'a tree pass listener failed');
+      }
+    }
   }
 
   /** A finished build is recorded as a job of its project (the Jobs page); sweeps and checks are maintenance runs. */

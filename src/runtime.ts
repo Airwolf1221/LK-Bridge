@@ -28,6 +28,7 @@ import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 import { createTree, type TreeService } from './tree/index.js';
+import { createRegistry, type Registry } from './registry/index.js';
 import {
   InstanceGuard,
   ProjectSelector,
@@ -62,6 +63,8 @@ export interface Runtime {
   readonly mappings: Mappings;
   /** v2 A2: the repository tree of each project's AI REPOSITORY (build, after-write updates, sweep, check, queries). */
   readonly tree: TreeService;
+  /** v2 A3: the type registry and taxonomy, name resolution, ordering and character placement, per project. */
+  readonly registry: Registry;
   readonly tools: readonly McpToolProvider[];
   readonly instructions: string;
   /** The configuration the components were built from: the environment plus the dashboard's stored settings. */
@@ -190,6 +193,16 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   tree.attach();
   tree.start();
+  // v2 A3: the type registry and taxonomy. Its drift report follows each completed daily check of the tree.
+  const registry = createRegistry({
+    db: o.db,
+    tree,
+    engine,
+    audit: policy.store,
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachRegistry = registry.attach();
 
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
@@ -240,6 +253,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     maintenance,
     mappings,
     tree,
+    registry,
     tools,
     instructions: BRIDGE_INSTRUCTIONS,
     config,
@@ -260,6 +274,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachPolicy();
       await engine.stop();
       await tree.stop();
+      detachRegistry();
       projects.close(); // every governor saves its counts
       guard?.release();
     },

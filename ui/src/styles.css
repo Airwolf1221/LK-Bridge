@@ -889,3 +889,19 @@ progress {
 .setting-edit input {
   min-width: 14rem;
 }
+
+/* ----- v2 A3: the taxonomy tree on the Repository Mappings page ----- */
+ul.taxonomy {
+  list-style: none;
+  margin: 0.25rem 0 0.25rem 1.25rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid var(--border, #d0d4da);
+}
+ul.plain.taxonomy {
+  margin-left: 0;
+  border-left: none;
+  padding-left: 0;
+}
+ul.taxonomy li {
+  margin: 0.25rem 0;
+}
