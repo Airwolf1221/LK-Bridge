@@ -404,6 +404,8 @@ export class StepExecutor {
       }
       const body = (r.body ?? {}) as { data?: unknown; version?: unknown };
       const version = str(body.version) ?? null;
+      // listPropertyRows gives rows by rank, the plan's listProperties in stored order: compareRows puts both in rank
+      // order and matches rows by id (sidebar-state.ts), never by position.
       const diffs: StateDifference[] =
         c.kind === 'propertyRows'
           ? compareRows(c.label, c.rows ?? [], rowsState(body.data))
@@ -475,6 +477,7 @@ export class StepExecutor {
                 diffs.push({ path: label, expected: 'present', actual: '(gone)' });
                 continue;
               }
+              // getResource gives rows in stored order: compared in rank order, by id (sidebar-state.ts).
               if (p.rows) compareRows(label, p.rows, rowsState(actual.rows), diffs);
               if (p.collection) compareCollection(label, p.collection, collectionState(actual), diffs);
             }
@@ -709,6 +712,7 @@ export class StepExecutor {
                   (current.entity as { rows?: unknown } | undefined)?.rows,
               )
             : collectionState(current.entity ?? current.body);
+        // Rows in rank order on both sides (rowsState and rowsContentHash sort them), whichever endpoint gave them.
         const hash = expect.state === 'rows' ? rowsContentHash(now as RowState[]) : stateHash(now);
         if (hash !== expect.hash) {
           throw new StateConflictError(

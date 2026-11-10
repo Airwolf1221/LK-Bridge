@@ -90,6 +90,18 @@ low-level tools and work that was approved for something else. C2b will build mu
 - **Open for the owner:** deleting or restoring a page whose facts are protected (`deleteResource`, `restoreResource`)
   changes no fact and is not guarded; whether it should need canonical approval is the owner's decision. The guard can
   be extended to it without changing its contract.
+- **Rows are compared in rank order, by id** (hotfix, 10 November 2026). LegendKeeper's endpoints return the same
+  key-value rows in different orders: `listProperties`, `getProperty` and `getResource` in stored order,
+  `listPropertyRows` sorted by `rank` (code-unit string order). Decision 3's "rows by id, key and value in order",
+  implemented position by position across the plan's `listProperties` and the check's `listPropertyRows`, made every
+  set_facts on a page with a row ever inserted mid-list a permanent `VERSION_CONFLICT`. Every reader now puts rows in
+  rank order (ties by id; a planned new row keeps its place by its anchor) and compares them by id: a row on one side
+  only is added or removed, a changed rank is a reorder (still a conflict), a planned new row is matched by key and must
+  stand where the plan put it (between the anchor and its rank-sorted neighbour, where LegendKeeper ranks it); position
+  is only the fallback for rows with no id. The in-lock content hash (decision 4), the verify step (decision 8), the
+  canonical guard's model (decision 11) and the proposal capture's fingerprint use the same order. The mock
+  LegendKeeper returns the endpoints' different orders, with a fixture of a real page's ranks, so this cannot pass
+  unnoticed again.
 - **To verify on the test world** (E4 or the owner): whether `listProperties` and `getProperty` carry a version (the
   bridge records one when present and compares it only with the same kind of read), and that `createPropertyRow` and
   `updatePropertyRow` answer with the new version in the body (the bridge falls back to a read and a content check when

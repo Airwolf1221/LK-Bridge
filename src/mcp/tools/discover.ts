@@ -46,6 +46,7 @@ import {
   type ProjectDeps,
   type ToolDeps,
 } from './shape.js';
+import { inRankOrder } from '../../lk/row-order.js';
 
 const SCOPE_CLIP = 60;
 const KIND = z.enum(['index', 'bsrc', 'unclassified']);
@@ -995,7 +996,8 @@ export function sidebarOf(
       return {
         ...base,
         kind: 'facts',
-        facts: list(p.rows).map((r) => {
+        // In LegendKeeper's display order (by rank): getResource gives rows in stored order.
+        facts: inRankOrder(list(p.rows)).map((r) => {
           const value = typeof r.text === 'string' ? r.text : runsText(r.content);
           const mentions = list(r.content)
             .filter((c) => c.mention)

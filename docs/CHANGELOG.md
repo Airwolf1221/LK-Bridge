@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased: hotfix, sidebar rows compared in rank order by id (10 November 2026)
+
+`set_facts` on Asagiri Miyabi - Biography failed with `VERSION_CONFLICT` every time (fresh read or not, one fact or
+two, nothing else editing the page), naming a row partway down the sidebar ("Scope", later "Last Major Revision").
+LegendKeeper returns a key-value property's rows in **different orders from different endpoints**: `listProperties`,
+`getProperty` and `getResource` in stored order, `listPropertyRows` sorted by `rank`. The plan read the first, the check
+inside the lock the second, and compared them **position by position**; on any page where a row was ever inserted
+between two others, every position after the first out-of-order row "changed", permanently. The mock LegendKeeper
+returned one order everywhere, so the tests never saw it ([ADR 0032](adr/0032-set-facts-and-canon.md), Consequences).
+
+- **One row order everywhere** (`src/lk/row-order.ts`): by `rank` as a plain string in code-unit order (what `<` does,
+  never `localeCompare`; `a` < `aR` < `af`), ties by id. A planned new row (no id, no rank) keeps its place next to the
+  row it is anchored to.
+- **Rows are compared by id** (`compareRows`): a row on one side only is added or removed; a changed rank is a reorder
+  and still conflicts; a planned new row is matched by key and must stand where the plan put it; rows with no id fall
+  back to position. Differences name the row: `PROPERTIES “Scope” (row id).value`.
+- **Every reader of sidebar rows uses it**: the planner's sidebar model (`rowsFrom`, so the plan, the template's key
+  order and the canonical guard see rank order), the check inside the lock (`bridge.expect`, `listPropertyRows`), the
+  verify step (`bridge.verify`, `getResource`), the in-lock expectation hash of row writes (`rowsContentHash`,
+  `expectCurrent: { state: 'rows' }`), the proposal capture's fingerprint of `getProperty`, `getResource` and
+  `listProperties` targets (low-level and ChatGPT proposals), the facts table and before/after rows on set_facts
+  results and proposals, `get_resource`'s facts, `read_document`'s sidebar and the repository tree's sidebar summary.
+  Expectations now keep each row's `rank` (optional, so older stored ones still parse and match by id).
+- **Placement**: a new template fact is anchored as before (`after` / `before` a row that stays); LegendKeeper ranks it
+  between the anchor and the anchor's **rank-sorted** neighbour, and the plan now expects it exactly there, so on
+  Rheashira Aela's page a fact after Subject (`a`) lands before Life State (`aR`), not before Canonical Display Name
+  (`b`). The verify step reports a row ranked anywhere else (`(order)`).
+- **The mock behaves like LegendKeeper**: `listPropertyRows` rank-sorted; `listProperties`, `getProperty` and
+  `getResource` in stored order; `createPropertyRow` ranks between rank-sorted neighbours and appends to the stored
+  order, without renumbering other rows. A fixture seeds Rheashira Aela's real order and ranks.
+- **Tests**: set_facts on that fixture (one changed fact, two, a new template fact and a non-template fact, Mood as a
+  dry run then for real), real conflicts still caught (an outside value edit naming the row, a reorder, an added and a
+  deleted row), the verify step catching a misplaced row, `lk_api_write`, proposals approved with and without an outside
+  change, the canonical guard (Status still canonical, Scope not), and unit tests of the order, the comparison and the
+  ranks. They fail on the previous code.
+- **Upgrading**: a set_facts proposal captured before this release on a page whose two orders differ was already
+  doomed to conflict; reject it and propose again. A pending low-level proposal of `updateProperty` or `deleteProperty`
+  on such a page may show as conflicted at approval (its fingerprint is now taken in rank order); propose it again.
+
 ## Unreleased: v2 C2a, set_facts, protected canon and the multi-page groundwork (10 November 2026)
 
 Sidebar facts and relationship links, the protected canonical facts rule on every write path, and the proposal and job

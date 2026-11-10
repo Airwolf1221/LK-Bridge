@@ -440,9 +440,10 @@ every kept item exactly as read (`id`, `rank`, `resourceId`, `documentId`), then
    (`status: "no_change"`, no job). A `dryRun` stops here.
 2. **Check, inside the lock** (`bridge.expect`): every property the plan changes is read again (`listPropertyRows` for
    the key-value property, which gives the version row writes check; `getProperty` for each collection) and compared
-   with the state the plan was built on: rows by id, key and value in order; items by id, page and document in order;
-   the filter whole; a property's version where both reads give one. Any difference is a conflict (`VERSION_CONFLICT`)
-   and **nothing is written**. LegendKeeper's If-Match is not an atomic compare-and-swap (PLAN-v2 10.6), so this check
+   with the state the plan was built on: rows by id (key, value and rank), both sides in LegendKeeper's rank order,
+   because `listProperties` gives rows in stored order and `listPropertyRows` sorted by rank; items by id, page and
+   document in order; the filter whole; a property's version where both reads give one. Any difference is a conflict
+   (`VERSION_CONFLICT`, naming the row) and **nothing is written**. LegendKeeper's If-Match is not an atomic compare-and-swap (PLAN-v2 10.6), so this check
    is the bridge's own.
 3. **The writes**, in order: changes, additions, removals (additions are anchored to rows that stay), then each
    collection. Each row write chains its If-Match from the write before it (the first from the check). A write with
@@ -450,7 +451,8 @@ every kept item exactly as read (`id`, `rank`, `resourceId`, `documentId`), then
    and compares them with the plan first. A collection write (`updateProperty`, which LegendKeeper does not version)
    reads the collection inside the lock and compares it with the plan first.
 4. **Verify** (`bridge.verify`): the sidebar is read back and compared with the planned state (keys, values, order,
-   links, the filter). A difference is **"written but not as planned"**: recorded on the job, in the errors table
+   links, the filter), rows by id in rank order, a new row where the plan put it (between its anchor and the anchor's
+   rank-sorted neighbour, where LegendKeeper ranks it). A difference is **"written but not as planned"**: recorded on the job, in the errors table
    (`VERIFY_MISMATCH`) and in the result, and never retried. The job's journal entries hold what each write changed.
 5. **The tree** re-reads the page once, when the job ends (Reference Type, Scope and the other catalogue fields).
 

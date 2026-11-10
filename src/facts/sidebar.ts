@@ -2,7 +2,13 @@
  * A page's sidebar as the facts code sees it (v2 C2a): the properties LegendKeeper returns (`listProperties`, or the
  * `properties` of `getResource`), and what each sidebar write would do to them. The canonical guard simulates a write
  * on the sidebar as it is now, then compares the facts before and after; the set_facts planner builds on the same model.
+ *
+ * A key-value property's rows are always held in LegendKeeper's ONE order, by rank (src/lk/row-order.ts), whichever
+ * endpoint they came from: `listProperties` and `getResource` give them in stored order, `listPropertyRows` by rank,
+ * and LegendKeeper places a new row (`after` / `before`) between its rank-sorted neighbours. So a planned new row is
+ * spliced next to its anchor in rank order here, exactly where LegendKeeper will rank it.
  */
+import { inRankOrder } from '../lk/row-order.js';
 import { normaliseContent } from '../jobs/sidebar-state.js';
 import type { OpParams } from '../jobs/types.js';
 
@@ -51,18 +57,21 @@ export function propertyFrom(p: Obj): SidebarProperty {
   };
 }
 
+/** Rows as LegendKeeper returns them (or as a write body gives them), in rank order. */
 export function rowsFrom(rows: unknown): SidebarRow[] {
   if (!Array.isArray(rows)) return [];
-  return (rows as unknown[]).filter(isObj).map((r) => ({
-    id: str(r.id) ?? null,
-    key: typeof r.key === 'string' ? r.key : '',
-    content: Array.isArray(r.content)
-      ? (r.content as unknown[]).filter(isObj)
-      : typeof r.text === 'string' && r.text !== ''
-        ? [{ text: r.text }]
-        : [],
-    ...(typeof r.rank === 'string' ? { rank: r.rank } : {}),
-  }));
+  return inRankOrder(
+    (rows as unknown[]).filter(isObj).map((r) => ({
+      id: str(r.id) ?? null,
+      key: typeof r.key === 'string' ? r.key : '',
+      content: Array.isArray(r.content)
+        ? (r.content as unknown[]).filter(isObj)
+        : typeof r.text === 'string' && r.text !== ''
+          ? [{ text: r.text }]
+          : [],
+      ...(typeof r.rank === 'string' && r.rank !== '' ? { rank: r.rank } : {}),
+    })),
+  );
 }
 
 /** A value's plain text: text runs, a mention's label (or its page id), a line break as a new line. */
@@ -94,7 +103,7 @@ export function valueSignature(content: readonly Obj[]): string {
   return JSON.stringify([valueText(runs).replace(/\s+/g, ' '), mentions]);
 }
 
-/** Every key-value row of the sidebar (the facts), in order. */
+/** Every key-value row of the sidebar (the facts), in order (each property's rows by rank). */
 export function factRows(sidebar: Sidebar): SidebarRow[] {
   return sidebar.flatMap((p) => (p.kind === 'keyValue' ? [...(p.rows ?? [])] : []));
 }

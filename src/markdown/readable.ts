@@ -9,6 +9,7 @@
 import { escapeLineStart, escapeText, mentionUrl, protectEdges } from './inline.js';
 import { isObj, mentionLabel, type Obj } from './model.js';
 import type { LkBlock } from './types.js';
+import { inRankOrder } from '../lk/row-order.js';
 
 const MAX_LINES = 400;
 
@@ -63,9 +64,10 @@ function link(res: unknown, doc: unknown): string {
   return `[${d ? 'document' : 'page'}](${mentionUrl(res, d)})`;
 }
 
+/** Key-value rows in LegendKeeper's display order (by rank; getResource gives them in stored order). */
 function rowsOfKeyValue(rows: unknown): string[] {
   if (!Array.isArray(rows)) return [];
-  return rows.filter(isObj).map((r) => {
+  return inRankOrder(rows.filter(isObj)).map((r) => {
     const value = Array.isArray(r.content) ? readableRuns(r.content) : escapeText(text(r.text));
     return `- **${escapeText(text(r.key)) || '(no key)'}:** ${value}`;
   });

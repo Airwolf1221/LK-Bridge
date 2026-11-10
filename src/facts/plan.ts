@@ -5,9 +5,11 @@
  *
  * - A fact whose key matches an existing row (without case, spaces trimmed) changes that row (its key is kept as it
  *   is); `null` removes it; the same value writes nothing.
+ * - The rows are taken in LegendKeeper's one order, by rank (sidebar.ts), whatever order the read gave them in.
  * - A new template fact goes in template order: after its nearest existing preceding template fact, else before its
  *   nearest existing following one, else above the facts that are not in the template (or at the end when there are
- *   none). Several new facts with the same anchor are ordered so they end up in template order. Any other new fact
+ *   none). LegendKeeper ranks it between the anchor and the anchor's rank-sorted neighbour, so the plan splices it in
+ *   at that place in rank order too (never next to the anchor's neighbour in stored order). Several new facts with the same anchor are ordered so they end up in template order. Any other new fact
  *   goes at the bottom, in the order given.
  * - A link collection (found by title) keeps every existing item's id and rank, the order, and its filter (the filter
  *   is never sent); added pages are appended, removed ones left out. LegendKeeper has no item-level operations for
@@ -453,7 +455,10 @@ export function planFacts(input: FactsPlanInput): FactsPlan {
   };
 }
 
-/** Rows as the check and verify steps compare them (`RowState`): the planned rows, new ones without an id. */
+/**
+ * Rows as the check and verify steps compare them (`RowState`), in rank order: each existing row with its id and rank,
+ * a planned new row with neither (it keeps the place the plan gave it, next to its anchor).
+ */
 export function rowStates(rows: readonly SidebarRow[]) {
-  return rowsState(rows.map((r) => ({ id: r.id, key: r.key, content: r.content })));
+  return rowsState(rows.map((r) => ({ id: r.id, rank: r.rank ?? null, key: r.key, content: r.content })));
 }

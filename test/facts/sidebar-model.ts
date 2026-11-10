@@ -35,6 +35,38 @@ export interface MSidebar {
 let seq = 0;
 const mint = (p: string) => `${p}${(++seq).toString(36).padStart(7, '0')}`.slice(0, 8);
 const rankAt = (n: number) => `r${n.toString(36).padStart(8, '0')}`;
+
+/** Code-unit order (what LegendKeeper's rank sort does): `<` on strings, never `localeCompare`. */
+export const byRank = (a: { rank: string; id: string }, b: { rank: string; id: string }): number =>
+  a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+
+const LO = 0x21; // '!'
+const HI = 0x7e; // '~'
+/**
+ * A rank strictly between `a` and `b` in code-unit order (`a` null: no lower bound; `b` null: no upper bound), as a
+ * fractional index does it. LegendKeeper's own ranks look like `O`, `\`, `aR`, `dZ`; any printable ASCII works here.
+ */
+export function rankBetween(a: string | null, b: string | null): string {
+  const lo = a ?? '';
+  if (b !== null && !(lo < b))
+    throw new Error(`rankBetween: ${JSON.stringify(a)} is not below ${JSON.stringify(b)}`);
+  let hi = b;
+  let out = '';
+  for (let i = 0; ; i++) {
+    const ca = i < lo.length ? lo.charCodeAt(i) : LO - 1;
+    const cb = hi !== null && i < hi.length ? hi.charCodeAt(i) : HI + 1;
+    if (ca === cb) {
+      out += String.fromCharCode(ca);
+      continue;
+    }
+    if (cb - ca > 1) return out + String.fromCharCode((ca + cb) >> 1);
+    if (ca < LO)
+      throw new Error(`rankBetween: no rank fits between ${JSON.stringify(a)} and ${JSON.stringify(b)}`);
+    // Adjacent characters: keep a's, and from here on only a bounds the rank from below.
+    out += String.fromCharCode(ca);
+    hi = null;
+  }
+}
 const err = (status: number, code: string): MockResponse => ({
   status,
   body: { message: `model ${code}`, code, requestId: `model-${code}` },
@@ -61,6 +93,8 @@ export class SidebarModel {
   /** Changes what a write stores (LegendKeeper storing something other than what was sent). */
   mangle: ((req: MockRequest, sidebar: MSidebar) => void) | null = null;
   propertyVersions = false;
+  /** A LegendKeeper that ranks a new row between its neighbours in STORED order (wrong; for the verify step). */
+  placeByStoredOrder = false;
 
   constructor(readonly names: (id: string) => string | undefined) {}
 
@@ -68,6 +102,28 @@ export class SidebarModel {
     const sb: MSidebar = { version: 1, props: props.map((p, i) => ({ ...p, rank: rankAt((i + 1) * 100) })) };
     this.pages.set(id, sb);
     return sb;
+  }
+
+  /**
+   * A key-value property with rows given exactly as LegendKeeper stores them: `[key, text, rank, id?]`, in STORED
+   * order (what `listProperties`, `getProperty` and `getResource` return); `listPropertyRows` sorts them by rank.
+   */
+  static kvRanked(
+    id: string,
+    title: string,
+    rows: [string, string | Obj[], string, string?][],
+  ): Omit<MProp, 'rank'> {
+    return {
+      id,
+      kind: 'keyValue',
+      title,
+      rows: rows.map(([key, v, rank, rowId], i) => ({
+        id: rowId ?? `${id}r${i + 1}`,
+        rank,
+        key,
+        content: typeof v === 'string' ? (v === '' ? [] : [{ text: v }]) : v,
+      })),
+    };
   }
 
   /** A key-value property from `[key, text]` pairs. */
@@ -111,9 +167,15 @@ export class SidebarModel {
     sb.version++;
   }
 
-  rows(page: string, title = 'PROPERTIES'): { key: string; text: string; id: string }[] {
+  /** The rows as LegendKeeper shows them: in rank order (what `listPropertyRows` gives, and the app displays). */
+  rows(page: string, title = 'PROPERTIES'): { key: string; text: string; id: string; rank: string }[] {
+    return [...this.storedRows(page, title)].sort(byRank);
+  }
+
+  /** The rows in STORED order (what `listProperties`, `getProperty` and `getResource` give). */
+  storedRows(page: string, title = 'PROPERTIES'): { key: string; text: string; id: string; rank: string }[] {
     const p = this.pages.get(page)!.props.find((x) => x.title === title)!;
-    return (p.rows ?? []).map((r) => ({ key: r.key, text: textOf(r.content), id: r.id }));
+    return (p.rows ?? []).map((r) => ({ key: r.key, text: textOf(r.content), id: r.id, rank: r.rank }));
   }
 
   items(page: string, title: string): MItem[] {
@@ -264,8 +326,9 @@ export class SidebarModel {
     if (prop.kind !== 'keyValue') return err(400, 'KIND_MISMATCH');
     const rows = prop.rows!;
     const version = `v${sb.version}`;
+    // listPropertyRows: "every row of the property as a Row, sorted by rank" (the spec); the other reads give stored order.
     if (M === 'GET' && !rowId)
-      return { status: 200, body: { data: rows.map((r) => this.rowView(r)), version } };
+      return { status: 200, body: { data: [...rows].sort(byRank).map((r) => this.rowView(r)), version } };
     if (req.headers['if-match'] !== undefined && req.headers['if-match'] !== version)
       return err(412, 'VERSION_MISMATCH');
     const contentOf = (cur: Obj[]): Obj[] =>
@@ -279,15 +342,25 @@ export class SidebarModel {
             : [{ text: body.text }]
           : cur;
     if (M === 'POST' && !rowId) {
-      const row: MRow = { id: mint('w'), rank: '', key: str(body.key), content: contentOf([]) };
-      const after = typeof body.after === 'string' ? rows.findIndex((r) => r.id === body.after) : -1;
-      const before = typeof body.before === 'string' ? rows.findIndex((r) => r.id === body.before) : -1;
+      // As LegendKeeper does it: the new row is ranked between its anchor and the anchor's RANK-SORTED neighbour (or
+      // after the highest rank), no other row's rank changes, and the row is appended to the STORED order whatever
+      // its rank. `placeByStoredOrder` models a LegendKeeper that got this wrong (for the verify step's test).
+      const sorted = [...rows].sort(byRank);
+      const after = typeof body.after === 'string' ? sorted.findIndex((r) => r.id === body.after) : -1;
+      const before = typeof body.before === 'string' ? sorted.findIndex((r) => r.id === body.before) : -1;
       if ((typeof body.after === 'string' && after < 0) || (typeof body.before === 'string' && before < 0))
         return err(404, 'NOT_FOUND');
-      if (after >= 0) rows.splice(after + 1, 0, row);
-      else if (before >= 0) rows.splice(before, 0, row);
-      else rows.push(row);
-      rows.forEach((r, i) => (r.rank = rankAt((i + 1) * 100)));
+      let lo = after >= 0 ? sorted[after]! : before >= 0 ? sorted[before - 1] : sorted[sorted.length - 1];
+      let hi = after >= 0 ? sorted[after + 1] : before >= 0 ? sorted[before]! : undefined;
+      if (this.placeByStoredOrder && after >= 0) {
+        // Wrong: "after X" read as "just before the row stored after X".
+        const next = rows[rows.findIndex((r) => r.id === body.after) + 1];
+        if (next) [lo, hi] = [sorted[sorted.indexOf(next) - 1], next];
+      }
+      const rank = rankBetween(lo?.rank ?? null, hi?.rank ?? null);
+      if (rows.some((r) => r.rank === rank)) return err(500, 'RANK_COLLISION');
+      const row: MRow = { id: mint('w'), rank, key: str(body.key), content: contentOf([]) };
+      rows.push(row);
       this.mangle?.(req, sb);
       sb.version++;
       return { status: 201, body: { ...this.rowView(row), version: `v${sb.version}` } };

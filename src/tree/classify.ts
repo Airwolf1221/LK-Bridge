@@ -5,6 +5,7 @@
  */
 import type { ProjectSettings } from '../projects/settings.js';
 import type { CatalogueFields, NodeKind, Observation, SidebarBlock, TreeDocument } from './types.js';
+import { inRankOrder } from '../lk/row-order.js';
 
 export const INDEX_PREFIX = '[INDEX] ';
 export const BSRC_PREFIX = '[BSRC] ';
@@ -106,9 +107,10 @@ export function summariseSidebar(properties: unknown): SidebarBlock[] {
       title: str(o.title),
       ...(kind === 'keyValue' && Array.isArray(o.rows)
         ? {
-            rows: (o.rows as unknown[])
-              .filter((r): r is Record<string, unknown> => !!r && typeof r === 'object')
-              .map((r) => ({ key: str(r.key) ?? '', text: rowText(r) })),
+            // In LegendKeeper's display order (by rank): getResource gives rows in stored order.
+            rows: inRankOrder(
+              (o.rows as unknown[]).filter((r): r is Record<string, unknown> => !!r && typeof r === 'object'),
+            ).map((r) => ({ key: str(r.key) ?? '', text: rowText(r) })),
           }
         : {}),
     };
