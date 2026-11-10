@@ -260,3 +260,28 @@ lkb_writable_by() {
   for g in $(id -G "$user"); do expr+=(-o \( -gid "$g" -perm -g+w \)); done
   find "$dir" \( -type f -o -type d \) \( "${expr[@]}" \) -print -quit 2>/dev/null
 }
+
+# ---------------------------------------------------------------------------------------- env file and boot check (OPS1)
+
+# lkb_config_check ENV_FILE: the bridge's own configuration check (`npm run config:check`, dist/config/check.js) on
+# ENV_FILE, run as the service user with an empty environment, from the built app. No database, no network. Prints one
+# `issue: NAME: …` line per problem (names, never values) and fails when the bridge would refuse to start.
+# LKB_RUNAS, as in deploy.sh, lets the tests run it without a second user.
+lkb_config_check() {
+  local file="$1" home
+  home="$(getent passwd "$LKB_SERVICE_USER" | cut -d: -f6 || true)"
+  # shellcheck disable=SC2016 # the inner script's $1 and $2 belong to the inner bash
+  ${LKB_RUNAS:-runuser -u} "$LKB_SERVICE_USER" -- env -i HOME="${home:-/}" USER="$LKB_SERVICE_USER" \
+    LOGNAME="$LKB_SERVICE_USER" PATH="${LKB_NODE_DIR}/bin:/usr/bin:/bin" LANG=C.UTF-8 \
+    bash -c 'umask 077 && cd "$1" && exec node dist/config/check.js --file "$2"' lkb-config-check "$LKB_APP_DIR" "$file"
+}
+
+# lkb_has_config_check: succeeds when the built app has the configuration check (releases from OPS1 on).
+lkb_has_config_check() { [[ -f "${LKB_APP_DIR}/dist/config/check.js" ]]; }
+
+# lkb_release_version FILE: the "version" of a package.json (text read as data, never run), as vX.Y.Z; "unknown" if none.
+lkb_release_version() {
+  local v
+  v="$(grep -m1 -oE '"version"[[:space:]]*:[[:space:]]*"[0-9A-Za-z.+-]{1,40}"' "$1" 2>/dev/null | sed -E 's/.*"([^"]+)"$/\1/' || true)"
+  printf 'v%s' "${v:-unknown}"
+}

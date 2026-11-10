@@ -13,6 +13,12 @@
 #                   back: check out the commit first (docs/runbook-deploy.md, "Rollback").
 #   --force         redeploy even though the checkout is already at origin/main.
 #   --local-health  health-check only 127.0.0.1:8787 (the public checks need the Caddy block and DNS).
+#   --sync-env      if the env file is not in step with this release's deploy/env.template, update it with env-sync
+#                   (after the build, with a backup and a boot check) instead of stopping. Asks first unless --yes.
+#   --update-self   if the installed deploy scripts differ from this release's, install the release's copies into
+#                   /opt/lk-bridge/bin (root:root, 0755 and 0644) and run the new deploy.sh with the same options.
+#                   Shows the difference and asks first unless --yes.
+#   --yes           answer yes to the questions --sync-env and --update-self ask.
 #
 # Who does what. Root only orchestrates: it never runs git, npm, node or a script from the checkout itself. Every phase
 # drops to the user it needs, with `runuser` and a clean environment (`env -i`: no inherited variable, so no secret):
@@ -25,14 +31,18 @@
 #
 # What it does, in order
 #   1. Pre-flight: root, the installed copy, both users and the layout (lkbuild owns the app and is not in the lkbridge
-#      group; the private Node 24 is root-owned), the env file readable by lkbridge (and a warning, names only, if it has
-#      drifted from env.template), a CLEAN checkout, the sudo rule, and that origin/main is a fast-forward of what is
-#      checked out. Nothing has changed yet.
+#      group; the private Node 24 is root-owned), the env file readable by lkbridge, a CLEAN checkout, the sudo rule, and
+#      that origin/main is a fast-forward of what is checked out. Then (OPS1) the installed deploy scripts are compared
+#      with the release's own copies (any difference stops the deploy, or --update-self installs them), and the env file
+#      with the release's env.template (env-sync --check: any difference stops the deploy, or --sync-env updates the
+#      file after the build; a missing secret always stops it with ACTION NEEDED). Nothing has changed yet.
 #   2. Drains and stops the service: `systemctl stop lk-bridge` (as lkbridge, through sudo). SIGTERM makes the bridge
 #      stop taking new work, give running jobs up to 20 s to finish, then exit; unit TimeoutStopSec=45 covers that.
 #   3. Takes a `pre-deploy` database backup (backup.sh, as lkbridge).
 #   4. As lkbuild: git merge --ff-only, npm ci, npm run build; then checks nothing in the app is writable by lkbridge.
-#      As lkbridge: the database migrations.
+#      With --sync-env, env-sync updates the env file. As lkbridge: the new build's configuration check on the env file
+#      (the boot check; on failure the deploy stops before the database or the service is touched), then the database
+#      migrations.
 #   5. Starts the service (as lkbridge, through sudo) and waits for /healthz.
 #   6. Runs healthcheck.sh as lkbridge (with its permission checks) and prints DEPLOY SUCCEEDED or DEPLOY FAILED.
 #
@@ -51,12 +61,19 @@ app_dir="$LKB_APP_DIR"
 branch="${DEPLOY_BRANCH:-main}"
 mode=fetch
 force=0
+sync_env=0
+update_self=0
+yes=0
 health_args=()
+orig_args=("$@")
 while (($# > 0)); do
   case "$1" in
     --current) mode=current ;;
     --force) force=1 ;;
     --local-health) health_args+=(--local-only) ;;
+    --sync-env) sync_env=1 ;;
+    --update-self) update_self=1 ;;
+    --yes) yes=1 ;;
     -h | --help)
       sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed -E 's/^# ?//'
       exit 0
@@ -109,6 +126,21 @@ svc() {
   fi
 }
 
+# The installed deploy scripts (OPS1): what --update-self installs, and with which mode.
+self_files=(deploy.sh:0755 lib.sh:0644 env-sync.sh:0755 env-sync.mjs:0644)
+# A root-only scratch directory (mktemp -d is 0700) for this release's copies of those files and of its env.template,
+# read out of git by the build user as text and never run from here.
+work_dir="$(mktemp -d)"
+
+# confirm QUESTION: asks on the terminal unless --yes was given; fails on anything but y or yes (and on no input).
+confirm() {
+  ((yes)) && return 0
+  local answer=""
+  printf '%s [y/N] ' "$1"
+  read -r answer || answer=""
+  [[ "$answer" =~ ^[Yy]([Ee][Ss])?$ ]]
+}
+
 step="starting"
 stopped_by_us=0
 started_again=0
@@ -118,6 +150,7 @@ new_sha=""
 
 on_exit() {
   local rc=$?
+  rm -rf -- "$work_dir"
   ((rc == 0)) && return 0
   echo >&2
   echo "==================== DEPLOY FAILED (during: ${step}) ====================" >&2
@@ -151,7 +184,8 @@ case "$here/" in
   "$app_dir"/*) die "This is the copy inside the checkout, which the build user can change. Run the installed copy: sudo ${LKB_BIN_DIR}/deploy.sh (install or update it as the runbook says)." ;;
 esac
 if [[ -z "${LKB_RUNAS:-}" ]]; then
-  for f in "$here" "${here}/deploy.sh" "${here}/lib.sh"; do
+  for f in "$here" "${here}/deploy.sh" "${here}/lib.sh" "${here}/env-sync.sh" "${here}/env-sync.mjs"; do
+    [[ -e "$f" ]] || continue # a missing env-sync file is reported (and installed by --update-self) below
     [[ "$(stat -c '%u' -- "$f")" == 0 ]] || die "${f} is not owned by root. The deploy scripts run as root, so only root may own them."
     [[ $((8#$(stat -c '%a' -- "$f") & 8#022)) -eq 0 ]] || die "${f} is writable by its group or by others. chmod go-w it."
   done
@@ -174,8 +208,6 @@ as_service test -r "$LKB_ENV_FILE" || die "${svc_user} cannot read ${LKB_ENV_FIL
 if [[ -z "${LKB_RUNAS:-}" ]] && as_build test -r "$LKB_ENV_FILE"; then
   die "${build_user} can read ${LKB_ENV_FILE}. It must be root:${svc_user} 0640 inside /etc/lk-bridge (root:${svc_user} 0750)."
 fi
-# Warn (names only, never values) when the env file and deploy/env.template have drifted apart. Never fails.
-env_drift_report "${app_dir}/deploy/env.template" "$LKB_ENV_FILE"
 command -v git >/dev/null 2>&1 || die "git is not installed."
 as_build git rev-parse --git-dir >/dev/null 2>&1 || die "${app_dir} is not a git checkout (or ${build_user} cannot read it)."
 
@@ -204,10 +236,97 @@ else
   new_sha="$prev_sha"
 fi
 
+# ---------------------------------------------------------------- 1b. the installed deploy scripts (OPS1)
+# Compared with the copies in the commit being deployed, so an outdated installed script is never used for a release
+# that needs the new one. These files hold no secrets, so the difference is shown in full.
+step="checking the installed deploy scripts"
+differs=()
+for spec in "${self_files[@]}"; do
+  f="${spec%%:*}"
+  # A release from before a file existed (a rollback to it, say) has nothing to compare it with.
+  as_build git cat-file -e "${new_sha}:deploy/${f}" 2>/dev/null || continue
+  as_build git show "${new_sha}:deploy/${f}" >"${work_dir}/${f}"
+  cmp -s "${work_dir}/${f}" "${here}/${f}" 2>/dev/null || differs+=("$spec")
+done
+if ((${#differs[@]} > 0)); then
+  log "The installed deploy scripts in ${here} differ from the ones in ${new_sha:0:9}:"
+  for spec in "${differs[@]}"; do
+    f="${spec%%:*}"
+    diff -uN --label "installed ${here}/${f}" --label "release ${new_sha:0:9} deploy/${f}" "${here}/${f}" "${work_dir}/${f}" || true
+  done
+  differ_names="$(printf '%s ' "${differs[@]%%:*}")"
+  if ((update_self)); then
+    [[ -z "${LKB_SELF_UPDATED:-}" ]] || die "The deploy scripts still differ after --update-self installed them. Install them by hand (runbook, 'Updating')."
+    confirm "Install ${differ_names% }into ${here} and run the new deploy.sh?" || die "Nothing was installed or changed."
+    for spec in "${differs[@]}"; do
+      f="${spec%%:*}"
+      if [[ -z "${LKB_RUNAS:-}" ]]; then
+        install -o root -g root -m "${spec##*:}" -- "${work_dir}/${f}" "${here}/${f}.new"
+      else
+        install -m "${spec##*:}" -- "${work_dir}/${f}" "${here}/${f}.new"
+      fi
+      mv -f -- "${here}/${f}.new" "${here}/${f}"
+      log "Installed ${here}/${f}."
+    done
+    log "Running the new ${here}/deploy.sh with the same options ..."
+    rm -rf -- "$work_dir"
+    trap - EXIT
+    export LKB_SELF_UPDATED=1
+    exec "${here}/deploy.sh" "${orig_args[@]}"
+  elif [[ "$mode" == "current" ]]; then
+    # --current deploys a commit that is already checked out, often an older one (a rollback): never downgrade the
+    # scripts that run as root by surprise. Say so, and carry on with the installed copies.
+    warn "The installed deploy scripts differ from ${new_sha:0:9}'s (above). Carrying on with the installed ones (--current); add --update-self to install the commit's copies instead."
+  else
+    die "The installed deploy scripts (${differ_names% }) differ from this release's (difference above). Nothing was changed. Read the difference, then run: sudo ${here}/deploy.sh ${orig_args[*]+${orig_args[*]} }--update-self"
+  fi
+fi
+
 if [[ "$mode" == "fetch" && "$prev_sha" == "$new_sha" && $force -eq 0 && -f "${app_dir}/dist/server.js" ]]; then
   log "Already at origin/${branch} (${prev_sha:0:9}). Nothing to deploy. Use --force to rebuild and restart anyway."
+  rm -rf -- "$work_dir"
   trap - EXIT
   exit 0
+fi
+
+# ---------------------------------------------------------------- 1c. the env file against this release's template (OPS1)
+# env-sync (the installed copy, as root; names only, never a value) compares the env file with the env.template of the
+# commit being deployed. Nothing changes here. A missing secret stops the deploy (only the owner can supply it); other
+# differences stop it unless --sync-env was given, which applies them after the build, where the new code can check
+# the result before anything else changes.
+step="checking the env file against this release's env.template"
+sync_args=()
+env_changes=0
+if as_build git cat-file -e "${new_sha}:deploy/env.template" 2>/dev/null && [[ -x "${here}/env-sync.sh" ]]; then
+  as_build git show "${new_sha}:deploy/env.template" >"${work_dir}/env.template"
+  as_build git show "${new_sha}:package.json" >"${work_dir}/package.json"
+  sync_args=(--template "${work_dir}/env.template" --release "$(lkb_release_version "${work_dir}/package.json")")
+  set +e
+  gate="$(LKB_FROM_DEPLOY=1 "${here}/env-sync.sh" --check "${sync_args[@]}")"
+  gate_rc=$?
+  set -e
+  [[ -z "$gate" ]] || printf '%s
+' "$gate"
+  case "$gate_rc" in
+    0) ;;
+    1)
+      if grep -q '^ACTION NEEDED' <<<"$gate"; then
+        if ((sync_env)); then
+          # Only the commented-out placeholder lines: inert for the running version and for this one.
+          LKB_FROM_DEPLOY=1 "${here}/env-sync.sh" --placeholders-only --yes --no-boot-check "${sync_args[@]}" || true
+        fi
+        die "ACTION NEEDED (above): only you can supply these values. Fill them in (sudoedit ${LKB_ENV_FILE}; $( ((sync_env)) && echo 'the placeholder lines are at the end' || echo 'or run this again with --sync-env to add placeholder lines for them')), then run the deploy again. The deploy stopped before changing anything else; the service was not touched."
+      fi
+      if ((sync_env == 0)); then
+        die "The env file is not in step with this release's env.template (above). Nothing was changed. To let the deploy update it (after the build, with a backup and a boot check), run: sudo ${here}/deploy.sh ${orig_args[*]+${orig_args[*]} }--sync-env"
+      fi
+      confirm "Apply these changes to ${LKB_ENV_FILE} after the build?" || die "Nothing was changed."
+      env_changes=1
+      ;;
+    *) die "env-sync could not check the env file (above). Nothing was changed." ;;
+  esac
+else
+  warn "Not checking the env file against the template: ${new_sha:0:9} has no deploy/env.template, or ${here}/env-sync.sh is not installed."
 fi
 
 log "Deploying: ${prev_sha:0:9} -> ${new_sha:0:9}  (${mode} mode)"
@@ -253,6 +372,22 @@ if [[ -z "${LKB_RUNAS:-}" ]]; then
   [[ -z "$bad" ]] || die "${svc_user} could write ${bad} (in the app). Fix: sudo chown -R ${build_user}:${build_user} ${app_dir} && sudo chmod -R go-w ${app_dir}"
 fi
 
+# ---------------------------------------------------------------- 4b. env file and boot check (OPS1)
+if ((env_changes)); then
+  step="updating the env file (env-sync)"
+  log "Updating ${LKB_ENV_FILE} (env-sync; backup first, boot check after) ..."
+  LKB_FROM_DEPLOY=1 "${here}/env-sync.sh" --yes "${sync_args[@]}" \
+    || die "env-sync did not update the env file (above). If it had changed it, it has put the backup back."
+fi
+step="boot check (the new build's configuration check)"
+if lkb_has_config_check; then
+  log "Boot check: the new build's configuration check on ${LKB_ENV_FILE} (as ${svc_user}) ..."
+  lkb_config_check "$LKB_ENV_FILE" \
+    || die "The new build would refuse the env file (problems above, by name). The database and the service were not touched. Fix the env file, then run: sudo ${here}/deploy.sh --current --force"
+else
+  log "This build has no configuration check (dist/config/check.js); skipping the boot check."
+fi
+
 step="database migrations"
 log "Running migrations on ${db_path} (as ${svc_user}) ..."
 # v2 A1 (migration 0600): rows written before multi-project support belong to the project the single-project form names
@@ -283,19 +418,15 @@ done
 step="health checks"
 as_service "${app_dir}/deploy/healthcheck.sh" "${health_args[@]}"
 
-# The unit files, the sudoers file and this script's installed copy are installed by hand, not by this script. Say so if
-# this release changed one (compare only; nothing from the checkout is run or installed).
+# The unit files and the sudoers file are installed by hand, not by this script. Say so if this release changed one
+# (compare only; nothing from the checkout is run or installed). The deploy scripts themselves were compared in step 1b.
 for unit in lk-bridge.service lk-bridge-backup.service lk-bridge-backup.timer; do
   if [[ -f "/etc/systemd/system/${unit}" ]] && ! cmp -s "${app_dir}/deploy/${unit}" "/etc/systemd/system/${unit}"; then
     warn "/etc/systemd/system/${unit} differs from deploy/${unit}. An administrator should reinstall it (runbook, 'Updating')."
   fi
 done
-for f in deploy.sh lib.sh; do
-  if ! cmp -s "${app_dir}/deploy/${f}" "${here}/${f}"; then
-    warn "${here}/${f} differs from deploy/${f} in this release. Review the difference (diff ${here}/${f} ${app_dir}/deploy/${f}), then reinstall it (runbook, 'Updating')."
-  fi
-done
 
+rm -rf -- "$work_dir"
 trap - EXIT
 echo
 echo "==================== DEPLOY SUCCEEDED ===================="
