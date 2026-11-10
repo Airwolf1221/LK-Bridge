@@ -45,6 +45,7 @@ import {
 } from '../jobs/types.js';
 import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
 import { getOperation, operationInputSchema, requireOperation } from '../lk/registry.js';
+import { sidebarInRankOrder } from '../lk/row-order.js';
 import { projectWhere } from '../jobs/repo.js';
 import type { OperationDef } from '../lk/registry-types.js';
 import { markdownDiff, type MarkdownDiff } from '../pages/diff.js';
@@ -254,6 +255,9 @@ function capOperation(op: Readonly<Record<string, unknown>>): Record<string, unk
 }
 
 /** Builds the read that shows an operation's target, from op-meta's reader (as the engine does before a write). */
+/** The reads whose answer holds key-value rows in stored order (see snapshotOf). */
+const SIDEBAR_READS: ReadonlySet<string> = new Set(['getProperty', 'getResource', 'listProperties']);
+
 export function readerTarget(opId: string, params: OpParams): CapturedTarget | null {
   const meta = opMeta(opId);
   // A create with a client id targets something that does not exist yet: nothing to capture or compare.
@@ -654,6 +658,9 @@ export class ProposalService implements ProposalSink {
             : body;
     }
     const version = reader.version?.(body, entity) ?? null;
+    // A sidebar read's rows in LegendKeeper's one order (by rank), so the fingerprint (and the pre-state shown on the
+    // proposal) never depends on the order an endpoint happened to give them in (hotfix, 10 November 2026).
+    if (entity !== undefined && SIDEBAR_READS.has(target.op)) entity = sidebarInRankOrder(entity);
     return {
       exists: entity !== undefined,
       version,

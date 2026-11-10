@@ -152,7 +152,9 @@ and approval runs with exactly those ids. Every proposal has a **page-level summ
 its operations grouped by the page they affect, in plain labels such as `Asagiri Miyabi: sidebar, 3 facts changed, 1
 link added`; the dashboard shows it first. An expansion may hold the bridge's own steps (`bridge.expect`, the check
 inside the lock; `bridge.verify`, the generic verify) and a job-level lock (`job_options`); approval submits it with
-both. What the verify step found is kept on the proposal (`verification`) as well as on the job.
+both. What the verify step found is kept on the proposal (`verification`) as well as on the job. The check, the
+verify step and a proposal's capture compare sidebar rows in LegendKeeper's rank order and by id, never by position:
+its endpoints return the same rows in different orders (ADR 0032, Consequences).
 
 **Reject** (owner only) takes an optional reason, which the agent can read. It accepts a `pending` **or a `conflicted`**
 proposal, as one compare-and-set from those two states (ADR 0033): a conflicted proposal (the target changed after

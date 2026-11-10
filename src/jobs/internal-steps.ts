@@ -29,7 +29,10 @@ export function isInternalStep(op: string): boolean {
 const id = z.string().min(1).max(256);
 const label = z.string().min(1).max(300);
 const runs = z.array(z.record(z.string(), z.unknown())).max(10_000);
-const rowState = z.object({ id: id.nullable(), key: z.string().max(2048), content: runs }).strict();
+// `rank` is optional: an expectation stored before ranks were kept has none and is still compared by id.
+const rowState = z
+  .object({ id: id.nullable(), rank: id.nullable().optional(), key: z.string().max(2048), content: runs })
+  .strict();
 const itemState = z.object({ id: id.nullable(), resourceId: id, documentId: id.nullable() }).strict();
 const collectionState = z.object({ items: z.array(itemState).max(256), filter: z.unknown() }).strict();
 

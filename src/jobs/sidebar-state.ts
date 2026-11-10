@@ -4,21 +4,31 @@
  * property write (`expectCurrent`), and the generic verify step (`bridge.verify`: did the writes land as planned?).
  *
  * What counts, and what does not (taken from LegendKeeper's spec 3.0.0, as for page writes in verify-blocks.ts):
- * - a key-value row is its id, its key and its value as runs; the runs are normalised as LegendKeeper normalises them
- *   (empty text runs dropped, neighbours with the same marks merged), and a mention's `name` (read-only: the page's
- *   current name) is ignored. A row's `rank` and `text` are not compared: the order of the list is the order, and the
- *   text is derived from the runs;
+ * - a key-value row is its id, its rank, its key and its value as runs; the runs are normalised as LegendKeeper
+ *   normalises them (empty text runs dropped, neighbours with the same marks merged), and a mention's `name`
+ *   (read-only: the page's current name) is ignored. A row's `text` is not compared (it is derived from the runs);
+ * - rows are always put in LegendKeeper's ONE order first, by rank (src/lk/row-order.ts): its endpoints give the same
+ *   rows in different orders (`listProperties`, `getProperty` and `getResource` in stored order, `listPropertyRows`
+ *   sorted by rank), so a comparison by position across two endpoints saw a change on every row after the first one
+ *   ever inserted between two others (the permanent VERSION_CONFLICT of 10 November 2026). Rows are compared by id:
+ *   a row on one side only was added or removed, a changed rank is a reorder (a real change), and a planned new row
+ *   (no id, no rank) is matched by key and must land where the plan put it;
  * - a link collection item is its id, its page and its document; the collection's `filter` is compared whole.
  */
 import { createHash } from 'node:crypto';
+import { inRankOrder } from '../lk/row-order.js';
 import { normaliseRuns } from './verify-blocks.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
-/** One key-value row, normalised. `id` is null for a row the plan creates (LegendKeeper gives it its id). */
+/**
+ * One key-value row, normalised. `id` and `rank` are null for a row the plan creates (LegendKeeper gives it both).
+ * `rank` is optional so an expectation stored before ranks were kept (no rank) still parses and compares by id.
+ */
 export interface RowState {
   readonly id: string | null;
+  readonly rank?: string | null;
   readonly key: string;
   readonly content: readonly Obj[];
 }
@@ -70,14 +80,20 @@ function withoutKey(o: Obj, key: string): Obj {
   return rest;
 }
 
-/** Rows as LegendKeeper returns them (a key-value property's `rows`, or `listPropertyRows`' `data`), normalised. */
+/**
+ * Rows as LegendKeeper returns them (a key-value property's `rows`, or `listPropertyRows`' `data`), or as a plan
+ * expects them, normalised and in LegendKeeper's one order (by rank; a planned row without one keeps its place).
+ */
 export function rowsState(rows: unknown): RowState[] {
   if (!Array.isArray(rows)) return [];
-  return (rows as unknown[]).filter(isObj).map((r) => ({
-    id: typeof r.id === 'string' && r.id !== '' ? r.id : null,
-    key: typeof r.key === 'string' ? r.key : '',
-    content: normaliseContent(r.content, r.text),
-  }));
+  return inRankOrder(
+    (rows as unknown[]).filter(isObj).map((r) => ({
+      id: typeof r.id === 'string' && r.id !== '' ? r.id : null,
+      rank: typeof r.rank === 'string' && r.rank !== '' ? r.rank : null,
+      key: typeof r.key === 'string' ? r.key : '',
+      content: normaliseContent(r.content, r.text),
+    })),
+  );
 }
 
 /** A link collection (`resourceCollection` or `resourceLink`) as LegendKeeper returns it, normalised. */
@@ -96,10 +112,11 @@ export function collectionState(property: unknown): CollectionState {
 
 /**
  * The hash an in-step check of a row write compares (`expectCurrent: { state: 'rows' }`): the rows' keys and values in
- * order, without their ids (a row the same job created a moment ago has an id the plan could not know).
+ * LegendKeeper's one order (by rank), without their ids or ranks (a row the same job created a moment ago has an id
+ * and a rank the plan could not know; it sits where the plan put it, so the order still says whether it landed there).
  */
 export function rowsContentHash(rows: readonly RowState[]): string {
-  return stateHash(rows.map((r) => ({ key: r.key, content: r.content })));
+  return stateHash(inRankOrder(rows).map((r) => ({ key: r.key, content: r.content })));
 }
 
 export interface StateDifference {
@@ -114,9 +131,18 @@ const short = (v: unknown): unknown => {
   return s !== undefined && s.length > 300 ? `${s.slice(0, 300)}…` : (v ?? null);
 };
 
+const rowName = (label: string, r: RowState) => `${label} “${r.key}”${r.id ? ` (${r.id})` : ''}`;
+
 /**
- * Rows compared position by position: the same number of rows, each with the same key and value, and the same id
- * where the expectation names one (a row the plan created has `id: null`, and any id is accepted for it).
+ * Rows compared in LegendKeeper's one order (by rank), BY ID (see the module comment):
+ * - a row whose id is on one side only was removed (expected, not there) or added (there, not expected);
+ * - a row on both sides must have the same key, the same value, and the same rank where both give one: a changed rank
+ *   is a reorder, a real change;
+ * - a planned new row (no id) is matched by key with a row the expectation does not name, and must stand where the
+ *   plan put it among the matched rows (after the row it was placed after), so a row created in the wrong place is a
+ *   difference;
+ * - rows without an id on either side, left over, are compared position by position (the fallback).
+ * Differences name the row: `PROPERTIES “Scope” (row id).value`.
  */
 export function compareRows(
   label: string,
@@ -124,25 +150,102 @@ export function compareRows(
   actual: readonly RowState[],
   out: StateDifference[] = [],
 ): StateDifference[] {
-  const n = Math.max(expected.length, actual.length);
-  for (let i = 0; i < n; i++) {
-    const e = expected[i];
-    const a = actual[i];
-    if (!e || !a) {
-      out.push({
-        path: `${label} rows[${i}]`,
-        expected: e ? short(e) : '(no row)',
-        actual: a ? short(a) : '(no row)',
-      });
+  const exp = inRankOrder(expected);
+  const act = inRankOrder(actual);
+  const actIndex = new Map(act.map((r, i) => [r, i]));
+  const actById = new Map<string, RowState>();
+  for (const a of act) if (a.id !== null && !actById.has(a.id)) actById.set(a.id, a);
+  const pairs = new Map<RowState, RowState>();
+  const used = new Set<RowState>();
+  // 1. By id.
+  for (const e of exp) {
+    if (e.id === null) continue;
+    const a = actById.get(e.id);
+    if (a && !used.has(a)) {
+      pairs.set(e, a);
+      used.add(a);
+    }
+  }
+  // 2. Planned new rows by key, among the rows the expectation does not name.
+  const named = new Set(exp.flatMap((e) => (e.id !== null ? [e.id] : [])));
+  for (const e of exp) {
+    if (e.id !== null) continue;
+    const a = act.find((x) => !used.has(x) && (x.id === null || !named.has(x.id)) && x.key === e.key);
+    if (a) {
+      pairs.set(e, a);
+      used.add(a);
+    }
+  }
+  // 3. The fallback: rows without an id on either side, by position.
+  const restE = exp.filter((e) => !pairs.has(e) && e.id === null);
+  const restA = act.filter((a) => !used.has(a) && a.id === null);
+  restE.forEach((e, i) => {
+    const a = restA[i];
+    if (a) {
+      pairs.set(e, a);
+      used.add(a);
+    }
+  });
+
+  const reordered = new Set<RowState>();
+  for (const e of exp) {
+    const a = pairs.get(e);
+    if (!a) {
+      out.push({ path: `${rowName(label, e)} (removed)`, expected: short(e), actual: '(no row)' });
       continue;
     }
-    if (e.id !== null && e.id !== a.id)
-      out.push({ path: `${label} rows[${i}].id`, expected: e.id, actual: a.id });
-    if (e.key !== a.key) out.push({ path: `${label} rows[${i}].key`, expected: e.key, actual: a.key });
+    const name = rowName(label, e.id !== null ? e : { ...e, id: a.id });
+    if (e.key !== a.key) out.push({ path: `${name}.key`, expected: e.key, actual: a.key });
     if (stableJson(e.content) !== stableJson(a.content))
-      out.push({ path: `${label} rows[${i}].value`, expected: short(e.content), actual: short(a.content) });
+      out.push({ path: `${name}.value`, expected: short(e.content), actual: short(a.content) });
+    if (e.rank && a.rank && e.rank !== a.rank) {
+      out.push({ path: `${name}.rank (reordered)`, expected: e.rank, actual: a.rank });
+      reordered.add(e);
+    }
+  }
+  // The order of the matched rows: those not on the longest run already in order were put somewhere else. Only rows
+  // whose place the expectation knows count: a ranked row, or a planned new row (placed among ranked ones). A row of an
+  // expectation stored before ranks were kept has no rank, and its list may be in stored order: it is matched by id.
+  const matched = exp.filter((e) => pairs.has(e) && (e.rank || e.id === null));
+  const pos = matched.map((e) => actIndex.get(pairs.get(e)!)!);
+  for (const i of outOfOrder(pos)) {
+    const e = matched[i]!;
+    if (reordered.has(e)) continue;
+    const a = pairs.get(e)!;
+    const prevE = matched[i - 1];
+    const prevA = act[actIndex.get(a)! - 1];
+    out.push({
+      path: `${rowName(label, e.id !== null ? e : { ...e, id: a.id })} (order)`,
+      expected: prevE ? `after “${prevE.key}”` : 'first',
+      actual: prevA ? `after “${prevA.key}”` : 'first',
+    });
+  }
+  for (const a of act) {
+    if (used.has(a)) continue;
+    out.push({ path: `${rowName(label, a)} (added)`, expected: '(no row)', actual: short(a) });
   }
   return out;
+}
+
+/** The indexes of `pos` that are not on one longest increasing run (the rows that moved). */
+function outOfOrder(pos: readonly number[]): number[] {
+  const n = pos.length;
+  if (n < 2) return [];
+  const len = new Array<number>(n).fill(1);
+  const prev = new Array<number>(n).fill(-1);
+  let best = 0;
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < i; j++) {
+      if (pos[j]! < pos[i]! && len[j]! + 1 > len[i]!) {
+        len[i] = len[j]! + 1;
+        prev[i] = j;
+      }
+    }
+    if (len[i]! > len[best]!) best = i;
+  }
+  const keep = new Set<number>();
+  for (let i = best; i >= 0; i = prev[i]!) keep.add(i);
+  return [...Array(n).keys()].filter((i) => !keep.has(i));
 }
 
 /** Items compared position by position (ids where expected), and the filter whole. */

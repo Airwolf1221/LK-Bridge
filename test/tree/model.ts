@@ -594,13 +594,16 @@ export class TreeModel {
       return {
         status: 200,
         body: {
-          data: prop.rows.map((r) => ({
-            id: r.id,
-            rank: r.rank,
-            key: r.key,
-            text: r.text,
-            content: [{ text: r.text }],
-          })),
+          // listPropertyRows is sorted by rank (code-unit order), as LegendKeeper's is; the other reads give stored order.
+          data: [...prop.rows]
+            .sort((a, b) => (a.rank < b.rank ? -1 : a.rank > b.rank ? 1 : 0))
+            .map((r) => ({
+              id: r.id,
+              rank: r.rank,
+              key: r.key,
+              text: r.text,
+              content: [{ text: r.text }],
+            })),
           version,
         },
       };
