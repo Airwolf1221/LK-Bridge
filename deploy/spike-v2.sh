@@ -8,7 +8,8 @@
 # Every other argument goes to the script (see `npm run spike:v2 -- --help`): the known test-world ids, --skip,
 # --out-dir, and so on.
 #
-# Like soak-sandbox.sh: it reads just that project's key variable and DB_PATH, exports only those, and prints neither.
+# Like soak-sandbox.sh: it exports only DB_PATH and the env file's path and reads no key; the spike finds the project's
+# key as the bridge does (its encrypted store first, the env file's key only when nothing is stored) and prints none.
 # The spike refuses any project not registered as a sandbox in the bridge's database (`npm run projects -- sandbox
 # <name> on`), and any key whose own project is not exactly that one; it reads everything except check 1, writes only
 # under one throwaway root resource that it deletes (cascade) at the end, and uses its own temporary database. It draws

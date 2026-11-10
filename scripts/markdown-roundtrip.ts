@@ -5,9 +5,10 @@
  *
  * v2 A1: `--project NAME` names a project registered in the bridge's database (DB_PATH) and marked as a sandbox there;
  * any other project is refused before any request (test/sandbox/target.ts), as for the spike and the soak. Its key is
- * the bridge's own variable for it (`LK_PROJECT_<NAME>_API_KEY`, or `LK_API_KEY` in the single-project form). It refuses
- * to run unless the key's own project is exactly the registered one, uses a temporary database, and never prints a
- * secret. On the server, deploy/markdown-roundtrip.sh exports just that key and DB_PATH from the env file.
+ * found as the bridge finds it: the key in the bridge's encrypted store (OPS2), or, only when none is stored, the env
+ * file's `LK_PROJECT_<NAME>_API_KEY` (`LK_API_KEY` in the single-project form). It refuses to run unless the key's own
+ * project is exactly the registered one, uses a temporary database, and never prints a secret. On the server,
+ * deploy/markdown-roundtrip.sh passes the project, DB_PATH and the env file's path (LKB_ENV_FILE), never a key.
  *
  * Output: the Markdown report on stdout (progress on stderr) and in <out-dir>/roundtrip-<timestamp>.md; for every
  * failing page, a minimal reproduction in <out-dir>/roundtrip-<timestamp>/<resourceId>-<documentId>.json.
@@ -18,7 +19,7 @@ import { mkdirSync } from 'node:fs';
 import { fileStamp } from '../test/sandbox/spike-report.js';
 import { SandboxGuardError } from '../test/sandbox/smoke.js';
 import { createSoakRuntime, type SoakRuntime } from '../test/sandbox/soak.js';
-import { resolveSandboxTarget, type SandboxTarget } from '../test/sandbox/target.js';
+import { keySourceLine, resolveSandboxTarget, type SandboxTarget } from '../test/sandbox/target.js';
 import { formatRoundTripReport, runRoundTrip, writeRoundTripReport } from './markdown-roundtrip-core.js';
 
 const USAGE = `usage: npm run roundtrip -- --project NAME [flags]
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
     if (e instanceof SandboxGuardError) fail(e.message);
     throw e;
   }
+  process.stderr.write(keySourceLine(target));
   let maxPages: number | undefined;
   if (flags.has('--max-pages')) {
     maxPages = Number(flags.get('--max-pages'));

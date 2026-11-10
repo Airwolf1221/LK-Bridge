@@ -14,3 +14,4 @@ export {
   type UnreadableReason,
 } from './store.js';
 export { MIN_MASTER_KEY_LENGTH, deriveMasterKey, envValueDigest, keyHint } from './crypto.js';
+export { resolveProjectKey, type ProjectKeyResult, type ProjectKeySource } from './project-key.js';

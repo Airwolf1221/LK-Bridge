@@ -44,6 +44,37 @@ Migration 1200.
   32 tools (29 shown to a profile without low-level tools).
 - **For the owner:** ChatGPT keeps its own copy of the tool list. After deploying: Plugins, the bridge, **Refresh**.
 
+## Unreleased: hotfix, the sandbox scripts read keys from the encrypted store (10 November 2026)
+
+After OPS2's rollout, with the env file's key lines retired (`env-sync.sh --retire-imported-keys`), the sandbox, soak,
+spike and round-trip scripts stopped with `LK_PROJECT_TEST_API_KEY is empty in /etc/lk-bridge/lk-bridge.env`: they still
+read project keys from the env file only ([ADR 0030](adr/0030-sandbox-scripts-find-keys-as-the-bridge-does.md)).
+
+- **The scripts find a key exactly as the bridge does** (`resolveProjectKey`, new in `src/secrets/project-key.ts`,
+  used by `test/sandbox/target.ts`): the key in the encrypted store, opened with `SECRETS_MASTER_KEY` from the env file;
+  only when nothing is stored for the project, the env file's `LK_PROJECT_<NAME>_API_KEY` (`LK_API_KEY` in the
+  single-project form); a stored key that cannot be opened is refused, never replaced by the env file's. A key in
+  neither place is refused with a message naming the dashboard's Projects page. Every earlier rule stands (registered,
+  marked as a sandbox, the key's own project exactly the registered one), and a project removed on the dashboard is now
+  refused too. Each script says on stderr where the key came from (never the key).
+- **`sandbox_project_env` (deploy/lib.sh) reads no key.** It exports only `DB_PATH` and the env file's path
+  (`LKB_ENV_FILE`), and drops any key or master key the caller's environment holds; the script reads just the names it
+  needs from the file, so no key or master key is put in any process's environment. Without `LKB_ENV_FILE` (a
+  developer's checkout) the values come from the environment as before. `project_key_var` is gone (no other user).
+- **Checked, nothing else to fix:** no other script or command reads a project key from the env file. `deploy.sh`
+  reads only `LK_PROJECT_ID` and `LK_PROJECT_NAME` (for migration 0600); env-sync manages the key lines and asks the
+  bridge's `env-tool` (the store) to compare them; `config:check` only checks the format of keys still in the file;
+  `lk-run.sh`, `healthcheck.sh`, `backup.sh` and `restore.sh` read no key.
+- Tests: `test/unit/sandbox-wrappers.test.ts` runs all four wrappers end to end on a fake server (a fake LegendKeeper
+  preloaded into each Node process, logging only a hash of the bearer token): the stored key with no env key, the env
+  fallback, a key in neither place, a non-sandbox project, the stored key over a different env key, a stored key that
+  cannot be opened, a removed project, and one end-to-end dry run of the round trip in the retired-keys state. Every run's
+  stdout and stderr, every process's environment and the report are scanned for every key and master key.
+  `test/unit/sandbox-target.test.ts` covers `resolveSandboxTarget` and `resolveProjectKey` directly.
+- **For the owner:** nothing to change in the env file. `deploy/lib.sh` changed, so the deploy stops once to show the
+  difference; run it again with `--update-self`. Then run the round trip as before:
+  `sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test`.
+
 ## Unreleased: v2 B2, the Discover and Read tools (10 November 2026)
 
 The first v2 tools agents use ([ADR 0029](adr/0029-discover-and-read-tools.md); every tool in

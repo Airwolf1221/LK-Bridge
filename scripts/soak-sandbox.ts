@@ -4,14 +4,15 @@
  * a report: total time, writes per minute, 429 responses (target zero), retries, budget waits and peak memory.
  *
  * v2 A1: `--project` names a project registered in the bridge's database (DB_PATH) and marked as a sandbox there; any
- * other project is refused (test/sandbox/target.ts). Its key is the bridge's own variable for it,
- * LK_PROJECT_<NAME>_API_KEY (on the server, deploy/soak-sandbox.sh reads just that one from the env file). It also
+ * other project is refused (test/sandbox/target.ts). Its key is found as the bridge finds it:
+ * the key in the bridge's encrypted store (OPS2), or, only when none is stored, the env file's LK_PROJECT_<NAME>_API_KEY
+ * (on the server, deploy/soak-sandbox.sh passes the project, DB_PATH and the env file's path, never a key). It also
  * refuses unless the key's own project is exactly the registered one. It uses a temporary database and cleans up.
  * Exit code: 0 when the report passes, 1 when it fails, 2 when it refused to run.
  */
 import { SandboxGuardError } from '../test/sandbox/smoke.js';
 import { createSoakRuntime, formatSoakReport, runSoak } from '../test/sandbox/soak.js';
-import { projectFlag, resolveSandboxTarget } from '../test/sandbox/target.js';
+import { keySourceLine, projectFlag, resolveSandboxTarget } from '../test/sandbox/target.js';
 
 function argValue(name: string, fallback: number, min: number, max: number): number {
   const args = process.argv.slice(2);
@@ -39,6 +40,7 @@ async function main(): Promise<void> {
   let soak;
   try {
     target = resolveSandboxTarget(projectFlag(process.argv.slice(2)));
+    process.stderr.write(keySourceLine(target));
     soak = await createSoakRuntime({ apiKey: target.apiKey, project: target.name, writersMax: writers });
   } catch (e) {
     if (e instanceof SandboxGuardError) {

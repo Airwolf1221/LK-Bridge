@@ -3,22 +3,29 @@
  * project that is not registered in the bridge's database AND marked as a sandbox there, before any request is made
  * (test/sandbox/target.ts). Checked here directly, and by running the two scripts against a project that is not a
  * sandbox: they must refuse (exit code 2) without contacting LegendKeeper.
+ *
+ * OPS2 hotfix: the key is found as the bridge finds it: the encrypted store first, the env file's key only when nothing
+ * is stored, never the env file's key in place of a stored key that cannot be opened. With LKB_ENV_FILE set (the
+ * wrappers), only the names it needs are read from that file. The wrappers end to end: test/unit/sandbox-wrappers.test.ts.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runMigrations } from '../../src/db/migrate.js';
 import { openDatabase } from '../../src/db/open.js';
 import { ProjectStore } from '../../src/projects/index.js';
+import { SecretStore, resolveProjectKey } from '../../src/secrets/index.js';
 import { SandboxGuardError } from '../sandbox/smoke.js';
-import { projectFlag, resolveSandboxTarget } from '../sandbox/target.js';
+import { keyNames, keySourceLine, projectFlag, resolveSandboxTarget } from '../sandbox/target.js';
 
 let dir: string;
 let dbPath: string;
 const KEY = 'test-key-SECRET-0000';
 const REAL = 'arkona-key-SECRET-1111';
+const STORED = 'stored-test-key-SECRET-2222';
+const MASTER = 'm'.repeat(44);
 
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), 'lkb-target-'));
@@ -29,6 +36,15 @@ beforeAll(() => {
   store.insert({ id: 'lkp_test', name: 'test', displayName: 'Test world', verifiedAt: 1 });
   store.insert({ id: 'lkp_arkona', name: 'arkona', displayName: 'Arkona', verifiedAt: 1 });
   store.setSandbox('lkp_test', true);
+  // A second sandbox project whose key the dashboard keeps in the encrypted store, and one removed on the dashboard.
+  store.insert({ id: 'lkp_stored', name: 'stored', displayName: 'Stored', verifiedAt: 1 });
+  store.setSandbox('lkp_stored', true);
+  store.insert({ id: 'lkp_gone', name: 'gone', displayName: 'Gone', verifiedAt: 1 });
+  store.setSandbox('lkp_gone', true);
+  store.archive('lkp_gone');
+  new SecretStore(db, { masterKey: MASTER }).write('lkp_stored', 'lk_api_key', STORED, {
+    source: 'dashboard',
+  });
   db.close();
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -41,6 +57,7 @@ describe('resolveSandboxTarget', () => {
       name: 'test',
       projectId: 'lkp_test',
       apiKey: KEY,
+      keySource: 'env',
       keyVariable: 'LK_PROJECT_TEST_API_KEY',
     });
     // The single-project form: LK_API_KEY for the project LK_PROJECT_NAME names (default test).
@@ -66,14 +83,108 @@ describe('resolveSandboxTarget', () => {
     } catch (e) {
       message = (e as Error).message;
     }
-    expect(message).toMatch(/LK_PROJECT_TEST_API_KEY is empty/);
+    expect(message).toMatch(
+      /has no key: none is stored in the bridge's encrypted store, and LK_PROJECT_TEST_API_KEY/,
+    );
+    expect(message).toMatch(/dashboard's Projects page/);
     expect(message).not.toContain(REAL);
+  });
+
+  it('uses the key in the encrypted store with no env key (keys retired), and over a different env key', () => {
+    const t = resolveSandboxTarget('stored', { SECRETS_MASTER_KEY: MASTER }, dbPath);
+    expect(t).toMatchObject({ projectId: 'lkp_stored', apiKey: STORED, keySource: 'store' });
+    expect(keySourceLine(t)).toMatch(/encrypted store/);
+    expect(keySourceLine(t)).not.toContain(STORED);
+    const env = { SECRETS_MASTER_KEY: MASTER, LK_PROJECTS: 'stored', LK_PROJECT_STORED_API_KEY: KEY };
+    expect(resolveSandboxTarget('stored', env, dbPath).apiKey).toBe(STORED);
+  });
+
+  it('refuses a stored key it cannot open, and never uses the env key instead', () => {
+    for (const env of [
+      { LK_PROJECT_STORED_API_KEY: KEY }, // no master key
+      { SECRETS_MASTER_KEY: 'w'.repeat(44), LK_PROJECT_STORED_API_KEY: KEY }, // the wrong one
+    ]) {
+      let message = '';
+      try {
+        resolveSandboxTarget('stored', env, dbPath);
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/cannot be read here/);
+      expect(message).toMatch(/LK_PROJECT_STORED_API_KEY from the environment is not used instead/);
+      for (const s of [KEY, STORED, MASTER]) expect(message).not.toContain(s);
+    }
+  });
+
+  it('refuses a project removed on the dashboard', () => {
+    expect(() => resolveSandboxTarget('gone', { LK_PROJECT_GONE_API_KEY: KEY }, dbPath)).toThrow(
+      /removed on the dashboard/,
+    );
+  });
+
+  it('with LKB_ENV_FILE, reads only the names it needs from that file, never the environment', () => {
+    const file = join(dir, 'lk-bridge.env');
+    writeFileSync(
+      file,
+      [
+        `SECRETS_MASTER_KEY='${MASTER}'`,
+        `# LK_PROJECT_STORED_API_KEY=${KEY}`,
+        `LK_PROJECT_TEST_API_KEY="${KEY}"`,
+        'OWNER_PASSWORD_HASH=$argon2id$not-read',
+      ].join('\n'),
+    );
+    // The environment's own keys are ignored once the file is named.
+    const env = { LKB_ENV_FILE: file, SECRETS_MASTER_KEY: 'w'.repeat(44), LK_PROJECT_TEST_API_KEY: REAL };
+    expect(resolveSandboxTarget('stored', env, dbPath)).toMatchObject({ apiKey: STORED, keySource: 'store' });
+    expect(resolveSandboxTarget('test', env, dbPath)).toMatchObject({ apiKey: KEY, keySource: 'env' });
+    expect(keyNames('test')).toEqual([
+      'LK_PROJECTS',
+      'LK_PROJECT_NAME',
+      'LK_API_KEY',
+      'LK_PROJECT_TEST_API_KEY',
+      'SECRETS_MASTER_KEY',
+      'SECRETS_MASTER_KEY_PREVIOUS',
+    ]);
+    expect(() => resolveSandboxTarget('test', { LKB_ENV_FILE: join(dir, 'missing.env') }, dbPath)).toThrow(
+      /Cannot read the env file .*missing\.env \(ENOENT\)/,
+    );
   });
 
   it('reads --project NAME and --project=NAME', () => {
     expect(projectFlag(['--writes', '10', '--project', 'test'])).toBe('test');
     expect(projectFlag(['--project=arkona'])).toBe('arkona');
     expect(projectFlag(['--writes', '10'])).toBeUndefined();
+  });
+});
+
+describe('resolveProjectKey: the bridge’s rule, for the tools beside it', () => {
+  it('store first; the env key only when nothing is stored; a database from before OPS2 uses the env key', () => {
+    const db = openDatabase(':memory:');
+    try {
+      // No secrets table at all (before migration 1000): the env file's key, as the bridge did.
+      expect(resolveProjectKey(db, 'p1', { envKey: ` ${KEY} ` })).toEqual({
+        ok: true,
+        apiKey: KEY,
+        source: 'env',
+      });
+      expect(resolveProjectKey(db, 'p1', {})).toEqual({ ok: false, reason: 'missing', detail: null });
+      runMigrations(db);
+      expect(resolveProjectKey(db, 'p1', { masterKey: MASTER, envKey: KEY })).toMatchObject({
+        source: 'env',
+      });
+      new ProjectStore(db).insert({ id: 'p1', name: 'one', displayName: null, verifiedAt: 1 });
+      new SecretStore(db, { masterKey: MASTER }).write('p1', 'lk_api_key', STORED, { source: 'dashboard' });
+      expect(resolveProjectKey(db, 'p1', { masterKey: MASTER, envKey: KEY })).toEqual({
+        ok: true,
+        apiKey: STORED,
+        source: 'store',
+      });
+      const r = resolveProjectKey(db, 'p1', { envKey: KEY });
+      expect(r).toMatchObject({ ok: false, reason: 'unreadable' });
+      expect(JSON.stringify(r)).not.toContain(KEY);
+    } finally {
+      db.close();
+    }
   });
 });
 

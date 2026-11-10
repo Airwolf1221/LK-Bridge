@@ -1,6 +1,7 @@
 /**
  * Opt-in: `npm run test:sandbox` with LKB_SANDBOX_PROJECT naming the sandbox project (on the server,
- * `deploy/sandbox-test.sh --project <name>` sets it and that project's key). Skipped otherwise. It talks to a REAL
+ * `deploy/sandbox-test.sh --project <name>` sets it, DB_PATH and LKB_ENV_FILE; the key is found as the bridge finds it,
+ * in its encrypted store first, test/sandbox/target.ts). Skipped otherwise. It talks to a REAL
  * LegendKeeper project, and refuses to run unless the project is registered in the bridge's database (DB_PATH) and
  * marked as a sandbox there, and the key's own project is exactly the registered one (v2 A1, test/sandbox/target.ts).
  */
