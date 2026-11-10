@@ -1,4 +1,4 @@
--- v2 A2: the repository tree (docs/PLAN-v2.md 4.2, docs/tree.md, ADR 0024).
+-- v2 A2: the repository tree (docs/PLAN-v2.md 4.2, docs/tree.md, ADR 0025).
 --
 -- The bridge's own model of each project's AI REPOSITORY: one row per resource under the project's root (the root
 -- included, kind 'root'). Resources outside the root are never stored. Every row carries `project_id`; child tables
@@ -8,7 +8,7 @@
 -- never deleted and re-inserted for a refresh, so later sessions can hang their own rows on (project_id, id): A3 adds
 -- type and taxonomy links (`tree_node_links`), C2 records the template a page was created from (`template_id`).
 --
--- Concurrency (ADR 0024): every observation carries the time it was made (`struct_observed_at` for the structure a
+-- Concurrency (ADR 0025): every observation carries the time it was made (`struct_observed_at` for the structure a
 -- listing shows, `props_observed_at` for what only getResource shows). An observation never replaces one made later,
 -- so a sweep or check that listed at time T never undoes an update the bridge's own write made after T. Removals
 -- leave a tombstone with their observation time for the same reason.

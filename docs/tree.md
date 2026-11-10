@@ -5,7 +5,7 @@ REPOSITORY page, with its kind, place, tags, aliases, documents and catalogue fi
 ordering, the Discover tools) answer from it, so most questions cost no LegendKeeper request. Pages outside the root
 are never stored.
 
-Design and concurrency rules: [ADR 0024](adr/0024-repository-tree.md). Source: `src/tree/`. Migration:
+Design and concurrency rules: [ADR 0025](adr/0025-repository-tree.md). Source: `src/tree/`. Migration:
 `0700_repository_tree.sql`. Tests: `test/tree/`, `test/ui/tree.test.tsx`.
 
 ## Setting it up on the server
@@ -78,7 +78,7 @@ Every query answer states the status, why it is not ready, and when the tree was
   added or removed, and each re-read that failed, with the pass that found it. The newest 10,000 entries per project
   are kept.
 
-A sweep or check never undoes what the bridge itself changed after the sweep's listing (ADR 0024).
+A sweep or check never undoes what the bridge itself changed after the sweep's listing (ADR 0025).
 
 ## Settings (per project)
 

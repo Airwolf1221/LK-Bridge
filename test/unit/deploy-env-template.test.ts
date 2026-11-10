@@ -5,25 +5,15 @@
  */
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import {
-  loadAdminConfig,
-  loadAuthConfig,
-  loadConfig,
-  loadPolicyConfig,
-  loadToolsConfig,
-} from '../../src/config/index.js';
+import { parseTemplate } from '../../deploy/env-sync.mjs';
+import { CONFIG_LOADERS } from '../../src/config/check.js';
 
 const root = new URL('../../', import.meta.url);
 const template = readFileSync(new URL('deploy/env.template', root), 'utf8');
 const envExample = readFileSync(new URL('.env.example', root), 'utf8');
 
-const loaders: readonly (readonly [string, (env: NodeJS.ProcessEnv) => unknown])[] = [
-  ['loadConfig', loadConfig],
-  ['loadAuthConfig', loadAuthConfig],
-  ['loadPolicyConfig', loadPolicyConfig],
-  ['loadToolsConfig', loadToolsConfig],
-  ['loadAdminConfig', loadAdminConfig],
-];
+/** Every loader the server runs at start-up (the same list `npm run config:check` uses). */
+const loaders = CONFIG_LOADERS;
 
 /**
  * Runs every loader against an empty environment that records each name read. `read` is every variable any loader looks
@@ -215,5 +205,65 @@ describe('deploy/env.template', () => {
       expect(v).not.toMatch(/lkb_(rt|ac|pat|cs)_/);
     }
     expect(template).not.toMatch(/\$argon2|BEGIN [A-Z ]*PRIVATE KEY/);
+  });
+});
+
+describe('deploy/env.template markers (OPS1, env-sync)', () => {
+  const parsed = parse(template);
+  const multi = inspectLoaders({ LK_PROJECTS: parsed.active.get('LK_PROJECTS') ?? '' });
+  const single = inspectLoaders();
+  const read = [...new Set([...multi.read, ...single.read])].filter((n) => /^[A-Z][A-Z0-9_]*$/.test(n));
+  const lines = template.split('\n');
+  /** name -> the markers on the lines directly above its variable line (a marker belongs to the next line only). */
+  const markersOf = new Map<string, string[]>();
+  lines.forEach((line, i) => {
+    const m = /^#?\s*([A-Z][A-Z0-9_]*)=/.exec(line);
+    if (!m?.[1]) return;
+    const above: string[] = [];
+    for (let j = i - 1; j >= 0 && /^#\s*@\S+\s*$/.test(lines[j] ?? ''); j--)
+      above.push((lines[j] ?? '').trim());
+    markersOf.set(m[1], [...(markersOf.get(m[1]) ?? []), ...above]);
+  });
+  const { vars, errors } = parseTemplate(template);
+  const kind = new Map(vars.map((v) => [v.name, v.marker.kind]));
+
+  it('parses with no errors (what env-sync itself checks before it trusts a template)', () => {
+    expect(errors).toEqual([]);
+  });
+
+  it('gives every variable any config loader reads exactly one marker', () => {
+    expect(read.length).toBeGreaterThan(50);
+    for (const name of read) {
+      expect(markersOf.get(name), name).toHaveLength(1);
+      expect(markersOf.get(name)?.[0], name).toMatch(
+        /^# @(default|generate:(base64|base64url|hex):\d+|secret|optional)$/,
+      );
+    }
+  });
+
+  it('gives every variable line in the template exactly one marker, and no marker without a variable', () => {
+    for (const [name, m] of markersOf) expect(m, name).toHaveLength(1);
+    expect(lines.filter((l) => /^#\s*@\S+\s*$/.test(l))).toHaveLength(markersOf.size);
+  });
+
+  it('never carries a value for a @secret or @generate variable, and marks every credential-shaped name so', () => {
+    for (const v of vars) {
+      if (v.marker.kind === 'secret' || v.marker.kind === 'generate') expect(v.value, v.name).toBe('');
+      if (/(SECRET|KEY|HASH|TOKEN|PASSWORD)$/.test(v.name))
+        expect(['secret', 'generate'], v.name).toContain(v.marker.kind);
+    }
+    // The ones the owner named: the LegendKeeper keys, the owner hash and the TOTP secret are owner-only; the session
+    // and JWT secrets are generated (48 random bytes, base64).
+    for (const n of ['LK_PROJECT_TEST_API_KEY', 'LK_API_KEY', 'OWNER_PASSWORD_HASH', 'OWNER_TOTP_SECRET']) {
+      expect(kind.get(n), n).toBe('secret');
+    }
+    for (const n of ['SESSION_SECRET', 'JWT_SIGNING_KEY']) {
+      expect(markersOf.get(n), n).toEqual(['# @generate:base64:48']);
+    }
+  });
+
+  it('marks the production defaults @default and everything commented out @optional or @secret', () => {
+    for (const n of Object.keys(PRODUCTION_DEFAULTS)) expect(kind.get(n), n).toBe('default');
+    for (const v of vars) if (!v.active) expect(['optional', 'secret'], v.name).toContain(v.marker.kind);
   });
 });

@@ -1,4 +1,4 @@
-# ADR 0024: The repository tree: observation order, per-project serialisation, and how it stays correct
+# ADR 0025: The repository tree: observation order, per-project serialisation, and how it stays correct
 
 Status: Accepted (v2 session A2, 10 November 2026). Implements PLAN-v2 4.2 (with sections 2, 10.2 and 10.6). Records the
 concurrency rules PLAN-v2 asks A2 to record.

@@ -39,6 +39,7 @@ describe('deploy scripts', () => {
       'spike-v2.sh', // v2 phase 0
       'restore.sh', // chunk 8
       'migrate-to-build-user.sh', // v1.0.1
+      'env-sync.sh', // OPS1
     ]) {
       expect(scripts, s).toContain(s);
     }
@@ -168,6 +169,75 @@ describe('deploy.sh with a separate build user (v1.0.1, ADR 0020, F-17)', () => 
     const r = spawnSync(join(deployDir, 'deploy.sh'), [], { encoding: 'utf8', env: { ...process.env } });
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/Run this as root, from the installed copy/);
+  });
+});
+
+describe('deploy.sh, env-sync and the self-check: order and separation (OPS1)', () => {
+  const code = read('deploy.sh')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('#'))
+    .join('\n');
+  const at = (re: RegExp) => {
+    const i = code.search(re);
+    expect(i, String(re)).toBeGreaterThan(0);
+    return i;
+  };
+
+  it('checks the installed scripts and the env file before stopping the service, and boots-checks before migrating', () => {
+    const selfCheck = at(/as_build git show "\$\{new_sha\}:deploy\/\$\{f\}"/);
+    const gate = at(/"\$\{here\}\/env-sync\.sh" --check/);
+    const stop = at(/\nsvc stop/);
+    const build = at(/as_build npm run build/);
+    const apply = at(/"\$\{here\}\/env-sync\.sh" --yes/);
+    const boot = at(/lkb_config_check "\$LKB_ENV_FILE"/);
+    const migrate = at(/node dist\/db\/migrate\.js/);
+    const start = at(/\nsvc start/);
+    expect(selfCheck).toBeLessThan(gate);
+    expect(gate).toBeLessThan(stop);
+    expect(build).toBeLessThan(apply);
+    expect(apply).toBeLessThan(boot);
+    expect(boot).toBeLessThan(migrate);
+    expect(migrate).toBeLessThan(start);
+  });
+
+  it('runs the installed env-sync (never the checkout copy), and the build user only reads the template out of git', () => {
+    expect(code).not.toMatch(/app_dir\}?\/deploy\/env-sync/);
+    for (const l of code
+      .split('\n')
+      .filter((x) => /env-sync\.sh"/.test(x) && !/die |log |echo |warn |\[\[/.test(x))) {
+      expect(l, l).toMatch(/"\$\{here\}\/env-sync\.sh"/);
+    }
+    // The build user's part: git show of the template and package.json into root's scratch directory. It is never
+    // given the env file (beyond the pre-flight check that it cannot read it).
+    for (const l of code.split('\n').filter((x) => /as_build/.test(x) && /LKB_ENV_FILE/.test(x))) {
+      expect(l).toMatch(/as_build test -r "\$LKB_ENV_FILE"; then/);
+    }
+    expect(code).toMatch(
+      /as_build git show "\$\{new_sha\}:deploy\/env\.template" >"\$\{work_dir\}\/env\.template"/,
+    );
+  });
+
+  it('installs itself only with --update-self, root-owned and with fixed modes, then re-runs the new copy', () => {
+    expect(code).toMatch(/self_files=\(deploy\.sh:0755 lib\.sh:0644 env-sync\.sh:0755 env-sync\.mjs:0644\)/);
+    expect(code).toMatch(
+      /install -o root -g root -m "\$\{spec##\*:\}" -- "\$\{work_dir\}\/\$\{f\}" "\$\{here\}\/\$\{f\}\.new"/,
+    );
+    expect(code).toMatch(/exec "\$\{here\}\/deploy\.sh" "\$\{orig_args\[@\]\}"/);
+    expect(code).toMatch(/LKB_SELF_UPDATED/); // never a loop
+  });
+
+  it('env-sync.sh writes atomically beside the file after a backup, and checks with the bridge as the service user', () => {
+    const e = read('env-sync.sh');
+    const backup = e.indexOf('cp --preserve=mode,ownership,timestamps -- "$env_file" "$backup"');
+    const rename = e.indexOf('mv -f -- "$tmp" "$env_file"');
+    expect(backup).toBeGreaterThan(0);
+    expect(rename).toBeGreaterThan(backup);
+    expect(e).toMatch(/chown --reference="\$env_file" -- "\$tmp"/);
+    expect(e).toMatch(/chmod --reference="\$env_file" -- "\$tmp"/);
+    expect(e).toMatch(/^umask 077$/m);
+    expect(e).toMatch(/env -i PATH=/); // the planner gets an empty environment
+    const lib = read('lib.sh');
+    expect(lib).toMatch(/\$\{LKB_RUNAS:-runuser -u\} "\$LKB_SERVICE_USER" -- env -i /);
   });
 });
 
@@ -401,9 +471,11 @@ describe('env drift check (chunk 8, F-10)', () => {
     expect(old.err + old.out).not.toMatch(/k6-secret|proj_x/);
   });
 
-  it('is called by deploy.sh and healthcheck.sh', () => {
-    expect(read('deploy.sh')).toMatch(/^env_drift_report /m);
+  it('is called by healthcheck.sh; deploy.sh checks with env-sync against the release being deployed (OPS1)', () => {
     expect(read('healthcheck.sh')).toMatch(/env_drift_report /);
+    // deploy.sh used to warn against the checkout's (old) template; it now runs env-sync --check against the new one.
+    expect(read('deploy.sh')).not.toMatch(/^env_drift_report /m);
+    expect(read('deploy.sh')).toMatch(/"\$\{here\}\/env-sync\.sh" --check "\$\{sync_args\[@\]\}"/);
   });
 });
 

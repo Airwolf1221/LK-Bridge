@@ -1,5 +1,5 @@
 /**
- * The repository tree's tables (migration 0700) and the rules for changing them (ADR 0024). Synchronous, like every
+ * The repository tree's tables (migration 0700) and the rules for changing them (ADR 0025). Synchronous, like every
  * other store: each method that changes the tree runs in one SQLite transaction, so a change is all or nothing.
  *
  * The one rule every change follows: **an observation never replaces one made later.** Each node keeps when its

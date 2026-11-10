@@ -3,7 +3,7 @@
 ## Unreleased: v2 A2, the repository tree (10 November 2026)
 
 The bridge's own model of each project's AI REPOSITORY ([docs/PLAN-v2.md](PLAN-v2.md) 4.2; design and concurrency rules
-in [ADR 0024](adr/0024-repository-tree.md); how to use it in [docs/tree.md](tree.md)). No MCP tools yet: later
+in [ADR 0025](adr/0025-repository-tree.md); how to use it in [docs/tree.md](tree.md)). No MCP tools yet: later
 sessions (A3, B2) build on its query layer.
 
 - **Storage (migration 0700).** One row per page under the project's root (the root included), every row with
@@ -52,8 +52,39 @@ sessions (A3, B2) build on its query layer.
   a check that must not undo newer after-write updates; two projects with the same ids, fully isolated; status
   transitions; the dashboard and the CLI.
 - **Independent review:** eleven issues found by a read-only review of the tree code are fixed, with regression tests
-  in `test/tree/review.test.ts` (ADR 0024, "Review").
+  in `test/tree/review.test.ts` (ADR 0025, "Review").
 - Existing tests that listed every migration or maintenance job now include 0700 and the two tree jobs.
+
+## Unreleased: OPS1, env-sync and the deploy's self-check (10 November 2026)
+
+The env file is kept in step with each release's template, and moved to the multi-project form, without anyone
+hand-editing secrets ([ADR 0024](adr/0024-env-sync.md); runbook:
+[Updating the env file](runbook-deploy.md#updating-the-env-file)). No change to the bridge's behaviour.
+
+- **Markers in `deploy/env.template`.** Every variable has exactly one: `@default`, `@generate:<enc>:<bytes>`
+  (`SESSION_SECRET`, `JWT_SIGNING_KEY`), `@secret` (the LegendKeeper keys, `OWNER_PASSWORD_HASH`, `OWNER_TOTP_SECRET`)
+  or `@optional`. A test requires one for every variable the config loaders read, and no value on a secret.
+- **`deploy/env-sync.sh`** (planner in `deploy/env-sync.mjs`), run as root from `/opt/lk-bridge/bin`: adds missing
+  defaults, generates missing or blank secrets from `crypto.randomBytes`, adds a commented-out placeholder and
+  `ACTION NEEDED: fill in X` for an owner-only secret, adds optional settings commented out, and comments out (with a
+  dated note) settings the template no longer lists. It never changes an existing value and never prints one. `--check`
+  reports only (0 in step, 1 changes needed, 2 error); otherwise it shows the summary and asks, unless `--yes`. Every
+  edit: a timestamped backup beside the file, an atomic write keeping `root:lkbridge 0640`, then the bridge's own
+  configuration check as `lkbridge`, with the backup put back if the edit made the file invalid.
+- **`--migrate-projects`** moves `LK_API_KEY` to `LK_PROJECT_<NAME>_API_KEY` (the value moved, never shown), adds
+  `LK_PROJECTS` and `LK_DEFAULT_PROJECT`, and comments out `LK_PROJECT_ID`, `LK_PROJECT_NAME` and the retired sandbox
+  settings. It refuses a mixed or unexpected state and changes nothing the second time. The runbook's
+  [Moving to several projects](runbook-deploy.md#moving-to-several-projects-v2-a1) now uses it.
+- **`npm run config:check -- --file <env file>`** (`src/config/check.ts`): runs every start-up config loader on an env
+  file and checks each project key's format (no network, no database); one `issue:` line per problem, names only.
+- **`deploy.sh`**: after fetching, compares its installed copies (`deploy.sh`, `lib.sh`, `env-sync.sh`,
+  `env-sync.mjs`) with the release's and stops with the difference, or installs them and re-runs itself with
+  `--update-self` (a warning only with `--current`, so a rollback never downgrades them). Then runs env-sync `--check`
+  against the release's template: a missing secret stops it with `ACTION NEEDED`; other differences stop it with the
+  exact command, or are applied after the build with `--sync-env`. Every deploy now runs the new build's configuration
+  check before the migrations and the start. `--yes` answers its questions. The drift warnings moved out of `deploy.sh`
+  (the health check keeps them).
+- `migrate-to-build-user.sh` installs the env-sync files too. `tsconfig.json` type-checks `deploy/*.mjs`.
 
 ## Unreleased: v2 session B1, the Markdown converter (9 November 2026)
 

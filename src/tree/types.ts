@@ -1,4 +1,4 @@
-/** Shared types of the repository tree (v2 A2, docs/tree.md, ADR 0024). */
+/** Shared types of the repository tree (v2 A2, docs/tree.md, ADR 0025). */
 
 /** `root` is the AI REPOSITORY page itself; every other node is classified by its name's prefix. */
 export type NodeKind = 'root' | 'index' | 'bsrc' | 'unclassified';

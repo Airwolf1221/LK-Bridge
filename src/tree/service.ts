@@ -1,5 +1,5 @@
 /**
- * The repository tree service (v2 A2, docs/tree.md, ADR 0024): the bridge's own model of each project's AI REPOSITORY.
+ * The repository tree service (v2 A2, docs/tree.md, ADR 0025): the bridge's own model of each project's AI REPOSITORY.
  *
  * - **First build** (`prepareBuild` → `confirmBuild`): lists every resource (paged), shows an estimate, then reads each
  *   node under the root with getResource, at P3. Progress is persisted; a restart continues where it stopped.

@@ -1,5 +1,5 @@
 /**
- * Public surface of `src/tree` (v2 A2, docs/tree.md, ADR 0024): the repository tree of each project's AI REPOSITORY.
+ * Public surface of `src/tree` (v2 A2, docs/tree.md, ADR 0025): the repository tree of each project's AI REPOSITORY.
  *
  * ```ts
  * const tree = createTree({ db, engine, projects, clock });

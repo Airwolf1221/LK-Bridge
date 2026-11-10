@@ -32,7 +32,7 @@ env file ✋ → `setup:owner` ✋ → systemd units, the sudo rule and the depl
 block → health check → sandbox script ✋ → connect Claude and ChatGPT ✋ → go live ✋. These are sections 1 to 14 below,
 in that order.
 
-Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), [rollback](#rollback),
+Afterwards: [updating](#updating), [updating the env file](#updating-the-env-file), [backups and restore](#backups-and-restore), [rollback](#rollback),
 [logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the v2 phase 0 spike](#v2-phase-0-spike-),
 [the browser smoke test](#browser-smoke-test),
 [memory](#memory), [moving to several projects (v2 A1)](#moving-to-several-projects-v2-a1),
@@ -44,11 +44,11 @@ Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), 
 | ---------------------------------------- | -------------------------------------------------------------------------------------- | --------------------- |
 | `/opt/lk-bridge`                         | the three directories below                                                            | `root`, 0755          |
 | `/opt/lk-bridge/app`                     | the git checkout and build output; readable by all, writable only by `lkbuild`         | `lkbuild`, 0755       |
-| `/opt/lk-bridge/bin`                     | the installed `deploy.sh` and `lib.sh`, run as root (v1.0.1)                           | `root`, 0755          |
+| `/opt/lk-bridge/bin`                     | the installed `deploy.sh`, `lib.sh`, `env-sync.sh`, `env-sync.mjs`, run as root        | `root`, 0755          |
 | `/opt/lk-bridge/runtime/node`            | symlink to the private Node 24 (`node-v24.x.y-linux-x64` beside it)                    | `root`, 0755          |
 | `/var/lib/lk-bridge`                     | `bridge.db` and its WAL files; the only place the service may write                    | `lkbridge`, **0700**  |
 | `/var/lib/lk-bridge/backups`             | `nightly-*.db.gz` (newest 14) and `pre-deploy-*.db.gz` (newest 5)                      | `lkbridge`, 0700      |
-| `/etc/lk-bridge/lk-bridge.env`           | every setting and secret                                                               | `root:lkbridge`, 0640 |
+| `/etc/lk-bridge/lk-bridge.env`           | every setting and secret (and `lk-bridge.env.bak.<time>`, env-sync's backups)          | `root:lkbridge`, 0640 |
 | `/etc/systemd/system/lk-bridge.service`  | the service                                                                            | `root`, 0644          |
 | `/etc/systemd/system/lk-bridge-backup.*` | the nightly backup service and timer                                                   | `root`, 0644          |
 | `/etc/sudoers.d/lk-bridge`               | lets `lkbridge` start, stop, restart and show the status of `lk-bridge` — nothing else | `root`, 0440          |
@@ -60,9 +60,10 @@ Afterwards: [updating](#updating), [backups and restore](#backups-and-restore), 
 
 The scripts, all in `deploy/`: `install-node.sh`, `deploy.sh`, `backup.sh`, `restore.sh` (chunk 8), `healthcheck.sh`,
 `lk-run.sh` (runs a command with the private Node and `DB_PATH` set), `sandbox-test.sh`, `soak-sandbox.sh` (chunk 8), `spike-v2.sh` (v2 phase 0),
-`migrate-to-build-user.sh` (v1.0.1, once), plus `lib.sh` (shared helpers) and the files the steps install:
-`lk-bridge.service`, `lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`, `sudoers.lk-bridge`,
-`env.template`. `deploy.sh` and `lib.sh` are also installed into `/opt/lk-bridge/bin` (step 8).
+`migrate-to-build-user.sh` (v1.0.1, once), `env-sync.sh` with `env-sync.mjs` (OPS1: keeps the env file in step with
+`env.template`), plus `lib.sh` (shared helpers) and the files the steps install: `lk-bridge.service`,
+`lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`, `sudoers.lk-bridge`, `env.template`.
+`deploy.sh`, `lib.sh`, `env-sync.sh` and `env-sync.mjs` are also installed into `/opt/lk-bridge/bin` (step 8).
 
 ---
 
@@ -310,8 +311,13 @@ the checkout, which `lkbuild` can change; it refuses to.
 ```bash
 sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/deploy.sh /opt/lk-bridge/bin/deploy.sh
 sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/lib.sh /opt/lk-bridge/bin/lib.sh
-ls -l /opt/lk-bridge/bin                # both root root, neither group- nor world-writable
+sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/env-sync.sh /opt/lk-bridge/bin/env-sync.sh
+sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/env-sync.mjs /opt/lk-bridge/bin/env-sync.mjs
+ls -l /opt/lk-bridge/bin                # all root root, none group- nor world-writable
 ```
+
+From then on `deploy.sh` keeps these four files up to date itself, when you ask it to (`--update-self`, see
+[Updating](#updating)).
 
 ## 9. Start it and check it locally
 
@@ -504,10 +510,22 @@ start through `lkbridge`'s sudo rule. What it does, in order (it stops at the fi
 
 1. **Pre-flight, nothing changed yet:** it runs as root from `/opt/lk-bridge/bin` (root's, not writable by others), both
    users exist, `lkbuild` owns the app, is not in group `lkbridge` and **cannot read the env file**, the private Node is
-   root's, `lkbridge` can read the env file (and, by variable **name** only, whether it has drifted from
-   `deploy/env.template`: see below), the checkout has **no local changes or untracked files** (otherwise it refuses and
-   lists them), the sudo rule works, and `origin/main` is a **fast-forward** of what is checked out (otherwise it
-   refuses). If there is nothing new it says so and exits (`--force` redeploys anyway).
+   root's, `lkbridge` can read the env file, the checkout has **no local changes or untracked files** (otherwise it
+   refuses and lists them), the sudo rule works, and `origin/main` is a **fast-forward** of what is checked out
+   (otherwise it refuses). Then two comparisons with the release it is about to deploy (OPS1):
+   - **the installed deploy scripts** (`deploy.sh`, `lib.sh`, `env-sync.sh`, `env-sync.mjs` in `/opt/lk-bridge/bin`)
+     against the release's own copies. If they differ it shows the difference in full (these files hold no secrets) and
+     stops, so an outdated script is never used for a release that needs the new one. Read the difference, then run the
+     same command again with `--update-self`: it asks, installs the release's copies (root:root, 0755 and 0644) and
+     runs the new `deploy.sh` with the same options. With `--current` (a rollback, usually to an older commit) a
+     difference is only a warning, so a rollback never downgrades the scripts by surprise.
+   - **the env file** against the release's `deploy/env.template`, with `env-sync.sh --check` (names only, never a
+     value). If they differ it stops and prints the exact command to run: the same deploy with `--sync-env`. A secret
+     only you can supply (a new key, say) always stops it with **`ACTION NEEDED`**; see
+     [Updating the env file](#updating-the-env-file).
+
+   If there is nothing new it says so and exits (`--force` redeploys anyway).
+
 2. **Drains and stops** the service: `systemctl stop lk-bridge` (as `lkbridge`, through sudo). This is the drain. SIGTERM makes the bridge stop
    taking new work and give running jobs up to 20 seconds to finish; the unit allows 45 seconds before killing it. A job
    still unfinished then is picked up again by the engine's start-up recovery when the service starts. (The admin API could
@@ -515,7 +533,10 @@ start through `lkbridge`'s sudo rule. What it does, in order (it stops at the fi
    hand-over, press _Drain_ on the dashboard's Writers page before you start.)
 3. Takes a **`pre-deploy` backup** of the database (kept: the newest 5), as `lkbridge`.
 4. As `lkbuild`: `git merge --ff-only`, `npm ci`, `npm run build`; then checks that **nothing in the app is writable by
-   `lkbridge`**. As `lkbridge`: the **database migrations**.
+   `lkbridge`**. With `--sync-env`, env-sync updates the env file now (backup first). Then the **boot check**: the new
+   build's own configuration check (`npm run config:check`) on the env file, as `lkbridge`, with no database and no
+   network. If it fails, an env-sync edit is undone from its backup and the deploy stops **before** the migrations and
+   the start. Then, as `lkbridge`, the **database migrations**.
 5. **Starts** the service (as `lkbridge`, through sudo) and waits up to 60 seconds for `/healthz`.
 6. Runs `healthcheck.sh` as `lkbridge` (with the permission checks) and prints **`DEPLOY SUCCEEDED`** or
    **`DEPLOY FAILED`**.
@@ -526,29 +547,61 @@ rollback command. If only a check **after** the start fails (the health check), 
 message says so.
 
 Options: `--current` (deploy the checked-out commit without fetching; used for rollback), `--force`, `--local-health`
-(skip the public checks).
+(skip the public checks), `--sync-env` (update the env file instead of stopping), `--update-self` (install the release's
+deploy scripts instead of stopping), `--yes` (answer the questions `--sync-env` and `--update-self` ask).
 
-**Env drift warnings (chunk 8).** `deploy.sh` and `healthcheck.sh` compare the env file with `deploy/env.template` by
-name and print a `WARNING:` line (never a value; never a failure) for: a variable the template sets that your file does
-not; an optional setting a release added (the template shows it as `# NAME=…`; copy that commented line across to keep
-the file in step); and a variable your file still sets that the template no longer lists (the bridge ignores it; remove the
-line). When everything matches it says `Env file matches deploy/env.template`. Since v2 A1 the project variables follow
-their own rules (by name only): each project in `LK_PROJECTS` needs its `LK_PROJECT_<NAME>_API_KEY`, a key line for an
-unlisted project is ignored, the single-project form (`LK_API_KEY`, `LK_PROJECT_ID`) still works but should be moved
-off, and `LK_SANDBOX_API_KEY` / `LK_SANDBOX_PROJECT_ID` are retired.
+**Env drift warnings (chunk 8).** `healthcheck.sh` still compares the env file with the checkout's `deploy/env.template`
+by name and prints a `WARNING:` line (never a value; never a failure) for each difference; since v2 A1 the project
+variables follow their own rules there too. `deploy.sh` no longer prints these warnings: it runs env-sync against the
+release being deployed instead (above).
 
-The unit files, the sudoers file, the Caddy block and the installed deploy script are **not** updated by `deploy.sh`. If
-a release changes one, the script warns after a successful deploy ("… differs from deploy/…"); an administrator then
-repeats step 8 (and `sudo systemctl restart lk-bridge`) or step 10 for that file. For the deploy script itself, **read
-the difference first**, because it runs as root:
+The unit files, the sudoers file and the Caddy block are **not** updated by `deploy.sh`. If a release changes one, the
+script warns after a successful deploy ("… differs from deploy/…"); an administrator then repeats step 8 (and
+`sudo systemctl restart lk-bridge`) or step 10 for that file. To upgrade Node:
+`sudo NODE_VERSION=v24.x.y /opt/lk-bridge/app/deploy/install-node.sh`, then `sudo systemctl restart lk-bridge`.
 
-````bash
-diff /opt/lk-bridge/bin/deploy.sh /opt/lk-bridge/app/deploy/deploy.sh
-diff /opt/lk-bridge/bin/lib.sh /opt/lk-bridge/app/deploy/lib.sh
-sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/deploy.sh /opt/lk-bridge/bin/deploy.sh   # 🔒 sudo
-sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/lib.sh /opt/lk-bridge/bin/lib.sh         # 🔒 sudo
-``` To upgrade Node: `sudo NODE_VERSION=v24.x.y
-/opt/lk-bridge/app/deploy/install-node.sh`, then `sudo systemctl restart lk-bridge`.
+## Updating the env file
+
+`/etc/lk-bridge/lk-bridge.env` is kept in step with each release's `deploy/env.template` by **env-sync** (OPS1,
+[ADR 0024](adr/0024-env-sync.md)), so nobody edits secrets by hand except to paste one only they have. Every deploy
+checks it (`--check`, above); you can also run it on its own (🔒 sudo):
+
+```bash
+sudo /opt/lk-bridge/bin/env-sync.sh --check
+```
+
+```bash
+sudo /opt/lk-bridge/bin/env-sync.sh
+```
+
+The first only reports (exit status 0 in step, 1 changes needed, 2 error). The second shows the same summary and asks
+before it writes. Each variable in the template carries a marker that says what env-sync may do when your file lacks it:
+
+| Marker                | What env-sync does when the variable is missing                                                               |
+| --------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `@default`            | adds it with the template's value and comment                                                                 |
+| `@generate:<enc>:<n>` | adds it with a new random value (`SESSION_SECRET`, `JWT_SIGNING_KEY`), and fills a blank line in; never shown |
+| `@secret`             | adds a commented-out placeholder and prints **`ACTION NEEDED: fill in X`**; it never invents one              |
+| `@optional`           | adds it commented out, with its default                                                                       |
+| (no longer listed)    | a variable your file sets that the template no longer lists is commented out with a dated note; never deleted |
+
+A value already in your file is **never changed** (only `--migrate-projects`, below, moves the key to its new name). The
+summary names variables only, never a value: not one it read, moved or generated. Before writing, it makes a backup
+beside the file (`lk-bridge.env.bak.<UTC time>`, same owner, group and mode), writes the new file beside it and renames
+it over the old one, keeping `root:lkbridge 0640`. Then it runs the bridge's own configuration check as `lkbridge`; if
+the edit made the file invalid, it puts the backup back and says so. Restart to use the new settings
+(`sudo systemctl restart lk-bridge`); a deploy with `--sync-env` does that for you.
+
+**ACTION NEEDED.** For a secret only you can supply, env-sync adds a commented-out line at the end of the file, for
+example `# LK_PROJECT_ARKONA_API_KEY=`. Open the file with `sudoedit /etc/lk-bridge/lk-bridge.env`, remove the `# ` and
+paste the value after the `=`. A required secret stops every deploy until it is filled in; an optional one (the TOTP
+secret, say) stops only the deploy that first adds its placeholder.
+
+Old backups are not removed automatically; once a change has proved itself, delete the ones you no longer need (🔒 sudo):
+
+```bash
+sudo ls -l /etc/lk-bridge/
+```
 
 ## Backups and restore
 
@@ -563,6 +616,8 @@ sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/lib.sh /opt/lk-br
   sudo journalctl -u lk-bridge-backup -n 20 --no-pager
   sudo ls -lh /var/lib/lk-bridge/backups/
   sudo systemctl start lk-bridge-backup.service        # a backup right now
+  ```
+
 ````
 
 - **Off the server:** the backups sit on the same disk as the database. Copy them somewhere else now and then, from your
@@ -776,24 +831,27 @@ Since v2 A1 one bridge serves several LegendKeeper projects, each with its own k
 [ADR 0023](adr/0023-project-model.md)). The release adds migration **`0600_projects.sql`**, which gives every stored row a
 project and assigns all existing rows (jobs, journal, proposals, errors, budget history, mappings, maintenance runs, the
 governor's saved counts) to the project the bridge serves today: the one in `LK_PROJECT_ID`, named `test` (or
-`LK_PROJECT_NAME` if your file sets it). So **deploy first, with the env file as it is, then change the file.**
+`LK_PROJECT_NAME` if your file sets it). So **deploy first, with the env file as it is, then migrate the file.** Since
+OPS1, env-sync migrates it for you; nothing below prints a key, and nobody copies one by hand.
 
 The live file today has the single-project form: `LK_API_KEY` and `LK_PROJECT_ID` (the test world, PLAN amendment 6), and
-`LK_SANDBOX_API_KEY` / `LK_SANDBOX_PROJECT_ID`. Nothing below prints a key.
+`LK_SANDBOX_API_KEY` / `LK_SANDBOX_PROJECT_ID`.
 
-1. **Deploy** as usual (🔒 sudo). `deploy.sh` takes its `pre-deploy` backup, then migrates.
+1. **Deploy** as usual (🔒 sudo). `deploy.sh` takes its `pre-deploy` backup, then migrates the database.
 
    ```bash
    sudo /opt/lk-bridge/bin/deploy.sh
    ```
 
-   The deploy script installed in `/opt/lk-bridge/bin` comes from an earlier release and gives the migration `DB_PATH`
-   only; the migration then reads `LK_PROJECT_ID` and `LK_PROJECT_NAME` (those two names only) from
-   `/etc/lk-bridge/lk-bridge.env` itself, and says so (`LK_PROJECT_ID was read from …`). The bridge starts in the
-   single-project form and logs a warning that names the variables to move to. The deploy ends with a warning that the
-   installed deploy script differs: step 2.
+   An installed deploy script from before OPS1 deploys as it always did and ends with a warning that the installed
+   `deploy.sh` and `lib.sh` differ: install the new ones in step 2. (The migration reads `LK_PROJECT_ID` and
+   `LK_PROJECT_NAME`, those two names only, from the env file if the script does not pass them, and says so.) An
+   installed script from OPS1 on checks the env file first: the single-project form is only a note there, not a stop;
+   if it stops for anything else, run what it prints (the same command with `--sync-env`). The bridge starts in the
+   single-project form and logs a warning that names the variables to move to.
 
-2. **Update the installed deploy script** (it runs as root, so read the difference first; 🔒 sudo):
+2. **Install the deploy scripts, the first time only** (🔒 sudo). They run as root, so read them first. From then on,
+   `deploy.sh` compares them with each release itself and installs new ones with `--update-self`.
 
    ```bash
    diff /opt/lk-bridge/bin/deploy.sh /opt/lk-bridge/app/deploy/deploy.sh
@@ -804,6 +862,10 @@ The live file today has the single-project form: `LK_API_KEY` and `LK_PROJECT_ID
    ```
 
    ```bash
+   less /opt/lk-bridge/app/deploy/env-sync.sh /opt/lk-bridge/app/deploy/env-sync.mjs
+   ```
+
+   ```bash
    sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/deploy.sh /opt/lk-bridge/bin/deploy.sh
    ```
 
@@ -811,35 +873,43 @@ The live file today has the single-project form: `LK_API_KEY` and `LK_PROJECT_ID
    sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/lib.sh /opt/lk-bridge/bin/lib.sh
    ```
 
-   The differences: the migration step passes `LK_PROJECT_ID` and `LK_PROJECT_NAME` (ids and names, never a key), and the
-   env drift check knows the project variables.
+   ```bash
+   sudo install -o root -g root -m 0755 /opt/lk-bridge/app/deploy/env-sync.sh /opt/lk-bridge/bin/env-sync.sh
+   ```
 
-3. **Edit the env file** ✋ (`sudoedit /etc/lk-bridge/lk-bridge.env`). Rename and remove lines; never copy a key into a
-   message or a terminal:
+   ```bash
+   sudo install -o root -g root -m 0644 /opt/lk-bridge/app/deploy/env-sync.mjs /opt/lk-bridge/bin/env-sync.mjs
+   ```
 
-   | Change                                                             | Line(s)                                               |
-   | ------------------------------------------------------------------ | ----------------------------------------------------- |
-   | **rename** the key's line, keeping its value exactly               | `LK_API_KEY=…` becomes `LK_PROJECT_TEST_API_KEY=…`    |
-   | **add**                                                            | `LK_PROJECTS=test`                                    |
-   | **add**                                                            | `LK_DEFAULT_PROJECT=test`                             |
-   | **add** (optional; the default, shown as in `deploy/env.template`) | `# REQUIRE_PROJECT_FOR_WRITES=true`                   |
-   | **remove** (the id is now learned from the key and stored)         | `LK_PROJECT_ID=…`, and `LK_PROJECT_NAME=…` if present |
-   | **remove** (retired: the scripts now use the project's own key)    | `LK_SANDBOX_API_KEY=…`, `LK_SANDBOX_PROJECT_ID=…`     |
+3. **Migrate the env file** (🔒 sudo):
 
-   If your file set `LK_PROJECT_NAME`, use that name (lowercase) instead of `test` in all three new names. Check by name
-   only (🔒 sudo):
+   ```bash
+   sudo /opt/lk-bridge/bin/env-sync.sh --migrate-projects
+   ```
+
+   It shows what it will do, by name, and asks first:
+
+   | Change                                                                 | Line(s)                                                                     |
+   | ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+   | **moves** the key: the line is renamed in place, its value untouched  | `LK_API_KEY=…` becomes `LK_PROJECT_TEST_API_KEY=…`                          |
+   | **adds**, just above it                                                | `LK_PROJECTS=test`, `LK_DEFAULT_PROJECT=test`                               |
+   | **comments out**, with a "migrated" note (the id is now learned from the key and stored; the sandbox settings are retired) | `LK_PROJECT_ID`, `LK_PROJECT_NAME`, `LK_SANDBOX_API_KEY`, `LK_SANDBOX_PROJECT_ID` |
+
+   If your file sets `LK_PROJECT_NAME`, that name (lower-cased) is used instead of `test`. In the same pass it brings
+   the rest of the file in step with the template, as in [Updating the env file](#updating-the-env-file) (for example
+   `# REQUIRE_PROJECT_FOR_WRITES=true`, commented out). It backs the file up first, then runs the bridge's configuration
+   check as `lkbridge` (which also checks the moved key's format, without calling LegendKeeper); if that fails it puts
+   the backup back. It **refuses**, changing nothing, if the file is in a mixed or unexpected state: both forms at once
+   (`LK_PROJECTS` and `LK_API_KEY`), a `LK_PROJECT_<NAME>_API_KEY` line without `LK_PROJECTS`, a variable set twice,
+   an empty key, or an `LK_DEFAULT_PROJECT` that names another project; the message says which. Running it again
+   changes nothing. Check by name only (🔒 sudo):
 
    ```bash
    sudo grep -oE '^LK_[A-Z0-9_]+=' /etc/lk-bridge/lk-bridge.env
    ```
 
-   It should list `LK_PROJECTS=`, `LK_PROJECT_TEST_API_KEY=`, `LK_DEFAULT_PROJECT=`, `LK_READ_ONLY=` and
-   `LK_ALLOW_MEMBER_ADMIN=`, and none of `LK_API_KEY=`, `LK_PROJECT_ID=`, `LK_SANDBOX_…`. This must print nothing (an
-   empty key line):
-
-   ```bash
-   sudo grep -E '^LK_PROJECT_TEST_API_KEY=$' /etc/lk-bridge/lk-bridge.env
-   ```
+   It should list `LK_PROJECTS=`, `LK_DEFAULT_PROJECT=`, `LK_PROJECT_TEST_API_KEY=`, `LK_READ_ONLY=` and
+   `LK_ALLOW_MEMBER_ADMIN=`, and none of `LK_API_KEY=`, `LK_PROJECT_ID=`, `LK_SANDBOX_…`.
 
 4. **Restart and check** (🔒 sudo):
 
@@ -854,7 +924,7 @@ The live file today has the single-project form: `LK_API_KEY` and `LK_PROJECT_ID
    The journal no longer shows the single-project warning, and the health check's drift check is quiet about project
    variables. On the dashboard, **Projects** shows `test` as default, key valid, active, with the same LegendKeeper id as
    before (the key proved it); its jobs, journal and proposals are all there under the project switcher's `test`. If the
-   project shows **stopped**, the reason says why (for example a key pasted wrongly); the bridge keeps running.
+   project shows **stopped**, the reason says why; the bridge keeps running.
 
 5. **Mark the test world as the sandbox** (once; the sandbox, soak and spike scripts refuse every other project;
    🔒 sudo):
@@ -869,15 +939,21 @@ The live file today has the single-project form: `LK_API_KEY` and `LK_PROJECT_ID
 6. In Claude or ChatGPT, `list_projects` shows `test`. With one project, agents may leave `project` out; once a second
    project is added, every write must name its project.
 
-**Going back.** Until step 3 nothing in the env file has changed. After it, putting the old lines back (the single-project
-form still works) and restarting returns to step 1's state. Going back to a release before this one needs the
-`pre-deploy` backup of step 1 (see [Rollback](#rollback)).
+**Going back.** Until step 3 nothing in the env file has changed. After it, env-sync's backup is beside the file
+(`ls -l /etc/lk-bridge/`): put it back and restart, and you are at step 1's state (the single-project form still works):
+
+```bash
+sudo install -o root -g lkbridge -m 0640 /etc/lk-bridge/lk-bridge.env.bak.<time> /etc/lk-bridge/lk-bridge.env
+```
+
+Going back to a release before A1 needs the `pre-deploy` backup of step 1 (see [Rollback](#rollback)).
 
 ### Adding a project
 
 1. Choose a name (a lowercase letter, then lowercase letters, digits or `_`), for example `arkona`.
 2. In the env file add the name to `LK_PROJECTS` (`LK_PROJECTS=test,arkona`) and a line `LK_PROJECT_ARKONA_API_KEY=` with
-   its key. With two projects `LK_DEFAULT_PROJECT` is required: reads without `project` go there.
+   its key (or add only the name, then let `sudo /opt/lk-bridge/bin/env-sync.sh` add a commented-out placeholder for the
+   key and say `ACTION NEEDED`). With two projects `LK_DEFAULT_PROJECT` is required: reads without `project` go there.
 3. `sudo systemctl restart lk-bridge`. The bridge checks the new key, learns and stores the project's id, and shows it on
    the Projects page. Switch its **Read-only** flag on there first if it should not be written to yet.
 4. Never mark a live world as a sandbox, and never put one project's key in two bridges' env files (ADR 0023).
@@ -1004,3 +1080,4 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/deploy.sh --current --force
 ```
 
 Then, once it runs: `sudo userdel -r lkbuild` and `sudo rm -r /opt/lk-bridge/bin`.
+````
