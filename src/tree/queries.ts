@@ -15,6 +15,7 @@ import type {
   NameField,
   NameMatch,
   NodeKind,
+  SidebarBlock,
   TreeAnswer,
   TreeDocument,
   TreeMeta,
@@ -231,6 +232,36 @@ export class TreeQueries {
         stale: agg.stale ?? 0,
         propertiesPending: agg.pending ?? 0,
       };
+    });
+  }
+
+  /**
+   * v2 A3: the stored sidebar summary of each node asked for (null when its properties have not been read), for rows
+   * the catalogue fields do not carry (a page's Subject). Nodes the tree does not hold are left out.
+   */
+  sidebars(projectId: string, ids: readonly string[]): TreeAnswer<Map<string, SidebarBlock[] | null>> {
+    return this.answer(projectId, new Map<string, SidebarBlock[] | null>(), () => {
+      const out = new Map<string, SidebarBlock[] | null>();
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        const rows = this.db
+          .prepare(
+            `SELECT id, sidebar FROM tree_nodes WHERE project_id = ? AND id IN (${chunk.map(() => '?').join(', ')})`,
+          )
+          .all(projectId, ...chunk) as { id: string; sidebar: string | null }[];
+        for (const r of rows) {
+          let v: SidebarBlock[] | null = null;
+          if (r.sidebar !== null) {
+            try {
+              v = JSON.parse(r.sidebar) as SidebarBlock[];
+            } catch {
+              v = null;
+            }
+          }
+          out.set(r.id, v);
+        }
+      }
+      return out;
     });
   }
 

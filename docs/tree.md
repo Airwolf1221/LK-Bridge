@@ -120,6 +120,12 @@ than the P3 floor allows and always wait for agents' work.
 - exact-name lookups, every match, case-insensitive unless `caseSensitive: true`: `findByName(project, name, { fields })`
   (raw, display, alias, canonical), `findByRawName`, `findByDisplayName`, `findByAlias`, `findByCanonicalName`. No
   partial or fuzzy matching: A3 builds name resolution on these.
+- v2 A3: `sidebars(project, ids)`: the stored sidebar summary of each node (for rows the catalogue fields do not carry,
+  such as a page's Subject).
+
+`tree.onPassFinished(fn)` (v2 A3) calls `fn` with each pass that completes (build, sweep or check), after the tree is
+updated; a listener that throws is logged and never fails the pass. The registry's taxonomy drift report follows the
+daily check this way ([registry.md](registry.md)).
 
 ## Dashboard and admin API
 

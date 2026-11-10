@@ -58,7 +58,7 @@ export interface PlanDeps {
   /** The Characters root page (the project's `charactersRootId` setting), or null to look for it by name. */
   readonly charactersRootId?: (projectId: string) => string | null;
   /**
-   * The type registry's asset root folder for characters (A3), or null. Not wired until A3's data exists: then the
+   * The type registry's asset root folder for characters (A3), or null. The runtime wires it to A3's character type; without one the
    * literal "Characters" is used.
    */
   readonly assetRootFolderName?: (projectId: string) => string | null;

@@ -6,6 +6,9 @@ The data model, owner CRUD, import and export, a read-only preview, and the Repo
 `ui/src/pages/mappings.tsx`, tables in migration `0400_maintenance_mappings.sql`. Tests: `test/mappings/`,
 `test/ui/mappings.test.tsx`.
 
+**v2 A3:** the same page also holds the type registry, the taxonomy, the drift report and a read-only "Try it" panel,
+which later tools do use to place pages: see [registry.md](registry.md).
+
 ## Model
 
 **Mappings belong to a project (v2 A1).** Every set, rule and field map carries its project; the page and every

@@ -81,6 +81,13 @@ const routes = (extra: Record<string, unknown> = {}) => ({
     suggestedTypes: SUGGESTED,
   },
   'GET /mappings/sets/ms_1': detail(),
+  // v2 A3: the registry sections below the sets (test/ui/registry.test.tsx covers them).
+  'GET /registry': {
+    types: [],
+    templates: { templates: [], readAt: null, error: null },
+    tree: { status: 'ready', reason: null },
+  },
+  'GET /registry/drift': { latest: null, recent: [] },
   ...extra,
 });
 

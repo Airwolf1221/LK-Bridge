@@ -29,6 +29,7 @@ import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 import { createAssets, type AssetService } from './assets/index.js';
 import { createTree, type TreeService } from './tree/index.js';
+import { createRegistry, type Registry } from './registry/index.js';
 import {
   InstanceGuard,
   ProjectSelector,
@@ -63,6 +64,8 @@ export interface Runtime {
   readonly mappings: Mappings;
   /** v2 A2: the repository tree of each project's AI REPOSITORY (build, after-write updates, sweep, check, queries). */
   readonly tree: TreeService;
+  /** v2 A3: the type registry and taxonomy, name resolution, ordering and character placement, per project. */
+  readonly registry: Registry;
   /** v2 A4: the asset tree of each project's asset library (build, after-write updates, refresh, check, queries, placement). */
   readonly assets: AssetService;
   readonly tools: readonly McpToolProvider[];
@@ -193,6 +196,22 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   tree.attach();
   tree.start();
+  // v2 A3: the type registry and taxonomy. Its drift report follows each completed daily check of the tree.
+  const registry = createRegistry({
+    db: o.db,
+    tree,
+    engine,
+    audit: policy.store,
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachRegistry = registry.attach();
+
+  const characterType = (projectId: string) =>
+    registry
+      .forProject(projectId)
+      .store.listTypes()
+      .find((t) => t.placementKind === 'character');
 
   // v2 A4: the asset tree. It follows the engine's asset writes (a re-read after each, in the same job), resumes a
   // build a restart interrupted, and runs the refresh and check for the scheduler. Placement planning reads both trees.
@@ -203,6 +222,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     clock: o.clock ?? systemClock,
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
     tree: tree.queries,
+    // The type registry (A3) says where characters live: their asset root folder and their Characters index page.
+    assetRootFolderName: (projectId) => characterType(projectId)?.assetRootFolder?.trim() || null,
+    charactersRootId: (projectId) => characterType(projectId)?.rootIndexId ?? null,
   });
   assets.attach();
   assets.start();
@@ -257,6 +279,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     maintenance,
     mappings,
     tree,
+    registry,
     assets,
     tools,
     instructions: BRIDGE_INSTRUCTIONS,
@@ -279,6 +302,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachPolicy();
       await engine.stop();
       await tree.stop();
+      detachRegistry();
       await assets.stop();
       projects.close(); // every governor saves its counts
       guard?.release();

@@ -14,8 +14,9 @@ export default defineConfig({
       'test/mappings/**/*.test.ts',
       'test/markdown/**/*.test.ts', // v2 B1: the Markdown converter
       'test/projects/**/*.test.ts', // v2 A1: several LegendKeeper projects in one bridge
-      'test/tree/**/*.test.ts',
-      'test/assets/**/*.test.ts', // v2 A2: the repository tree
+      'test/tree/**/*.test.ts', // v2 A2: the repository tree
+      'test/registry/**/*.test.ts', // v2 A3: the type registry, taxonomy, resolution and ordering
+      'test/assets/**/*.test.ts', // v2 A4: the asset tree
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

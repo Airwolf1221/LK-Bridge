@@ -67,6 +67,8 @@ export interface AssetServiceOptions {
   readonly tree?: PlanDeps['tree'];
   /** The type registry's asset root folder for characters (A3), or null. Not wired until A3's data exists. */
   readonly assetRootFolderName?: PlanDeps['assetRootFolderName'];
+  /** The Characters index page from the type registry (A3), used when the project has no `charactersRootId` setting. */
+  readonly charactersRootId?: PlanDeps['charactersRootId'];
 }
 
 /** The asset operations the model follows, and what each does. */
@@ -360,7 +362,7 @@ export class AssetService {
     return planAssetDestination(projectId, request, {
       assets: this.queries,
       tree: this.o.tree,
-      charactersRootId: (p) => this.settings(p).charactersRootId,
+      charactersRootId: (p) => this.settings(p).charactersRootId ?? this.o.charactersRootId?.(p) ?? null,
       ...(this.o.assetRootFolderName ? { assetRootFolderName: this.o.assetRootFolderName } : {}),
     });
   }

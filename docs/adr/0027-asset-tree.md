@@ -91,8 +91,9 @@ app, which the bridge cannot see.
    - **No plan while the asset tree is `not_built` or `building`**: nothing could be told from a missing folder.
    - **Names are literal**: surrounding spaces are removed; empty, over-long (200), control-character and slash-path
      names are refused, except the literal `Undetermined / Unknown`.
-   - **The asset root folder name** comes from the type registry when A3's data exists (a hook,
-     `PlanDeps.assetRootFolderName`, not wired by this session); otherwise "Characters".
+   - **The asset root folder name** comes from the type registry (A3): the runtime wires
+     `PlanDeps.assetRootFolderName` and the Characters index fallback to the project's `character` type; otherwise
+     "Characters".
 10. **Stays in its area.** No MCP tools, no uploads or image processing (D3), no writes to LegendKeeper. The migration,
     the `src/assets` folder, one maintenance file, one admin route file and one page; the shared files it touches
     (runtime, maintenance registry, admin plugin, project settings, the dashboard's navigation) take one small addition

@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased: v2 A3, the type registry, taxonomy, name resolution and ordering (10 November 2026)
+
+Where each kind of page lives, and how the bridge finds and places pages ([docs/PLAN-v2.md](PLAN-v2.md) 4.3, 4.4, 4.5
+and section 9; design in [ADR 0026](adr/0026-type-registry-and-name-resolution.md); how to use it in
+[docs/registry.md](registry.md)). No MCP tools and no LegendKeeper writes: the services, storage and dashboard the
+phase C write tools will use.
+
+- **Storage (migration 0800).** Per project: types, taxonomy entries, the last read of the project's templates, and
+  taxonomy drift reports. Types are stored to grow into recipes (PLAN-v2 10.2): page templates as named roles, a
+  versioned, empty `recipe` document, a `pack_id` for later; nothing about Arkona is in code (the old bridge's
+  conventions are seed defaults and per-type settings).
+- **Type registry.** Singular and plural, root index, index template, page templates by role (`core`, `compact`, …),
+  asset root folder, placement rule (`character`, with section 9's settings, or `generic`). Created and edited on the
+  dashboard (audited). **Seed the Character type** finds `[INDEX] Characters` directly under the root and the templates
+  by name (one `listTemplates` read through the governor; the word "Template" ignored, as LegendKeeper's copies drop
+  it), and marks anything not found, or found twice, as needing review.
+- **Taxonomy.** Each type's categories (plural, singular, parent, aliases, source index, asset folder, status and
+  notes). Seeded once per type on request: every index under the root except character indexes (an index holding a
+  Core or Compact page about itself) and the unknown-race index. Singulars from the old bridge's race list, otherwise
+  simple rules, each marked for review; empty, unread, deep and duplicate indexes are marked too, with the reason.
+  **Add missing** creates entries for new indexes only and never changes existing ones.
+- **Drift report.** After each completed nightly tree check (a new `tree.onPassFinished` hook) and on request: indexes
+  with no entry, entries whose index was deleted, renamed or moved, entries whose parent no longer matches the tree.
+  Reported with links into the Repository Tree page, never fixed automatically.
+- **Name resolution.** `resolve(project, query, { scope, kinds })`: ids always, raw and display names, aliases and the
+  Canonical Display Name, any case; stray `[INDEX]` / `[BSRC]` prefixes cleaned (repeats collapse). Exactly one match,
+  or a typed `ambiguous` with every candidate and its path, or `not_found` with near names as a hint only. No fuzzy
+  matching decides anything. It is also the Markdown converter's `ctx.resolveMention` (B1).
+- **Character placement.** `planCharacterPlacement` (no write): the race index (children and grandchildren of the
+  type root, by the taxonomy's plural, singular and aliases), a character index to reuse or create, an existing Core or
+  Compact page returned rather than duplicated, the unknown-race index with Race / Species `Unestablished` for an
+  unknown or omitted race, the species value otherwise kept as given, and each new page's template and ordering slot.
+  A race that does not resolve, is ambiguous or is still waiting for review is a typed refusal.
+- **Ordering.** `placementFor` gives the `after` / `before` neighbour (`[INDEX]`, then `[BSRC]`, then unclassified;
+  alphabetical with a base-sensitivity, numeric collator), landing next to the right neighbour even among siblings
+  out of order. `outOfOrder` reports the fewest siblings that break the rule (never moves anything).
+- **Dashboard.** The Repository Mappings page gains _Types_, _Taxonomy_ (a tree view and the review queue), _Drift_ and a
+  read-only _Try it_ panel (resolve a name, plan a character placement, compute an ordering slot). The Repository Tree
+  page opens at a page linked with `?node=<id>`. Admin routes under `/api/admin/registry`.
+- **Tree (additive):** `tree.onPassFinished(fn)` and `tree.queries.sidebars(project, ids)`.
+- **Tests** (`test/registry/`, `test/ui/registry.test.tsx`): seeding against a tree shaped like the test world (both
+  character layouts, Humans' mix, one unknown-race index), singular forms, every resolution, placement and ordering
+  case, drift (on request and from the real nightly check), and two projects fully isolated. Tests that list every
+  migration now include 0800.
+- **Housekeeping:** CLAUDE.md now says to work only on the session's own branch, never force-push, and merge `main` in
+  rather than rebasing.
+
 ## Unreleased: v2 A4, the asset tree (10 November 2026)
 
 The bridge's own model of each project's asset library, and the old bridge's folder placement rules as a pure planning
@@ -37,7 +84,7 @@ tools) build on its query layer and planner.
   the group when the race sits directly under Characters) from the character page's ancestry, `Undetermined / Unknown`
   for an unknown race, then the literal `subfolders`. It lists the folders reused and those that would be created, in
   order. A non-folder asset in the way is `ASSET_NAME_CONFLICT`, several folders of the name `AMBIGUOUS_FOLDER`; folders
-  are never moved. The type registry's asset root name is a hook for A3 (default "Characters").
+  are never moved. The asset root folder name and the Characters index come from A3's character type (default "Characters").
 - **Dashboard.** An **Asset Tree** page per project (status, counts, build with estimate and progress, last build,
   refresh and check, stale rows, failed re-reads, correction log, a folder browser, **Refresh now** and a read-only
   **Try it** panel for placement) and `GET|POST /api/admin/asset-tree/…` (build, confirm, cancel and refresh are

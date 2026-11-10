@@ -5,10 +5,12 @@ import { fmtTime } from '../format';
 import { useReloadOn } from '../hooks';
 import { useProject, useProjectApi, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
+import { RegistrySections } from './registry';
 
 /**
  * Repository Mappings (PLAN §8 page 7, docs/mappings.md): mapping sets, type rules, field maps, import and export,
  * a readable summary and a read-only preview. Data and forms only: there is no inference engine.
+ * v2 A3 (docs/registry.md): the type registry, taxonomy, drift report and "Try it" panel below the sets.
  */
 
 type Selector =
@@ -207,6 +209,7 @@ function SetsPage() {
       </section>
       <NewSetCard onCreated={list.reload} />
       <ImportCard onImported={list.reload} />
+      <RegistrySections />
     </>
   );
 }

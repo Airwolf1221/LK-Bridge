@@ -129,7 +129,7 @@ The old bridge's rules, exactly (PLAN-v2 section 9):
    race sits directly under Characters. The labels come from the character page's ancestry in the repository tree
    (display names, so the `[INDEX]` and `[BSRC]` prefixes are gone). A Character Core page sits below the character's
    own `[INDEX]` page: that index gives the name and is not a label. "Characters" is the asset root folder name from
-   the type registry when A3's data exists (`PlanDeps.assetRootFolderName`, not wired until then), otherwise the
+   the type registry when A3's data exists (`PlanDeps.assetRootFolderName`; the runtime wires it to the project's character type, whose root index page is also the Characters index when `charactersRootId` is not set), otherwise the
    literal "Characters". The Characters index is the project's `charactersRootId` setting, or the one `[INDEX]` page of
    that name directly under the AI REPOSITORY.
 3. An unknown race (no page under Characters answers to the name, or the page sits directly under Characters) uses the

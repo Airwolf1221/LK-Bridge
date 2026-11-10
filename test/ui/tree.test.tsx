@@ -209,6 +209,22 @@ describe('Repository Tree page', () => {
     expect(within(browser).getByRole('button', { name: 'AI REPOSITORY' })).toBeInTheDocument();
   });
 
+  it('opens the browser at a node linked with ?node= (v2 A3: the registry links here)', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /tree': overview(),
+      'GET /tree/corrections': corrections,
+      'GET /tree/children': children,
+    });
+    renderApp('/ui/tree?node=chars001');
+    await screen.findByTestId('tree-browser');
+    await waitFor(() =>
+      expect(
+        api.find('GET', '/tree/children').some((c) => new URLSearchParams(c.query).get('id') === 'chars001'),
+      ).toBe(true),
+    );
+  });
+
   it('not configured: offers the suggested root, and sets it with the audited settings route', async () => {
     const api = installApi({
       ...baseRoutes(),
