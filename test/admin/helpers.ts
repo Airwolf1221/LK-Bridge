@@ -137,6 +137,8 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     LOG_LEVEL: 'silent',
     SESSION_SECRET: throwawaySecret(),
     JWT_SIGNING_KEY: throwawaySecret(),
+    // OPS2: the encrypted secret store's master key (a test value, made here; '' turns the store off).
+    SECRETS_MASTER_KEY: throwawaySecret(),
     ...o.env,
   };
   const config = loadConfig(envConfig);

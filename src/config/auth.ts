@@ -28,9 +28,12 @@ export interface AuthConfig {
   readonly secureCookies: boolean;
   readonly owner: {
     readonly username: string;
-    /** Argon2id PHC string produced by `npm run setup:owner`. */
-    readonly passwordHash: string;
-    /** Base32 TOTP secret; TOTP is required at login when set. */
+    /**
+     * Argon2id PHC string produced by `npm run setup:owner`. OPS2: optional; imported into the encrypted store on the
+     * first start with a master key, after which the store's value (changed on the dashboard) is the one used.
+     */
+    readonly passwordHash?: string;
+    /** Base32 TOTP secret; TOTP is required at login when set. OPS2: imported into the store like the hash. */
     readonly totpSecret?: string;
   };
   readonly sessionSecret: string;
@@ -96,9 +99,12 @@ const authEnvSchema = z.object({
     .string()
     .regex(/^[A-Za-z0-9._@-]{1,64}$/, { error: 'OWNER_USERNAME must be 1-64 of A-Z a-z 0-9 . _ @ -' })
     .default('owner'),
+  // OPS2: optional (the encrypted store keeps the owner's password once imported, or set on the dashboard).
   OWNER_PASSWORD_HASH: z
-    .string({ error: 'OWNER_PASSWORD_HASH is required; run `npm run setup:owner` to generate it' })
-    .regex(ARGON2ID_PHC, {
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? undefined : v.trim()))
+    .refine((v) => v === undefined || ARGON2ID_PHC.test(v), {
       error: 'OWNER_PASSWORD_HASH must be an Argon2id hash produced by `npm run setup:owner`',
     }),
   OWNER_TOTP_SECRET: z
@@ -281,7 +287,7 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
     secureCookies: pub.secure,
     owner: {
       username: e.OWNER_USERNAME,
-      passwordHash: e.OWNER_PASSWORD_HASH,
+      ...(e.OWNER_PASSWORD_HASH ? { passwordHash: e.OWNER_PASSWORD_HASH } : {}),
       ...(e.OWNER_TOTP_SECRET ? { totpSecret: e.OWNER_TOTP_SECRET } : {}),
     },
     sessionSecret: e.SESSION_SECRET,

@@ -29,6 +29,7 @@ import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 import { createAssets, type AssetService } from './assets/index.js';
 import { createTree, type TreeService } from './tree/index.js';
+import { SecretStore } from './secrets/store.js';
 import { createRegistry, type Registry } from './registry/index.js';
 import {
   InstanceGuard,
@@ -48,6 +49,8 @@ export interface Runtime {
    * The projects this bridge serves (v2 A1), each with its own governor and key; which are served now, and why not.
    */
   readonly projects: ProjectRegistry;
+  /** OPS2: the encrypted secret store (project keys, the owner's credentials). Never exposes a value but by `read`. */
+  readonly secrets: SecretStore;
   /** Resolves the `project` argument of the tools (REQUIRE_PROJECT_FOR_WRITES). */
   readonly selector: ProjectSelector;
   /**
@@ -138,10 +141,23 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   }
   // v2 A1: one governor per project (its key's tiers and its project tier), with counts that survive a restart
   // (governor_counters, one row per project). Each project's key is checked below, without blocking start-up.
+  // OPS2: the encrypted secret store. A missing or wrong master key only makes the secrets it cannot open unavailable
+  // (each affected project is stopped with the reason; the dashboard shows it); nothing here throws.
+  const secrets = new SecretStore(o.db, config.secrets, () => (o.clock ?? systemClock).now());
+  const storeState = secrets.state();
+  if (storeState.problem) log.warn({ keyId: storeState.keyId }, storeState.problem);
+  // Env keys imported into the store are audited once the policy layer (which holds the audit log) exists; an import
+  // made later, at a project's first key check, is audited as it happens.
+  const importsToAudit: { project: string; variable: string; hint: string }[] = [];
+  let auditImport = (i: { project: string; variable: string; hint: string }): void => {
+    importsToAudit.push(i);
+  };
   const projects = createProjectRegistry({
     db: o.db,
     config,
     transport,
+    secrets,
+    onImport: (i) => auditImport(i),
     log: {
       info: (obj, msg) => log.info(obj, msg),
       warn: (obj, msg) => log.warn(obj, msg),
@@ -182,6 +198,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     autoStart: false,
   });
   engine.start(); // restart-resume: jobs left running by a crash are verified and continued
+  // OPS2: keys imported from the env file, audited by name and last four characters only.
+  auditImport = (i) =>
+    policy.store.audit('system', 'project.key_import', i.project, undefined, {
+      variable: i.variable,
+      keyHint: i.hint,
+    });
+  for (const i of importsToAudit.splice(0)) auditImport(i);
   // Follows approved proposals' jobs, reconciles proposals left mid-approval by a crash, runs the expiry sweep.
   const detachPolicy = policy.attach(engine);
 
@@ -272,6 +295,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
 
   return {
     projects,
+    secrets,
     selector,
     ready,
     engine,

@@ -392,3 +392,119 @@ describe('env-sync.sh --migrate-projects', () => {
     );
   });
 });
+
+describe('env-sync.sh --retire-imported-keys (OPS2)', () => {
+  /** The live server's form: two projects with their keys, the owner hash, and the master key. */
+  const serverEnv = (r: FakeRoot) =>
+    inStepEnv(r)
+      .replace(
+        /^LK_PROJECT_TEST_API_KEY=.*$/m,
+        `LK_PROJECT_TEST_API_KEY=${SECRETS.key}\nLK_PROJECT_ARKONA_API_KEY=${SECRETS.key2}`,
+      )
+      .replace(/^LK_PROJECTS=test$/m, 'LK_PROJECTS=test,arkona');
+
+  it('retires only what the bridge found equal (or superseded); refuses a mismatch by name; prints no value', () => {
+    const r = makeFakeRoot();
+    root = r;
+    r.writeEnv(serverEnv(r));
+    r.setStore({
+      compare: {
+        LK_PROJECT_TEST_API_KEY: 'equal',
+        LK_PROJECT_ARKONA_API_KEY: 'differs',
+        OWNER_PASSWORD_HASH: 'superseded',
+      },
+    });
+    const res = run(r, 'env-sync.sh', ['--retire-imported-keys', '--yes']);
+    // Something was refused, so the owner is told (status 1), but what was safe is done.
+    expect(res.status).toBe(1);
+    expect(res.err).toMatch(
+      /Not retired: LK_PROJECT_ARKONA_API_KEY differs from the value in the bridge's encrypted store/,
+    );
+    expect(res.out).toMatch(
+      /will retire \(in the encrypted store now; values are never shown\): LK_PROJECT_TEST_API_KEY, OWNER_PASSWORD_HASH/,
+    );
+    const text = r.readEnv();
+    expect(text).toMatch(/^# LK_PROJECT_TEST_API_KEY=/m);
+    expect(text).toMatch(new RegExp(`^LK_PROJECT_ARKONA_API_KEY=${SECRETS.key2}$`, 'm')); // refused: untouched
+    expect(text).toMatch(/^# OWNER_PASSWORD_HASH=/m);
+    expect(text).toMatch(/^LK_PROJECTS=test,arkona$/m); // arkona keeps a key here
+    expect(r.backups()).toHaveLength(1);
+  });
+
+  it('retires LK_PROJECTS with the last key; the file then stays in step (no ACTION NEEDED)', () => {
+    const r = makeFakeRoot();
+    root = r;
+    r.writeEnv(inStepEnv(r));
+    r.setStore({ compare: { LK_PROJECT_TEST_API_KEY: 'equal', OWNER_PASSWORD_HASH: 'equal' } });
+    const res = run(r, 'env-sync.sh', ['--retire-imported-keys', '--yes']);
+    expect(res.status).toBe(0);
+    expect(r.readEnv()).toMatch(/^# LK_PROJECTS=test$/m);
+    expect(r.readEnv()).toMatch(/^LK_DEFAULT_PROJECT=test$/m);
+    const check = run(r, 'env-sync.sh', ['--check']);
+    expect(check.out).not.toMatch(/ACTION NEEDED/);
+    expect(check.status).toBe(0);
+  });
+
+  it('refuses what is not stored yet or unreadable, and changes nothing when nothing is safe', () => {
+    const r = makeFakeRoot();
+    root = r;
+    r.writeEnv(inStepEnv(r));
+    const before = r.readEnv();
+    r.setStore({ compare: { LK_PROJECT_TEST_API_KEY: 'not_stored', OWNER_PASSWORD_HASH: 'unreadable' } });
+    const res = run(r, 'env-sync.sh', ['--retire-imported-keys', '--yes']);
+    expect(res.status).toBe(1);
+    expect(res.err).toMatch(
+      /Not retired: LK_PROJECT_TEST_API_KEY is not in the bridge's encrypted store yet/,
+    );
+    expect(res.err).toMatch(/Not retired: the bridge cannot read its stored OWNER_PASSWORD_HASH/);
+    expect(r.readEnv()).toBe(before);
+    expect(r.backups()).toEqual([]);
+  });
+
+  it('needs a build that can compare (and has no --check form)', () => {
+    const r = makeFakeRoot({ secretsTool: false });
+    root = r;
+    r.writeEnv(inStepEnv(r));
+    const res = run(r, 'env-sync.sh', ['--retire-imported-keys', '--yes']);
+    expect(res.status).toBe(2);
+    expect(res.err).toMatch(/cannot compare the env file with its encrypted store/);
+    r.cleanup();
+    const r2 = fake();
+    r2.writeEnv(inStepEnv(r2, TEMPLATE));
+    expect(run(r2, 'env-sync.sh', ['--retire-imported-keys', '--check']).status).toBe(2);
+  });
+});
+
+describe('env-sync.sh and the master key (OPS2)', () => {
+  it('--rotate-master-key moves the key aside and generates a new one, printing neither', () => {
+    const r = makeFakeRoot();
+    root = r;
+    r.writeEnv(inStepEnv(r));
+    const res = run(r, 'env-sync.sh', ['--rotate-master-key', '--yes']);
+    expect(res.status).toBe(0);
+    expect(res.out).toMatch(/will rotate the master key: SECRETS_MASTER_KEY -> SECRETS_MASTER_KEY_PREVIOUS/);
+    expect(res.out).toMatch(/npm run secrets -- rotate-master-key/);
+    const text = r.readEnv();
+    expect(text).toContain(`SECRETS_MASTER_KEY_PREVIOUS=${SECRETS.master}`);
+    const fresh = /^SECRETS_MASTER_KEY=(.+)$/m.exec(text)?.[1] ?? '';
+    expect(Buffer.from(fresh, 'base64')).toHaveLength(32);
+    expect(fresh).not.toBe(SECRETS.master);
+    expect(r.backups()).toHaveLength(1);
+  });
+
+  it('never generates a new master key over a database that already holds encrypted secrets', () => {
+    const r = makeFakeRoot();
+    root = r;
+    r.writeEnv(inStepEnv(r).replace(/^SECRETS_MASTER_KEY=.*\n/m, ''));
+    r.setStore({ stored: 3 });
+    const before = r.readEnv();
+    const res = run(r, 'env-sync.sh', ['--yes']);
+    expect(res.status).toBe(2);
+    expect(res.err).toMatch(/holds 3 encrypted secret\(s\) that a new key could not open/);
+    expect(r.readEnv()).toBe(before);
+    // With nothing stored (a first OPS2 deploy), it is generated as any @generate variable.
+    r.setStore({ stored: 0 });
+    expect(run(r, 'env-sync.sh', ['--yes']).status).toBe(0);
+    expect(r.readEnv()).toMatch(/^SECRETS_MASTER_KEY=.{44}$/m);
+  });
+});

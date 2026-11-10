@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { api } from '../api';
+import { useState, type FormEvent } from 'react';
+import { api, formText } from '../api';
 import {
   Badge,
   Button,
@@ -15,13 +15,19 @@ import {
 import { PROJECT_STATUS_LABELS, fmtAgo, prettyJson } from '../format';
 import { useNow } from '../hooks';
 import { useProject } from '../project';
-import type { ProjectInfo, ProjectSettingKey, ProjectsResponse } from '../types';
+import { useReauth } from '../reauth';
+import type { KeyCheck, ProjectInfo, ProjectSettingKey, ProjectsResponse } from '../types';
 
 /**
  * Projects (v2 A1): every LegendKeeper project the bridge knows, its flags and status, and whether its key is configured
- * and valid. A key is never shown, only the name of the env variable that holds it (the API never sends one). The
- * per-project read-only flag is editable here, and (v2 A2) each project's settings: the AI REPOSITORY root, the names
- * the repository tree reads, and the hourly sweep switch. Every change is audited.
+ * and valid. A key is never shown, only the name of the env variable that holds it, or (OPS2) its last four
+ * characters. The per-project read-only flag is editable here, and (v2 A2) each project's settings: the AI REPOSITORY
+ * root, the names the repository tree reads, and the hourly sweep switch. Every change is audited.
+ *
+ * OPS2: projects are added here by pasting a key into a write-only field (checked with LegendKeeper, then confirmed,
+ * then stored encrypted), keys are replaced (same LegendKeeper project only), and projects are paused and drained, then
+ * removed (archived). Adding, replacing and removing ask for the password again when the last check is over five
+ * minutes old.
  */
 export function ProjectsPage() {
   const { data, error, reload } = useProject();
@@ -49,8 +55,14 @@ export function ProjectsPage() {
         </p>
       )}
       <ErrorNote error={error} onRetry={reload} />
+      {(data.notes ?? []).map((n) => (
+        <p key={n} className="note note-warn small-text">
+          {n}
+        </p>
+      ))}
+      <AddProjectCard canManage={data.canManageKeys !== false} onChanged={reload} />
       {data.projects.length === 0 ? (
-        <Empty>No projects are configured.</Empty>
+        <Empty>No projects yet. Add one above with its LegendKeeper API key.</Empty>
       ) : (
         <>
           <section className="card table-wrap" aria-labelledby="projects-h">
@@ -97,7 +109,60 @@ function ProjectRow({
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const toast = useToast();
+  const withReauth = useReauth();
+  const [replacing, setReplacing] = useState(false);
   const name = encodeURIComponent(p.name);
+  const archived = p.archived === true || p.status === 'archived';
+  const pending = p.pending ?? { jobs: 0, proposals: 0 };
+  const drain = (value: boolean) =>
+    void run(
+      () => api.put(`/projects/${name}/draining`, { value }),
+      value ? `${p.name} is paused and draining: it takes no new work.` : `${p.name} takes new work again.`,
+    ).then(onChanged);
+  const remove = () => {
+    if (pending.jobs + pending.proposals > 0) {
+      void confirm({
+        title: `Pause and drain ${p.name} first?`,
+        message: (
+          <>
+            <p>
+              <strong>{p.name}</strong> still has {pending.jobs} unfinished job(s) and {pending.proposals}{' '}
+              open proposal(s), so it cannot be removed yet.
+            </p>
+            <p>
+              Pausing and draining it stops new work for it at once; its running jobs finish. Decide its
+              proposals on the Proposals page, then remove it.
+            </p>
+          </>
+        ),
+        confirmLabel: p.draining ? 'Keep draining' : 'Pause and drain',
+      }).then((ok) => ok && !p.draining && drain(true));
+      return;
+    }
+    void confirm({
+      title: `Remove ${p.name}?`,
+      message: (
+        <>
+          <p>
+            The bridge stops serving <strong>{p.name}</strong> and deletes its stored key. Its history (jobs,
+            journal, errors) is kept and stays readable here. Nothing in LegendKeeper is changed.
+          </p>
+          <p className="small-text">
+            Revoke the key in LegendKeeper too if nothing else uses it. To serve the project again later, add
+            it with the same name and a key of the same LegendKeeper project.
+          </p>
+        </>
+      ),
+      confirmLabel: 'Remove the project',
+      danger: true,
+    }).then((ok) => {
+      if (ok)
+        void run(
+          () => withReauth(() => api.post(`/projects/${name}/remove`, { confirm: true })),
+          `${p.name} was removed; its history is kept.`,
+        ).then(onChanged);
+    });
+  };
   const setReadOnly = (value: boolean) => {
     void confirm(
       value
@@ -137,80 +202,376 @@ function ProjectRow({
         ).then(onChanged);
     });
   };
+  if (archived) {
+    return (
+      <tr data-project={p.name} className="muted">
+        <td>
+          <strong>{p.name}</strong>
+        </td>
+        <td>{p.displayName ?? <span className="muted">–</span>}</td>
+        <td>{p.id ? <span className="mono">{p.id}</span> : null}</td>
+        <td>
+          <span className="muted">no</span>
+        </td>
+        <td>{p.isSandbox ? <Badge>sandbox</Badge> : <span className="muted">no</span>}</td>
+        <td>
+          <Badge>read-only</Badge>
+        </td>
+        <td>
+          <ProjectStatusBadge status="archived" />
+          <div className="small-text">
+            Removed {p.archivedAt ? fmtAgo(p.archivedAt, now) : ''}; its history is kept, read-only.
+          </div>
+        </td>
+        <td>
+          <span className="muted">Deleted</span>
+        </td>
+        <td />
+      </tr>
+    );
+  }
   return (
-    <tr data-project={p.name}>
-      <td>
-        <strong>{p.name}</strong>
-      </td>
-      <td>{p.displayName ?? <span className="muted">–</span>}</td>
-      <td>{p.id ? <span className="mono">{p.id}</span> : <span className="muted">not known yet</span>}</td>
-      <td>{p.isDefault ? <Badge tone="info">default</Badge> : <span className="muted">no</span>}</td>
-      <td>{p.isSandbox ? <Badge>sandbox</Badge> : <span className="muted">no</span>}</td>
-      <td>
-        <div className="stack">
-          {p.readOnly ? <Badge tone="warn">read-only</Badge> : <Badge tone="ok">writes allowed</Badge>}
-          <Button
-            className="small"
-            busy={busy}
-            disabled={p.id === null}
-            aria-label={p.readOnly ? `Allow writes to ${p.name}` : `Make ${p.name} read-only`}
-            onClick={() => setReadOnly(!p.readOnly)}
-          >
-            {p.readOnly ? 'Allow writes…' : 'Make read-only…'}
-          </Button>
-          {p.id === null && <span className="muted small-text">Possible once its key is verified.</span>}
-        </div>
-      </td>
-      <td>
-        <ProjectStatusBadge status={p.status} />
-        {p.reason && <div className="small-text">{p.reason}</div>}
-        <div className="muted small-text">
-          {p.checkedAt ? `Checked ${fmtAgo(p.checkedAt, now)}` : 'Not checked yet'}
-          {p.verifiedAt ? ` · verified ${fmtAgo(p.verifiedAt, now)}` : ''}
-        </div>
-      </td>
-      <td>
-        {p.configured && p.keyVariable ? (
-          <>
-            <div className="mono small-text">{p.keyVariable}</div>
-            <div className="row">
-              {p.keyPresent ? <Badge tone="ok">present</Badge> : <Badge tone="bad">missing</Badge>}
-              {p.keyValid === true && <Badge tone="ok">valid</Badge>}
-              {p.keyValid === false && <Badge tone="bad">refused</Badge>}
-              {p.keyValid === null && <Badge>not checked yet</Badge>}
+    <>
+      <tr data-project={p.name}>
+        <td>
+          <strong>{p.name}</strong>
+          {p.draining && (
+            <div>
+              <Badge tone="warn">paused, draining</Badge>
             </div>
-          </>
-        ) : (
-          <span className="muted">No key configured</span>
-        )}
-      </td>
-      <td>
-        {p.configured && (
-          <Button
-            className="small"
-            busy={busy}
-            aria-label={`Check the key of ${p.name} again`}
-            onClick={() =>
-              void run(() => api.post<{ project?: ProjectInfo | null }>(`/projects/${name}/verify`)).then(
-                (r) => {
-                  if (!r) return;
-                  const status = r.project?.status;
-                  toast(
-                    status === 'active' ? 'ok' : 'error',
-                    status
-                      ? `${p.name}: ${PROJECT_STATUS_LABELS[status] ?? status}${r.project?.reason ? `. ${r.project.reason}` : '.'}`
-                      : `${p.name} was checked.`,
-                  );
-                  onChanged();
-                },
-              )
-            }
-          >
-            Check key again
+          )}
+        </td>
+        <td>{p.displayName ?? <span className="muted">–</span>}</td>
+        <td>{p.id ? <span className="mono">{p.id}</span> : <span className="muted">not known yet</span>}</td>
+        <td>{p.isDefault ? <Badge tone="info">default</Badge> : <span className="muted">no</span>}</td>
+        <td>{p.isSandbox ? <Badge>sandbox</Badge> : <span className="muted">no</span>}</td>
+        <td>
+          <div className="stack">
+            {p.readOnly ? <Badge tone="warn">read-only</Badge> : <Badge tone="ok">writes allowed</Badge>}
+            <Button
+              className="small"
+              busy={busy}
+              disabled={p.id === null}
+              aria-label={p.readOnly ? `Allow writes to ${p.name}` : `Make ${p.name} read-only`}
+              onClick={() => setReadOnly(!p.readOnly)}
+            >
+              {p.readOnly ? 'Allow writes…' : 'Make read-only…'}
+            </Button>
+            {p.id === null && <span className="muted small-text">Possible once its key is verified.</span>}
+          </div>
+        </td>
+        <td>
+          <ProjectStatusBadge status={p.status} />
+          {p.reason && <div className="small-text">{p.reason}</div>}
+          <div className="muted small-text">
+            {p.checkedAt ? `Checked ${fmtAgo(p.checkedAt, now)}` : 'Not checked yet'}
+            {p.verifiedAt ? ` · verified ${fmtAgo(p.verifiedAt, now)}` : ''}
+          </div>
+        </td>
+        <td>
+          {p.keySource === 'store' || p.keySource === 'env' || (p.configured && p.keyVariable) ? (
+            <>
+              <div className="small-text">
+                {p.keySource === 'store' ? (
+                  <>Encrypted store</>
+                ) : (
+                  <span className="mono">{p.keyVariable}</span>
+                )}
+                {p.keyHint && (
+                  <>
+                    {' '}
+                    · ends <span className="mono">{p.keyHint}</span>
+                  </>
+                )}
+              </div>
+              <div className="row">
+                {p.keyValid === true && <Badge tone="ok">valid</Badge>}
+                {p.keyValid === false && <Badge tone="bad">refused</Badge>}
+                {p.keyValid === null && <Badge>not checked yet</Badge>}
+              </div>
+              {p.keyConflict && <div className="note note-warn small-text">{p.keyConflict}</div>}
+            </>
+          ) : (
+            <span className="muted">No key</span>
+          )}
+        </td>
+        <td>
+          <div className="stack">
+            {p.id !== null && (
+              <Button
+                className="small"
+                busy={busy}
+                aria-label={`Replace the key of ${p.name}`}
+                onClick={() => setReplacing(true)}
+              >
+                Replace key…
+              </Button>
+            )}
+            {p.configured && (
+              <Button
+                className="small"
+                busy={busy}
+                aria-label={p.draining ? `Resume ${p.name}` : `Pause and drain ${p.name}`}
+                onClick={() => drain(!p.draining)}
+              >
+                {p.draining ? 'Resume' : 'Pause and drain'}
+              </Button>
+            )}
+            {p.id !== null && (
+              <Button className="small danger" busy={busy} aria-label={`Remove ${p.name}`} onClick={remove}>
+                Remove…
+              </Button>
+            )}
+            {(pending.jobs > 0 || pending.proposals > 0) && (
+              <span className="muted small-text">
+                {pending.jobs} job(s), {pending.proposals} proposal(s) pending
+              </span>
+            )}
+          </div>
+          {p.configured && (
+            <Button
+              className="small"
+              busy={busy}
+              aria-label={`Check the key of ${p.name} again`}
+              onClick={() =>
+                void run(() => api.post<{ project?: ProjectInfo | null }>(`/projects/${name}/verify`)).then(
+                  (r) => {
+                    if (!r) return;
+                    const status = r.project?.status;
+                    toast(
+                      status === 'active' ? 'ok' : 'error',
+                      status
+                        ? `${p.name}: ${PROJECT_STATUS_LABELS[status] ?? status}${r.project?.reason ? `. ${r.project.reason}` : '.'}`
+                        : `${p.name} was checked.`,
+                    );
+                    onChanged();
+                  },
+                )
+              }
+            >
+              Check key again
+            </Button>
+          )}
+        </td>
+      </tr>
+      {replacing && (
+        <tr className="key-row">
+          <td colSpan={9}>
+            <KeyForm
+              mode="replace"
+              project={p.name}
+              onCancel={() => setReplacing(false)}
+              onDone={() => {
+                setReplacing(false);
+                onChanged();
+              }}
+            />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/** OPS2: adding a project: a name, then its key in a write-only field, checked before anything is stored. */
+function AddProjectCard({ canManage, onChanged }: { canManage: boolean; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <section className="card" aria-labelledby="add-project-h">
+      <h2 id="add-project-h">Add a project</h2>
+      {!canManage ? (
+        <p className="note note-warn small-text">
+          Keys cannot be managed here yet: the bridge’s encrypted secret store has no master key
+          (SECRETS_MASTER_KEY). Run env-sync on the server (runbook, “Managing projects from the dashboard”).
+        </p>
+      ) : open ? (
+        <KeyForm
+          mode="add"
+          onCancel={() => setOpen(false)}
+          onDone={() => {
+            setOpen(false);
+            onChanged();
+          }}
+        />
+      ) : (
+        <>
+          <p className="muted small-text">
+            Create an API key with the ADMIN role in the LegendKeeper project (Project Settings, Developers,
+            API Keys), then paste it here. The bridge checks it with LegendKeeper and shows you what it found
+            before it stores anything. After that the key is kept encrypted and never shown again, only its
+            last four characters.
+          </p>
+          <Button className="primary" onClick={() => setOpen(true)}>
+            Add a project…
           </Button>
-        )}
-      </td>
-    </tr>
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
+ * OPS2: one key, checked then confirmed. The key goes to the bridge once, in the check; the field is cleared at once, and
+ * the confirmation refers to the check, not to the key.
+ */
+function KeyForm({
+  mode,
+  project,
+  onCancel,
+  onDone,
+}: {
+  mode: 'add' | 'replace';
+  project?: string;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const withReauth = useReauth();
+  const { run, busy } = useAction();
+  const toast = useToast();
+  const [check, setCheck] = useState<KeyCheck | null>(null);
+  const [reminder, setReminder] = useState<string | null>(null);
+
+  const submit = (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formEl = e.currentTarget;
+    const f = new FormData(formEl);
+    const apiKey = formText(f, 'apiKey');
+    const body = mode === 'add' ? { name: formText(f, 'name'), apiKey } : { apiKey };
+    const path =
+      mode === 'add' ? '/projects/check' : `/projects/${encodeURIComponent(project ?? '')}/key/check`;
+    void run(() => withReauth(() => api.post<KeyCheck>(path, body))).then((r) => {
+      formEl.reset(); // the key is not kept in the page, whatever the answer
+      if (r) setCheck(r);
+    });
+  };
+  const confirmCheck = () =>
+    void run(() =>
+      withReauth(() =>
+        api.post<{ project: ProjectInfo; reminder: string | null }>('/projects/confirm', {
+          checkId: check?.checkId,
+          confirm: true,
+        }),
+      ),
+    ).then((r) => {
+      if (!r) return;
+      setCheck(null);
+      if (r.reminder) setReminder(r.reminder);
+      else {
+        toast('ok', `${r.project.name} was added and is served now.`);
+        onDone();
+      }
+    });
+
+  if (reminder) {
+    return (
+      <div className="key-check" role="status">
+        <p className="note note-warn">
+          <strong>Key replaced.</strong> {reminder}
+        </p>
+        <Button className="primary" onClick={onDone}>
+          Done
+        </Button>
+      </div>
+    );
+  }
+  if (check) {
+    return (
+      <div className="key-check" data-testid="key-check">
+        <p>
+          <strong>
+            {mode === 'add' ? `Add “${check.name}” with this key?` : `Use this key for “${check.name}”?`}
+          </strong>{' '}
+          LegendKeeper says it belongs to:
+        </p>
+        <dl>
+          <dt>Project</dt>
+          <dd>{check.lkProjectName ?? <span className="muted">(no name)</span>}</dd>
+          <dt>LegendKeeper id</dt>
+          <dd className="mono">{check.lkProjectId}</dd>
+          <dt>The key’s role</dt>
+          <dd>
+            {check.role === 'ADMIN' ? (
+              <Badge tone="ok">ADMIN</Badge>
+            ) : (
+              <>
+                <Badge tone="warn">{check.role === 'MEMBER' ? 'MEMBER' : 'unknown'}</Badge>{' '}
+                <span className="small-text">
+                  The bridge needs an ADMIN key for templates, top-level pages and members.
+                </span>
+              </>
+            )}
+          </dd>
+          <dt>Key</dt>
+          <dd>
+            ends <span className="mono">{check.keyHint}</span>
+          </dd>
+        </dl>
+        <p className="muted small-text">
+          Nothing is stored until you confirm
+          {mode === 'add' ? '; the project is served at once, without a restart' : ''}.
+        </p>
+        <div className="actions">
+          <button
+            type="button"
+            onClick={() => {
+              setCheck(null);
+              onCancel();
+            }}
+          >
+            Cancel
+          </button>
+          <Button busy={busy} className="primary" onClick={confirmCheck}>
+            {mode === 'add' ? 'Add the project' : 'Use this key'}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <form className="stack-form" onSubmit={submit} autoComplete="off">
+      {mode === 'add' && (
+        <>
+          <label htmlFor="new-project-name">Name on this bridge</label>
+          <input
+            id="new-project-name"
+            name="name"
+            required
+            maxLength={32}
+            pattern="[A-Za-z][A-Za-z0-9_]{0,31}"
+            placeholder="for example arkona"
+            autoComplete="off"
+          />
+          <span className="muted small-text">
+            A letter, then letters, digits or underscores (stored in lower case). Agents name the project with
+            it.
+          </span>
+        </>
+      )}
+      <label htmlFor={`key-${mode}-${project ?? 'new'}`}>
+        {mode === 'add' ? 'API key' : `New API key for ${project ?? ''}`}
+      </label>
+      <input
+        id={`key-${mode}-${project ?? 'new'}`}
+        name="apiKey"
+        type="password"
+        autoComplete="off"
+        spellCheck={false}
+        required
+      />
+      <span className="muted small-text">
+        {mode === 'add'
+          ? 'Write-only: the key is checked, then kept encrypted. It is never shown again.'
+          : 'It must be a key of the same LegendKeeper project; anything else is refused.'}
+      </span>
+      <div className="actions">
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+        <Button busy={busy} type="submit" className="primary">
+          Check the key
+        </Button>
+      </div>
+    </form>
   );
 }
 
@@ -397,28 +758,30 @@ function SettingsCard({ data, onChanged }: { data: ProjectsResponse; onChanged: 
     <section className="card" aria-labelledby="project-settings-h">
       <h2 id="project-settings-h">Settings</h2>
       <p className="muted small-text">
-        Each project’s settings. Changes are audited, and the repository tree uses them at once. Keys stay in
-        the env file and are never shown.
+        Each project’s settings. Changes are audited, and the repository tree uses them at once. Keys are
+        never shown, only their last four characters.
       </p>
-      {data.projects.map((p) => (
-        <section key={p.name} aria-label={`Settings of ${p.name}`} data-project-settings={p.name}>
-          <h3>
-            {p.name}{' '}
-            {p.status !== 'active' && (
-              <span className="muted small-text">({PROJECT_STATUS_LABELS[p.status] ?? p.status})</span>
+      {data.projects
+        .filter((p) => p.status !== 'archived')
+        .map((p) => (
+          <section key={p.name} aria-label={`Settings of ${p.name}`} data-project-settings={p.name}>
+            <h3>
+              {p.name}{' '}
+              {p.status !== 'active' && (
+                <span className="muted small-text">({PROJECT_STATUS_LABELS[p.status] ?? p.status})</span>
+              )}
+            </h3>
+            {p.settingsProblem && (
+              <p className="note note-warn small-text">
+                The stored settings could not be read, so they count as empty: {p.settingsProblem}
+              </p>
             )}
-          </h3>
-          {p.settingsProblem && (
-            <p className="note note-warn small-text">
-              The stored settings could not be read, so they count as empty: {p.settingsProblem}
-            </p>
-          )}
-          {p.id === null && (
-            <p className="muted small-text">Settings can be changed once the project’s key is verified.</p>
-          )}
-          <SettingsList project={p} keys={data.settingKeys} onChanged={onChanged} />
-        </section>
-      ))}
+            {p.id === null && (
+              <p className="muted small-text">Settings can be changed once the project’s key is verified.</p>
+            )}
+            <SettingsList project={p} keys={data.settingKeys} onChanged={onChanged} />
+          </section>
+        ))}
     </section>
   );
 }

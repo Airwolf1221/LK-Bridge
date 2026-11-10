@@ -87,3 +87,9 @@ export const qs = (params: Record<string, string | number | boolean | undefined 
   const s = p.toString();
   return s ? `?${s}` : '';
 };
+
+/** A text field of a submitted form ('' when absent): never `[object File]`. */
+export const formText = (f: FormData, name: string): string => {
+  const v = f.get(name);
+  return typeof v === 'string' ? v : '';
+};

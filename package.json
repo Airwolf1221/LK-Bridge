@@ -28,6 +28,7 @@
     "setup:owner": "node dist/auth/cli/setup-owner.js",
     "pat": "node dist/auth/cli/pat.js",
     "projects": "node dist/projects/cli.js",
+    "secrets": "node dist/secrets/cli.js",
     "build:ui": "vite build --config ui/vite.config.ts",
     "dev:ui": "vite --config ui/vite.config.ts",
     "test:e2e": "playwright test --config test/e2e/playwright.config.ts"
@@ -69,6 +70,7 @@
     "fast-check": "^4.10.2",
     "jsdom": "^31.0.0",
     "prettier": "^3.9.10",
+    "qrcode-generator": "2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tsx": "^4.23.15",

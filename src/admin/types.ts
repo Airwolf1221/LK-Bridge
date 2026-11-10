@@ -7,6 +7,7 @@ import type { Mappings } from '../mappings/index.js';
 import type { Policy } from '../policy/index.js';
 import type { AssetService } from '../assets/index.js';
 import type { TreeService } from '../tree/index.js';
+import type { SecretStore } from '../secrets/store.js';
 import type { Registry } from '../registry/index.js';
 
 /**
@@ -16,6 +17,8 @@ export interface AdminRuntime {
   readonly engine: JobEngine;
   /** The projects this bridge serves (v2 A1): each one's governor, flags and whether it is served now. */
   readonly projects: ProjectRegistry;
+  /** OPS2: the encrypted secret store (its state is shown; values never leave it here). */
+  readonly secrets: SecretStore;
   readonly policy: Policy;
   /** Maintenance registry, scheduler and owner commands (chunk 6). */
   readonly maintenance: Maintenance;

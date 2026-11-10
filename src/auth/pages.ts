@@ -62,7 +62,7 @@ ${p.error ? `<p class="err" role="alert">${escapeHtml(p.error)}</p>` : ''}
 <label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>
 ${
   p.totp
-    ? '<label for="totp">Authenticator code</label><input id="totp" name="totp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" required>'
+    ? '<label for="totp">Authenticator code</label><input id="totp" name="totp" autocomplete="one-time-code" maxlength="40" required><p class="muted">The 6-digit code from your authenticator app, or one of your recovery codes if you have lost it.</p>'
     : ''
 }
 <div class="actions"><button class="primary" type="submit">Sign in</button></div>

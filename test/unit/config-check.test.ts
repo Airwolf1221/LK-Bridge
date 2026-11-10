@@ -22,6 +22,7 @@ const valid = (extra: Record<string, string> = {}): Record<string, string> => ({
   SESSION_SECRET: SESSION,
   JWT_SIGNING_KEY: JWT,
   OWNER_PASSWORD_HASH: HASH,
+  SECRETS_MASTER_KEY: 'TESTMASTER-0123456789-0123456789-0123456789',
   ...extra,
 });
 
@@ -85,9 +86,25 @@ describe('checkConfig', () => {
     expect(single.warnings.join('\n')).toMatch(/single-project form/);
   });
 
-  it('reports a missing key for a listed project', () => {
+  it('OPS2: a listed project without an env key is a warning (its key may be in the encrypted store)', () => {
     const r = checkConfig(valid({ LK_PROJECTS: 'test,arkona' }));
-    expect(r.issues.join('\n')).toMatch(/LK_PROJECT_ARKONA_API_KEY: required/);
+    expect(r.issues.join('\n')).not.toMatch(/LK_PROJECT_ARKONA_API_KEY/);
+    expect(r.warnings.join('\n')).toMatch(/LK_PROJECT_ARKONA_API_KEY is not set/);
+  });
+
+  it('OPS2: a short master key, or one equal to another secret, is an issue here (the bridge itself only warns)', () => {
+    const short = checkConfig(valid({ SECRETS_MASTER_KEY: 'short-but-set' }));
+    expect(short.issues.join('\n')).toMatch(/SECRETS_MASTER_KEY: at least 32 characters/);
+    const env = valid({});
+    const same = checkConfig({ ...env, SECRETS_MASTER_KEY: env.SESSION_SECRET });
+    expect(same.issues.join('\n')).toMatch(
+      /SECRETS_MASTER_KEY: must differ from SESSION_SECRET and JWT_SIGNING_KEY/,
+    );
+    const prev = checkConfig(
+      valid({ SECRETS_MASTER_KEY: 'a'.repeat(44), SECRETS_MASTER_KEY_PREVIOUS: 'a'.repeat(44) }),
+    );
+    expect(prev.issues.join('\n')).toMatch(/SECRETS_MASTER_KEY_PREVIOUS: must differ/);
+    for (const r of [short, same, prev]) expect(r.issues.join('\n')).not.toMatch(/short-but-set|aaaaaaaa/);
   });
 });
 

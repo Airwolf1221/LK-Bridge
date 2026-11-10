@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased: OPS2, projects, keys and the owner's sign-in on the dashboard (10 November 2026)
+
+Projects and their API keys, the owner password and the authenticator app are managed on the dashboard; the env file
+keeps only the bootstrap secrets ([ADR 0028](adr/0028-secrets-on-the-dashboard.md); how to use it in
+[runbook-deploy.md](runbook-deploy.md#managing-projects-from-the-dashboard-ops2), [projects.md](projects.md) and
+[auth.md](auth.md)).
+
+- **Encrypted secret store** (migration 1000, `src/secrets/`). AES-256-GCM under a key derived from the new
+  `SECRETS_MASTER_KEY` (env-sync generates it: `@generate:base64:32`), a fresh nonce per value, the project and purpose
+  as associated data, a key id per row. A missing or wrong master key stops only the secrets it cannot open (their
+  projects, or the owner's sign-in, fail closed with the reason); nothing crash-loops. `npm run secrets -- status`,
+  `rotate-master-key` (backup first, one transaction, refuses while the bridge runs) and `reset-owner --yes`.
+- **Projects on the dashboard, at runtime.** Add a project (the key checked with LegendKeeper first: project name, id
+  and the key's role shown before anything is stored; then served by a new governor at once, no restart). Replace a key
+  (same LegendKeeper project only; atomic; the governor is kept; a reminder to revoke the old key). Pause and drain, then
+  remove (refused while jobs or proposals are pending; the project is archived, its key deleted, its history kept
+  read-only). Keys are shown by their last four characters only.
+- **Env keys move across once.** `LK_PROJECTS`, `LK_PROJECT_<NAME>_API_KEY` and `OWNER_PASSWORD_HASH` become optional;
+  at the first start with a master key every env key and the owner's hash and TOTP secret are imported (logged and
+  audited by name only). The stored value wins over the env file afterwards, with a warning on the dashboard.
+- **Re-authentication** for adding, replacing or removing a key, the password and the authenticator: the password (and
+  code) within the last five minutes, rate-limited together with sign-in, on top of the session, Origin and CSRF checks.
+- **Account page:** password change (current password required; other sessions signed out), the authenticator app (QR
+  code drawn in the browser with `qrcode-generator`, a new bundled dashboard dependency; confirmed by a code; ten
+  recovery codes shown once, each usable once at sign-in), the store's state. The Overview recommends the authenticator
+  strongly while it is off.
+- **env-sync:** `--retire-imported-keys` (the bridge, as the service user, compares each env value with the store;
+  only equal or since-replaced values are commented out; mismatches refused; names only), `--rotate-master-key`, and a
+  refusal to generate a new master key over a database that holds secrets. The project rules accept a key line that is
+  commented out.
+- **Audit:** `project.key_check`, `project.add`, `project.replace_key`, `project.drain`, `project.undrain`,
+  `project.remove`, `project.key_import`, `owner.reauth`, `owner.password_change`, `owner.totp_enrol_start`,
+  `owner.totp_enable`, `owner.totp_remove`, `owner.recovery_codes_regenerate`, `owner.credential_import`,
+  `owner.credentials_reset`: names and last four characters, never a value.
+- **Tests:** `test/secrets/` (store, associated data, missing and wrong master keys, rotation; runtime add, replace and
+  remove with governor isolation; re-authentication; the password; TOTP and recovery codes; import across restarts; a
+  scan of logs, responses, events, the audit log, the error table, the HTML and the database files for every secret),
+  `test/ui/account.test.tsx`, and the env-sync planner and shell tests. Existing tests that listed every migration now
+  check the earlier ones only.
+
 ## Unreleased: v2 A3, the type registry, taxonomy, name resolution and ordering (10 November 2026)
 
 Where each kind of page lives, and how the bridge finds and places pages ([docs/PLAN-v2.md](PLAN-v2.md) 4.3, 4.4, 4.5

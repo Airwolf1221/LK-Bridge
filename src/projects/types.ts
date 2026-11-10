@@ -33,6 +33,8 @@ export interface ProjectRecord {
   readonly createdAt: number;
   readonly updatedAt: number;
   readonly verifiedAt: number | null;
+  /** OPS2: when the project was removed on the dashboard (it is then archived: history kept, read-only). */
+  readonly archivedAt: number | null;
 }
 
 /**
@@ -58,7 +60,8 @@ export interface ProjectView {
   readonly configured: boolean;
   /** Stored in `projects` (it has, or had, data in this database). */
   readonly registered: boolean;
-  readonly status: ProjectStatus | 'not_configured';
+  /** `archived` (OPS2): removed on the dashboard; its history is kept and shown read-only. */
+  readonly status: ProjectStatus | 'not_configured' | 'archived';
   /** Plain-language reason for any status but `active`. Never contains a key. */
   readonly reason: string | null;
   /** The env variable that holds the key (name only), when configured. */
@@ -69,4 +72,13 @@ export interface ProjectView {
   readonly checkedAt: number | null;
   readonly settings: ProjectSettings;
   readonly settingsProblem: string | null;
+  /** OPS2: where the key in use comes from: the encrypted store, the env file, or nowhere (no key). */
+  readonly keySource: 'store' | 'env' | null;
+  /** OPS2: the last four characters of the key in use (all that is ever shown of a key). */
+  readonly keyHint: string | null;
+  /** OPS2: the env file holds a different key than the store; the stored key is used. Names only. */
+  readonly keyConflict: string | null;
+  /** OPS2: paused and draining before removal: takes no new work; running work finishes. */
+  readonly draining: boolean;
+  readonly archivedAt: number | null;
 }

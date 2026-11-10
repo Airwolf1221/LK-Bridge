@@ -431,7 +431,11 @@ describe('env drift check (chunk 8, F-10)', () => {
   });
 
   it('judges the project variables by the project rules (v2 A1), by name only', () => {
-    const template = read('env.template');
+    // OPS2: the template's project lines are commented out (projects are added on the dashboard); a live file that
+    // uses them, as the server's does, is built from it here.
+    const template = read('env.template')
+      .replace(/^# LK_PROJECTS=$/m, 'LK_PROJECTS=test\nLK_PROJECT_TEST_API_KEY=')
+      .replace(/^# LK_DEFAULT_PROJECT=$/m, 'LK_DEFAULT_PROJECT=test');
     // The shipped template with a second project, its key, and nothing else: quiet.
     const two = template
       .replace(/^LK_PROJECTS=test$/m, 'LK_PROJECTS=test,arkona')

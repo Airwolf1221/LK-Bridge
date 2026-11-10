@@ -15,6 +15,15 @@
 #   --release VERSION    the release named in the notes it writes (default: the checkout's package.json version).
 #   --placeholders-only  add only the commented-out placeholders for missing @secret variables (inert in any release).
 #   --no-boot-check      skip the configuration check after an edit. Only for a file no built bridge reads yet.
+#   --retire-imported-keys  (OPS2) comment out the env lines the bridge now keeps in its encrypted store: each project
+#                        key (LK_PROJECT_<NAME>_API_KEY), OWNER_PASSWORD_HASH and OWNER_TOTP_SECRET. The bridge itself
+#                        (as the service user) checks each one first: only a value equal to the stored one, or the
+#                        value first imported that the dashboard has since replaced or removed, is retired; anything
+#                        else is refused and named. LK_PROJECTS goes too once no listed project keeps a key here.
+#                        Nothing is ever printed but names.
+#   --rotate-master-key  (OPS2) start a rotation of the secret store's key: SECRETS_MASTER_KEY moves to
+#                        SECRETS_MASTER_KEY_PREVIOUS and a new one is generated. Stop the bridge first, then run
+#                        `npm run secrets -- rotate-master-key` (runbook, "Rotating the master key").
 #
 # What it does (the template's markers decide; see the top of deploy/env.template):
 #   - missing @default and @generate variables are added (with the template's comment); a generated value comes from
@@ -41,7 +50,7 @@ source "${here}/lib.sh"
 failing=1
 tmp=""
 restore_tmp=""
-# shellcheck disable=SC2329 # invoked by the EXIT trap below
+# shellcheck disable=SC2317,SC2329 # invoked by the EXIT trap below
 sync_on_exit() {
   local rc=$?
   [[ -z "$tmp" ]] || rm -f -- "$tmp" "$restore_tmp"
@@ -53,6 +62,8 @@ trap sync_on_exit EXIT
 check=0
 yes=0
 boot_check=1
+retire=0
+rotate=0
 template=""
 release=""
 core_args=()
@@ -62,6 +73,11 @@ while (($# > 0)); do
     --yes) yes=1 ;;
     --migrate-projects) core_args+=(--migrate-projects) ;;
     --placeholders-only) core_args+=(--placeholders-only) ;;
+    --retire-imported-keys) retire=1 ;;
+    --rotate-master-key)
+      rotate=1
+      core_args+=(--rotate-master-key)
+      ;;
     --no-boot-check) boot_check=0 ;;
     --template)
       (($# > 1)) || die "--template needs a file."
@@ -116,6 +132,52 @@ core() {
 status_of() { sed -n "s/^status: .*${1}=\([0-9]*\).*/\1/p" <<<"$2"; }
 
 log "env-sync: ${env_file} against ${template} (${release})"
+
+# OPS2: --retire-imported-keys. The bridge compares each env value with its encrypted store (as the service user, names
+# and verdicts only); only `equal` and `superseded` names are handed to the planner, which comments them out.
+refused_retire=0
+if ((retire)); then
+  ((check == 0)) || die "--retire-imported-keys changes the file; it has no --check form. Run it without --check."
+  lkb_has_secrets_tool || die "The built bridge in ${LKB_APP_DIR} cannot compare the env file with its encrypted store (dist/secrets/env-tool.js). Deploy this release first. Nothing was changed."
+  set +e
+  verdicts="$(lkb_secrets_tool compare "$env_file" 2>/dev/null)"
+  vrc=$?
+  set -e
+  ((vrc == 0)) || die "The bridge could not compare the env file with its encrypted store. Nothing was changed."
+  equal_names=()
+  superseded_names=()
+  while read -r verdict name; do
+    [[ "${name:-}" =~ ^[A-Z][A-Z0-9_]*$ ]] || continue
+    case "$verdict" in
+      equal) equal_names+=("$name") ;;
+      superseded) superseded_names+=("$name") ;;
+      differs)
+        warn "Not retired: ${name} differs from the value in the bridge's encrypted store (and was never imported from this file). Check which is right on the dashboard before you remove it by hand."
+        refused_retire=$((refused_retire + 1))
+        ;;
+      not_stored)
+        warn "Not retired: ${name} is not in the bridge's encrypted store yet (the bridge imports it at its next start, if SECRETS_MASTER_KEY is set). Restart the bridge, check the dashboard, then run this again."
+        refused_retire=$((refused_retire + 1))
+        ;;
+      unreadable)
+        warn "Not retired: the bridge cannot read its stored ${name} with this file's SECRETS_MASTER_KEY. Fix the master key first."
+        refused_retire=$((refused_retire + 1))
+        ;;
+    esac
+  done <<<"$verdicts"
+  if ((${#equal_names[@]} > 0)); then core_args+=(--retire "$(
+    IFS=,
+    printf '%s' "${equal_names[*]}"
+  )"); fi
+  if ((${#superseded_names[@]} > 0)); then core_args+=(--retire-superseded "$(
+    IFS=,
+    printf '%s' "${superseded_names[*]}"
+  )"); fi
+  if ((${#equal_names[@]} + ${#superseded_names[@]} == 0)); then
+    log "Nothing to retire: no env value is safely in the bridge's encrypted store yet."
+  fi
+fi
+
 if ((check)); then
   set +e
   out="$(core)"
@@ -145,10 +207,18 @@ needs="$(status_of action_needed "$out")"
 if ((changes == 0)); then
   log "Nothing to change in ${env_file}."
   failing=0
-  ((needs == 0)) && exit 0
+  ((needs == 0 && refused_retire == 0)) && exit 0
   exit 1
 fi
 [[ -f "$tmp" ]] || die "env-sync planned changes but wrote no new file. Nothing was changed."
+# OPS2: never generate a new master key over a database that already holds encrypted secrets: they could no longer be
+# read. (A rotation moves the old key aside first, so it is exempt.)
+if ((rotate == 0)) && grep -q '^  will generate .*SECRETS_MASTER_KEY' <<<"$out" && lkb_has_secrets_tool; then
+  stored="$(lkb_secrets_tool status "$env_file" 2>/dev/null | sed -n 's/^stored=\([0-9]*\).*/\1/p' || true)"
+  if [[ "$stored" =~ ^[0-9]+$ ]] && ((stored > 0)); then
+    die "SECRETS_MASTER_KEY is missing from ${env_file}, but the bridge's database holds ${stored} encrypted secret(s) that a new key could not open. Put the old SECRETS_MASTER_KEY line back from a backup (${env_file}.bak.*), then run this again. Nothing was changed."
+  fi
+fi
 if ((boot_check)) && ! lkb_has_config_check; then
   die "The built bridge in ${LKB_APP_DIR} has no configuration check (dist/config/check.js), so the edit could not be verified. Deploy this release first (sudo ${LKB_BIN_DIR}/deploy.sh), then run this again. Nothing was changed."
 fi
@@ -203,9 +273,11 @@ if ((boot_check)); then
   fi
 fi
 
-if [[ -z "${LKB_FROM_DEPLOY:-}" ]]; then
+if ((rotate)); then
+  log "Master key rotation started. Next, with the bridge stopped: sudo -u ${LKB_SERVICE_USER} ${LKB_APP_DIR}/deploy/lk-run.sh npm run secrets -- rotate-master-key"
+elif [[ -z "${LKB_FROM_DEPLOY:-}" ]]; then
   log "The running bridge still has the old settings. To apply the new ones: sudo systemctl restart ${LKB_SERVICE}"
 fi
 failing=0
-((needs == 0)) && exit 0
+((needs == 0 && refused_retire == 0)) && exit 0
 exit 1

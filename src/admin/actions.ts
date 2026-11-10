@@ -4,7 +4,14 @@
  * an engine control, or the runtime settings functions, and leaves an `audit_log` row (which also emits a `policy`
  * event on the engine's stream). The commands audit themselves; engine controls and settings are audited here.
  */
+import { randomToken, safeEqual } from '../auth/crypto.js';
+import { MIN_PASSWORD_LENGTH } from '../auth/cli/setup-owner.js';
+import { hashPassword } from '../auth/password.js';
 import type { PatView } from '../auth/pats.js';
+import { verifyTotp } from '../auth/totp.js';
+import { plausibleApiKey } from '../config/check.js';
+import { ProjectChangeError, type KeyProbe } from '../projects/registry.js';
+import { keyHint } from '../secrets/crypto.js';
 import { WRITERS_LIMIT, WRITERS_MIN } from '../config/jobs.js';
 import type { ControlsView, JobView } from '../jobs/index.js';
 import type { Profile, Scope } from '../policy/index.js';
@@ -27,6 +34,43 @@ const OWNER = 'owner' as const;
 const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write: 2 };
 
 export type AdminActions = ReturnType<typeof createAdminActions>;
+
+const archivedError = (name: string) =>
+  new AdminHttpError(
+    409,
+    'PROJECT_ARCHIVED',
+    `Project "${name}" was removed: its history is kept read-only. Add it again (with a key of the same LegendKeeper project) to change it.`,
+  );
+
+/** OPS2: job states that keep a project from being removed. */
+const UNFINISHED_JOBS = ['queued', 'running', 'waiting_budget', 'waiting_lock', 'paused'] as const;
+/** OPS2: proposal states that keep a project from being removed (waiting for the owner, or being carried out). */
+const OPEN_PROPOSALS = ['pending', 'approved', 'executing'] as const;
+/** OPS2: a checked key waits this long for the owner's confirmation (in memory only, bound to the session). */
+const KEY_CHECK_TTL_MS = 5 * 60_000;
+
+/** A checked key waiting for confirmation. The key itself never leaves the server again. */
+interface PendingKeyCheck {
+  readonly id: string;
+  readonly sessionHash: string;
+  readonly kind: 'add' | 'replace';
+  readonly name: string;
+  readonly apiKey: string;
+  readonly probe: KeyProbe;
+  readonly expiresAt: number;
+}
+
+/** What a key check shows the owner before anything is stored: never the key, only its last four characters. */
+export interface KeyCheckView {
+  readonly checkId: string;
+  readonly kind: 'add' | 'replace';
+  readonly name: string;
+  readonly lkProjectId: string;
+  readonly lkProjectName: string | null;
+  readonly role: KeyProbe['role'];
+  readonly keyHint: string;
+  readonly expiresAt: number;
+}
 
 export function createAdminActions(d: AdminDeps) {
   const { engine, projects, policy, tree, assets } = d.runtime;
@@ -51,6 +95,98 @@ export function createAdminActions(d: AdminDeps) {
 
   const controlsAudit = (action: string, before: ControlsView, after: ControlsView) =>
     audit(action, null, before, after);
+
+  // ------------------------------------------------------------------------------- OPS2: keys and the owner
+  const { owner, credentials } = d.services;
+  const nowMs = d.now ?? Date.now;
+  const pendingChecks = new Map<string, PendingKeyCheck>();
+  const sweepChecks = () => {
+    const now = nowMs();
+    for (const [k, v] of pendingChecks) if (v.expiresAt <= now) pendingChecks.delete(k);
+  };
+  /** The key as typed: surrounding whitespace removed; anything else wrong is refused without echoing it. */
+  const cleanKey = (raw: string): string => {
+    const key = raw.trim();
+    if (!plausibleApiKey(key)) {
+      throw new AdminHttpError(
+        400,
+        'INVALID_KEY_FORMAT',
+        'That does not look like a LegendKeeper API key (one token of letters, digits and - . _ ~ + /, 16 to 512 characters). Paste it again, without spaces or quotes.',
+      );
+    }
+    return key;
+  };
+  const projectPending = (projectId: string) => ({
+    jobs: engine.queries.listJobs(projectId, { status: [...UNFINISHED_JOBS], limit: 500 }).length,
+    proposals: OPEN_PROPOSALS.reduce(
+      (n, state) =>
+        n + policy.commands.listProposals(OWNER, { project: projectId, state, limit: 500 }).length,
+      0,
+    ),
+  });
+  const checkKey = async (
+    sessionHash: string,
+    kind: 'add' | 'replace',
+    name: string,
+    rawKey: string,
+  ): Promise<KeyCheckView> => {
+    const apiKey = cleanKey(rawKey);
+    let probe: KeyProbe;
+    try {
+      probe = await projects.probeKey(apiKey);
+    } catch (e) {
+      audit('project.key_check', name, undefined, {
+        kind,
+        keyHint: keyHint(apiKey),
+        outcome: e instanceof ProjectChangeError ? e.code : 'ERROR',
+      });
+      throw e;
+    }
+    if (kind === 'replace') {
+      const p = projects.find(name);
+      if (p?.id && p.id !== probe.id) {
+        audit('project.key_check', name, undefined, {
+          kind,
+          keyHint: keyHint(apiKey),
+          lkProjectId: probe.id,
+          outcome: 'KEY_WRONG_PROJECT',
+        });
+        throw new ProjectChangeError(
+          'KEY_WRONG_PROJECT',
+          `This key belongs to LegendKeeper project ${probe.id}${probe.displayName ? ` ("${probe.displayName}")` : ''}, not to "${name}" (LegendKeeper project ${p.id}). Nothing was changed.`,
+        );
+      }
+    }
+    sweepChecks();
+    if (pendingChecks.size >= 20) pendingChecks.delete(pendingChecks.keys().next().value!);
+    const check: PendingKeyCheck = {
+      id: randomToken(18),
+      sessionHash,
+      kind,
+      name,
+      apiKey,
+      probe,
+      expiresAt: nowMs() + KEY_CHECK_TTL_MS,
+    };
+    pendingChecks.set(check.id, check);
+    audit('project.key_check', name, undefined, {
+      kind,
+      keyHint: keyHint(apiKey),
+      lkProjectId: probe.id,
+      role: probe.role,
+      outcome: 'ok',
+    });
+    return {
+      checkId: check.id,
+      kind,
+      name,
+      lkProjectId: probe.id,
+      lkProjectName: probe.displayName,
+      role: probe.role,
+      keyHint: keyHint(apiKey),
+      expiresAt: check.expiresAt,
+    };
+  };
 
   return {
     // ---------------------------------------------------------------------------------------------- jobs
@@ -98,6 +234,7 @@ export function createAdminActions(d: AdminDeps) {
     setProjectReadOnly(projectId: string, value: boolean) {
       const before = projects.find(projectId);
       if (!before?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${projectId}`);
+      if (before.status === 'archived') throw archivedError(before.name);
       const after = projects.setReadOnly(before.id, value);
       audit(
         'project.set_read_only',
@@ -123,6 +260,7 @@ export function createAdminActions(d: AdminDeps) {
     setProjectSetting(ref: string, key: string, value: unknown) {
       const before = projects.find(ref);
       if (!before?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${ref} with stored data`);
+      if (before.status === 'archived') throw archivedError(before.name);
       let parsed: string | boolean | null;
       try {
         parsed = parseSettingValue(key, value);
@@ -135,6 +273,237 @@ export function createAdminActions(d: AdminDeps) {
       audit('project.set_setting', before.name, { key, value: old ?? null }, { key, value: parsed });
       tree.onSettingsChanged(before.id);
       return after;
+    },
+
+    // ------------------------------------------------------------------------- OPS2: projects and their keys
+    /** Checks a new project's key with LegendKeeper; nothing is stored until `confirmKeyCheck`. */
+    checkNewProjectKey(sessionHash: string, name: string, apiKey: string): Promise<KeyCheckView> {
+      const n = name.trim().toLowerCase();
+      if (projects.find(n) && projects.find(n)?.status !== 'archived') {
+        throw new ProjectChangeError('NAME_TAKEN', `There is already a project called "${n}".`);
+      }
+      return checkKey(sessionHash, 'add', n, apiKey);
+    },
+    /** Checks a replacement key: it must belong to the same LegendKeeper project. Nothing is stored yet. */
+    checkReplacementKey(sessionHash: string, name: string, apiKey: string): Promise<KeyCheckView> {
+      const p = projects.find(name);
+      if (!p || p.status === 'archived') {
+        throw new ProjectChangeError('NOT_FOUND', `There is no project "${name.slice(0, 64)}".`);
+      }
+      return checkKey(sessionHash, 'replace', p.name, apiKey);
+    },
+    /** Stores a checked key (adds the project, or replaces its key) after the owner confirmed what the check showed. */
+    confirmKeyCheck(sessionHash: string, checkId: string) {
+      sweepChecks();
+      const c = pendingChecks.get(checkId);
+      if (!c || !safeEqual(c.sessionHash, sessionHash)) {
+        throw new AdminHttpError(
+          404,
+          'CHECK_NOT_FOUND',
+          'That key check has expired or was already used. Paste the key and check it again.',
+        );
+      }
+      pendingChecks.delete(checkId);
+      if (c.kind === 'add') {
+        const view = projects.addProject({ name: c.name, apiKey: c.apiKey, probe: c.probe });
+        audit('project.add', view.name, undefined, {
+          lkProjectId: c.probe.id,
+          lkProjectName: c.probe.displayName,
+          role: c.probe.role,
+          keyHint: keyHint(c.apiKey),
+        });
+        return { project: view, reminder: null };
+      }
+      const { view, oldHint } = projects.replaceKey({ name: c.name, apiKey: c.apiKey, probe: c.probe });
+      audit(
+        'project.replace_key',
+        view.name,
+        { keyHint: oldHint },
+        { keyHint: keyHint(c.apiKey), lkProjectId: c.probe.id, role: c.probe.role },
+      );
+      return {
+        project: view,
+        reminder: `Now revoke the old key${oldHint ? ` (ending ${oldHint})` : ''} in LegendKeeper: Project Settings, Developers, API Keys. The bridge no longer uses it, but it still works until it is revoked.`,
+      };
+    },
+    /** Pauses a project for removal (no new work) or resumes it. Audited. */
+    setProjectDraining(name: string, value: boolean) {
+      const before = projects.find(name);
+      if (!before || before.status === 'archived' || !before.configured) {
+        throw new ProjectChangeError('NOT_FOUND', `There is no served project "${name.slice(0, 64)}".`);
+      }
+      const after = projects.setDraining(before.name, value);
+      audit(
+        value ? 'project.drain' : 'project.undrain',
+        before.name,
+        { draining: before.draining },
+        {
+          draining: after.draining,
+          ...(after.id ? projectPending(after.id) : {}),
+        },
+      );
+      return { project: after, pending: after.id ? projectPending(after.id) : { jobs: 0, proposals: 0 } };
+    },
+    /** What keeps a project from being removed now. */
+    projectPending: (projectId: string) => projectPending(projectId),
+    /**
+     * Removes (archives) a project and deletes its stored key. Refused while it has unfinished jobs or open proposals:
+     * pause and drain it first. The check and the removal happen in one synchronous step.
+     */
+    removeProject(name: string) {
+      const before = projects.find(name);
+      if (!before || before.status === 'archived') {
+        throw new ProjectChangeError('NOT_FOUND', `There is no project "${name.slice(0, 64)}" to remove.`);
+      }
+      if (before.id) {
+        const pending = projectPending(before.id);
+        if (pending.jobs > 0 || pending.proposals > 0) {
+          throw new AdminHttpError(
+            409,
+            'PROJECT_BUSY',
+            `Project "${before.name}" still has ${pending.jobs} unfinished job(s) and ${pending.proposals} open proposal(s). Pause and drain it first: it then takes no new work, its jobs finish, and you decide its proposals. Then remove it.`,
+            { pending, draining: before.draining },
+          );
+        }
+      }
+      const after = projects.removeProject(before.name);
+      audit(
+        'project.remove',
+        before.name,
+        { keyHint: before.keyHint, keySource: before.keySource },
+        {
+          lkProjectId: before.id,
+          archived: true,
+          keyDeleted: true,
+        },
+      );
+      return { project: after };
+    },
+
+    // ------------------------------------------------------------------------- OPS2: the owner's account
+    /** Re-confirms the owner on this session (password, and the authenticator code when it is on). Audited. */
+    async reauthenticate(sessionToken: string, input: { password: string; totp?: string }, ip: string) {
+      const r = await owner.reauthenticate({
+        sessionToken,
+        password: input.password,
+        totp: input.totp,
+        ip,
+      });
+      if (r.ok) {
+        audit('owner.reauth', null, undefined, { ok: true });
+        return { until: (r.at + 300) * 1000 };
+      }
+      audit('owner.reauth', null, undefined, { ok: false, reason: r.reason });
+      if (r.reason === 'rate_limited') {
+        throw new AdminHttpError(
+          429,
+          'RATE_LIMITED',
+          `Too many failed attempts. Try again in ${Math.ceil(r.retryAfterSeconds / 60)} minute(s).`,
+          { retryAfterSeconds: r.retryAfterSeconds },
+        );
+      }
+      if (r.reason === 'unavailable') throw new AdminHttpError(503, 'CREDENTIALS_UNAVAILABLE', r.message);
+      if (r.reason === 'no_session') {
+        throw new AdminHttpError(401, 'UNAUTHENTICATED', 'Sign in as the owner to use the dashboard.');
+      }
+      throw new AdminHttpError(401, 'REAUTH_FAILED', 'Those details were not recognised.');
+    },
+    /** Changes the owner's password; every other dashboard session is signed out. Audited (no value). */
+    async changePassword(
+      sessionToken: string,
+      input: { currentPassword: string; newPassword: string },
+      ip: string,
+    ) {
+      const pw = input.newPassword;
+      if (pw.length < MIN_PASSWORD_LENGTH || pw.length > 1024) {
+        throw new AdminHttpError(
+          400,
+          'WEAK_PASSWORD',
+          `The new password must be at least ${MIN_PASSWORD_LENGTH} characters (and at most 1024).`,
+        );
+      }
+      const current = await owner.checkPassword(input.currentPassword, ip);
+      if (!current.ok) {
+        audit('owner.password_change', null, undefined, { ok: false, reason: current.reason });
+        if (current.reason === 'rate_limited') {
+          throw new AdminHttpError(
+            429,
+            'RATE_LIMITED',
+            `Too many failed attempts. Try again in ${Math.ceil(current.retryAfterSeconds / 60)} minute(s).`,
+          );
+        }
+        if (current.reason === 'unavailable')
+          throw new AdminHttpError(503, 'CREDENTIALS_UNAVAILABLE', current.message);
+        throw new AdminHttpError(401, 'WRONG_PASSWORD', 'The current password is not right.');
+      }
+      if (input.newPassword === input.currentPassword) {
+        throw new AdminHttpError(400, 'SAME_PASSWORD', 'The new password is the same as the current one.');
+      }
+      const hash = await hashPassword(pw);
+      credentials.setPasswordHash(hash);
+      const signedOut = owner.revokeOtherSessions(sessionToken);
+      d.services.event('password.changed', { other_sessions_signed_out: signedOut });
+      audit('owner.password_change', null, undefined, { ok: true, otherSessionsSignedOut: signedOut });
+      return { otherSessionsSignedOut: signedOut };
+    },
+    /** Starts enrolling an authenticator: a new secret, shown once (QR code and text), held until confirmed. */
+    beginTotp(sessionHash: string) {
+      if (credentials.totp().state !== 'off') {
+        throw new AdminHttpError(
+          409,
+          'TOTP_ALREADY_ON',
+          'An authenticator is already set up. Remove it first to enrol another.',
+        );
+      }
+      const secret = credentials.beginTotp(sessionHash);
+      audit('owner.totp_enrol_start', null);
+      return { secret, account: d.services.config.owner.username, issuer: 'LK-Bridge' };
+    },
+    /** Confirms the enrolment with a code from the app; returns the recovery codes, shown once. */
+    confirmTotp(sessionHash: string, code: string) {
+      const secret = credentials.pendingTotp(sessionHash);
+      if (!secret) {
+        throw new AdminHttpError(
+          409,
+          'NO_ENROLMENT',
+          'There is no enrolment waiting (it lasts 10 minutes). Start again.',
+        );
+      }
+      const now = d.services.now();
+      const step = verifyTotp(secret, code.replace(/\s+/g, ''), now);
+      if (step === undefined || !d.services.store.claimTotpStep(step, now)) {
+        audit('owner.totp_enable', null, undefined, { ok: false });
+        throw new AdminHttpError(
+          400,
+          'WRONG_CODE',
+          'That code does not match. Check the time on your phone and try the next code.',
+        );
+      }
+      const recoveryCodes = credentials.enableTotp(sessionHash);
+      d.services.event('totp.enabled', { recovery_codes: recoveryCodes.length });
+      audit('owner.totp_enable', null, undefined, { ok: true, recoveryCodes: recoveryCodes.length });
+      return { recoveryCodes };
+    },
+    removeTotp() {
+      if (credentials.totp().state === 'off') {
+        throw new AdminHttpError(409, 'TOTP_OFF', 'No authenticator is set up.');
+      }
+      credentials.disableTotp();
+      d.services.event('totp.removed', {});
+      audit('owner.totp_remove', null, undefined, { ok: true });
+    },
+    regenerateRecoveryCodes() {
+      if (credentials.totp().state !== 'on') {
+        throw new AdminHttpError(
+          409,
+          'TOTP_OFF',
+          'Recovery codes belong to an authenticator; set one up first.',
+        );
+      }
+      const recoveryCodes = credentials.regenerateRecoveryCodes();
+      d.services.event('recovery_codes.regenerated', { count: recoveryCodes.length });
+      audit('owner.recovery_codes_regenerate', null, undefined, { count: recoveryCodes.length });
+      return { recoveryCodes };
     },
 
     // ------------------------------------------------------------------------------------- repository tree

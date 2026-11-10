@@ -257,7 +257,7 @@ export class JobEngine {
    * Throws only `JobsError` subclasses.
    */
   async run(opId: string, params: OpParams = {}, opts: RunOptions): Promise<RunResult> {
-    const project = this.requireProject(opts.project);
+    const project = this.requireAdmission(this.requireProject(opts.project));
     const def = this.validate(opId, params);
     const options = stepOptions(opts);
     const origin = normaliseOrigin(opts.origin);
@@ -476,7 +476,7 @@ export class JobEngine {
   }
 
   private async submitBatch(req: BatchSubmit): Promise<SubmitResult | ProposalCaptured> {
-    const project = this.requireProject(req.project);
+    const project = this.requireAdmission(this.requireProject(req.project));
     if (req.steps.length === 0)
       throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
     const origin = normaliseOrigin(req.origin);
@@ -521,7 +521,7 @@ export class JobEngine {
   }
 
   private async submitPaginate(req: PaginateSubmit): Promise<SubmitResult | ProposalCaptured> {
-    const project = this.requireProject(req.project);
+    const project = this.requireAdmission(this.requireProject(req.project));
     const params = req.params ?? {};
     const def = this.validate(req.op, params);
     if (!def.paged || def.kind !== 'read') {
@@ -579,7 +579,7 @@ export class JobEngine {
    * The upload key is bound into the last step when it is about to run (see `bindUploadStep`).
    */
   private async submitUpload(req: UploadImageSubmit): Promise<SubmitResult | ProposalCaptured> {
-    const project = this.requireProject(req.project);
+    const project = this.requireAdmission(this.requireProject(req.project));
     const origin = normaliseOrigin(req.origin);
     const uploadParams: OpParams = {
       body: {
@@ -1309,6 +1309,16 @@ export class JobEngine {
         why ?? `project "${this.projects.nameOf(projectId)}" is not available now`,
       );
     }
+    return projectId;
+  }
+
+  /**
+   * OPS2: a project paused and draining before its removal takes no new work (its queued and running jobs carry on).
+   * Internal reads for work already admitted (the tree's re-reads after a write) are not affected.
+   */
+  private requireAdmission(projectId: string): string {
+    const why = this.projects.admissionRefusal?.(projectId) ?? null;
+    if (why !== null) throw new ProjectUnavailableError(this.projects.nameOf(projectId), why);
     return projectId;
   }
 

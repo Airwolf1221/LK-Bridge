@@ -91,4 +91,5 @@ export const PROJECT_STATUS_LABELS: Record<string, string> = {
   unverified: 'not verified',
   stopped: 'stopped',
   not_configured: 'no key configured',
+  archived: 'removed',
 };

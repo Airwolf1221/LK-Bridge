@@ -25,6 +25,24 @@ export function sessionTokenOf(req: FastifyRequest): string {
   return t;
 }
 
+/**
+ * OPS2: sensitive actions (adding, replacing or removing a key; the password; the authenticator) need the owner to have
+ * re-confirmed their password (and authenticator code) on this session within the last 5 minutes, even when signed in.
+ * Throws 403 `REAUTH_REQUIRED` otherwise. Returns the session token.
+ */
+export function requireReauth(s: AuthServices, req: FastifyRequest): string {
+  const token = sessionTokenOf(req);
+  const session = s.owner.getSession(token);
+  if (!session || s.owner.reauthUntil(session) === null) {
+    throw new AdminHttpError(
+      403,
+      'REAUTH_REQUIRED',
+      'Confirm your password (and authenticator code) first: this action needs a fresh check, within the last 5 minutes.',
+    );
+  }
+  return token;
+}
+
 export function adminGuard(s: AuthServices) {
   return async (req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply | undefined> => {
     reply

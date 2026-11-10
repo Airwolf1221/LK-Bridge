@@ -22,7 +22,7 @@ step.
 - **✋ Owner** marks a step only you can do: it involves a secret, a password, or an account on GitHub, LegendKeeper,
   Claude or ChatGPT. If a Claude Code session is following this runbook for you, it must stop at those steps and let you
   do them. **Never paste an API key, a secret or the owner password into a chat or a command line**; secrets go into the
-  env file through an editor (`sudoedit`).
+  dashboard's write-only key field (OPS2) or into the env file through an editor (`sudoedit`).
 - Every path and name below is the real one; there is nothing to substitute except where a `<placeholder>` is shown.
 
 ## The order, in one list
@@ -36,6 +36,8 @@ Afterwards: [updating](#updating), [updating the env file](#updating-the-env-fil
 [logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the v2 phase 0 spike](#v2-phase-0-spike-),
 [the browser smoke test](#browser-smoke-test),
 [memory](#memory), [moving to several projects (v2 A1)](#moving-to-several-projects-v2-a1),
+[managing projects from the dashboard (OPS2)](#managing-projects-from-the-dashboard-ops2) (and
+[rotating the master key](#rotating-the-master-key)),
 [migrating an existing install to v1.0.1](#migrating-an-existing-install-to-v101).
 
 ## What is where
@@ -271,9 +273,11 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run setup:owner
 ```
 
 Paste the printed `OWNER_USERNAME=…` and `OWNER_PASSWORD_HASH='…'` lines (and `OWNER_TOTP_SECRET=…` if you enrolled
-TOTP) into the env file with `sudoedit`, replacing the blank `OWNER_PASSWORD_HASH=` line and keeping the single quotes.
-Keep the password and the TOTP secret in your password manager; the bridge cannot recover them, only replace them
-(run this step again).
+TOTP) into the env file with `sudoedit`, replacing the commented `# OWNER_PASSWORD_HASH=` line and keeping the single
+quotes. Keep the password and the TOTP secret in your password manager; the bridge cannot recover them, only replace
+them. Since OPS2 this is only the first password: at the first start it moves into the encrypted store, and from then on
+you change it (and set up the authenticator app) on the dashboard's **Account** page
+([The password and the authenticator](#the-password-and-the-authenticator)).
 
 ## 8. systemd units, the sudo rule and the deploy script
 
@@ -577,15 +581,17 @@ sudo /opt/lk-bridge/bin/env-sync.sh
 The first only reports (exit status 0 in step, 1 changes needed, 2 error). The second shows the same summary and asks
 before it writes. Each variable in the template carries a marker that says what env-sync may do when your file lacks it:
 
-| Marker                | What env-sync does when the variable is missing                                                               |
-| --------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `@default`            | adds it with the template's value and comment                                                                 |
-| `@generate:<enc>:<n>` | adds it with a new random value (`SESSION_SECRET`, `JWT_SIGNING_KEY`), and fills a blank line in; never shown |
-| `@secret`             | adds a commented-out placeholder and prints **`ACTION NEEDED: fill in X`**; it never invents one              |
-| `@optional`           | adds it commented out, with its default                                                                       |
-| (no longer listed)    | a variable your file sets that the template no longer lists is commented out with a dated note; never deleted |
+| Marker                | What env-sync does when the variable is missing                                                                                                                                                                                     |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@default`            | adds it with the template's value and comment                                                                                                                                                                                       |
+| `@generate:<enc>:<n>` | adds it with a new random value (`SESSION_SECRET`, `JWT_SIGNING_KEY`, `SECRETS_MASTER_KEY`), and fills a blank line in; never shown. A new `SECRETS_MASTER_KEY` is refused while the database holds secrets sealed with the old one |
+| `@secret`             | adds a commented-out placeholder and prints **`ACTION NEEDED: fill in X`**; it never invents one                                                                                                                                    |
+| `@optional`           | adds it commented out, with its default                                                                                                                                                                                             |
+| (no longer listed)    | a variable your file sets that the template no longer lists is commented out with a dated note; never deleted                                                                                                                       |
 
-A value already in your file is **never changed** (only `--migrate-projects`, below, moves the key to its new name). The
+A value already in your file is **never changed** (only `--migrate-projects`, below, moves the key to its new name;
+OPS2's `--retire-imported-keys` comments out values the bridge keeps in its encrypted store, and `--rotate-master-key`
+moves the master key aside: [Managing projects from the dashboard](#managing-projects-from-the-dashboard-ops2)). The
 summary names variables only, never a value: not one it read, moved or generated. Before writing, it makes a backup
 beside the file (`lk-bridge.env.bak.<UTC time>`, same owner, group and mode), writes the new file beside it and renames
 it over the old one, keeping `root:lkbridge 0640`. Then it runs the bridge's own configuration check as `lkbridge`; if
@@ -948,7 +954,11 @@ sudo install -o root -g lkbridge -m 0640 /etc/lk-bridge/lk-bridge.env.bak.<time>
 
 Going back to a release before A1 needs the `pre-deploy` backup of step 1 (see [Rollback](#rollback)).
 
-### Adding a project
+### Adding a project (the env-file way)
+
+Since OPS2 the dashboard is the way to add a project ([Managing projects from the dashboard](#managing-projects-from-the-dashboard-ops2)):
+nothing to edit, nothing to restart. The env-file way still works; a key added this way is imported into the encrypted
+store at the next start.
 
 1. Choose a name (a lowercase letter, then lowercase letters, digits or `_`), for example `arkona`.
 2. In the env file add the name to `LK_PROJECTS` (`LK_PROJECTS=test,arkona`) and a line `LK_PROJECT_ARKONA_API_KEY=` with
@@ -957,6 +967,154 @@ Going back to a release before A1 needs the `pre-deploy` backup of step 1 (see [
 3. `sudo systemctl restart lk-bridge`. The bridge checks the new key, learns and stores the project's id, and shows it on
    the Projects page. Switch its **Read-only** flag on there first if it should not be written to yet.
 4. Never mark a live world as a sandbox, and never put one project's key in two bridges' env files (ADR 0023).
+
+## Managing projects from the dashboard (OPS2)
+
+Since OPS2 ([ADR 0028](adr/0028-secrets-on-the-dashboard.md)) projects, their API keys, the owner password and the
+authenticator app are managed on the dashboard. The keys are kept **encrypted in the bridge's database**
+(AES-256-GCM) under `SECRETS_MASTER_KEY`, which env-sync generates; the env file keeps only the bootstrap secrets
+(`SESSION_SECRET`, `JWT_SIGNING_KEY`, `SECRETS_MASTER_KEY`). Adding, replacing or removing a key, and changing the
+password or the authenticator, ask for your password (and authenticator code) again if you have not confirmed it in the
+last five minutes.
+
+### The first deploy of this release ✋
+
+1. **Deploy, letting env-sync add the master key** (🔒 sudo). env-sync generates `SECRETS_MASTER_KEY` (never shown).
+   It refuses to make a new one if the database already holds encrypted secrets, so it can never lock existing ones
+   away.
+
+   ```bash
+   sudo /opt/lk-bridge/bin/deploy.sh --sync-env
+   ```
+
+   (If the deploy first says its installed scripts differ, read the difference, then run the same command with
+   `--update-self` too.) At its first start the bridge imports every key in the env file
+   (`LK_PROJECT_<NAME>_API_KEY`), and `OWNER_PASSWORD_HASH` and `OWNER_TOTP_SECRET`, into the encrypted store, once.
+   The log names each variable imported, never a value:
+
+   ```bash
+   sudo journalctl -u lk-bridge --since "10 min ago" | grep -i imported
+   ```
+
+2. **Turn on the authenticator app.** Sign in to `https://<host>/ui`, open **Account**, choose **Set up the
+   authenticator**, confirm your password, scan the QR code with your phone's authenticator app (or type the secret it
+   shows), and enter the code it gives. Save the ten **recovery codes** it then shows, offline: they are shown once, and
+   each signs you in once if you lose the phone. From now on sign-in asks for a code. (If `OWNER_TOTP_SECRET` was already
+   set, it was imported: Account shows it as on; make recovery codes there with **New recovery codes**.)
+3. **Confirm the imported keys.** On **Projects**, each project's key column says **Encrypted store · ends XXXX**, its
+   status is **active**, and no row shows a note that the env file differs. The Overview shows no warning about the
+   env file or the store.
+4. **Retire the env keys** (🔒 sudo). env-sync asks the bridge (as `lkbridge`) to compare each key line, and the owner
+   hash and TOTP lines, with its encrypted store, and comments out only those it found equal (or that you have since
+   replaced on the dashboard). It prints names, never a value; anything it refuses is named with the reason.
+
+   ```bash
+   sudo /opt/lk-bridge/bin/env-sync.sh --retire-imported-keys
+   ```
+
+   ```bash
+   sudo systemctl restart lk-bridge
+   ```
+
+   The lines stay in the file, commented out with a dated note (and the backup beside it holds them too). Once every
+   project's key line is retired, `LK_PROJECTS` is commented out as well: the projects live in the database now.
+   After the restart, check the Projects page again: every project active, keys from the encrypted store.
+
+### Adding a project
+
+1. In LegendKeeper, open the project, then **Project Settings → Developers → API Keys**, and create a key with the
+   **ADMIN** role. Copy it.
+2. On the dashboard, **Projects → Add a project**. Give it a name for this bridge (a letter, then letters, digits or
+   `_`; agents name the project with it) and paste the key into the key field (write-only: it is never shown again).
+3. **Check the key.** Confirm your password if asked. The bridge asks LegendKeeper which project the key belongs to and
+   shows its name, its LegendKeeper id, the key's role and the key's last four characters. Nothing is stored yet.
+4. If that is the project you meant, **Add the project**. It is served at once, with its own request budget; no restart.
+   Switch its **Read-only** flag on first if it should not be written to yet. With two projects or more, every write
+   must name its project.
+
+A project whose LegendKeeper project was served before and removed comes back only under its old name.
+
+### Replacing a key
+
+**Projects → Replace key…** on the project's row, paste the new key, **Check the key**. A key of any other
+LegendKeeper project is refused and nothing changes. Confirm, and the new key is used at once (a request already on its
+way finishes with the old one). Then **revoke the old key in LegendKeeper** (the page reminds you, with its last four
+characters): the bridge no longer uses it, but it works until revoked. If the old key is still in the env file, the
+Projects page notes it until you retire it with `env-sync.sh --retire-imported-keys`.
+
+### Removing a project
+
+**Projects → Remove…**. A project with unfinished jobs or open proposals cannot be removed: the dialog offers **Pause and
+drain** instead. A draining project takes no new work (agents get `PROJECT_UNAVAILABLE`, saying why); its running jobs
+finish; decide its proposals on the Proposals page; then remove it. Removal deletes its stored key and stops serving it;
+its history (jobs, journal, errors, proposals) stays, read-only, under its name in the project switcher. **Resume** undoes
+a pause. Revoke the key in LegendKeeper too if nothing else uses it.
+
+### The password and the authenticator
+
+**Account → Password**: the current password, then the new one twice (at least 12 characters). Every other dashboard
+session is signed out; this one stays. **Account → Authenticator app**: set it up (above), make new recovery codes (the
+old ones stop working), or remove it (asks for a code). Lost the phone? Sign in with a recovery code in the code field.
+
+### If the master key is missing or wrong
+
+The bridge still starts. Each project whose key cannot be opened is **stopped** with the reason (the others are served),
+and the Overview and Account pages say what is wrong. If the owner password was imported, the sign-in page says
+sign-in is not possible and why. Put the right `SECRETS_MASTER_KEY` back from env-sync's backup beside the env file,
+then restart (🔒 sudo):
+
+```bash
+sudo ls -l /etc/lk-bridge/
+```
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run secrets -- status
+```
+
+`status` lists what is stored (projects by name, the last four characters, which master key sealed each), never a value.
+If the key is truly lost, the stored keys are lost with it: add the projects again with their keys. To get back in, run
+`npm run setup:owner` (step 7), put its `OWNER_PASSWORD_HASH` line in the env file, then clear the stored owner
+credentials, which is audited, and restart:
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run secrets -- reset-owner --yes
+```
+
+### Rotating the master key
+
+Rotate `SECRETS_MASTER_KEY` if it may have been exposed (the env file or one of its backups was read by someone it
+should not have been). Every stored secret is re-encrypted; nothing else changes.
+
+1. Stop the bridge (🔒 sudo):
+
+   ```bash
+   sudo systemctl stop lk-bridge
+   ```
+
+2. Move the key aside and generate a new one. env-sync makes a backup of the env file first, then the old key becomes
+   `SECRETS_MASTER_KEY_PREVIOUS` and a new `SECRETS_MASTER_KEY` is generated; neither is shown.
+
+   ```bash
+   sudo /opt/lk-bridge/bin/env-sync.sh --rotate-master-key
+   ```
+
+3. Re-encrypt. This takes a checked backup of the database first (`/var/lib/lk-bridge/backups/pre-rotation-<time>.db`),
+   then re-encrypts every secret with the new key, in one transaction. It refuses while the bridge runs, and changes
+   nothing if a secret opens with neither key. Running it twice is harmless.
+
+   ```bash
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run secrets -- rotate-master-key
+   ```
+
+4. Start the bridge and check the Account page's **Encrypted secret store** card (working, nothing sealed with the
+   previous key):
+
+   ```bash
+   sudo systemctl start lk-bridge
+   ```
+
+Keep `SECRETS_MASTER_KEY_PREVIOUS` as long as you keep database backups from before the rotation: they need it. A
+later rotation comments it out (kept in the file) before moving the current key there.
 
 ## Migrating an existing install to v1.0.1
 

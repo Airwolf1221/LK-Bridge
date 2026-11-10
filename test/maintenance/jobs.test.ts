@@ -234,86 +234,91 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
     expect(m.maintenance.scheduler.get('journal-prune').schedule).toEqual({ kind: 'daily', time: '03:30' });
   });
 
-  it('deletes finished proposals past the retention with their pre-state; keeps the job and journal that name them', async () => {
-    m = await maintenanceRig();
-    const r = m.rig;
-    for (const id of [
-      'budget-sampler',
-      'proposal-expiry',
-      'sqlite-optimise',
-      'journal-prune',
-      'proposal-prune',
-      'asset-refresh', // v2 A4: not under test here
-      'asset-check',
-    ])
-      m.maintenance.commands.disable('owner', id);
+  // It simulates 91 days and takes about 5 s even on its own, so the 5 s default timed out under a full run's load.
+  it(
+    'deletes finished proposals past the retention with their pre-state; keeps the job and journal that name them',
+    { timeout: 20_000 },
+    async () => {
+      m = await maintenanceRig();
+      const r = m.rig;
+      for (const id of [
+        'budget-sampler',
+        'proposal-expiry',
+        'sqlite-optimise',
+        'journal-prune',
+        'proposal-prune',
+        'asset-refresh', // v2 A4: not under test here
+        'asset-check',
+      ])
+        m.maintenance.commands.disable('owner', id);
 
-    // A real executed proposal: approved by the owner, run as a job, journalled.
-    const executed = await capture(r, 'raaaaaaa', 'Executed');
-    const approved = await settle(r.h, r.e, r.policy.commands.approve('owner', executed));
-    expect(approved.error).toBeUndefined();
-    await r.h.drive(r.e, () => r.policy.proposals.state(executed) === 'executed');
-    const jobId = r.policy.proposals.get(executed)!.jobId!;
-    expect(ops(executed)).toBe(1);
-    expect(
-      count(
-        'SELECT count(*) AS n FROM proposal_ops WHERE proposal_id = ? AND pre_state IS NOT NULL',
-        executed,
-      ),
-    ).toBe(1);
-    const journalBefore = r.e.engine.queries
-      .journalLookup(PROJECT, { limit: 100 })
-      .filter((j) => j.jobId === jobId);
-    expect(journalBefore.length).toBeGreaterThan(0);
+      // A real executed proposal: approved by the owner, run as a job, journalled.
+      const executed = await capture(r, 'raaaaaaa', 'Executed');
+      const approved = await settle(r.h, r.e, r.policy.commands.approve('owner', executed));
+      expect(approved.error).toBeUndefined();
+      await r.h.drive(r.e, () => r.policy.proposals.state(executed) === 'executed');
+      const jobId = r.policy.proposals.get(executed)!.jobId!;
+      expect(ops(executed)).toBe(1);
+      expect(
+        count(
+          'SELECT count(*) AS n FROM proposal_ops WHERE proposal_id = ? AND pre_state IS NOT NULL',
+          executed,
+        ),
+      ).toBe(1);
+      const journalBefore = r.e.engine.queries
+        .journalLookup(PROJECT, { limit: 100 })
+        .filter((j) => j.jobId === jobId);
+      expect(journalBefore.length).toBeGreaterThan(0);
 
-    // One of each other state, all captured for real.
-    const ids: Record<string, string> = { executed };
-    for (const [i, state] of ['rejected', 'expired', 'failed', 'pending', 'conflicted'].entries()) {
-      ids[state] = await capture(r, `rb${i}aaaaa`, state);
-    }
-    const t0 = r.h.clock.now();
-    for (const state of ['rejected', 'expired', 'failed', 'conflicted']) force(ids[state]!, state, t0);
+      // One of each other state, all captured for real.
+      const ids: Record<string, string> = { executed };
+      for (const [i, state] of ['rejected', 'expired', 'failed', 'pending', 'conflicted'].entries()) {
+        ids[state] = await capture(r, `rb${i}aaaaa`, state);
+      }
+      const t0 = r.h.clock.now();
+      for (const state of ['rejected', 'expired', 'failed', 'conflicted']) force(ids[state]!, state, t0);
 
-    // Inside the 90-day retention: nothing goes.
-    await r.h.clock.advance(89 * D);
-    expect((await run('proposal-prune')).detail).toMatch(/^Removed 0 finished proposals/);
-    for (const id of Object.values(ids)) expect(exists(id)).toBe(true);
+      // Inside the 90-day retention: nothing goes.
+      await r.h.clock.advance(89 * D);
+      expect((await run('proposal-prune')).detail).toMatch(/^Removed 0 finished proposals/);
+      for (const id of Object.values(ids)) expect(exists(id)).toBe(true);
 
-    // Past it: the four finished states go, with their operations and pre-state; pending and conflicted stay.
-    await r.h.clock.advance(2 * D);
-    const result = await run('proposal-prune');
-    expect(result).toMatchObject({ outcome: 'succeeded' });
-    expect(result.detail).toMatch(/^Removed 4 finished proposals/);
-    for (const state of ['executed', 'rejected', 'expired', 'failed']) {
-      expect(exists(ids[state]!), state).toBe(false);
-      expect(ops(ids[state]!), state).toBe(0);
-    }
-    for (const state of ['pending', 'conflicted']) {
-      expect(exists(ids[state]!), state).toBe(true);
-      expect(ops(ids[state]!), state).toBe(1);
-    }
-    // The job that executed it, and its journal entries, are kept; the job still names the proposal as text.
-    const job = r.e.engine.queries.getJob(PROJECT, jobId)!;
-    expect(job).toMatchObject({ status: 'succeeded' });
-    expect(job.origin.detail).toBe(`proposal:${executed}`);
-    expect(
-      r.e.engine.queries.journalLookup(PROJECT, { limit: 100 }).filter((j) => j.jobId === jobId),
-    ).toEqual(journalBefore);
-    // v2 A1: a bridge-wide run (it covers every project): in the run history, not a job of one project; and one
-    // system audit row says what went.
-    expect(result).toMatchObject({ projectId: '*', jobId: null });
-    expect(
-      r.e.engine.queries
-        .listJobs(ALL_PROJECTS, { limit: 500 })
-        .filter((j) => j.origin.kind === 'maintenance' && j.origin.tool === 'proposal-prune'),
-    ).toEqual([]);
-    const audit = r.policy.commands.listAudit('owner').filter((a) => a.action === 'proposal.pruned');
-    expect(audit).toHaveLength(1);
-    expect(audit[0]).toMatchObject({ actor: 'system', after: { removed: 4 } });
-    // The owner's views no longer list them; the agent's own view answers "not found" like any unknown id.
-    expect(r.policy.proposals.get(executed)).toBeUndefined();
-    expect(writesAtMock().filter((c) => c.method !== 'PATCH')).toEqual([]); // only the approved update was sent
-  }, 30_000); // it moves virtual time through 91 days of hourly jobs: close to the 5 s default on a slow machine
+      // Past it: the four finished states go, with their operations and pre-state; pending and conflicted stay.
+      await r.h.clock.advance(2 * D);
+      const result = await run('proposal-prune');
+      expect(result).toMatchObject({ outcome: 'succeeded' });
+      expect(result.detail).toMatch(/^Removed 4 finished proposals/);
+      for (const state of ['executed', 'rejected', 'expired', 'failed']) {
+        expect(exists(ids[state]!), state).toBe(false);
+        expect(ops(ids[state]!), state).toBe(0);
+      }
+      for (const state of ['pending', 'conflicted']) {
+        expect(exists(ids[state]!), state).toBe(true);
+        expect(ops(ids[state]!), state).toBe(1);
+      }
+      // The job that executed it, and its journal entries, are kept; the job still names the proposal as text.
+      const job = r.e.engine.queries.getJob(PROJECT, jobId)!;
+      expect(job).toMatchObject({ status: 'succeeded' });
+      expect(job.origin.detail).toBe(`proposal:${executed}`);
+      expect(
+        r.e.engine.queries.journalLookup(PROJECT, { limit: 100 }).filter((j) => j.jobId === jobId),
+      ).toEqual(journalBefore);
+      // v2 A1: a bridge-wide run (it covers every project): in the run history, not a job of one project; and one
+      // system audit row says what went.
+      expect(result).toMatchObject({ projectId: '*', jobId: null });
+      expect(
+        r.e.engine.queries
+          .listJobs(ALL_PROJECTS, { limit: 500 })
+          .filter((j) => j.origin.kind === 'maintenance' && j.origin.tool === 'proposal-prune'),
+      ).toEqual([]);
+      const audit = r.policy.commands.listAudit('owner').filter((a) => a.action === 'proposal.pruned');
+      expect(audit).toHaveLength(1);
+      expect(audit[0]).toMatchObject({ actor: 'system', after: { removed: 4 } });
+      // The owner's views no longer list them; the agent's own view answers "not found" like any unknown id.
+      expect(r.policy.proposals.get(executed)).toBeUndefined();
+      expect(writesAtMock().filter((c) => c.method !== 'PATCH')).toEqual([]); // only the approved update was sent
+    },
+  );
 
   it('never prunes pending, approved, executing or conflicted proposals, however old', async () => {
     m = await maintenanceRig();
