@@ -106,6 +106,11 @@ export class StaticProjects implements ProjectsRuntime, SelectableProjects {
       checkedAt: null,
       settings: r?.settings ?? {},
       settingsProblem: r?.settingsProblem ?? null,
+      keySource: null,
+      keyHint: null,
+      keyConflict: null,
+      draining: false,
+      archivedAt: r?.archivedAt ?? null,
     };
   }
 

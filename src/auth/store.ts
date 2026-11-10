@@ -97,6 +97,8 @@ export interface SessionRecord {
   readonly ip: string | null;
   readonly userAgent: string | null;
   readonly revokedAt: number | null;
+  /** OPS2: when this session last re-confirmed the owner's password (and second factor); null: never. */
+  readonly reauthAt: number | null;
 }
 
 type Row = Record<string, unknown>;
@@ -209,11 +211,12 @@ function toSession(r: Row): SessionRecord {
     ip: str(r.ip),
     userAgent: str(r.user_agent),
     revokedAt: num(r.revoked_at),
+    reauthAt: num(r.reauth_at),
   };
 }
 
 export class AuthStore {
-  constructor(private readonly db: Db) {}
+  constructor(readonly db: Db) {}
 
   /** Runs `fn` in one SQLite transaction (synchronous, so atomic within this process). */
   tx<T>(fn: () => T): T {
@@ -465,7 +468,7 @@ export class AuthStore {
 
   // --- Owner sessions ---
 
-  insertSession(s: Omit<SessionRecord, 'revokedAt'>): void {
+  insertSession(s: Omit<SessionRecord, 'revokedAt' | 'reauthAt'>): void {
     this.db
       .prepare(
         `INSERT INTO auth_owner_sessions (session_hash, created_at, expires_at, last_seen_at, ip, user_agent)
@@ -490,6 +493,20 @@ export class AuthStore {
     this.db
       .prepare('UPDATE auth_owner_sessions SET revoked_at = ? WHERE session_hash = ? AND revoked_at IS NULL')
       .run(now, sessionHash);
+  }
+
+  /** OPS2: records a successful re-authentication on a session. */
+  setReauth(sessionHash: string, now: number): void {
+    this.db
+      .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ? AND revoked_at IS NULL')
+      .run(now, sessionHash);
+  }
+
+  /** OPS2: signs out every owner session except `keepHash` (after a password change). Returns how many. */
+  revokeOtherSessions(keepHash: string, now: number): number {
+    return this.db
+      .prepare('UPDATE auth_owner_sessions SET revoked_at = ? WHERE session_hash <> ? AND revoked_at IS NULL')
+      .run(now, keepHash).changes;
   }
 
   // --- Owner state ---

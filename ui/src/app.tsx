@@ -5,7 +5,9 @@ import { Link, Router, useRoute } from './router';
 import { StreamProvider, useStream, useStreamEvent, type SourceFactory } from './stream';
 import { useReloadOn } from './hooks';
 import { ProjectProvider, useProject, useScopedApi } from './project';
+import { ReauthProvider } from './reauth';
 import type { ProposalCounts, SessionInfo } from './types';
+import { AccountPage } from './pages/account';
 import { BudgetsPage } from './pages/budgets';
 import { ClientsPage } from './pages/clients';
 import { ErrorsPage } from './pages/errors';
@@ -51,6 +53,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/projects', label: 'Projects' },
   { to: '/tree', label: 'Repository Tree' },
   { to: '/settings', label: 'Settings' },
+  { to: '/account', label: 'Account' },
   { to: '/maintenance', label: 'Maintenance Jobs' },
   { to: '/mappings', label: 'Repository Mappings' },
 ];
@@ -93,6 +96,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/projects') return <ProjectsPage />;
   if (path === '/tree') return <TreePage />;
   if (path === '/settings') return <SettingsPage />;
+  if (path === '/account') return <AccountPage />;
   if (path === '/maintenance') return <MaintenancePage />;
   if (path === '/mappings' || path.startsWith('/mappings/')) return <MappingsPage />;
   return (
@@ -225,7 +229,9 @@ export function App({ session, createSource }: { session: SessionInfo; createSou
         <Router>
           <StreamProvider {...(createSource ? { createSource } : {})}>
             <ProjectProvider>
-              <Shell session={session} />
+              <ReauthProvider totp={session.totpEnabled === true}>
+                <Shell session={session} />
+              </ReauthProvider>
             </ProjectProvider>
           </StreamProvider>
         </Router>

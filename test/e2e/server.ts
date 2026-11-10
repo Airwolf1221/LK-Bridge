@@ -49,6 +49,8 @@ const config = loadConfig({
   LOG_LEVEL: 'silent',
   SESSION_SECRET: secret(),
   JWT_SIGNING_KEY: secret(),
+  // OPS2: the encrypted secret store (a throwaway key made here).
+  SECRETS_MASTER_KEY: secret(),
 });
 const authConfig = loadAuthConfig({
   BRIDGE_PUBLIC_URL: publicUrl,

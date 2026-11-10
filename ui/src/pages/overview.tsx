@@ -7,7 +7,8 @@ import type { Overview, ProjectStatusSummary } from '../types';
 
 /** Every project whose status is not `active` (a refused key, a mismatched id, not checked yet, no key), with why. */
 function ProjectsAttention({ projects }: { projects: ProjectStatusSummary[] }) {
-  const attention = projects.filter((p) => p.status !== 'active');
+  // A removed (archived) project needs nothing: its history is kept on purpose.
+  const attention = projects.filter((p) => p.status !== 'active' && p.status !== 'archived');
   if (attention.length === 0) return null;
   return (
     <section className="card card-alert" aria-labelledby="attention-h">
@@ -28,6 +29,47 @@ function ProjectsAttention({ projects }: { projects: ProjectStatusSummary[] }) {
         <Link to="/projects">Projects</Link> page shows each key and can check it again.
       </p>
     </section>
+  );
+}
+
+/**
+ * OPS2: keys can now be changed from the dashboard, so the owner's sign-in guards them. While the authenticator is off,
+ * the Overview recommends it strongly; it also shows any problem with the encrypted secret store, and any difference
+ * between the env file and the store (the stored value wins).
+ */
+function SecurityAdvice({ security }: { security: Overview['security'] }) {
+  if (!security) return null;
+  return (
+    <>
+      {!security.totpEnabled && (
+        <section className="card card-alert" aria-labelledby="totp-advice-h" data-testid="totp-advice">
+          <h2 id="totp-advice-h">Turn on the authenticator app</h2>
+          <p>
+            API keys can be added and replaced from this dashboard now, so your password alone guards every
+            project. An authenticator app on your phone stops anyone who learns it. It takes a minute:{' '}
+            <Link to="/account">Account</Link>, then “Set up the authenticator”.
+          </p>
+        </section>
+      )}
+      {security.storeProblem && (
+        <section className="card card-alert" aria-labelledby="store-h">
+          <h2 id="store-h">The encrypted secret store needs attention</h2>
+          <p>{security.storeProblem}</p>
+        </section>
+      )}
+      {security.warnings.length > 0 && (
+        <section className="card" aria-labelledby="sec-warn-h">
+          <h2 id="sec-warn-h">The env file and the store differ</h2>
+          <ul className="plain">
+            {security.warnings.map((w) => (
+              <li key={w} className="small-text">
+                {w}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }
 
@@ -56,6 +98,7 @@ export function OverviewPage() {
         </button>
       </PageHeader>
 
+      <SecurityAdvice security={d.security} />
       <ProjectsAttention projects={d.projects ?? []} />
 
       <div className="grid">

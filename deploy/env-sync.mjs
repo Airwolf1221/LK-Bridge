@@ -47,6 +47,8 @@ import { pathToFileURL } from 'node:url';
  * @property {string[]} placeholders secret-marked placeholders to add, commented out
  * @property {string[]} commentOut  variables no longer in the template, to comment out
  * @property {string[]} migrate     the migration's steps, by name
+ * @property {string[]} retire      env lines retired because the bridge's encrypted store holds them (OPS2), by name
+ * @property {string[]} rotate      the master-key rotation's steps, by name (OPS2)
  * @property {Need[]} needs         what only the owner can do
  * @property {string[]} notes       information; never a change
  * @property {number} changes       how many edits the new text holds
@@ -76,6 +78,8 @@ const SINGLE_FORM = new Set(['LK_API_KEY', 'LK_PROJECT_ID', 'LK_PROJECT_NAME']);
 const PROJECT_NAME = /^[a-z][a-z0-9_]{0,31}$/;
 /** Single-project names the migration comments out (the key itself is moved). */
 const MIGRATED_AWAY = ['LK_PROJECT_ID', 'LK_PROJECT_NAME', 'LK_SANDBOX_API_KEY', 'LK_SANDBOX_PROJECT_ID'];
+/** OPS2: the only names --retire may comment out: values the bridge keeps in its encrypted store. */
+const RETIRABLE = /^(LK_PROJECT_[A-Z0-9_]+_API_KEY|OWNER_PASSWORD_HASH|OWNER_TOTP_SECRET)$/;
 
 /** @param {string} raw */
 function parseMarker(raw) {
@@ -372,12 +376,126 @@ function migrateProjects(live, o) {
 }
 
 /**
+ * OPS2: comments out env lines whose values the bridge now keeps in its encrypted store. The NAMES come from the
+ * bridge's own comparison (`dist/secrets/env-tool.js compare`, run by env-sync.sh as the service user): `equal` names
+ * hold exactly the stored value, `superseded` ones the value first imported, since replaced on the dashboard. Values
+ * are never read here. When no listed project keeps a key line in force, LK_PROJECTS is commented out too.
+ * @param {LiveFile} live
+ * @param {{ equal: string[], superseded: string[], release: string, date: string }} o
+ * @returns {{ steps: string[], refusal?: string, notes: string[] }}
+ */
+function retireImported(live, o) {
+  /** @type {string[]} */
+  const steps = [];
+  /** @type {string[]} */
+  const notes = [];
+  if (live.activeAt('LK_API_KEY').length > 0 && !live.isSet('LK_PROJECTS')) {
+    return {
+      steps,
+      notes,
+      refusal:
+        'the file uses the single-project form (LK_API_KEY). Move it first with --migrate-projects, deploy, then retire.',
+    };
+  }
+  const stamp = `${o.release}, ${o.date}`;
+  const all = [...o.equal.map((n) => [n, 'equal']), ...o.superseded.map((n) => [n, 'superseded'])];
+  for (const [name, kind] of all) {
+    if (!RETIRABLE.test(name ?? ''))
+      return { steps, notes, refusal: `${String(name).slice(0, 60)} cannot be retired` };
+    const at = live.activeAt(name ?? '');
+    if (at.length === 0) {
+      notes.push(`${name} is not set in the file: nothing to retire.`);
+      continue;
+    }
+    for (const i of at.reverse()) {
+      const old = live.lines[i]?.text ?? '';
+      live.replace(i, [
+        kind === 'equal'
+          ? `# retired by env-sync (${stamp}): the bridge keeps ${name} in its encrypted store (checked equal), so this file no longer needs it.`
+          : `# retired by env-sync (${stamp}): ${name} was replaced on the dashboard; the bridge keeps the new value in its encrypted store. Revoke this old value if you have not.`,
+        `# ${old.trimStart()}`,
+      ]);
+    }
+    steps.push(`${name}${kind === 'superseded' ? ' (an old value, replaced on the dashboard)' : ''}`);
+  }
+  // LK_PROJECTS once no listed project keeps a key here: the projects live in the bridge's database now.
+  const listed = live.value('LK_PROJECTS');
+  if (steps.length > 0 && listed !== undefined && listed !== '') {
+    const names = listed
+      .split(',')
+      .map((n) => n.trim().toLowerCase())
+      .filter((n) => n !== '');
+    const keysLeft = names.filter((n) => live.isSet(`LK_PROJECT_${n.toUpperCase()}_API_KEY`));
+    if (keysLeft.length === 0) {
+      for (const i of live.activeAt('LK_PROJECTS').reverse()) {
+        const old = live.lines[i]?.text ?? '';
+        live.replace(i, [
+          `# retired by env-sync (${stamp}): every listed project's key is in the bridge's encrypted store; projects are managed on the dashboard.`,
+          `# ${old.trimStart()}`,
+        ]);
+      }
+      steps.push('LK_PROJECTS (no listed project keeps a key in this file)');
+    }
+  }
+  return { steps, notes };
+}
+
+/**
+ * OPS2: starts a rotation of the secret store's master key. The current SECRETS_MASTER_KEY line becomes
+ * SECRETS_MASTER_KEY_PREVIOUS with its value text moved, never read out; SECRETS_MASTER_KEY gets a new random value. An
+ * older SECRETS_MASTER_KEY_PREVIOUS line is commented out (kept, with a note). The bridge's
+ * `npm run secrets -- rotate-master-key` then re-encrypts everything (backup first).
+ * @param {LiveFile} live
+ * @param {{ release: string, date: string, random: (n: number) => Buffer, marker: Marker | undefined }} o
+ * @returns {{ steps: string[], refusal?: string }}
+ */
+function rotateMasterKey(live, o) {
+  const at = live.activeAt('SECRETS_MASTER_KEY');
+  if (at.length !== 1 || !live.isSet('SECRETS_MASTER_KEY')) {
+    return {
+      steps: [],
+      refusal:
+        at.length > 1
+          ? 'SECRETS_MASTER_KEY is set more than once. Keep one line, then run this again.'
+          : 'SECRETS_MASTER_KEY is not set, so there is nothing to rotate.',
+    };
+  }
+  if (!o.marker || o.marker.kind !== 'generate') {
+    return { steps: [], refusal: 'the template does not say how to generate SECRETS_MASTER_KEY.' };
+  }
+  const stamp = `${o.release}, ${o.date}`;
+  const steps = [];
+  for (const i of live.activeAt('SECRETS_MASTER_KEY_PREVIOUS').reverse()) {
+    const old = live.lines[i]?.text ?? '';
+    live.replace(i, [
+      `# replaced by env-sync (${stamp}): an older SECRETS_MASTER_KEY_PREVIOUS, kept for database backups sealed with it.`,
+      `# ${old.trimStart()}`,
+    ]);
+    steps.push('comment out the older SECRETS_MASTER_KEY_PREVIOUS (kept in the file)');
+  }
+  const keyAt = live.activeAt('SECRETS_MASTER_KEY')[0] ?? -1;
+  const keyLine = live.lines[keyAt]?.text ?? '';
+  const raw = keyLine.slice(keyLine.indexOf('=') + 1);
+  live.replace(keyAt, [
+    `# master key rotated by env-sync (${stamp}): run \`npm run secrets -- rotate-master-key\` before restarting the bridge.`,
+    `SECRETS_MASTER_KEY=${generate(o.marker, o.random)}`,
+    `SECRETS_MASTER_KEY_PREVIOUS=${raw}`,
+  ]);
+  steps.push('SECRETS_MASTER_KEY -> SECRETS_MASTER_KEY_PREVIOUS (the value is moved, never shown)');
+  steps.push('generate a new SECRETS_MASTER_KEY (random; never shown)');
+  return { steps };
+}
+
+/**
  * Works out the new env file.
  * @param {object} o
  * @param {string} o.template           deploy/env.template's text
  * @param {string} o.live               the env file's text
  * @param {boolean} [o.migrateProjects] also migrate the single-project form (refuses a mixed state)
  * @param {boolean} [o.placeholdersOnly] only add the commented-out secret-marked placeholders (inert in any release)
+ * @param {string[]} [o.retireEqual]    OPS2: names the bridge found equal to its encrypted store, to comment out
+ * @param {string[]} [o.retireSuperseded] OPS2: names holding a value the dashboard has since replaced, to comment out
+ * @param {boolean} [o.rotateMasterKey] OPS2: move SECRETS_MASTER_KEY to SECRETS_MASTER_KEY_PREVIOUS and make a new one
  * @param {string} [o.release]          the release the template belongs to, for the notes in the file
  * @param {string} [o.date]             YYYY-MM-DD, for the notes in the file
  * @param {(n: number) => Buffer} [o.random] the random source (crypto.randomBytes)
@@ -399,11 +517,35 @@ export function planSync(o) {
     placeholders: [],
     commentOut: [],
     migrate: [],
+    retire: [],
+    rotate: [],
     needs: [],
     notes: [],
     changes: 0,
   };
   const all = !o.placeholdersOnly;
+
+  if (all && (o.retireEqual?.length || o.retireSuperseded?.length)) {
+    const r = retireImported(live, {
+      equal: o.retireEqual ?? [],
+      superseded: o.retireSuperseded ?? [],
+      release,
+      date,
+    });
+    if (r.refusal) return { error: `refusing to retire: ${r.refusal}` };
+    plan.retire = r.steps;
+    plan.notes.push(...r.notes);
+  }
+  if (all && o.rotateMasterKey) {
+    const r = rotateMasterKey(live, {
+      release,
+      date,
+      random,
+      marker: t.vars.find((v) => v.name === 'SECRETS_MASTER_KEY')?.marker,
+    });
+    if (r.refusal) return { error: `refusing to rotate: ${r.refusal}` };
+    plan.rotate = r.steps;
+  }
 
   if (o.migrateProjects && all) {
     const m = migrateProjects(live, { release, date });
@@ -421,7 +563,9 @@ export function planSync(o) {
   const multi = listed !== undefined && listed !== '';
   const single =
     !multi && (live.activeAt('LK_API_KEY').length > 0 || live.activeAt('LK_PROJECT_ID').length > 0);
-  const projectRules = multi || single;
+  // OPS2: a file that mentions LK_PROJECTS only commented out (retired, or never used) leaves the projects to the
+  // dashboard: no project line is added for it.
+  const projectRules = multi || single || live.mentions('LK_PROJECTS');
 
   for (const v of t.vars) {
     // The single-project form's names are never added; the project variables follow the project rules below once
@@ -480,6 +624,14 @@ export function planSync(o) {
       const keyVar = `LK_PROJECT_${n.toUpperCase()}_API_KEY`;
       if (live.isSet(keyVar)) continue;
       const placeholder = !live.mentions(keyVar);
+      // OPS2: a key line that is present but not set (retired, or left blank) is fine: the bridge serves the project
+      // with its key from the encrypted store, if one is stored there.
+      if (!placeholder) {
+        plan.notes.push(
+          `${keyVar} is not set: project ${n} is served with its key from the bridge's encrypted store, if one is stored.`,
+        );
+        continue;
+      }
       if (placeholder) {
         additions.push([
           `# The API key of project ${n} (listed in LK_PROJECTS; ADMIN role). Secret: never paste it anywhere else.`,
@@ -574,6 +726,8 @@ export function planSync(o) {
   }
 
   plan.changes =
+    plan.retire.length +
+    plan.rotate.length +
     plan.add.length +
     plan.generate.length +
     plan.addOptional.length +
@@ -596,6 +750,8 @@ export function summarise(p, o = {}) {
     if (names.length > 0) out.push(`  ${label}: ${names.join(', ')}`);
   };
   list(`${will}migrate to the multi-project form`, p.migrate);
+  list(`${will}retire (in the encrypted store now; values are never shown)`, p.retire);
+  list(`${will}rotate the master key`, p.rotate);
   list(`${will}add`, p.add);
   list(`${will}generate (random; the value is never shown)`, p.generate);
   list(`${will}add, commented out (optional)`, p.addOptional);
@@ -618,14 +774,35 @@ export function actionNeeded(needs, file) {
   );
 }
 
+/** A comma-separated list of variable names (from env-sync.sh), or none. @param {unknown} v @returns {string[]} */
+function names(v) {
+  return typeof v === 'string'
+    ? v
+        .split(',')
+        .map((n) => n.trim())
+        .filter((n) => /^[A-Z][A-Z0-9_]*$/.test(n))
+    : [];
+}
+
 /** @param {string[]} argv */
 function main(argv) {
   /** @type {Record<string, string | boolean>} */
   const a = {};
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i] ?? '';
-    if (['--migrate-projects', '--placeholders-only'].includes(k)) a[k] = true;
-    else if (['--template', '--live', '--out', '--release', '--date', '--label'].includes(k))
+    if (['--migrate-projects', '--placeholders-only', '--rotate-master-key'].includes(k)) a[k] = true;
+    else if (
+      [
+        '--template',
+        '--live',
+        '--out',
+        '--release',
+        '--date',
+        '--label',
+        '--retire',
+        '--retire-superseded',
+      ].includes(k)
+    )
       a[k] = argv[++i] ?? '';
     else {
       process.stderr.write(`ERROR: unknown argument ${k.slice(0, 40)}\n`);
@@ -656,6 +833,9 @@ function main(argv) {
       live: liveText,
       migrateProjects: a['--migrate-projects'] === true,
       placeholdersOnly: a['--placeholders-only'] === true,
+      rotateMasterKey: a['--rotate-master-key'] === true,
+      retireEqual: names(a['--retire']),
+      retireSuperseded: names(a['--retire-superseded']),
       ...(typeof a['--release'] === 'string' ? { release: a['--release'] } : {}),
       ...(typeof a['--date'] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a['--date'])
         ? { date: a['--date'] }

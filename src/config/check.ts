@@ -36,6 +36,11 @@ export const CONFIG_LOADERS: readonly (readonly [string, (env: NodeJS.ProcessEnv
 const BEARER_TOKEN = /^[A-Za-z0-9\-._~+/]+=*$/;
 const MIN_KEY_LENGTH = 16;
 
+/** OPS2: whether `key` could be a LegendKeeper API key (a bearer token of a sensible length). Never says why: no echo. */
+export function plausibleApiKey(key: string): boolean {
+  return key.length >= MIN_KEY_LENGTH && key.length <= 512 && BEARER_TOKEN.test(key);
+}
+
 /** Names whose values must never be printed, even by accident. */
 const CREDENTIAL_NAME = /(SECRET|KEY|HASH|TOKEN|PASSWORD)/;
 
@@ -84,6 +89,24 @@ export function checkConfig(env: NodeJS.ProcessEnv): CheckResult {
   }
   const projects = projectsFrom(env);
   warnings.push(...projects.warnings);
+  // OPS2: the bridge only warns about its master key (a bad one must never stop it from starting, ADR 0028); an edit
+  // that would make it unusable is still caught here, before a deploy or env-sync keeps it.
+  const master = (env.SECRETS_MASTER_KEY ?? '').trim();
+  const previous = (env.SECRETS_MASTER_KEY_PREVIOUS ?? '').trim();
+  if (master === '') {
+    warnings.push(
+      'SECRETS_MASTER_KEY is not set: keys and the owner credentials cannot be kept in the encrypted store (env-sync generates it).',
+    );
+  } else if (master.length < 32) {
+    issues.add('SECRETS_MASTER_KEY: at least 32 characters (env-sync generates one; never shorten it)');
+  } else if (master === (env.SESSION_SECRET ?? '').trim() || master === (env.JWT_SIGNING_KEY ?? '').trim()) {
+    issues.add('SECRETS_MASTER_KEY: must differ from SESSION_SECRET and JWT_SIGNING_KEY');
+  }
+  if (previous !== '' && previous === master) {
+    issues.add(
+      'SECRETS_MASTER_KEY_PREVIOUS: must differ from SECRETS_MASTER_KEY (it is the key before a rotation)',
+    );
+  }
   for (const p of projects.projects) {
     if (p.apiKey.length < MIN_KEY_LENGTH || !BEARER_TOKEN.test(p.apiKey)) {
       issues.add(

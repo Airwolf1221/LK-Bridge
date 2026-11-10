@@ -263,7 +263,6 @@ describe('Projects page', () => {
     expect(within(main).getByText('active')).toBeInTheDocument();
     expect(within(main).getByText('writes allowed')).toBeInTheDocument();
     expect(within(main).getByText('LK_PROJECT_BAISHENG_API_KEY')).toBeInTheDocument();
-    expect(within(main).getByText('present')).toBeInTheDocument();
     expect(within(main).getByText('valid')).toBeInTheDocument();
 
     const test = row('test');
@@ -277,7 +276,7 @@ describe('Projects page', () => {
 
     const arkona = row('arkona');
     expect(within(arkona).getByText('no key configured')).toBeInTheDocument(); // the status
-    expect(within(arkona).getByText('No key configured')).toBeInTheDocument(); // the key column
+    expect(within(arkona).getByText('No key')).toBeInTheDocument(); // the key column
     expect(within(arkona).queryByRole('button', { name: /Check the key/ })).toBeNull();
 
     // A key value never reaches the page, whatever the payload holds.

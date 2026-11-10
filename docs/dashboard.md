@@ -38,7 +38,12 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
   owner command layer (`policy.commands`), an engine control, or the runtime settings functions
   (`src/admin/runtime-settings.ts`). Each leaves an `audit_log` row (actor `owner`) and a `policy` event on the stream.
   No route touches the database or the engine itself.
-- **No secrets shown or logged.** A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
+- **Re-authentication (OPS2).** Adding, replacing or removing an API key, and changing the password or the authenticator,
+  also need the owner's password (and authenticator code) within the last five minutes on the session, or the answer is
+  `403 REAUTH_REQUIRED`; the dashboard asks in a dialog and retries ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)).
+- **No secrets shown or logged.** An API key goes to the bridge once, from a write-only field; afterwards only its last
+  four characters are shown (OPS2). The authenticator secret (while it is set up) and recovery codes are in one response
+  each, marked `shownOnce`. A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
   hash is stored and nothing else returns it. Signed upload URLs, upload keys, headers, image bytes and credential-shaped
   fields are replaced by `[redacted]` in every job, step, artefact, error, journal, proposal and stream payload
   (`src/admin/redact.ts`); very long values are shortened. Request logging keeps the path only (no query string).
@@ -56,6 +61,14 @@ project with its flags, LegendKeeper id and name, whether its key is configured 
 valid, its status and reason, and its settings (read-only); it can switch a project's **Read-only** flag (with a
 confirmation, audited) and **Check again** a project's key. The sandbox flag is shown but only set from the server's
 shell (`npm run projects`).
+
+## Account, and keys on the Projects page (OPS2)
+
+The **Account** page: the password, the authenticator app (QR code drawn in the browser, recovery codes shown once) and
+the encrypted secret store's state ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)). The
+**Projects** page adds, re-keys, pauses and drains, and removes projects ([projects.md](projects.md#managing-projects-on-the-dashboard-ops2)).
+The **Overview** recommends the authenticator strongly while it is off, and shows any problem with the secret store
+and any difference between the env file and the store.
 
 ## Repository Tree (v2 A2)
 
@@ -76,7 +89,7 @@ character placement, compute an ordering slot). How to use it: [registry.md](reg
 ## Admin API
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take
-`?project=` (v2 A1).
+`?project=` (v2 A1); routes marked ‡ need a re-authentication within the last five minutes (OPS2).
 
 | Area        | Routes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -93,7 +106,8 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Maintenance | `GET /maintenance`, `GET /maintenance/:id` (with history), `POST /maintenance/:id/enable\|disable\|run`, `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md))                                                                                                                                                                                                                                                                                                |
 | Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md))                                                                                                 |
 | Registry †  | `GET /registry`, `POST /registry/types\|seed-character\|templates/refresh`, `GET\|PUT /registry/types/:id`, `POST /registry/types/:id/delete`, `GET /registry/types/:id/taxonomy`, `POST /registry/types/:id/taxonomy/seed\|add-missing`, `PUT /registry/taxonomy/:id`, `POST /registry/taxonomy/:id/delete`, `GET /registry/drift`, `POST /registry/drift/run`, `GET /registry/try/resolve\|placement\|ordering`, `GET /registry/out-of-order` (v2 A3, [docs/registry.md](registry.md)) |
-| Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1), `PUT /projects/:name/settings` (`{ key, value }`, v2 A2)                                                                                                                                                                                                                                                                                                           |
+| Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1), `PUT /projects/:name/settings` (`{ key, value }`, v2 A2); OPS2: `POST /projects/check` (`{ name, apiKey }`) ‡, `POST /projects/:name/key/check` (`{ apiKey }`) ‡, `POST /projects/confirm` (`{ checkId, confirm: true }`) ‡, `PUT /projects/:name/draining` (`{ value }`), `POST /projects/:name/remove` (`{ confirm: true }`) ‡                                   |
+| Account     | OPS2: `GET /security`, `POST /security/reauth` (`{ password, totp? }`), `POST /security/password` (`{ currentPassword, newPassword }`) ‡, `POST /security/totp/enrol` ‡, `POST /security/totp/confirm` (`{ code }`) ‡, `POST /security/totp/remove` (`{ confirm: true }`) ‡, `POST /security/recovery-codes` (`{ confirm: true }`) ‡                                                                                                                                                     |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409

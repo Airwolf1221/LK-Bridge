@@ -30,3 +30,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0024](0024-env-sync.md)                               | env-sync keeps the env file in step with the template; the deploy checks itself first | Accepted |
 | [0025](0025-repository-tree.md)                        | The repository tree: observation order, per-project serialisation                     | Accepted |
 | [0026](0026-type-registry-and-name-resolution.md)      | The type registry and taxonomy, name resolution, ordering and character placement     | Accepted |
+| [0028](0028-secrets-on-the-dashboard.md)               | Projects, keys and the owner's sign-in on the dashboard, in an encrypted store        | Accepted |

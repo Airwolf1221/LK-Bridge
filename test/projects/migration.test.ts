@@ -398,7 +398,8 @@ describe('migration 0600 on a v1.0.2 database', () => {
     const result = runMigrations(db, undefined, {
       context: migrationContextFromEnv({ LK_PROJECT_ID: LEGACY, LK_PROJECT_NAME: 'Test' }),
     });
-    expect(result.applied).toEqual([
+    // Later releases add migrations after these (OPS2: 1000).
+    expect(result.applied.slice(0, 3)).toEqual([
       '0600_projects.sql',
       '0700_repository_tree.sql',
       '0800_type_registry.sql',
@@ -479,7 +480,7 @@ describe('migration 0600 on a v1.0.2 database', () => {
   it('an empty v1.0.2 database upgrades without a legacy id (the projects are registered at start-up)', () => {
     const db = openDatabase(join(tempDir(), 'bridge.db'));
     runMigrations(db, v1MigrationsDir());
-    expect(runMigrations(db).applied).toEqual([
+    expect(runMigrations(db).applied.slice(0, 3)).toEqual([
       '0600_projects.sql',
       '0700_repository_tree.sql',
       '0800_type_registry.sql',
@@ -569,7 +570,7 @@ describe('npm run db:migrate finds the legacy project id', () => {
   it('with the env-file context, a v1.0.2 database with data upgrades', () => {
     const { db } = v1Database();
     const { context } = cliMigrationContext({ LKB_ENV_FILE: file });
-    expect(runMigrations(db, undefined, { context }).applied).toEqual([
+    expect(runMigrations(db, undefined, { context }).applied.slice(0, 3)).toEqual([
       '0600_projects.sql',
       '0700_repository_tree.sql',
       '0800_type_registry.sql',
