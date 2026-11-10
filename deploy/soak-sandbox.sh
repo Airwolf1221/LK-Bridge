@@ -5,7 +5,8 @@
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh --project test                 # about 1,000 writes
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/soak-sandbox.sh --project test --writes 100    # a quick run
 #
-# Like sandbox-test.sh: it reads just that project's key variable and DB_PATH, exports only those, and prints neither.
+# Like sandbox-test.sh: it exports only DB_PATH and the env file's path and reads no key; the soak finds the project's
+# key as the bridge does (its encrypted store first, the env file's key only when nothing is stored) and prints none.
 # The soak refuses any project not registered as a sandbox in the bridge's database (`npm run projects -- sandbox <name>
 # on`), and any key whose own project is not exactly that one; it creates everything under one throwaway root resource
 # and deletes it at the end, and uses its own temporary database. It draws on the same LegendKeeper rate budget as the

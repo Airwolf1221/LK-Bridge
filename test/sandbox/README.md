@@ -3,12 +3,18 @@
 Opt-in checks against a real LegendKeeper **sandbox** project (never Baisheng or Arkona). Excluded from `npm test` and from public CI.
 
 v2 A1: the target is a project the bridge serves **and that is marked as a sandbox** in the bridge's database
-(`npm run projects -- sandbox <name> on`; [docs/projects.md](../../docs/projects.md)). The key is that project's own
-(`LK_PROJECT_<NAME>_API_KEY`, or `LK_API_KEY` in the single-project form). `LK_SANDBOX_API_KEY` and
-`LK_SANDBOX_PROJECT_ID` are retired.
+(`npm run projects -- sandbox <name> on`; [docs/projects.md](../../docs/projects.md)). The key is that project's own,
+found as the bridge finds it (OPS2, `target.ts`): the key in the bridge's encrypted store (opened with
+`SECRETS_MASTER_KEY`), or, only when nothing is stored for the project, `LK_PROJECT_<NAME>_API_KEY` (`LK_API_KEY` in the
+single-project form). With `LKB_ENV_FILE` set, those few names are read from that file (the wrappers do this);
+otherwise from the environment. `LK_SANDBOX_API_KEY` and `LK_SANDBOX_PROJECT_ID` are retired.
 
 ```bash
 DB_PATH=… LK_PROJECT_TEST_API_KEY=… LKB_SANDBOX_PROJECT=test npm run test:sandbox
+```
+
+```bash
+DB_PATH=… LKB_ENV_FILE=/path/to/lk-bridge.env LKB_SANDBOX_PROJECT=test npm run test:sandbox
 ```
 
 On the server: `deploy/sandbox-test.sh --project test`. Without `LKB_SANDBOX_PROJECT` the suite is skipped. It **refuses to run** unless the project is marked as a sandbox and the key's own project (from `listProjects`) is exactly that project's stored id (`target.ts`). Everything it creates lives under one throwaway resource that is deleted (cascade) at the end; if that fails the report says which id to delete by hand.

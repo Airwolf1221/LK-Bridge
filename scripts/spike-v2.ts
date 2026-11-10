@@ -4,8 +4,9 @@
  * writes, and only under one throwaway root resource that is deleted (cascade) at the end, even after a failure.
  *
  * v2 A1: `--project NAME` names a project registered in the bridge's database (DB_PATH) and marked as a sandbox there;
- * any other project is refused (test/sandbox/target.ts). Its key is the bridge's own variable for it,
- * LK_PROJECT_<NAME>_API_KEY (on the server, deploy/spike-v2.sh reads just that one from the env file). It also refuses
+ * any other project is refused (test/sandbox/target.ts). Its key is found as the bridge finds it:
+ * the key in the bridge's encrypted store (OPS2), or, only when none is stored, the env file's LK_PROJECT_<NAME>_API_KEY
+ * (on the server, deploy/spike-v2.sh passes the project, DB_PATH and the env file's path, never a key). It also refuses
  * unless the key's own project is exactly the registered one, uses a temporary database, and never prints a secret.
  *
  * Output: the Markdown report on stdout (progress goes to stderr), and the same report written to
@@ -18,7 +19,7 @@ import { formatReport, writeReportFiles } from '../test/sandbox/spike-report.js'
 import { DEFAULT_SPIKE_IDS, runSpike, type SpikeIds } from '../test/sandbox/spike-v2.js';
 import { SandboxGuardError } from '../test/sandbox/smoke.js';
 import { createSoakRuntime } from '../test/sandbox/soak.js';
-import { resolveSandboxTarget } from '../test/sandbox/target.js';
+import { keySourceLine, resolveSandboxTarget } from '../test/sandbox/target.js';
 
 const USAGE = `usage: npm run spike:v2 -- --project NAME [flags]
   --project NAME          the sandbox project (registered by the bridge and marked as a sandbox)
@@ -95,6 +96,7 @@ async function main(): Promise<void> {
     if (e instanceof SandboxGuardError) fail(e.message);
     throw e;
   }
+  process.stderr.write(keySourceLine(target));
   const project = target.projectId;
   const skip = new Set<number>();
   for (const part of (flags.get('--skip') ?? '').split(',').filter(Boolean)) {

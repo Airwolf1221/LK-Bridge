@@ -45,39 +45,29 @@ env_file_get() {
   printf '%s' "$line"
 }
 
-# project_key_var NAME: the env variable that holds project NAME's key (v2 A1): LK_PROJECT_<NAME>_API_KEY in the
-# multi-project form (LK_PROJECTS set), or LK_API_KEY in the single-project form for the project LK_PROJECT_NAME names
-# (default "test"). Prints the variable's NAME only, never a value. Fails for a malformed name.
-project_key_var() {
-  local name="$1" single
-  [[ "$name" =~ ^[a-z][a-z0-9_]{0,31}$ ]] || return 1
-  single="$(env_file_get LK_PROJECT_NAME)"
-  single="${single:-test}"
-  if [[ -z "$(env_file_get LK_PROJECTS)" && -n "$(env_file_get LK_API_KEY)" && "$name" == "${single,,}" ]]; then
-    printf 'LK_API_KEY'
-  else
-    printf 'LK_PROJECT_%s_API_KEY' "${name^^}"
-  fi
-}
-
-# sandbox_project_env NAME: for the sandbox, soak and spike wrappers (v2 A1). Exports exactly what the script needs to
-# find the project and its key: DB_PATH (the bridge's database, which says whether NAME is a sandbox project), the one
-# variable holding NAME's key, and LK_PROJECT_NAME when that is the single-project form's LK_API_KEY. Prints nothing;
-# never prints the key. The script itself refuses a project that is not registered as a sandbox.
+# sandbox_project_env NAME: for the sandbox, soak, spike and round-trip wrappers (v2 A1; OPS2 hotfix). Exports only
+# DB_PATH (the bridge's database, which says whether NAME is a registered sandbox and holds the encrypted keys) and
+# LKB_ENV_FILE (the env file's PATH). It reads no key: the script finds NAME's key exactly as the running bridge does
+# (test/sandbox/target.ts): the key in the bridge's encrypted store, opened with SECRETS_MASTER_KEY from the env file,
+# or, only when nothing is stored for NAME, the env file's LK_PROJECT_<NAME>_API_KEY (LK_API_KEY in the single-project
+# form). The script reads just those few names from the file, so no key or master key is ever put in an environment.
+# It refuses a project that is not registered and marked as a sandbox, and one with a key in neither place. A key the
+# caller's own environment holds is dropped, so it can never stand in for the bridge's. Prints nothing.
 sandbox_project_env() {
-  local name="$1" var key db_path
+  local name="$1" db_path var
   [[ -n "$name" ]] || die "Name the sandbox project: --project <name> (a project the bridge has registered and that is marked as a sandbox: npm run projects -- list)."
-  var="$(project_key_var "$name")" || die "\"${name}\" is not a project name (lowercase letter first, then lowercase letters, digits or underscores)."
-  key="$(env_file_get "$var")"
-  [[ -n "$key" ]] || die "${var} is empty in ${LKB_ENV_FILE}: the key of project \"${name}\" is needed."
+  [[ "$name" =~ ^[a-z][a-z0-9_]{0,31}$ ]] || die "\"${name}\" is not a project name (lowercase letter first, then lowercase letters, digits or underscores)."
+  [[ -r "$LKB_ENV_FILE" ]] || die "Cannot read ${LKB_ENV_FILE}: run this as the service user (sudo -u ${LKB_SERVICE_USER} ...), which reads the env file and the bridge's database."
+  for var in $(compgen -e); do
+    if [[ "$var" =~ ^(LK_PROJECT_[A-Z0-9_]+_API_KEY|LK_API_KEY|SECRETS_MASTER_KEY|SECRETS_MASTER_KEY_PREVIOUS)$ ]]; then
+      unset "$var"
+    fi
+  done
   db_path="$(env_file_get DB_PATH)"
   export DB_PATH="${db_path:-${LKB_DATA_DIR}/bridge.db}"
-  export "${var}=${key}"
-  if [[ "$var" == LK_API_KEY ]]; then
-    local single
-    single="$(env_file_get LK_PROJECT_NAME)"
-    export LK_PROJECT_NAME="${single:-test}"
-  fi
+  # Absolute: the wrappers change directory before the script reads it.
+  LKB_ENV_FILE="$(readlink -f -- "$LKB_ENV_FILE")"
+  export LKB_ENV_FILE
 }
 
 # use_private_node: puts the bridge's private Node first on PATH and checks it is the real thing.
