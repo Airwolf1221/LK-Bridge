@@ -600,7 +600,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
           return finishCreate(cc, [{ ...page, facts: facts.value, tags }], {
             batch: false,
             dryRun: args.dryRun === true,
-            extraHead: { status },
+            extraHead: { lifecycleStatus: status },
             summary: `create_resource: ${page.rawName} under ${parent.value.rawName}`,
           });
         });
@@ -729,7 +729,7 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
           return finishCreate(cc, [page], {
             batch: false,
             dryRun: args.dryRun === true,
-            ...(n.status ? { extraHead: { status: n.status } } : {}),
+            ...(n.status ? { extraHead: { lifecycleStatus: n.status } } : {}),
             summary: `create_bare_resource: ${page.rawName} under ${parent.value.rawName}`,
           });
         });
@@ -1544,7 +1544,7 @@ function deleteResourceTool(deps: ToolDeps): McpToolProvider {
           subtree.map((n) => n.id),
         );
         const canon = subtree
-          .flatMap((n) => assessDelete(rules, facts.get(n.id) ?? [], n.rawName))
+          .flatMap((n) => assessDelete(rules, facts.get(n.id) ?? [], n.rawName, n.kind))
           .map((c) => c.text);
         const head = { page, removed, ...(below.length > 0 ? { cascade: true } : {}) };
         if (args.dryRun === true) {

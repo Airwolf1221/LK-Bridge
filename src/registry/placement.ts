@@ -34,6 +34,11 @@ export interface CharacterPlacementInput {
    * given; the page goes under the race index only when it is promoted. Existing pages are looked for under both.
    */
   readonly working?: { readonly indexId: string } | undefined;
+  /**
+   * v2 C2c: the project's `[INDEX] Working`, searched for an existing page of the character whatever the status (so an
+   * Authoritative request returns a Working page that exists, and the reverse).
+   */
+  readonly lookUnder?: string | undefined;
 }
 
 export type PagePlan =
@@ -212,13 +217,14 @@ export function planCharacterPlacement(
   };
   const raceKids = tree.children(raceNode.id);
   const raceCharIndex = indexNamed(raceNode);
-  const workingCharIndex = workingNode ? indexNamed(workingNode) : null;
+  const lookNode = workingNode ?? (input.lookUnder ? tree.node(input.lookUnder) : null);
+  const workingCharIndex = lookNode && lookNode.kind === 'index' ? indexNamed(lookNode) : null;
   const charIndex = workingNode ? workingCharIndex : raceCharIndex;
   const homeKids = tree.children(home.id);
   const pool = [
     ...raceKids,
     ...(raceCharIndex ? tree.children(raceCharIndex.id) : []),
-    ...(workingNode ? homeKids : []),
+    ...(lookNode && lookNode.kind === 'index' ? tree.children(lookNode.id) : []),
     ...(workingCharIndex ? tree.children(workingCharIndex.id) : []),
   ];
   const pagesOf = (referenceType: string) => {
@@ -232,7 +238,7 @@ export function planCharacterPlacement(
     if (hits.length > 1) {
       throw new RegistryError(
         'EXISTING_PAGE_AMBIGUOUS',
-        `There are ${hits.length} ${referenceType} pages for “${characterName}” under ${raceNode.displayName}${workingNode ? ` and ${workingNode.displayName}` : ''}.`,
+        `There are ${hits.length} ${referenceType} pages for “${characterName}” under ${raceNode.displayName}${lookNode ? ` and ${lookNode.displayName}` : ''}.`,
         { candidates: hits.map((h) => tree.ref(h)) },
       );
     }

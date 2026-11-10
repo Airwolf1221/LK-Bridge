@@ -559,11 +559,20 @@ export interface ProposalDetail extends Proposal {
 /** v2 C2a: a project's protected canonical facts rules. */
 export interface CanonRule {
   id: string;
-  key: string;
-  /** `delete` (v2 C2b): deleting a page whose fact holds one of `values` needs canonical approval. */
-  kind: 'value' | 'change' | 'delete';
+  /** Absent for `deleteKind` (it names a prefix, not a fact). */
+  key?: string;
+  /**
+   * `delete` (v2 C2b): deleting a page whose fact holds one of `values` needs canonical approval. v2 C2c: `deleteKind`
+   * (deleting a page of these kinds, by prefix) and `deleteDocument` (deleting a document of these types of a page whose
+   * fact holds one of `values`).
+   */
+  kind: 'value' | 'change' | 'delete' | 'deleteKind' | 'deleteDocument';
   values?: string[];
+  kinds?: string[];
+  documentTypes?: string[];
   note?: string;
+  /** v2 C2c: false switches the rule off (kept in the list). */
+  enabled?: boolean;
 }
 
 export interface CanonConfig {
@@ -991,3 +1000,88 @@ export interface AssetPlanView {
 export type AssetPlanResponse =
   | { ok: true; plan: AssetPlanView }
   | { ok: false; error: { code: string; message: string; details?: Record<string, unknown> } };
+
+// ============================================================================================ v2 C2c: the lifecycle
+
+export interface LifecycleIndexLookup {
+  status: 'found' | 'missing' | 'ambiguous';
+  name: string;
+  node?: { id: string; name: string; path: string };
+  candidates?: { id: string; name: string; path: string }[];
+}
+
+export interface LifecycleConfigView {
+  workingIndexId: string | null;
+  archiveIndexId: string | null;
+  indexNames: { working: string; archived: string };
+  status: { authoritative: string; working: string; archived: string };
+  tags: { canon: string; working: string; archived: string };
+  fields: {
+    status: string;
+    continuityType: string;
+    scope: string;
+    temporalScope: string;
+    lastMajorRevision: string;
+  };
+  continuityTypes: { canon: string; au: string; nonCurrent: string };
+  texts: {
+    noteFromAuthoritative: string;
+    noteFromWorking: string;
+    scopePrefix: string;
+    temporalFromAuthoritative: string;
+    temporalFromWorking: string;
+  };
+  problem: string | null;
+}
+
+export interface LifecycleView {
+  project: string;
+  working: LifecycleIndexLookup;
+  archived: LifecycleIndexLookup;
+  config: LifecycleConfigView;
+  confirmed: { ok: boolean; code?: string; message?: string };
+}
+
+export interface LifecycleRecordView {
+  id: number;
+  pageId: string;
+  pageName: string;
+  action: 'archive' | 'unarchive' | 'move_to_working' | 'promote';
+  date: string;
+  state: 'incomplete' | 'complete';
+  previousState: string;
+  previousName: string;
+  previousParentId: string | null;
+  target: { name: string; parentId: string };
+  tagsRemoved: string[];
+  tagsAdded: string[];
+  principalId: string;
+  approver: string | null;
+  jobId: string | null;
+  jobs: string[];
+  proposalId: string | null;
+  detail: Record<string, unknown>;
+  createdAt: number;
+  completedAt: number | null;
+}
+
+export interface LinkSweepView {
+  id: string;
+  status: string;
+  startedAt: number;
+  finishedAt: number | null;
+  pagesTotal: number | null;
+  pagesDone: number;
+  documentsRead: number;
+  requests: number;
+  links: number;
+  error: string | null;
+}
+
+export interface LifecycleRecordsResponse {
+  project: ProjectRef;
+  total: number;
+  records: LifecycleRecordView[];
+  principals: Record<string, { name: string } | undefined>;
+  links: { total: number; lastSweep: LinkSweepView | null; running: LinkSweepView | null };
+}

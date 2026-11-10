@@ -144,6 +144,35 @@ export async function lifecycleWorld(o: Parameters<typeof resourcesWorld>[0] = {
       .prepare('UPDATE tree_nodes SET template_id = ? WHERE project_id = ? AND id = ?')
       .run(L.template, PROJECT, id);
   }
+  // LegendKeeper's content search, loosely: a page whose name or page text holds the words (B2's world answers only
+  // its own fixed query, so this one comes first).
+  w.overrides.set(/\/search$/, (req) => {
+    if (req.method !== 'GET') return undefined;
+    const q = String(req.query.q ?? '')
+      .toLowerCase()
+      .trim();
+    if (!q) return { status: 200, body: { data: [], hasMore: false, nextCursor: null } };
+    const hits = [...w.repo.res.values()].filter(
+      (r) =>
+        r.deletedAt === null &&
+        (r.name.toLowerCase().includes(q) ||
+          w.repo.liveDocs(r).some((d) =>
+            JSON.stringify(w.repo.blocks.get(d.id)?.blocks ?? [])
+              .toLowerCase()
+              .includes(q),
+          )),
+    );
+    return {
+      status: 200,
+      body: {
+        data: hits
+          .slice(0, Number(req.query.limit ?? 32))
+          .map((r) => ({ resource: { id: r.id, name: r.name } })),
+        hasMore: false,
+        nextCursor: null,
+      },
+    };
+  });
   w.main = main;
   w.blocks = (docId: string) => (w.repo.blocks.get(docId)?.blocks ?? []) as Record<string, unknown>[];
   return w;

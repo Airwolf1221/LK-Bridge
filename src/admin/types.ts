@@ -1,3 +1,4 @@
+import type { Lifecycle } from '../lifecycle/index.js';
 import type { AuthServices } from '../auth/services.js';
 import type { AdminSettings, Config } from '../config/index.js';
 import type { JobEngine } from '../jobs/index.js';
@@ -30,6 +31,8 @@ export interface AdminRuntime {
   readonly registry: Registry;
   /** v2 A4: the asset tree of each project. */
   readonly assets: AssetService;
+  /** v2 C2c: the page lifecycle (settings, the lifecycle record, the link index); optional for tests' runtimes. */
+  readonly lifecycle?: Lifecycle;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

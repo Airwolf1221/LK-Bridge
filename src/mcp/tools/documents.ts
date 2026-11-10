@@ -9,7 +9,7 @@
  * canonical content without canonical approval; the owner decides whether it should need it.
  */
 import * as z from 'zod';
-import { assessDelete, canonConfigFrom } from '../../facts/index.js';
+import { assessDelete, assessDeleteDocument, canonConfigFrom } from '../../facts/index.js';
 import { VERIFY_STEP } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
 import type { TreeDocument, TreeNode } from '../../tree/index.js';
@@ -375,8 +375,10 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
     description:
       'Deletes one document (a map, timeline or board, or one of several page documents) of a page inside the AI ' +
       'REPOSITORY; LegendKeeper keeps it for a restore. `confirm: true` is required. The page’s last document, or its only ' +
-      'page-type document, is refused: that is the page’s content (use write_page or delete_resource). Cost: 1 write, 1 read ' +
-      'to verify, the tree’s re-read.',
+      'page-type document, is refused: that is the page’s content (use write_page or delete_resource). PROTECTED CANON ' +
+      '(a canon rule the owner can switch off): deleting a map, timeline or board of an Authoritative page becomes a ' +
+      'proposal only the owner can accept as canon, whatever your scope. Cost: 2 reads for the canon check, 1 write, 1 ' +
+      'read to verify, the tree’s re-read.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: z.string().min(1).max(500).describe('The document (name or id).'),
@@ -424,18 +426,32 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
             ? (b.rows ?? []).map((r) => ({ key: r.key, content: [{ text: r.text }] }))
             : [],
         );
-        const canon = assessDelete(rules, facts, node.rawName).length > 0;
+        // v2 C2c: deleting a map, timeline or board of an Authoritative page is a canon rule (recommended, switchable):
+        // the engine's guard judges it on the page's facts as they are now; this estimate is from the tree.
+        const canon = assessDeleteDocument(rules, facts, node.rawName, doc.type, doc.name ?? doc.id);
         const head = {
           page,
           document,
-          ...(canon
-            ? {
-                note: 'The page is protected canon (Authoritative); deleting one of its documents is not guarded by canonical approval (an open question for the owner).',
-              }
-            : {}),
+          ...(canon.length > 0
+            ? { requiresCanonicalApproval: true, protectedChanges: canon.map((c) => c.text) }
+            : assessDelete(rules, facts, node.rawName).length > 0
+              ? {
+                  note: 'The page is protected canon (Authoritative); deleting this kind of document is not guarded by a canon rule.',
+                }
+              : {}),
         };
         if (args.dryRun === true)
-          return render({ ...head, status: 'dry_run', message: 'Dry run: nothing was deleted.' }, pd);
+          return render(
+            {
+              ...head,
+              status: 'dry_run',
+              message:
+                canon.length > 0
+                  ? 'Dry run: nothing was deleted. As the tree last read it, the page is protected canon, so the delete would become a proposal only the owner can accept as canon.'
+                  : 'Dry run: nothing was deleted.',
+            },
+            pd,
+          );
         const steps: StepSpec[] = [
           {
             op: 'deleteDocument',

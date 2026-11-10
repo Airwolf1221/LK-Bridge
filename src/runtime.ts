@@ -464,6 +464,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       // while the engine drains, so their re-reads are made (or owed) before the tree stops.
       await tree.stopPasses();
       await assets.stopPasses();
+      lifecycle.stop(); // a link sweep in flight stops, to be continued by the next run
       await maintenance.stop(); // stops cleanly, before the engine and database wind down
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([

@@ -653,6 +653,11 @@ function ProposalReview({
             .map((o, i) => (
               <FactsView key={i} o={o as unknown as FactsOperation} execution={p.execution ?? null} />
             ))}
+          {(p.operations ?? [])
+            .filter((o) => typeof o.lifecycle === 'object' && o.lifecycle !== null)
+            .map((o, i) => (
+              <LifecyclePlanView key={`lc${i}`} o={o as unknown as LifecycleOperation} />
+            ))}
           {p.ops.map((op) => (
             <OpView key={op.index} op={op} conflict={p.conflict} />
           ))}
@@ -775,6 +780,123 @@ function ProposalReview({
             </div>
           )}
         </>
+      )}
+    </section>
+  );
+}
+
+// ============================================================================================ v2 C2c: lifecycle plans
+
+interface LifecycleOperation {
+  tool: string;
+  lifecycle: {
+    page: { id: string; name: string; path?: string };
+    action: string;
+    newName: string;
+    newParent: { id: string; name: string };
+    place?: { after: string | null; before: string | null };
+    facts: { key: string; before: string | null; after: string | null; change: string }[];
+    tags: { before: string[]; after: string[]; removed: string[]; added: string[] };
+    note?: { action: 'insert' | 'remove'; blockId: string; diff: string };
+    characterIndex?: { id: string; name: string };
+    flags?: string[];
+    resumes?: { recordId: number };
+  };
+  relatedPages?: {
+    pages: { id: string; name: string; path: string; links: string[] }[];
+    textSearch: { id: string; name: string; path: string; found: string }[];
+    freshness: string;
+    note: string;
+  };
+}
+
+/**
+ * v2 C2c (ADR 0035): a lifecycle tool's plan, in full: the move and the new name, every fact change, the tag changes,
+ * the archive note as a Markdown diff, and the pages that depend on or relate to the page (reported, never edited).
+ */
+function LifecyclePlanView({ o }: { o: LifecycleOperation }) {
+  const l = o.lifecycle;
+  const rel = o.relatedPages;
+  return (
+    <section className="card" aria-label="Lifecycle change">
+      <h3>
+        <span className="mono">{o.tool}</span> on <strong>{l.page.name}</strong>
+        {l.resumes && <span className="muted"> (resumes record {l.resumes.recordId})</span>}
+      </h3>
+      <p>
+        <strong>{l.page.name}</strong> becomes <strong>{l.newName}</strong> under{' '}
+        <strong>{l.newParent.name}</strong>
+        {l.place && (l.place.after || l.place.before) ? (
+          <span className="muted small-text">
+            {' '}
+            (alphabetical: {l.place.after ? `after ${l.place.after}` : `before ${l.place.before}`})
+          </span>
+        ) : null}
+        {l.characterIndex && <span> · the character’s index {l.characterIndex.name} moves with it</span>}
+      </p>
+      {l.facts.length > 0 && (
+        <div className="table-wrap">
+          <table aria-label="Lifecycle facts before and after">
+            <thead>
+              <tr>
+                <th>Fact</th>
+                <th>Before</th>
+                <th>After</th>
+                <th>Change</th>
+              </tr>
+            </thead>
+            <tbody>
+              {l.facts.map((f) => (
+                <tr key={f.key} data-fact={f.key}>
+                  <td>{f.key}</td>
+                  <td className="diff-del">{f.before ?? <span className="muted">—</span>}</td>
+                  <td className="diff-add">{f.after ?? <span className="muted">—</span>}</td>
+                  <td>{f.change}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p className="small-text">
+        <strong>Tags:</strong> {l.tags.before.join(', ') || '(none)'} → {l.tags.after.join(', ') || '(none)'}
+        {l.tags.removed.length > 0 && <> · removed {l.tags.removed.join(', ')}</>}
+        {l.tags.added.length > 0 && <> · added {l.tags.added.join(', ')}</>}
+      </p>
+      {l.note && (
+        <pre
+          className={`diff small-text ${l.note.action === 'insert' ? 'diff-add' : 'diff-del'}`}
+          aria-label="The archive note"
+        >
+          {l.note.diff}
+        </pre>
+      )}
+      {(l.flags ?? []).map((f) => (
+        <p key={f} className="note note-warn small-text">
+          {f}
+        </p>
+      ))}
+      {rel && (
+        <div className="mt" role="group" aria-label="Related pages">
+          <h4>Related pages (reported, never edited)</h4>
+          <p className="muted small-text">{rel.freshness}</p>
+          {rel.pages.length === 0 && rel.textSearch.length === 0 ? (
+            <p className="muted small-text">None found.</p>
+          ) : (
+            <ul className="plain small-text">
+              {rel.pages.map((x) => (
+                <li key={x.id}>
+                  {x.path} — {x.links.join('; ')}
+                </li>
+              ))}
+              {rel.textSearch.map((x) => (
+                <li key={x.id}>
+                  {x.path} — <span className="muted">{x.found}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </section>
   );

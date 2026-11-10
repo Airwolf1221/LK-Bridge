@@ -3,7 +3,7 @@
  * v2 A2 added the repository tree's sweep and check, replacing the `tree-snapshot` placeholder).
  * A placeholder has no `run`, cannot be enabled and cannot be run. Its real logic is a later chunk's work.
  */
-import type { JobEngine, OpParams, RunResult } from '../jobs/index.js';
+import type { JobEngine } from '../jobs/index.js';
 import type { LkClient } from '../lk/index.js';
 import type { ProjectsRuntime } from '../projects/registry.js';
 import type { Db } from '../db/open.js';
@@ -20,10 +20,7 @@ export interface TreeMaintenance {
 
 /** v2 C2c: what the link sweep needs from the lifecycle module (src/lifecycle). */
 export interface LinkMaintenance {
-  sweep(
-    projectId: string,
-    run: (op: string, params?: OpParams) => Promise<RunResult>,
-  ): Promise<MaintenanceResult>;
+  sweep(projectId: string): Promise<MaintenanceResult>;
 }
 
 export interface BuiltinJobDeps {
@@ -278,7 +275,7 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       background: true,
       run: (ctx) =>
         d.links && ctx.project
-          ? d.links.sweep(ctx.project.id, (op, params) => ctx.run(op, params))
+          ? d.links.sweep(ctx.project.id)
           : { skipped: true, summary: 'Skipped: the link index is not running.' },
     },
   ];

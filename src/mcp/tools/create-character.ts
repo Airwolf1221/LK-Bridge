@@ -103,10 +103,15 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
             const status: CreateStatus = args.status ?? 'working';
             // v2 C2c: a Working character's set goes under [INDEX] Working (it must be confirmed).
             let working: { indexId: string } | undefined;
+            let lookUnder: string | undefined;
             if (status === 'working') {
               const wi = workingIndex(cc);
               if (!wi.ok) return { kind: 'answer', result: wi.result };
               working = { indexId: wi.value.id };
+            } else {
+              // An Authoritative request still finds (and returns) a Working page of the character.
+              const wi = workingIndex(cc);
+              if (wi.ok) lookUnder = wi.value.id;
             }
             let plan;
             try {
@@ -116,6 +121,7 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                 kind: args.kind,
                 ...(args.type !== undefined ? { type: args.type } : {}),
                 ...(working ? { working } : {}),
+                ...(lookUnder ? { lookUnder } : {}),
               });
             } catch (e) {
               if (e instanceof RegistryError) return { kind: 'answer', result: registryError(e, ctx) };
@@ -132,7 +138,7 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
                 index: plan.raceIndex.rawName,
               },
               species: { [plan.species.row]: plan.species.value },
-              status,
+              lifecycleStatus: status,
               ...(plan.working ? { placedUnder: plan.home.rawName } : {}),
               ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
             };

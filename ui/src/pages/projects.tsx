@@ -21,6 +21,9 @@ import type {
   CanonConfig,
   CanonRule,
   KeyCheck,
+  LifecycleConfigView,
+  LifecycleIndexLookup,
+  LifecycleView,
   ProjectInfo,
   ProjectSettingKey,
   ProjectsResponse,
@@ -100,6 +103,7 @@ export function ProjectsPage() {
           </section>
           <SettingsCard data={data} onChanged={reload} />
           <CanonCard data={data} />
+          <LifecycleCard data={data} />
         </>
       )}
     </>
@@ -802,7 +806,11 @@ const ruleText = (r: CanonRule) =>
     ? `${r.key} = ${(r.values ?? []).join(' or ')}: setting it to, or changing it from, this value needs canonical approval`
     : r.kind === 'delete'
       ? `${r.key} = ${(r.values ?? []).join(' or ')}: deleting such a page (or a subtree holding one) needs canonical approval; restoring does not`
-      : `${r.key}: changing an existing value needs canonical approval (setting it where empty is allowed)`;
+      : r.kind === 'deleteKind'
+        ? `Deleting a ${(r.kinds ?? []).map((k) => `[${k.toUpperCase()}]`).join(' or ')} page (or a subtree holding one) needs canonical approval (recommended)`
+        : r.kind === 'deleteDocument'
+          ? `${r.key} = ${(r.values ?? []).join(' or ')}: deleting a ${(r.documentTypes ?? []).map((t) => (t === 'time' ? 'timeline' : t)).join(', ')} of such a page needs canonical approval (recommended)`
+          : `${r.key}: changing an existing value needs canonical approval (setting it where empty is allowed)`;
 
 /**
  * v2 C2a (ADR 0032): each project's protected canonical facts. A change that touches one becomes a proposal only the
@@ -844,11 +852,14 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
         <p>
           {next === null
             ? 'The default rules apply again.'
-            : `${next.length} rule${next.length === 1 ? '' : 's'} will protect canon. Anything not listed can be changed by agents with scope “write”.`}
+            : `${next.filter((r) => r.enabled !== false).length} rule${next.filter((r) => r.enabled !== false).length === 1 ? '' : 's'} will protect canon${next.some((r) => r.enabled === false) ? ` (${next.filter((r) => r.enabled === false).length} switched off)` : ''}. Anything not listed can be changed by agents with scope “write”.`}
         </p>
       ),
       confirmLabel: 'Save',
-      danger: next !== null && next.length < c.data!.rules.length,
+      danger:
+        next !== null &&
+        next.filter((r) => r.enabled !== false).length <
+          c.data!.rules.filter((r) => r.enabled !== false).length,
     }).then((ok) => {
       if (!ok) return;
       void run(
@@ -905,12 +916,23 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
       ) : (
         <ul className="plain" aria-label={`Protected facts of ${p.name}`}>
           {rules.map((r) => (
-            <li key={r.id} data-rule={r.id}>
-              {ruleText(r)}{' '}
+            <li key={r.id} data-rule={r.id} className={r.enabled === false ? 'muted' : undefined}>
+              {ruleText(r)}
+              {r.enabled === false && <span className="small-text"> (switched off)</span>}{' '}
               <button
                 type="button"
                 className="small"
-                aria-label={`Remove the rule ${r.key} of ${p.name}`}
+                aria-label={`${r.enabled === false ? 'Switch on' : 'Switch off'} the rule ${r.id} of ${p.name}`}
+                onClick={() =>
+                  setDraft(rules.map((x) => (x.id === r.id ? { ...x, enabled: x.enabled === false } : x)))
+                }
+              >
+                {r.enabled === false ? 'Switch on' : 'Switch off'}
+              </button>{' '}
+              <button
+                type="button"
+                className="small"
+                aria-label={`Remove the rule ${r.key ?? r.id} of ${p.name}`}
                 onClick={() => setDraft(rules.filter((x) => x.id !== r.id))}
               >
                 Remove
@@ -989,6 +1011,232 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
           </Button>
         )}
       </div>
+    </section>
+  );
+}
+
+// ============================================================================================ v2 C2c: the lifecycle
+
+/**
+ * v2 C2c (ADR 0035): each project's page lifecycle. [INDEX] Working and [INDEX] Archived are found by name through the
+ * repository tree (never by id or position) and confirmed here; until both are confirmed the lifecycle tools, and
+ * creates with the default Working status, refuse. The status values, tags, field names, Continuity Types and archive
+ * texts default to the owner's values. Every change is audited.
+ */
+function LifecycleCard({ data }: { data: ProjectsResponse }) {
+  const projects = data.projects.filter((p) => p.status !== 'archived' && p.id !== null);
+  if (projects.length === 0) return null;
+  return (
+    <section className="card" aria-labelledby="lifecycle-h">
+      <h2 id="lifecycle-h">Lifecycle</h2>
+      <p className="muted small-text">
+        Pages are Authoritative ([BSRC], in their normal place), Working ([BWRK], under [INDEX] Working) or
+        Archived ([BARC], under [INDEX] Archived). Only archive_page, unarchive_page, move_to_working and
+        promote_page change a page’s state, each with your canonical approval. The changes are listed on the
+        Archive and lifecycle page.
+      </p>
+      {projects.map((p) => (
+        <LifecycleEditor key={p.name} project={p} />
+      ))}
+    </section>
+  );
+}
+
+const lookupText = (l: LifecycleIndexLookup) =>
+  l.status === 'found'
+    ? `found: ${l.node!.path} (${l.node!.id})`
+    : l.status === 'missing'
+      ? `no index named “${l.name}” in the repository tree`
+      : `${l.candidates?.length ?? 0} indexes named “${l.name}”: ${(l.candidates ?? []).map((c) => c.path).join('; ')}`;
+
+type Group = 'indexNames' | 'status' | 'tags' | 'fields' | 'continuityTypes' | 'texts';
+const GROUPS: { key: Group; label: string; fields: [string, string][] }[] = [
+  {
+    key: 'indexNames',
+    label: 'Index names (found by these)',
+    fields: [
+      ['working', 'Working'],
+      ['archived', 'Archived'],
+    ],
+  },
+  {
+    key: 'status',
+    label: 'Status values',
+    fields: [
+      ['authoritative', 'Authoritative'],
+      ['working', 'Working'],
+      ['archived', 'Archived'],
+    ],
+  },
+  {
+    key: 'tags',
+    label: 'Status tags',
+    fields: [
+      ['canon', 'Authoritative'],
+      ['working', 'Working'],
+      ['archived', 'Archived'],
+    ],
+  },
+  {
+    key: 'fields',
+    label: 'Fact names',
+    fields: [
+      ['status', 'Status'],
+      ['continuityType', 'Continuity Type'],
+      ['scope', 'Scope'],
+      ['temporalScope', 'Temporal Scope'],
+      ['lastMajorRevision', 'Last Major Revision'],
+    ],
+  },
+  {
+    key: 'continuityTypes',
+    label: 'Continuity Types',
+    fields: [
+      ['canon', 'Canon'],
+      ['au', 'Alternate universe'],
+      ['nonCurrent', 'Archived'],
+    ],
+  },
+  {
+    key: 'texts',
+    label: 'Archive texts ({date} and {source} are filled in)',
+    fields: [
+      ['noteFromAuthoritative', 'Note, from Authoritative'],
+      ['noteFromWorking', 'Note, from Working'],
+      ['scopePrefix', 'Scope prefix (then one space and the original)'],
+      ['temporalFromAuthoritative', 'Temporal Scope, from Authoritative'],
+      ['temporalFromWorking', 'Temporal Scope, from Working'],
+    ],
+  },
+];
+
+function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
+  const v = useApi<LifecycleView>(`/projects/${encodeURIComponent(p.name)}/lifecycle`);
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const [draft, setDraft] = useState<Partial<Record<Group, Record<string, string>>>>({});
+  if (!v.data) return v.error ? <ErrorNote error={v.error} onRetry={v.reload} /> : <Loading />;
+  const d = v.data;
+  const c = d.config;
+  const value = (g: Group, f: string) => draft[g]?.[f] ?? (c[g] as Record<string, string>)[f] ?? '';
+  const edited = Object.keys(draft).length > 0;
+  const put = (body: Record<string, unknown>, label: string, message: string) =>
+    void confirm({ title: `${label} for ${p.name}?`, message: <p>{message}</p>, confirmLabel: 'Save' }).then(
+      (ok) => {
+        if (!ok) return;
+        void run(
+          () => api.put(`/projects/${encodeURIComponent(p.name)}/lifecycle`, { ...body, confirm: true }),
+          'Lifecycle settings saved.',
+        ).then((r) => {
+          if (r) {
+            setDraft({});
+            v.reload();
+          }
+        });
+      },
+    );
+  const canConfirm =
+    d.working.status === 'found' &&
+    d.archived.status === 'found' &&
+    (d.working.node!.id !== c.workingIndexId || d.archived.node!.id !== c.archiveIndexId);
+  return (
+    <section aria-label={`Lifecycle of ${p.name}`} data-lifecycle={p.name}>
+      <h3>
+        {p.name}{' '}
+        {d.confirmed.ok ? <Badge tone="ok">confirmed</Badge> : <Badge tone="warn">not confirmed</Badge>}
+      </h3>
+      {c.problem && <p className="note note-warn small-text">{c.problem}</p>}
+      {!d.confirmed.ok && d.confirmed.message && (
+        <p className="note note-warn small-text">{d.confirmed.message}</p>
+      )}
+      <dl className="kv">
+        <dt>[INDEX] {c.indexNames.working}</dt>
+        <dd>
+          {lookupText(d.working)}
+          {c.workingIndexId && <span className="muted small-text"> · confirmed: {c.workingIndexId}</span>}
+        </dd>
+        <dt>[INDEX] {c.indexNames.archived}</dt>
+        <dd>
+          {lookupText(d.archived)}
+          {c.archiveIndexId && <span className="muted small-text"> · confirmed: {c.archiveIndexId}</span>}
+        </dd>
+      </dl>
+      {canConfirm && (
+        <Button
+          variant="primary"
+          busy={busy}
+          onClick={() =>
+            put(
+              { workingIndexId: d.working.node!.id, archiveIndexId: d.archived.node!.id },
+              'Confirm the lifecycle indexes',
+              `[INDEX] ${c.indexNames.working} is ${d.working.node!.path}; [INDEX] ${c.indexNames.archived} is ${d.archived.node!.path}.`,
+            )
+          }
+        >
+          Confirm these indexes
+        </Button>
+      )}
+      <details className="mt">
+        <summary>Values</summary>
+        {GROUPS.map((g) => (
+          <fieldset key={g.key} className="mt">
+            <legend>{g.label}</legend>
+            {g.fields.map(([f, label]) => (
+              <div className="row" key={f}>
+                <label htmlFor={`lc-${p.name}-${g.key}-${f}`}>{label}</label>
+                <input
+                  id={`lc-${p.name}-${g.key}-${f}`}
+                  value={value(g.key, f)}
+                  size={g.key === 'texts' ? 80 : 24}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      [g.key]: {
+                        ...(c[g.key] as Record<string, string>),
+                        ...draft[g.key],
+                        [f]: e.target.value,
+                      },
+                    })
+                  }
+                />
+              </div>
+            ))}
+          </fieldset>
+        ))}
+        <div className="row mt">
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={!edited}
+            onClick={() =>
+              put(
+                draft as Partial<LifecycleConfigView>,
+                'Save the lifecycle values',
+                'The lifecycle tools use them from the next call.',
+              )
+            }
+          >
+            Save
+          </Button>
+          {edited && (
+            <button type="button" className="small" onClick={() => setDraft({})}>
+              Discard changes
+            </button>
+          )}
+          <Button
+            busy={busy}
+            onClick={() =>
+              put(
+                { reset: true },
+                'Restore the default lifecycle settings',
+                'The owner’s values apply again, and the two indexes must be confirmed again.',
+              )
+            }
+          >
+            Restore the defaults
+          </Button>
+        </div>
+      </details>
     </section>
   );
 }

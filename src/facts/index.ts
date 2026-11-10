@@ -8,6 +8,7 @@
  */
 export {
   assessDelete,
+  assessDeleteDocument,
   assessFactChange,
   CASCADE_READ_LIMIT,
   canonicalReason,

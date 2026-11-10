@@ -12,7 +12,15 @@
  */
 import { randomBytes } from 'node:crypto';
 import type { Db } from '../db/open.js';
-import type { JobEngine, JobView, OpParams, RunResult, StepView, WriteObserver } from '../jobs/index.js';
+import {
+  BudgetExhaustedError,
+  LkOperationError,
+  type JobEngine,
+  type JobView,
+  type OpParams,
+  type StepView,
+  type WriteObserver,
+} from '../jobs/index.js';
 import type { TreeNode, TreeService } from '../tree/index.js';
 import { collectionLinks, mentionLinks, propertyLinks } from './links.js';
 import {
@@ -125,15 +133,17 @@ export interface Lifecycle {
   attach(): () => void;
   /** The pages that link to a page, from the link index (pages still in the tree only). */
   related(projectId: string, pageId: string): Related;
-  /** The link sweep of one project: paced, resumable, at P3 through `run`. */
-  sweep(
-    projectId: string,
-    run: (op: string, params?: OpParams) => Promise<RunResult>,
-  ): Promise<{
+  /**
+   * The link sweep of one project: paced (P3 reads that wait out an exhausted budget, and wait while agents' P1 or P2
+   * work is queued), resumable (a pass that stops is continued by the next run).
+   */
+  sweep(projectId: string): Promise<{
     readonly summary: string;
     readonly changed: boolean;
     readonly skipped?: boolean;
   }>;
+  /** Stops a sweep in flight (shutdown): it stops after its current read, to be continued by the next run. */
+  stop(): void;
 }
 
 const nodeView = (n: TreeNode) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') });
@@ -430,7 +440,30 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
 
   // ------------------------------------------------------------------------------------------ the sweep
 
-  const sweep: Lifecycle['sweep'] = async (projectId, run) => {
+  const stopper = new AbortController();
+  /** One P3 read of the sweep: a gone page is undefined; an exhausted budget is waited out on the clock. */
+  const read = async (projectId: string, op: string, params: OpParams): Promise<unknown> => {
+    for (;;) {
+      if (stopper.signal.aborted) throw new Error('the bridge is stopping');
+      try {
+        return await d.engine.internalRead(projectId, op, params, {
+          priority: 'P3',
+          notFoundIsAnswer: true,
+          signal: stopper.signal,
+        });
+      } catch (e) {
+        if (e instanceof LkOperationError && (e.lk.status === 404 || e.lkCode === 'NOT_FOUND'))
+          return undefined;
+        if (e instanceof BudgetExhaustedError) {
+          await sleep(Math.max(1000, e.retryAtMs - d.now()));
+          continue;
+        }
+        throw e;
+      }
+    }
+  };
+
+  const sweep: Lifecycle['sweep'] = async (projectId) => {
     let nodes: TreeNode[];
     try {
       const st = d.tree.queries.status(projectId).status;
@@ -464,9 +497,8 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
         // Agents' work first: wait while P1 or P2 work is queued for the project.
         for (let i = 0; i < 240 && d.busy?.(projectId); i++) await sleep(250);
         const one = { documents: 0, requests: 0, links: 0 };
-        const r = await run('getResource', { path: { resourceId: n.id } });
+        const res = (await read(projectId, 'getResource', { path: { resourceId: n.id } })) as Obj | undefined;
         one.requests++;
-        const res = (r as { result?: unknown }).result as Obj | undefined;
         if (!res || typeof res !== 'object') {
           store.removeFrom(projectId, [n.id]);
         } else {
@@ -483,13 +515,12 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
           );
           for (const doc of docs) {
             if (doc.type !== 'page') continue;
-            const b = await run('getDocumentBlocks', {
+            const b = (await read(projectId, 'getDocumentBlocks', {
               path: { resourceId: n.id, documentId: doc.id as string },
-            });
+            })) as { blocks?: unknown } | undefined;
             one.requests++;
             one.documents++;
-            const blocks =
-              ((b as { result?: unknown }).result as { blocks?: unknown } | undefined)?.blocks ?? [];
+            const blocks = b?.blocks ?? [];
             const m = mentionLinks(blocks, doc.id as string, typeof doc.name === 'string' ? doc.name : null);
             store.replaceLinks(
               projectId,
@@ -539,6 +570,7 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
     },
     related,
     sweep,
+    stop: () => stopper.abort(),
   };
 }
 

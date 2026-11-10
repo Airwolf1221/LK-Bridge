@@ -361,33 +361,6 @@ export class TreeModel {
   private route(req: MockRequest, p: string[]): MockResponse | undefined {
     const body = (req.body ?? {}) as Record<string, unknown>;
     const M = req.method;
-    // v2 C2c: LegendKeeper's content search, ranked loosely: a page whose name or page text holds the words.
-    if (p[0] === 'search' && p.length === 1 && M === 'GET') {
-      const q = String(req.query.q ?? '')
-        .toLowerCase()
-        .trim();
-      const limit = Number(req.query.limit ?? 32);
-      const hits = q
-        ? [...this.res.values()].filter(
-            (r) =>
-              r.deletedAt === null &&
-              (r.name.toLowerCase().includes(q) ||
-                this.liveDocs(r).some((d) =>
-                  JSON.stringify(this.blocks.get(d.id)?.blocks ?? [])
-                    .toLowerCase()
-                    .includes(q),
-                )),
-          )
-        : [];
-      return {
-        status: 200,
-        body: {
-          data: hits.slice(0, limit).map((r) => ({ resource: { id: r.id, name: r.name } })),
-          hasMore: false,
-          nextCursor: null,
-        },
-      };
-    }
     if (p[0] !== 'resources') return undefined;
 
     if (p.length === 1) {
