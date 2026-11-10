@@ -17,6 +17,7 @@ import { OverviewPage } from './pages/overview';
 import { ProjectsPage } from './pages/projects';
 import { ProposalsPage } from './pages/proposals';
 import { SettingsPage } from './pages/settings';
+import { TreePage } from './pages/tree';
 import { WritersPage } from './pages/writers';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -48,6 +49,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/clients', label: 'Clients & Access' },
   { to: '/journal', label: 'Journal' },
   { to: '/projects', label: 'Projects' },
+  { to: '/tree', label: 'Repository Tree' },
   { to: '/settings', label: 'Settings' },
   { to: '/maintenance', label: 'Maintenance Jobs' },
   { to: '/mappings', label: 'Repository Mappings' },
@@ -89,6 +91,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/clients') return <ClientsPage session={session} />;
   if (path === '/journal') return <JournalPage />;
   if (path === '/projects') return <ProjectsPage />;
+  if (path === '/tree') return <TreePage />;
   if (path === '/settings') return <SettingsPage />;
   if (path === '/maintenance') return <MaintenancePage />;
   if (path === '/mappings' || path.startsWith('/mappings/')) return <MappingsPage />;

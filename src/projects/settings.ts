@@ -1,12 +1,16 @@
 /**
  * Per-project settings (v2 A1): the JSON `settings` column of `projects`. Later sessions fill these in (A2 the AI
- * REPOSITORY root, C2 the Characters root and template ids, D1 the chronology resource); A1 only defines the shape,
- * reads it safely and shows it on the dashboard. Unknown keys are kept as they are, so a newer release's settings
- * survive a rollback.
+ * REPOSITORY root and the names the tree reads, C2 the Characters root and template ids, D1 the chronology resource).
+ * Unknown keys are kept as they are, so a newer release's settings survive a rollback.
+ *
+ * v2 A2: the settings are editable, one key at a time, on the dashboard's Projects page (audited
+ * `project.set_setting`) and with `npm run projects -- set <project> <key> <value>`. `parseSettingValue` is the one
+ * validator both use.
  */
 import * as z from 'zod';
 
 const id = z.string().min(1).max(64);
+const label = z.string().trim().min(1).max(256);
 
 export const projectSettingsSchema = z
   .object({
@@ -18,18 +22,82 @@ export const projectSettingsSchema = z
     chronologyResourceId: id.optional(),
     /** Template ids by role, for example `{ "index": "…", "characterCore": "…" }` (PLAN-v2 4.3). */
     templateIds: z.record(z.string().min(1).max(64), id).optional(),
+    /** v2 A2: the title of the key-value sidebar property the tree reads its catalogue fields from. */
+    treePropertiesName: label.optional(),
+    /** v2 A2: the keys of the rows the tree reads from that property. */
+    treeReferenceTypeRow: label.optional(),
+    treeScopeRow: label.optional(),
+    treeIndexScopeRow: label.optional(),
+    treeCanonicalNameRow: label.optional(),
+    /** v2 A2: whether the hourly structural sweep runs for this project (default on). */
+    treeSweepEnabled: z.boolean().optional(),
   })
   .loose();
 
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>;
 
+export type SettingKind = 'resource id' | 'name' | 'on/off' | 'role → template id';
+
 /** The settings the dashboard and later sessions may rely on, by key, with what each is for. */
-export const PROJECT_SETTING_KEYS = [
-  { key: 'aiRepositoryRootId', label: 'AI REPOSITORY root', kind: 'resource id' },
-  { key: 'charactersRootId', label: 'Characters root', kind: 'resource id' },
-  { key: 'chronologyResourceId', label: 'Chronology resource', kind: 'resource id' },
-  { key: 'templateIds', label: 'Template ids', kind: 'role → template id' },
-] as const;
+export const PROJECT_SETTING_KEYS: readonly {
+  readonly key: Extract<keyof ProjectSettings, string>;
+  readonly label: string;
+  readonly kind: SettingKind;
+  /** The value used while none is stored. */
+  readonly default?: string | boolean;
+  /** Editable on the dashboard and with `npm run projects -- set`. */
+  readonly editable: boolean;
+  readonly help?: string;
+}[] = [
+  {
+    key: 'aiRepositoryRootId',
+    label: 'AI REPOSITORY root',
+    kind: 'resource id',
+    editable: true,
+    help: 'The resource id of the AI REPOSITORY page. Until it is set, the repository tree is not configured. Changing it discards the stored tree.',
+  },
+  { key: 'charactersRootId', label: 'Characters root', kind: 'resource id', editable: true },
+  { key: 'chronologyResourceId', label: 'Chronology resource', kind: 'resource id', editable: true },
+  { key: 'templateIds', label: 'Template ids', kind: 'role → template id', editable: false },
+  {
+    key: 'treePropertiesName',
+    label: 'Tree: key-value property',
+    kind: 'name',
+    default: 'PROPERTIES',
+    editable: true,
+    help: 'The title of the key-value sidebar property the tree reads its catalogue fields from.',
+  },
+  {
+    key: 'treeReferenceTypeRow',
+    label: 'Tree: Reference Type row',
+    kind: 'name',
+    default: 'Reference Type',
+    editable: true,
+  },
+  { key: 'treeScopeRow', label: 'Tree: Scope row', kind: 'name', default: 'Scope', editable: true },
+  {
+    key: 'treeIndexScopeRow',
+    label: 'Tree: Index Scope row',
+    kind: 'name',
+    default: 'Index Scope',
+    editable: true,
+  },
+  {
+    key: 'treeCanonicalNameRow',
+    label: 'Tree: Canonical Display Name row',
+    kind: 'name',
+    default: 'Canonical Display Name',
+    editable: true,
+  },
+  {
+    key: 'treeSweepEnabled',
+    label: 'Tree: hourly structural sweep',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'Off: the hourly sweep skips this project; the daily consistency check still runs.',
+  },
+];
 
 export interface ParsedSettings {
   readonly settings: ProjectSettings;
@@ -62,4 +130,47 @@ export function projectSetting<K extends keyof ProjectSettings>(
   key: K,
 ): ProjectSettings[K] | undefined {
   return settings[key];
+}
+
+/** A LegendKeeper resource id as the API writes them (cuid2-style: a lowercase letter, then letters and digits). */
+const RESOURCE_ID = /^[a-z][0-9a-z]{1,63}$/;
+
+export class SettingValueError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SettingValueError';
+  }
+}
+
+/**
+ * Validates one editable setting from text (the CLI) or JSON (the dashboard). `null` (or the text `-`) clears it, so
+ * the default applies again. Throws `SettingValueError` with a plain-language reason.
+ */
+export function parseSettingValue(key: string, value: unknown): string | boolean | null {
+  const def = PROJECT_SETTING_KEYS.find((k) => k.key === key);
+  if (!def) {
+    const known = PROJECT_SETTING_KEYS.filter((k) => k.editable).map((k) => k.key);
+    throw new SettingValueError(`Unknown setting "${key}". Editable settings: ${known.join(', ')}.`);
+  }
+  if (!def.editable) throw new SettingValueError(`"${key}" cannot be edited here yet.`);
+  if (value === null || value === undefined || value === '-') return null;
+  if (def.kind === 'on/off') {
+    if (typeof value === 'boolean') return value;
+    const t = typeof value === 'string' ? value.trim().toLowerCase() : '';
+    if (['on', 'true', 'yes', '1'].includes(t)) return true;
+    if (['off', 'false', 'no', '0'].includes(t)) return false;
+    throw new SettingValueError(`"${key}" is on or off.`);
+  }
+  if (typeof value !== 'string') throw new SettingValueError(`"${key}" must be text.`);
+  const t = value.trim();
+  if (def.kind === 'resource id') {
+    if (!RESOURCE_ID.test(t)) {
+      throw new SettingValueError(
+        `"${key}" must be a LegendKeeper resource id (lowercase letters and digits, starting with a letter).`,
+      );
+    }
+    return t;
+  }
+  if (t.length === 0 || t.length > 256) throw new SettingValueError(`"${key}" must be 1 to 256 characters.`);
+  return t;
 }

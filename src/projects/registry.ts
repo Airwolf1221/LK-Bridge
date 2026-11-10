@@ -227,6 +227,26 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
     return v;
   }
 
+  /**
+   * v2 A2: sets one project setting (`null` clears it). The value must already be validated (`parseSettingValue`);
+   * owner commands audit it. Returns the new view.
+   */
+  setSetting(projectId: string, key: string, value: unknown): ProjectView | undefined {
+    if (!this.store.setSetting(projectId, key, value)) return undefined;
+    this.reload();
+    const v = this.viewById(projectId);
+    if (v) this.emit(v);
+    return v;
+  }
+
+  /**
+   * Re-reads the stored rows (flags and settings), for changes made outside this process: `npm run projects -- set`
+   * on the server writes the database directly.
+   */
+  refresh(): void {
+    this.reload();
+  }
+
   // ============================================================================================ checks
 
   /** Checks every configured project's key (in parallel). Never throws: a failure stops only that project. */

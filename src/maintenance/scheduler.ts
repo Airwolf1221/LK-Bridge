@@ -62,6 +62,8 @@ export class MaintenanceScheduler {
   private readonly retryAt = new Map<string, number>();
   /** Overdue at start-up: their one run is labelled `catch-up`. */
   private readonly catchUp = new Set<string>();
+  /** Background jobs (`def.background`) whose scheduled run is in flight. */
+  private readonly inBackground = new Set<string>();
   /** Owner asked for a run now, but it had to wait for P1/P2 work to clear. */
   private readonly manualPending = new Set<string>();
   private timer: TimerHandle | undefined;
@@ -212,7 +214,9 @@ export class MaintenanceScheduler {
   runNow(id: string): { done: Promise<RunView | null> } {
     const def = this.def(id);
     if (!def.implemented || !def.run) throw new MaintenanceError('NOT_IMPLEMENTED', 'Not implemented yet');
-    if (this.running.has(id)) throw new MaintenanceError('ALREADY_RUNNING', `${def.name} is already running`);
+    if (this.running.has(id) || this.inBackground.has(id)) {
+      throw new MaintenanceError('ALREADY_RUNNING', `${def.name} is already running`);
+    }
     this.ensureRow(def);
     const done = this.track(this.execute(def, 'manual'));
     return { done };
@@ -257,7 +261,7 @@ export class MaintenanceScheduler {
       defaultSchedule: def.defaultSchedule,
       scheduleOverridden: s?.schedule != null,
       priority: 'P3',
-      running: this.running.has(def.id),
+      running: this.running.has(def.id) || this.inBackground.has(def.id),
       lastRun:
         s && s.lastRunAt !== null && s.lastOutcome
           ? {
@@ -283,6 +287,7 @@ export class MaintenanceScheduler {
     for (const def of this.defs.values()) {
       const s = this.store.get(def.id);
       if (!def.implemented || !s?.enabled || s.nextRunAt === null) continue;
+      if (this.inBackground.has(def.id)) continue; // re-armed when it finishes
       at = Math.min(at, Math.max(s.nextRunAt, this.retryAt.get(def.id) ?? 0));
     }
     if (!Number.isFinite(at)) return;
@@ -311,8 +316,21 @@ export class MaintenanceScheduler {
           if (this.stopped) break;
           const s = this.store.get(def.id);
           if (!def.implemented || !s?.enabled || s.nextRunAt === null || s.nextRunAt > now) continue;
-          if (this.running.has(def.id) || (this.retryAt.get(def.id) ?? 0) > now) continue;
+          if (this.running.has(def.id) || this.inBackground.has(def.id)) continue;
+          if ((this.retryAt.get(def.id) ?? 0) > now) continue;
           const trigger: RunTrigger = this.catchUp.delete(def.id) ? 'catch-up' : 'schedule';
+          if (def.background) {
+            // v2 A2: a long job (a full pass over a repository tree) runs alongside the others, so the 10-second
+            // sampler and the expiry sweep are never held up behind it.
+            this.inBackground.add(def.id);
+            void this.track(
+              this.execute(def, trigger).finally(() => {
+                this.inBackground.delete(def.id);
+                this.arm();
+              }),
+            );
+            continue;
+          }
           await this.execute(def, trigger);
         }
       } while (this.again && !this.stopped);
@@ -442,6 +460,7 @@ export class MaintenanceScheduler {
       const result = await def.run!(ctx);
       detail = result.summary;
       changed = result.changed === true;
+      if (result.skipped === true) outcome = 'skipped';
     } catch (e) {
       outcome = 'failed';
       detail = e instanceof Error ? e.message : String(e);
@@ -452,7 +471,11 @@ export class MaintenanceScheduler {
     let engineJobId: string | null = null;
     // v2 A1: a per-project run is recorded as a job of its project. A bridge-wide run belongs to no project's job list:
     // its record is the run history on the Maintenance page.
-    if (project !== null && (def.record === 'always' || outcome === 'failed' || changed)) {
+    if (
+      project !== null &&
+      outcome !== 'skipped' &&
+      (def.record === 'always' || outcome === 'failed' || changed)
+    ) {
       try {
         engineJobId = this.o.engine.recordResult({
           project: project.id,

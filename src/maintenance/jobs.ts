@@ -1,5 +1,6 @@
 /**
- * The maintenance job registry: five implemented jobs and four placeholders (PLAN §8 page 6, docs/maintenance.md).
+ * The maintenance job registry: seven implemented jobs and three placeholders (PLAN §8 page 6, docs/maintenance.md;
+ * v2 A2 added the repository tree's sweep and check, replacing the `tree-snapshot` placeholder).
  * A placeholder has no `run`, cannot be enabled and cannot be run. Its real logic is a later chunk's work.
  */
 import type { JobEngine } from '../jobs/index.js';
@@ -7,7 +8,13 @@ import type { LkClient } from '../lk/index.js';
 import type { ProjectsRuntime } from '../projects/registry.js';
 import type { Db } from '../db/open.js';
 import type { ProposalService } from '../policy/proposals.js';
-import type { MaintenanceJobDef } from './types.js';
+import type { MaintenanceJobDef, MaintenanceResult } from './types.js';
+
+/** v2 A2: what the tree jobs need from the repository tree (src/tree). */
+export interface TreeMaintenance {
+  sweep(projectId: string, trigger: string): Promise<MaintenanceResult>;
+  check(projectId: string, trigger: string): Promise<MaintenanceResult>;
+}
 
 export interface BuiltinJobDeps {
   readonly engine: JobEngine;
@@ -21,6 +28,8 @@ export interface BuiltinJobDeps {
   readonly proposalRetentionMs: number;
   /** The proposal expiry sweep interval from the policy settings (POLICY_EXPIRY_SWEEP_SECONDS). */
   readonly expirySweepMs: number;
+  /** v2 A2: the repository tree (its sweep and check). Without it the two tree jobs skip, saying why. */
+  readonly tree?: TreeMaintenance;
 }
 
 const NOT_IMPLEMENTED = 'Not implemented yet';
@@ -45,13 +54,10 @@ const placeholder = (
   scope: 'project',
 });
 
-/** Ids of the placeholders, for tests and docs. */
-export const PLACEHOLDER_IDS = [
-  'assign-block-ids-sweep',
-  'tree-snapshot',
-  'orphan-and-link-audit',
-  'tag-audit',
-] as const;
+/** Ids of the placeholders, for tests and docs. (v2 A2: `tree-snapshot` became `tree-sweep` and `tree-check`.) */
+export const PLACEHOLDER_IDS = ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit'] as const;
+
+const NO_TREE: MaintenanceResult = { skipped: true, summary: 'Skipped: the repository tree is not running.' };
 
 export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
   return [
@@ -166,17 +172,41 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
         };
       },
     },
+    {
+      id: 'tree-sweep',
+      name: 'Repository tree sweep',
+      description:
+        'Lists every resource of each project (about one request per 100 resources) and brings its repository tree in line: new pages, moves, renames, tags, aliases, documents and deletions made outside the bridge. Reads the properties of new and stale pages only. Can be switched off per project (Projects page). Skips projects whose tree is not configured or not built.',
+      defaultSchedule: { kind: 'interval', everySeconds: 3600 },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: true,
+      record: 'on-change', // hourly: a job record when it corrected something or failed
+      scope: 'project',
+      background: true,
+      run: (ctx) => (d.tree && ctx.project ? d.tree.sweep(ctx.project.id, ctx.trigger) : NO_TREE),
+    },
+    {
+      id: 'tree-check',
+      name: 'Repository tree consistency check',
+      description:
+        'A full pass over each project’s repository tree at night: the structure, then every page’s properties (one request per page). Corrects the tree and records each correction (old and new values) in the correction log on the Repository Tree page.',
+      defaultSchedule: { kind: 'daily', time: '02:30' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: true,
+      record: 'always',
+      scope: 'project',
+      background: true, // a full pass takes minutes: the sampler and the expiry sweep must not wait for it
+      run: (ctx) => (d.tree && ctx.project ? d.tree.check(ctx.project.id, ctx.trigger) : NO_TREE),
+    },
     placeholder(
       'assign-block-ids-sweep',
       'Assign block IDs sweep',
       'Will give legacy documents addressable block ids (assignBlockIds), a page at a time within the P3 budget.',
       true,
-    ),
-    placeholder(
-      'tree-snapshot',
-      'Tree snapshot',
-      'Will store a snapshot of the whole resource tree so changes can be compared over time.',
-      false,
     ),
     placeholder(
       'orphan-and-link-audit',

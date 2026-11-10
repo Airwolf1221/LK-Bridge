@@ -51,7 +51,7 @@ describe('migration 0300', () => {
     db.prepare(
       `INSERT INTO auth_pats (id, name, token_hash, token_hint, scope, created_at) VALUES ('pat_old', 'laptop', 'h', 'abcd', 'mcp', 1)`,
     ).run();
-    // Chunk 6 added migration 0400, chunk 8 0201, v1.0.1 0500, v1.0.2 0101 and v2 A1 0600 (which needs no project id
+    // Chunk 6 added migration 0400, chunk 8 0201, v1.0.1 0500, v1.0.2 0101, v2 A2 0700 and v2 A1 0600 (which needs no project id
     // here: this database holds no LegendKeeper data); the point here is that 0300 is applied on top of an older
     // database.
     expect(runMigrations(db).applied).toEqual([
@@ -61,6 +61,7 @@ describe('migration 0300', () => {
       '0400_maintenance_mappings.sql',
       '0500_governor_counters.sql',
       '0600_projects.sql',
+      '0700_repository_tree.sql',
     ]);
     const policy = createPolicy({ db, allowMemberAdmin: false });
     expect(policy.store.listProfiles()).toMatchObject([

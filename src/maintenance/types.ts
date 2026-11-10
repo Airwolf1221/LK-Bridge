@@ -11,6 +11,8 @@ export type RunTrigger = 'schedule' | 'manual' | 'catch-up';
 export interface MaintenanceResult {
   readonly summary: string;
   readonly changed?: boolean;
+  /** v2 A2: the run decided not to do its work (for example the project's tree is not configured): recorded as skipped. */
+  readonly skipped?: boolean;
 }
 
 /** What a running job can use. LegendKeeper is reachable only through `run`, which is the engine at P3. */
@@ -56,6 +58,11 @@ export interface MaintenanceJobDef {
    */
   readonly scope?: 'project' | 'bridge';
   readonly record: RecordPolicy;
+  /**
+   * v2 A2: a long job (minutes: a full pass over a repository tree). Its scheduled runs go alongside the other jobs
+   * instead of holding up the scheduler's loop (default false: jobs run one after another).
+   */
+  readonly background?: boolean;
   readonly run?: (ctx: MaintenanceContext) => Promise<MaintenanceResult> | MaintenanceResult;
 }
 

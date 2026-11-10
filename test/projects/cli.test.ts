@@ -64,4 +64,63 @@ describe('npm run projects', () => {
     ]);
     check.close();
   });
+
+  it('v2 A2: shows and sets a project setting (validated, audited); "-" clears it', () => {
+    expect(run(dbPath, 'settings', 'test')).toEqual({
+      code: 0,
+      out: expect.stringMatching(
+        /aiRepositoryRootId {2}not set[\s\S]*treePropertiesName {2}PROPERTIES \(default\)/,
+      ) as string,
+    });
+    expect(run(dbPath, 'set', 'test', 'aiRepositoryRootId', 'h0gczxh7')).toEqual({
+      code: 0,
+      out: expect.stringMatching(
+        /aiRepositoryRootId of "test" is now h0gczxh7\. The repository tree .* first build/,
+      ) as string,
+    });
+    expect(run(dbPath, 'set', 'test', 'aiRepositoryRootId', 'h0gczxh7').out).toMatch(/already h0gczxh7/);
+    expect(run(dbPath, 'set', 'test', 'treeSweepEnabled', 'off')).toMatchObject({ code: 0 });
+    expect(run(dbPath, 'set', 'test', 'treeCanonicalNameRow', 'Canonical', 'Name')).toMatchObject({
+      code: 0,
+    });
+    // Refused: an id that is not a LegendKeeper id, an unknown key, a setting not editable here.
+    expect(run(dbPath, 'set', 'test', 'aiRepositoryRootId', 'Not An Id')).toMatchObject({
+      code: 2,
+      out: expect.stringMatching(/must be a LegendKeeper resource id/) as string,
+    });
+    expect(run(dbPath, 'set', 'test', 'rootId', 'x')).toMatchObject({
+      code: 2,
+      out: expect.stringMatching(/Unknown setting "rootId"/) as string,
+    });
+    expect(run(dbPath, 'set', 'test', 'templateIds', 'x').out).toMatch(/cannot be edited here/);
+    expect(run(dbPath, 'set', 'nope', 'treeScopeRow', 'x')).toMatchObject({ code: 1 });
+
+    const db = openDatabase(dbPath);
+    const p = new ProjectStore(db).byName('test')!;
+    expect(p.settings).toMatchObject({
+      aiRepositoryRootId: 'h0gczxh7',
+      treeSweepEnabled: false,
+      treeCanonicalNameRow: 'Canonical Name',
+    });
+    // The arkona project is untouched.
+    expect(new ProjectStore(db).byName('arkona')!.settings).toEqual({});
+    const audit = db
+      .prepare(
+        `SELECT target, "before", "after" FROM audit_log WHERE action = 'project.set_setting' ORDER BY id`,
+      )
+      .all() as { target: string; before: string; after: string }[];
+    expect(audit).toHaveLength(3);
+    expect(audit[0]!.target).toBe('test');
+    expect(JSON.parse(audit[0]!.after)).toEqual({
+      key: 'aiRepositoryRootId',
+      value: 'h0gczxh7',
+      via: 'projects-cli',
+    });
+    db.close();
+
+    expect(run(dbPath, 'set', 'test', 'treeSweepEnabled', '-')).toMatchObject({ code: 0 });
+    const db2 = openDatabase(dbPath);
+    expect(new ProjectStore(db2).byName('test')!.settings).not.toHaveProperty('treeSweepEnabled');
+    db2.close();
+  });
 });

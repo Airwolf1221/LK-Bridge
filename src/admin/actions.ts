@@ -8,6 +8,7 @@ import type { PatView } from '../auth/pats.js';
 import { WRITERS_LIMIT, WRITERS_MIN } from '../config/jobs.js';
 import type { ControlsView, JobView } from '../jobs/index.js';
 import type { Profile, Scope } from '../policy/index.js';
+import { SettingValueError, parseSettingValue } from '../projects/index.js';
 import { AdminHttpError } from './http.js';
 import {
   SETTING_KEYS,
@@ -28,7 +29,7 @@ const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write
 export type AdminActions = ReturnType<typeof createAdminActions>;
 
 export function createAdminActions(d: AdminDeps) {
-  const { engine, projects, policy } = d.runtime;
+  const { engine, projects, policy, tree } = d.runtime;
   const store = policy.store;
   const cmd = policy.commands;
   const audit = (action: string, target: string | null, before?: unknown, after?: unknown) =>
@@ -113,6 +114,53 @@ export function createAdminActions(d: AdminDeps) {
       const after = await projects.verify(before.name);
       audit('project.verify', before.name, { status: before.status }, { status: after?.status ?? null });
       return after;
+    },
+
+    /**
+     * v2 A2: one project setting (the AI REPOSITORY root, the names the tree reads, the sweep switch, …). `null` clears
+     * it. Validated like `npm run projects -- set`; audited as `project.set_setting` with the old and new value.
+     */
+    setProjectSetting(ref: string, key: string, value: unknown) {
+      const before = projects.find(ref);
+      if (!before?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${ref} with stored data`);
+      let parsed: string | boolean | null;
+      try {
+        parsed = parseSettingValue(key, value);
+      } catch (e) {
+        if (e instanceof SettingValueError) throw new AdminHttpError(400, 'INVALID_SETTING', e.message);
+        throw e;
+      }
+      const old = (before.settings as Record<string, unknown>)[key];
+      const after = projects.setSetting(before.id, key, parsed);
+      audit('project.set_setting', before.name, { key, value: old ?? null }, { key, value: parsed });
+      tree.onSettingsChanged(before.id);
+      return after;
+    },
+
+    // ------------------------------------------------------------------------------------- repository tree
+    /** v2 A2: starts a build's listing; it then waits for the owner to confirm its estimate. Audited. */
+    treePrepareBuild(projectId: string) {
+      const pass = tree.prepareBuild(projectId, { trigger: 'owner' });
+      audit('tree.build_prepare', projects.nameOf(projectId), undefined, { pass: pass.id });
+      return pass;
+    },
+    treeConfirmBuild(projectId: string) {
+      const pass = tree.confirmBuild(projectId);
+      audit('tree.build_start', projects.nameOf(projectId), undefined, {
+        pass: pass.id,
+        estimate: pass.estimate,
+      });
+      return pass;
+    },
+    treeCancelBuild(projectId: string) {
+      const pass = tree.cancelBuild(projectId);
+      audit('tree.build_cancel', projects.nameOf(projectId), undefined, { pass: pass.id });
+      return pass;
+    },
+    /** Looks for the AI REPOSITORY root (one listing at P3); never applies it. */
+    async treeSuggestRoot(projectId: string) {
+      audit('tree.suggest_root', projects.nameOf(projectId));
+      return tree.suggestRoot(projectId);
     },
 
     // -------------------------------------------------------------------------------------------- writers

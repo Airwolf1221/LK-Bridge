@@ -15,7 +15,7 @@ import type { Clock } from '../lk/index.js';
 import type { ProjectRegistry, ProjectsRuntime } from '../projects/registry.js';
 import type { Policy } from '../policy/index.js';
 import { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
-import { builtinJobs } from './jobs.js';
+import { builtinJobs, type TreeMaintenance } from './jobs.js';
 import { MaintenanceScheduler } from './scheduler.js';
 import type { MaintenanceJobDef } from './types.js';
 
@@ -39,6 +39,8 @@ export interface CreateMaintenanceOptions {
   /** POLICY_PROPOSAL_RETENTION_DAYS in milliseconds: what `proposal-prune` keeps. Default 90 days. */
   readonly proposalRetentionMs?: number;
   readonly log?: { warn(o: Record<string, unknown>, m: string): void };
+  /** v2 A2: the repository tree, for the `tree-sweep` and `tree-check` jobs. */
+  readonly tree?: TreeMaintenance;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -58,6 +60,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         proposals: o.policy.proposals,
         expirySweepMs: o.expirySweepMs,
         proposalRetentionMs: o.proposalRetentionMs ?? 90 * 86_400_000,
+        ...(o.tree ? { tree: o.tree } : {}),
       }),
       ...(o.extraJobs ?? []),
     ],
@@ -73,7 +76,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
 
 export { MaintenanceScheduler, MaintenanceError, type MaintenanceErrorCode } from './scheduler.js';
 export { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
-export { builtinJobs, PLACEHOLDER_IDS } from './jobs.js';
+export { builtinJobs, PLACEHOLDER_IDS, type TreeMaintenance } from './jobs.js';
 export {
   scheduleSchema,
   parseSchedule,

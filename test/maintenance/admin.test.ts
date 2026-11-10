@@ -80,8 +80,9 @@ describe('the registry', () => {
       'proposal-expiry',
       'proposal-prune',
       'sqlite-optimise',
+      'tree-sweep',
+      'tree-check',
       'assign-block-ids-sweep',
-      'tree-snapshot',
       'orphan-and-link-audit',
       'tag-audit',
     ]);
@@ -92,7 +93,8 @@ describe('the registry', () => {
       scheduleText: 'Every 10 seconds',
       lastRun: null,
     });
-    expect(r.json.jobs[5]).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
+    expect(r.json.jobs[5]).toMatchObject({ id: 'tree-sweep', implemented: true, scope: 'project' });
+    expect(r.json.jobs[7]).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
   });
 
   it('404s an unknown job', async () => {
@@ -150,7 +152,7 @@ describe('changes', () => {
 
   it('refuses to enable, schedule or run a placeholder, and changes nothing', async () => {
     const before = stack.audit().length;
-    for (const id of ['assign-block-ids-sweep', 'tree-snapshot', 'orphan-and-link-audit', 'tag-audit']) {
+    for (const id of ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit']) {
       for (const r of [
         await stack.post(`/api/admin/maintenance/${id}/enable`),
         await stack.post(`/api/admin/maintenance/${id}/run`),
@@ -166,7 +168,7 @@ describe('changes', () => {
     }
     // Only the (harmless) disables were audited: no enable, schedule change or run left a trace.
     const added = stack.audit().slice(0, stack.audit().length - before);
-    expect(added.length).toBe(4);
+    expect(added.length).toBe(3);
     for (const row of added) expect(row.action).toBe('maintenance.disable');
   });
 

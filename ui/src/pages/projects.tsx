@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { api } from '../api';
 import {
   Badge,
@@ -19,7 +20,8 @@ import type { ProjectInfo, ProjectSettingKey, ProjectsResponse } from '../types'
 /**
  * Projects (v2 A1): every LegendKeeper project the bridge knows, its flags and status, and whether its key is configured
  * and valid. A key is never shown, only the name of the env variable that holds it (the API never sends one). The
- * per-project read-only flag is the one thing editable here; settings are shown read-only in this release.
+ * per-project read-only flag is editable here, and (v2 A2) each project's settings: the AI REPOSITORY root, the names
+ * the repository tree reads, and the hourly sweep switch. Every change is audited.
  */
 export function ProjectsPage() {
   const { data, error, reload } = useProject();
@@ -76,7 +78,7 @@ export function ProjectsPage() {
               </tbody>
             </table>
           </section>
-          <SettingsCard data={data} />
+          <SettingsCard data={data} onChanged={reload} />
         </>
       )}
     </>
@@ -233,18 +235,27 @@ function SettingValue({ value }: { value: unknown }) {
   return <span className="mono">{prettyJson(value)}</span>;
 }
 
-function SettingsList({ project, keys }: { project: ProjectInfo; keys: ProjectSettingKey[] }) {
+function SettingsList({
+  project,
+  keys,
+  onChanged,
+}: {
+  project: ProjectInfo;
+  keys: ProjectSettingKey[];
+  onChanged: () => void;
+}) {
   const known = new Set(keys.map((k) => k.key));
   const extra = Object.keys(project.settings ?? {}).filter((k) => !known.has(k));
   return (
     <dl className="settings-list">
       {keys.map((k) => (
-        <div key={k.key}>
+        <div key={k.key} data-setting={k.key}>
           <dt>
             {k.label} <span className="muted small-text">({k.kind})</span>
           </dt>
           <dd>
-            <SettingValue value={project.settings?.[k.key]} />
+            <SettingEditor project={project} setting={k} onChanged={onChanged} />
+            {k.help && <div className="muted small-text">{k.help}</div>}
           </dd>
         </div>
       ))}
@@ -260,13 +271,134 @@ function SettingsList({ project, keys }: { project: ProjectInfo; keys: ProjectSe
   );
 }
 
-function SettingsCard({ data }: { data: ProjectsResponse }) {
+/** One setting: its value (or its default), and for an editable one, Edit / Save / Clear. Audited by the bridge. */
+function SettingEditor({
+  project: p,
+  setting: k,
+  onChanged,
+}: {
+  project: ProjectInfo;
+  setting: ProjectSettingKey;
+  onChanged: () => void;
+}) {
+  const value = p.settings?.[k.key];
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const shown =
+    value === undefined && k.default !== undefined ? (
+      <span>
+        <SettingValue value={k.kind === 'on/off' ? (k.default ? 'on' : 'off') : k.default} />{' '}
+        <span className="muted small-text">(default)</span>
+      </span>
+    ) : (
+      <SettingValue
+        value={k.kind === 'on/off' && typeof value === 'boolean' ? (value ? 'on' : 'off') : value}
+      />
+    );
+  if (!k.editable || p.id === null) return shown;
+  const save = (v: string | boolean | null) => {
+    const go = () =>
+      void run(
+        () => api.put(`/projects/${encodeURIComponent(p.name)}/settings`, { key: k.key, value: v }),
+        `${k.label} of ${p.name} saved.`,
+      ).then((r) => {
+        if (r) {
+          setEditing(false);
+          onChanged();
+        }
+      });
+    if (k.key === 'aiRepositoryRootId' && value !== undefined && v !== value) {
+      void confirm({
+        title: `Change the AI REPOSITORY root of ${p.name}?`,
+        message: (
+          <p>
+            The repository tree built for the current root is discarded. The new root needs a first build
+            (Repository Tree page).
+          </p>
+        ),
+        confirmLabel: 'Change the root',
+        danger: true,
+      }).then((ok) => ok && go());
+    } else go();
+  };
+  if (!editing) {
+    return (
+      <div className="setting-edit">
+        {shown}
+        {k.kind === 'on/off' ? (
+          <Button
+            className="small"
+            busy={busy}
+            aria-label={`Switch ${k.label} of ${p.name}`}
+            onClick={() => save(!(value === undefined ? k.default === true : value === true))}
+          >
+            {(value === undefined ? k.default === true : value === true) ? 'Switch off' : 'Switch on'}
+          </Button>
+        ) : (
+          <Button
+            className="small"
+            busy={busy}
+            aria-label={`Edit ${k.label} of ${p.name}`}
+            onClick={() => {
+              setDraft(typeof value === 'string' ? value : '');
+              setEditing(true);
+            }}
+          >
+            Edit
+          </Button>
+        )}
+        {value !== undefined && (
+          <Button
+            className="small"
+            busy={busy}
+            aria-label={`Clear ${k.label} of ${p.name}`}
+            onClick={() => save(null)}
+          >
+            {k.default !== undefined ? 'Use default' : 'Clear'}
+          </Button>
+        )}
+      </div>
+    );
+  }
+  return (
+    <form
+      className="setting-edit"
+      onSubmit={(e) => {
+        e.preventDefault();
+        save(draft.trim() === '' ? null : draft.trim());
+      }}
+    >
+      <label className="offscreen" htmlFor={`set-${p.name}-${k.key}`}>
+        {k.label} of {p.name}
+      </label>
+      <input
+        id={`set-${p.name}-${k.key}`}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder={
+          typeof k.default === 'string' ? k.default : k.kind === 'resource id' ? 'for example h0gczxh7' : ''
+        }
+        autoFocus
+      />
+      <Button className="small" busy={busy} type="submit">
+        Save
+      </Button>
+      <button type="button" className="small" onClick={() => setEditing(false)}>
+        Cancel
+      </button>
+    </form>
+  );
+}
+
+function SettingsCard({ data, onChanged }: { data: ProjectsResponse; onChanged: () => void }) {
   return (
     <section className="card" aria-labelledby="project-settings-h">
       <h2 id="project-settings-h">Settings</h2>
       <p className="muted small-text">
-        Each project’s settings, read-only here: editing them comes in a later release. Keys stay in the env
-        file and are never shown.
+        Each project’s settings. Changes are audited, and the repository tree uses them at once. Keys stay in
+        the env file and are never shown.
       </p>
       {data.projects.map((p) => (
         <section key={p.name} aria-label={`Settings of ${p.name}`} data-project-settings={p.name}>
@@ -281,7 +413,10 @@ function SettingsCard({ data }: { data: ProjectsResponse }) {
               The stored settings could not be read, so they count as empty: {p.settingsProblem}
             </p>
           )}
-          <SettingsList project={p} keys={data.settingKeys} />
+          {p.id === null && (
+            <p className="muted small-text">Settings can be changed once the project’s key is verified.</p>
+          )}
+          <SettingsList project={p} keys={data.settingKeys} onChanged={onChanged} />
         </section>
       ))}
     </section>

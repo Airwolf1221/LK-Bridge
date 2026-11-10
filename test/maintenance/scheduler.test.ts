@@ -47,7 +47,7 @@ function probe(over: Partial<MaintenanceJobDef> = {}) {
 }
 
 describe('the registry', () => {
-  it('lists the five implemented jobs and the four placeholders, with schedule, last run and next run', async () => {
+  it('lists the seven implemented jobs and the three placeholders, with schedule, last run and next run', async () => {
     m = await maintenanceRig();
     const jobs = m.maintenance.scheduler.list();
     expect(jobs.map((j) => j.id)).toEqual([
@@ -56,8 +56,9 @@ describe('the registry', () => {
       'proposal-expiry',
       'proposal-prune',
       'sqlite-optimise',
+      'tree-sweep',
+      'tree-check',
       'assign-block-ids-sweep',
-      'tree-snapshot',
       'orphan-and-link-audit',
       'tag-audit',
     ]);
@@ -81,7 +82,20 @@ describe('the registry', () => {
     });
     expect(view('proposal-prune').nextRunAt).toBe(nextDailyRun(now, '03:45'));
     expect(view('sqlite-optimise').scheduleText).toBe('Weekly');
-    for (const id of ['assign-block-ids-sweep', 'tree-snapshot', 'orphan-and-link-audit', 'tag-audit']) {
+    // v2 A2: the repository tree's sweep (hourly) and check (nightly) replaced the `tree-snapshot` placeholder.
+    expect(view('tree-sweep')).toMatchObject({
+      implemented: true,
+      enabled: true,
+      scope: 'project',
+      scheduleText: 'Hourly',
+    });
+    expect(view('tree-check')).toMatchObject({
+      implemented: true,
+      enabled: true,
+      scope: 'project',
+      scheduleText: 'Daily at 02:30 (London time)',
+    });
+    for (const id of ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit']) {
       expect(view(id)).toMatchObject({
         implemented: false,
         enabled: false,
@@ -435,7 +449,7 @@ describe('run now', () => {
 });
 
 describe('placeholders', () => {
-  const placeholders = ['assign-block-ids-sweep', 'tree-snapshot', 'orphan-and-link-audit', 'tag-audit'];
+  const placeholders = ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit'];
 
   it('cannot be enabled, run or rescheduled, and say so', async () => {
     m = await maintenanceRig();
@@ -489,6 +503,33 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(9);
+    expect(m.maintenance.scheduler.list()).toHaveLength(10);
+  });
+});
+
+describe('background jobs (v2 A2)', () => {
+  it('a long job runs alongside the others: the 10-second sampler keeps sampling while it runs', async () => {
+    let finish: () => void = () => {};
+    const gate = new Promise<void>((r) => (finish = r));
+    const long = probe({
+      id: 'long',
+      background: true,
+      run: async () => {
+        await gate;
+        return { summary: 'long done' };
+      },
+    });
+    m = await maintenanceRig({ extraJobs: [long.def] });
+    const clock = m.rig.h.clock;
+    await clock.advance(60_000); // the long job starts, and stays running
+    expect(view('long').running).toBe(true);
+    const before = sampleCount(m.rig);
+    await clock.advance(60_000);
+    expect(sampleCount(m.rig)).toBeGreaterThanOrEqual(before + 5);
+    expect(() => m!.maintenance.scheduler.runNow('long')).toThrow(MaintenanceError);
+    finish();
+    await m.maintenance.scheduler.whenIdle();
+    expect(view('long').running).toBe(false);
+    expect(history('long')[0]).toMatchObject({ outcome: 'succeeded', detail: 'long done' });
   });
 });

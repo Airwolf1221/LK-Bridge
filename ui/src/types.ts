@@ -81,6 +81,11 @@ export interface ProjectSettingKey {
   key: string;
   label: string;
   kind: string;
+  /** v2 A2: the value used while none is stored. */
+  default?: string | boolean;
+  /** v2 A2: editable on the Projects page. */
+  editable?: boolean;
+  help?: string;
 }
 
 export interface ProjectsResponse {
@@ -486,4 +491,147 @@ export interface AuditEntry {
   target: string | null;
   before: unknown;
   after: unknown;
+}
+
+// ------------------------------------------------------------------------------------- repository tree (v2 A2)
+
+export type TreeStatusName = 'not_configured' | 'not_built' | 'building' | 'ready' | 'stale';
+
+export interface TreeMetaView {
+  projectId: string;
+  status: TreeStatusName;
+  reason: string | null;
+  rootId: string | null;
+  confirmedAt: number | null;
+  confirmedBy: 'build' | 'sweep' | 'check' | null;
+  staleNodes: number;
+  pendingRereads: number;
+}
+
+export interface TreeNodeView {
+  id: string;
+  rawName: string;
+  displayName: string;
+  kind: 'root' | 'index' | 'bsrc' | 'unclassified';
+  parentId: string | null;
+  rank: string | null;
+  depth: number;
+  path: { ids: string[]; names: string[] };
+  tags: string[];
+  aliases: string[];
+  documents: { id: string; name: string | null; type: string | null }[];
+  isHidden: boolean;
+  isLocked: boolean | null;
+  referenceType: string | null;
+  scope: string | null;
+  indexScope: string | null;
+  canonicalDisplayName: string | null;
+  propertiesFound: boolean | null;
+  templateId: string | null;
+  lastReadAt: number;
+  lastReadBy: 'build' | 'write' | 'sweep' | 'check';
+  propertiesPending: boolean;
+  stale: boolean;
+  staleReason: string | null;
+}
+
+export interface TreePass {
+  id: string;
+  projectId: string;
+  kind: 'build' | 'sweep' | 'check';
+  trigger: string;
+  status:
+    'listing' | 'awaiting_confirmation' | 'reading' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted';
+  rootId: string;
+  snapshotAt: number | null;
+  pages: number;
+  listed: number;
+  subtree: number | null;
+  toRead: number | null;
+  readOk: number;
+  readFailed: number;
+  requests: number;
+  added: number;
+  removed: number;
+  corrected: number;
+  estimate: {
+    listed: number;
+    subtree: number;
+    reads: number;
+    listingRequests: number;
+    wallClockMs: number;
+    fitsInDailyBudget: boolean;
+    tightestTier: string | null;
+    at: number;
+  } | null;
+  summary: string | null;
+  error: string | null;
+  jobId: string | null;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+}
+
+export interface TreeCorrection {
+  id: number;
+  at: number;
+  source: 'build' | 'sweep' | 'check' | 'write';
+  passId: string | null;
+  nodeId: string;
+  nodeName: string | null;
+  change: 'added' | 'removed' | 'updated' | 'reread_failed';
+  field: string | null;
+  oldValue: unknown;
+  newValue: unknown;
+  detail: string | null;
+}
+
+export interface TreeOverview {
+  project: { id: string; name: string };
+  tree: TreeMetaView;
+  settings: {
+    rootId: string | null;
+    propertiesName: string;
+    referenceTypeRow: string;
+    scopeRow: string;
+    indexScopeRow: string;
+    canonicalNameRow: string;
+    sweepEnabled: boolean;
+  };
+  counts: {
+    total: number;
+    byKind: Record<'root' | 'index' | 'bsrc' | 'unclassified', number>;
+    maxDepth: number;
+    stale: number;
+    propertiesPending: number;
+  };
+  unclassified: TreeNodeView[];
+  staleNodes: TreeNodeView[];
+  activePass: TreePass | null;
+  lastBuild: TreePass | null;
+  lastSweep: TreePass | null;
+  lastCheck: TreePass | null;
+  recentPasses: TreePass[];
+  rereads: {
+    inFlight: number;
+    failed: {
+      id: number;
+      op: string;
+      jobId: string | null;
+      resourceIds: string[];
+      attempts: number;
+      lastError: string | null;
+      nextAt: number | null;
+      createdAt: number;
+    }[];
+  };
+  suggestion: {
+    at: number;
+    candidates: { id: string; name: string }[];
+    suggested: string | null;
+    listed: number;
+    error: string | null;
+  } | null;
+  suggesting: boolean;
+  now: number;
 }
