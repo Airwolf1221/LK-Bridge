@@ -43,6 +43,10 @@ function runRestricted(args: readonly string[]) {
   delete env.VITEST; // a nested run, not a worker of this one
   delete env.VITEST_WORKER_ID;
   delete env.VITEST_POOL_ID;
+  // The server's command runs outside GitHub Actions: on a runner, Vitest adds its GitHub Actions reporter, which writes
+  // the job summary to GITHUB_STEP_SUMMARY (outside the temporary directory, so refused here), not the sandbox config.
+  delete env.GITHUB_ACTIONS;
+  delete env.GITHUB_STEP_SUMMARY;
   return spawnSync(
     process.execPath,
     [
