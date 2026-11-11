@@ -69,8 +69,9 @@ describe('the bridge guide’s Operations section', () => {
     const guide = GUIDES.find((g) => g.id === 'bridge')!;
     const text = readGuide(guide);
     expect(outline(text).map((h) => h.text)).toContain('Operations');
-    for (const op of operations)
-      expect(getSection(text, 'Operations').markdown, op.operationId).toContain(`\`${op.operationId}\``);
+    // The section is parsed once (parsing the whole guide per operation came close to the 5 s timeout under CI load).
+    const section = getSection(text, 'Operations').markdown;
+    for (const op of operations) expect(section, op.operationId).toContain(`\`${op.operationId}\``);
     const resource = guideResources().find((r) => r.uri === guide.uri)!;
     expect(resource.read()).toBe(text);
     // The markdown guide is untouched.
