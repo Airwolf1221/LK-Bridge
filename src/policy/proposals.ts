@@ -29,7 +29,12 @@ import {
   UnknownOperationError,
   VersionConflictError,
 } from '../jobs/errors.js';
-import { assertNoUnsupportedLoss, checkSubmitGuards, unsupportedLoss } from '../jobs/guards.js';
+import {
+  assertNoUnsupportedLoss,
+  checkSubmitGuards,
+  unsupportedGuardSides,
+  unsupportedLoss,
+} from '../jobs/guards.js';
 import { READERS, opMeta } from '../jobs/op-meta.js';
 import {
   EXPECT_STEP,
@@ -502,10 +507,11 @@ export class ProposalService implements ProposalSink {
       }
       const om = opMeta(o.op);
       if (om.guard && snap.exists) {
-        const incoming =
-          om.guard === 'document' ? (o.params.body as { blocks?: unknown })?.blocks : o.params.body;
-        const existing = om.guard === 'document' ? (snap.body as { blocks?: unknown })?.blocks : snap.body;
-        assertNoUnsupportedLoss(o.op, existing, incoming, stepOptions(o));
+        const sides = unsupportedGuardSides(om.guard, o.op, o.params, {
+          body: snap.body,
+          entity: snap.state ?? undefined,
+        });
+        if (sides) assertNoUnsupportedLoss(o.op, sides.existing, sides.incoming, stepOptions(o));
       }
       captured.push({ target, snap });
     }
@@ -880,6 +886,14 @@ export class ProposalService implements ProposalSink {
     );
     const jobOptions = this.jobOptionsOf(id);
     const principal: Principal = { principalId: p.principalId, profile: p.profile, label: p.principalLabel };
+    // CR-2026-11 (CR-03): the sidebars this re-read has just read (a page's getResource carries its properties) are
+    // handed to the write guards' entry check, which would otherwise read them again a moment later. The guards still
+    // judge them, and check again inside the lock before each write.
+    const prefetched = ops.flatMap((op) => {
+      if (!op.target || (op.target.op !== 'getResource' && op.target.op !== 'listProperties')) return [];
+      const snap = current.get(canonicalJson(op.target));
+      return snap?.exists ? [{ op: op.target.op, path: op.target.path, body: snap.body }] : [];
+    });
     let result: Awaited<ReturnType<JobEngine['submit']>>;
     try {
       result = await engine.submit({
@@ -901,6 +915,7 @@ export class ProposalService implements ProposalSink {
         ...(jobOptions?.holdDocument ? { holdDocument: jobOptions.holdDocument } : {}),
         ...(jobOptions?.holdAlso ? { holdAlso: jobOptions.holdAlso } : {}),
         ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
+        ...(prefetched.length > 0 ? { proposal: { prefetched } } : {}),
       });
     } catch (e) {
       token.consume();
@@ -1074,13 +1089,26 @@ export class ProposalService implements ProposalSink {
     }
     // v2 C1: a page write whose compare-and-swap refused it inside the lock wrote nothing: the proposal is conflicted, as
     // if the approval's own re-read had seen the change (the owner approves exactly what they saw, never a re-plan).
-    const highLevel = this.store.db.prepare('SELECT operation FROM proposals WHERE id = ?').get(row.id) as
-      { operation: string | null } | undefined;
+    // CR-2026-11 (CR-05): every high-level proposal (write_page's `operation`, and the `operations` of set_facts, the
+    // resource, document and character tools and the lifecycle tools), and "nothing was written" judged by the job's
+    // LegendKeeper writes (none succeeded, none may have been sent), not by its step count: the bridge's own check and
+    // record steps come first in those jobs and succeed without writing anything to LegendKeeper.
+    const highLevel = this.store.db
+      .prepare('SELECT operation, operations FROM proposals WHERE id = ?')
+      .get(row.id) as { operation: string | null; operations: string | null } | undefined;
+    const steps = this.engine?.queries.getJob(job.projectId, job.id)?.steps ?? [];
+    const wroteNothing =
+      steps.length > 0
+        ? !steps.some(
+            (s) =>
+              s.opKind !== 'read' && (s.status === 'succeeded' || s.status === 'uncertain' || s.maybeSent),
+          )
+        : job.progress.stepsDone === 0;
     if (
-      highLevel?.operation &&
+      (highLevel?.operation || highLevel?.operations) &&
       job.status === 'failed' &&
       job.lastError?.code === 'VERSION_CONFLICT' &&
-      job.progress.stepsDone === 0
+      wroteNothing
     ) {
       const le = job.lastError as {
         stepNo?: unknown;
@@ -1276,16 +1304,17 @@ export class ProposalService implements ProposalSink {
       const meta = opMeta(base.op);
       const proposed = meta.intent ? meta.intent(params) : params.body;
       const before = !truncated && meta.actual && pre !== null ? meta.actual(pre, pre) : pre;
-      const guardOld = meta.guard === 'document' ? (pre as { blocks?: unknown } | null)?.blocks : pre;
-      const guardNew =
-        meta.guard === 'document' ? (params.body as { blocks?: unknown })?.blocks : params.body;
+      const sides =
+        meta.guard && !truncated && pre !== null
+          ? unsupportedGuardSides(meta.guard, base.op, params, { body: pre, entity: pre })
+          : null;
       return {
         ...base,
         preState: pre,
         preStateTruncated: truncated,
         proposed: proposed ?? null,
         changes: truncated ? [] : diff(before, proposed),
-        unsupportedLoss: meta.guard && !truncated && pre !== null ? unsupportedLoss(guardOld, guardNew) : [],
+        unsupportedLoss: sides ? unsupportedLoss(sides.existing, sides.incoming) : [],
       };
     });
     const opRow = this.store.db.prepare('SELECT operation FROM proposals WHERE id = ?').get(id) as

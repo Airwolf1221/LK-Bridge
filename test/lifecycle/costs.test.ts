@@ -40,16 +40,19 @@ it('reads and writes per call: to capture the proposal, then the job', async () 
   await measure('promote_page', 'promote_page', { page: 'Harbour Guild', destination: 'locs0001' });
   await measure('archive_page, Working', 'archive_page', { page: 'Sky Ferry' });
   await measure('unarchive_page, to Working', 'unarchive_page', { page: 'Sky Ferry' });
-  // The job's reads: its checks (the page, its rows, the note's block), the canon and lifecycle guards at entry (the
-  // sidebar), the in-lock reads before each write (the page before a rename or move, the rows before the facts, the
-  // document before the note), then the verify step (the page, the new parent's listing, the note) and the tree's
-  // re-read of the page.
+  // The job's reads: the approval's re-read of what was captured (the page, its rows, the note's document), its checks
+  // inside the lock (the page, its rows, the note's block), the in-lock reads before each write (the page before a
+  // rename or move, the rows before the facts and the lifecycle guard's sidebar read for the Status, the document before
+  // the note), then the verify step (the new parent's listing, the page, the note) and the tree's one re-read of the
+  // page. CR-2026-11 (CR-03) took 4 reads off each job without dropping a check: the canon and lifecycle guards' entry
+  // reads of the sidebar (2) now use the approval's re-read of the page, made a moment before; and the tree re-reads the
+  // page once when the job ends, not after the rename and the move as well (2).
   expect(got).toEqual({
-    'archive_page, Authoritative': { capture: [6, 0], job: [19, 8] },
-    'unarchive_page, to Authoritative': { capture: [4, 0], job: [19, 7] },
-    move_to_working: { capture: [3, 0], job: [15, 3] },
-    promote_page: { capture: [2, 0], job: [15, 5] },
-    'archive_page, Working': { capture: [5, 0], job: [19, 8] },
-    'unarchive_page, to Working': { capture: [4, 0], job: [19, 7] },
+    'archive_page, Authoritative': { capture: [6, 0], job: [15, 8] },
+    'unarchive_page, to Authoritative': { capture: [4, 0], job: [15, 7] },
+    move_to_working: { capture: [3, 0], job: [11, 3] },
+    promote_page: { capture: [2, 0], job: [11, 5] },
+    'archive_page, Working': { capture: [5, 0], job: [15, 8] },
+    'unarchive_page, to Working': { capture: [4, 0], job: [15, 7] },
   });
 });

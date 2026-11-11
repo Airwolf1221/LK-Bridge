@@ -453,7 +453,19 @@ function jobTools(deps: ToolDeps) {
       },
       handler: ({ jobId: id, project: asked }, ctx) =>
         withProject(deps, asked, 'write', (pd) => {
-          if (!ownJob(pd, ctx, id)) return jobNotFound(pd, id);
+          const own = ownJob(pd, ctx, id);
+          if (!own) return jobNotFound(pd, id);
+          // CR-2026-11 (CR-19): an approved proposal's job runs as its proposer, but it is the owner's work now; stopping
+          // it part-way (a lifecycle change, canon accepted) is the owner's decision, on the dashboard.
+          if (own.approvedBy !== null) {
+            return errorResult(
+              {
+                code: 'OWNER_APPROVED_JOB',
+                message: `Job ${id} runs work the owner approved; only the owner can cancel it (on the dashboard's Jobs page). Nothing was changed.`,
+              },
+              pd,
+            );
+          }
           try {
             const job = deps.engine.controls.cancel(pd.project.id, id);
             return render(jobBody(deps.engine.queries.getJob(pd.project.id, job.id) ?? job, 'summary'), pd);

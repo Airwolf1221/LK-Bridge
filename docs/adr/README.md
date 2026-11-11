@@ -39,3 +39,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0033](0033-removing-connections-replace-on-reconnect-and-operation-discovery.md) | Removing connections, replace on reconnect, and operation discovery                           | Accepted |
 | [0034](0034-resources-documents-characters.md)                                    | The resource, document and character tools, operation_id, factsVersion, character mentions    | Accepted |
 | [0035](0035-page-lifecycle.md)                                                    | The page lifecycle: Working, Authoritative and Archived pages, the four tools and their guard | Accepted |
+| [0036](0036-cr-2026-11-owner-decisions.md)                                        | Owner decisions from the mid-point review (CR-2026-11)                                        | Proposed |

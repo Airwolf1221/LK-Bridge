@@ -7,8 +7,12 @@
  * Pre-images, as before chunk 8: the blocks JSON before `replaceDocumentBlocks` / `replaceBlock` / block deletes, the
  * board before `replaceBoardContent` / `deleteBoardShapes`, the resource before `updateResource` / `moveResource`, the
  * document before `updateDocument`, the property before `updateProperty`, rows and infobox properties before their
- * deletes, the calendar before `updateCalendar` / `deleteCalendar`; only the ids for other deletes and member removals;
- * none for every other write (inserts, creates, row and property additions, patches).
+ * deletes and updates, the calendar before `updateCalendar` / `deleteCalendar`; CR-2026-11: the property, lane, event,
+ * feature and asset before their deletes too (LegendKeeper can restore none of them; a lane's pre-image is the lane
+ * alone, without its events, and an asset's is its record, without its bytes); only the ids for the deletes
+ * LegendKeeper can undo (`deleteResource`, `deleteDocument`: restoreResource and restoreDocument) and member removals;
+ * none for every other write (inserts, creates, row and property additions, patches). How to restore from each is in
+ * docs/reviews/CR-2026-11.md, section 4.
  */
 import type { Db } from '../db/open.js';
 import { isAllProjects, type ProjectScope } from '../projects/types.js';

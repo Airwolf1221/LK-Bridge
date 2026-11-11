@@ -131,9 +131,10 @@ with the owner's canonical approval, and that every other route is refused.
 
 ## Costs
 
-Measured against the mock (test/lifecycle/costs.test.ts): `archive_page` 5–6 reads to capture, then about 19 reads and
-8 writes when accepted; `unarchive_page` 4, then 19 and 7; `move_to_working` 3, then 15 and 3; `promote_page` 2, then
-15 and 5 (one more write for a character index). The link sweep reads about one resource per page and index plus one
+Measured against the mock (test/lifecycle/costs.test.ts): `archive_page` 5–6 reads to capture, then about 15 reads and
+8 writes when accepted; `unarchive_page` 4, then 15 and 7; `move_to_working` 3, then 11 and 3; `promote_page` 2, then
+11 and 5 (one more write for a character index). (C2c measured 19, 19, 15 and 15 job reads; the mid-point review,
+CR-2026-11, took 4 off each without dropping a check.) The link sweep reads about one resource per page and index plus one
 document per page document: about 2,500–2,900 reads a pass on the test world, 6,500–7,000 on Arkona, at P3 only.
 
 ## Consequences
@@ -150,3 +151,14 @@ document per page document: about 2,500–2,900 reads a pass on the test world, 
 - Whether `unarchive_page` and `promote_page` should also list related pages. **Decided by the owner on 11 November 2026: no.** Related pages stay listed only by `archive_page` and `move_to_working`, the two tools that take a page out of canon.
 - Whether a page with pages under it should be archivable as a subtree (refused for now). **Decided by the owner on 11 November 2026: yes**, in session C2d ("Subtree lifecycle", [PLAN-v2](../PLAN-v2.md)): archiving a whole character (its index, Core and specialist pages) needs one canonical approval for the set, with the index archived too. Until C2d is built, the refusal stands.
 - Whether the Working index should allow sub-indexes other than a character's own (flat for now, as decided).
+
+## Amendments (CR-2026-11, 11 November 2026)
+
+The mid-point review ([docs/reviews/CR-2026-11.md](../reviews/CR-2026-11.md)) closed side routes decision 11 meant to
+close and did not: a caller's `If-Match` skipped the in-lock check; an `onError: "continue"` batch could blind the entry
+check; moves were judged from the repository tree only; the two lifecycle indexes themselves could be renamed, moved or
+deleted (which disabled the tools and could move pages out of their area); a template copy without a name or id, or
+with its children, was half judged; a Status could be written as a page mention; and look-alike prefixes (`[barc]`,
+fullwidth or Cyrillic letters, a missing space) were not read as prefixes. Each is now refused (decision 11's rule,
+unchanged). One addition is proposed to the owner in [ADR 0036](0036-cr-2026-11-owner-decisions.md): a page made
+`[BSRC]` by a create or rename that no tool declares is a canonical proposal (decision 5 applied to every route).

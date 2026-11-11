@@ -189,14 +189,79 @@ export const canonicalRulesSchema = z
   .max(50)
   .refine((l) => new Set(l.map((r) => r.id)).size === l.length, 'each rule id once');
 
-/** A fact key as rules compare it: trimmed, inner spaces collapsed, without case. */
-export function factKey(key: string): string {
-  return key.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-GB');
+/**
+ * CR-2026-11 (CR-12): Cyrillic and Greek letters that look like Latin ones (after lower-casing), as Unicode's
+ * confusables list (UTS #39) maps them, plus Cyrillic у, which reads as "u" as well as "y" (both are mapped to "u"
+ * here: the fold only ever makes two keys or values that look alike compare equal).
+ */
+const LOOKALIKES: Readonly<Record<string, string>> = {
+  а: 'a',
+  в: 'b',
+  е: 'e',
+  ё: 'e',
+  һ: 'h',
+  і: 'i',
+  ї: 'i',
+  ј: 'j',
+  к: 'k',
+  ӏ: 'l',
+  м: 'm',
+  н: 'h',
+  о: 'o',
+  р: 'p',
+  с: 'c',
+  ѕ: 's',
+  т: 't',
+  у: 'u',
+  ү: 'y',
+  х: 'x',
+  ԁ: 'd',
+  ԛ: 'q',
+  ԝ: 'w',
+  ѵ: 'v',
+  ɡ: 'g',
+  α: 'a',
+  β: 'b',
+  ε: 'e',
+  η: 'n',
+  ι: 'i',
+  κ: 'k',
+  ν: 'v',
+  ο: 'o',
+  ρ: 'p',
+  τ: 't',
+  υ: 'u',
+  χ: 'x',
+  ϲ: 'c',
+  ϳ: 'j',
+};
+const LOOKALIKE_RE = new RegExp(`[${Object.keys(LOOKALIKES).join('')}]`, 'gu');
+
+/**
+ * Text as the rules compare it (CR-2026-11, CR-12): compatibility forms folded (NFKC: fullwidth letters, ligatures),
+ * invisible characters removed (zero-width spaces and joiners, soft hyphens, byte-order marks: Unicode's
+ * default-ignorable code points), trimmed, inner spaces collapsed, without case, and Cyrillic or Greek look-alikes read
+ * as the Latin letters they look like. So a key or value LegendKeeper shows as "Status: Authoritative" is judged as
+ * that, however it was spelt.
+ */
+function fold(s: string): string {
+  return s
+    .normalize('NFKC')
+    .replace(/\p{Default_Ignorable_Code_Point}/gu, '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLocaleLowerCase('en-GB')
+    .replace(LOOKALIKE_RE, (c) => LOOKALIKES[c] ?? c);
 }
 
-/** A value as `value` rules compare it: trimmed, inner spaces collapsed, without case. */
+/** A fact key as rules compare it (see `fold`). */
+export function factKey(key: string): string {
+  return fold(key);
+}
+
+/** A value as `value` rules compare it (see `fold`). */
 export function factValueKey(value: string): string {
-  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-GB');
+  return fold(value);
 }
 
 export interface CanonConfig {

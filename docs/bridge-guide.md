@@ -267,7 +267,8 @@ sure it went through, send the SAME request with the SAME `operation_id`: you ge
 (`OPERATION_ID_REUSED`): use a new id for a new request.
 
 **A failed job is never replayed.** `WRITTEN_IN_PART` lists what was written, what was not, and the journal entries.
-Read the pages, then make a new, smaller request for what is missing.
+Read the pages, then make a new, smaller request for what is missing. `OUTCOME_UNKNOWN` lists under `uncertain` a write
+whose answer was lost: it may have been made, so read the pages before anything else and never repeat it blindly.
 
 ## The page lifecycle
 
@@ -364,6 +365,8 @@ Every refusal has a code and a plain message. The common ones:
 | `DUPLICATE_REQUEST`                      | Another request for the same character is under way. Follow it (its job or proposal).  |
 | `OPERATION_ID_REUSED`                    | That `operation_id` was used for a different request. Use a new id.                    |
 | `WRITTEN_IN_PART`                        | Some writes were made, then it stopped. Read the pages; make a new, smaller request.   |
+| `OUTCOME_UNKNOWN`                        | A write may or may not have been made (`uncertain`). Read the pages; do not repeat it. |
+| `OWNER_APPROVED_JOB`                     | The owner approved that job; only the owner can cancel it.                             |
 | `HAS_CHILDREN`                           | The page has pages under it: add `cascade: true` to delete them all.                   |
 
 `bridge_errors_recent` lists recent failures with LegendKeeper's request ids when you need to report one.

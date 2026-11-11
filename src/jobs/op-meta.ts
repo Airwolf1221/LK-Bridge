@@ -15,7 +15,10 @@
  *   ONE such read before a destructive or versioned write, for the If-Match version, the unsupported-block guard and
  *   the journal pre-image together.
  * - `journal`: `pre-image` (store what the read returned) or `ids` (store the ids only, no read).
- * - `guard`: `document` / `block` for the unsupported-block guard (PLAN §4 rule 2).
+ * - `guard`: `document` / `block` / `property` for the unsupported-block guard (PLAN §4 rule 2). CR-2026-11 (CR-02): a
+ *   sidebar or infobox property can be `unsupported` itself (TAGS) or hold `unsupported` blocks (a text field's
+ *   children); deleting it, or replacing its children, drops them for good, so property deletes and child replaces are
+ *   guarded too.
  * - `clientId`: where the engine puts the id it mints (PLAN §5.3).
  */
 import type { OpParams } from './types.js';
@@ -94,7 +97,7 @@ export interface OpMeta {
   /** Custom "is it gone?" for deletes that remove several records (deleteBoardShapes). */
   readonly gone?: (body: unknown, params: OpParams) => boolean;
   readonly journal?: 'pre-image' | 'ids';
-  readonly guard?: 'document' | 'block';
+  readonly guard?: 'document' | 'block' | 'property';
   readonly clientId?: 'body.id' | 'body.resources[].id';
 }
 
@@ -181,8 +184,9 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   listBlockProperties: read,
   createBlockProperty: key('blockProperties'),
   getBlockProperty: read,
-  updateBlockProperty: patch('blockProperty'),
-  deleteBlockProperty: gone('blockProperty', 'pre-image'),
+  // CR-2026-11 (CR-02): an infobox property can be `unsupported` or hold `unsupported` blocks (as a sidebar property).
+  updateBlockProperty: { ...patch('blockProperty', 'pre-image'), guard: 'property' },
+  deleteBlockProperty: { ...gone('blockProperty', 'pre-image'), guard: 'property' },
   listBlockPropertyRows: read,
   createBlockPropertyRow: key('blockPropertyRows'),
   updateBlockPropertyRow: patch('blockPropertyRows'),
@@ -191,8 +195,10 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   listProperties: read,
   createProperty: key(),
   getProperty: read,
-  updateProperty: patch('property', 'pre-image'),
-  deleteProperty: gone('property', 'ids'),
+  // CR-2026-11 (CR-01, CR-02): LegendKeeper has no restore for a property, so its delete keeps the property as it was
+  // (rows, items, children) for a restore by hand; and neither may drop an `unsupported` property or block unguarded.
+  updateProperty: { ...patch('property', 'pre-image'), guard: 'property' },
+  deleteProperty: { ...gone('property', 'pre-image'), guard: 'property' },
   listPropertyRows: read,
   createPropertyRow: key('propertyRows'),
   updatePropertyRow: patch('propertyRows'),
@@ -202,18 +208,20 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   createLane: created('lane'),
   getLane: read,
   updateLane: patch('lane'),
-  deleteLane: gone('lane', 'ids'),
+  // CR-2026-11 (CR-01): lanes, events and features have no restore: their deletes keep what they deleted. A lane's
+  // pre-image is the lane alone; the events it takes with it are not read (open for D1, docs/reviews/CR-2026-11.md).
+  deleteLane: gone('lane', 'pre-image'),
   listEvents: read,
   createEvent: created('event'),
   getEvent: read,
   updateEvent: patch('event'),
-  deleteEvent: gone('event', 'ids'),
+  deleteEvent: gone('event', 'pre-image'),
   // Map features
   listFeatures: read,
   createFeature: created('feature'),
   getFeature: read,
   updateFeature: patch('feature'),
-  deleteFeature: gone('feature', 'ids'),
+  deleteFeature: gone('feature', 'pre-image'),
   // Boards
   getBoardContent: read,
   replaceBoardContent: {
@@ -249,7 +257,8 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   createImageAsset: key(),
   getAsset: read,
   updateAsset: patch('asset'),
-  deleteAsset: gone('asset', 'ids'),
+  // CR-2026-11 (CR-01): the asset's record (not its bytes, nor a folder's contents: open for D3 and E1).
+  deleteAsset: gone('asset', 'pre-image'),
   // Calendars
   listCalendars: read,
   createCalendar: key(),

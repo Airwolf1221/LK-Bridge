@@ -578,6 +578,18 @@ export class JobsRepo {
     ).map(toJob);
   }
 
+  /**
+   * CR-2026-11 (CR-04): the ids of every queued job in scheduling order. The scheduler walks them until its capacity is
+   * used, so held write jobs at the head of the queue never hide a job that can run (one whose next step reads).
+   */
+  queuedJobIds(): string[] {
+    return (
+      this.db
+        .prepare(`SELECT id FROM jobs WHERE status = 'queued' ORDER BY ${PRIORITY_ORDER}, created_at, rowid`)
+        .all() as { id: string }[]
+    ).map((r) => r.id);
+  }
+
   jobsWithStatus(statuses: readonly JobStatus[]): JobView[] {
     const marks = statuses.map(() => '?').join(', ');
     return (

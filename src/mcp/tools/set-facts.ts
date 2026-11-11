@@ -494,6 +494,28 @@ function failedBody(
   const written = steps
     .filter((s) => s.status === 'succeeded' && s.stepNo > 1 && s.stepNo < labels.length)
     .map((s) => labels[s.stepNo - 1]!);
+  // CR-2026-11 (CR-07): a write whose answer was lost, and whose check could not tell, may have been made.
+  const uncertain = steps
+    .filter((s) => s.status === 'uncertain' && s.stepNo > 1 && s.stepNo < labels.length)
+    .map((s) => labels[s.stepNo - 1]!);
+  if (uncertain.length > 0) {
+    return errorResult(
+      {
+        code: 'OUTCOME_UNKNOWN',
+        message:
+          `Not known whether ${uncertain.join('; ')} ${uncertain.length === 1 ? 'was' : 'were'} written: LegendKeeper's answer ` +
+          `was lost and the read that should have told failed too (${why ?? view.status}). ` +
+          (written.length > 0 ? `Written: ${written.join('; ')}. ` : '') +
+          'Nothing after it was written, and nothing was retried.',
+        jobId: view.id,
+        written,
+        uncertain,
+        hint: `Read the page with get_resource to see what it holds before doing anything else; do not repeat this call. bridge_journal_lookup with jobId ${view.id} shows each write (its outcome "unknown").`,
+        ...head,
+      },
+      pd,
+    );
+  }
   if (written.length === 0 && err.code === 'VERSION_CONFLICT') {
     const differences = (view.lastError as { differences?: unknown } | null)?.differences;
     return errorResult(

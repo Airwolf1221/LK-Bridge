@@ -162,7 +162,7 @@ budget (arkona): writes 0/120·min …
 
 **`bridge_job_wait`** `{ jobId, seconds? }`: waits at most 25 seconds, then returns the job as it stands (`done: true` when finished).
 
-**`bridge_job_cancel`** `{ jobId }`: the step in flight finishes; nothing further is sent; finished steps are not undone.
+**`bridge_job_cancel`** `{ jobId }`: the step in flight finishes; nothing further is sent; finished steps are not undone. A job the owner approved (an approved proposal's job, which runs as the connection that proposed it) is refused with `OWNER_APPROVED_JOB`: only the owner stops approved work, on the dashboard (CR-2026-11).
 
 **`bridge_errors_recent`** `{ grouped?, limit?, sinceMinutes?, jobId? }`: failures grouped by operation, code and path (default), or one row each, with LegendKeeper `requestId`s.
 
@@ -510,7 +510,9 @@ twice), `FACT_KEY_DUPLICATED`, `FACTS_PROPERTY_NOT_FOUND` (with `available`), `F
 more than 256 items), `LINK_COLLECTION_NOT_FOUND`, `LINK_COLLECTION_AMBIGUOUS`, `DOCUMENT_NOT_FOUND`,
 `DOCUMENT_AMBIGUOUS`, `VERSION_CONFLICT` (the check in the lock; read the page again and redo the change), and the name
 and tree codes of the read tools (`NOT_FOUND`, `NOT_IN_REPOSITORY`, `AMBIGUOUS`, `TREE_NOT_READY`). A job that stops
-after some writes reports `WRITTEN_IN_PART` with the writes that were made; read the page before anything else.
+after some writes reports `WRITTEN_IN_PART` with the writes that were made; read the page before anything else. A write
+whose answer was lost and could not be checked is reported as `OUTCOME_UNKNOWN` with `uncertain` (it may have been
+made), never as not written (CR-2026-11).
 
 **Protected canon.** A change that touches a protected fact (by default: `Status` set to or changed from
 `Authoritative`; an existing `Continuity Type` or `Continuity` changed) becomes a proposal **whatever the connection's
@@ -560,7 +562,9 @@ The agent guide's "Creating and changing pages" section ([bridge-guide.md](bridg
   `warning` and `verification`: written but not as planned, never retried), or `null` (not read back).
 - **Never replayed.** A job that stops part-way answers `WRITTEN_IN_PART` with `written`, `notWritten` and the
   `journal` entries; nothing is retried, and the same request with the same `operation_id` returns that result rather
-  than running again. Make a new, smaller request for what was not written.
+  than running again. Make a new, smaller request for what was not written. A write whose answer was lost and could not
+  be checked is `uncertain` (code `OUTCOME_UNKNOWN`): it may have been made, so it is never listed under `notWritten`
+  (CR-2026-11); read the pages first.
 
 ### `operation_id` (every create tool)
 
@@ -870,16 +874,19 @@ refused, not proposed.
 
 Measured against the mock LegendKeeper (test/lifecycle/costs.test.ts), every read included: to capture the proposal
 (planning, the note's place, the content search), then the job the owner's acceptance runs (its checks, the canon and
-lifecycle guards' reads, the in-lock reads before each write, the verify step and the tree's re-read).
+lifecycle guards' reads, the in-lock reads before each write, the verify step and the tree's re-read). CR-2026-11 took
+4 reads off every job without dropping a check: the guards' entry reads of the sidebar now use the approval's re-read of
+the page, made a moment before, and the tree re-reads the page once when the job ends rather than after the rename and
+the move as well.
 
 | Call                               | Capture reads | Job reads | Job writes |
 | ---------------------------------- | ------------- | --------- | ---------- |
-| `archive_page`, from Authoritative | 6             | 19        | 8          |
-| `archive_page`, from Working       | 5             | 19        | 8          |
-| `unarchive_page`, to Authoritative | 4             | 19        | 7          |
-| `unarchive_page`, to Working       | 4             | 19        | 7          |
-| `move_to_working`                  | 3             | 15        | 3          |
-| `promote_page`                     | 2             | 15        | 5          |
+| `archive_page`, from Authoritative | 6             | 15        | 8          |
+| `archive_page`, from Working       | 5             | 15        | 8          |
+| `unarchive_page`, to Authoritative | 4             | 15        | 7          |
+| `unarchive_page`, to Working       | 4             | 15        | 7          |
+| `move_to_working`                  | 3             | 11        | 3          |
+| `promote_page`                     | 2             | 11        | 5          |
 
 The writes: `archive_page` 1 rename-and-tags, 5 facts (one added), 1 note, 1 move; `unarchive_page` 1 move, 4 facts,
 1 note removal, 1 rename-and-tags; `move_to_working` 1 rename-and-tags, 1 fact, 1 move; `promote_page` 1 move, 3 facts,

@@ -51,7 +51,7 @@ import {
 } from './sidebar-state.js';
 import { inRankOrder } from '../lk/row-order.js';
 import type { WriteGuard } from './write-guard.js';
-import { assertNoUnsupportedLoss } from './guards.js';
+import { assertNoUnsupportedLoss, unsupportedGuardSides } from './guards.js';
 import type { WriteJournal } from './journal.js';
 import { callOp, isNotFound, newCallStats, type CallStats } from './lk-call.js';
 import type { LockManager } from './locks.js';
@@ -984,12 +984,9 @@ export class StepExecutor {
         }
       }
 
-      if (meta.guard && current) {
-        const incoming =
-          meta.guard === 'document' ? (params.body as { blocks?: unknown })?.blocks : params.body;
-        const existing =
-          meta.guard === 'document' ? (current.body as { blocks?: unknown })?.blocks : current.body;
-        assertNoUnsupportedLoss(op.operationId, existing, incoming, step.options, ref);
+      if (meta.guard && current?.exists) {
+        const sides = unsupportedGuardSides(meta.guard, op.operationId, params, current);
+        if (sides) assertNoUnsupportedLoss(op.operationId, sides.existing, sides.incoming, step.options, ref);
       }
 
       // v2 C2a: the bridge's own compare-and-swap for a write LegendKeeper does not version (a link collection's

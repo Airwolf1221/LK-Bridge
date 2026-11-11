@@ -126,7 +126,8 @@ describe('every followed operation', () => {
     const img = P().model.byName('Foxian 001', w.foxians)[0]!.id;
     const g = gets();
     await run('deleteAsset', { path: { assetId: img } });
-    expect(gets() - g).toBe(1);
+    // CR-2026-11 (CR-01): the delete's own read of the asset (its journal pre-image), then the asset tree's re-read.
+    expect(gets() - g).toBe(2);
     expect(store().item(P().id, img)).toBeUndefined();
     // LegendKeeper's deleteAsset deletes a folder's contents at any depth; the folder reads as 404.
     await run('deleteAsset', { path: { assetId: w.beastkin } });

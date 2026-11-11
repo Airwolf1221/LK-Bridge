@@ -1,0 +1,60 @@
+# ADR 0036: Owner decisions from the mid-point review (CR-2026-11)
+
+Status: **Proposed** (CR session, 11 November 2026). For the owner to decide. Where a fix needed one of these decisions,
+the safe option is implemented and marked "implemented"; the owner may keep it or ask for the other. The findings are in
+[docs/reviews/CR-2026-11.md](../reviews/CR-2026-11.md).
+
+## Context
+
+The mid-point review of the write layer found that the canon and lifecycle guards could be passed by side routes the
+owner's rules meant to close (ADR 0032 decision 11, ADR 0035 decision 11). Most fixes only make the existing rules hold
+on every route and need no decision. A few go one step further than the rules as written, or leave a choice that
+belongs to the owner.
+
+## Decisions for the owner
+
+1. **A page made `[BSRC]` by a route no tool declares is a canonical proposal (implemented, CR-16).** ADR 0035 decision 5
+   makes an Authoritative create through the creation tools a canonical proposal. Through `lk_api_write`, `lk_api_batch`
+   or `lk_op_*`, a page could be created named `[BSRC] …`, or renamed from a plain name to `[BSRC] …`, directly at scope
+   `write`: an Authoritative page by its prefix without the owner's approval. Implemented: such a create or rename becomes
+   a canonical proposal at every scope ("Approve and accept as canon" runs it). Alternatives: refuse it outright, naming
+   `create_resource` with `status: "authoritative"` or `promote_page`; or allow it as before (the prefix alone is not a
+   protected fact).
+2. **A Status written as a page mention (implemented, CR-11).** A mention shows the mentioned page's name, which
+   LegendKeeper fills in (a run's `name` is read-only) and which changes when that page is renamed, so the bridge cannot
+   judge it. Implemented: the lifecycle guard refuses a page mention in the Status fact (use plain text), and the canon
+   guard treats a new mention in any fact a `value` rule names as a protected change. Alternative: resolve the
+   mentioned page's name live and judge that, and also guard renames of every page some Status mentions (much more
+   reading, and fragile).
+3. **The two lifecycle indexes are changed only by hand (implemented, CR-15).** Renaming, moving or deleting
+   `[INDEX] Working` or `[INDEX] Archived` through the bridge, or giving another page one of their names, is refused: a
+   rename stopped every lifecycle tool and Working create, a decoy could be confirmed by mistake, moving an index out of
+   the repository made the guard lose track of its pages, and a cascade delete of `[INDEX] Working` deleted every Working
+   page without approval. The owner changes them in LegendKeeper and confirms them again on the dashboard. Alternative:
+   allow it as a canonical proposal.
+4. **Re-authentication for the canon and lifecycle settings (not implemented; recommended).** ADR 0028 asks the owner to
+   sign in again (within 5 minutes) for key changes and project removal. Saving the canonical rules (`PUT
+/projects/:name/canon`, where `rules: []` switches every protection off), the lifecycle settings (`PUT
+/projects/:name/lifecycle`) and raising a connection's scope need only the session. Recommended: add the canon rules
+   and the lifecycle settings to ADR 0028's list. "Approve and accept as canon" is frequent and already confirmed in the
+   dialog; leave it as it is.
+5. **A canonical approval covers the job as approved, not each page in it (not changed).** "Approve and accept as canon"
+   lets the approved job make the protected changes it shows. For a cascade delete, pages added under the deleted page
+   between the approval and the job running are deleted too, without a second look (the approval's re-read compares the
+   page itself, not its subtree). Everything a cascade deletes comes back with one `restore_resource` of the page. The
+   alternative is to bind the approval to the pages it listed and refuse any other protected page found at execution
+   (a few lines in the canon guard; a proposal that ends `conflicted` more often).
+6. **Deleting a map's, timeline's or board's content (for D1 and D2).** The `delete-document-authoritative` rule makes
+   deleting a map, timeline or board of an Authoritative page a canonical proposal. Emptying it is not judged:
+   `deleteFeature`, `deleteEvent`, `deleteLane` and `replaceBoardContent` with no shapes. Decide before D1 and D2 build
+   their tools whether these are canon too (the rule could take a `contentOps` list).
+7. **The status tags are not guarded (by design; confirm).** ADR 0035 decision 11 guards the prefix, the Status and the
+   place; the tags `CANON`, `Working` and `Archived` are not, so a raw `updateResource` can take `CANON` off an
+   Authoritative page. The lifecycle-consistency audit (E2) reports such pages. Decide whether the tags should be
+   guarded as the prefix is.
+
+## Consequences
+
+- With decisions 1 to 3 as implemented, every side route to a lifecycle or canonical state that the review found is
+  refused or proposed; the tools are unchanged.
+- Decisions 4 to 7 change nothing until the owner decides; the review lists them as open.

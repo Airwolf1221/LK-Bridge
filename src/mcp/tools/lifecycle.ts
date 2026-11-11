@@ -257,6 +257,8 @@ async function build(
           op: 'updateResource',
           params: { path: { resourceId: page.node.id }, body: updateBody },
           journalOperation: journal(renameChange ? `renamed to ${target.name}` : 'tags'),
+          // CR-2026-11 (CR-03): the tree re-reads the page once, when the job ends, for all its writes together.
+          deferTreeReread: true,
         }
       : null;
   const updateLabel = [renameChange ? `rename to ${target.name}` : '', tagsChange ? 'tags' : '']
@@ -283,6 +285,7 @@ async function build(
         op: 'moveResource',
         params: { path: { resourceId: movingId }, body: { parentId: target.parentId, ...slot } },
         journalOperation: journal(mover ? `moved ${mover.name} (the character's index) with it` : 'moved'),
+        deferTreeReread: true,
       },
       label: `move ${mover ? mover.name : page.name} under ${ctx.tree.node(pid, target.parentId).data?.rawName ?? target.parentId}`,
     });

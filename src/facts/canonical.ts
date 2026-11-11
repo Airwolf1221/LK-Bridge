@@ -25,7 +25,7 @@ import type {
   WriteGuardInLock,
   WriteGuardVerdict,
 } from '../jobs/write-guard.js';
-import { SYSTEM_PRINCIPAL } from '../jobs/types.js';
+import { SYSTEM_PRINCIPAL, type OpParams } from '../jobs/types.js';
 import { classifyName } from '../tree/classify.js';
 import { canonConfigFrom, factKey, factValueKey, type CanonicalRule } from './rules.js';
 import {
@@ -70,6 +70,8 @@ export interface FactValue {
 }
 
 const shown = (l: readonly string[]) => (l.length === 0 ? '(nothing)' : l.map((v) => `“${v}”`).join(', '));
+const hasMention = (content: readonly Record<string, unknown>[]) =>
+  content.some((r) => typeof r.mention === 'object' && r.mention !== null);
 
 /**
  * The protected changes between a page's facts `before` and `after` (pure; the shared function with a clear contract).
@@ -94,6 +96,22 @@ export function assessFactChange(
     const bt = b.map((f) => valueText(f.content)).filter((t) => t !== '');
     const at = a.map((f) => valueText(f.content)).filter((t) => t !== '');
     if (rule.kind === 'value') {
+      // CR-2026-11 (CR-11): a page mention shows the mentioned page's name, which LegendKeeper fills in itself (a run's
+      // `name` is read-only, and a mention without a label shows it) and which changes when that page is renamed. The
+      // bridge cannot judge it, so a new mention in a protected fact is a protected change.
+      const had = new Set(b.map((f) => valueSignature(f.content)));
+      if (a.some((f) => hasMention(f.content) && !had.has(valueSignature(f.content)))) {
+        out.push({
+          ruleId: rule.id,
+          key: rule.key,
+          direction: 'to',
+          value: '(a page mention)',
+          before: bt,
+          after: at,
+          text: `${rule.key} would be set to a page mention, which shows that page’s name (write ${rule.key} as plain text)`,
+        });
+        continue;
+      }
       for (const v of rule.values) {
         const vk = factValueKey(v);
         const nb = bt.filter((t) => factValueKey(t) === vk).length;
@@ -265,6 +283,19 @@ export interface CanonicalGuardDeps {
   ) => { readonly type: string | null; readonly name: string | null } | null;
 }
 
+/**
+ * CR-2026-11 (CR-09, CR-10): operations that can put pages under another page. A cascade delete, or a template copied
+ * with its children, in the same request as one of them cannot be judged from a listing made at entry.
+ */
+const RESHAPING_OPS: ReadonlySet<string> = new Set([
+  'moveResource',
+  'restoreResource',
+  'createResource',
+  'createManyResources',
+  'createResourceFromTemplate',
+  'saveResourceAsTemplate',
+]);
+
 /** v2 C2b: at most this many pages of a cascade are read at entry; any beyond count as unchecked (protected). */
 export const CASCADE_READ_LIMIT = 100;
 
@@ -293,16 +324,24 @@ export class CanonicalGuard implements WriteGuard {
         (it) =>
           SIDEBAR_WRITE_OPS.has(it.op) ||
           it.op === 'createResourceFromTemplate' ||
+          it.op === 'saveResourceAsTemplate' ||
           (it.op === 'deleteResource' && rules.some((r) => r.kind === 'delete' || r.kind === 'deleteKind')) ||
           (it.op === 'deleteDocument' && rules.some((r) => r.kind === 'deleteDocument')),
       );
-    if (guarded.length === 0) return { decision: 'allow' };
+    if (!guarded.some((it) => it.op !== 'saveResourceAsTemplate')) return { decision: 'allow' };
     const priority = input.origin.approval !== undefined ? 'P0' : 'P1';
     const changes: ProtectedChange[] = [];
     const unchecked: { i: number; why: string }[] = [];
-    const sidebars = new Map<string, SidebarProperty[] | null>();
-    const read = async (resourceId: string): Promise<SidebarProperty[] | null> => {
-      if (sidebars.has(resourceId)) return sidebars.get(resourceId)!;
+    // CR-2026-11 (CR-08): the steps of an `onError: continue` batch may fail one by one while the rest still run, so
+    // each write is judged on the page as it is now as well as on the request's simulation (which assumes every step
+    // before it succeeded, and seeds a template copy's id with the template's sidebar).
+    const each = input.jobKind === 'batch_ops' && input.onError === 'continue';
+    // CR-2026-11 (CR-09, CR-10): pages that a move, restore or create earlier in the same request may put under a page
+    // the request deletes with a cascade, or under a template it copies with its children, cannot be listed at entry.
+    const reshapes = (i: number) => input.items.some((x, j) => j !== i && RESHAPING_OPS.has(x.op));
+    const live = new Map<string, SidebarProperty[] | null>();
+    const readLive = async (resourceId: string): Promise<SidebarProperty[] | null> => {
+      if (live.has(resourceId)) return live.get(resourceId)!;
       const pre = input.prefetched?.find(
         (p) => (p.op === 'listProperties' || p.op === 'getResource') && p.path.resourceId === resourceId,
       );
@@ -321,7 +360,7 @@ export class CanonicalGuard implements WriteGuard {
         } catch (e) {
           // Not there: LegendKeeper refuses the write itself (404), so there is nothing to protect.
           if (e instanceof LkOperationError && e.lk.status === 404) {
-            sidebars.set(resourceId, []);
+            live.set(resourceId, []);
             return [];
           }
           sb = null;
@@ -331,12 +370,32 @@ export class CanonicalGuard implements WriteGuard {
           });
         }
       }
+      live.set(resourceId, sb);
+      return sb;
+    };
+    const sidebars = new Map<string, SidebarProperty[] | null>();
+    const read = async (resourceId: string): Promise<SidebarProperty[] | null> => {
+      if (sidebars.has(resourceId)) return sidebars.get(resourceId)!;
+      const sb = await readLive(resourceId);
       sidebars.set(resourceId, sb);
       return sb;
     };
     for (const it of guarded) {
+      if (it.op === 'saveResourceAsTemplate') {
+        // CR-2026-11 (CR-17): a template saved from a page in the same request carries that page's sidebar, so a copy
+        // of it later in the request is judged on it.
+        const src = it.params.path?.resourceId;
+        const tid = (it.params.body as { id?: unknown } | undefined)?.id;
+        if (src && typeof tid === 'string') sidebars.set(tid, await read(src));
+        continue;
+      }
       if (it.op === 'createResourceFromTemplate') {
-        const body = (it.params.body ?? {}) as { templateId?: unknown; id?: unknown; name?: unknown };
+        const body = (it.params.body ?? {}) as {
+          templateId?: unknown;
+          id?: unknown;
+          name?: unknown;
+          includeChildren?: unknown;
+        };
         const templateId = typeof body.templateId === 'string' ? body.templateId : null;
         if (!templateId) continue;
         const template = await read(templateId);
@@ -355,6 +414,46 @@ export class CanonicalGuard implements WriteGuard {
                 : 'a new page from a template',
           });
         }
+        // CR-2026-11 (CR-10): with its children, LegendKeeper copies every page under the template too, each with its
+        // sidebar: each is judged as a new page.
+        if (body.includeChildren === true) {
+          if (reshapes(it.i)) {
+            unchecked.push({
+              i: it.i,
+              why: 'the template is copied with its children, and the same request moves, restores or creates pages, which may change what is under it',
+            });
+          }
+          const below = await this.listDescendants(input.project, templateId, priority);
+          if (below === null) {
+            unchecked.push({
+              i: it.i,
+              why: `the pages under the template ${templateId} could not be listed`,
+            });
+          } else {
+            if (below.length > CASCADE_READ_LIMIT) {
+              unchecked.push({
+                i: it.i,
+                why: `the template has ${below.length} pages under it, more than the ${CASCADE_READ_LIMIT} the guard reads`,
+              });
+            }
+            for (const d of below.slice(0, CASCADE_READ_LIMIT)) {
+              const sb = await readLive(d.id);
+              if (!sb) {
+                unchecked.push({
+                  i: it.i,
+                  why: `the sidebar of ${d.id} (under the template) could not be read`,
+                });
+                continue;
+              }
+              for (const c of assessFactChange(rules, [], rowsOf(sb)))
+                changes.push({
+                  ...c,
+                  stepIndex: it.i,
+                  page: `${d.name ?? d.id} (new, copied with the template)`,
+                });
+            }
+          }
+        }
         // v2 C2b: the new page starts as a copy of its template, so the facts the same request writes to it (with the
         // template's ids, bound to the copy's in the job) are judged on that copy.
         if (typeof body.id === 'string') sidebars.set(body.id, template);
@@ -364,12 +463,17 @@ export class CanonicalGuard implements WriteGuard {
         const rid = it.params.path?.resourceId;
         if (!rid) continue;
         const cascade = it.params.query?.cascade === true || it.params.query?.cascade === 'true';
-        const pages = [rid];
+        const pages: { id: string; name: string | null }[] = [{ id: rid, name: null }];
         if (cascade) {
-          // The tree's list of the subtree, else (no tree, or a page outside it) a live listing of it.
-          const below =
-            this.d.descendants?.(input.project, rid) ??
-            (await this.listDescendants(input.project, rid, priority));
+          // CR-2026-11 (CR-09): the subtree as LegendKeeper holds it now (the repository tree may not have seen pages
+          // added or moved under it in the app), and none of it may change earlier in the same request.
+          if (reshapes(it.i)) {
+            unchecked.push({
+              i: it.i,
+              why: 'a cascade delete in a request that also moves, restores or creates pages, which may put pages under it first',
+            });
+          }
+          const below = await this.listDescendants(input.project, rid, priority);
           if (below === null) {
             unchecked.push({ i: it.i, why: `the pages under ${rid} could not be listed` });
           } else {
@@ -383,23 +487,29 @@ export class CanonicalGuard implements WriteGuard {
           }
         }
         const byKind = rules.some((r) => r.kind === 'deleteKind');
-        for (const id of pages) {
-          const sb = await read(id);
-          if (!sb) {
-            unchecked.push({ i: it.i, why: `the sidebar of ${id} could not be read` });
-            continue;
-          }
-          const name = this.d.pageName?.(input.project, id) ?? id;
+        for (const p of pages) {
+          const id = p.id;
+          const name = p.name ?? this.d.pageName?.(input.project, id) ?? id;
           let kind: string | null | undefined = null;
           if (byKind) {
-            kind = this.d.pageKind?.(input.project, id) ?? (await this.kindLive(input.project, id, priority));
+            kind =
+              p.name !== null
+                ? kindOfName(p.name)
+                : (this.d.pageKind?.(input.project, id) ??
+                  (await this.kindLive(input.project, id, priority)));
             if (kind === undefined) {
               unchecked.push({ i: it.i, why: `the name of ${id} could not be read` });
               continue;
             }
           }
-          for (const c of assessDelete(rules, rowsOf(sb), name, kind))
-            changes.push({ ...c, stepIndex: it.i, resourceId: id });
+          for (const sb of each ? [await read(id), await readLive(id)] : [await read(id)]) {
+            if (!sb) {
+              unchecked.push({ i: it.i, why: `the sidebar of ${id} could not be read` });
+              continue;
+            }
+            for (const c of assessDelete(rules, rowsOf(sb), name, kind))
+              changes.push({ ...c, stepIndex: it.i, resourceId: id });
+          }
         }
         continue;
       }
@@ -408,17 +518,18 @@ export class CanonicalGuard implements WriteGuard {
         const rid = it.params.path?.resourceId;
         const did = it.params.path?.documentId;
         if (!rid || !did) continue;
-        const sb = await read(rid);
-        if (!sb) {
-          unchecked.push({ i: it.i, why: `the sidebar of ${rid} could not be read` });
-          continue;
-        }
         const doc =
           this.d.documentInfo?.(input.project, rid, did) ??
           (await this.documentLive(input.project, rid, did, priority));
         const name = this.d.pageName?.(input.project, rid) ?? rid;
-        for (const c of assessDeleteDocument(rules, rowsOf(sb), name, doc?.type ?? null, doc?.name ?? did))
-          changes.push({ ...c, stepIndex: it.i, resourceId: rid });
+        for (const sb of each ? [await read(rid), await readLive(rid)] : [await read(rid)]) {
+          if (!sb) {
+            unchecked.push({ i: it.i, why: `the sidebar of ${rid} could not be read` });
+            continue;
+          }
+          for (const c of assessDeleteDocument(rules, rowsOf(sb), name, doc?.type ?? null, doc?.name ?? did))
+            changes.push({ ...c, stepIndex: it.i, resourceId: rid });
+        }
         continue;
       }
       const rid = it.params.path?.resourceId;
@@ -428,12 +539,21 @@ export class CanonicalGuard implements WriteGuard {
         unchecked.push({ i: it.i, why: `the sidebar of ${rid} could not be read` });
         continue;
       }
-      const after = applySidebarWrite(before, it.op, it.params);
-      if (!after) continue; // its target is not there: LegendKeeper refuses it, nothing changes
-      sidebars.set(rid, after);
       const name = this.d.pageName?.(input.project, rid) ?? rid;
-      for (const c of assessFactChange(rules, rowsOf(before), rowsOf(after)))
-        changes.push({ ...c, stepIndex: it.i, resourceId: rid, page: name });
+      const after = applySidebarWrite(before, it.op, it.params);
+      if (after) {
+        sidebars.set(rid, after);
+        for (const c of assessFactChange(rules, rowsOf(before), rowsOf(after)))
+          changes.push({ ...c, stepIndex: it.i, resourceId: rid, page: name });
+      }
+      if (each) {
+        // The same write on the page as it is now, as if every step before it had failed.
+        const now = await readLive(rid);
+        const alone = now ? applySidebarWrite(now, it.op, it.params) : null;
+        if (now && alone)
+          for (const c of assessFactChange(rules, rowsOf(now), rowsOf(alone)))
+            changes.push({ ...c, stepIndex: it.i, resourceId: rid, page: name });
+      }
     }
     if (changes.length === 0 && unchecked.length === 0) return { decision: 'allow' };
     const reason =
@@ -510,43 +630,16 @@ export class CanonicalGuard implements WriteGuard {
     project: string,
     resourceId: string,
     priority: 'P0' | 'P1',
-  ): Promise<string[] | null> {
-    const out: string[] = [];
-    let level = [resourceId];
-    try {
-      while (level.length > 0 && out.length <= CASCADE_READ_LIMIT) {
-        const next: string[] = [];
-        for (const parentId of level) {
-          let cursor: string | undefined;
-          for (let page = 0; page < 50; page++) {
-            const body = (await this.d.engine.internalRead(
-              project,
-              'listResources',
-              { query: { parentId, limit: 100, ...(cursor ? { cursor } : {}) } },
-              { priority },
-            )) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
-            for (const r of Array.isArray(body?.data) ? (body.data as { id?: unknown }[]) : []) {
-              if (typeof r.id === 'string' && r.id !== resourceId) {
-                out.push(r.id);
-                next.push(r.id);
-              }
-            }
-            if (body?.hasMore !== true || typeof body.nextCursor !== 'string') break;
-            cursor = body.nextCursor;
-          }
-          if (out.length > CASCADE_READ_LIMIT) break;
-        }
-        level = next;
-      }
-      return out;
-    } catch {
-      return null;
-    }
+    read: (opId: string, params: OpParams) => Promise<unknown> = (opId, params) =>
+      this.d.engine.internalRead(project, opId, params, { priority }),
+  ): Promise<{ id: string; name: string | null }[] | null> {
+    return listSubtree(read, resourceId, CASCADE_READ_LIMIT);
   }
 
   async inLock(input: WriteGuardInLock): Promise<void> {
     if (input.opId === 'deleteResource') return this.deleteInLock(input);
     if (input.opId === 'deleteDocument') return this.deleteDocumentInLock(input);
+    if (input.opId === 'createResourceFromTemplate') return this.copyInLock(input);
     if (!SIDEBAR_WRITE_OPS.has(input.opId)) return; // a template copy is checked at entry (the template is not locked)
     if (input.job.origin.canonicalApprovedBy !== undefined) return; // approved as canon (checked at entry)
     const rules = this.rules(input.job.projectId);
@@ -567,9 +660,15 @@ export class CanonicalGuard implements WriteGuard {
       } else if (c.entity && typeof c.entity === 'object') {
         prop = sidebarFrom([c.entity])[0];
       }
-    } else if (input.params.ifMatch !== undefined && input.opId.endsWith('PropertyRow')) {
-      // A versioned row write with a version the bridge did not read here: LegendKeeper's If-Match refuses it if the
-      // rows changed since the version the entry check (or the job's own bridge.expect step) confirmed.
+    } else if (
+      input.params.ifMatch !== undefined &&
+      input.opId.endsWith('PropertyRow') &&
+      input.step.options.ifMatchFrom !== undefined
+    ) {
+      // A row write whose If-Match the engine chained from this job's own previous write (or its bridge.expect check):
+      // LegendKeeper's If-Match refuses it if the rows changed since. CR-2026-11 (CR-08): only such a chain; a version
+      // the CALLER gave proves nothing about what the entry check judged (a step before it may have failed), so that
+      // write is read and judged here like any other.
       return;
     } else if (pid) {
       const got = await input.read('getProperty', { path: { resourceId: rid, propertyId: pid } });
@@ -614,12 +713,75 @@ export class CanonicalGuard implements WriteGuard {
       ...c,
       resourceId: rid,
     }));
+    // CR-2026-11 (CR-09): with a cascade, every page under it as LegendKeeper holds it now (pages may have been added or
+    // moved under it since the entry check, by the same request or in the app); more than the guard reads, or one that
+    // cannot be read, is refused.
+    const cascade = input.params.query?.cascade === true || input.params.query?.cascade === 'true';
+    if (cascade && changes.length === 0) {
+      const below = await this.listDescendants(input.job.projectId, rid, 'P1', (op, prm) =>
+        input.read(op, prm),
+      );
+      const ref = { jobId: input.job.id, stepNo: input.step.stepNo };
+      if (below === null || below.length > CASCADE_READ_LIMIT) {
+        throw new CanonicalApprovalRequiredError(
+          input.opId,
+          `the pages under ${rid} could not all be checked inside the lock (${below === null ? 'they could not be listed' : `${below.length} pages, more than ${CASCADE_READ_LIMIT}`}), so the cascade needs the owner’s canonical approval`,
+          [],
+          ref,
+        );
+      }
+      for (const d of below) {
+        const sb = await input.read('listProperties', { path: { resourceId: d.id } });
+        if (sb === undefined) continue;
+        for (const c of assessDelete(
+          rules,
+          rowsOf(sidebarFrom(sb)),
+          d.name ?? d.id,
+          d.name ? kindOfName(d.name) : null,
+        ))
+          changes.push({ ...c, resourceId: d.id });
+      }
+    }
     if (changes.length > 0) {
       throw new CanonicalApprovalRequiredError(input.opId, canonicalReason(changes), changes, {
         jobId: input.job.id,
         stepNo: input.step.stepNo,
       });
     }
+  }
+
+  /**
+   * CR-2026-11 (CR-10): a template copied with its children, judged again inside the lock: the template and every page
+   * under it as LegendKeeper holds them now, each as a new page (pages may have been moved under the template since the
+   * entry check, by the same request or in the app).
+   */
+  private async copyInLock(input: WriteGuardInLock): Promise<void> {
+    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    const body = (input.params.body ?? {}) as { templateId?: unknown; includeChildren?: unknown };
+    if (body.includeChildren !== true || typeof body.templateId !== 'string') return;
+    const rules = this.rules(input.job.projectId);
+    if (rules.length === 0) return;
+    const ref = { jobId: input.job.id, stepNo: input.step.stepNo };
+    const below = await this.listDescendants(input.job.projectId, body.templateId, 'P1', (op, prm) =>
+      input.read(op, prm),
+    );
+    if (below === null || below.length > CASCADE_READ_LIMIT) {
+      throw new CanonicalApprovalRequiredError(
+        input.opId,
+        `the pages under the template ${body.templateId} could not all be checked inside the lock, so copying it with its children needs the owner’s canonical approval`,
+        [],
+        ref,
+      );
+    }
+    const changes: ProtectedChange[] = [];
+    for (const d of [{ id: body.templateId, name: null as string | null }, ...below]) {
+      const sb = await input.read('listProperties', { path: { resourceId: d.id } });
+      if (sb === undefined) continue;
+      for (const c of assessFactChange(rules, [], rowsOf(sidebarFrom(sb))))
+        changes.push({ ...c, resourceId: d.id, page: `${d.name ?? d.id} (copied)` });
+    }
+    if (changes.length > 0)
+      throw new CanonicalApprovalRequiredError(input.opId, canonicalReason(changes), changes, ref);
   }
 
   /** v2 C2c: a document delete, judged again inside its lock on the page's facts as they are now. */
@@ -653,4 +815,46 @@ export class CanonicalGuard implements WriteGuard {
 /** v2 C2c: a page's kind from its raw name (`bsrc`, `bwrk`, `barc`, `index`, `unclassified`). */
 function kindOfName(name: string): string {
   return classifyName(name).kind;
+}
+
+/**
+ * v2 C2b, CR-2026-11: the pages under `resourceId` as LegendKeeper holds them now (not the page itself), with their
+ * names: listed level by level (`listResources` by parent, 100 a page), up to one more than `limit`; null when a listing
+ * fails. Shared by the canon and lifecycle guards (cascade deletes, template copies with their children).
+ */
+export async function listSubtree(
+  read: (opId: string, params: OpParams) => Promise<unknown>,
+  resourceId: string,
+  limit: number,
+): Promise<{ id: string; name: string | null }[] | null> {
+  const out: { id: string; name: string | null }[] = [];
+  let level = [resourceId];
+  try {
+    while (level.length > 0 && out.length <= limit) {
+      const next: string[] = [];
+      for (const parentId of level) {
+        let cursor: string | undefined;
+        for (let page = 0; page < 50; page++) {
+          const body = (await read('listResources', {
+            query: { parentId, limit: 100, ...(cursor ? { cursor } : {}) },
+          })) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown } | undefined;
+          for (const r of Array.isArray(body?.data)
+            ? (body.data as { id?: unknown; name?: unknown }[])
+            : []) {
+            if (typeof r.id === 'string' && r.id !== resourceId) {
+              out.push({ id: r.id, name: typeof r.name === 'string' ? r.name : null });
+              next.push(r.id);
+            }
+          }
+          if (body?.hasMore !== true || typeof body.nextCursor !== 'string') break;
+          cursor = body.nextCursor;
+        }
+        if (out.length > limit) break;
+      }
+      level = next;
+    }
+    return out;
+  } catch {
+    return null;
+  }
 }
