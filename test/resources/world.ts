@@ -6,8 +6,9 @@
  * - the templates the tools copy, each with a sidebar in the model: `[INDEX] AI Index`, `[BSRC] AI Character Core`,
  *   `[BSRC] AI Compact Character Reference`, `[BSRC] AI General Source` (PROPERTIES with a Status row, and two link
  *   collections) and `[BSRC] AI Note` (PROPERTIES without a Status row); listed by `listTemplates`;
- * - a template copy as LegendKeeper makes it: the resource (A2's model) and its sidebar copied with NEW property, row
- *   and item ids and the same ranks, answered by `createResourceFromTemplate` and every later read;
+ * - a template copy as LegendKeeper makes it: the resource (A2's model) and its sidebar copied with the template's own
+ *   property, row and item ids (C2d: the owner's sandbox run of 11 November 2026 found LegendKeeper reuses them; ids
+ *   are unique only within a page) and the same ranks, answered by `createResourceFromTemplate` and every later read;
  * - the Character type with its Index, Core and Compact templates, and its taxonomy seeded from the tree and reviewed
  *   (Beastkin, Foxians, Qishen, Elves, Moon Elves, Humans; Undetermined / Unknown reserved).
  */
@@ -51,18 +52,31 @@ export const LIFECYCLE = { working: 'working1', archived: 'archive1' } as const;
 let copies = 0;
 const fresh = (p: string) => `${p}${(++copies).toString(36).padStart(7 - p.length + 1, '0')}`.slice(0, 8);
 
-/** Copies a template's modelled sidebar onto a new page: new ids, the same ranks, keys, values and items. */
+/** Test seam: copies get new ids (the assumption before the owner's run) instead of the template's (LegendKeeper). */
+export const freshCopyIds = { on: false };
+
+/**
+ * Copies a template's modelled sidebar onto a new page: the template's ids (C2d: LegendKeeper reuses them), ranks,
+ * keys, values and items.
+ */
 function copySidebar(sb: SidebarModel, templateId: string, pageId: string): void {
   const t = sb.pages.get(templateId);
   if (!t) return;
+  // C2d (the owner's sandbox run of 11 November 2026, A1): LegendKeeper REUSES the template's property, row and item ids
+  // in a copy; ids are unique only within a page. `freshCopyIds` models the old assumption (new ids), for the tests that
+  // show the copy check maps them either way.
   const copy: MSidebar = {
     version: 1,
-    props: t.props.map((p) => ({
-      ...structuredClone(p),
-      id: fresh('q'),
-      ...(p.rows ? { rows: p.rows.map((r) => ({ ...structuredClone(r), id: fresh('w') })) } : {}),
-      ...(p.items ? { items: p.items.map((i) => ({ ...structuredClone(i), id: fresh('j') })) } : {}),
-    })),
+    props: t.props.map((p) =>
+      freshCopyIds.on
+        ? {
+            ...structuredClone(p),
+            id: fresh('q'),
+            ...(p.rows ? { rows: p.rows.map((r) => ({ ...structuredClone(r), id: fresh('w') })) } : {}),
+            ...(p.items ? { items: p.items.map((i) => ({ ...structuredClone(i), id: fresh('j') })) } : {}),
+          }
+        : structuredClone(p),
+    ),
   };
   sb.pages.set(pageId, copy);
 }

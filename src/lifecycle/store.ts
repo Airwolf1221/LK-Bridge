@@ -57,6 +57,8 @@ export interface LifecycleRecordInput {
   readonly noteContent?: unknown;
   readonly target: LifecycleTarget;
   readonly detail?: Readonly<Record<string, unknown>>;
+  /** C2d (ADR 0037): the set record this page's record belongs to (a whole-set change), or absent. */
+  readonly setId?: number | null;
 }
 
 export interface LifecycleRecord extends LifecycleRecordInput {
@@ -101,6 +103,7 @@ interface RecordRow {
   created_at: number;
   updated_at: number;
   completed_at: number | null;
+  set_id?: number | null;
 }
 
 function parse<T>(text: string | null, fallback: T): T {
@@ -151,6 +154,105 @@ function toRecord(r: RecordRow): LifecycleRecord {
       tagsRemove: [],
       tagsAdd: [],
     }),
+    detail: parse<Record<string, unknown>>(r.detail, {}),
+    setId: r.set_id ?? null,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    completedAt: r.completed_at,
+  };
+}
+
+// ============================================================================================ sets (C2d, ADR 0037)
+
+/** One page of a set, as captured. `role`: an index (no lifecycle state of its own) or a content page. */
+export interface SetPage {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly name: string;
+  readonly kind: string;
+  readonly role: 'index' | 'page';
+}
+
+/** What a set change aims at: where its root goes, the state its content pages take, and each page's own target. */
+export interface SetTarget {
+  readonly parentId: string;
+  readonly state: 'authoritative' | 'working' | 'archived';
+  readonly pages: Readonly<Record<string, LifecycleTarget>>;
+}
+
+export interface LifecycleSetInput {
+  readonly rootId: string;
+  readonly rootName: string;
+  readonly action: LifecycleAction;
+  readonly date: string;
+  readonly previousState: LifecycleState;
+  readonly previousParentId: string | null;
+  readonly previousRank: string | null;
+  readonly pages: readonly SetPage[];
+  readonly target: SetTarget;
+  readonly summary?: Readonly<Record<string, unknown>>;
+  readonly detail?: Readonly<Record<string, unknown>>;
+}
+
+export interface LifecycleSet extends LifecycleSetInput {
+  readonly id: number;
+  readonly projectId: string;
+  readonly principalId: string;
+  readonly approver: string | null;
+  readonly jobId: string | null;
+  readonly jobs: readonly string[];
+  readonly proposalId: string | null;
+  readonly state: 'incomplete' | 'complete';
+  readonly createdAt: number;
+  readonly updatedAt: number;
+  readonly completedAt: number | null;
+}
+
+interface SetRow {
+  id: number;
+  project_id: string;
+  root_id: string;
+  root_name: string;
+  action: LifecycleAction;
+  date: string;
+  principal_id: string;
+  approver: string | null;
+  job_id: string | null;
+  jobs: string;
+  proposal_id: string | null;
+  state: 'incomplete' | 'complete';
+  previous_state: LifecycleState;
+  previous_parent_id: string | null;
+  previous_rank: string | null;
+  pages: string;
+  target: string;
+  summary: string | null;
+  detail: string | null;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+}
+
+function toSet(r: SetRow): LifecycleSet {
+  return {
+    id: r.id,
+    projectId: r.project_id,
+    rootId: r.root_id,
+    rootName: r.root_name,
+    action: r.action,
+    date: r.date,
+    principalId: r.principal_id,
+    approver: r.approver,
+    jobId: r.job_id,
+    jobs: parse<string[]>(r.jobs, []),
+    proposalId: r.proposal_id,
+    state: r.state,
+    previousState: r.previous_state,
+    previousParentId: r.previous_parent_id,
+    previousRank: r.previous_rank,
+    pages: parse<SetPage[]>(r.pages, []),
+    target: parse<SetTarget>(r.target, { parentId: '', state: 'archived', pages: {} }),
+    summary: parse<Record<string, unknown>>(r.summary, {}),
     detail: parse<Record<string, unknown>>(r.detail, {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -246,8 +348,9 @@ export class LifecycleStore {
       .prepare(
         `INSERT INTO lifecycle_records (project_id, page_id, page_name, action, date, principal_id, approver, job_id,
            jobs, proposal_id, state, previous_state, previous_parent_id, previous_rank, previous_name, previous_prefix,
-           previous_facts, tags_removed, tags_added, note_block_id, note_content, target, detail, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'incomplete', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           previous_facts, tags_removed, tags_added, note_block_id, note_content, target, detail, created_at, updated_at,
+           set_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'incomplete', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         projectId,
@@ -274,8 +377,173 @@ export class LifecycleStore {
         input.detail ? JSON.stringify(input.detail) : null,
         at,
         at,
+        input.setId ?? null,
       );
     return this.record(projectId, Number(r.lastInsertRowid))!;
+  }
+
+  // ------------------------------------------------------------------------------------------ sets (C2d)
+
+  /**
+   * `bridge.record` begin_set: the set record and one record per page (linked to it), incomplete, in one transaction;
+   * or (a resume, `resumeOf` naming the set) the existing ones with this job added. The same job starting again (a
+   * restart re-runs this step) gets the rows it already wrote.
+   */
+  beginSet(
+    projectId: string,
+    input: LifecycleSetInput & {
+      readonly principalId: string;
+      readonly approver: string | null;
+      readonly jobId: string;
+      readonly proposalId: string | null;
+      readonly resumeOf?: number;
+      readonly records: readonly LifecycleRecordInput[];
+    },
+  ): { set: LifecycleSet; records: LifecycleRecord[] } {
+    return this.db.transaction(() => {
+      const at = this.now();
+      if (input.resumeOf !== undefined) {
+        const had = this.set(projectId, input.resumeOf);
+        if (!had) throw new Error(`lifecycle set ${input.resumeOf} is not in project ${projectId}`);
+        const jobs = had.jobs.includes(input.jobId) ? had.jobs : [...had.jobs, input.jobId];
+        this.db
+          .prepare(
+            `UPDATE lifecycle_sets SET job_id = ?, jobs = ?, approver = COALESCE(?, approver),
+               proposal_id = COALESCE(?, proposal_id), state = 'incomplete', updated_at = ?, detail = ?
+             WHERE project_id = ? AND id = ?`,
+          )
+          .run(
+            input.jobId,
+            JSON.stringify(jobs),
+            input.approver,
+            input.proposalId,
+            at,
+            JSON.stringify({ ...(had.detail ?? {}), ...(input.detail ?? {}), resumed: true }),
+            projectId,
+            had.id,
+          );
+        for (const rec of this.setRecords(projectId, had.id)) {
+          if (rec.state === 'complete' && rec.jobs.length > 0) continue;
+          this.begin(projectId, {
+            ...rec,
+            principalId: input.principalId,
+            approver: input.approver,
+            jobId: input.jobId,
+            proposalId: input.proposalId,
+            resumeOf: rec.id,
+          });
+        }
+        return { set: this.set(projectId, had.id)!, records: this.setRecords(projectId, had.id) };
+      }
+      const again = this.db
+        .prepare('SELECT * FROM lifecycle_sets WHERE project_id = ? AND job_id = ? AND root_id = ?')
+        .get(projectId, input.jobId, input.rootId) as SetRow | undefined;
+      if (again) return { set: toSet(again), records: this.setRecords(projectId, again.id) };
+      const r = this.db
+        .prepare(
+          `INSERT INTO lifecycle_sets (project_id, root_id, root_name, action, date, principal_id, approver, job_id, jobs,
+             proposal_id, state, previous_state, previous_parent_id, previous_rank, pages, target, summary, detail,
+             created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'incomplete', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          projectId,
+          input.rootId,
+          input.rootName.slice(0, 500),
+          input.action,
+          input.date,
+          input.principalId,
+          input.approver,
+          input.jobId,
+          JSON.stringify([input.jobId]),
+          input.proposalId,
+          input.previousState,
+          input.previousParentId,
+          input.previousRank,
+          JSON.stringify(input.pages),
+          JSON.stringify(input.target),
+          input.summary ? JSON.stringify(input.summary) : null,
+          input.detail ? JSON.stringify(input.detail) : null,
+          at,
+          at,
+        );
+      const setId = Number(r.lastInsertRowid);
+      for (const rec of input.records) {
+        this.begin(projectId, {
+          ...rec,
+          setId,
+          principalId: input.principalId,
+          approver: input.approver,
+          jobId: input.jobId,
+          proposalId: input.proposalId,
+        });
+      }
+      return { set: this.set(projectId, setId)!, records: this.setRecords(projectId, setId) };
+    })();
+  }
+
+  /** `bridge.record` complete_set: the set and every page's record are done. */
+  completeSet(
+    projectId: string,
+    id: number,
+    detail?: Readonly<Record<string, unknown>>,
+  ): LifecycleSet | null {
+    const had = this.set(projectId, id);
+    if (!had) return null;
+    return this.db.transaction(() => {
+      const at = this.now();
+      this.db
+        .prepare(
+          `UPDATE lifecycle_sets SET state = 'complete', completed_at = ?, updated_at = ?, detail = ?
+           WHERE project_id = ? AND id = ?`,
+        )
+        .run(at, at, JSON.stringify({ ...(had.detail ?? {}), ...(detail ?? {}) }), projectId, id);
+      for (const rec of this.setRecords(projectId, id))
+        if (rec.state !== 'complete') this.complete(projectId, rec.id, detail);
+      return this.set(projectId, id);
+    })();
+  }
+
+  set(projectId: string, id: number): LifecycleSet | null {
+    const r = this.db
+      .prepare('SELECT * FROM lifecycle_sets WHERE project_id = ? AND id = ?')
+      .get(projectId, id) as SetRow | undefined;
+    return r ? toSet(r) : null;
+  }
+
+  /** The set a job is working on. */
+  setByJob(projectId: string, jobId: string): LifecycleSet | null {
+    const r = this.db
+      .prepare('SELECT * FROM lifecycle_sets WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1')
+      .get(projectId, jobId) as SetRow | undefined;
+    return r ? toSet(r) : null;
+  }
+
+  /** The page records of a set, in page order. */
+  setRecords(projectId: string, setId: number): LifecycleRecord[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM lifecycle_records WHERE project_id = ? AND set_id = ? ORDER BY id')
+        .all(projectId, setId) as RecordRow[]
+    ).map(toRecord);
+  }
+
+  /** A root's newest set records (complete or not), newest first. */
+  setsForRoot(projectId: string, rootId: string, limit = 20): LifecycleSet[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM lifecycle_sets WHERE project_id = ? AND root_id = ? ORDER BY id DESC LIMIT ?')
+        .all(projectId, rootId, limit) as SetRow[]
+    ).map(toSet);
+  }
+
+  /** The newest set records of a project (the dashboard). */
+  recentSets(projectId: string, o: { limit?: number; offset?: number } = {}): LifecycleSet[] {
+    return (
+      this.db
+        .prepare('SELECT * FROM lifecycle_sets WHERE project_id = ? ORDER BY id DESC LIMIT ? OFFSET ?')
+        .all(projectId, o.limit ?? 100, o.offset ?? 0) as SetRow[]
+    ).map(toSet);
   }
 
   /** `bridge.record` complete: the change is done. */

@@ -445,6 +445,10 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- sandbox
 sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
 ```
 
+It needs no workaround (C2d, 11 November 2026): `lkbridge` cannot write to `node_modules` (the build user owns it), so
+the sandbox config is loaded in memory (`--configLoader runner`) and Vitest's file caches are off; nothing is written
+there. It no longer warns that `SECRETS_MASTER_KEY` is not set (the sandbox runtimes keep no secrets of their own).
+
 The suite finds the project's key exactly as the bridge does (OPS2): the key kept in the bridge's encrypted store,
 opened with `SECRETS_MASTER_KEY` from the env file, or, only when nothing is stored for the project, the env file's
 `LK_PROJECT_TEST_API_KEY`. So it works after `env-sync.sh --retire-imported-keys` has commented the key lines out. The

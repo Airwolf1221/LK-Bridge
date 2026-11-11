@@ -347,11 +347,8 @@ export class TreeModel {
     withChildren: boolean,
   ): Res {
     const r = this.seed({ id, name, parentId, props: false });
-    r.props = structuredClone(t.props).map((p) => ({
-      ...p,
-      id: newId('p'),
-      rows: p.rows.map((w) => ({ ...w, id: newId('w') })),
-    }));
+    // C2d (A1): LegendKeeper reuses the template's property and row ids in a copy (unique only within a page).
+    r.props = structuredClone(t.props);
     if (withChildren) {
       for (const c of this.children(t.id)) this.copyTemplate(c, newId('c'), c.name, r.id, true);
     }

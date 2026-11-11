@@ -34,7 +34,7 @@ import {
   type LifecycleConfig,
   type StoredLifecycle,
 } from './settings.js';
-import { LifecycleStore, type LifecycleRecordInput, type LinkRow } from './store.js';
+import { LifecycleStore, type LifecycleRecordInput, type LifecycleSetInput, type LinkRow } from './store.js';
 
 export * from './settings.js';
 export * from './store.js';
@@ -281,7 +281,57 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
       });
       return { recordId: rec.id, state: done?.state ?? 'complete' };
     }
-    throw new LifecycleError('INVALID_RECORD', 'A bridge.record step is begin or complete.');
+    // C2d (ADR 0037): a whole set: the set record and every page's own record (linked to it), begun and completed
+    // together; a resume adds this job to the set and to each page's record.
+    if (body.action === 'begin_set') {
+      const r = body.record as {
+        set?: LifecycleSetInput;
+        records?: LifecycleRecordInput[];
+        resumeOf?: number;
+      };
+      if (!r?.set || typeof r.set.rootId !== 'string' || !Array.isArray(r.records)) {
+        throw new LifecycleError(
+          'INVALID_RECORD',
+          'The lifecycle set record of this job is not valid; nothing was written.',
+        );
+      }
+      const origin = job.origin as { canonicalApprovedBy?: unknown; approval?: { proposalId?: unknown } };
+      const approver =
+        typeof origin.canonicalApprovedBy === 'string'
+          ? origin.canonicalApprovedBy
+          : (job.approvedBy ?? null);
+      const proposalId = typeof origin.approval?.proposalId === 'string' ? origin.approval.proposalId : null;
+      const out = store.beginSet(job.projectId, {
+        ...r.set,
+        records: r.records,
+        principalId: job.principalId,
+        approver,
+        jobId: job.id,
+        proposalId,
+        ...(typeof r.resumeOf === 'number' ? { resumeOf: r.resumeOf } : {}),
+      });
+      return { setId: out.set.id, state: out.set.state, recordIds: out.records.map((x) => x.id) };
+    }
+    if (body.action === 'complete_set') {
+      const set = store.setByJob(job.projectId, job.id);
+      if (!set) throw new LifecycleError('NO_RECORD', 'This job wrote no lifecycle set record to complete.');
+      const steps = d.engine.stepResults(job.projectId, job.id) ?? [];
+      const verification = steps
+        .map((s) => (s.value as { verification?: { status?: unknown } } | null)?.verification)
+        .find((v) => v !== undefined);
+      const extra = (body.record ?? {}) as Obj;
+      const done = store.completeSet(job.projectId, set.id, {
+        ...extra,
+        ...(verification
+          ? { verified: verification.status === 'verified', verification: verification.status }
+          : {}),
+      });
+      return { setId: set.id, state: done?.state ?? 'complete' };
+    }
+    throw new LifecycleError(
+      'INVALID_RECORD',
+      'A bridge.record step is begin, complete, begin_set or complete_set.',
+    );
   };
 
   // ------------------------------------------------------------------------------------------ the link index

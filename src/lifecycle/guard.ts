@@ -25,7 +25,7 @@ import type {
   WriteGuardInLock,
   WriteGuardVerdict,
 } from '../jobs/write-guard.js';
-import { factKey, factValueKey } from '../facts/rules.js';
+import { canonConfigFrom, factKey, factValueKey, statusTagsGuarded } from '../facts/rules.js';
 import {
   SIDEBAR_WRITE_OPS,
   applySidebarWrite,
@@ -50,9 +50,10 @@ export interface LifecycleChange {
   /**
    * What changes: the Status, the prefix, or the place. CR-2026-11: `index`, a lifecycle index itself (renamed, moved,
    * deleted, or a second page given its name), always refused; `canon`, a page made `[BSRC]` (Authoritative) by a create
-   * or rename that no lifecycle tool or creation tool declares: a canonical proposal.
+   * or rename that no lifecycle tool or creation tool declares: a canonical proposal. C2d (ADR 0036 decision 7): `tag`,
+   * a status tag added or removed.
    */
-  readonly what: 'status' | 'prefix' | 'place' | 'create' | 'index' | 'canon';
+  readonly what: 'status' | 'prefix' | 'place' | 'create' | 'index' | 'canon' | 'tag';
   /** The state it moves to, as far as the change tells. */
   readonly to: State | null;
   readonly text: string;
@@ -140,6 +141,55 @@ export function prefixChange(
     to: toKind === 'bsrc' ? 'authoritative' : null,
     tool: toKind === 'bsrc' ? 'promote_page' : TOOL_FROM.working,
   };
+}
+
+/**
+ * C2d (ADR 0036 decision 7, the owner's): the status tags a tag list holds, by the state each names (the lifecycle
+ * settings' tags compared without case, invisible characters and look-alikes, as CR-12 and CR-14 fold keys and
+ * prefixes: `canon`, `ＣＡＮＯＮ` and a Cyrillic `С` read as CANON).
+ */
+function statusTagStates(c: LifecycleConfig, tags: readonly string[]): Map<State, string> {
+  const out = new Map<State, string>();
+  const want: [State, string][] = [
+    ['authoritative', factKey(c.tags.canon)],
+    ['working', factKey(c.tags.working)],
+    ['archived', factKey(c.tags.archived)],
+  ];
+  for (const t of tags) {
+    const k = factKey(t);
+    for (const [s, w] of want) if (k === w && !out.has(s)) out.set(s, t);
+  }
+  return out;
+}
+
+const TAG_TOOL_ADD: Readonly<Record<State, string>> = {
+  authoritative: 'promote_page (or create_resource with status "authoritative")',
+  working: 'move_to_working (or create_resource with status "working")',
+  archived: 'archive_page',
+};
+const TAG_TOOL_REMOVE: Readonly<Record<State, string>> = {
+  authoritative: 'move_to_working or archive_page',
+  working: 'promote_page or archive_page',
+  archived: 'unarchive_page',
+};
+
+/**
+ * C2d (ADR 0036 decision 7): the status tags added or removed between two tag lists (pure). An added tag moves the page
+ * to that tag's state; a removed one to no state the change tells (`to: null`).
+ */
+export function statusTagChanges(
+  c: LifecycleConfig,
+  before: readonly string[],
+  after: readonly string[],
+): { readonly tag: string; readonly added: boolean; readonly to: State | null; readonly tool: string }[] {
+  const b = statusTagStates(c, before);
+  const a = statusTagStates(c, after);
+  const out: { tag: string; added: boolean; to: State | null; tool: string }[] = [];
+  for (const s of ['authoritative', 'working', 'archived'] as const) {
+    if (a.has(s) && !b.has(s)) out.push({ tag: a.get(s)!, added: true, to: s, tool: TAG_TOOL_ADD[s] });
+    if (b.has(s) && !a.has(s)) out.push({ tag: b.get(s)!, added: false, to: null, tool: TAG_TOOL_REMOVE[s] });
+  }
+  return out;
 }
 
 /** The lifecycle change of a move (pure), or null: into or out of the Working or Archive area, or between them. */
@@ -486,6 +536,22 @@ export class LifecycleGuard implements WriteGuard {
       return sb;
     };
     const created = new Set<string>();
+    // C2d (ADR 0036 decision 7): the status tags, when the project's `statusTags` rule is on.
+    const tagsGuarded = statusTagsGuarded(canonConfigFrom(this.d.settings(input.project)).active);
+    const tagChanges = (rid: string, page: string, before: readonly string[], after: unknown, i: number) => {
+      if (!tagsGuarded || !Array.isArray(after)) return;
+      const next = (after as unknown[]).filter((t): t is string => typeof t === 'string');
+      for (const t of statusTagChanges(c, before, next))
+        out.push({
+          resourceId: rid,
+          page,
+          what: 'tag',
+          to: t.to,
+          text: `the status tag ${t.tag} would be ${t.added ? 'added' : 'removed'}`,
+          tool: t.tool,
+          stepIndex: i,
+        });
+    };
     // The area of a page created earlier in the same request (for a batch whose items nest).
     const createdArea = new Map<string, Area>();
     const name = (id: string) => this.d.node(input.project, id)?.rawName ?? id;
@@ -556,6 +622,8 @@ export class LifecycleGuard implements WriteGuard {
             createdArea.set(x.id, area);
           }
           out.push(...this.createChanges(c, id, raw, area, i));
+          // C2d: a create body that adds a status tag (createResourceFromTemplate takes no tags).
+          tagChanges(id, raw || id, [], x.tags, i);
         }
         if (templateId) {
           const id = typeof body.id === 'string' ? body.id : null;
@@ -643,6 +711,25 @@ export class LifecycleGuard implements WriteGuard {
         }
         continue;
       }
+      // C2d (ADR 0036 decision 7): status tags added or removed, judged on the page's tags now (the tree's, else read;
+      // a page created earlier in the same request starts with none) and again inside the lock.
+      if (it.op === 'updateResource' && Array.isArray(body.tags) && tagsGuarded) {
+        const rid = it.params.path?.resourceId;
+        if (rid) {
+          const before = created.has(rid) ? [] : await this.tagsNow(input.project, rid, internal);
+          if (before === null) {
+            out.push({
+              resourceId: rid,
+              page: name(rid),
+              what: 'tag',
+              to: null,
+              text: 'the page’s tags would be replaced, and the bridge could not read its status tags now',
+              tool: 'the lifecycle tools for the status tags, or try again',
+              stepIndex: i,
+            });
+          } else tagChanges(rid, name(rid), before, body.tags, i);
+        }
+      }
       if (it.op === 'updateResource' && typeof body.name === 'string') {
         const rid = it.params.path?.resourceId;
         if (!rid) continue;
@@ -727,6 +814,23 @@ export class LifecycleGuard implements WriteGuard {
       }
     }
     return out;
+  }
+
+  /** C2d: a page's tags now: the tree's, else read live (null when they cannot be told). */
+  private async tagsNow(
+    project: string,
+    id: string,
+    read: (opId: string, params: OpParams) => Promise<unknown>,
+  ): Promise<string[] | null> {
+    const n = this.d.node(project, id);
+    if (n) return [...n.tags];
+    try {
+      const r = (await read('getResource', { path: { resourceId: id } })) as { tags?: unknown } | undefined;
+      if (!r) return [];
+      return Array.isArray(r.tags) ? r.tags.filter((t): t is string => typeof t === 'string') : [];
+    } catch {
+      return null;
+    }
   }
 
   /** CR-2026-11: a page's name now: the tree's, else read live (null when it cannot be told). */
@@ -817,6 +921,28 @@ export class LifecycleGuard implements WriteGuard {
       const ix = this.indexChange(c, rid, 'deleted');
       if (ix) refuse(ix);
       return;
+    }
+    // C2d (ADR 0036 decision 7): status tags, judged on the page's tags as LegendKeeper holds them now.
+    if (
+      input.opId === 'updateResource' &&
+      Array.isArray(body.tags) &&
+      statusTagsGuarded(canonConfigFrom(this.d.settings(project)).active)
+    ) {
+      const before = Array.isArray(current?.tags)
+        ? (current.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+        : ((
+            (await input.read('getResource', { path: { resourceId: rid } })) as { tags?: unknown } | undefined
+          )?.tags as string[] | undefined);
+      const next = (body.tags as unknown[]).filter((t): t is string => typeof t === 'string');
+      for (const t of statusTagChanges(c, Array.isArray(before) ? before : [], next))
+        refuse({
+          resourceId: rid,
+          page: typeof current?.name === 'string' ? current.name : rid,
+          what: 'tag',
+          to: t.to,
+          text: `the status tag ${t.tag} would be ${t.added ? 'added' : 'removed'}`,
+          tool: t.tool,
+        });
     }
     if (input.opId === 'updateResource' && typeof body.name === 'string') {
       const ix = this.indexChange(c, rid, `renamed to ${body.name}`);
@@ -960,6 +1086,7 @@ function refusal(changes: readonly LifecycleChange[]): string {
   return (
     `refused: this changes a page’s lifecycle state (${parts.join('; ')}${changes.length > 3 ? `; and ${changes.length - 3} more` : ''}). ` +
     'Lifecycle changes (Working, Archived, and Working to Authoritative) happen only through the lifecycle tools ' +
-    '(archive_page, unarchive_page, move_to_working, promote_page) and the creation tools’ status; nothing was written'
+    '(archive_page, unarchive_page, move_to_working, promote_page) and the creation tools’ status, and so do the ' +
+    'status tags CANON, Working and Archived (every other tag stays free); nothing was written'
   );
 }

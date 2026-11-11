@@ -133,6 +133,31 @@ const childrenCheck = z
   .strict();
 
 /**
+ * C2d (ADR 0037; ADR 0036 decision 5): the WHOLE set under a page must still be exactly the pages the plan captured:
+ * every page under `resourceId` (not the page itself), each under the same parent, with the same name and tags (each
+ * compared when given). A page added, gone or moved, renamed or retagged is a conflict and nothing is written.
+ */
+const subtreeCheck = z
+  .object({
+    label,
+    kind: z.literal('subtree'),
+    resourceId: id,
+    pages: z
+      .array(
+        z
+          .object({
+            id,
+            parentId: id.nullable(),
+            name: z.string().max(500).optional(),
+            tags: z.array(z.string().max(100)).max(50).optional(),
+          })
+          .strict(),
+      )
+      .max(500),
+  })
+  .strict();
+
+/**
  * v2 C2c: one block of a document: `first` (it is still the document's first block), `content` (it is still exactly
  * this block, compared as C1's verify compares blocks), or `absent` (no such block); `empty`: the document has no
  * blocks at all (a note then goes in as its only block).
@@ -157,11 +182,13 @@ export const expectCheckSchema = z.union([
   sidebarCheck,
   resourceCheck,
   childrenCheck,
+  subtreeCheck,
   blockCheck,
 ]);
 
+// C2d: a whole set checks up to a hundred pages' rows and notes in one step (it was 50).
 export const expectParamsSchema = z
-  .object({ body: z.object({ checks: z.array(expectCheckSchema).min(1).max(50) }).strict() })
+  .object({ body: z.object({ checks: z.array(expectCheckSchema).min(1).max(400) }).strict() })
   .strict();
 
 const expectedProperty = z
@@ -276,7 +303,8 @@ export const recordParamsSchema = z
   .object({
     body: z
       .object({
-        action: z.enum(['begin', 'complete']),
+        // C2d: `begin_set` / `complete_set`, a whole set's record and its pages' records together.
+        action: z.enum(['begin', 'complete', 'begin_set', 'complete_set']),
         record: z.record(z.string(), z.unknown()),
       })
       .strict(),
@@ -297,7 +325,21 @@ export type ExpectCheck =
   | SidebarCheck
   | ResourceCheck
   | ChildrenCheck
+  | SubtreeCheck
   | BlockCheck;
+
+/** C2d: the whole set under a page, as captured. */
+export interface SubtreeCheck {
+  readonly label: string;
+  readonly kind: 'subtree';
+  readonly resourceId: string;
+  readonly pages: readonly {
+    readonly id: string;
+    readonly parentId: string | null;
+    readonly name?: string;
+    readonly tags?: readonly string[];
+  }[];
+}
 
 /** v2 C2c: a page's own fields as the plan saw them. */
 export interface ResourceCheck {

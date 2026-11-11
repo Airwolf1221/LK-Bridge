@@ -27,7 +27,7 @@ describe('factsVersion', () => {
   it('is stable across reads, and the same from getResource (stored order) and listProperties (set_facts)', async () => {
     const a = await version(RHEASHIRA.page);
     const b = await version(RHEASHIRA.page);
-    expect(a).toMatch(/^fv1_[0-9a-f]{24}$/);
+    expect(a).toMatch(/^fv2_[0-9a-f]{24}$/);
     expect(b).toBe(a);
     // set_facts plans on listProperties; Rheashira's rows are stored out of rank order.
     const dry = await call('set_facts', { page: RHEASHIRA.page, facts: { Mood: 'Calm' }, dryRun: true });
@@ -71,7 +71,7 @@ describe('factsVersion', () => {
     const u = await call('set_facts', {
       page: P.miyabi,
       facts: { Notes: 'Mine' },
-      baseFactsVersion: 'fv1_000000000000000000000000',
+      baseFactsVersion: 'fv2_000000000000000000000000',
     });
     expect(u.body.error).toMatchObject({ code: 'VERSION_CONFLICT', reason: 'base_unknown' });
   });

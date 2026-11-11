@@ -225,6 +225,11 @@ accept it, with a separate "Approve and accept as canon". Never retry such a wri
 tell the person it is waiting for the owner, and follow it with `bridge_proposal_status`. Only the owner makes a page
 `Authoritative`; the page-creation tools make Working pages unless you pass `status: "authoritative"`.
 
+**An approval covers only what it listed.** The owner approves exactly the pages a proposal shows. If, by the time it
+runs, a page it would touch was added (for example a new page under a page being deleted with `cascade`, or under a set
+being archived), removed or moved, it does not run: the proposal becomes `conflicted` and nothing is written. Read the
+pages again and propose afresh.
+
 ## Creating and changing pages
 
 All of these work inside the AI REPOSITORY only, put a new or moved page in its alphabetical place (indexes first) in
@@ -280,6 +285,8 @@ A page is in one of three states, and its prefix, Status, status tag and place a
 | Working       | `[BWRK]` | `Working`       | `Working`  | directly under `[INDEX] Working`, flat  |
 | Archived      | `[BARC]` | `Archived`      | `Archived` | directly under `[INDEX] Archived`, flat |
 
+(The one exception to "flat": a whole set kept together, below.)
+
 **Four tools change a page's state, and nothing else can.** Each one is always a proposal that only the owner can
 accept as canon, whatever your scope: you get `proposal_captured` with `requiresCanonicalApproval`. Never retry it;
 follow it with `bridge_proposal_status`. `dryRun: true` shows the whole plan (new name and place, every fact before and
@@ -297,18 +304,32 @@ after, the tags, the archive note) and proposes nothing.
   `Authoritative`, Last Major Revision today). Without `destination` you are told where it was before
   `move_to_working`, if anywhere. A Working character's index goes with its Core.
 
+**Whole sets: `subtree: true`.** A set is a page and every page beneath it; the usual one is a character (its
+`[INDEX] {name}`, Core and specialist pages). Pass `subtree: true` to any of the four tools to change the whole set as
+ONE proposal (the owner accepts it as canon once). The set stays together: its root moves as a group (under
+`[INDEX] Archived` or `[INDEX] Working`, or to `destination` for `promote_page`, or back to its old place for
+`unarchive_page`) and nothing beneath it moves. Each content page gets the single-page treatment by its own previous
+state; an `[INDEX]` page stays `[INDEX]` with no Status, only its status tag changes, and archiving adds a short note at
+its top. A set must be all in one state, at most 100 pages, with no unclassified, inconsistent or half-changed page
+(refused with `SET_NOT_ELIGIBLE`, listing each page). Use `dryRun: true` first: it shows every page's plan, the page
+count and the estimated reads and writes. Changing ONE page of a set takes it out of the set; unarchiving one page alone
+from inside an archived set needs `destination`.
+
 **Related pages.** `archive_page` and `move_to_working` list the pages that link to or mention the page (from the
-bridge's link index, with how fresh it is, and one text search marked "may be incomplete"). They are never edited:
-tell the person, or change them yourself where a page should no longer depend on this one.
+bridge's link index, with how fresh it is, and one text search marked "may be incomplete"); for a set, every page's,
+leaving out links between pages of the set. They are never edited: tell the person, or change them yourself where a
+page should no longer depend on this one.
 
 **Side routes are refused.** Changing Status to or from `Working` or `Archived` (or `Working` to `Authoritative`) with
 `set_facts` or any low-level tool, renaming a page to or from `[BWRK]` or `[BARC]`, and moving a page into, out of or
 between `[INDEX] Working` and `[INDEX] Archived` are all refused (`POLICY_DENIED`), naming the tool to use instead.
-Other changes to Working and Archived pages (their text, other facts, links, tags) work as usual.
+**The status tags are guarded too**: adding or removing `CANON`, `Working` or `Archived` (in any case or spelling) with
+`update_resource`, a low-level tool or a create body is refused, naming the lifecycle tool to use. Other changes to
+Working and Archived pages (their text, other facts, links, other tags) work as usual.
 
 **Stopped part-way.** If a lifecycle job stops part-way, the result says which steps ran. Call the same tool on the
-same page again: it plans what is left and proposes only that. Until then another lifecycle tool on that page is refused
-(`LIFECYCLE_INCOMPLETE`). Before the owner has confirmed the project's two indexes, the tools and Working creates are
+same page again (for a set: on its root, with `subtree: true`): it plans what is left and proposes only that. Until then
+another lifecycle tool on that page, or on any page of the set, is refused (`LIFECYCLE_INCOMPLETE`). Before the owner has confirmed the project's two indexes, the tools and Working creates are
 refused (`LIFECYCLE_NOT_CONFIGURED`): tell the person.
 
 ## Budget rules

@@ -58,6 +58,14 @@ export type CanonicalRule = (
       readonly documentTypes: readonly string[];
       readonly note?: string;
     }
+  /**
+   * C2d (ADR 0036 decision 7, the owner's): the lifecycle status tags (the lifecycle settings' CANON, Working and
+   * Archived; compared without case and look-alikes folded) are added to or removed from a page only by the four
+   * lifecycle tools and by the creation tools according to their `status`. `update_resource`, `updateResource` on any
+   * route and a create body that adds one are refused (the lifecycle guard), naming the tool to use. Every other tag
+   * stays free.
+   */
+  | { readonly id: string; readonly kind: 'statusTags'; readonly note?: string }
 ) & {
   /** v2 C2c: false switches the rule off (kept in the list, shown on the dashboard, applied nowhere). Default true. */
   readonly enabled?: boolean;
@@ -93,6 +101,13 @@ export const DEFAULT_DELETE_DOCUMENT_RULE: CanonicalRule = Object.freeze({
   note: 'Deleting a map, timeline or board of a page whose Status is Authoritative needs canonical approval: it removes canonical content. Recommended; switch it off here if not wanted.',
 });
 
+/** C2d (ADR 0036 decision 7, the owner's, 11 November 2026): the status tags are the lifecycle tools'. */
+export const DEFAULT_STATUS_TAGS_RULE: CanonicalRule = Object.freeze({
+  id: 'status-tags',
+  kind: 'statusTags' as const,
+  note: 'The status tags (CANON, Working, Archived, as the lifecycle settings name them) are added or removed only by the lifecycle tools and by creates according to their status; any other route is refused. Every other tag stays free.',
+});
+
 export const DEFAULT_CANONICAL_RULES: readonly CanonicalRule[] = Object.freeze([
   {
     id: 'status-authoritative',
@@ -116,6 +131,7 @@ export const DEFAULT_CANONICAL_RULES: readonly CanonicalRule[] = Object.freeze([
   DEFAULT_DELETE_RULE,
   DEFAULT_DELETE_ARCHIVED_RULE,
   DEFAULT_DELETE_DOCUMENT_RULE,
+  DEFAULT_STATUS_TAGS_RULE,
 ]);
 
 /** The Status agents' new pages get (C2b), unless the project says otherwise. */
@@ -178,6 +194,15 @@ export const canonicalRuleSchema = z.discriminatedUnion('kind', [
         .array(z.enum(['page', 'map', 'time', 'board', 'blank']))
         .min(1)
         .max(5),
+      note: z.string().max(500).optional(),
+      enabled,
+    })
+    .strict(),
+  // C2d (ADR 0036 decision 7)
+  z
+    .object({
+      id: ruleId,
+      kind: z.literal('statusTags'),
       note: z.string().max(500).optional(),
       enabled,
     })
@@ -306,7 +331,12 @@ export function canonConfigFrom(settings: Readonly<Record<string, unknown>> | un
   return { rules, active: active(rules), defaults: false, agentDefaultStatus: status, problem: null };
 }
 
-/** v2 C2c: the fact a rule names (`deleteKind` names none). */
+/** C2d: whether a project's status tags are guarded (the `statusTags` rule is listed and switched on). */
+export function statusTagsGuarded(active: readonly CanonicalRule[]): boolean {
+  return active.some((r) => r.kind === 'statusTags');
+}
+
+/** v2 C2c: the fact a rule names (`deleteKind` and `statusTags` name none). */
 export function ruleKey(rule: CanonicalRule): string | null {
   return 'key' in rule ? rule.key : null;
 }

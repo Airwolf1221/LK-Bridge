@@ -72,7 +72,7 @@ describe('create_character: core', () => {
     // Both templates recorded in the tree at once; the Core's Reference Type in the tree after the job's re-read.
     expect(node(idx.id)).toMatchObject({ templateId: T.index });
     expect(node(core.id)).toMatchObject({ templateId: T.core, referenceType: 'Character Core' });
-    expect(r.body.factsVersions?.[core.name]).toMatch(/^fv1_/);
+    expect(r.body.factsVersions?.[core.name]).toMatch(/^fv2_/);
     // Writes: two creates (each with its place), then one row write per fact.
     const w2 = writes().slice(before);
     expect(w2.filter((l) => l.startsWith('POST /resources/from-template'))).toHaveLength(2);
@@ -88,7 +88,7 @@ describe('create_character: core', () => {
       page: { name: '[BSRC] Asagiri Ren - Character Core' },
     });
     expect(r.body.note).toMatch(/already exists/);
-    expect(r.body.factsVersion).toMatch(/^fv1_/);
+    expect(r.body.factsVersion).toMatch(/^fv2_/);
     expect(writes().length).toBe(before);
   });
 

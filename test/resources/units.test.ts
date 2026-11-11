@@ -124,14 +124,22 @@ describe('factsVersion', () => {
   ];
 
   it('is the same from listProperties (stored order) and getResource and listPropertyRows orders; property order too', () => {
-    const a = factsVersionFrom({ data: props(rows) }).version;
-    const b = factsVersionFrom({ properties: [...props([...rows].reverse())].reverse() }).version;
-    expect(a).toMatch(/^fv1_[0-9a-f]{24}$/);
+    const a = factsVersionFrom('page0001', { data: props(rows) }).version;
+    const b = factsVersionFrom('page0001', { properties: [...props([...rows].reverse())].reverse() }).version;
+    expect(a).toMatch(/^fv2_[0-9a-f]{24}$/);
     expect(b).toBe(a);
   });
 
+  it('C2d: belongs to one page: two copies of one template with the same ids and values get different versions', () => {
+    // LegendKeeper reuses a template's property and row ids in every copy (ADR 0037), so the facts alone are equal.
+    const a = factsVersionFrom('copy0001', { data: props(rows) }).version;
+    const b = factsVersionFrom('copy0002', { data: props(rows) }).version;
+    expect(a).not.toBe(b);
+    expect(factsVersionFrom('copy0001', { data: props(rows) }).version).toBe(a);
+  });
+
   it('changes with a value, a key, a rank, a row added or removed, an item, a filter; not with a TAGS property', () => {
-    const base = factsVersionFrom({ data: props(rows) }).version;
+    const base = factsVersionFrom('page0001', { data: props(rows) }).version;
     const changed = [
       props([{ ...rows[0]!, text: 'Archived' }, rows[1]!]),
       props([{ ...rows[0]!, key: 'State' }, rows[1]!]),
@@ -140,14 +148,16 @@ describe('factsVersion', () => {
       props(rows, ['p1', 'p2']),
       props(rows).map((p) => (p.id === 'dep' ? { ...p, filter: { tag: 'x' } } : p)),
     ];
-    for (const c of changed) expect(factsVersionFrom({ data: c }).version).not.toBe(base);
+    for (const c of changed) expect(factsVersionFrom('page0001', { data: c }).version).not.toBe(base);
     const tags = props(rows).map((p) => (p.id === 'tags' ? { ...p, title: 'Tags (renamed)' } : p));
-    expect(factsVersionFrom({ data: tags }).version).toBe(base);
+    expect(factsVersionFrom('page0001', { data: tags }).version).toBe(base);
   });
 
   it('says which rows or collections changed', () => {
-    const a = factsVersionFrom({ data: props(rows) }).state;
-    const b = factsVersionFrom({ data: props([{ ...rows[0]!, text: 'Archived' }, rows[1]!], ['p2']) }).state;
+    const a = factsVersionFrom('page0001', { data: props(rows) }).state;
+    const b = factsVersionFrom('page0001', {
+      data: props([{ ...rows[0]!, text: 'Archived' }, rows[1]!], ['p2']),
+    }).state;
     const d = factsDifferences(a, b).map((x) => x.path);
     expect(d.some((p) => p.includes('Status'))).toBe(true);
     expect(d.some((p) => p.includes('Dependencies'))).toBe(true);

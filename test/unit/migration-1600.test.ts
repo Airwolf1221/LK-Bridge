@@ -27,7 +27,13 @@ describe('migration 1600 (v2 C2c)', () => {
     db.prepare("UPDATE tree_nodes SET kind='bwrk' WHERE id='n1'").run();
     const row = db.prepare('SELECT settings FROM projects').get() as { settings: string };
     const rules = (JSON.parse(row.settings) as { canonicalRules: { id: string }[] }).canonicalRules;
-    expect(rules.map((r) => r.id)).toEqual(['x', 'delete-archived', 'delete-document-authoritative']);
+    // (C2d's migration 1750, run here too, adds the status-tags rule after them.)
+    expect(rules.map((r) => r.id)).toEqual([
+      'x',
+      'delete-archived',
+      'delete-document-authoritative',
+      'status-tags',
+    ]);
     db.prepare("DELETE FROM tree_nodes WHERE id='n1'").run();
     expect(db.prepare('SELECT COUNT(*) n FROM tree_names').get()).toEqual({ n: 0 });
   });

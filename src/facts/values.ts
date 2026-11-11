@@ -6,6 +6,7 @@
  * The converter is used as it is (B1 is not changed): the Markdown is converted as a one-block page and its paragraph's
  * runs are taken.
  */
+import { trimRowBreaks } from '../jobs/sidebar-state.js';
 import { MarkdownError, fromMarkdown, type FromMarkdownContext } from '../markdown/index.js';
 
 export type FactInput = string | { readonly markdown: string };
@@ -38,8 +39,26 @@ export function textRuns(text: string): Obj[] {
 
 const ROW_RUN_KEYS = new Set(['text', 'bold', 'italic', 'underline', 'strike', 'code', 'link', 'sub', 'sup']);
 
-/** A value's runs. Throws `FactValueError` (or passes on the converter's `MarkdownError` codes as one). */
+/**
+ * C2d (ADR 0037): a plain-text row value as LegendKeeper stores it: one text run per line, breaks between them, and no
+ * leading or trailing break (LegendKeeper trims them, so a value ending in a new line is stored without it). Empty, or
+ * nothing but new lines: no runs (the row is cleared). Used for every value the bridge writes itself: the identity
+ * facts of the creation tools, the Status of a new page and the lifecycle tools' facts.
+ */
+export function rowTextRuns(text: string): Obj[] {
+  return trimRowBreaks(textRuns(text));
+}
+
+/**
+ * A value's runs. Throws `FactValueError` (or passes on the converter's `MarkdownError` codes as one). C2d: leading and
+ * trailing breaks are trimmed (a trailing new line, or a trailing `<br>`), as LegendKeeper trims them; a value that is
+ * then empty clears the row.
+ */
 export function factValueRuns(value: FactInput, ctx: FromMarkdownContext): Obj[] {
+  return trimRowBreaks(factValueRunsAsGiven(value, ctx));
+}
+
+function factValueRunsAsGiven(value: FactInput, ctx: FromMarkdownContext): Obj[] {
   if (typeof value === 'string') return textRuns(value);
   const md = value.markdown;
   if (md.trim() === '') return [];

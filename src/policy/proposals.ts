@@ -62,6 +62,16 @@ import type { OperationDef } from '../lk/registry-types.js';
 import { markdownDiff, type MarkdownDiff } from '../pages/diff.js';
 import { canonicalJson, hashJson, issueApprovalToken } from './approval.js';
 import { buildPageSummary, type PageSummaryEntry } from './page-summary.js';
+import {
+  PAGE_SCOPE_LIMIT,
+  compareScope,
+  implicitSubtrees,
+  listScope,
+  scopeChanged,
+  scopeText,
+  type PageScope,
+  type PageScopeEntry,
+} from './page-scope.js';
 import { PolicyError } from './errors.js';
 import type { PolicyStore } from './store.js';
 import {
@@ -233,6 +243,10 @@ interface StoredJobOptions {
   readonly holdDocument?: { readonly documentId: string };
   readonly holdAlso?: { readonly resourceId: string };
   readonly lifecycle?: LifecycleMarker;
+  /** C2d: further job-level locks (a whole set). */
+  readonly holdMore?: { readonly resources?: readonly string[]; readonly documents?: readonly string[] };
+  /** C2d (ADR 0036 decision 5): the pages the proposal touches without naming them, as captured. */
+  readonly pageScope?: PageScope;
 }
 
 /** The part of a high-level operation a list shows (never the Markdown or the page). */
@@ -302,8 +316,10 @@ function describe(opId: string, params: OpParams): string {
     p.featureId ??
     p.documentId ??
     p.resourceId;
+  // C2d (ADR 0037): a row, property or block id is unique only within its page, so it is named with the page.
+  const on = id && p.resourceId && id !== p.resourceId ? `${p.resourceId} › ${id}` : id;
   const name = (params.body as { name?: unknown } | undefined)?.name;
-  return `${opId}${id ? ` on ${id}` : ''}${typeof name === 'string' ? ` ("${name.slice(0, 40)}")` : ''}`;
+  return `${opId}${on ? ` on ${on}` : ''}${typeof name === 'string' ? ` ("${name.slice(0, 40)}")` : ''}`;
 }
 
 export function proposalSummary(ops: readonly { op: string; params: OpParams }[]): string {
@@ -516,6 +532,30 @@ export class ProposalService implements ProposalSink {
       captured.push({ target, snap });
     }
 
+    // 2b. C2d (ADR 0036 decision 5): an approval covers only the pages it listed. The pages an operation touches without
+    // naming them (a cascade's, a template copy's children) are listed now and kept with the proposal; a lifecycle set
+    // brings its own list (its tool listed it). Checked again at approval and inside the lock.
+    const scopeEntries: PageScopeEntry[] = [...(meta.jobOptions?.pageScope?.subtrees ?? [])];
+    for (const s of implicitSubtrees(ops)) {
+      if (created.has(s.rootId)) continue; // made by this proposal: nothing under it yet to capture
+      const pages = await listScope(
+        (op, params) =>
+          engine.internalRead(meta.project, op, params, { priority: meta.priority, notFoundIsAnswer: true }),
+        s.rootId,
+      );
+      if (pages === null || pages.length > PAGE_SCOPE_LIMIT) {
+        throw new PolicyDeniedError(
+          ops[s.step]?.op ?? 'operation',
+          pages === null
+            ? `${s.label} could not be listed, so the proposal could not record which pages it covers; nothing was proposed. Try again`
+            : `${s.label} are more than ${PAGE_SCOPE_LIMIT}; an approval covers only the pages it lists, so delete or copy them in parts`,
+          principal.principalId,
+        );
+      }
+      scopeEntries.push({ ...s, pages });
+    }
+    const pageScope: PageScope | null = scopeEntries.length > 0 ? { subtrees: scopeEntries } : null;
+
     // 3. Store the ordered operations as one proposal.
     const id = newProposalId();
     const now = this.now();
@@ -527,19 +567,23 @@ export class ProposalService implements ProposalSink {
     const operations = opList ? JSON.stringify(opList.map(capOperation)) : null;
     const pages = buildPageSummary(ops, opList, (rid) => this.pageName(meta.project, rid));
     const jobOptions: StoredJobOptions | null =
-      meta.jobOptions && (meta.jobOptions.holdLock || meta.jobOptions.internal || meta.jobOptions.lifecycle)
+      (meta.jobOptions &&
+        (meta.jobOptions.holdLock || meta.jobOptions.internal || meta.jobOptions.lifecycle)) ||
+      pageScope
         ? {
-            ...(meta.jobOptions.holdLock
+            ...(meta.jobOptions?.holdLock
               ? { holdLock: { resourceId: meta.jobOptions.holdLock.resourceId } }
               : {}),
-            ...(meta.jobOptions.internal ? { internal: true } : {}),
-            ...(meta.jobOptions.holdDocument
+            ...(meta.jobOptions?.internal ? { internal: true } : {}),
+            ...(meta.jobOptions?.holdDocument
               ? { holdDocument: { documentId: meta.jobOptions.holdDocument.documentId } }
               : {}),
-            ...(meta.jobOptions.holdAlso
+            ...(meta.jobOptions?.holdAlso
               ? { holdAlso: { resourceId: meta.jobOptions.holdAlso.resourceId } }
               : {}),
-            ...(meta.jobOptions.lifecycle ? { lifecycle: meta.jobOptions.lifecycle } : {}),
+            ...(meta.jobOptions?.holdMore ? { holdMore: meta.jobOptions.holdMore } : {}),
+            ...(meta.jobOptions?.lifecycle ? { lifecycle: meta.jobOptions.lifecycle } : {}),
+            ...(pageScope ? { pageScope } : {}),
           }
         : null;
     this.store.tx(() => {
@@ -874,6 +918,42 @@ export class ProposalService implements ProposalSink {
       );
     }
 
+    // C2d (ADR 0036 decision 5): the pages it touches without naming them, listed again: an approval covers only the
+    // pages it listed, so a page added, gone or moved under them since capture is a conflict, and nothing runs.
+    const scope = this.jobOptionsOf(id)?.pageScope;
+    for (const entry of scope?.subtrees ?? []) {
+      const now = await listScope(
+        (op, params) =>
+          engine.internalRead(p.projectId, op, params, { priority: 'P0', notFoundIsAnswer: true }),
+        entry.rootId,
+      );
+      const d = now === null ? null : compareScope(entry.pages, now);
+      if (d === null || scopeChanged(d)) {
+        const conflict: ProposalConflict = {
+          index: entry.step ?? 0,
+          op: entry.step !== undefined ? (ops[entry.step]?.op ?? 'operation') : (ops[0]?.op ?? 'operation'),
+          reason:
+            d === null
+              ? `${entry.label} could not be listed again, so the bridge cannot tell they are the pages the approval listed; nothing was written`
+              : scopeText(entry, d),
+          capturedVersion: null,
+          currentVersion: null,
+        };
+        this.transition(id, ['approved'], 'conflicted', {
+          conflict: JSON.stringify(conflict),
+          finished_at: this.now(),
+        });
+        this.store.audit(
+          'system',
+          'proposal.conflicted',
+          id,
+          { state: 'approved' },
+          { state: 'conflicted', conflict },
+        );
+        return this.require(id);
+      }
+    }
+
     // Submit the approved batch with a token bound to this proposal.
     const steps = executionSteps(ops);
     const token = issueApprovalToken(
@@ -914,7 +994,9 @@ export class ProposalService implements ProposalSink {
         ...(jobOptions?.internal ? { internal: true } : {}),
         ...(jobOptions?.holdDocument ? { holdDocument: jobOptions.holdDocument } : {}),
         ...(jobOptions?.holdAlso ? { holdAlso: jobOptions.holdAlso } : {}),
+        ...(jobOptions?.holdMore ? { holdMore: jobOptions.holdMore } : {}),
         ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
+        ...(jobOptions?.pageScope ? { pageScope: jobOptions.pageScope } : {}),
         ...(prefetched.length > 0 ? { proposal: { prefetched } } : {}),
       });
     } catch (e) {
@@ -1104,8 +1186,11 @@ export class ProposalService implements ProposalSink {
               s.opKind !== 'read' && (s.status === 'succeeded' || s.status === 'uncertain' || s.maybeSent),
           )
         : job.progress.stepsDone === 0;
+    // C2d (ADR 0036 decision 5): the pages an approval listed, changed before the write (the page-scope guard inside
+    // the lock): conflicted whatever tool made the proposal.
+    const scopeConflict = (job.lastError as { scope?: unknown } | null | undefined)?.scope === true;
     if (
-      (highLevel?.operation || highLevel?.operations) &&
+      (highLevel?.operation || highLevel?.operations || scopeConflict) &&
       job.status === 'failed' &&
       job.lastError?.code === 'VERSION_CONFLICT' &&
       wroteNothing
@@ -1119,8 +1204,11 @@ export class ProposalService implements ProposalSink {
       const conflict: ProposalConflict = {
         index: typeof le.stepNo === 'number' ? le.stepNo - 1 : 0,
         op: typeof le.opId === 'string' ? le.opId : 'replaceDocumentBlocks',
-        reason:
-          typeof (le as { label?: unknown }).label === 'string'
+        reason: scopeConflict
+          ? typeof (job.lastError as { message?: unknown }).message === 'string'
+            ? (job.lastError as { message: string }).message
+            : 'the pages the approval listed changed'
+          : typeof (le as { label?: unknown }).label === 'string'
             ? `${String((le as { label?: unknown }).label)} changed between the approval’s check and the write (the bridge’s own check inside the page’s lock); nothing was written`
             : 'the page changed between the approval’s check and the write (the bridge’s own version check inside the page’s lock); nothing was written',
         capturedVersion: typeof le.sentVersion === 'string' ? le.sentVersion : null,

@@ -17,7 +17,22 @@ DB_PATH=… LK_PROJECT_TEST_API_KEY=… LKB_SANDBOX_PROJECT=test npm run test:sa
 DB_PATH=… LKB_ENV_FILE=/path/to/lk-bridge.env LKB_SANDBOX_PROJECT=test npm run test:sandbox
 ```
 
-On the server: `deploy/sandbox-test.sh --project test`. Without `LKB_SANDBOX_PROJECT` the suite is skipped. It **refuses to run** unless the project is marked as a sandbox and the key's own project (from `listProjects`) is exactly that project's stored id (`target.ts`). Everything it creates lives under one throwaway resource that is deleted (cascade) at the end; if that fails the report says which id to delete by hand.
+On the server, as the service user, with no workaround (C2d):
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
+```
+
+`lkbridge` cannot write to `node_modules` (it belongs to the build user), so nothing in the run writes there:
+`npm run test:sandbox` loads `vitest.sandbox.config.ts` with `--configLoader runner` (evaluated in memory; the default
+loader wrote a bundled copy to `node_modules/.vite-temp` and failed with `EACCES` on the owner's first run, 11 November
+2026), and the config switches off Vitest's module cache (`fsModuleCache: false`, which removes the "could not create
+.vitest-cache" warning) and its results cache. `test/tools/sandbox-config-readonly.test.ts` runs the command in CI under
+Node's permission model with every write outside a temporary directory refused. The sandbox runtimes keep no secrets (a
+temporary database; the project's key is handed to them), so they no longer warn that `SECRETS_MASTER_KEY` is not set;
+the wrapper still keeps the master key out of every environment. The soak, spike and round-trip wrappers run `tsx`
+scripts with no TypeScript config (tsx caches in the system's temporary directory), so they needed no change. Without
+`LKB_SANDBOX_PROJECT` the suite is skipped. It **refuses to run** unless the project is marked as a sandbox and the key's own project (from `listProjects`) is exactly that project's stored id (`target.ts`). Everything it creates lives under one throwaway resource that is deleted (cascade) at the end; if that fails the report says which id to delete by hand.
 
 The report (printed at the end) states each item as PASS, FAIL, INCONCLUSIVE or SKIPPED:
 
@@ -69,4 +84,17 @@ clean-up does.
   and reads every page of a cascade at entry and again inside the lock. A few minutes at the bridge's write pacing.
 - **Dry run:** `test/tools/assumptions-dryrun.test.ts` runs the same script against the lifecycle test world's mock, to
   check that every check runs to an answer and the clean-up works (the mock does not model every behaviour, so some
-  checks FAIL there; that is expected and shows which behaviours only the real API can confirm).
+  checks FAIL there; that is expected and shows which behaviours only the real API can confirm). A second dry run
+  answers as the real API did on the owner's run and checks the corrected checks below pass.
+- **Corrected after the owner's first run (C2d, 11 November 2026):**
+  - **A1:** LegendKeeper reuses the template's property, row and item ids in a copy. That is its behaviour, not a
+    failure: the check passes and notes the reused ids (the bridge keys everything of a page by the page and the id
+    together, ADR 0037).
+  - **B12:** makes its own page, property, row create and row update (it used to rely on B11, and came out INCONCLUSIVE),
+    and checks each write's answered version (in its body, which the bridge chains from) against the next read; an ETag
+    header is reported alongside.
+  - **B16:** expects the trimmed form: LegendKeeper trims a leading or trailing line break from a row value (the OpenAPI
+    schema). It sends two at each end and says plainly if only one is trimmed (the bridge trims them all).
+  - **Clean-up:** a page that is already gone (404, or "… is already deleted" after an earlier cascade) counts as
+    cleaned; any other failure is confirmed by a read before it is reported as left over.
+  - B12 adds a page, a property and two row writes: about 104 writes in all.

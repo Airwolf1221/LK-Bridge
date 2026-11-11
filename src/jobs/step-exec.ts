@@ -31,6 +31,7 @@ import {
   type ChildrenCheck,
   type ExpectCheck,
   type ResourceCheck,
+  type SubtreeCheck,
   type TargetVerification,
   type VerifyTarget,
 } from './internal-steps.js';
@@ -410,11 +411,26 @@ export class StepExecutor {
     step: StepView,
     params: OpParams,
     stats: CallStats,
-  ): Promise<{ checked: string[]; versions: Record<string, string | null>; ids?: Record<string, string> }> {
+  ): Promise<{
+    checked: string[];
+    versions: Record<string, string | null>;
+    versionsByPage: Record<string, Record<string, string | null>>;
+    ids?: Record<string, string>;
+    idsByPage?: Record<string, Record<string, string>>;
+  }> {
     const checks = ((params.body ?? {}) as { checks?: ExpectCheck[] }).checks ?? [];
     const ref = { jobId: job.id, stepNo: step.stepNo };
     const versions: Record<string, string | null> = {};
     const ids: Record<string, string> = {};
+    // C2d (ADR 0037): property, row and item ids are unique only within a page (copies of one template share them),
+    // so the versions a check read and the ids a copy check mapped are also kept per page; `bindIfMatch` and
+    // `bindIds` take them from the page the bound write names (the flat maps stay for jobs stored before).
+    const versionsByPage: Record<string, Record<string, string | null>> = {};
+    const idsByPage: Record<string, Record<string, string>> = {};
+    const keep = (resourceId: string, label: string, v: string | null) => {
+      versions[label] = v;
+      (versionsByPage[resourceId] ??= {})[label] = v;
+    };
     for (const c of checks) {
       // v2 C2b: a page this job created from a template (its ids mapped for `bindIds`), or the whole sidebar.
       if (c.kind === 'copy' || c.kind === 'sidebar') {
@@ -441,10 +457,11 @@ export class StepExecutor {
             throw new StateConflictError(EXPECT_STEP, c.label, m.differences, null, null, ref);
           }
           Object.assign(ids, m.ids);
+          Object.assign((idsByPage[c.resourceId] ??= {}), m.ids);
         } else {
           const now = sidebarState(r.body);
           const diffs = compareSidebarStates(c.properties, now);
-          const version = factsVersionOf(now);
+          const version = factsVersionOf(c.resourceId, now);
           if (diffs.length === 0 && version !== c.factsVersion) {
             diffs.push({ path: `${c.label} factsVersion`, expected: c.factsVersion, actual: version });
           }
@@ -452,14 +469,14 @@ export class StepExecutor {
             throw new StateConflictError(EXPECT_STEP, c.label, diffs, c.factsVersion, version, ref);
           }
         }
-        versions[c.label] = null;
+        keep(c.resourceId, c.label, null);
         continue;
       }
       // v2 C2c: a page's own fields, the pages under it, or one block of a document, as the plan saw them.
-      if (c.kind === 'resource' || c.kind === 'children' || c.kind === 'block') {
+      if (c.kind === 'resource' || c.kind === 'children' || c.kind === 'subtree' || c.kind === 'block') {
         const diffs = await this.expectStructure(job, step, c, stats);
         if (diffs.length > 0) throw new StateConflictError(EXPECT_STEP, c.label, diffs, null, null, ref);
-        versions[c.label] = null;
+        keep(c.resourceId, c.label, null);
         continue;
       }
       const path = { resourceId: c.resourceId, propertyId: c.propertyId };
@@ -494,12 +511,13 @@ export class StepExecutor {
       if (diffs.length > 0) {
         throw new StateConflictError(EXPECT_STEP, c.label, diffs, c.version ?? null, version, ref);
       }
-      versions[c.label] = version;
+      keep(c.resourceId, c.label, version);
     }
     return {
       checked: checks.map((c) => c.label),
       versions,
-      ...(Object.keys(ids).length > 0 ? { ids } : {}),
+      versionsByPage,
+      ...(Object.keys(ids).length > 0 ? { ids, idsByPage } : {}),
     };
   }
 
@@ -507,7 +525,7 @@ export class StepExecutor {
   private async expectStructure(
     job: JobView,
     step: StepView,
-    c: ResourceCheck | ChildrenCheck | BlockCheck,
+    c: ResourceCheck | ChildrenCheck | SubtreeCheck | BlockCheck,
     stats: CallStats,
   ): Promise<StateDifference[]> {
     const diffs: StateDifference[] = [];
@@ -524,6 +542,67 @@ export class StepExecutor {
         if (JSON.stringify(now) !== JSON.stringify(c.tags))
           diffs.push({ path: `${c.label} tags`, expected: c.tags, actual: now });
       }
+      return diffs;
+    }
+    if (c.kind === 'subtree') {
+      // C2d: every page under the set's root, level by level, with its parent, name and tags as LegendKeeper holds them.
+      const seen = new Map<string, { parentId: string; name: unknown; tags: unknown }>();
+      let level = [c.resourceId];
+      for (let depth = 0; depth < 64 && level.length > 0 && seen.size <= c.pages.length + 100; depth++) {
+        const next: string[] = [];
+        for (const parentId of level) {
+          let cursor: string | undefined;
+          for (let page = 0; page < 50; page++) {
+            const r = await this.readOp(
+              job,
+              step,
+              'listResources',
+              { query: { parentId, limit: 100, ...(cursor ? { cursor } : {}) } },
+              stats,
+            );
+            const body = (r.body ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+            for (const x of Array.isArray(body.data)
+              ? (body.data as { id?: unknown; name?: unknown; tags?: unknown }[])
+              : []) {
+              if (typeof x.id !== 'string' || x.id === c.resourceId || seen.has(x.id)) continue;
+              seen.set(x.id, { parentId, name: x.name, tags: x.tags });
+              next.push(x.id);
+            }
+            if (body.hasMore !== true || typeof body.nextCursor !== 'string') break;
+            cursor = body.nextCursor;
+          }
+        }
+        level = next;
+      }
+      const want = new Map(c.pages.map((p) => [p.id, p]));
+      for (const [id, now] of seen) {
+        const was = want.get(id);
+        if (!was) {
+          diffs.push({
+            path: `${c.label}: page ${typeof now.name === 'string' ? now.name : id}`,
+            expected: '(not in the set as approved)',
+            actual: `added under ${now.parentId}`,
+          });
+          continue;
+        }
+        if ((was.parentId ?? null) !== now.parentId)
+          diffs.push({
+            path: `${c.label}: ${was.name ?? id} parent`,
+            expected: was.parentId,
+            actual: now.parentId,
+          });
+        if (was.name !== undefined && now.name !== was.name)
+          diffs.push({ path: `${c.label}: ${was.name} name`, expected: was.name, actual: now.name ?? null });
+        if (was.tags !== undefined && JSON.stringify(now.tags ?? []) !== JSON.stringify(was.tags))
+          diffs.push({
+            path: `${c.label}: ${was.name ?? id} tags`,
+            expected: was.tags,
+            actual: now.tags ?? null,
+          });
+      }
+      for (const [id, was] of want)
+        if (!seen.has(id))
+          diffs.push({ path: `${c.label}: page ${was.name ?? id}`, expected: id, actual: '(gone)' });
       return diffs;
     }
     if (c.kind === 'children') {
@@ -721,9 +800,9 @@ export class StepExecutor {
           } else if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
           else if (t.kind === 'facts') {
             compareFacts(t, res, diffs);
-            factsVersion = factsVersionOf(sidebarState(res));
+            factsVersion = factsVersionOf(t.resourceId, sidebarState(res));
           } else if (t.kind === 'sidebar') {
-            factsVersion = factsVersionOf(sidebarState(res));
+            factsVersion = factsVersionOf(t.resourceId, sidebarState(res));
             const props = Array.isArray(res.properties) ? (res.properties as Record<string, unknown>[]) : [];
             for (const p of t.properties) {
               const actual = props.find((x) => x && x.id === p.id);

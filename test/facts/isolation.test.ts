@@ -129,7 +129,13 @@ describe('set_facts with two projects', () => {
       'Status', // v2 C2b: deleting an Authoritative page
       undefined, // v2 C2c: deleting a [BARC] page (by its prefix; no fact)
       'Status', // v2 C2c: deleting a map, timeline or board of an Authoritative page
+      undefined, // C2d: the status tags (ADR 0036 decision 7; no fact)
     ]);
+    // C2d (ADR 0036 decision 4): saving the rules needs the owner to have signed in again in the last 5 minutes.
+    const before403 = await t.admin.put('/projects/alpha/canon', { rules: null, confirm: true });
+    expect(before403.status).toBe(403);
+    expect(before403.json.error.code).toBe('REAUTH_REQUIRED');
+    expect((await t.admin.post('/security/reauth', { password: t.stack.bridge.password })).status).toBe(200);
     const bad = await t.admin.put('/projects/alpha/canon', {
       rules: [{ id: 'x', key: 'Status', kind: 'value' }],
       confirm: true,

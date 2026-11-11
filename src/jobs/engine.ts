@@ -653,7 +653,7 @@ export class JobEngine {
     // v2 C2a: a job-level lock covers every write step: each must take that same lock (or none). v2 C2c: a job may
     // hold more: a document of the page (`holdDocument`) and one more resource (`holdAlso`), all taken at its start.
     const heldLock = req.holdLock ? projectLockKey(project, `res:${req.holdLock.resourceId}`) : null;
-    if ((req.holdDocument || req.holdAlso) && !heldLock) {
+    if ((req.holdDocument || req.holdAlso || req.holdMore) && !heldLock) {
       throw new InvalidParamsError('batch_ops', [
         {
           path: 'holdDocument',
@@ -661,10 +661,15 @@ export class JobEngine {
         },
       ]);
     }
+    // C2d: a whole set's pages and documents (`holdMore`), deduplicated; all taken in sorted key order at the start.
     const heldMore = [
-      ...(req.holdDocument ? [projectLockKey(project, `doc:${req.holdDocument.documentId}`)!] : []),
-      ...(req.holdAlso ? [projectLockKey(project, `res:${req.holdAlso.resourceId}`)!] : []),
-    ];
+      ...new Set([
+        ...(req.holdDocument ? [projectLockKey(project, `doc:${req.holdDocument.documentId}`)!] : []),
+        ...(req.holdAlso ? [projectLockKey(project, `res:${req.holdAlso.resourceId}`)!] : []),
+        ...(req.holdMore?.resources ?? []).map((id) => projectLockKey(project, `res:${id}`)!),
+        ...(req.holdMore?.documents ?? []).map((id) => projectLockKey(project, `doc:${id}`)!),
+      ]),
+    ].filter((k) => k !== heldLock);
     const heldKeys = heldLock ? [heldLock, ...heldMore] : [];
     if (heldLock) {
       validated.forEach((v, i) => {
@@ -684,13 +689,15 @@ export class JobEngine {
     const onError: OnError = req.onError ?? 'stop';
     const title = req.title ?? `batch of ${validated.length} operation(s)`;
     const jobOptions: ProposalJobOptions | undefined =
-      req.holdLock || req.internal || req.lifecycle
+      req.holdLock || req.internal || req.lifecycle || req.pageScope
         ? {
             ...(req.holdLock ? { holdLock: { resourceId: req.holdLock.resourceId } } : {}),
             ...(req.internal ? { internal: true } : {}),
             ...(req.holdDocument ? { holdDocument: { documentId: req.holdDocument.documentId } } : {}),
             ...(req.holdAlso ? { holdAlso: { resourceId: req.holdAlso.resourceId } } : {}),
+            ...(req.holdMore ? { holdMore: req.holdMore } : {}),
             ...(req.lifecycle ? { lifecycle: req.lifecycle } : {}),
+            ...(req.pageScope ? { pageScope: req.pageScope } : {}),
           }
         : undefined;
     // Every step is put to the policy gate before anything is queued: one deny denies the batch, one propose
@@ -725,11 +732,13 @@ export class JobEngine {
       onError,
       prepared,
       'queued',
-      heldLock || req.lifecycle
+      heldLock || req.lifecycle || req.pageScope
         ? {
             ...(heldLock ? { [HELD_LOCK]: heldLock } : {}),
             ...(heldMore.length > 0 ? { [HELD_MORE]: heldMore } : {}),
             ...(req.lifecycle ? { [LIFECYCLE_OPTION]: req.lifecycle } : {}),
+            // C2d (ADR 0036 decision 5): read by the page-scope guard inside the lock.
+            ...(req.pageScope ? { pageScope: req.pageScope } : {}),
           }
         : undefined,
     );
@@ -912,9 +921,17 @@ export class JobEngine {
     const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
     const result =
       source?.status === 'succeeded'
-        ? (this.repo.stepResult(source) as { ids?: Record<string, unknown> } | null)
+        ? (this.repo.stepResult(source) as {
+            ids?: Record<string, unknown>;
+            idsByPage?: Record<string, Record<string, unknown>>;
+          } | null)
         : null;
-    const ids = result?.ids;
+    const params = this.repo.stepParams(step);
+    // C2d (ADR 0037): the ids of the page this write names. Copies of one template share their ids, so a map keyed by
+    // the template's ids alone could hand one copy's write another copy's ids; a write naming a page the check did not
+    // map binds nothing and is refused. Results stored before C2d carry only the flat map.
+    const page = typeof params.path?.resourceId === 'string' ? params.path.resourceId : undefined;
+    const ids = result?.idsByPage ? (page !== undefined ? result.idsByPage[page] : undefined) : result?.ids;
     if (!ids || typeof ids !== 'object') {
       return new JobsError(
         'BRIDGE_ERROR',
@@ -923,7 +940,6 @@ export class JobEngine {
       );
     }
     const map = (v: unknown): unknown => (typeof v === 'string' && typeof ids[v] === 'string' ? ids[v] : v);
-    const params = this.repo.stepParams(step);
     const path = params.path
       ? Object.fromEntries(
           Object.entries(params.path).map(([k, v]) => [
@@ -955,9 +971,25 @@ export class JobEngine {
     const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
     const result =
       source?.status === 'succeeded'
-        ? (this.repo.stepResult(source) as { version?: unknown; versions?: Record<string, unknown> } | null)
+        ? (this.repo.stepResult(source) as {
+            version?: unknown;
+            versions?: Record<string, unknown>;
+            versionsByPage?: Record<string, Record<string, unknown>>;
+          } | null)
         : null;
-    const version = from.key !== undefined ? result?.versions?.[from.key] : result?.version;
+    // C2d (ADR 0037): a check's version is taken from the page this write names (labels are titles, which two copies
+    // of one template share); results stored before C2d carry only the flat map.
+    const page = this.repo.stepParams(step).path?.resourceId;
+    const byPage =
+      from.key !== undefined && result?.versionsByPage && typeof page === 'string'
+        ? result.versionsByPage[page]
+        : undefined;
+    const version =
+      from.key !== undefined
+        ? result?.versionsByPage && typeof page === 'string'
+          ? byPage?.[from.key]
+          : result?.versions?.[from.key]
+        : result?.version;
     if (typeof version !== 'string' || version === '') {
       // Nothing to chain from (a delete answers 204, without a version): a step with its own in-step check reads the
       // state inside the lock instead, compares it with the plan, and sends the version it read.
