@@ -26,6 +26,7 @@
 import * as z from 'zod';
 import { factKey, factRows, sidebarFrom, valueText, type SidebarProperty } from '../../facts/index.js';
 import { FactsPlanError, planFacts, rowStates, type FactsPlan } from '../../facts/plan.js';
+import { rowTextRuns } from '../../facts/values.js';
 import {
   EXPECT_STEP,
   RECORD_STEP,
@@ -46,6 +47,7 @@ import {
   type LifecycleConfig,
   type LifecycleFacts,
   type LifecycleRecord,
+  type LifecycleRecordInput,
   type LifecycleState,
   type LifecycleTarget,
 } from '../../lifecycle/index.js';
@@ -60,12 +62,19 @@ import { CHANGE_ANNOTATIONS } from './resources.js';
 import { pageRef, templateKeysFor } from './set-facts.js';
 import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
 import { runWriteJob } from './write-job.js';
+import { runSet, subtreeArg } from './lifecycle-sets.js';
 
 type Obj = Record<string, unknown>;
-type Role = keyof LifecycleFacts;
-const ROLES: readonly Role[] = ['status', 'continuityType', 'scope', 'temporalScope', 'lastMajorRevision'];
+export type Role = keyof LifecycleFacts;
+export const ROLES: readonly Role[] = [
+  'status',
+  'continuityType',
+  'scope',
+  'temporalScope',
+  'lastMajorRevision',
+];
 
-const TOOL: Readonly<Record<LifecycleAction, string>> = {
+export const TOOL: Readonly<Record<LifecycleAction, string>> = {
   archive: 'archive_page',
   unarchive: 'unarchive_page',
   move_to_working: 'move_to_working',
@@ -73,22 +82,22 @@ const TOOL: Readonly<Record<LifecycleAction, string>> = {
 };
 
 /** Whether an action leaves the current state (prefix first) or enters it (prefix last). */
-const LEAVING: Readonly<Record<LifecycleAction, boolean>> = {
+export const LEAVING: Readonly<Record<LifecycleAction, boolean>> = {
   archive: true,
   move_to_working: true,
   unarchive: false,
   promote: false,
 };
 
-type Answer = { kind: 'answer'; result: McpToolResult };
-const refuse = (pd: ProjectDeps, code: string, message: string, more: Obj = {}): Answer => ({
+export type Answer = { kind: 'answer'; result: McpToolResult };
+export const refuse = (pd: ProjectDeps, code: string, message: string, more: Obj = {}): Answer => ({
   kind: 'answer',
   result: errorResult({ code, message, ...more }, pd),
 });
 
 // ============================================================================================ the page now
 
-interface PageNow {
+export interface PageNow {
   readonly node: TreeNode;
   readonly name: string;
   readonly kind: string;
@@ -105,7 +114,7 @@ interface PageNow {
   readonly raw: Obj;
 }
 
-async function readPage(
+export async function readPage(
   pd: ProjectDeps,
   mctx: McpToolContext,
   tool: string,
@@ -140,7 +149,7 @@ async function readPage(
 }
 
 /** The five lifecycle facts as the page holds them (null: no such row). */
-function factsOf(
+export function factsOf(
   c: LifecycleConfig,
   propertyTitle: string,
   sidebar: readonly SidebarProperty[],
@@ -160,11 +169,11 @@ function factsOf(
   };
 }
 
-const same = (a: string | null, b: string | null) =>
+export const same = (a: string | null, b: string | null) =>
   (a ?? '').trim().toLocaleLowerCase('en-GB') === (b ?? '').trim().toLocaleLowerCase('en-GB');
 
 /** The page's main page document: `Main` (a page, or blank), else its first page document. */
-function mainDocument(p: PageNow) {
+export function mainDocument(p: PageNow) {
   return (
     p.documents.find((d) => d.name === 'Main' && (d.type === 'page' || d.type === 'blank')) ??
     p.documents.find((d) => d.type === 'page') ??
@@ -173,7 +182,11 @@ function mainDocument(p: PageNow) {
 }
 
 /** `tags` with `remove` taken out (any case) and `add` put in (if missing). */
-function tagsAfter(tags: readonly string[], remove: readonly string[], add: readonly string[]): string[] {
+export function tagsAfter(
+  tags: readonly string[],
+  remove: readonly string[],
+  add: readonly string[],
+): string[] {
   const r = new Set(remove.map((t) => t.toLocaleLowerCase('en-GB')));
   const out = tags.filter((t) => !r.has(t.toLocaleLowerCase('en-GB')));
   for (const a of add)
@@ -227,13 +240,15 @@ async function build(
 ): Promise<{ ok: true; value: Built } | { ok: false; result: McpToolResult }> {
   const { page, target, action, tool } = plan;
   const pid = ctx.projectId;
-  const label = page.name;
   const steps: StepSpec[] = [];
   const labels: string[] = [];
-  const verify: VerifyTarget[] = [];
+  const pp = await planPage(pd, mctx, ctx, c, propertyTitle, page, target, tool);
+  if (!pp.ok) return pp;
+  const part = pp.value;
+  const verify: VerifyTarget[] = [...part.verify];
   const checks: ExpectCheck[] = [
     {
-      label,
+      label: page.name,
       kind: 'resource',
       resourceId: page.node.id,
       name: page.name,
@@ -241,29 +256,7 @@ async function build(
       tags: [...page.tags],
     },
   ];
-
-  // --- the rename and the tags (one write).
-  const newTags = tagsAfter(page.tags, target.tagsRemove, target.tagsAdd);
-  const tagsChange = JSON.stringify(newTags) !== JSON.stringify(page.tags);
-  const renameChange = page.name !== target.name;
-  const updateBody: Obj = {
-    ...(renameChange ? { name: target.name } : {}),
-    ...(tagsChange ? { tags: newTags } : {}),
-  };
   const journal = (write: string) => ({ tool, page: { id: page.node.id, name: page.name }, write });
-  const updateStep: StepSpec | null =
-    Object.keys(updateBody).length > 0
-      ? {
-          op: 'updateResource',
-          params: { path: { resourceId: page.node.id }, body: updateBody },
-          journalOperation: journal(renameChange ? `renamed to ${target.name}` : 'tags'),
-          // CR-2026-11 (CR-03): the tree re-reads the page once, when the job ends, for all its writes together.
-          deferTreeReread: true,
-        }
-      : null;
-  const updateLabel = [renameChange ? `rename to ${target.name}` : '', tagsChange ? 'tags' : '']
-    .filter(Boolean)
-    .join(' and ');
 
   // --- the move (the page, or a Working character's index with the page under it).
   const sim = new SiblingSim((parentId) => ctx.tree.children(pid, parentId).data);
@@ -299,13 +292,221 @@ async function build(
       });
     }
   }
+  checks.push(...part.checks);
+
+  // --- the check, the record, the writes in their order, the verify, the record's end.
+  const recordInput = recordInputOf(plan, page, target);
+  const updateW = part.updateStep ? [{ step: part.updateStep, label: part.updateLabel }] : [];
+  const writesInOrder = LEAVING[action]
+    ? [...updateW, ...part.factSteps, ...part.noteSteps, ...moveSteps]
+    : [...moveSteps, ...part.factSteps, ...part.noteSteps, ...updateW];
+  steps.push({ op: EXPECT_STEP, params: { body: { checks } } });
+  labels.push('check');
+  steps.push({ op: RECORD_STEP, params: { body: { action: 'begin', record: recordInput } } });
+  labels.push('record');
+  for (const w of writesInOrder) {
+    const step =
+      w.step.ifMatchFrom?.step === -1 ? { ...w.step, ifMatchFrom: { step: steps.length } } : w.step;
+    steps.push(step);
+    labels.push(w.label);
+  }
+  // The page (and a moved index) where the plan puts it, named and tagged as planned.
+  verify.unshift({
+    kind: 'resource',
+    label: target.name,
+    resourceId: page.node.id,
+    fields: { name: target.name, tags: part.newTags, ...(mover ? {} : { parentId: target.parentId }) },
+    ...(placement && !mover ? { placement } : {}),
+  });
+  if (mover && placement) {
+    verify.push({
+      kind: 'resource',
+      label: mover.name,
+      resourceId: mover.id,
+      fields: { parentId: target.parentId },
+      placement,
+    });
+  }
+  steps.push({ op: VERIFY_STEP, params: { body: { targets: verify } } });
+  labels.push('verify');
+  steps.push({
+    op: RECORD_STEP,
+    params: { body: { action: 'complete', record: { flags: [...plan.flags, ...part.noteFlags] } } },
+  });
+  labels.push('record complete');
+
+  // The state the page moves to, by the prefix it ends with.
+  const toState = stateByName(target.name);
+  const marker: LifecycleMarker = {
+    tool,
+    canonical: true,
+    pages: [{ id: page.node.id, to: toState }, ...(mover ? [{ id: mover.id, to: null }] : [])],
+  };
+  const parentNode = ctx.tree.node(pid, target.parentId).data;
+  const head: Obj = {
+    page: { id: page.node.id, name: page.name, path: page.node.path.names.join(' / ') },
+    action: tool,
+    newName: target.name,
+    newParent: { id: target.parentId, name: parentNode?.rawName ?? target.parentId },
+    ...(placement ? { place: { after: placement.after, before: placement.before } } : {}),
+    facts: part.factTable.filter((f) => f.change !== 'unchanged'),
+    tags: {
+      before: page.tags,
+      after: part.newTags,
+      removed: plan.record.tagsRemoved,
+      added: plan.record.tagsAdded,
+    },
+    ...(part.noteHead ? { note: part.noteHead } : {}),
+    ...(mover ? { characterIndex: { id: mover.id, name: mover.name, movesWith: true } } : {}),
+    ...(plan.flags.length + part.noteFlags.length ? { flags: [...plan.flags, ...part.noteFlags] } : {}),
+    ...(plan.record.resumeOf !== undefined ? { resumes: { recordId: plan.record.resumeOf } } : {}),
+  };
+  const operation: Obj = {
+    tool,
+    page: { id: page.node.id, name: page.name },
+    pageParts: [
+      ...part.pageParts.filter((x) => !x.startsWith('renamed') || part.renameChange),
+      ...(moveSteps.length ? [`moved under ${parentNode?.rawName ?? target.parentId}`] : []),
+    ].sort((a, b) => PART_ORDER(a) - PART_ORDER(b)),
+    summaryLabel: `${tool}: ${page.name} → ${target.name} under ${parentNode?.rawName ?? target.parentId}`,
+    lifecycle: head,
+  };
+  return {
+    ok: true,
+    value: {
+      steps,
+      labels,
+      marker,
+      hold: { resourceId: page.node.id },
+      ...(part.holdDocument ? { holdDocument: part.holdDocument } : {}),
+      ...(mover ? { holdAlso: { resourceId: mover.id } } : {}),
+      head,
+      operation,
+      writes: writesInOrder.length,
+    },
+  };
+}
+
+/** The order of the page-level summary's parts (as C2c listed them). */
+const PART_ORDER = (p: string): number =>
+  p.startsWith('renamed')
+    ? 0
+    : p.startsWith('moved')
+      ? 1
+      : p.includes('fact write')
+        ? 2
+        : p === 'tags'
+          ? 3
+          : p.startsWith('archive note')
+            ? 4
+            : 5;
+
+/** The lifecycle state a name's prefix says (`[BARC]` archived, `[BWRK]` working, else Authoritative). */
+export function stateByName(name: string): 'authoritative' | 'working' | 'archived' {
+  const k = classifyName(name).kind;
+  return k === 'barc' ? 'archived' : k === 'bwrk' ? 'working' : 'authoritative';
+}
+
+/** The record a change writes when its job starts (the page as it is now and the target). */
+function recordInputOf(plan: Plan, page: PageNow, target: LifecycleTarget): LifecycleRecordInput {
+  return {
+    pageId: page.node.id,
+    pageName: page.name,
+    action: plan.action,
+    date: plan.record.date,
+    previousState: plan.record.previousState,
+    previousParentId: page.parentId,
+    previousRank: page.rank,
+    previousName: page.name,
+    previousPrefix: page.kind === 'unclassified' ? '' : KIND_PREFIX[page.kind as 'bsrc'].trim(),
+    previousFacts: plan.record.previousFacts,
+    tagsRemoved: plan.record.tagsRemoved,
+    tagsAdded: plan.record.tagsAdded,
+    ...(target.note?.action === 'insert'
+      ? { noteBlockId: target.note.blockId, noteContent: target.note.block ?? null }
+      : {}),
+    target,
+    detail: plan.record.detail,
+    ...(plan.record.resumeOf !== undefined ? { resumeOf: plan.record.resumeOf } : {}),
+  };
+}
+
+/** What one page of a change writes, checks and verifies; the caller places the page (or its set's root). */
+export interface PagePart {
+  readonly page: PageNow;
+  readonly target: LifecycleTarget;
+  readonly updateStep: StepSpec | null;
+  readonly updateLabel: string;
+  readonly renameChange: boolean;
+  readonly tagsChange: boolean;
+  readonly newTags: string[];
+  readonly factSteps: { step: StepSpec; label: string }[];
+  readonly noteSteps: { step: StepSpec; label: string }[];
+  readonly checks: ExpectCheck[];
+  readonly verify: VerifyTarget[];
+  readonly holdDocument?: { documentId: string };
+  readonly noteHead?: Obj;
+  readonly noteFlags: string[];
+  readonly factTable: { key: string; before: string | null; after: string | null; change: string }[];
+  readonly pageParts: string[];
+}
+
+/**
+ * One page's part of a change (C2c's plan, shared by the single-page tools and the whole-set ones, C2d): the rename and
+ * tags (one write), the lifecycle facts (C2a's planner, in template order for missing rows), and the note (block by
+ * block, so it works beside content the whole-document write cannot take back); their in-lock checks and verify targets.
+ * Only what differs from the target is written (a resume does only what is left).
+ */
+export async function planPage(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  ctx: RepoCtx,
+  c: LifecycleConfig,
+  propertyTitle: string,
+  page: PageNow,
+  target: LifecycleTarget,
+  tool: string,
+  /** C2d: a set names each page in its step labels and checks (a single page keeps C2c's labels). */
+  qualify = false,
+): Promise<{ ok: true; value: PagePart } | { ok: false; result: McpToolResult }> {
+  const label = page.name;
+  const of = (what: string) => (qualify ? `${what} of ${label}` : what);
+  const verify: VerifyTarget[] = [];
+  const checks: ExpectCheck[] = [];
+  const journal = (write: string) => ({ tool, page: { id: page.node.id, name: page.name }, write });
+
+  // --- the rename and the tags (one write).
+  const newTags = tagsAfter(page.tags, target.tagsRemove, target.tagsAdd);
+  const tagsChange = JSON.stringify(newTags) !== JSON.stringify(page.tags);
+  const renameChange = page.name !== target.name;
+  const updateBody: Obj = {
+    ...(renameChange ? { name: target.name } : {}),
+    ...(tagsChange ? { tags: newTags } : {}),
+  };
+  const updateStep: StepSpec | null =
+    Object.keys(updateBody).length > 0
+      ? {
+          op: 'updateResource',
+          params: { path: { resourceId: page.node.id }, body: updateBody },
+          journalOperation: journal(renameChange ? `renamed to ${target.name}` : 'tags'),
+          // CR-2026-11 (CR-03): the tree re-reads the page once, when the job ends, for all its writes together.
+          deferTreeReread: true,
+        }
+      : null;
+  const updateLabel = [
+    renameChange ? (qualify ? `rename ${page.name} to ${target.name}` : `rename to ${target.name}`) : '',
+    tagsChange ? of('tags') : '',
+  ]
+    .filter(Boolean)
+    .join(' and ');
 
   // --- the facts (C2a's planner, in template order for missing rows).
   const facts: { key: string; value: Obj[] | null }[] = ROLES.filter(
     (r) => target.facts[r] !== undefined,
   ).map((r) => {
     const v = target.facts[r]!;
-    return { key: c.fields[r], value: v === null ? null : v === '' ? [] : [{ text: v }] };
+    // C2d: as LegendKeeper stores it (lines with breaks between them, none leading or trailing).
+    return { key: c.fields[r], value: v === null ? null : rowTextRuns(v) };
   });
   const kv = page.sidebar.filter((p) => p.kind === 'keyValue' && factKey(p.title) === factKey(propertyTitle));
   let factsPlan: FactsPlan | null = null;
@@ -349,7 +550,7 @@ async function build(
   const factSteps: { step: StepSpec; label: string }[] = [];
   if (factsPlan && factWrites.length > 0 && factsPlan.property) {
     checks.push({
-      label: factsPlan.property.title,
+      label: qualify ? `${label} ${factsPlan.property.title}` : factsPlan.property.title,
       kind: 'propertyRows',
       resourceId: page.node.id,
       propertyId: factsPlan.property.id,
@@ -373,7 +574,7 @@ async function build(
           journalOperation: journal(w.label),
           ...(i === 0 && preImage ? { journalPreImage: preImage } : {}),
         },
-        label: `${w.label}`,
+        label: qualify ? `${label}: ${w.label}` : `${w.label}`,
       });
     });
     verify.push({
@@ -419,18 +620,20 @@ async function build(
           },
           journalOperation: journal('the archive note, as the first block'),
         },
-        label: 'insert the archive note',
+        label: of('insert the archive note'),
       });
       holdDocument = { documentId: note.documentId };
       noteHead = { action: 'insert', blockId: note.blockId, diff: `+ ${noteText(note.block ?? {})}` };
     }
     if (note.action === 'remove' && at < 0)
-      noteFlags.push('the archive note is no longer on the page; nothing to remove');
+      noteFlags.push(
+        `${qualify ? `${label}: ` : ''}the archive note is no longer on the page; nothing to remove`,
+      );
     if (note.action === 'remove' && at >= 0) {
       const unchanged = note.block !== undefined && compareStoredBlocks([note.block], [blocks[at]], 1).ok;
       if (!unchanged) {
         noteFlags.push(
-          'the archive note was edited after archiving, so it is KEPT on the page (only an unchanged note is removed); remove or change it by hand',
+          `${qualify ? `${label}: ` : ''}the archive note was edited after archiving, so it is KEPT on the page (only an unchanged note is removed); remove or change it by hand`,
         );
       }
       if (unchanged) {
@@ -450,7 +653,7 @@ async function build(
             },
             journalOperation: journal('the archive note removed'),
           },
-          label: 'remove the archive note',
+          label: of('remove the archive note'),
         });
         holdDocument = { documentId: note.documentId };
         noteHead = { action: 'remove', blockId: note.blockId, diff: `- ${noteText(note.block)}` };
@@ -478,75 +681,6 @@ async function build(
     }
   }
 
-  // --- the check, the record, the writes in their order, the verify, the record's end.
-  const recordInput = {
-    pageId: page.node.id,
-    pageName: page.name,
-    action,
-    date: plan.record.date,
-    previousState: plan.record.previousState,
-    previousParentId: page.parentId,
-    previousRank: page.rank,
-    previousName: page.name,
-    previousPrefix: page.kind === 'unclassified' ? '' : KIND_PREFIX[page.kind as 'bsrc'].trim(),
-    previousFacts: plan.record.previousFacts,
-    tagsRemoved: plan.record.tagsRemoved,
-    tagsAdded: plan.record.tagsAdded,
-    ...(target.note?.action === 'insert'
-      ? { noteBlockId: target.note.blockId, noteContent: target.note.block ?? null }
-      : {}),
-    target,
-    detail: plan.record.detail,
-    ...(plan.record.resumeOf !== undefined ? { resumeOf: plan.record.resumeOf } : {}),
-  };
-  const writesInOrder = LEAVING[action]
-    ? [
-        ...(updateStep ? [{ step: updateStep, label: updateLabel }] : []),
-        ...factSteps,
-        ...noteSteps,
-        ...moveSteps,
-      ]
-    : [
-        ...moveSteps,
-        ...factSteps,
-        ...noteSteps,
-        ...(updateStep ? [{ step: updateStep, label: updateLabel }] : []),
-      ];
-  steps.push({ op: EXPECT_STEP, params: { body: { checks } } });
-  labels.push('check');
-  steps.push({ op: RECORD_STEP, params: { body: { action: 'begin', record: recordInput } } });
-  labels.push('record');
-  for (const w of writesInOrder) {
-    const step =
-      w.step.ifMatchFrom?.step === -1 ? { ...w.step, ifMatchFrom: { step: steps.length } } : w.step;
-    steps.push(step);
-    labels.push(w.label);
-  }
-  // The page (and a moved index) where the plan puts it, named and tagged as planned.
-  verify.unshift({
-    kind: 'resource',
-    label: target.name,
-    resourceId: page.node.id,
-    fields: { name: target.name, tags: newTags, ...(mover ? {} : { parentId: target.parentId }) },
-    ...(placement && !mover ? { placement } : {}),
-  });
-  if (mover && placement) {
-    verify.push({
-      kind: 'resource',
-      label: mover.name,
-      resourceId: mover.id,
-      fields: { parentId: target.parentId },
-      placement,
-    });
-  }
-  steps.push({ op: VERIFY_STEP, params: { body: { targets: verify } } });
-  labels.push('verify');
-  steps.push({
-    op: RECORD_STEP,
-    params: { body: { action: 'complete', record: { flags: [...plan.flags, ...noteFlags] } } },
-  });
-  labels.push('record complete');
-
   const factTable = ROLES.filter((r) => target.facts[r] !== undefined).map((r) => {
     const before = factsOf(c, propertyTitle, page.sidebar)[r];
     const after = target.facts[r] ?? null;
@@ -564,66 +698,39 @@ async function build(
               : 'changed',
     };
   });
-  // The state the page moves to, by the prefix it ends with.
-  const endKind = classifyName(target.name).kind;
-  const toState: LifecycleMarker['pages'][number]['to'] =
-    endKind === 'barc' ? 'archived' : endKind === 'bwrk' ? 'working' : 'authoritative';
-  const marker: LifecycleMarker = {
-    tool,
-    canonical: true,
-    pages: [{ id: page.node.id, to: toState }, ...(mover ? [{ id: mover.id, to: null }] : [])],
-  };
-  const parentNode = ctx.tree.node(pid, target.parentId).data;
-  const head: Obj = {
-    page: { id: page.node.id, name: page.name, path: page.node.path.names.join(' / ') },
-    action: tool,
-    newName: target.name,
-    newParent: { id: target.parentId, name: parentNode?.rawName ?? target.parentId },
-    ...(placement ? { place: { after: placement.after, before: placement.before } } : {}),
-    facts: factTable.filter((f) => f.change !== 'unchanged'),
-    tags: {
-      before: page.tags,
-      after: newTags,
-      removed: plan.record.tagsRemoved,
-      added: plan.record.tagsAdded,
-    },
-    ...(noteHead ? { note: noteHead } : {}),
-    ...(mover ? { characterIndex: { id: mover.id, name: mover.name, movesWith: true } } : {}),
-    ...(plan.flags.length + noteFlags.length ? { flags: [...plan.flags, ...noteFlags] } : {}),
-    ...(plan.record.resumeOf !== undefined ? { resumes: { recordId: plan.record.resumeOf } } : {}),
-  };
-  const operation: Obj = {
-    tool,
-    page: { id: page.node.id, name: page.name },
-    pageParts: [
-      ...(renameChange ? [`renamed to ${target.name}`] : []),
-      ...(moveSteps.length ? [`moved under ${parentNode?.rawName ?? target.parentId}`] : []),
-      ...(factWrites.length ? [`${factWrites.length} fact write${factWrites.length === 1 ? '' : 's'}`] : []),
-      ...(tagsChange ? ['tags'] : []),
-      ...(noteSteps.length
-        ? [noteHead?.action === 'insert' ? 'archive note added' : 'archive note removed']
-        : []),
-    ],
-    summaryLabel: `${tool}: ${page.name} → ${target.name} under ${parentNode?.rawName ?? target.parentId}`,
-    lifecycle: head,
-  };
   return {
     ok: true,
     value: {
-      steps,
-      labels,
-      marker,
-      hold: { resourceId: page.node.id },
+      page,
+      target,
+      updateStep,
+      updateLabel,
+      renameChange,
+      tagsChange,
+      newTags,
+      factSteps,
+      noteSteps,
+      checks,
+      verify,
       ...(holdDocument ? { holdDocument } : {}),
-      ...(mover ? { holdAlso: { resourceId: mover.id } } : {}),
-      head,
-      operation,
-      writes: writesInOrder.length,
+      ...(noteHead ? { noteHead } : {}),
+      noteFlags,
+      factTable,
+      pageParts: [
+        ...(renameChange ? [`renamed to ${target.name}`] : []),
+        ...(factWrites.length
+          ? [`${factWrites.length} fact write${factWrites.length === 1 ? '' : 's'}`]
+          : []),
+        ...(tagsChange ? ['tags'] : []),
+        ...(noteSteps.length
+          ? [noteHead?.action === 'insert' ? 'archive note added' : 'archive note removed']
+          : []),
+      ],
     },
   };
 }
 
-function noteText(block: Readonly<Record<string, unknown>>): string {
+export function noteText(block: Readonly<Record<string, unknown>>): string {
   const content = Array.isArray(block.content) ? (block.content as Obj[]) : [];
   return content.map((r) => (typeof r.text === 'string' ? r.text : '')).join('');
 }
@@ -681,14 +788,14 @@ async function relatedPages(
 
 // ============================================================================================ the tools
 
-const dryRunArg = z
+export const dryRunArg = z
   .boolean()
   .optional()
   .describe(
     'Show the plan (move, name, facts, tags, note, related pages); capture nothing and write nothing.',
   );
 
-const CANON_NOTE =
+export const CANON_NOTE =
   'ALWAYS needs the owner’s canonical approval, whatever your scope: the call returns proposal_captured with ' +
   'requiresCanonicalApproval; never retry it, follow it with bridge_proposal_status. A call on a page whose earlier ' +
   'change of the same kind stopped part-way resumes it (only what is left). Every check is made again when it runs.';
@@ -742,6 +849,16 @@ async function runLifecycle(
         }
         // A change of this page that stopped part-way: the same tool resumes it; another waits for it.
         const incomplete = lc.store.incomplete(ctx.projectId, node.id);
+        // C2d: a page of a whole-set change that stopped part-way: the set is resumed as a whole, on its root.
+        const ofSet = incomplete?.setId ? lc.store.set(ctx.projectId, incomplete.setId) : null;
+        if (incomplete && ofSet) {
+          return refuse(
+            pd,
+            'LIFECYCLE_INCOMPLETE',
+            `“${node.rawName}” is part of a whole-set ${TOOL[ofSet.action]} that stopped part-way (set record ${ofSet.id}, root “${ofSet.rootName}”); call ${TOOL[ofSet.action]} with subtree: true on ${ofSet.rootId} to finish it first. Nothing was done.`,
+            { setId: ofSet.id, root: { id: ofSet.rootId, name: ofSet.rootName }, action: TOOL[ofSet.action] },
+          );
+        }
         if (incomplete) {
           const job = incomplete.jobId ? pd.engine.queries.getJob(ctx.projectId, incomplete.jobId) : null;
           if (job && !['succeeded', 'failed', 'cancelled'].includes(job.status)) {
@@ -837,7 +954,7 @@ async function runLifecycle(
 }
 
 /** The archive target of a page in a state (`from`), with a new note. */
-function archiveTarget(
+export function archiveTarget(
   c: LifecycleConfig,
   page: PageNow,
   facts: LifecycleFacts,
@@ -878,7 +995,7 @@ function archiveTarget(
 }
 
 /** A page's lifecycle state by its prefix, and whether its Status says another one (an inconsistent page). */
-function stateOf(
+export function stateOf(
   c: LifecycleConfig,
   page: PageNow,
   facts: LifecycleFacts,
@@ -914,9 +1031,35 @@ function subpageRefusal(pd: ProjectDeps, ctx: RepoCtx, node: TreeNode, tool: str
   return refuse(
     pd,
     'HAS_SUBPAGES',
-    `“${node.rawName}” has ${kids.length} page${kids.length === 1 ? '' : 's'} under it, so ${tool} refuses it (a lifecycle change moves one page). Move or change them first.`,
+    `“${node.rawName}” has ${kids.length} page${kids.length === 1 ? '' : 's'} under it, so ${tool} refuses it (a lifecycle change of one page moves that page alone). To change the whole set together, pass subtree: true; otherwise move or change them first.`,
     { subpages: kids.slice(0, 50).map((k) => ({ id: k.id, name: k.rawName })) },
   );
+}
+
+/** C2d (ADR 0037): the whole set (`subtree: true`); a hand-archived page's arguments are for a single page only. */
+function runSubtree(
+  deps: ToolDeps,
+  mctx: McpToolContext,
+  action: LifecycleAction,
+  args: Common & {
+    readonly destination?: string | undefined;
+    readonly previousState?: unknown;
+    readonly restore?: unknown;
+  },
+): McpToolResult | Promise<McpToolResult> {
+  if (args.previousState !== undefined || args.restore !== undefined) {
+    return withProject(deps, args.project, 'write', (pd) =>
+      errorResult(
+        {
+          code: 'INVALID_ARGUMENTS',
+          message:
+            'previousState and restore are for one page archived by hand; a set is unarchived from the record of its archiving (subtree: true takes neither). Nothing was done.',
+        },
+        pd,
+      ),
+    );
+  }
+  return runSet(deps, mctx, action, args);
 }
 
 function archivePageTool(deps: ToolDeps): McpToolProvider {
@@ -935,85 +1078,90 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
       ' Cost: about 6 reads to plan (1 of them a content search); the job about 19 reads (checks, in-lock reads, verify) ' +
       'and up to 8 writes: 1 to rename and tag, 1 per fact changed, 1 for the note, 1 to move.',
     inputSchema: z.object({
-      page: pageRef.describe('The page to archive (name or id).'),
+      page: pageRef.describe('The page to archive (name or id); with subtree, the root of the set.'),
+      subtree: subtreeArg,
       dryRun: dryRunArg,
       project: projectArg,
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'archive', args, (pd, ctx, c, idx, page, o) => {
-        const facts = factsOf(c, o.propertyTitle, page.sidebar);
-        const rec = o.incomplete;
-        if (!rec) {
-          if (page.kind === 'index')
-            return refuse(pd, 'INDEX_PAGE', `“${page.name}” is an index: only pages are archived.`);
-          if (page.kind === 'barc')
-            return refuse(pd, 'ALREADY_ARCHIVED', `“${page.name}” is already archived.`);
-          if (page.kind !== 'bsrc' && page.kind !== 'bwrk') {
-            return refuse(
-              pd,
-              'NOT_LIFECYCLE_PAGE',
-              `“${page.name}” is neither an Authoritative [BSRC] page nor a Working [BWRK] page.`,
-            );
-          }
-          const st = stateOf(c, page, facts);
-          if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
-        }
-        const sub = subpageRefusal(pd, ctx, page.node, 'archive_page');
-        if (sub) return sub;
-        const from: 'authoritative' | 'working' = rec
-          ? rec.previousState === 'working'
-            ? 'working'
-            : 'authoritative'
-          : page.kind === 'bwrk'
-            ? 'working'
-            : 'authoritative';
-        let target: LifecycleTarget;
-        if (rec) target = rec.target;
-        else {
-          const doc = mainDocument(page);
-          if (!doc) {
-            return refuse(
-              pd,
-              'NO_PAGE_DOCUMENT',
-              `“${page.name}” has no page document for the archive note; nothing was done.`,
-            );
-          }
-          target = archiveTarget(c, page, facts, from, idx.archived.id, o.date, doc);
-        }
-        const twin = ctx.tree
-          .children(ctx.projectId, target.parentId)
-          .data.find(
-            (x) =>
-              x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
-          );
-        if (twin) {
-          return refuse(
-            pd,
-            'NAME_TAKEN',
-            `[INDEX] ${c.indexNames.archived} already holds “${twin.rawName}”; rename one of them first.`,
-            {
-              existing: { id: twin.id, name: twin.rawName },
-            },
-          );
-        }
-        return {
-          action: 'archive',
-          tool: 'archive_page',
-          page,
-          target,
-          record: {
-            previousState: rec ? rec.previousState : from,
-            previousFacts: rec ? rec.previousFacts : facts,
-            tagsRemoved: target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t)) || rec !== null),
-            tagsAdded: target.tagsAdd,
-            date: o.date,
-            detail: {},
-            ...(rec ? { resumeOf: rec.id } : {}),
-          },
-          flags: [],
-        };
-      }),
+      args.subtree === true
+        ? runSubtree(deps, mctx, 'archive', args)
+        : runLifecycle(deps, mctx, 'archive', args, (pd, ctx, c, idx, page, o) => {
+            const facts = factsOf(c, o.propertyTitle, page.sidebar);
+            const rec = o.incomplete;
+            if (!rec) {
+              if (page.kind === 'index')
+                return refuse(pd, 'INDEX_PAGE', `“${page.name}” is an index: only pages are archived.`);
+              if (page.kind === 'barc')
+                return refuse(pd, 'ALREADY_ARCHIVED', `“${page.name}” is already archived.`);
+              if (page.kind !== 'bsrc' && page.kind !== 'bwrk') {
+                return refuse(
+                  pd,
+                  'NOT_LIFECYCLE_PAGE',
+                  `“${page.name}” is neither an Authoritative [BSRC] page nor a Working [BWRK] page.`,
+                );
+              }
+              const st = stateOf(c, page, facts);
+              if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
+            }
+            const sub = subpageRefusal(pd, ctx, page.node, 'archive_page');
+            if (sub) return sub;
+            const from: 'authoritative' | 'working' = rec
+              ? rec.previousState === 'working'
+                ? 'working'
+                : 'authoritative'
+              : page.kind === 'bwrk'
+                ? 'working'
+                : 'authoritative';
+            let target: LifecycleTarget;
+            if (rec) target = rec.target;
+            else {
+              const doc = mainDocument(page);
+              if (!doc) {
+                return refuse(
+                  pd,
+                  'NO_PAGE_DOCUMENT',
+                  `“${page.name}” has no page document for the archive note; nothing was done.`,
+                );
+              }
+              target = archiveTarget(c, page, facts, from, idx.archived.id, o.date, doc);
+            }
+            const twin = ctx.tree
+              .children(ctx.projectId, target.parentId)
+              .data.find(
+                (x) =>
+                  x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
+              );
+            if (twin) {
+              return refuse(
+                pd,
+                'NAME_TAKEN',
+                `[INDEX] ${c.indexNames.archived} already holds “${twin.rawName}”; rename one of them first.`,
+                {
+                  existing: { id: twin.id, name: twin.rawName },
+                },
+              );
+            }
+            return {
+              action: 'archive',
+              tool: 'archive_page',
+              page,
+              target,
+              record: {
+                previousState: rec ? rec.previousState : from,
+                previousFacts: rec ? rec.previousFacts : facts,
+                tagsRemoved: target.tagsRemove.filter(
+                  (t) => page.tags.some((x) => same(x, t)) || rec !== null,
+                ),
+                tagsAdded: target.tagsAdd,
+                date: o.date,
+                detail: {},
+                ...(rec ? { resumeOf: rec.id } : {}),
+              },
+              flags: [],
+            };
+          }),
   });
 }
 
@@ -1035,10 +1183,13 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
       ' Cost: about 4 reads to plan; the job about 19 reads (checks, in-lock reads, verify) and up to 8 writes: 1 to ' +
       'move, 1 per fact changed, 1 to remove the note, 1 to rename and tag.',
     inputSchema: z.object({
-      page: pageRef.describe('The [BARC] page (name or id).'),
+      page: pageRef.describe('The [BARC] page (name or id); with subtree, the root of the archived set.'),
+      subtree: subtreeArg,
       destination: pageRef
         .optional()
-        .describe('Where it goes back (an index), when its previous parent cannot be used.'),
+        .describe(
+          'Where it goes back (an index), when its previous parent cannot be used (a page unarchived alone from inside an archived set always needs it).',
+        ),
       previousState: z
         .enum(['authoritative', 'working'])
         .optional()
@@ -1060,192 +1211,199 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'unarchive', args, (pd, ctx, c, idx, page, o) => {
-        const lc = pd.services!.lifecycle!;
-        const flags: string[] = [];
-        const facts = factsOf(c, o.propertyTitle, page.sidebar);
-        if (o.incomplete) {
-          // Resume: the same target, re-planned from the page as it is now.
-          return {
-            action: 'unarchive',
-            tool: 'unarchive_page',
-            page,
-            target: o.incomplete.target,
-            record: {
-              previousState: o.incomplete.previousState,
-              previousFacts: o.incomplete.previousFacts,
-              tagsRemoved: o.incomplete.tagsRemoved,
-              tagsAdded: o.incomplete.tagsAdded,
-              date: o.date,
-              detail: {},
-              resumeOf: o.incomplete.id,
-            },
-            flags,
-          };
-        }
-        if (page.kind !== 'barc') {
-          return refuse(
-            pd,
-            'NOT_ARCHIVED',
-            `“${page.name}” is not an Archived [BARC] page; unarchive_page reverses an archiving.`,
-          );
-        }
-        const sub = subpageRefusal(pd, ctx, page.node, 'unarchive_page');
-        if (sub) return sub;
-        const last = lc.store.latest(ctx.projectId, page.node.id, ['archive', 'unarchive']);
-        const rec = last && last.action === 'archive' && last.state === 'complete' ? last : null;
-        let state: 'authoritative' | 'working';
-        let restore: LifecycleFacts;
-        let parentId: string;
-        let note: LifecycleTarget['note'];
-        const destination = (q: string | undefined, why: string): TreeNode | Answer => {
-          if (q === undefined) {
-            return refuse(
-              pd,
-              'DESTINATION_REQUIRED',
-              `${why} Give \`destination\`: the index it goes back under.`,
-            );
-          }
-          const d = resolveParent(ctx, q, { what: `the destination “${q}”` });
-          if (!d.ok) return { kind: 'answer', result: d.result };
-          if (
-            d.value.id === idx.working.id ||
-            d.value.id === idx.archived.id ||
-            d.value.path.ids.includes(idx.working.id) ||
-            d.value.path.ids.includes(idx.archived.id)
-          ) {
-            return refuse(
-              pd,
-              'LIFECYCLE_AREA',
-              `“${d.value.displayName}” is a lifecycle index or under one; an Authoritative page goes back to its normal place.`,
-            );
-          }
-          return d.value;
-        };
-        if (rec) {
-          state = rec.previousState === 'working' ? 'working' : 'authoritative';
-          restore = rec.previousFacts;
-          if (state === 'working') parentId = idx.working.id;
-          else {
-            const prev = rec.previousParentId
-              ? ctx.tree.node(ctx.projectId, rec.previousParentId).data
-              : null;
-            const usable =
-              prev &&
-              prev.kind !== 'root' &&
-              prev.id !== idx.working.id &&
-              prev.id !== idx.archived.id &&
-              !prev.path.ids.includes(idx.working.id) &&
-              !prev.path.ids.includes(idx.archived.id);
-            if (args.destination !== undefined || !usable) {
-              const d = destination(
-                args.destination,
-                `Its previous parent (${rec.previousParentId ?? 'none'}) is gone, outside the repository or not usable.`,
+      args.subtree === true
+        ? runSubtree(deps, mctx, 'unarchive', args)
+        : runLifecycle(deps, mctx, 'unarchive', args, (pd, ctx, c, idx, page, o) => {
+            const lc = pd.services!.lifecycle!;
+            const flags: string[] = [];
+            const facts = factsOf(c, o.propertyTitle, page.sidebar);
+            if (o.incomplete) {
+              // Resume: the same target, re-planned from the page as it is now.
+              return {
+                action: 'unarchive',
+                tool: 'unarchive_page',
+                page,
+                target: o.incomplete.target,
+                record: {
+                  previousState: o.incomplete.previousState,
+                  previousFacts: o.incomplete.previousFacts,
+                  tagsRemoved: o.incomplete.tagsRemoved,
+                  tagsAdded: o.incomplete.tagsAdded,
+                  date: o.date,
+                  detail: {},
+                  resumeOf: o.incomplete.id,
+                },
+                flags,
+              };
+            }
+            if (page.kind !== 'barc') {
+              return refuse(
+                pd,
+                'NOT_ARCHIVED',
+                `“${page.name}” is not an Archived [BARC] page; unarchive_page reverses an archiving.`,
               );
-              if ('result' in d) return d;
-              parentId = d.id;
-              if (usable && d.id !== prev.id)
-                flags.push(`returns under ${d.rawName}, not its previous parent ${prev.rawName}, as asked`);
-            } else parentId = prev.id;
-          }
-          // The note: removed only if it is still exactly what was inserted.
-          const noteDoc = rec.target.note?.documentId ?? null;
-          if (rec.noteBlockId && noteDoc && rec.noteContent) {
-            // Checked against the document when the job is built: removed only if it is still exactly as inserted.
-            note = {
-              action: 'remove',
-              blockId: rec.noteBlockId,
-              documentId: noteDoc,
-              block: rec.noteContent as Obj,
+            }
+            const sub = subpageRefusal(pd, ctx, page.node, 'unarchive_page');
+            if (sub) return sub;
+            const last = lc.store.latest(ctx.projectId, page.node.id, ['archive', 'unarchive']);
+            const rec = last && last.action === 'archive' && last.state === 'complete' ? last : null;
+            let state: 'authoritative' | 'working';
+            let restore: LifecycleFacts;
+            let parentId: string;
+            let note: LifecycleTarget['note'];
+            const destination = (q: string | undefined, why: string): TreeNode | Answer => {
+              if (q === undefined) {
+                return refuse(
+                  pd,
+                  'DESTINATION_REQUIRED',
+                  `${why} Give \`destination\`: the index it goes back under.`,
+                );
+              }
+              const d = resolveParent(ctx, q, { what: `the destination “${q}”` });
+              if (!d.ok) return { kind: 'answer', result: d.result };
+              if (
+                d.value.id === idx.working.id ||
+                d.value.id === idx.archived.id ||
+                d.value.path.ids.includes(idx.working.id) ||
+                d.value.path.ids.includes(idx.archived.id)
+              ) {
+                return refuse(
+                  pd,
+                  'LIFECYCLE_AREA',
+                  `“${d.value.displayName}” is a lifecycle index or under one; an Authoritative page goes back to its normal place.`,
+                );
+              }
+              return d.value;
             };
-          }
-          // Scope: edited after archiving when it is no longer the archive prefix plus the original.
-          const expected = archivedScope(c, rec.previousFacts.scope ?? '');
-          if (facts.scope !== null && !same(facts.scope, expected)) {
-            flags.push(
-              `Scope was edited after archiving (it is “${facts.scope}”); the recorded original “${rec.previousFacts.scope ?? ''}” is restored`,
-            );
-          }
-        } else {
-          // Archived by hand: the agent supplies what the record would have held.
-          const missing = [
-            ...(args.previousState === undefined ? ['previousState'] : []),
-            ...(args.restore === undefined ? ['restore (continuityType, scope, temporalScope)'] : []),
-            ...(args.previousState !== 'working' && args.destination === undefined ? ['destination'] : []),
-          ];
-          if (missing.length > 0) {
-            return refuse(
-              pd,
-              'NO_LIFECYCLE_RECORD',
-              `The bridge has no record of archiving “${page.name}” (it was archived by hand), so it cannot know what to restore. Give: ${missing.join(', ')}. Nothing was done.`,
-              { missing },
-            );
-          }
-          state = args.previousState!;
-          restore = {
-            status: args.restore!.status ?? (state === 'working' ? c.status.working : c.status.authoritative),
-            continuityType: args.restore!.continuityType,
-            scope: args.restore!.scope,
-            temporalScope: args.restore!.temporalScope,
-            lastMajorRevision: null,
-          };
-          if (state === 'working') parentId = idx.working.id;
-          else {
-            const d = destination(args.destination, 'A page archived by hand has no recorded parent.');
-            if ('result' in d) return d;
-            parentId = d.id;
-          }
-          flags.push(
-            'archived by hand: no archive note is known, so none is removed (remove it by hand if there is one)',
-          );
-        }
-        const kind = state === 'working' ? 'bwrk' : 'bsrc';
-        const target: LifecycleTarget = {
-          name: `${KIND_PREFIX[kind]}${page.displayName}`,
-          parentId,
-          facts: {
-            status: state === 'working' ? c.status.working : (restore.status ?? null),
-            continuityType: restore.continuityType,
-            scope: restore.scope,
-            temporalScope: restore.temporalScope,
-            lastMajorRevision: o.date,
-          },
-          tagsRemove: [c.tags.archived],
-          tagsAdd: [state === 'working' ? c.tags.working : c.tags.canon],
-          ...(note ? { note } : {}),
-        };
-        const twin = ctx.tree
-          .children(ctx.projectId, parentId)
-          .data.find(
-            (x) =>
-              x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
-          );
-        if (twin) {
-          return refuse(
-            pd,
-            'NAME_TAKEN',
-            `The destination already holds “${twin.rawName}”; give another \`destination\`.`,
-            {
-              existing: { id: twin.id, name: twin.rawName },
-            },
-          );
-        }
-        return {
-          action: 'unarchive',
-          tool: 'unarchive_page',
-          page,
-          target,
-          record: {
-            previousState: 'archived',
-            previousFacts: facts,
-            tagsRemoved: target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t))),
-            tagsAdded: target.tagsAdd,
-            date: o.date,
-            detail: rec ? { archiveRecord: rec.id } : { handArchived: true },
-          },
-          flags,
-        };
-      }),
+            if (rec) {
+              state = rec.previousState === 'working' ? 'working' : 'authoritative';
+              restore = rec.previousFacts;
+              if (state === 'working') parentId = idx.working.id;
+              else {
+                const prev = rec.previousParentId
+                  ? ctx.tree.node(ctx.projectId, rec.previousParentId).data
+                  : null;
+                const usable =
+                  prev &&
+                  prev.kind !== 'root' &&
+                  prev.id !== idx.working.id &&
+                  prev.id !== idx.archived.id &&
+                  !prev.path.ids.includes(idx.working.id) &&
+                  !prev.path.ids.includes(idx.archived.id);
+                if (args.destination !== undefined || !usable) {
+                  const d = destination(
+                    args.destination,
+                    `Its previous parent (${rec.previousParentId ?? 'none'}) is gone, outside the repository or not usable.`,
+                  );
+                  if ('result' in d) return d;
+                  parentId = d.id;
+                  if (usable && d.id !== prev.id)
+                    flags.push(
+                      `returns under ${d.rawName}, not its previous parent ${prev.rawName}, as asked`,
+                    );
+                } else parentId = prev.id;
+              }
+              // The note: removed only if it is still exactly what was inserted.
+              const noteDoc = rec.target.note?.documentId ?? null;
+              if (rec.noteBlockId && noteDoc && rec.noteContent) {
+                // Checked against the document when the job is built: removed only if it is still exactly as inserted.
+                note = {
+                  action: 'remove',
+                  blockId: rec.noteBlockId,
+                  documentId: noteDoc,
+                  block: rec.noteContent as Obj,
+                };
+              }
+              // Scope: edited after archiving when it is no longer the archive prefix plus the original.
+              const expected = archivedScope(c, rec.previousFacts.scope ?? '');
+              if (facts.scope !== null && !same(facts.scope, expected)) {
+                flags.push(
+                  `Scope was edited after archiving (it is “${facts.scope}”); the recorded original “${rec.previousFacts.scope ?? ''}” is restored`,
+                );
+              }
+            } else {
+              // Archived by hand: the agent supplies what the record would have held.
+              const missing = [
+                ...(args.previousState === undefined ? ['previousState'] : []),
+                ...(args.restore === undefined ? ['restore (continuityType, scope, temporalScope)'] : []),
+                ...(args.previousState !== 'working' && args.destination === undefined
+                  ? ['destination']
+                  : []),
+              ];
+              if (missing.length > 0) {
+                return refuse(
+                  pd,
+                  'NO_LIFECYCLE_RECORD',
+                  `The bridge has no record of archiving “${page.name}” (it was archived by hand), so it cannot know what to restore. Give: ${missing.join(', ')}. Nothing was done.`,
+                  { missing },
+                );
+              }
+              state = args.previousState!;
+              restore = {
+                status:
+                  args.restore!.status ?? (state === 'working' ? c.status.working : c.status.authoritative),
+                continuityType: args.restore!.continuityType,
+                scope: args.restore!.scope,
+                temporalScope: args.restore!.temporalScope,
+                lastMajorRevision: null,
+              };
+              if (state === 'working') parentId = idx.working.id;
+              else {
+                const d = destination(args.destination, 'A page archived by hand has no recorded parent.');
+                if ('result' in d) return d;
+                parentId = d.id;
+              }
+              flags.push(
+                'archived by hand: no archive note is known, so none is removed (remove it by hand if there is one)',
+              );
+            }
+            const kind = state === 'working' ? 'bwrk' : 'bsrc';
+            const target: LifecycleTarget = {
+              name: `${KIND_PREFIX[kind]}${page.displayName}`,
+              parentId,
+              facts: {
+                status: state === 'working' ? c.status.working : (restore.status ?? null),
+                continuityType: restore.continuityType,
+                scope: restore.scope,
+                temporalScope: restore.temporalScope,
+                lastMajorRevision: o.date,
+              },
+              tagsRemove: [c.tags.archived],
+              tagsAdd: [state === 'working' ? c.tags.working : c.tags.canon],
+              ...(note ? { note } : {}),
+            };
+            const twin = ctx.tree
+              .children(ctx.projectId, parentId)
+              .data.find(
+                (x) =>
+                  x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
+              );
+            if (twin) {
+              return refuse(
+                pd,
+                'NAME_TAKEN',
+                `The destination already holds “${twin.rawName}”; give another \`destination\`.`,
+                {
+                  existing: { id: twin.id, name: twin.rawName },
+                },
+              );
+            }
+            return {
+              action: 'unarchive',
+              tool: 'unarchive_page',
+              page,
+              target,
+              record: {
+                previousState: 'archived',
+                previousFacts: facts,
+                tagsRemoved: target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t))),
+                tagsAdded: target.tagsAdd,
+                date: o.date,
+                detail: rec ? { archiveRecord: rec.id } : { handArchived: true },
+              },
+              flags,
+            };
+          }),
   });
 }
 
@@ -1264,85 +1422,88 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
       ' Cost: about 3 reads to plan (1 of them a content search); the job about 15 reads (checks, in-lock reads, verify) ' +
       'and 3 writes: rename and tag, Status, move.',
     inputSchema: z.object({
-      page: pageRef.describe('The [BSRC] page (name or id).'),
+      page: pageRef.describe('The [BSRC] page (name or id); with subtree, the root of the set.'),
+      subtree: subtreeArg,
       dryRun: dryRunArg,
       project: projectArg,
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'move_to_working', args, (pd, ctx, c, idx, page, o) => {
-        const facts = factsOf(c, o.propertyTitle, page.sidebar);
-        const rec = o.incomplete;
-        if (!rec) {
-          if (page.kind !== 'bsrc') {
-            return refuse(
-              pd,
-              'NOT_AUTHORITATIVE',
-              `“${page.name}” is not an Authoritative [BSRC] page; move_to_working takes only those.`,
-            );
-          }
-          const st = stateOf(c, page, facts);
-          if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
-        }
-        const sub = subpageRefusal(pd, ctx, page.node, 'move_to_working');
-        if (sub) return sub;
-        const flags: string[] = [];
-        const parent = page.parentId ? ctx.tree.node(ctx.projectId, page.parentId).data : null;
-        const role = pd.services?.registry.forProject(ctx.projectId).characterRole(page.node.id) ?? null;
-        if (
-          role?.role === 'core' &&
-          parent &&
-          parent.kind === 'index' &&
-          key(parent.displayName) === key(role.subject)
-        ) {
-          flags.push(
-            `a Character Core under its own character index: the Core moves alone; ${parent.rawName} and its other pages stay where they are, and promote_page offers it as the way back`,
-          );
-        }
-        const target: LifecycleTarget = rec
-          ? rec.target
-          : {
-              name: `${KIND_PREFIX.bwrk}${page.displayName}`,
-              parentId: idx.working.id,
-              facts: { status: c.status.working },
-              tagsRemove: [c.tags.canon],
-              tagsAdd: [c.tags.working],
+      args.subtree === true
+        ? runSubtree(deps, mctx, 'move_to_working', args)
+        : runLifecycle(deps, mctx, 'move_to_working', args, (pd, ctx, c, idx, page, o) => {
+            const facts = factsOf(c, o.propertyTitle, page.sidebar);
+            const rec = o.incomplete;
+            if (!rec) {
+              if (page.kind !== 'bsrc') {
+                return refuse(
+                  pd,
+                  'NOT_AUTHORITATIVE',
+                  `“${page.name}” is not an Authoritative [BSRC] page; move_to_working takes only those.`,
+                );
+              }
+              const st = stateOf(c, page, facts);
+              if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
+            }
+            const sub = subpageRefusal(pd, ctx, page.node, 'move_to_working');
+            if (sub) return sub;
+            const flags: string[] = [];
+            const parent = page.parentId ? ctx.tree.node(ctx.projectId, page.parentId).data : null;
+            const role = pd.services?.registry.forProject(ctx.projectId).characterRole(page.node.id) ?? null;
+            if (
+              role?.role === 'core' &&
+              parent &&
+              parent.kind === 'index' &&
+              key(parent.displayName) === key(role.subject)
+            ) {
+              flags.push(
+                `a Character Core under its own character index: the Core moves alone; ${parent.rawName} and its other pages stay where they are, and promote_page offers it as the way back`,
+              );
+            }
+            const target: LifecycleTarget = rec
+              ? rec.target
+              : {
+                  name: `${KIND_PREFIX.bwrk}${page.displayName}`,
+                  parentId: idx.working.id,
+                  facts: { status: c.status.working },
+                  tagsRemove: [c.tags.canon],
+                  tagsAdd: [c.tags.working],
+                };
+            const twin = ctx.tree
+              .children(ctx.projectId, idx.working.id)
+              .data.find(
+                (x) =>
+                  x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
+              );
+            if (twin) {
+              return refuse(
+                pd,
+                'NAME_TAKEN',
+                `[INDEX] ${c.indexNames.working} already holds “${twin.rawName}”.`,
+                {
+                  existing: { id: twin.id, name: twin.rawName },
+                },
+              );
+            }
+            return {
+              action: 'move_to_working',
+              tool: 'move_to_working',
+              page,
+              target,
+              record: {
+                previousState: rec ? rec.previousState : 'authoritative',
+                previousFacts: rec ? rec.previousFacts : facts,
+                tagsRemoved: rec
+                  ? rec.tagsRemoved
+                  : target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t))),
+                tagsAdded: target.tagsAdd,
+                date: o.date,
+                detail: {},
+                ...(rec ? { resumeOf: rec.id } : {}),
+              },
+              flags,
             };
-        const twin = ctx.tree
-          .children(ctx.projectId, idx.working.id)
-          .data.find(
-            (x) =>
-              x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
-          );
-        if (twin) {
-          return refuse(
-            pd,
-            'NAME_TAKEN',
-            `[INDEX] ${c.indexNames.working} already holds “${twin.rawName}”.`,
-            {
-              existing: { id: twin.id, name: twin.rawName },
-            },
-          );
-        }
-        return {
-          action: 'move_to_working',
-          tool: 'move_to_working',
-          page,
-          target,
-          record: {
-            previousState: rec ? rec.previousState : 'authoritative',
-            previousFacts: rec ? rec.previousFacts : facts,
-            tagsRemoved: rec
-              ? rec.tagsRemoved
-              : target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t))),
-            tagsAdded: target.tagsAdd,
-            date: o.date,
-            detail: {},
-            ...(rec ? { resumeOf: rec.id } : {}),
-          },
-          flags,
-        };
-      }),
+          }),
   });
 }
 
@@ -1361,162 +1522,170 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
       ' Cost: about 2 reads to plan; the job about 15 reads (checks, in-lock reads, verify) and up to 5 writes: 1 to ' +
       'move, 1 per fact changed (up to 3), 1 to rename and tag; a character index that moves with it adds 1 move.',
     inputSchema: z.object({
-      page: pageRef.describe('The [BWRK] page (name or id).'),
+      page: pageRef.describe('The [BWRK] page (name or id); with subtree, the root of the Working set.'),
+      subtree: subtreeArg,
       destination: pageRef
         .optional()
-        .describe('The index it goes under (required; normally its normal place).'),
+        .describe('The index it (or the set’s root) goes under (required; normally its normal place).'),
       dryRun: dryRunArg,
       project: projectArg,
     }),
     annotations: CHANGE_ANNOTATIONS,
     handler: (args, mctx) =>
-      runLifecycle(deps, mctx, 'promote', args, (pd, ctx, c, idx, page, o) => {
-        const lc = pd.services!.lifecycle!;
-        const facts = factsOf(c, o.propertyTitle, page.sidebar);
-        const rec = o.incomplete;
-        if (rec) {
-          return {
-            action: 'promote',
-            tool: 'promote_page',
-            page,
-            target: rec.target,
-            record: {
-              previousState: rec.previousState,
-              previousFacts: rec.previousFacts,
-              tagsRemoved: rec.tagsRemoved,
-              tagsAdded: rec.tagsAdded,
-              date: o.date,
-              detail: {},
-              resumeOf: rec.id,
-            },
-            flags: [],
-          };
-        }
-        if (page.kind !== 'bwrk') {
-          return refuse(
-            pd,
-            'NOT_WORKING',
-            `“${page.name}” is not a Working [BWRK] page; promote_page takes only those.`,
-          );
-        }
-        const st = stateOf(c, page, facts);
-        if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
-        // The location move_to_working remembered, offered (never used without being asked).
-        const back = lc.store.latest(ctx.projectId, page.node.id, ['move_to_working']);
-        const prev =
-          back?.state === 'complete' && back.previousParentId
-            ? ctx.tree.node(ctx.projectId, back.previousParentId).data
-            : null;
-        const suggested = prev
-          ? { id: prev.id, name: prev.rawName, path: prev.path.names.join(' / ') }
-          : null;
-        if (args.destination === undefined) {
-          return refuse(
-            pd,
-            'DESTINATION_REQUIRED',
-            `promote_page needs \`destination\`: the index “${page.displayName}” goes under.${suggested ? ` It was under ${suggested.name} (${suggested.path}) before move_to_working: pass destination “${suggested.id}” to take it back there.` : ''}`,
-            { ...(suggested ? { suggestedDestination: suggested } : {}) },
-          );
-        }
-        const d = resolveParent(ctx, args.destination, { what: `the destination “${args.destination}”` });
-        if (!d.ok) return { kind: 'answer', result: d.result };
-        const dest = d.value;
-        if ([idx.working.id, idx.archived.id].some((x) => dest.id === x || dest.path.ids.includes(x))) {
-          return refuse(
-            pd,
-            'LIFECYCLE_AREA',
-            `“${dest.displayName}” is a lifecycle index or under one; an Authoritative page goes in its normal place.`,
-          );
-        }
-        // A Working character: its own index under [INDEX] Working moves with it.
-        let mover: LifecycleTarget['moveIndex'] = null;
-        const flags: string[] = [];
-        const parent = page.parentId ? ctx.tree.node(ctx.projectId, page.parentId).data : null;
-        const others: { id: string; name: string }[] = [];
-        if (parent && parent.kind === 'index' && parent.parentId === idx.working.id) {
-          mover = { id: parent.id, name: parent.rawName, parentId: idx.working.id };
-        } else if (page.parentId === idx.working.id) {
-          const role = pd.services?.registry.forProject(ctx.projectId).characterRole(page.node.id) ?? null;
-          if (role && (role.role === 'core' || role.role === 'compact')) {
-            const ci = ctx.tree
-              .children(ctx.projectId, idx.working.id)
-              .data.find((x) => x.kind === 'index' && key(x.displayName) === key(role.subject));
-            if (ci) mover = { id: ci.id, name: ci.rawName, parentId: idx.working.id };
-          }
-        }
-        if (mover) {
-          if (dest.id === mover.id || dest.path.ids.includes(mover.id)) {
-            return refuse(
-              pd,
-              'MOVE_CYCLE',
-              `The destination is under ${mover.name}, which moves with the page.`,
-            );
-          }
-          for (const k of ctx.tree.children(ctx.projectId, mover.id).data)
-            if (k.id !== page.node.id) others.push({ id: k.id, name: k.rawName });
-          if (others.length)
-            flags.push(
-              `${others.length} other page(s) under ${mover.name} move with it and keep their state: ${others.map((x) => x.name).join(', ')}`,
-            );
-          const twinIdx = ctx.tree
-            .children(ctx.projectId, dest.id)
-            .data.find(
-              (x) =>
-                x.id !== mover.id &&
-                x.kind === 'index' &&
-                key(x.displayName) === key(mover.name.replace(/^\[INDEX\]\s*/, '')),
-            );
-          if (twinIdx)
-            return refuse(pd, 'NAME_TAKEN', `“${dest.displayName}” already holds “${twinIdx.rawName}”.`);
-        } else {
-          const twin = ctx.tree
-            .children(ctx.projectId, dest.id)
-            .data.find(
-              (x) =>
-                x.id !== page.node.id && isPageKind(x.kind) && key(x.displayName) === key(page.displayName),
-            );
-          if (twin) return refuse(pd, 'NAME_TAKEN', `“${dest.displayName}” already holds “${twin.rawName}”.`);
-          const sub = subpageRefusal(pd, ctx, page.node, 'promote_page');
-          if (sub) return sub;
-        }
-        const ct = facts.continuityType;
-        const keepCt = ct !== null && (same(ct, c.continuityTypes.canon) || same(ct, c.continuityTypes.au));
-        const target: LifecycleTarget = {
-          name: `${KIND_PREFIX.bsrc}${page.displayName}`,
-          parentId: dest.id,
-          facts: {
-            status: c.status.authoritative,
-            lastMajorRevision: o.date,
-            ...(keepCt ? {} : { continuityType: c.continuityTypes.canon }),
-          },
-          tagsRemove: [c.tags.working],
-          tagsAdd: [c.tags.canon],
-          ...(mover ? { moveIndex: mover } : {}),
-        };
-        return {
-          action: 'promote',
-          tool: 'promote_page',
-          page,
-          target,
-          record: {
-            previousState: 'working',
-            previousFacts: facts,
-            tagsRemoved: target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t))),
-            tagsAdded: target.tagsAdd,
-            date: o.date,
-            detail: {
-              ...(suggested ? { remembered: suggested } : {}),
-              ...(others.length ? { othersUnderIndex: others } : {}),
-            },
-          },
-          flags: [
-            ...flags,
-            ...(suggested && suggested.id !== dest.id
-              ? [`goes under ${dest.rawName}; it was under ${suggested.name} before move_to_working`]
-              : []),
-          ],
-        };
-      }),
+      args.subtree === true
+        ? runSubtree(deps, mctx, 'promote', args)
+        : runLifecycle(deps, mctx, 'promote', args, (pd, ctx, c, idx, page, o) => {
+            const lc = pd.services!.lifecycle!;
+            const facts = factsOf(c, o.propertyTitle, page.sidebar);
+            const rec = o.incomplete;
+            if (rec) {
+              return {
+                action: 'promote',
+                tool: 'promote_page',
+                page,
+                target: rec.target,
+                record: {
+                  previousState: rec.previousState,
+                  previousFacts: rec.previousFacts,
+                  tagsRemoved: rec.tagsRemoved,
+                  tagsAdded: rec.tagsAdded,
+                  date: o.date,
+                  detail: {},
+                  resumeOf: rec.id,
+                },
+                flags: [],
+              };
+            }
+            if (page.kind !== 'bwrk') {
+              return refuse(
+                pd,
+                'NOT_WORKING',
+                `“${page.name}” is not a Working [BWRK] page; promote_page takes only those.`,
+              );
+            }
+            const st = stateOf(c, page, facts);
+            if (st.conflict) return refuse(pd, 'LIFECYCLE_INCONSISTENT', st.conflict);
+            // The location move_to_working remembered, offered (never used without being asked).
+            const back = lc.store.latest(ctx.projectId, page.node.id, ['move_to_working']);
+            const prev =
+              back?.state === 'complete' && back.previousParentId
+                ? ctx.tree.node(ctx.projectId, back.previousParentId).data
+                : null;
+            const suggested = prev
+              ? { id: prev.id, name: prev.rawName, path: prev.path.names.join(' / ') }
+              : null;
+            if (args.destination === undefined) {
+              return refuse(
+                pd,
+                'DESTINATION_REQUIRED',
+                `promote_page needs \`destination\`: the index “${page.displayName}” goes under.${suggested ? ` It was under ${suggested.name} (${suggested.path}) before move_to_working: pass destination “${suggested.id}” to take it back there.` : ''}`,
+                { ...(suggested ? { suggestedDestination: suggested } : {}) },
+              );
+            }
+            const d = resolveParent(ctx, args.destination, { what: `the destination “${args.destination}”` });
+            if (!d.ok) return { kind: 'answer', result: d.result };
+            const dest = d.value;
+            if ([idx.working.id, idx.archived.id].some((x) => dest.id === x || dest.path.ids.includes(x))) {
+              return refuse(
+                pd,
+                'LIFECYCLE_AREA',
+                `“${dest.displayName}” is a lifecycle index or under one; an Authoritative page goes in its normal place.`,
+              );
+            }
+            // A Working character: its own index under [INDEX] Working moves with it.
+            let mover: LifecycleTarget['moveIndex'] = null;
+            const flags: string[] = [];
+            const parent = page.parentId ? ctx.tree.node(ctx.projectId, page.parentId).data : null;
+            const others: { id: string; name: string }[] = [];
+            if (parent && parent.kind === 'index' && parent.parentId === idx.working.id) {
+              mover = { id: parent.id, name: parent.rawName, parentId: idx.working.id };
+            } else if (page.parentId === idx.working.id) {
+              const role =
+                pd.services?.registry.forProject(ctx.projectId).characterRole(page.node.id) ?? null;
+              if (role && (role.role === 'core' || role.role === 'compact')) {
+                const ci = ctx.tree
+                  .children(ctx.projectId, idx.working.id)
+                  .data.find((x) => x.kind === 'index' && key(x.displayName) === key(role.subject));
+                if (ci) mover = { id: ci.id, name: ci.rawName, parentId: idx.working.id };
+              }
+            }
+            if (mover) {
+              if (dest.id === mover.id || dest.path.ids.includes(mover.id)) {
+                return refuse(
+                  pd,
+                  'MOVE_CYCLE',
+                  `The destination is under ${mover.name}, which moves with the page.`,
+                );
+              }
+              for (const k of ctx.tree.children(ctx.projectId, mover.id).data)
+                if (k.id !== page.node.id) others.push({ id: k.id, name: k.rawName });
+              if (others.length)
+                flags.push(
+                  `${others.length} other page(s) under ${mover.name} move with it and keep their state: ${others.map((x) => x.name).join(', ')}`,
+                );
+              const twinIdx = ctx.tree
+                .children(ctx.projectId, dest.id)
+                .data.find(
+                  (x) =>
+                    x.id !== mover.id &&
+                    x.kind === 'index' &&
+                    key(x.displayName) === key(mover.name.replace(/^\[INDEX\]\s*/, '')),
+                );
+              if (twinIdx)
+                return refuse(pd, 'NAME_TAKEN', `“${dest.displayName}” already holds “${twinIdx.rawName}”.`);
+            } else {
+              const twin = ctx.tree
+                .children(ctx.projectId, dest.id)
+                .data.find(
+                  (x) =>
+                    x.id !== page.node.id &&
+                    isPageKind(x.kind) &&
+                    key(x.displayName) === key(page.displayName),
+                );
+              if (twin)
+                return refuse(pd, 'NAME_TAKEN', `“${dest.displayName}” already holds “${twin.rawName}”.`);
+              const sub = subpageRefusal(pd, ctx, page.node, 'promote_page');
+              if (sub) return sub;
+            }
+            const ct = facts.continuityType;
+            const keepCt =
+              ct !== null && (same(ct, c.continuityTypes.canon) || same(ct, c.continuityTypes.au));
+            const target: LifecycleTarget = {
+              name: `${KIND_PREFIX.bsrc}${page.displayName}`,
+              parentId: dest.id,
+              facts: {
+                status: c.status.authoritative,
+                lastMajorRevision: o.date,
+                ...(keepCt ? {} : { continuityType: c.continuityTypes.canon }),
+              },
+              tagsRemove: [c.tags.working],
+              tagsAdd: [c.tags.canon],
+              ...(mover ? { moveIndex: mover } : {}),
+            };
+            return {
+              action: 'promote',
+              tool: 'promote_page',
+              page,
+              target,
+              record: {
+                previousState: 'working',
+                previousFacts: facts,
+                tagsRemoved: target.tagsRemove.filter((t) => page.tags.some((x) => same(x, t))),
+                tagsAdded: target.tagsAdd,
+                date: o.date,
+                detail: {
+                  ...(suggested ? { remembered: suggested } : {}),
+                  ...(others.length ? { othersUnderIndex: others } : {}),
+                },
+              },
+              flags: [
+                ...flags,
+                ...(suggested && suggested.id !== dest.id
+                  ? [`goes under ${dest.rawName}; it was under ${suggested.name} before move_to_working`]
+                  : []),
+              ],
+            };
+          }),
   });
 }
 

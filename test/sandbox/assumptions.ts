@@ -251,9 +251,22 @@ export async function runAssumptions(
         const m = matchCopy('copy', expected, copyProps);
         if (m.differences.length > 0)
           fail(`the copy is not the template's layout: ${JSON.stringify(m.differences)}`);
+        // C2d (the owner's run of 11 November 2026): LegendKeeper REUSES the template's property, row and item ids in a
+        // copy (ids are unique only within a page). That is its behaviour, not a failure: the bridge keys everything of
+        // a page by the page and the id together (ADR 0037), and the copy check's map is then the identity. A note.
         const reused = Object.entries(m.ids).filter(([a, b]) => a === b);
-        if (reused.length > 0)
-          fail(`the copy reuses the template's ids: ${reused.map(([a]) => a).join(', ')}`);
+        const allIds = Object.keys(m.ids).length;
+        const idNote =
+          reused.length === 0
+            ? 'new ids'
+            : reused.length === allIds
+              ? `the template's ids reused (${reused.length} of ${allIds}: ${reused
+                  .slice(0, 6)
+                  .map(([a]) => a)
+                  .join(
+                    ', ',
+                  )}${reused.length > 6 ? ', …' : ''}; LegendKeeper's behaviour, noted, not a failure)`
+              : `${reused.length} of ${allIds} of the template's ids reused (noted, not a failure)`;
         const tc = tplProps.find((p) => p.kind === 'resourceCollection');
         const cc = (copyProps.data as Obj[]).find((p) => p.kind === 'resourceCollection');
         if (!same(collectionState(tc).filter, collectionState(cc).filter))
@@ -262,7 +275,7 @@ export async function runAssumptions(
           rowsState(props.find((p) => p.kind === 'keyValue')?.rows).map((r) => r.rank ?? '');
         return (
           `template ${tplA1}, copy ${made.id as string}: ${expected.length} properties matched in order, rows by key and value ` +
-          `in rank order, new ids; filter kept; ranks ${same(ranks(tplProps), ranks(copyProps.data)) ? 'equal' : 'DIFFERENT (not relied on)'}`
+          `in rank order; ids: ${idNote}; filter kept; ranks ${same(ranks(tplProps), ranks(copyProps.data)) ? 'equal' : 'DIFFERENT (not relied on)'}`
         );
       },
     );
@@ -492,17 +505,15 @@ export async function runAssumptions(
     const rowPath = (rowId?: string) => ({ resourceId: R.id, propertyId: K.id, ...(rowId ? { rowId } : {}) });
     const rowId = async (key: string) =>
       (await rowsOf(R.id, K.id)).data.find((r) => r.key === key)!.id as string;
-    let v1 = '';
 
     await check('B11', 'listPropertyRows answers a version that row writes accept as If-Match', async () => {
       const r = await rowsOf(R.id, K.id);
       if (typeof r.version !== 'string' || r.version === '') fail(`no version: ${JSON.stringify(r.version)}`);
-      const w = (await run('createPropertyRow', {
+      await run('createPropertyRow', {
         path: rowPath(),
         body: { key: 'X', text: 'x', after: await rowId('R1') },
         ifMatch: r.version,
-      })) as Obj;
-      v1 = w.version as string;
+      });
       return `version ${r.version} accepted`;
     });
 
@@ -510,21 +521,64 @@ export async function runAssumptions(
       'B12',
       'createPropertyRow and updatePropertyRow answer the new version, which the next read gives',
       async () => {
-        const before = await rowsOf(R.id, K.id);
-        if (!v1) throw new Unclear('B11 did not write');
-        if (v1 !== before.version)
-          fail(`createPropertyRow answered ${v1}; the next listPropertyRows gives ${before.version}`);
-        const u = (await run('updatePropertyRow', {
-          path: rowPath(await rowId('R2')),
-          body: { text: 'two, changed' },
-          ifMatch: before.version,
+        // C2d: its own page and property, its own create and update (it used to depend on B11's write, and came out
+        // INCONCLUSIVE on the owner's run). The bridge chains a write's If-Match from the version in its BODY
+        // (ADR 0032 decision 4), so that is what must equal the next read; an ETag header is reported alongside.
+        const P = await mk('B12 rows');
+        const prop = (await run('createProperty', {
+          path: { resourceId: P.id },
+          body: { kind: 'keyValue', title: 'PROPERTIES', rows: [{ key: 'K1', text: 'one' }] },
         })) as Obj;
-        const after = await rowsOf(R.id, K.id);
-        if (typeof u.version !== 'string' || u.version === before.version)
-          fail(`updatePropertyRow answered ${String(u.version)}`);
-        if (u.version !== after.version)
-          fail(`updatePropertyRow answered ${String(u.version)}; the next read gives ${after.version}`);
-        return `create answered ${v1}, update ${String(u.version)}; each equals the next read`;
+        const suffix = `/resources/${P.id as string}/properties/${prop.id as string}/rows`;
+        const start = await rowsOf(P.id, prop.id);
+        if (typeof start.version !== 'string' || start.version === '')
+          throw new Unclear(`listPropertyRows gave no version: ${JSON.stringify(start.version)}`);
+        const answered = (res: { body?: any; headers?: Headers }) => ({
+          body: typeof res.body?.version === 'string' ? (res.body.version as string) : null,
+          etag: res.headers?.get('etag') ?? null,
+        });
+        const created = await raw('createPropertyRow', 'POST', suffix, {
+          body: { key: 'K2', text: 'two' },
+          ifMatch: start.version,
+          idempotencyKey: `lkb-assume-${mintClientId(8)}`,
+        });
+        if (created.status < 200 || created.status > 299)
+          throw new Unclear(
+            `createPropertyRow answered ${created.status}${created.code ? ` ${created.code}` : ''}`,
+          );
+        const cv = answered(created);
+        const afterCreate = await rowsOf(P.id, prop.id);
+        const rowK2 = afterCreate.data.find((r) => r.key === 'K2');
+        if (!rowK2) fail('the created row is not listed');
+        const updated = await raw('updatePropertyRow', 'PATCH', `${suffix}/${rowK2!.id as string}`, {
+          body: { text: 'two, changed' },
+          ifMatch: afterCreate.version,
+        });
+        if (updated.status < 200 || updated.status > 299)
+          throw new Unclear(
+            `updatePropertyRow answered ${updated.status}${updated.code ? ` ${updated.code}` : ''}`,
+          );
+        const uv = answered(updated);
+        const afterUpdate = await rowsOf(P.id, prop.id);
+        const out: string[] = [];
+        const judge = (
+          what: string,
+          v: { body: string | null; etag: string | null },
+          next: string,
+          prev: string,
+        ) => {
+          if (v.body === null) out.push(`${what} answered no version in its body (ETag ${v.etag ?? 'none'})`);
+          else if (v.body === prev) out.push(`${what} answered the version it was sent with (${v.body})`);
+          else if (v.body !== next)
+            out.push(`${what} answered ${v.body}; the next listPropertyRows gives ${next}`);
+        };
+        judge('createPropertyRow', cv, afterCreate.version, start.version);
+        judge('updatePropertyRow', uv, afterUpdate.version, afterCreate.version);
+        if (out.length > 0) fail(out.join('; '));
+        const etags = [cv.etag, uv.etag].every((e) => e === null)
+          ? 'no ETag headers'
+          : `ETag headers ${JSON.stringify([cv.etag, uv.etag])}`;
+        return `create answered ${cv.body}, update ${uv.body}; each equals the next read (${etags})`;
       },
     );
 
@@ -589,7 +643,20 @@ export async function runAssumptions(
           v = ((await run('updatePropertyRow', { path: rowPath(await rowId(key)), body, ifMatch: v })) as Obj)
             .version as string;
         };
-        const breaks = [{ text: 'a' }, { break: true }, { break: true }, { text: 'b' }, { break: true }];
+        // C2d (the owner's run of 11 November 2026, and the OpenAPI schema): LegendKeeper trims a leading or trailing
+        // `{ break: true }` from a row value, so the trimmed form is what must read back. Two at each end tell whether
+        // it trims them all (as the bridge does before planning, ADR 0037) or only one.
+        const breaks = [
+          { break: true },
+          { break: true },
+          { text: 'a' },
+          { break: true },
+          { break: true },
+          { text: 'b' },
+          { break: true },
+          { break: true },
+        ];
+        const trimmed = [{ text: 'a' }, { break: true }, { break: true }, { text: 'b' }];
         await put('X', { content: breaks });
         await put('Y', { content: [{ text: 'from content' }], text: 'from text' });
         await put('Z', { content: null });
@@ -597,7 +664,16 @@ export async function runAssumptions(
         const rows = (await rowsOf(R.id, K.id)).data;
         const c = (k: string) => rows.find((r) => r.key === k)!.content as Obj[];
         const out: string[] = [];
-        if (!same(c('X'), breaks)) out.push(`breaks read back as ${JSON.stringify(c('X'))}`);
+        if (!same(c('X'), trimmed)) {
+          const oneEach = [{ break: true }, ...trimmed, { break: true }];
+          out.push(
+            same(c('X'), oneEach)
+              ? 'only ONE leading and ONE trailing break were trimmed (the bridge trims them all: tell the bridge’s developer)'
+              : same(c('X'), breaks)
+                ? 'leading and trailing breaks were kept (the bridge trims them: tell the bridge’s developer)'
+                : `breaks read back as ${JSON.stringify(c('X'))}, not trimmed to ${JSON.stringify(trimmed)}`,
+          );
+        }
         if (!same(c('Y'), [{ text: 'from content' }]))
           out.push(`content and text read back as ${JSON.stringify(c('Y'))}`);
         if (!same(c('Z') ?? [], [])) out.push(`null content read back as ${JSON.stringify(c('Z'))}`);
@@ -605,7 +681,7 @@ export async function runAssumptions(
         if (!m || m.resourceId !== rootId || m.text !== 'label')
           out.push(`a mention read back as ${JSON.stringify(c('W'))}`);
         if (out.length > 0) fail(out.join('; '));
-        return 'all four kept as sent';
+        return 'leading and trailing breaks trimmed (all of them), the inner ones kept; content over text; null clears; a mention kept';
       },
     );
 
@@ -730,9 +806,13 @@ export async function runAssumptions(
           fail(`the filter changed: ${JSON.stringify(g1.filter)} → ${JSON.stringify(g2.filter)}`);
         // C19: the same sidebar from two endpoints gives the same factsVersion.
         const viaList = factsVersionOf(
+          R.id as string,
           sidebarState(await run('listProperties', { path: { resourceId: R.id } })),
         );
-        const viaRes = factsVersionOf(sidebarState(await run('getResource', { path: { resourceId: R.id } })));
+        const viaRes = factsVersionOf(
+          R.id as string,
+          sidebarState(await run('getResource', { path: { resourceId: R.id } })),
+        );
         if (viaList !== viaRes)
           fail(`C19: factsVersion ${viaList} from listProperties, ${viaRes} from getResource`);
         return 'items kept, new item appended, filter kept; C20 filter matches not in items; C19 factsVersion equal';
@@ -1071,6 +1151,28 @@ export async function runAssumptions(
     // Clean up: each check's pages (one small cascade each: the canon guard lists and reads every page of a cascade at
     // entry and again inside the lock), the templates (outside the root), then the root. A delete the guard could not
     // judge for lack of budget (the key's minute) is tried again after the minute.
+    // C2d (the owner's run of 11 November 2026): a page that is already gone counts as cleaned. A page under one
+    // already deleted by an earlier cascade answers "… is already deleted" (or 404): it was reported as left over
+    // although a read showed it gone. Any other failure is confirmed by a read before it is reported.
+    const goneAlready = (e: unknown): boolean => {
+      const m = (e as Error).message ?? '';
+      const lk = (e as { lk?: { status?: number; code?: string } }).lk;
+      const codes = [(e as { code?: string }).code, lk?.code];
+      return (
+        /\b404\b|NOT_FOUND|ALREADY_DELETED|already deleted|is deleted|was deleted|not found/i.test(m) ||
+        lk?.status === 404 ||
+        codes.includes('NOT_FOUND') ||
+        codes.includes('ALREADY_DELETED')
+      );
+    };
+    const isGone = async (id: string): Promise<boolean> => {
+      try {
+        const r = await raw('getResource', 'GET', `/resources/${id}`);
+        return r.status === 404 || r.code === 'NOT_FOUND' || (r.status === 200 && r.body?.deletedAt != null);
+      } catch {
+        return false;
+      }
+    };
     const remove = async (id: string): Promise<string | null> => {
       for (let attempt = 0; ; attempt++) {
         try {
@@ -1081,13 +1183,10 @@ export async function runAssumptions(
           );
           return null;
         } catch (e) {
+          if (goneAlready(e)) return null;
           const m = (e as Error).message;
-          if (
-            /404|NOT_FOUND|ALREADY_DELETED/.test(m) ||
-            (e as { lk?: { status?: number } }).lk?.status === 404
-          )
-            return null;
-          if (attempt >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m)) return m;
+          if (attempt >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
+            return (await isGone(id)) ? null : m;
           await sleep(65_000);
         }
       }

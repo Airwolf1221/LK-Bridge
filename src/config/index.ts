@@ -363,15 +363,19 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     warnings: [
       ...projects.warnings,
       ...(nonEmpty(e.SECRETS_MASTER_KEY) === undefined
-        ? [
-            'SECRETS_MASTER_KEY is not set: keys and the owner credentials cannot be kept in the encrypted store, so they are read from the env file only. Run `sudo /opt/lk-bridge/bin/env-sync.sh` to generate it.',
-          ]
+        ? [MASTER_KEY_NOT_SET_WARNING]
         : (nonEmpty(e.SECRETS_MASTER_KEY)?.length ?? 0) < 32
-          ? ['SECRETS_MASTER_KEY is shorter than 32 characters, so the encrypted secret store is not used.']
+          ? [MASTER_KEY_SHORT_WARNING]
           : []),
     ],
   };
 }
+
+/** The start-up warnings about the secret store's master key (a runtime that keeps no secrets does not log them). */
+export const MASTER_KEY_NOT_SET_WARNING =
+  'SECRETS_MASTER_KEY is not set: keys and the owner credentials cannot be kept in the encrypted store, so they are read from the env file only. Run `sudo /opt/lk-bridge/bin/env-sync.sh` to generate it.';
+export const MASTER_KEY_SHORT_WARNING =
+  'SECRETS_MASTER_KEY is shorter than 32 characters, so the encrypted secret store is not used.';
 
 export * from './lk.js';
 export * from './jobs.js';

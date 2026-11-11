@@ -274,8 +274,15 @@ function BulkResults({ report, onClose }: { report: BulkReport; onClose: () => v
 /** The related pages a lifecycle proposal reports (reported, never edited), or null when it reports none. */
 function relatedCount(p: ProposalDetail): number | null {
   for (const o of p.operations ?? []) {
-    const rel = (o as { relatedPages?: { pages: unknown[]; textSearch: unknown[] } }).relatedPages;
-    if (rel) return rel.pages.length + rel.textSearch.length;
+    const rel = (o as { relatedPages?: { pages: unknown[]; textSearch?: unknown[] } }).relatedPages;
+    if (!rel) continue;
+    // C2d: a whole set lists its related pages page by page.
+    if ((o as { subtree?: unknown }).subtree === true)
+      return (rel.pages as { pages?: unknown[]; textSearch?: unknown[] }[]).reduce(
+        (n, x) => n + (x.pages?.length ?? 0) + (x.textSearch?.length ?? 0),
+        0,
+      );
+    return rel.pages.length + (rel.textSearch?.length ?? 0);
   }
   return null;
 }
@@ -880,9 +887,13 @@ function ProposalReview({
             ))}
           {(p.operations ?? [])
             .filter((o) => typeof o.lifecycle === 'object' && o.lifecycle !== null)
-            .map((o, i) => (
-              <LifecyclePlanView key={`lc${i}`} o={o as unknown as LifecycleOperation} />
-            ))}
+            .map((o, i) =>
+              (o as { subtree?: unknown }).subtree === true ? (
+                <SetPlanView key={`lc${i}`} o={o as unknown as SetOperation} />
+              ) : (
+                <LifecyclePlanView key={`lc${i}`} o={o as unknown as LifecycleOperation} />
+              ),
+            )}
           {p.ops.map((op) => (
             <OpView key={op.index} op={op} conflict={p.conflict} />
           ))}
@@ -1117,6 +1128,147 @@ function LifecyclePlanView({ o }: { o: LifecycleOperation }) {
               {rel.textSearch.map((x) => (
                 <li key={x.id}>
                   {x.path} — <span className="muted">{x.found}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ============================================================================================ C2d: whole sets
+
+interface SetOperation {
+  tool: string;
+  subtree: true;
+  lifecycle: {
+    action: string;
+    set: {
+      root: { id: string; name: string; path?: string };
+      pages: number;
+      contentPages: number;
+      indexes: number;
+      from: string | null;
+      to: string;
+      newParent: { id: string; name: string };
+      layout: string;
+    };
+    pages: {
+      id: string;
+      name: string;
+      role: 'index' | 'page';
+      from?: string;
+      newName: string;
+      move: { under: { id: string; name: string } } | string;
+      facts: { key: string; before: string | null; after: string | null; change: string }[];
+      tags: { before: string[]; after: string[] };
+      note?: { action: 'insert' | 'remove'; blockId: string; diff: string };
+    }[];
+    estimate?: { pages: number; reads: number; writes: number; wallClock?: string; fitsToday?: boolean };
+    flags?: string[];
+    resumes?: { setId: number };
+  };
+  relatedPages?: {
+    pages: {
+      page: { id: string; name: string };
+      pages: { id: string; name: string; path: string; links: string[] }[];
+      textSearch: { id: string; name: string; path: string; found: string }[];
+    }[];
+    freshness: string;
+    excluded: string;
+  };
+}
+
+/**
+ * C2d (ADR 0037): a whole-set lifecycle change, in full: the set summary (its root, its pages, the state it leaves and
+ * enters, where its root goes, the estimate), then every page with its own plan (name, move, facts, tags, note), and the
+ * related pages of each (links inside the set left out). One canonical proposal for the whole set.
+ */
+function SetPlanView({ o }: { o: SetOperation }) {
+  const l = o.lifecycle;
+  const rel = o.relatedPages;
+  return (
+    <section className="card" aria-label="Whole-set lifecycle change">
+      <h3>
+        <span className="mono">{o.tool}</span> of the whole set under <strong>{l.set.root.name}</strong>
+        {l.resumes && <span className="muted"> (resumes set record {l.resumes.setId})</span>}
+      </h3>
+      <p>
+        {l.set.pages} page{l.set.pages === 1 ? '' : 's'} ({l.set.contentPages} content, {l.set.indexes} index
+        {l.set.indexes === 1 ? '' : 'es'}), {l.set.from ?? 'unknown'} → {l.set.to}. The root moves under{' '}
+        <strong>{l.set.newParent.name}</strong>; {l.set.layout}.
+      </p>
+      {l.estimate && (
+        <p className="muted small-text">
+          Estimate: about {l.estimate.reads} reads and {l.estimate.writes} writes
+          {l.estimate.wallClock ? `, ${l.estimate.wallClock}` : ''}
+          {l.estimate.fitsToday === false ? ' — does not fit in today’s budget' : ''}.
+        </p>
+      )}
+      <div className="table-wrap">
+        <table aria-label="Every page of the set">
+          <thead>
+            <tr>
+              <th>Page</th>
+              <th>Becomes</th>
+              <th>Place</th>
+              <th>Facts</th>
+              <th>Tags</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            {l.pages.map((p) => (
+              <tr key={p.id} data-set-page={p.id}>
+                <td>
+                  {p.name}
+                  {p.role === 'index' && <span className="muted small-text"> (index: no Status)</span>}
+                </td>
+                <td>{p.newName}</td>
+                <td className="small-text">
+                  {typeof p.move === 'string' ? p.move : `moves under ${p.move.under.name}`}
+                </td>
+                <td className="small-text">
+                  {p.facts.length === 0
+                    ? '—'
+                    : p.facts.map((f) => (
+                        <div key={f.key}>
+                          {f.key}: <span className="diff-del">{f.before ?? '—'}</span> →{' '}
+                          <span className="diff-add">{f.after ?? '—'}</span>
+                        </div>
+                      ))}
+                </td>
+                <td className="small-text">
+                  {p.tags.before.join(', ') || '(none)'} → {p.tags.after.join(', ') || '(none)'}
+                </td>
+                <td className="small-text">{p.note ? p.note.diff : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {(l.flags ?? []).map((f) => (
+        <p key={f} className="note note-warn small-text">
+          {f}
+        </p>
+      ))}
+      {rel && (
+        <div className="mt" role="group" aria-label="Related pages">
+          <h4>Related pages (reported, never edited; links inside the set left out)</h4>
+          <p className="muted small-text">{rel.freshness}</p>
+          {rel.pages.length === 0 ? (
+            <p className="muted small-text">None found.</p>
+          ) : (
+            <ul className="plain small-text">
+              {rel.pages.map((x) => (
+                <li key={x.page.id}>
+                  <strong>{x.page.name}</strong>:{' '}
+                  {[
+                    ...x.pages.map((y) => `${y.path} — ${y.links.join('; ')}`),
+                    ...x.textSearch.map((y) => `${y.path} — ${y.found}`),
+                  ].join(' · ')}
                 </li>
               ))}
             </ul>

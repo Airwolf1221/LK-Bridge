@@ -3,7 +3,7 @@
  * that covers a whole sidebar (`listProperties`, `getProperty` and `listPropertyRows` carry none that does; checked on
  * 10 November 2026), so nothing caught a change made after an agent last read a page and before it called set_facts.
  *
- * - `factsVersionFrom(body)`: the version and the normalised state of a `listProperties` or `getResource` answer: the
+ * - `factsVersionFrom(resourceId, body)`: the version and the normalised state of a `listProperties` or `getResource` answer: the
  *   key-value rows in rank order by id (C2a.1) and the link collections (items and filter), properties by id, so every
  *   endpoint gives the same version for the same sidebar (src/jobs/sidebar-state.ts).
  * - `FactsVersions`: the state at each version the bridge handed out (get_resource, get_resources, set_facts, the create
@@ -31,13 +31,16 @@ export const DEFAULT_FACTS_VERSION_SETTINGS: FactsVersionSettings = Object.freez
   maxBytes: 512 * 1024,
 });
 
-/** The facts version and normalised state of a sidebar read (`listProperties` or `getResource`). */
-export function factsVersionFrom(body: unknown): {
+/** The facts version and normalised state of a sidebar read (`listProperties` or `getResource`) of page `resourceId`. */
+export function factsVersionFrom(
+  resourceId: string,
+  body: unknown,
+): {
   readonly version: string;
   readonly state: SidebarPropertyState[];
 } {
   const state = sidebarState(body);
-  return { version: factsVersionOf(state), state };
+  return { version: factsVersionOf(resourceId, state), state };
 }
 
 /** Which rows or collections differ between a remembered state and the current one (as conflict details). */
@@ -57,7 +60,7 @@ export class FactsVersions {
 
   /** Remembers the state of a sidebar read and returns its version. */
   remember(projectId: string, resourceId: string, body: unknown): string {
-    const { version, state } = factsVersionFrom(body);
+    const { version, state } = factsVersionFrom(resourceId, body);
     this.store(projectId, resourceId, version, state);
     return version;
   }

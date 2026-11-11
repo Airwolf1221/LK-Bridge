@@ -283,8 +283,16 @@ export function journalLookup(db: Db, scope: ProjectScope, filter: JournalFilter
   if (filter.documentId !== undefined) eq('document_id', filter.documentId);
   if (filter.targetId !== undefined) {
     // Both halves stay inside the same project when one is given (the outer project_id condition applies too).
+    // C2d (ADR 0037): a property, row, collection-item or block id is unique only within its page (LegendKeeper reuses
+    // a template's ids in every copy), so such a target is matched only together with its page (`resourceId`, applied
+    // above). Without a page, only targets that are unique on their own match: a page, a document, or something that
+    // belongs to no page (an asset, a calendar), and the pages a createManyResources made.
     where.push(
-      'id IN (SELECT id FROM write_journal WHERE target_id = ? UNION SELECT journal_id FROM write_journal_targets WHERE target_id = ?)',
+      filter.resourceId !== undefined
+        ? 'id IN (SELECT id FROM write_journal WHERE target_id = ? UNION SELECT journal_id FROM write_journal_targets WHERE target_id = ?)'
+        : `id IN (SELECT id FROM write_journal WHERE target_id = ?
+             AND (resource_id IS NULL OR target_id = resource_id OR target_id = document_id)
+           UNION SELECT journal_id FROM write_journal_targets WHERE target_id = ?)`,
     );
     vals.push(filter.targetId, filter.targetId);
   }

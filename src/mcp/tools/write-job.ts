@@ -10,7 +10,7 @@
  * - a failed job is NEVER replayed (PLAN-v2 4.13): its result says which writes were made and which were not, with the
  *   journal entries, so a retry is a new, smaller request.
  */
-import type { JobView, LifecycleMarker, StepSpec } from '../../jobs/index.js';
+import type { BatchSubmit, JobView, LifecycleMarker, StepSpec } from '../../jobs/index.js';
 import type { ProposalExtras } from '../../jobs/policy.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import { finish } from './repo.js';
@@ -27,6 +27,10 @@ export interface WriteJobSpec {
   /** v2 C2c: the second job-level lock (a document of the held page). */
   readonly holdDocument?: { readonly documentId: string };
   readonly holdAlso?: { readonly resourceId: string };
+  /** C2d: further job-level locks (a whole set's pages and the notes' documents). */
+  readonly holdMore?: { readonly resources?: readonly string[]; readonly documents?: readonly string[] };
+  /** C2d (ADR 0036 decision 5): the pages the job touches without naming them (a set), as planned. */
+  readonly pageScope?: BatchSubmit['pageScope'];
   /** v2 D1: the documents the job holds the locks of, from its first step to its last (sorted). */
   readonly holdDocuments?: readonly string[];
   /** v2 C2c: the lifecycle change the job makes (the lifecycle guard allows exactly that). */
@@ -72,6 +76,8 @@ export async function runWriteJob(
       ...(spec.holdLock ? { holdLock: spec.holdLock } : {}),
       ...(spec.holdDocument ? { holdDocument: spec.holdDocument } : {}),
       ...(spec.holdAlso ? { holdAlso: spec.holdAlso } : {}),
+      ...(spec.holdMore ? { holdMore: spec.holdMore } : {}),
+      ...(spec.pageScope ? { pageScope: spec.pageScope } : {}),
       ...(spec.holdDocuments && spec.holdDocuments.length > 0 ? { holdDocuments: spec.holdDocuments } : {}),
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
       internal: true,

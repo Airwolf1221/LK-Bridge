@@ -251,7 +251,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
         if (!read.ok) return read.result;
         const sidebar = sidebarFrom(read.value);
         // v2 C2b: the bridge's own version of the whole sidebar, checked against the agent's base before anything else.
-        const before = factsVersionFrom(read.value);
+        const before = factsVersionFrom(node.id, read.value);
         pd.services?.factsVersions?.store(ctx.projectId, node.id, before.version, before.state);
         if (args.baseFactsVersion !== undefined && args.baseFactsVersion !== before.version) {
           return staleBase(pd, node, args.baseFactsVersion, before);

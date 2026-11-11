@@ -3,7 +3,7 @@
 ## Unreleased: v2 D1, the calendar engine, chronology sync and the timeline tools (11 November 2026)
 
 [ADR 0038](adr/0038-calendar-engine-and-chronology-sync.md). Migration **1800** (chronology calendars, records, links
-and checks; 1700 is left for C2d). Nothing was run against a live system: every test runs against the mock
+and checks; after C2d's 1750). Nothing was run against a live system: every test runs against the mock
 LegendKeeper; the owner runs the read-only sandbox check on the server.
 
 - **The calendar engine** (`src/calendar`), built from a LegendKeeper calendar definition alone: months every N years,
@@ -31,10 +31,62 @@ LegendKeeper; the owner runs the read-only sandbox check on the server.
 - **Owner decision 6 of ADR 0036 recorded (option (a)):** timeline events, lanes, map features and board shapes on an
   Authoritative page are ordinary edits, not canon; only deleting a whole map, timeline or board document of one is.
 - **Sandbox.** `test/sandbox/chronology.test.ts` (read-only): every row, event and age of the real chronology against
-  the engine. `npm run test:sandbox` now loads its config with `--configLoader runner` and the sandbox config turns
-  `fsModuleCache` off, so it runs as the service user; `deploy/sandbox-test.sh --project test -- chronology` runs only
-  the chronology check (anything after `--` is a vitest filter).
+  the engine. `deploy/sandbox-test.sh --project test -- chronology` runs only the chronology check (anything after
+  `--` is passed to vitest as a filter), so nothing that writes runs with it.
 - **For agents:** see the bridge guide's new "Dates and the chronology". ChatGPT: refresh the tool list (Plugins page).
+
+## Unreleased: C2d, whole-set lifecycle, the owner's CR decisions, and the sandbox run's findings (11 November 2026)
+
+Session C2d ([ADR 0037](adr/0037-whole-set-lifecycle-and-page-scoped-ids.md);
+[ADR 0036](adr/0036-cr-2026-11-owner-decisions.md) decisions 1 to 5 and 7 accepted). **Migration 1750** (deploy
+normally; it adds the set record table, links page records to it, and adds the status-tags canon rule to projects that
+store their own rules). Refresh both assistants' tool lists after deploying (ChatGPT: Plugins, the bridge, Refresh).
+Nothing was run against a live system; every test runs against the mock.
+
+- **Whole sets (owner, 11 November).** `archive_page`, `unarchive_page`, `move_to_working` and `promote_page` take
+  `subtree: true`: a page and every page beneath it (a character's index, Core and specialist pages) change together as
+  ONE canonical proposal listing every page's plan and a set summary. The set stays together (its root moves as a
+  group, alphabetically; nothing beneath it moves); content pages get the single-page treatment by their own previous
+  state; an index keeps `[INDEX]`, gets no Status, changes its status tag and gets a short note on archiving (a new
+  lifecycle setting, "Note on an index archived with its set": **the default wording is a proposal for the owner to
+  confirm**). At most 100 pages; a mixed, inconsistent or unclassified set is refused, listing pages; the dry run shows
+  the page count and the estimated reads and writes. One job holds every page's lock; a part-way stop leaves an
+  incomplete set record and calling the same tool again resumes. Related pages are listed for every page, without the
+  set's own links. The dashboard shows a set proposal page by page, and the Archive and lifecycle page marks each page's
+  record with its set.
+- **An approval covers only the pages it listed** (decision 5). A cascade delete's pages, a template copy's children
+  and a whole set are listed when the proposal is captured and again at approval and inside the lock: a page added,
+  gone or moved since makes the proposal `conflicted`, nothing written, whatever tool made it. A cascade over 500 pages
+  is refused at capture.
+- **The status tags are guarded** (decision 7, a per-project canon rule `status-tags`, on by default). `CANON`,
+  `Working` and `Archived` (any case; look-alikes caught) change only through the lifecycle tools and creates by their
+  status; `update_resource`, `updateResource` on every route and create bodies that add one are refused, naming the
+  tool. **Behaviour change:** an agent can no longer remove `CANON` from a page with `update_resource`, and
+  `lk_api_write createResource` with a `CANON` tag is refused (the same create without the tag is still a canonical
+  proposal, decision 1). Other tags are free.
+- **Signing in again for the canon rules and the lifecycle settings** (decision 4): saving either needs the dashboard's
+  re-authentication within the last 5 minutes, as keys do; the dashboard asks for it.
+- **Ids below a page are keyed by the page** (the sandbox run's A1: LegendKeeper reuses a template's property, row and
+  item ids in every copy). `factsVersion` is now `fv2_…` and unique to its page (a version read before the upgrade is a
+  conflict once: read the page again); the copy check's id map and the check's versions are kept per page; the journal's
+  `targetId` matches a row, property or block id only with its `resourceId`; the dashboard and proposal summaries name a
+  row with its page. The test mocks now reuse ids too.
+- **Row values are planned as LegendKeeper stores them** (the sandbox run's B16): every leading and trailing line break
+  is trimmed before planning (`set_facts` plain and Markdown values, identity facts, a new page's Status, lifecycle
+  facts) and in every comparison, so a value sent with a trailing new line verifies true and causes no later conflict; a
+  value of only line breaks clears the row.
+- **The sandbox harness (the owner's first server run).** `npm run test:sandbox` loads its config with
+  `--configLoader runner` and the sandbox config switches off Vitest's file caches, so it runs as `lkbridge` without
+  writing to `node_modules` (no workaround needed); a CI test runs it under Node's permission model with every write
+  outside a temporary directory refused. The sandbox runtimes keep no secrets, so the four `SECRETS_MASTER_KEY` warnings
+  are gone (the key still never enters the environment). The assumptions check: A1 reports reused ids as a note, B12
+  makes its own create and update, B16 expects the trimmed form (and says if only one break is trimmed), and the
+  clean-up counts a 404 or "already deleted" page as cleaned. The soak, spike and round-trip scripts use no TypeScript
+  config (tsx caches in the system's temporary directory), so they needed no change.
+- Tests: about 100 new, among them two copies of one template written at once, trailing breaks, re-authentication,
+  decision 5 on a cascade and on a set (at approval and inside the lock), the status tags through every route, and for
+  each set operation a 4-page character set with a nested index, the layout, the index treatment, each page's variant,
+  the refusals, related pages, and a fault after every write followed by a resume (52 fault-and-resume cycles).
 
 ## Unreleased: CR-2026-11, the mid-point review of the write layer (11 November 2026)
 

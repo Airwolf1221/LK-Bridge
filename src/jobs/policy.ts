@@ -17,6 +17,7 @@ import type {
   LifecycleMarker,
   OnError,
   OpParams,
+  PageScopeEntryShape,
   Principal,
   PriorityClass,
   StepOptions,
@@ -102,6 +103,10 @@ export interface ProposalJobOptions {
   readonly holdDocuments?: readonly string[];
   /** v2 C2c: the lifecycle change the job makes (bridge code only). */
   readonly lifecycle?: LifecycleMarker;
+  /** C2d: further job-level locks (a whole set's pages and documents). */
+  readonly holdMore?: { readonly resources?: readonly string[]; readonly documents?: readonly string[] };
+  /** C2d (ADR 0036 decision 5): the pages the request touches without naming them, as planned. */
+  readonly pageScope?: { readonly subtrees: readonly PageScopeEntryShape[] };
 }
 
 /**

@@ -140,8 +140,13 @@ export const registerProjects: Register = (api, ctx) => {
     };
   });
 
-  /** v2 C2a: replaces the rules (`rules: null` restores the defaults); `confirm: true` required. Audited. */
+  /**
+   * v2 C2a: replaces the rules (`rules: null` restores the defaults); `confirm: true` required. Audited. C2d (ADR 0036
+   * decision 4, the owner's): any change, a rule switched off and `rules: []` included, needs the owner to have signed
+   * in again within the last 5 minutes, as the other sensitive actions do (ADR 0028).
+   */
   api.put('/projects/:name/canon', (req) => {
+    requireReauth(ctx.deps.services, req);
     const { name } = parseInput(nameParam, req.params);
     const b = parseInput(
       z.object({

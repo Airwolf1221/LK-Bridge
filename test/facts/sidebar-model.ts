@@ -87,6 +87,18 @@ const textOf = (content: Obj[]) =>
     )
     .join('');
 
+/**
+ * C2d (ADR 0037): LegendKeeper trims a leading or trailing `{ break: true }` run from a key-value row value (the OpenAPI
+ * schema; the owner's sandbox run of 11 November 2026). Every one of them, as the bridge assumes.
+ */
+export function trimRowBreaks(content: Obj[]): Obj[] {
+  let a = 0;
+  let b = content.length;
+  while (a < b && content[a]!.break === true) a++;
+  while (b > a && content[b - 1]!.break === true) b--;
+  return a === 0 && b === content.length ? content : content.slice(a, b);
+}
+
 export class SidebarModel {
   readonly pages = new Map<string, MSidebar>();
   readonly requests: { method: string; path: string; ifMatch?: string; body?: unknown }[] = [];
@@ -97,6 +109,8 @@ export class SidebarModel {
   propertyVersions = false;
   /** A LegendKeeper that ranks a new row between its neighbours in STORED order (wrong; for the verify step). */
   placeByStoredOrder = false;
+  /** C2d: trim leading and trailing breaks from row values written (LegendKeeper does); off only to show the old way. */
+  trimBreaks = true;
 
   constructor(readonly names: (id: string) => string | undefined) {}
 
@@ -182,6 +196,10 @@ export class SidebarModel {
 
   items(page: string, title: string): MItem[] {
     return [...(this.pages.get(page)!.props.find((x) => x.title === title)!.items ?? [])];
+  }
+
+  private trim(content: Obj[]): Obj[] {
+    return this.trimBreaks ? trimRowBreaks(content) : content;
   }
 
   rowView(r: MRow) {
@@ -276,7 +294,9 @@ export class SidebarModel {
                   id: mint('w'),
                   rank: rankAt((i + 1) * 100),
                   key: str(r.key),
-                  content: Array.isArray(r.content) ? (r.content as Obj[]) : r.text ? [{ text: r.text }] : [],
+                  content: this.trim(
+                    Array.isArray(r.content) ? (r.content as Obj[]) : r.text ? [{ text: r.text }] : [],
+                  ),
                 })),
               }
             : {}),
@@ -318,7 +338,9 @@ export class SidebarModel {
             id: typeof r.id === 'string' ? r.id : mint('w'),
             rank: rankAt((i + 1) * 100),
             key: str(r.key),
-            content: Array.isArray(r.content) ? (r.content as Obj[]) : r.text ? [{ text: r.text }] : [],
+            content: this.trim(
+              Array.isArray(r.content) ? (r.content as Obj[]) : r.text ? [{ text: r.text }] : [],
+            ),
           }));
         }
         this.mangle?.(req, sb);
@@ -338,7 +360,7 @@ export class SidebarModel {
     const contentOf = (cur: Obj[]): Obj[] =>
       'content' in body
         ? Array.isArray(body.content)
-          ? (body.content as Obj[])
+          ? this.trim(body.content as Obj[])
           : []
         : typeof body.text === 'string'
           ? body.text === ''

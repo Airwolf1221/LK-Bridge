@@ -12,6 +12,7 @@
  * The same code runs as a dry run against the mock LegendKeeper in test/tools/soak-dryrun.test.ts.
  */
 import { randomBytes } from 'node:crypto';
+import type { Writable } from 'node:stream';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -102,6 +103,8 @@ export async function createSoakRuntime(o: {
   /** Extra environment for the config (the dry run sets the pacing to zero). */
   readonly env?: Readonly<Record<string, string>>;
   readonly transport?: Transport;
+  /** Where the runtime logs (tests capture it); default stdout. */
+  readonly logStream?: Writable;
 }): Promise<SoakRuntime> {
   const dir = mkdtempSync(join(tmpdir(), 'lkb-soak-'));
   const db = openDatabase(join(dir, 'soak.db'));
@@ -129,6 +132,11 @@ export async function createSoakRuntime(o: {
     version: 'soak',
     lkTransport: countingTransport(o.transport ?? defaultTransport, counters),
     maintenanceSettings: defaultMaintenanceSettings({ enabled: false }),
+    // C2d: a temporary database of its own that keeps no secrets; the key is handed over directly (target.ts opened
+    // the bridge's store with the env file's master key), and the wrappers keep that master key out of every
+    // environment, so its absence here is expected, not worth four warnings.
+    secretStore: 'unused',
+    ...(o.logStream ? { logStream: o.logStream } : {}),
   });
   const close = async () => {
     await runtime.shutdown(5_000);

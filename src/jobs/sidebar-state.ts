@@ -63,14 +63,31 @@ export function stateHash(v: unknown): string {
   return createHash('sha256').update(stableJson(v)).digest('hex');
 }
 
-/** A row's value as normalised runs: its `content`, or its `text` as one run when there is no content. */
+/**
+ * C2d (ADR 0037; the OpenAPI schema, and the owner's sandbox run of 11 November 2026, B16): LegendKeeper trims a
+ * leading or trailing `{ break: true }` run from a key-value row value. Every one of them is taken off here, so what the
+ * bridge plans, sends and compares is what LegendKeeper stores. A value that is nothing but breaks becomes empty (no
+ * runs): the row is cleared, as an empty value clears it.
+ */
+export function trimRowBreaks<T extends Obj>(runs: readonly T[]): T[] {
+  let a = 0;
+  let b = runs.length;
+  while (a < b && runs[a]!.break === true) a++;
+  while (b > a && runs[b - 1]!.break === true) b--;
+  return runs.slice(a, b);
+}
+
+/**
+ * A row's value as normalised runs: its `content`, or its `text` as one run when there is no content; leading and
+ * trailing breaks trimmed, as LegendKeeper stores the value (C2d).
+ */
 export function normaliseContent(content: unknown, text?: unknown): Obj[] {
   const runs = Array.isArray(content)
     ? (content as unknown[]).filter(isObj)
     : typeof text === 'string' && text !== ''
       ? [{ text }]
       : [];
-  return normaliseRuns(runs).map((r) =>
+  return trimRowBreaks(normaliseRuns(runs)).map((r) =>
     isObj(r.mention) ? { ...r, mention: withoutKey(r.mention, 'name') } : r,
   );
 }
@@ -327,9 +344,13 @@ export function sidebarState(body: unknown): SidebarPropertyState[] {
  * `factsVersion` (v2 C2b): the bridge's own version of a page's sidebar facts, since LegendKeeper gives none that covers
  * the whole sidebar. A stable hash of `sidebarState`: the same on every read of an unchanged sidebar, from any endpoint;
  * different after any change to a row (key, value, rank, added or removed) or to a link collection (items or filter).
+ *
+ * C2d (ADR 0037): `fv2_`, the page's id hashed in. Copies of one template share their property, row and item ids
+ * (LegendKeeper reuses them), so two untouched copies had the same `fv1_` version, and a version read on one page
+ * passed as `baseFactsVersion` on its twin. A version now belongs to exactly one page.
  */
-export function factsVersionOf(state: readonly SidebarPropertyState[]): string {
-  return `fv1_${stateHash(state).slice(0, 24)}`;
+export function factsVersionOf(resourceId: string, state: readonly SidebarPropertyState[]): string {
+  return `fv2_${stateHash({ page: resourceId, facts: state }).slice(0, 24)}`;
 }
 
 /** Every difference between two sidebar states, property by property (rows by id, items in order). */

@@ -3,16 +3,22 @@ import { defineConfig } from 'vitest/config';
 /**
  * Opt-in: talks to a real LegendKeeper sandbox project. Never run in public CI.
  *
- * It runs on the server as the service user, who cannot write into the release's node_modules: the package script
- * loads this file with `--configLoader runner` (no bundled copy of the config written beside it), and `fsModuleCache`
- * is off (no transformed-module cache written under node_modules).
+ * On the server it runs as the service user (`lkbridge`), which cannot write to `node_modules` (it belongs to the build
+ * user, ADR 0020). So nothing here may write there (C2d, the owner's run of 11 November 2026):
+ * - `npm run test:sandbox` loads this file with `--configLoader runner`, which evaluates it in memory; the default
+ *   loader writes a bundled copy to `node_modules/.vite-temp` and failed with EACCES;
+ * - `fsModuleCache: false`: no transformed-module cache in `node_modules/.vitest-cache` ("could not create
+ *   .vitest-cache");
+ * - `cache: false`: no results file in Vite's cache directory (it only orders reruns, which a one-off run has none of).
+ * test/tools/sandbox-config-readonly.test.ts runs this config with every write outside a temporary directory refused.
  */
 export default defineConfig({
   test: {
     include: ['test/sandbox/**/*.test.ts'],
-    fsModuleCache: false,
     environment: 'node',
     disableConsoleIntercept: true,
     testTimeout: 120_000,
+    fsModuleCache: false,
+    cache: false,
   },
 });

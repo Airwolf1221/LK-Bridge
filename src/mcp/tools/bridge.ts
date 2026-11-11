@@ -679,7 +679,11 @@ function otherTools(deps: ToolDeps) {
           .string()
           .max(256)
           .optional()
-          .describe('Also finds every resource a createManyResources created.'),
+          .describe(
+            'Also finds every resource a createManyResources created. A property, row, link-item or block id is unique ' +
+              'only within its page (copies of one template share them): give resourceId with it, or only page and ' +
+              'document targets match.',
+          ),
         operationId: z.string().max(100).optional(),
         jobId: z.string().max(100).optional(),
         principalId: z

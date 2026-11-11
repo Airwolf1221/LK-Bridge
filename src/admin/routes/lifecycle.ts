@@ -9,6 +9,7 @@
  */
 import * as z from 'zod';
 import { LifecycleError } from '../../lifecycle/index.js';
+import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { limitSchema, parseInput, projectParam, type Register } from './util.js';
 
@@ -52,6 +53,8 @@ const patchSchema = z
         scopePrefix: text(500),
         temporalFromAuthoritative: text(500),
         temporalFromWorking: text(500),
+        // C2d (ADR 0037): the note an index of an archived set gets (a proposed default; the owner edits it here).
+        noteForIndex: text(2000).optional(),
       })
       .strict()
       .optional(),
@@ -87,6 +90,8 @@ export const registerLifecycle: Register = (api, ctx) => {
    * `confirm: true` required. Audited as `project.set_lifecycle` with the old and new values.
    */
   api.put('/projects/:name/lifecycle', (req) => {
+    // C2d (ADR 0036 decision 4, the owner's): signing in again within the last 5 minutes, as for keys (ADR 0028).
+    requireReauth(ctx.deps.services, req);
     const p = projectByName(parseInput(nameParam, req.params).name);
     const body = (req.body ?? {}) as Record<string, unknown>;
     parseInput(z.object({ confirm: z.literal(true) }).loose(), body);
@@ -138,8 +143,23 @@ export const registerLifecycle: Register = (api, ctx) => {
         jobs: r.jobs,
         proposalId: r.proposalId,
         detail: r.detail ?? {},
+        // C2d (ADR 0037): the whole-set change this page's record belongs to, if any.
+        setId: r.setId ?? null,
         createdAt: r.createdAt,
         completedAt: r.completedAt,
+      })),
+      // C2d: the newest whole-set changes (the root, the action, how many pages, complete or not).
+      sets: store.recentSets(p.id, { limit: 20 }).map((x) => ({
+        id: x.id,
+        rootId: x.rootId,
+        rootName: x.rootName,
+        action: x.action,
+        date: x.date,
+        state: x.state,
+        pages: x.pages.length,
+        previousState: x.previousState,
+        jobs: x.jobs,
+        proposalId: x.proposalId,
       })),
       principals: ctx.principals(rows.map((r) => r.principalId)),
       links: {

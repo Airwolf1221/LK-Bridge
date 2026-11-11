@@ -566,7 +566,7 @@ export interface CanonRule {
    * (deleting a page of these kinds, by prefix) and `deleteDocument` (deleting a document of these types of a page whose
    * fact holds one of `values`).
    */
-  kind: 'value' | 'change' | 'delete' | 'deleteKind' | 'deleteDocument';
+  kind: 'value' | 'change' | 'delete' | 'deleteKind' | 'deleteDocument' | 'statusTags';
   values?: string[];
   kinds?: string[];
   documentTypes?: string[];
@@ -1030,6 +1030,8 @@ export interface LifecycleConfigView {
     scopePrefix: string;
     temporalFromAuthoritative: string;
     temporalFromWorking: string;
+    /** C2d: the note an index archived with its set gets. */
+    noteForIndex: string;
   };
   problem: string | null;
 }
@@ -1044,6 +1046,8 @@ export interface LifecycleView {
 
 export interface LifecycleRecordView {
   id: number;
+  /** C2d: the whole-set change this record belongs to, if any. */
+  setId?: number | null;
   pageId: string;
   pageName: string;
   action: 'archive' | 'unarchive' | 'move_to_working' | 'promote';

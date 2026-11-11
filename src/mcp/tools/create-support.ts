@@ -7,7 +7,7 @@
 import { factKey, sidebarFrom, type SidebarProperty } from '../../facts/index.js';
 import { expandNewPageFacts } from '../../facts/expand.js';
 import { FactsPlanError, planFacts, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
-import { factValueRuns, FactValueError } from '../../facts/values.js';
+import { factValueRuns, FactValueError, rowTextRuns } from '../../facts/values.js';
 import { VERIFY_STEP, type VerifyTarget } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
 import { mintClientId } from '../../jobs/ids.js';
@@ -330,9 +330,10 @@ export async function planNewPageFacts(
     );
   }
   const identity = input.identity ?? [];
+  // C2d: as LegendKeeper stores them (no leading or trailing break), so the copy check and verify agree with it.
   const facts: { key: string; value: Obj[] | null }[] = identity.map((f) => ({
     key: f.key,
-    value: f.value === '' ? [] : [{ text: f.value }],
+    value: rowTextRuns(f.value),
   }));
   for (const [k, v] of callerFacts) {
     const id = identity.find((f) => factKey(f.key) === factKey(k));
@@ -371,7 +372,7 @@ export async function planNewPageFacts(
   }
   const hasStatusRow = templateKeys?.some((k) => factKey(k) === factKey(statusKey)) ?? false;
   const writeStatus = input.status !== null && !callerStatus && hasStatusRow;
-  if (writeStatus) facts.push({ key: statusKey, value: [{ text: input.status }] });
+  if (writeStatus) facts.push({ key: statusKey, value: rowTextRuns(input.status) });
   for (const [k, v] of callerFacts) {
     if (identity.some((f) => factKey(f.key) === factKey(k))) continue;
     if (v === null) {

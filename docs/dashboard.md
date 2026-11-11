@@ -149,6 +149,9 @@ shows the warning and asks twice before forcing.
 
 ## Journal page (chunk 8)
 
+C2d: a target below a page (a property, row, link item or block, whose id copies of one template share) is shown with
+its page and document (`page › document › id`), and filtering by such a target id needs the page's id too.
+
 The journal records **every** write the bridge sends, not only destructive ones, so the page lists what each agent
 changed, with outcome, principal, profile and approver. Filters: operation, document, resource, profile, principal,
 outcome, "destructive only" (writes that kept a pre-image) and time. Pages of 100, newest first; **Older** and **Newest**
@@ -237,14 +240,24 @@ a destination other than the remembered one), and, for `archive_page` and `move_
 how fresh the link index is. A proposal that resumes a lifecycle change that stopped part-way says so and lists only
 what is left. Everything is checked again when it runs: a page changed since the plan makes it conflicted.
 
+**A whole set (C2d, `subtree: true`)** opens with a **Whole-set lifecycle change** panel instead: the set's root, how
+many pages (content pages and indexes), the state it leaves and enters, where its root goes (the set stays together),
+the estimated reads and writes, then a table with **every page of the set**: its name, what it becomes, its place
+("moves under …" for the root, "stays under its parent" for the rest), its fact changes, its tags before and after, and
+its note (indexes are marked as having no Status). The related pages are listed page by page, links between pages of
+the set left out. One "Approve and accept as canon" runs the whole set; a page added, removed or moved under the set
+since the proposal makes it conflicted (ADR 0036 decision 5).
+
 ## Archive and lifecycle (v2 C2c)
 
 The **Archive and lifecycle** page (navigation: Archive and lifecycle) lists the selected project's lifecycle record,
 newest first, read-only and never pruned: one row per change (archived, unarchived, moved to Working, promoted) with the
 page (id and name before the change), the date, the state it was in, its name after, whether the change is
 **complete** or **incomplete** (and "not as planned" when the verify step found a difference), and its job ids, each
-linked to the Journal page filtered by that job (`/journal?jobId=…`). An incomplete change is finished by calling the
-same tool on the page again. Below the list, the **link index**: how many links it holds, the last complete link
+linked to the Journal page filtered by that job (`/journal?jobId=…`). A page changed as part of a whole set shows
+"(whole set N)" beside its action, N being the set record (`GET /lifecycle/records` also returns the newest set records
+as `sets`). An incomplete change is finished by calling the same tool on the page again (for a set: on its root, with
+`subtree: true`). Below the list, the **link index**: how many links it holds, the last complete link
 sweep (when, pages, documents and requests), and a sweep in progress (how far it is, and why it stopped if it did).
 
 **Lifecycle (Projects page).** Each project's lifecycle settings: `[INDEX] Working` and `[INDEX] Archived` as found by
@@ -252,9 +265,12 @@ name in the repository tree now (found, missing, or ambiguous with the candidate
 **Confirm these indexes** when exactly one of each is found (asks for a confirmation; the lifecycle tools and Working
 creates refuse until both are confirmed, and again if a confirmed index is renamed, moved out or deleted). **Values**
 opens the index names, Status values, status tags, fact names, Continuity Types and the archive texts (`{date}` and
-`{source}` are filled in) for editing; **Save** asks for a confirmation, **Restore the defaults** brings back the
-owner's values and clears the confirmation. Every change is audited as `project.set_lifecycle` with the values before
-and after.
+`{source}` are filled in) for editing; C2d adds **Note on an index archived with its set** (default "Archived - {date}.
+The author retired {source} and the pages beneath it. They are kept for provenance.", a proposed wording for the owner
+to confirm). **Save** asks for a confirmation and, since C2d (ADR 0036 decision 4), for the password (and authenticator
+code) if the owner has not re-confirmed them in the last 5 minutes; **Restore the defaults** brings back the owner's
+values and clears the confirmation (the same re-authentication applies). Every change is audited as
+`project.set_lifecycle` with the values before and after.
 
 ## Chronology (v2 D1)
 
@@ -296,8 +312,11 @@ by default. **Remove** takes a rule out, **Add** puts one in (a fact, and either
 change of a set value", or, since v2 C2b, "deleting a page with these values": the rule that makes deleting an
 Authoritative page need canonical approval, seeded by default as "Status = Authoritative: deleting such a page (or a
 subtree holding one) needs canonical approval; restoring does not"); nothing is stored until **Save**, which asks for a
-confirmation (marked as dangerous when it protects fewer facts than before). **Restore the defaults** brings back the
-seeded rules. Every save is audited as `project.set_canonical_rules` with the rules before and after. With no rule at
+confirmation (marked as dangerous when it protects fewer facts than before) and, since C2d (ADR 0036 decision 4), the
+dashboard's re-authentication (password, and authenticator code when set up) unless done in the last 5 minutes:
+switching a rule off and removing every rule count as saving too. **Restore the defaults** brings back the seeded rules.
+C2d adds a rule, on by default: **Status tags (CANON, Working, Archived)**: added or removed only by the lifecycle tools
+and by creates according to their status (ADR 0036 decision 7); switching it off frees them. Every save is audited as `project.set_canonical_rules` with the rules before and after. With no rule at
 all the section warns that agents with scope "write" can change any fact. Changes apply to the next write; nothing
 needs a restart.
 

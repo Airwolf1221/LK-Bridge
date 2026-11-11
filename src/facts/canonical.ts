@@ -89,7 +89,14 @@ export function assessFactChange(
   const out: ProtectedChange[] = [];
   for (const rule of rules) {
     // Judged when a page or document is deleted (assessDelete, assessDeleteDocument), not on a fact change.
-    if (rule.kind === 'delete' || rule.kind === 'deleteKind' || rule.kind === 'deleteDocument') continue;
+    // C2d: `statusTags` is the lifecycle guard's (src/lifecycle/guard.ts), judged on tags, never on facts.
+    if (
+      rule.kind === 'delete' ||
+      rule.kind === 'deleteKind' ||
+      rule.kind === 'deleteDocument' ||
+      rule.kind === 'statusTags'
+    )
+      continue;
     const k = factKey(rule.key);
     const b = before.filter((f) => factKey(f.key) === k);
     const a = after.filter((f) => factKey(f.key) === k);
@@ -826,8 +833,8 @@ export async function listSubtree(
   read: (opId: string, params: OpParams) => Promise<unknown>,
   resourceId: string,
   limit: number,
-): Promise<{ id: string; name: string | null }[] | null> {
-  const out: { id: string; name: string | null }[] = [];
+): Promise<{ id: string; name: string | null; parentId: string }[] | null> {
+  const out: { id: string; name: string | null; parentId: string }[] = [];
   let level = [resourceId];
   try {
     while (level.length > 0 && out.length <= limit) {
@@ -842,7 +849,7 @@ export async function listSubtree(
             ? (body.data as { id?: unknown; name?: unknown }[])
             : []) {
             if (typeof r.id === 'string' && r.id !== resourceId) {
-              out.push({ id: r.id, name: typeof r.name === 'string' ? r.name : null });
+              out.push({ id: r.id, name: typeof r.name === 'string' ? r.name : null, parentId });
               next.push(r.id);
             }
           }

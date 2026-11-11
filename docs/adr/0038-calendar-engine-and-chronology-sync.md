@@ -2,8 +2,7 @@
 
 Status: Accepted (v2 session D1, 11 November 2026). Implements PLAN-v2 4.8 (the calendar engine), 4.9 (chronology sync)
 and the Timelines rows of section 5, on C1's engine hooks (ADR 0031), C2a's internal steps and job-level locks (ADR
-0032), C2b's `operation_id` and write jobs (ADR 0034), C2c's sorted job-level locks, record step and resume pattern (ADR 0035) and the mid-point review's notes (CR-2026-11). Migration 1800 is this session's (1700 is left for C2d, which runs
-alongside). Owner decision 6 of ADR 0036 (option (a)) is recorded as accepted. No other decision in PLAN.md or
+0032), C2b's `operation_id` and write jobs (ADR 0034), C2c's sorted job-level locks, record step and resume pattern (ADR 0035) and the mid-point review's notes (CR-2026-11). Migration 1800 is this session's (C2d, which ran alongside, took 1750). Owner decision 6 of ADR 0036 (option (a)) is recorded as accepted. No other decision in PLAN.md or
 PLAN-v2.md is changed; the choices below fill the gaps the plan and the brief left.
 
 ## Context
@@ -115,8 +114,8 @@ prototype built only from the calendar definition reproduces LegendKeeper's date
     Never a repair (PLAN-v2 4.12).
 19. **The opt-in sandbox test is read-only** (`test/sandbox/chronology.test.ts`): every row, every event and every age
     of the real chronology against the engine, with every failing row's exact text and a summary of the cell shapes it
-    saw. The package's `test:sandbox` loads its config with `--configLoader runner` and the config turns `fsModuleCache`
-    off, so it runs as the service user; `deploy/sandbox-test.sh` passes a filter after `--`.
+    saw. It runs as the service user (C2d's `--configLoader runner` and read-only sandbox config); `deploy/sandbox-test.sh`
+    passes a filter after `--`, so `-- chronology` runs nothing that writes.
 
 ## Costs
 

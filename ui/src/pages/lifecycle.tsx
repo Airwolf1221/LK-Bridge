@@ -66,7 +66,10 @@ export function LifecyclePage() {
                   <td>
                     <span className="mono small-text">{x.pageId}</span> {x.previousName}
                   </td>
-                  <td>{ACTION[x.action]}</td>
+                  <td>
+                    {ACTION[x.action]}
+                    {x.setId ? <span className="muted small-text"> (whole set {x.setId})</span> : null}
+                  </td>
                   <td>{x.date}</td>
                   <td>{STATE[x.previousState] ?? x.previousState}</td>
                   <td>{x.target.name}</td>

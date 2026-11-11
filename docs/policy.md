@@ -322,16 +322,17 @@ A second engine guard, beside the canon guard and combined with it (src/lifecycl
 every write, on every path (`set_facts`, the creation and resource tools, `lk_api_write`, `lk_api_batch`, every
 `lk_op_*`, an approved proposal), with the project's lifecycle settings:
 
-| Refused                                                                                              | Names                              |
-| ---------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| Status to `Archived`                                                                                 | `archive_page`                     |
-| Status from `Archived` to anything                                                                   | `unarchive_page`                   |
-| Status from `Authoritative` (or another value) to `Working`                                          | `move_to_working`                  |
-| Status from `Working` to `Authoritative` (or another value)                                          | `promote_page` (or `archive_page`) |
-| A rename that adds, removes or changes `[BWRK]` or `[BARC]`; a page created with one by hand         | the matching tool                  |
-| A move into, out of or between `[INDEX] Working` and `[INDEX] Archived`; a page created under either | the matching tool                  |
-| A Status written as a page mention (CR-2026-11)                                                      | `set_facts` with plain text        |
-| `[INDEX] Working` or `[INDEX] Archived` itself renamed, moved or deleted; a page given its name      | none: the owner, by hand           |
+| Refused                                                                                                                                               | Names                              |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Status to `Archived`                                                                                                                                  | `archive_page`                     |
+| Status from `Archived` to anything                                                                                                                    | `unarchive_page`                   |
+| Status from `Authoritative` (or another value) to `Working`                                                                                           | `move_to_working`                  |
+| Status from `Working` to `Authoritative` (or another value)                                                                                           | `promote_page` (or `archive_page`) |
+| A rename that adds, removes or changes `[BWRK]` or `[BARC]`; a page created with one by hand                                                          | the matching tool                  |
+| A move into, out of or between `[INDEX] Working` and `[INDEX] Archived`; a page created under either                                                  | the matching tool                  |
+| A Status written as a page mention (CR-2026-11)                                                                                                       | `set_facts` with plain text        |
+| C2d (ADR 0036 decision 7): a status tag (`CANON`, `Working`, `Archived`) added or removed by `updateResource` on any route, or added by a create body | the matching lifecycle tool        |
+| `[INDEX] Working` or `[INDEX] Archived` itself renamed, moved or deleted; a page given its name                                                       | none: the owner, by hand           |
 
 The refusal is `POLICY_DENIED`, at every scope (a request at scope `propose` is refused, not proposed), with a message
 naming the tool to use. `update_resource` answers a prefix change with `PREFIX_CHANGE` before it reaches the guard.
@@ -341,7 +342,21 @@ spaces or invisible characters before it, in fullwidth or look-alike letters (`[
 with a Cyrillic А are all `[BARC]`). A template copy given no name is judged by the template's name, and a copy's Status
 is judged whether or not the caller gave the copy an id. A page made `[BSRC]` (Authoritative) by a create or a rename
 that no creation tool or lifecycle tool declares is not refused but becomes a **canonical proposal**, at every scope, as
-an Authoritative create through the creation tools is (CR-2026-11, CR-16; ADR 0036 asks the owner to confirm).
+an Authoritative create through the creation tools is (CR-2026-11, CR-16; ADR 0036 decision 1, accepted by the owner).
+
+**The status tags (C2d, ADR 0036 decision 7, accepted by the owner on 11 November 2026).** The lifecycle settings' three
+status tags are compared without case, invisible characters and look-alikes (the same fold as keys and prefixes). A
+request that adds or removes one, other than through a lifecycle tool's marker or a creation tool's (which declare the
+pages they retag), is refused at entry and again inside the lock, where the page's tags are read as LegendKeeper holds
+them. Every other tag is free, and a status tag already on a page is kept when other tags change. The check is the
+project's canon rule `status-tags` (kind `statusTags`, on by default; switched off on the dashboard, the status tags are
+free again). `createResourceFromTemplate` takes no tags; the creation tools retag a copy with a declared
+`updateResource`.
+
+**Whole sets (C2d, ADR 0037).** A set change's marker names every page of the set: content pages with the state they
+move to, indexes with the set's (for their status tags). Pages under an archived set's index are in the archive area as
+far as the guard is concerned, so no route can create a page there, move one in or out, or rename one out of
+`[BARC]`.
 
 **Where it is enforced:** at entry (the request's sidebar writes simulated on the page's sidebar, as the canon guard
 does; renames judged from the page's name; moves from where the page is, from the repository tree when it knows the page
@@ -366,6 +381,29 @@ the three Status values, the three status tags, the field names (Status, Continu
 Major Revision), the Continuity Type values (CANON, AU, NON-CURRENT) and the archive texts. Until the indexes are
 confirmed the guard still refuses Status and prefix changes (with the values above), but cannot tell a move into or out
 of a lifecycle index, and the four tools and Working creates refuse to run: confirm the indexes first.
+
+## An approval covers only the pages it listed (C2d, ADR 0036 decision 5)
+
+Accepted by the owner on 11 November 2026 and built in C2d. An approved proposal runs only on the pages it showed. Most
+operations name every page they touch, so the proposal's own targets (re-read at approval: a target gone or changed is a
+conflict) are its list. The pages an operation touches without naming them are listed live when the proposal is captured
+and kept with it (`pageScope` in its job options, src/policy/page-scope.ts):
+
+- a cascade `deleteResource`: every page under the page it deletes;
+- `createResourceFromTemplate` with `includeChildren`: every page under the template;
+- a whole lifecycle set (`subtree: true`): every page under the set's root (the tool's own list).
+
+At approval they are listed again; inside the lock, just before the cascade or the copy is sent, the page-scope guard
+lists them once more (for a set, the job's own first check does). A page added, gone, or moved to another parent makes
+the proposal **`conflicted`** (nothing written), whatever tool made it: the conflict names the pages. More than 500
+pages under one page is refused at capture (delete or copy them in parts).
+
+## Re-authentication for the canon rules and the lifecycle settings (C2d, ADR 0036 decision 4)
+
+Saving the canon rules (`PUT /projects/:name/canon`: any change, a rule switched off and `rules: []` included) and
+saving the lifecycle settings (`PUT /projects/:name/lifecycle`) need the owner to have re-confirmed their password (and
+authenticator code) on this session within the last 5 minutes, as key changes do (ADR 0028); otherwise `403
+REAUTH_REQUIRED` and nothing is saved. "Approve and accept as canon" is unchanged.
 
 ## Timeline, map and board content on Authoritative pages (ADR 0036 decision 6)
 
