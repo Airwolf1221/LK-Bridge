@@ -185,13 +185,37 @@ function failedBody(
   const written = steps
     .filter((s) => s.status === 'succeeded' && isWrite(s.stepNo))
     .map((s) => labels[s.stepNo - 1]!);
+  // CR-2026-11 (CR-07): a write whose answer was lost, and whose check could not tell, may have been made: never listed
+  // as not written.
+  const uncertain = steps
+    .filter((s) => s.status === 'uncertain' && isWrite(s.stepNo))
+    .map((s) => labels[s.stepNo - 1]!);
   const notWritten = steps
-    .filter((s) => s.status !== 'succeeded' && isWrite(s.stepNo))
+    .filter((s) => s.status !== 'succeeded' && s.status !== 'uncertain' && isWrite(s.stepNo))
     .map((s) => labels[s.stepNo - 1]!);
   const journal = pd.engine.queries
     .journalLookup(pd.project.id, { jobId: view.id, includePreImage: false, limit: 200 })
     .map((e) => ({ id: e.id, op: e.opId, target: e.targetId, outcome: e.outcome }));
   const code = typeof err.code === 'string' ? err.code : 'JOB_FAILED';
+  if (uncertain.length > 0) {
+    return {
+      code: 'OUTCOME_UNKNOWN',
+      message:
+        `Not known whether ${uncertain.join('; ')} ${uncertain.length === 1 ? 'was' : 'were'} written: LegendKeeper's answer ` +
+        `was lost and the read that should have told failed too (${why ?? view.status}). ` +
+        (written.length > 0 ? `Written: ${written.join('; ')}. ` : '') +
+        `Not written: ${notWritten.join('; ') || 'nothing else'}. Nothing was retried, and nothing will be.`,
+      jobId: view.id,
+      written,
+      uncertain,
+      notWritten,
+      journal,
+      hint:
+        `Read the pages to see what they hold before doing anything else; do not repeat this request. ` +
+        `bridge_journal_lookup with jobId ${view.id} shows each write (an unknown one has the outcome "unknown").`,
+      ...head,
+    };
+  }
   if (written.length === 0) {
     return {
       code,

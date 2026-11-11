@@ -386,7 +386,10 @@ export class World {
       const parent = req.query.parentId;
       // The spike's own listings fail; the bridge's internal reads (`lkb.t…`, such as the canonical guard listing a
       // cascade's pages before the clean-up delete, v2 C2b) do not, so the clean-up is still judged and made.
-      const internal = (req.headers['x-request-id'] ?? '').startsWith('lkb.t');
+      // CR-2026-11: the canon guard also lists a cascade's pages inside the delete's lock (a job's own extra read,
+      // `lkb.<job>.<step>.<attempt>.r…`), which is let through the same way.
+      const rid = req.headers['x-request-id'] ?? '';
+      const internal = rid.startsWith('lkb.t') || /^lkb\.j[^.]+\.\d+\.\d+\.r/.test(rid);
       if (parent !== undefined && this.o.failChildListing && !internal)
         return err(500, 'INTERNAL', 'mock failure');
       const all = [...this.resources.values()].filter((r) =>

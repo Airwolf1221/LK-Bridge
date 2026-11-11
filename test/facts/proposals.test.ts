@@ -125,7 +125,8 @@ describe('ids minted at capture, used exactly at approval', () => {
       'Asagiri Miyabi: sidebar, 1 link added',
     ]);
     expect(proposals().get(id)!.pages).toHaveLength(3);
-    await w.stack.runtime.policy.commands.approve('owner', id);
+    // CR-2026-11 (CR-16): a [BSRC] page created by a route no creation tool declares needs canonical approval.
+    await w.stack.runtime.policy.commands.approveAsCanon('owner', id);
     const p = await settle(id);
     expect(p.state, JSON.stringify(p.error)).toBe('executed');
     expect(w.repo.live(plan.indexId)?.parentId).toBe(ROOT);
@@ -148,7 +149,8 @@ describe('ids minted at capture, used exactly at approval', () => {
         .detail(id)!
         .pageSummary.map((e) => e.label),
     ).toEqual(['[BSRC] Captured Id Page (new): created']);
-    await w.stack.runtime.policy.commands.approve('owner', id);
+    // CR-2026-11 (CR-16): a [BSRC] page created by a route no creation tool declares needs canonical approval.
+    await w.stack.runtime.policy.commands.approveAsCanon('owner', id);
     expect((await settle(id)).state).toBe('executed');
     expect(w.repo.live(minted)?.name).toBe('[BSRC] Captured Id Page');
   });
@@ -169,7 +171,8 @@ describe('generic verification', () => {
         proposal: { operations: plan.operations },
       });
       const id = (r as { proposalId: string }).proposalId;
-      await w.stack.runtime.policy.commands.approve('owner', id);
+      // CR-2026-11 (CR-16): a [BSRC] page created by a route no creation tool declares needs canonical approval.
+      await w.stack.runtime.policy.commands.approveAsCanon('owner', id);
       const p = await settle(id);
       expect(p.state).toBe('executed');
       const d = proposals().detail(id)!;

@@ -18,7 +18,7 @@
  */
 import { isCanonicalApproval } from '../policy/approval.js';
 import { PolicyDeniedError, type JobEngine, LkOperationError } from '../jobs/index.js';
-import { SYSTEM_PRINCIPAL, type LifecycleMarker } from '../jobs/types.js';
+import { SYSTEM_PRINCIPAL, type LifecycleMarker, type OpParams } from '../jobs/types.js';
 import type {
   WriteGuard,
   WriteGuardEntry,
@@ -31,9 +31,11 @@ import {
   applySidebarWrite,
   factRows,
   sidebarFrom,
+  valueSignature,
   valueText,
   type SidebarProperty,
 } from '../facts/sidebar.js';
+import { listSubtree } from '../facts/canonical.js';
 import { classifyName, type TreeNode } from '../tree/index.js';
 import { areaOf, lifecycleFrom, type LifecycleConfig } from './settings.js';
 
@@ -45,8 +47,12 @@ type State = 'authoritative' | 'working' | 'archived';
 export interface LifecycleChange {
   readonly resourceId: string;
   readonly page: string;
-  /** What changes: the Status, the prefix, or the place. */
-  readonly what: 'status' | 'prefix' | 'place' | 'create';
+  /**
+   * What changes: the Status, the prefix, or the place. CR-2026-11: `index`, a lifecycle index itself (renamed, moved,
+   * deleted, or a second page given its name), always refused; `canon`, a page made `[BSRC]` (Authoritative) by a create
+   * or rename that no lifecycle tool or creation tool declares: a canonical proposal.
+   */
+  readonly what: 'status' | 'prefix' | 'place' | 'create' | 'index' | 'canon';
   /** The state it moves to, as far as the change tells. */
   readonly to: State | null;
   readonly text: string;
@@ -157,6 +163,48 @@ export interface LifecycleGuardDeps {
   readonly node: (projectId: string, id: string) => TreeNode | null;
 }
 
+/**
+ * CR-2026-11 (CR-14): a name's kind as a reader sees it, which the guard judges by: the bracketed prefix in any case,
+ * with or without the space after it, with spaces or invisible characters before it, in fullwidth or look-alike letters
+ * (`factKey`'s fold). The tree classifies strictly (`[BARC] ` exactly); a name that only LOOKS like a lifecycle prefix
+ * is still judged as one, so it cannot take a page out of its state unseen.
+ */
+export function looseKind(name: string): string {
+  const m = /^\[\s*(bsrc|bwrk|barc|index)\s*\]/.exec(factKey(name));
+  return m ? m[1]! : classifyName(name).kind;
+}
+
+/** CR-2026-11 (CR-15): whether a name is (or looks like) one of the project's lifecycle index names. */
+function isLifecycleIndexName(c: LifecycleConfig, name: string): boolean {
+  if (looseKind(name) !== 'index') return false;
+  const display = factKey(name).replace(/^\[\s*index\s*\]\s*/, '');
+  return display === factKey(c.indexNames.working) || display === factKey(c.indexNames.archived);
+}
+
+const INDEX_TOOL =
+  'none: the owner manages the lifecycle indexes by hand in LegendKeeper, then confirms them again on the dashboard';
+const BSRC_TOOL = 'create_resource with status "authoritative", or promote_page';
+
+/** CR-2026-11 (CR-11): a Status written as a page mention, which shows that page's name (the bridge cannot judge it). */
+function newStatusMention(
+  c: LifecycleConfig,
+  before: readonly SidebarProperty[],
+  after: readonly SidebarProperty[],
+) {
+  const k = factKey(c.fields.status);
+  const had = new Set(
+    factRows(before)
+      .filter((r) => factKey(r.key) === k)
+      .map((r) => valueSignature(r.content)),
+  );
+  return factRows(after).some(
+    (r) =>
+      factKey(r.key) === k &&
+      r.content.some((x) => typeof x.mention === 'object' && x.mention !== null) &&
+      !had.has(valueSignature(r.content)),
+  );
+}
+
 const statusValues = (c: LifecycleConfig, sb: readonly SidebarProperty[]) =>
   factRows(sb)
     .filter((r) => factKey(r.key) === factKey(c.fields.status))
@@ -191,23 +239,33 @@ export class LifecycleGuard implements WriteGuard {
     const c = this.config(input.project);
     const changes = await this.changes(input, c);
     // Changes the job does not declare: refused, naming the right tool. A marker is bridge code's, so an undeclared
-    // change in a marked job is a bridge fault: refused too.
+    // change in a marked job is a bridge fault: refused too. CR-2026-11 (CR-16): a page made [BSRC] that no tool
+    // declares is not refused but needs the owner's canonical approval, as an Authoritative create by the tools does.
     const undeclared = changes.filter((ch) => !declares(marker, ch));
-    if (undeclared.length > 0) {
-      const first = undeclared[0]!;
+    const refused = undeclared.filter((ch) => ch.what !== 'canon');
+    if (refused.length > 0) {
+      const first = refused[0]!;
       return {
         decision: 'deny',
         opId: input.items[first.stepIndex ?? 0]?.op ?? 'operation',
         ...(input.jobKind === 'batch_ops' && first.stepIndex !== undefined
           ? { stepIndex: first.stepIndex }
           : {}),
-        reason: refusal(undeclared),
+        reason: refusal(refused),
       };
     }
-    if (!marker?.canonical) return { decision: 'allow' };
+    const canon = undeclared.filter((ch) => ch.what === 'canon');
+    if (!marker?.canonical && canon.length === 0) return { decision: 'allow' };
     // The four lifecycle tools: always the owner's canonical approval, at every scope (owner, 10 November 2026).
     if (isCanonicalApproval(input.origin.approval)) return { decision: 'allow' };
-    const reason = `${marker.tool} ${marker.reason ?? 'changes a page’s lifecycle state'}, which always needs the owner’s canonical approval (“Approve and accept as canon”), whatever the scope`;
+    const reason = marker?.canonical
+      ? `${marker.tool} ${marker.reason ?? 'changes a page’s lifecycle state'}, which always needs the owner’s canonical approval (“Approve and accept as canon”), whatever the scope`
+      : `this makes ${canon.length === 1 ? 'a page' : `${canon.length} pages`} [BSRC] (Authoritative: ${canon
+          .slice(0, 3)
+          .map((ch) => ch.text)
+          .join(
+            '; ',
+          )}), which always needs the owner’s canonical approval (“Approve and accept as canon”), whatever the scope`;
     if (input.origin.approval !== undefined) {
       return {
         decision: 'deny',
@@ -226,8 +284,8 @@ export class LifecycleGuard implements WriteGuard {
       decision: 'propose_canonical',
       reason,
       changes: [
-        { lifecycle: marker.tool, pages: marker.pages },
-        ...changes.map((ch) => ({
+        ...(marker?.canonical ? [{ lifecycle: marker.tool, pages: marker.pages }] : []),
+        ...[...(marker?.canonical ? changes : canon)].map((ch) => ({
           lifecycle: ch.what,
           page: ch.page,
           resourceId: ch.resourceId,
@@ -237,15 +295,174 @@ export class LifecycleGuard implements WriteGuard {
     };
   }
 
+  /**
+   * CR-2026-11 (CR-13): the lifecycle area a page under `parentId` is in, from what LegendKeeper holds: the confirmed
+   * index ids, the tree for a parent it knows, else the parent's ancestors read one by one (at most 16). `unknown` when
+   * it cannot be told (judged as a crossing).
+   */
+  private async areaLive(
+    c: LifecycleConfig,
+    project: string,
+    parentId: string | null,
+    read: (opId: string, params: OpParams) => Promise<unknown>,
+  ): Promise<Area | 'unknown'> {
+    // No index confirmed: no page is in a lifecycle area the guard can know (ADR 0035 decision 11).
+    if (c.workingIndexId === null && c.archiveIndexId === null) return null;
+    let id = parentId;
+    for (let i = 0; i < 16; i++) {
+      if (id === null) return null;
+      if (id === c.workingIndexId) return 'working';
+      if (id === c.archiveIndexId) return 'archived';
+      const n = this.d.node(project, id);
+      if (n) return areaOf(n, c);
+      let r: unknown;
+      try {
+        r = await read('getResource', { path: { resourceId: id } });
+      } catch {
+        return 'unknown';
+      }
+      if (!r || typeof r !== 'object') return 'unknown';
+      const pid = (r as Obj).parentId;
+      id = typeof pid === 'string' ? pid : null;
+    }
+    return 'unknown';
+  }
+
+  /** The changes of a move from area `from` to area `to` (an area that cannot be told counts as a crossing). */
+  private moveChange(
+    c: LifecycleConfig,
+    rid: string,
+    page: string,
+    from: Area | 'unknown',
+    to: Area | 'unknown',
+    stepIndex?: number,
+  ): LifecycleChange | null {
+    if (from === 'unknown' || to === 'unknown') {
+      return {
+        resourceId: rid,
+        page,
+        what: 'place',
+        to: null,
+        text: 'the page would be moved, and the bridge could not tell whether that crosses a lifecycle index',
+        tool: 'the lifecycle tools, or move it by hand in LegendKeeper',
+        ...(stepIndex !== undefined ? { stepIndex } : {}),
+      };
+    }
+    const ch = placeChange(from, to);
+    if (!ch) return null;
+    return {
+      resourceId: rid,
+      page,
+      what: 'place',
+      to: ch.to,
+      text:
+        to !== null
+          ? `the page would be moved into [INDEX] ${to === 'working' ? c.indexNames.working : c.indexNames.archived}`
+          : `the page would be moved out of [INDEX] ${from === 'working' ? c.indexNames.working : c.indexNames.archived}`,
+      tool: ch.tool,
+      ...(stepIndex !== undefined ? { stepIndex } : {}),
+    };
+  }
+
+  /** CR-2026-11 (CR-15): a write to one of the confirmed lifecycle indexes themselves. */
+  private indexChange(
+    c: LifecycleConfig,
+    rid: string,
+    what: string,
+    stepIndex?: number,
+  ): LifecycleChange | null {
+    if (rid !== c.workingIndexId && rid !== c.archiveIndexId) return null;
+    const name = rid === c.workingIndexId ? c.indexNames.working : c.indexNames.archived;
+    return {
+      resourceId: rid,
+      page: `[INDEX] ${name}`,
+      what: 'index',
+      to: null,
+      text: `[INDEX] ${name} itself would be ${what}`,
+      tool: INDEX_TOOL,
+      ...(stepIndex !== undefined ? { stepIndex } : {}),
+    };
+  }
+
+  /** The changes a new page (or a page copied with a template) of this name makes. */
+  private createChanges(
+    c: LifecycleConfig,
+    id: string,
+    raw: string,
+    area: Area,
+    stepIndex: number,
+    copied = false,
+  ): LifecycleChange[] {
+    const out: LifecycleChange[] = [];
+    const kind = looseKind(raw);
+    const what = copied ? 'copied with the template' : 'created';
+    if (kind === 'bwrk' || kind === 'barc') {
+      out.push({
+        resourceId: id,
+        page: raw,
+        what: 'create',
+        to: kind === 'bwrk' ? 'working' : 'archived',
+        text: `a page would be ${what} named ${raw}`,
+        tool: kind === 'bwrk' ? 'create_resource with status "working"' : 'archive_page',
+        stepIndex,
+      });
+    } else if (area !== null) {
+      out.push({
+        resourceId: id,
+        page: raw || id,
+        what: 'create',
+        to: area,
+        text: `a page would be ${what} under [INDEX] ${area === 'working' ? c.indexNames.working : c.indexNames.archived}`,
+        tool: area === 'working' ? 'create_resource with status "working"' : 'archive_page',
+        stepIndex,
+      });
+    }
+    if (kind === 'bsrc')
+      out.push({
+        resourceId: id,
+        page: raw,
+        what: 'canon',
+        to: 'authoritative',
+        text: `a page would be ${what} named ${raw}`,
+        tool: BSRC_TOOL,
+        stepIndex,
+      });
+    if (isLifecycleIndexName(c, raw))
+      out.push({
+        resourceId: id,
+        page: raw,
+        what: 'index',
+        to: null,
+        text: `a page would be ${what} named ${raw}, a lifecycle index’s name`,
+        tool: INDEX_TOOL,
+        stepIndex,
+      });
+    return out;
+  }
+
   /** Every lifecycle change the request makes, judged in order (sidebar writes simulated on the sidebars as they are). */
   private async changes(input: WriteGuardEntry, c: LifecycleConfig): Promise<LifecycleChange[]> {
     const out: LifecycleChange[] = [];
-    const sidebars = new Map<string, SidebarProperty[] | null>();
-    const created = new Set<string>();
-    // The area of a page created earlier in the same request (for a batch whose items nest).
-    const createdArea = new Map<string, Area>();
-    const read = async (resourceId: string): Promise<SidebarProperty[] | null> => {
-      if (sidebars.has(resourceId)) return sidebars.get(resourceId)!;
+    const priority = input.origin.approval !== undefined ? 'P0' : 'P1';
+    const internal = (opId: string, params: OpParams) =>
+      this.d.engine.internalRead(input.project, opId, params, { priority, notFoundIsAnswer: true });
+    // CR-2026-11 (CR-08): an `onError: continue` batch's steps may fail one by one while the rest still run, so each
+    // sidebar write is also judged on the page as it is now.
+    const each = input.jobKind === 'batch_ops' && input.onError === 'continue';
+    const reshapes = input.items.some((it) =>
+      [
+        'moveResource',
+        'restoreResource',
+        'createResource',
+        'createManyResources',
+        'saveResourceAsTemplate',
+      ].includes(it.op),
+    );
+    // CR-2026-11 (CR-17): templates saved earlier in the same request: the name a copy of one takes.
+    const savedNames = new Map<string, string>();
+    const live = new Map<string, SidebarProperty[] | null>();
+    const readLive = async (resourceId: string): Promise<SidebarProperty[] | null> => {
+      if (live.has(resourceId)) return live.get(resourceId)!;
       const pre = input.prefetched?.find(
         (p) => (p.op === 'listProperties' || p.op === 'getResource') && p.path.resourceId === resourceId,
       );
@@ -253,22 +470,55 @@ export class LifecycleGuard implements WriteGuard {
       if (pre) sb = sidebarFrom(pre.body);
       else {
         try {
-          sb = sidebarFrom(
-            await this.d.engine.internalRead(
-              input.project,
-              'listProperties',
-              { path: { resourceId } },
-              { priority: input.origin.approval !== undefined ? 'P0' : 'P1', notFoundIsAnswer: true },
-            ),
-          );
+          sb = sidebarFrom(await internal('listProperties', { path: { resourceId } }));
         } catch (e) {
           sb = e instanceof LkOperationError && e.lk.status === 404 ? [] : null;
         }
       }
+      live.set(resourceId, sb);
+      return sb;
+    };
+    const sidebars = new Map<string, SidebarProperty[] | null>();
+    const read = async (resourceId: string): Promise<SidebarProperty[] | null> => {
+      if (sidebars.has(resourceId)) return sidebars.get(resourceId)!;
+      const sb = await readLive(resourceId);
       sidebars.set(resourceId, sb);
       return sb;
     };
+    const created = new Set<string>();
+    // The area of a page created earlier in the same request (for a batch whose items nest).
+    const createdArea = new Map<string, Area>();
     const name = (id: string) => this.d.node(input.project, id)?.rawName ?? id;
+    const statusOf = (
+      rid: string,
+      page: string,
+      before: SidebarProperty[],
+      after: SidebarProperty[],
+      i: number,
+    ) => {
+      if (newStatusMention(c, before, after)) {
+        out.push({
+          resourceId: rid,
+          page,
+          what: 'status',
+          to: null,
+          text: 'Status would be set to a page mention, which shows that page’s name (the bridge cannot judge it)',
+          tool: 'set_facts with a plain-text Status, or the lifecycle tools',
+          stepIndex: i,
+        });
+      }
+      const ch = statusChange(c, statusValues(c, before), statusValues(c, after), created.has(rid));
+      if (ch)
+        out.push({
+          resourceId: rid,
+          page,
+          what: 'status',
+          to: ch.to,
+          text: ch.text,
+          tool: ch.tool,
+          stepIndex: i,
+        });
+    };
     for (const [i, it] of input.items.entries()) {
       const body = (it.params.body ?? {}) as Obj;
       if (
@@ -280,10 +530,21 @@ export class LifecycleGuard implements WriteGuard {
           it.op === 'createManyResources'
             ? ((Array.isArray(body.resources) ? body.resources : []) as Obj[])
             : [body];
+        const templateId =
+          it.op === 'createResourceFromTemplate' && typeof body.templateId === 'string'
+            ? body.templateId
+            : null;
         for (const x of items) {
           const id = typeof x.id === 'string' ? x.id : '(new)';
-          const raw = typeof x.name === 'string' ? x.name : '';
-          const kind = classifyName(raw).kind;
+          // CR-2026-11 (CR-17): a template copy given no name takes the template's.
+          let raw = typeof x.name === 'string' ? x.name : '';
+          if (templateId && typeof x.name !== 'string') {
+            const t = savedNames.has(templateId)
+              ? { name: savedNames.get(templateId) }
+              : ((await internal('getResource', { path: { resourceId: templateId } }).catch(() => null)) as
+                  Obj | null | undefined);
+            raw = typeof t?.name === 'string' ? t.name : '';
+          }
           const pid = typeof x.parentId === 'string' ? x.parentId : null;
           // A parent created earlier in the same request has the area it was created in.
           const area: Area =
@@ -294,47 +555,72 @@ export class LifecycleGuard implements WriteGuard {
             created.add(x.id);
             createdArea.set(x.id, area);
           }
-          if (kind === 'bwrk' || kind === 'barc') {
-            out.push({
-              resourceId: id,
-              page: raw,
-              what: 'create',
-              to: kind === 'bwrk' ? 'working' : 'archived',
-              text: `a page would be created named ${raw}`,
-              tool: kind === 'bwrk' ? 'create_resource with status "working"' : 'archive_page',
-              stepIndex: i,
-            });
-          } else if (area !== null) {
-            out.push({
-              resourceId: id,
-              page: raw || id,
-              what: 'create',
-              to: area,
-              text: `a page would be created under [INDEX] ${area === 'working' ? c.indexNames.working : c.indexNames.archived}`,
-              tool: area === 'working' ? 'create_resource with status "working"' : 'archive_page',
-              stepIndex: i,
-            });
-          }
+          out.push(...this.createChanges(c, id, raw, area, i));
         }
-        if (it.op === 'createResourceFromTemplate') {
-          const templateId = typeof body.templateId === 'string' ? body.templateId : null;
+        if (templateId) {
           const id = typeof body.id === 'string' ? body.id : null;
-          if (templateId) {
-            const t = await read(templateId);
-            const ch = t ? statusChange(c, [], statusValues(c, t), true) : null;
-            if (ch && id)
+          const t = await read(templateId);
+          const ch = t ? statusChange(c, [], statusValues(c, t), true) : null;
+          // CR-2026-11 (CR-17): judged whether or not the caller gave the copy an id.
+          if (ch)
+            out.push({
+              resourceId: id ?? '(new)',
+              page: `${typeof body.name === 'string' ? body.name : (id ?? 'a new page')} (new)`,
+              what: 'status',
+              to: ch.to,
+              text: ch.text,
+              tool: ch.tool,
+              stepIndex: i,
+            });
+          // The new page starts as a copy of its template: later writes to it are judged on that copy.
+          if (id && t) sidebars.set(id, t);
+          // CR-2026-11 (CR-10): with its children, every page under the template is copied too, with its name and
+          // sidebar: each is judged as a page created under the copy.
+          if (body.includeChildren === true) {
+            const area =
+              typeof body.parentId === 'string' ? this.areaOfParent(c, input.project, body.parentId) : null;
+            const below = reshapes ? null : await listSubtree(internal, templateId, 100);
+            if (below === null || below.length > 100) {
               out.push({
-                resourceId: id,
-                page: `${typeof body.name === 'string' ? body.name : id} (new)`,
-                what: 'status',
-                to: ch.to,
-                text: ch.text,
-                tool: ch.tool,
+                resourceId: id ?? '(new)',
+                page: 'a template copied with its children',
+                what: 'create',
+                to: null,
+                text: reshapes
+                  ? 'a template would be copied with its children in a request that also moves or creates pages, so what it copies cannot be told'
+                  : 'a template would be copied with pages under it that could not all be checked',
+                tool: 'a copy without includeChildren',
                 stepIndex: i,
               });
-            // The new page starts as a copy of its template: later writes to it are judged on that copy.
-            if (id && t) sidebars.set(id, t);
+            } else {
+              for (const d of below) {
+                out.push(...this.createChanges(c, d.id, d.name ?? '', area, i, true));
+                const sb = await readLive(d.id);
+                const sc = sb ? statusChange(c, [], statusValues(c, sb), true) : null;
+                if (sc)
+                  out.push({
+                    resourceId: d.id,
+                    page: `${d.name ?? d.id} (copied with the template)`,
+                    what: 'status',
+                    to: sc.to,
+                    text: sc.text,
+                    tool: sc.tool,
+                    stepIndex: i,
+                  });
+              }
+            }
           }
+        }
+        continue;
+      }
+      if (it.op === 'saveResourceAsTemplate') {
+        // A template saved from a page carries its name (unless renamed) and its sidebar.
+        const src = it.params.path?.resourceId;
+        const tid = typeof body.id === 'string' ? body.id : null;
+        if (src && tid) {
+          const n = typeof body.name === 'string' ? body.name : await this.nameNow(input.project, src);
+          if (n !== null) savedNames.set(tid, n);
+          sidebars.set(tid, await read(src));
         }
         continue;
       }
@@ -342,31 +628,32 @@ export class LifecycleGuard implements WriteGuard {
         const rid = it.params.path?.resourceId;
         if (!rid) continue;
         const before = await read(rid);
-        if (!before) {
-          // Unreadable: judged inside the lock, where a read is made again before the write is sent.
-          continue;
+        if (before) {
+          const after = applySidebarWrite(before, it.op, it.params);
+          if (after) {
+            sidebars.set(rid, after);
+            statusOf(rid, name(rid), before, after, i);
+          }
         }
-        const after = applySidebarWrite(before, it.op, it.params);
-        if (!after) continue;
-        sidebars.set(rid, after);
-        const ch = statusChange(c, statusValues(c, before), statusValues(c, after), created.has(rid));
-        if (ch)
-          out.push({
-            resourceId: rid,
-            page: name(rid),
-            what: 'status',
-            to: ch.to,
-            text: ch.text,
-            tool: ch.tool,
-            stepIndex: i,
-          });
+        // Unreadable: judged inside the lock, where a read is made again before the write is sent.
+        if (each) {
+          const now = await readLive(rid);
+          const alone = now ? applySidebarWrite(now, it.op, it.params) : null;
+          if (now && alone) statusOf(rid, name(rid), now, alone, i);
+        }
         continue;
       }
       if (it.op === 'updateResource' && typeof body.name === 'string') {
         const rid = it.params.path?.resourceId;
         if (!rid) continue;
-        const fromKind = await this.kindNow(input.project, rid);
-        const toKind = classifyName(body.name).kind;
+        const ix = this.indexChange(c, rid, `renamed to ${body.name}`, i);
+        if (ix) {
+          out.push(ix);
+          continue;
+        }
+        const fromName = await this.nameNow(input.project, rid);
+        const fromKind = fromName === null ? null : looseKind(fromName);
+        const toKind = looseKind(body.name);
         const ch = prefixChange(fromKind, toKind);
         if (ch)
           out.push({
@@ -378,40 +665,74 @@ export class LifecycleGuard implements WriteGuard {
             tool: ch.tool,
             stepIndex: i,
           });
+        else if (toKind === 'bsrc' && fromKind !== 'bsrc')
+          out.push({
+            resourceId: rid,
+            page: name(rid),
+            what: 'canon',
+            to: 'authoritative',
+            text: `the page would be renamed to ${body.name}`,
+            tool: BSRC_TOOL,
+            stepIndex: i,
+          });
+        if (isLifecycleIndexName(c, body.name))
+          out.push({
+            resourceId: rid,
+            page: name(rid),
+            what: 'index',
+            to: null,
+            text: `the page would be renamed to ${body.name}, a lifecycle index’s name`,
+            tool: INDEX_TOOL,
+            stepIndex: i,
+          });
         continue;
       }
       if (it.op === 'moveResource') {
         const rid = it.params.path?.resourceId;
         if (!rid || body.parentId === undefined) continue;
-        const from = this.areaOfPage(c, input.project, rid);
-        const to = this.areaOfParent(
+        const ix = this.indexChange(c, rid, 'moved', i);
+        if (ix) {
+          out.push(ix);
+          continue;
+        }
+        // CR-2026-11 (CR-13): where the page is now, from the tree when it knows the page, else read.
+        const known = this.d.node(input.project, rid);
+        const from: Area | 'unknown' = known
+          ? areaOf(known, c)
+          : await (async () => {
+              const r = (await internal('getResource', { path: { resourceId: rid } }).catch(() => null)) as
+                Obj | null | undefined;
+              if (!r) return 'unknown' as const;
+              return this.areaLive(
+                c,
+                input.project,
+                typeof r.parentId === 'string' ? r.parentId : null,
+                internal,
+              );
+            })();
+        const to = await this.areaLive(
           c,
           input.project,
           typeof body.parentId === 'string' ? body.parentId : null,
+          internal,
         );
-        const ch = placeChange(from, to);
-        if (ch)
-          out.push({
-            resourceId: rid,
-            page: name(rid),
-            what: 'place',
-            to: ch.to,
-            text:
-              to !== null
-                ? `the page would be moved into [INDEX] ${to === 'working' ? c.indexNames.working : c.indexNames.archived}`
-                : `the page would be moved out of [INDEX] ${from === 'working' ? c.indexNames.working : c.indexNames.archived}`,
-            tool: ch.tool,
-            stepIndex: i,
-          });
+        const ch = this.moveChange(c, rid, name(rid), from, to, i);
+        if (ch) out.push(ch);
+        continue;
+      }
+      if (it.op === 'deleteResource') {
+        const rid = it.params.path?.resourceId;
+        const ix = rid ? this.indexChange(c, rid, 'deleted', i) : null;
+        if (ix) out.push(ix);
       }
     }
     return out;
   }
 
-  /** A page's kind now: the tree's, else its name read live (null when it cannot be told). */
-  private async kindNow(project: string, id: string): Promise<string | null> {
+  /** CR-2026-11: a page's name now: the tree's, else read live (null when it cannot be told). */
+  private async nameNow(project: string, id: string): Promise<string | null> {
     const n = this.d.node(project, id);
-    if (n) return n.kind;
+    if (n) return n.rawName;
     try {
       const r = (await this.d.engine.internalRead(
         project,
@@ -419,7 +740,7 @@ export class LifecycleGuard implements WriteGuard {
         { path: { resourceId: id } },
         { priority: 'P1', notFoundIsAnswer: true },
       )) as { name?: unknown } | undefined;
-      return typeof r?.name === 'string' ? classifyName(r.name).kind : null;
+      return typeof r?.name === 'string' ? r.name : null;
     } catch {
       return null;
     }
@@ -433,57 +754,156 @@ export class LifecycleGuard implements WriteGuard {
     const marker = (input.jobOptions?.lifecycle as LifecycleMarker | undefined) ?? undefined;
     const c = this.config(input.job.projectId);
     const rid = input.params.path?.resourceId;
-    if (!rid) return;
     const project = input.job.projectId;
     const body = (input.params.body ?? {}) as Obj;
     const refuse = (ch: LifecycleChange) => {
       if (declares(marker, ch)) return;
+      // CR-2026-11 (CR-16): a page made [BSRC] passes only in work the owner approved as canon.
+      if (ch.what === 'canon' && input.job.origin.canonicalApprovedBy !== undefined) return;
       throw new PolicyDeniedError(
         input.opId,
         `${refusal([ch])} (checked again inside the lock; nothing was sent)`,
         input.job.principalId,
       );
     };
+    const read = async (opId: string, params: OpParams) => input.read(opId, params);
+    if (input.opId === 'createResourceFromTemplate') {
+      if (typeof body.templateId !== 'string') return;
+      const area = typeof body.parentId === 'string' ? this.areaOfParent(c, project, body.parentId) : null;
+      // CR-2026-11 (CR-17): a copy given no name takes the template's, judged on the template as it is now (it may have
+      // been saved earlier in the same request), with the Status it carries.
+      if (typeof body.name !== 'string') {
+        const t = (await input.read('getResource', { path: { resourceId: body.templateId } })) as
+          Obj | undefined;
+        const id = typeof body.id === 'string' ? body.id : '(new)';
+        for (const ch of this.createChanges(c, id, typeof t?.name === 'string' ? t.name : '', area, 0))
+          refuse(ch);
+        const sc = t ? statusChange(c, [], statusValues(c, sidebarFrom(t.properties)), true) : null;
+        if (sc) refuse({ resourceId: id, page: id, what: 'status', to: sc.to, text: sc.text, tool: sc.tool });
+      }
+      // CR-2026-11 (CR-10): a template copied with its children, judged again on what is under the template now.
+      if (body.includeChildren !== true) return;
+      const below = await listSubtree(read, body.templateId, 100);
+      if (below === null || below.length > 100) {
+        refuse({
+          resourceId: typeof body.id === 'string' ? body.id : '(new)',
+          page: 'a template copied with its children',
+          what: 'create',
+          to: null,
+          text: 'a template would be copied with pages under it that could not all be checked',
+          tool: 'a copy without includeChildren',
+        });
+        return;
+      }
+      for (const d of below) {
+        for (const ch of this.createChanges(c, d.id, d.name ?? '', area, 0, true)) refuse(ch);
+        const sb = await input.read('listProperties', { path: { resourceId: d.id } });
+        const sc = sb !== undefined ? statusChange(c, [], statusValues(c, sidebarFrom(sb)), true) : null;
+        if (sc)
+          refuse({
+            resourceId: d.id,
+            page: d.name ?? d.id,
+            what: 'status',
+            to: sc.to,
+            text: sc.text,
+            tool: sc.tool,
+          });
+      }
+      return;
+    }
+    if (!rid) return;
     const current = (input.current?.entity ?? input.current?.body) as Obj | undefined;
+    if (input.opId === 'deleteResource') {
+      const ix = this.indexChange(c, rid, 'deleted');
+      if (ix) refuse(ix);
+      return;
+    }
     if (input.opId === 'updateResource' && typeof body.name === 'string') {
-      const fromName = typeof current?.name === 'string' ? current.name : null;
-      const fromKind = fromName !== null ? classifyName(fromName).kind : await this.kindNow(project, rid);
-      const ch = prefixChange(fromKind, classifyName(body.name).kind);
+      const ix = this.indexChange(c, rid, `renamed to ${body.name}`);
+      if (ix) return refuse(ix);
+      const fromName = typeof current?.name === 'string' ? current.name : await this.nameNow(project, rid);
+      const fromKind = fromName === null ? null : looseKind(fromName);
+      const toKind = looseKind(body.name);
+      const ch = prefixChange(fromKind, toKind);
+      const page = fromName ?? rid;
       if (ch)
         refuse({
           resourceId: rid,
-          page: fromName ?? rid,
+          page,
           what: 'prefix',
           to: ch.to,
           text: `the page would be renamed to ${body.name}`,
           tool: ch.tool,
         });
-      return;
-    }
-    if (input.opId === 'moveResource' && body.parentId !== undefined) {
-      const from = this.areaOfPage(c, project, rid);
-      const to = this.areaOfParent(c, project, typeof body.parentId === 'string' ? body.parentId : null);
-      const ch = placeChange(from, to);
-      if (ch)
+      else if (toKind === 'bsrc' && fromKind !== 'bsrc')
         refuse({
           resourceId: rid,
-          page: rid,
-          what: 'place',
-          to: ch.to,
-          text: 'the page would be moved across a lifecycle index',
-          tool: ch.tool,
+          page,
+          what: 'canon',
+          to: 'authoritative',
+          text: `the page would be renamed to ${body.name}`,
+          tool: BSRC_TOOL,
+        });
+      if (isLifecycleIndexName(c, body.name))
+        refuse({
+          resourceId: rid,
+          page,
+          what: 'index',
+          to: null,
+          text: `the page would be renamed to ${body.name}, a lifecycle index’s name`,
+          tool: INDEX_TOOL,
         });
       return;
     }
+    if (input.opId === 'moveResource' && body.parentId !== undefined) {
+      const ix = this.indexChange(c, rid, 'moved');
+      if (ix) return refuse(ix);
+      // CR-2026-11 (CR-13): where the page is now, from the engine's own read of it in the lock (the tree may not have
+      // seen a move made in the app), and where it goes, from LegendKeeper when the tree does not know the parent.
+      const from: Area | 'unknown' =
+        current && 'parentId' in current
+          ? await this.areaLive(
+              c,
+              project,
+              typeof current.parentId === 'string' ? current.parentId : null,
+              read,
+            )
+          : this.areaOfPage(c, project, rid);
+      const to = await this.areaLive(
+        c,
+        project,
+        typeof body.parentId === 'string' ? body.parentId : null,
+        read,
+      );
+      const ch = this.moveChange(c, rid, typeof current?.name === 'string' ? current.name : rid, from, to);
+      if (ch) refuse(ch);
+      return;
+    }
     if (!SIDEBAR_WRITE_OPS.has(input.opId)) return;
-    // A versioned row write sent with an If-Match the bridge did not read here: LegendKeeper's If-Match refuses it if
-    // the rows changed since the version the entry check (or the job's own check step) confirmed (as the canon guard).
-    if (!input.current && input.params.ifMatch !== undefined && input.opId.endsWith('PropertyRow')) return;
+    // A row write whose If-Match the engine chained from this job's own previous write (or its check step):
+    // LegendKeeper's If-Match refuses it if the rows changed since. CR-2026-11 (CR-08): only such a chain; a version the
+    // caller gave proves nothing about what the entry check judged, so that write is judged here like any other.
+    if (
+      !input.current &&
+      input.params.ifMatch !== undefined &&
+      input.opId.endsWith('PropertyRow') &&
+      input.step.options.ifMatchFrom !== undefined
+    )
+      return;
     // Only a write that can touch the Status row needs the whole sidebar (one more read).
     if (!touchesKey(input, factKey(c.fields.status))) return;
     const whole = sidebarFrom(await input.read('listProperties', { path: { resourceId: rid } }));
     const after = applySidebarWrite(whole, input.opId, input.params);
     if (!after) return;
+    if (newStatusMention(c, whole, after))
+      refuse({
+        resourceId: rid,
+        page: rid,
+        what: 'status',
+        to: null,
+        text: 'Status would be set to a page mention, which shows that page’s name (the bridge cannot judge it)',
+        tool: 'set_facts with a plain-text Status, or the lifecycle tools',
+      });
     const ch = statusChange(c, statusValues(c, whole), statusValues(c, after));
     if (ch) refuse({ resourceId: rid, page: rid, what: 'status', to: ch.to, text: ch.text, tool: ch.tool });
   }

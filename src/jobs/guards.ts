@@ -101,6 +101,32 @@ export function unsupportedLoss(current: unknown, incoming: unknown): string[] {
   return lost;
 }
 
+/**
+ * CR-2026-11 (CR-02): what the unsupported-block guard compares for a write, by the operation's `guard` kind (op-meta):
+ * the document's blocks; a block (a delete sends nothing, so everything under it is lost); a property, whose delete loses
+ * the property itself when it is `unsupported` and every `unsupported` block among its children, and whose update loses
+ * only what its new `children` leave out (an update that sends no children keeps them). Null: nothing to compare.
+ */
+export function unsupportedGuardSides(
+  guard: 'document' | 'block' | 'property',
+  opId: string,
+  params: OpParams,
+  current: { readonly body: unknown; readonly entity?: unknown },
+): { readonly existing: unknown; readonly incoming: unknown } | null {
+  if (guard === 'document') {
+    return {
+      existing: (current.body as { blocks?: unknown } | undefined)?.blocks,
+      incoming: (params.body as { blocks?: unknown } | undefined)?.blocks,
+    };
+  }
+  if (guard === 'block') return { existing: current.body, incoming: params.body };
+  const entity = current.entity ?? current.body;
+  if (opId.startsWith('delete')) return { existing: entity, incoming: undefined };
+  const children = (params.body as { children?: unknown } | undefined)?.children;
+  if (children === undefined) return null;
+  return { existing: (entity as { children?: unknown } | undefined)?.children, incoming: children };
+}
+
 /** Throws `UnsupportedBlockLossError` unless nothing is lost or the caller allowed the loss. */
 export function assertNoUnsupportedLoss(
   opId: string,

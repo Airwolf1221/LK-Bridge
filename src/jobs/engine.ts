@@ -1280,9 +1280,13 @@ export class JobEngine {
     if (!this.started || this.stopped || this.draining) return;
     let capacity = this.settings.maxActiveJobs - this.active.size;
     if (capacity <= 0) return;
-    for (const job of this.repo.queuedJobs(capacity + 100)) {
+    // CR-2026-11 (CR-04): the whole queue, not only its first `capacity + 100` jobs: while writes are held, a long queue
+    // of held writes must not keep a job that can run (its next step reads) from starting.
+    for (const id of this.repo.queuedJobIds()) {
       if (capacity <= 0) break;
-      if (this.active.has(job.id)) continue;
+      if (this.active.has(id)) continue;
+      const job = this.repo.job(id);
+      if (!job || job.status !== 'queued') continue;
       const step = this.repo.nextStep(job.id);
       // A project that is not served now holds every step of its jobs; otherwise only writes can be held.
       // v2 C2a: the bridge's own check (`bridge.expect`) is the first step of a write and is held like one; otherwise
@@ -1366,6 +1370,7 @@ export class JobEngine {
         );
       }
       this.setWaitingLock(jobId, null);
+      this.recheckOnRelock(jobId);
     } catch (e) {
       release();
       this.setWaitingLock(jobId, null);
@@ -1385,6 +1390,32 @@ export class JobEngine {
     } finally {
       release();
     }
+  }
+
+  /**
+   * CR-2026-11 (CR-06): a job that took its job-level lock again (it was held for a writes pause or read-only, parked for
+   * budget, paused, or the bridge restarted) after its `bridge.expect` check but before anything was sent checks again:
+   * the page may have changed while the lock was free. Once a write has been sent the check is not repeated (the job's
+   * own writes changed what it checked); the writes after it carry their own checks (a chained If-Match, an in-step
+   * check), as before.
+   */
+  private recheckOnRelock(jobId: string): void {
+    const steps = this.repo.steps(jobId);
+    const checks = steps.filter((s) => s.opId === EXPECT_STEP && s.status === 'succeeded');
+    if (checks.length === 0) return;
+    const sent = steps.some(
+      (s) => s.opKind !== 'read' && (s.status !== 'pending' || s.maybeSent || s.firstSentAt !== null),
+    );
+    if (sent) return;
+    for (const s of checks) {
+      this.repo.updateStep(jobId, s.stepNo, {
+        status: 'pending',
+        resultSummary: null,
+        resultArtifactId: null,
+        finishedAt: null,
+      });
+    }
+    this.refreshProgress(jobId);
   }
 
   private async runSteps(
@@ -2071,6 +2102,7 @@ export class JobEngine {
           ...(meta.extras?.prefetched ? { prefetched: meta.extras.prefetched } : {}),
           gate: propose ? 'propose' : 'allow',
           ...(lifecycle ? { lifecycle } : {}),
+          ...(meta.onError ? { onError: meta.onError } : {}),
         });
       } catch (e) {
         verdict = {

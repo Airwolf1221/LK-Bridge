@@ -17,6 +17,7 @@ import type {
   JobOrigin,
   JobView,
   LifecycleMarker,
+  OnError,
   OpParams,
   Principal,
   StepOptions,
@@ -40,6 +41,11 @@ export interface WriteGuardEntry {
   readonly gate: 'allow' | 'propose';
   /** v2 C2c: the lifecycle change the request declares (bridge code only: `BatchSubmit.lifecycle`). */
   readonly lifecycle?: LifecycleMarker;
+  /**
+   * CR-2026-11 (CR-08): what the batch does after a failed step. With `continue`, a step the entry check simulated may
+   * fail and the steps after it still run, so the guards also judge each write on the page as it is now.
+   */
+  readonly onError?: OnError;
 }
 
 export type WriteGuardVerdict =

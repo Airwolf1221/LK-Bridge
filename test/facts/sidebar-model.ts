@@ -26,6 +26,8 @@ export interface MProp {
   rows?: MRow[];
   items?: MItem[];
   filter?: unknown;
+  /** A text field's blocks (LegendKeeper's `TextFieldProperty.children`; may hold `unsupported` blocks). */
+  children?: Record<string, unknown>[];
 }
 export interface MSidebar {
   version: number;
@@ -212,7 +214,7 @@ export class SidebarModel {
         })),
         ...(p.filter !== undefined ? { filter: structuredClone(p.filter) } : {}),
       };
-    if (p.kind === 'textField') return { ...env, children: [] };
+    if (p.kind === 'textField') return { ...env, children: structuredClone(p.children ?? []) };
     return { kind: 'unsupported', id: p.id, title: p.title, rank: p.rank };
   }
 
@@ -296,6 +298,8 @@ export class SidebarModel {
       }
       if (M === 'PATCH') {
         if (typeof body.title === 'string') prop.title = body.title;
+        if (Array.isArray(body.children) && prop.kind === 'textField')
+          prop.children = structuredClone(body.children as Record<string, unknown>[]);
         if (Array.isArray(body.items)) {
           let last = 0;
           prop.items = (body.items as Obj[]).map((i) => {
