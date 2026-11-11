@@ -118,6 +118,11 @@ export interface ChronologyWorld extends LifecycleWorld {
   count(age: string): string;
   /** The events of a timeline document. */
   events(docId: string): Obj[];
+  /**
+   * The timeline's stored events themselves (not copies): an edit made in the LegendKeeper app, outside the bridge. It
+   * costs no request.
+   */
+  liveEvents(docId: string): Obj[];
   lanes(docId: string): Obj[];
   /** The next `n`-th request (0-based) for this operation fails with `response` (once). */
   failAt(op: string, n: number, response?: MockResponse): void;
@@ -547,6 +552,10 @@ export async function chronologyWorld(
     return textOf((row.children as Obj[])[1]!);
   };
   w.events = (doc) => (events.get(doc) ?? []).map((e) => structuredClone(e));
+  w.liveEvents = (doc) => {
+    if (!events.has(doc)) events.set(doc, []);
+    return events.get(doc)!;
+  };
   w.lanes = (doc) => (lanes.get(doc) ?? []).map((e) => structuredClone(e));
   w.failAt = (op, at, response = err(400, 'VALIDATION_ERROR')) =>
     faults.push({ op, n: at, seen: 0, response });

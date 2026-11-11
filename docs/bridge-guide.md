@@ -345,7 +345,9 @@ keep all three in step in one job.
 (months), `4A 881 - 4A 900` (years). `Unknown` alone is refused. The Archon Age (`AA`) counts down: `AA 5` is five
 years before 1A. Each age begins mid-year (4A begins on Azah 18th, so `Kumikas 1st, 4A 1` does not exist). **Check a
 date with `calendar_date` first**: it answers the age, the KCY as the table writes it, LegendKeeper's text, or exactly
-why the date is refused. It costs nothing. `calendar_date` also turns minutes or a KCY into dates.
+why the date is refused. It costs nothing. `calendar_date` also turns minutes or a KCY into dates. **Two styles:** LegendKeeper writes a year with no thousands
+separator on events (`AA 1988119`), the tables with one (`AA 1,988,119`); `calendar_date` gives both (`formatted` and
+`tableFormatted`) and reads either, and the tools always write the table's style into a table cell.
 
 **The tools.**
 
@@ -356,11 +358,17 @@ why the date is refused. It costs nothing. `calendar_date` also turns minutes or
 - `update_timeline_event { event, date?, name?, description? }`: `event` names it by its `date` with its `description`
   or `name`, or by `row_id` / `event_id`. A date in another age moves it there (both counts change).
 - `delete_timeline_event { event, confirm: true }`.
+- `sync_timeline_event { row: { date, description } | { row_id, age } }` repairs the timeline for ONE table row, the
+  table being the authority: it creates the row's missing event, or corrects the paired event's minutes, `detail`, shape
+  and `uri` to match the row. It never touches the table or the count and never renames an event; a row whose event
+  already agrees answers `nothing_to_do`. If several events could be the row's it refuses with the candidates
+  (`PAIRING_AMBIGUOUS`): tell the person, or pass `event_id` to choose one. Use it for what the chronology check
+  reports (a row without an event, a row and event that disagree about the date).
 - `create_timeline_lane` adds a lane to an ordinary timeline; the chronology's age timelines have exactly one lane and
   refuse more.
 
-If a table row and its event no longer agree, the tools refuse (`CHRONOLOGY_DRIFT`): tell the person; the owner fixes it
-by hand (the weekly chronology check reports it). If a change stops part-way, send **the same request again**: it does
+If a table row and its event no longer agree, the other tools refuse (`CHRONOLOGY_DRIFT`): repair it with
+`sync_timeline_event` (the weekly chronology check reports it, and the owner's dashboard offers "Propose a fix"). If a change stops part-way, send **the same request again**: it does
 only what is left; other changes of that age wait for it (`CHRONOLOGY_INCOMPLETE`). Before the owner has confirmed the
 chronology, the tools refuse (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on
 an Authoritative page.

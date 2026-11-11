@@ -10,6 +10,7 @@ export { CalendarEngine, type DateFields, type Detail, type EventDate, type Mome
 export {
   DateParser,
   DEFAULT_DATE_STYLE,
+  LK_DATE_STYLE,
   type DateForm,
   type DateTextStyle,
   type EventShape,

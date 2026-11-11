@@ -9,7 +9,9 @@ import type {
   ChronologyCheckResponse,
   ChronologyEvidence,
   ChronologyFindView,
+  ChronologyFinding,
   ChronologyFindingKind,
+  ChronologyProposeFixResponse,
   ChronologyLookupView,
   ChronologyRecordView,
   ChronologyRecordsResponse,
@@ -519,6 +521,7 @@ function LookupResult({
 
 const KIND: Record<ChronologyFindingKind, string> = {
   row_without_event: 'Row without an event',
+  date_mismatch: 'Row and event disagree about the date',
   event_without_row: 'Event without a row',
   row_out_of_order: 'Row out of order',
   wrong_kcy: 'Wrong KCY',
@@ -550,6 +553,34 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
     return () => clearInterval(t);
   }, [running, kick, reload]);
 
+  // "Propose a fix": one `sync_timeline_event` proposal for the finding's row; the owner approves it as normal.
+  const [proposing, setProposing] = useState<string | null>(null);
+  const [proposed, setProposed] = useState<Record<string, string>>({});
+  const propose = (f: ChronologyFinding, key: string) => {
+    const rowId = typeof f.detail?.rowId === 'string' ? f.detail.rowId : null;
+    if (!rowId) return;
+    setProposing(key);
+    void run(() =>
+      api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
+        confirm: true,
+        project,
+        age: f.age,
+        rowId,
+      }),
+    )
+      .then((res) => {
+        if (!res) return;
+        setProposed((p) => ({
+          ...p,
+          [key]:
+            res.status === 'proposal_captured'
+              ? `Proposal ${res.proposalId} is waiting on the Proposals page.`
+              : res.message,
+        }));
+      })
+      .finally(() => setProposing(null));
+  };
+
   const start = () =>
     void run(
       () => api.post('/chronology/check', { confirm: true, project }),
@@ -569,8 +600,10 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
     <section className="card" aria-labelledby="chronology-check-h">
       <h2 id="chronology-check-h">Chronology check</h2>
       <p className="muted small-text">
-        Compares each age’s table with its timeline and the Main counts. It only reads and never repairs
-        anything. It also runs weekly (Maintenance Jobs page).
+        Compares each age’s table with its timeline and the Main counts. The check itself only reads and never
+        repairs anything; “Propose a fix” on a row without an event, or a row and event that disagree about
+        the date, makes ONE proposal (the table is the authority) for you to approve on the Proposals page. It
+        also runs weekly (Maintenance Jobs page).
       </p>
       {last && state ? (
         <dl className="kv">
@@ -621,16 +654,39 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
                   <th>Finding</th>
                   <th>Age</th>
                   <th>Message</th>
+                  <th>Fix</th>
                 </tr>
               </thead>
               <tbody>
-                {last.findings.map((f, i) => (
-                  <tr key={i} data-kind={f.kind}>
-                    <td>{KIND[f.kind] ?? f.kind}</td>
-                    <td>{f.age}</td>
-                    <td>{f.message}</td>
-                  </tr>
-                ))}
+                {last.findings.map((f, i) => {
+                  const key = `${f.kind}:${typeof f.detail?.rowId === 'string' ? f.detail.rowId : i}`;
+                  const fixable =
+                    (f.kind === 'row_without_event' || f.kind === 'date_mismatch') &&
+                    typeof f.detail?.rowId === 'string';
+                  return (
+                    <tr key={i} data-kind={f.kind}>
+                      <td>{KIND[f.kind] ?? f.kind}</td>
+                      <td>{f.age}</td>
+                      <td>{f.message}</td>
+                      <td>
+                        {fixable && !proposed[key] && (
+                          <Button
+                            busy={busy && proposing === key}
+                            disabled={busy || !project}
+                            onClick={() => propose(f, key)}
+                          >
+                            Propose a fix
+                          </Button>
+                        )}
+                        {proposed[key] && (
+                          <span className="small-text">
+                            {proposed[key]} <Link to="/proposals">Open Proposals</Link>
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -649,6 +705,7 @@ const TOOL: Record<ChronologyRecordView['tool'], string> = {
   create_timeline_event: 'Created',
   update_timeline_event: 'Updated',
   delete_timeline_event: 'Deleted',
+  sync_timeline_event: 'Repaired the timeline',
 };
 
 function RecordsCard({ project, r }: { project: string | null; r: Resource<ChronologyRecordsResponse> }) {

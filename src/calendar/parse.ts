@@ -19,7 +19,8 @@
  * The compressed forms (`day-range`, `cross-month-range`, `month-range`, `unknown-year`) exist when the day template
  * divides into a month-and-day part and a year part (template.ts, `splitTemplate`). Matching ignores case, accepts any
  * ordinal suffix or none, extra spaces, any dash between the ends of a range, and a year with or without thousands
- * commas. `Unknown` alone is refused.
+ * commas (so both the table style, `AA 1,988,119`, and LegendKeeper's, `AA 1988119`, are read). `Unknown` alone is
+ * refused.
  *
  * Minutes follow LegendKeeper (verified on 330 real events, the spike's oracle): a day starts at its first minute; a
  * date range ends at the first minute of its last day; a month range at the first minute of its last month; a year range
@@ -46,7 +47,13 @@ export type DateForm =
 /** How LegendKeeper stores an event's dates (the spike's names): its `detail` and whether it has an end. */
 export type EventShape = 'day' | 'date-range' | 'month-only' | 'month-range' | 'year-only' | 'year-range';
 
-/** How a table writes dates (ADR 0038: learned from the tables, confirmed by the owner). */
+/**
+ * How a date is written as text. There are two styles (ADR 0039):
+ *
+ * - the TABLE style (this type, learned from the tables and confirmed by the owner): the year's thousands separator
+ *   (`AA 1,988,119`) and the range separator. Used only for table Date and KCY cells;
+ * - LegendKeeper's style (`LK_DATE_STYLE`): no separator in the year (`AA 1988119`), as it shows on events.
+ */
 export interface DateTextStyle {
   /** Between the two ends of a range. The owner's forms use ` - `. */
   readonly rangeSeparator: string;
@@ -54,7 +61,11 @@ export interface DateTextStyle {
   readonly yearGrouping: string;
 }
 
+/** The table style until the owner confirms the one learned from the rows (the owner's own forms). */
 export const DEFAULT_DATE_STYLE: DateTextStyle = { rangeSeparator: ' - ', yearGrouping: ',' };
+
+/** LegendKeeper's style: how it writes a date on an event (no thousands separator in a year). */
+export const LK_DATE_STYLE: DateTextStyle = { rangeSeparator: ' - ', yearGrouping: '' };
 
 export interface ParsedDate {
   readonly input: string;
@@ -70,11 +81,17 @@ export interface ParsedDate {
   readonly endDate: EventDate | null;
   /** KCY of the start's year, and of the end's (null when there is no end). */
   readonly kcy: { readonly start: number; readonly end: number | null };
-  /** What LegendKeeper shows for these minutes (`formattedStart`, `formattedEnd`). */
+  /** What LegendKeeper shows for these minutes (`formattedStart`, `formattedEnd`): LegendKeeper's style. */
   readonly formattedStart: string;
   readonly formattedEnd: string | null;
-  /** The date written back in its own form, with the calendar's names (what a table cell gets). */
+  /** LegendKeeper's text of the whole date: the start, or `start - end` for a range (LegendKeeper's style). */
+  readonly formatted: string;
+  /**
+   * The date written back in its own form with the calendar's names, in the TABLE style given to the parser (what a
+   * table Date cell gets). `tableFormatted` is the same text.
+   */
   readonly text: string;
+  readonly tableFormatted: string;
 }
 
 const SHAPE: Readonly<Record<DateForm, EventShape>> = {
@@ -519,6 +536,7 @@ export class DateParser {
     const detail = DETAIL[shape];
     const a = this.cal.resolve(start);
     const b = end !== null ? this.cal.resolve(end) : null;
+    const tableText = this.render(form, start, end, style);
     return {
       input,
       form,
@@ -533,7 +551,12 @@ export class DateParser {
       kcy: { start: a.kcy, end: b?.kcy ?? null },
       formattedStart: this.cal.format(start, detail),
       formattedEnd: end !== null ? this.cal.format(end, detail) : null,
-      text: this.render(form, start, end, style),
+      formatted:
+        end !== null
+          ? `${this.cal.format(start, detail)}${LK_DATE_STYLE.rangeSeparator}${this.cal.format(end, detail)}`
+          : this.cal.format(start, detail),
+      text: tableText,
+      tableFormatted: tableText,
     };
   }
 

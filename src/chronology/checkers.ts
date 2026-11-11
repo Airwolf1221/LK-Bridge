@@ -52,6 +52,8 @@ export type TableOp =
       readonly description: string;
     }
   | { readonly op: 'delete'; readonly rowId: string; readonly texts: RowTexts }
+  /** v2 D1.1: the row must still be exactly this (a repair that writes only the timeline); nothing is written to it. */
+  | { readonly op: 'assert'; readonly rowId: string; readonly texts: RowTexts }
   | {
       readonly op: 'replace';
       readonly rowId: string;
@@ -165,7 +167,7 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
         differences.push(diff(`${ctx.label} row ${op.rowId}`, 'present', '(gone)'));
         continue;
       }
-      if (op.op === 'delete') {
+      if (op.op === 'delete' || op.op === 'assert') {
         if (!same(row, op.texts))
           differences.push(
             diff(`${ctx.label} row ${op.rowId}`, op.texts, {

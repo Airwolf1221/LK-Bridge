@@ -130,6 +130,8 @@ describe('sandbox assumptions script (dry run, as the real API answered on 11 No
       limits: { 'key-min': 5000, 'write-min': 2000 },
     });
     const sb = r.sidebars;
+    // B12/B13 (11 November 2026): a row write answers no version in its body, but an ETag header (on a 204 too).
+    sb.rowVersions = 'etag';
     // The pages whose sidebars the checks build get the faithful sidebar model (trimming included).
     r.overrides.set(/\/resources$/, (req: MockRequest): MockResponse | undefined => {
       if (req.method !== 'POST') return undefined;
@@ -188,12 +190,49 @@ describe('sandbox assumptions script (dry run, as the real API answered on 11 No
     expect(f('A1').verdict, report).toBe('pass');
     expect(f('A1').detail, report).toMatch(/the template's ids reused/);
     expect(f('B12').verdict, report).toBe('pass');
-    expect(f('B12').detail, report).toMatch(/each equals the next read/);
+    expect(f('B12').detail, report).toMatch(/ETag equals the next listPropertyRows version/);
+    expect(f('B12').detail, report).toMatch(/accepted as If-Match/);
+    expect(f('B12').detail, report).toMatch(/none answered a version in its body/);
     expect(f('B16').verdict, report).toBe('pass');
     expect(f('B16').detail, report).toMatch(/trimmed/);
     expect(f('cleanup').verdict, report).toBe('pass');
     // The page F29 deleted itself was met again by the clean-up, answered "already deleted", and counted as cleaned.
     expect(alreadyDeleted.length, report).toBeGreaterThan(0);
+  }, 120_000);
+
+  it('B12 FAILs, saying plainly which half did not hold, when there is no ETag or it is not the next version', async () => {
+    const sb = r.sidebars;
+    const t: SmokeTarget = {
+      engine: r.stack.runtime.engine,
+      lk: r.stack.runtime.projects.client(PROJECT)!,
+      projectId: PROJECT,
+      baseUrl: r.stack.mock.url,
+      apiKey: API_KEY,
+    };
+    const b12 = async () => {
+      const findings = await runAssumptions(t, PROJECT, {
+        searchWaitMs: 0,
+        searchPollMs: 1,
+        sleep: async () => {},
+      });
+      return findings.find((x) => x.id === 'B12')!;
+    };
+    try {
+      // The spec's way: a version in the body and no ETag. The bridge uses an ETag only; this is reported, not passed.
+      sb.rowVersions = 'body';
+      const none = await b12();
+      expect(none.verdict).toBe('fail');
+      expect(none.detail).toMatch(/createPropertyRow sent no ETag header/);
+      expect(none.detail).toMatch(/useEtagVersions off/);
+      // An ETag that is not the next read's version and that LegendKeeper would not accept as If-Match.
+      sb.rowVersions = 'etag-wrong';
+      const wrong = await b12();
+      expect(wrong.verdict).toBe('fail');
+      expect(wrong.detail).toMatch(/is not the next listPropertyRows version/);
+      expect(wrong.detail).toMatch(/refused the create's ETag/);
+    } finally {
+      sb.rowVersions = 'etag';
+    }
   }, 120_000);
 
   it('B16 fails, naming what to report, when LegendKeeper trims only one break at each end', async () => {

@@ -167,6 +167,13 @@ collection, version? }] } }`: reads each property inside the lock (`listProperty
   - `bridge.verify` `{ body: { targets: [{ kind: 'sidebar' | 'blocks' | 'resource', label, … }] } }`: reads each target
     back and compares it with the plan; never fails, never retries. Its value is `{ verification }` (a
     `WriteVerification` with `targets` and the job's `journalIds`); a mismatch is an error row (`VERIFY_MISMATCH`).
+- **`BatchSubmit.forceProposal`** (v2 D1.1, ADR 0039; bridge code only): the batch becomes ONE proposal whatever the
+  principal's scope (the dashboard's "Propose a fix"); the policy gate and the write guard still run, and a deny still
+  denies. `lk_api_batch` never sets it.
+- **Versions from the ETag** (v2 D1.1, ADR 0039): the governor captures a response's `ETag` (unquoted); for a write LegendKeeper
+  versions (`versioned` in the registry, never `updateProperty`) a step keeps it beside its result as `etag`, and a step
+  chained with `ifMatchFrom` takes the previous write's body `version`, else its `etag`, unless the project switched
+  `useEtagVersions` off (`CreateJobEngineOptions.etagVersions`). Neither: the in-lock read, as before.
 - **`BatchSubmit.proposal`**: as `RunOptions.proposal`, for a batch (now also `operations`, a list of high-level
   operations, each with its `page` and `pageParts`).
 - Step options: **`ifMatchFrom: { step, key? }`** (the If-Match is bound from that step's result `version`, or

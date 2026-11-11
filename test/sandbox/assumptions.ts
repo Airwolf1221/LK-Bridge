@@ -25,6 +25,7 @@ import {
   stableJson,
 } from '../../src/jobs/sidebar-state.js';
 import { matchCopy } from '../../src/jobs/step-exec.js';
+import { parseEtag } from '../../src/lk/governor/headers.js';
 import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
 import { fromMarkdown, stubResolver } from '../../src/markdown/index.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
@@ -519,11 +520,15 @@ export async function runAssumptions(
 
     await check(
       'B12',
-      'createPropertyRow and updatePropertyRow answer the new version, which the next read gives',
+      'a row write’s ETag is the version the next listPropertyRows gives, and LegendKeeper accepts it as If-Match',
       async () => {
-        // C2d: its own page and property, its own create and update (it used to depend on B11's write, and came out
-        // INCONCLUSIVE on the owner's run). The bridge chains a write's If-Match from the version in its BODY
-        // (ADR 0032 decision 4), so that is what must equal the next read; an ETag header is reported alongside.
+        // v2 D1.1 (ADR 0039). The owner's run of 11 November 2026 showed that createPropertyRow and updatePropertyRow
+        // answer no version in their body but send an ETag header (`6f78abcf9e74a430`, `f187b4e39467a0e4`), and that a
+        // delete answering 204 sends one too (B13, D25). The bridge now uses the ETag (unquoted) as the write's new
+        // version for the next chained If-Match (project setting `useEtagVersions`, default on). PASS only if BOTH hold,
+        // for a create, an update and a delete: (1) the ETag equals the version the next listPropertyRows gives;
+        // (2) it is accepted as If-Match by the next write (sent INSTEAD of the version read). Anything else is a FAIL
+        // that says which of the two did not hold, and the owner switches `useEtagVersions` off.
         const P = await mk('B12 rows');
         const prop = (await run('createProperty', {
           path: { resourceId: P.id },
@@ -533,52 +538,92 @@ export async function runAssumptions(
         const start = await rowsOf(P.id, prop.id);
         if (typeof start.version !== 'string' || start.version === '')
           throw new Unclear(`listPropertyRows gave no version: ${JSON.stringify(start.version)}`);
-        const answered = (res: { body?: any; headers?: Headers }) => ({
+        const problems: string[] = [];
+        const notes: string[] = [];
+        const ok = (res: { status: number; code?: string }, what: string) => {
+          if (res.status < 200 || res.status > 299)
+            throw new Unclear(`${what} answered ${res.status}${res.code ? ` ${res.code}` : ''}`);
+        };
+        /** The ETag as the bridge reads it (unquoted), and the version in the body, if any. */
+        const versions = (res: { body?: any; headers?: Headers }) => ({
+          etag: res.headers ? (parseEtag(res.headers) ?? null) : null,
+          rawEtag: res.headers?.get('etag') ?? null,
           body: typeof res.body?.version === 'string' ? (res.body.version as string) : null,
-          etag: res.headers?.get('etag') ?? null,
         });
+        /** (1) the ETag equals the next read's version. */
+        const equalsNext = (what: string, v: ReturnType<typeof versions>, next: string) => {
+          if (v.etag === null) problems.push(`${what} sent no ETag header`);
+          else if (v.etag !== next)
+            problems.push(
+              `${what}'s ETag ${JSON.stringify(v.rawEtag)} is not the next listPropertyRows version ${next}`,
+            );
+          if (v.body !== null && v.body !== next)
+            notes.push(
+              `${what} also answered a version in its body (${v.body}) that is not the next read's (${next})`,
+            );
+        };
+
+        // A create: sent with the version read; its ETag is then sent as If-Match by an update.
         const created = await raw('createPropertyRow', 'POST', suffix, {
           body: { key: 'K2', text: 'two' },
           ifMatch: start.version,
           idempotencyKey: `lkb-assume-${mintClientId(8)}`,
         });
-        if (created.status < 200 || created.status > 299)
-          throw new Unclear(
-            `createPropertyRow answered ${created.status}${created.code ? ` ${created.code}` : ''}`,
-          );
-        const cv = answered(created);
+        ok(created, 'createPropertyRow');
+        const cv = versions(created);
         const afterCreate = await rowsOf(P.id, prop.id);
+        equalsNext('createPropertyRow', cv, afterCreate.version);
         const rowK2 = afterCreate.data.find((r) => r.key === 'K2');
         if (!rowK2) fail('the created row is not listed');
+
+        // (2) the create's ETag, not the version read, as If-Match of an update.
         const updated = await raw('updatePropertyRow', 'PATCH', `${suffix}/${rowK2!.id as string}`, {
           body: { text: 'two, changed' },
-          ifMatch: afterCreate.version,
+          ifMatch: cv.etag ?? afterCreate.version,
         });
-        if (updated.status < 200 || updated.status > 299)
-          throw new Unclear(
-            `updatePropertyRow answered ${updated.status}${updated.code ? ` ${updated.code}` : ''}`,
+        if (cv.etag !== null && updated.status === 412)
+          problems.push(
+            `LegendKeeper refused the create's ETag ${cv.etag} as If-Match (412 ${updated.code ?? ''})`,
           );
-        const uv = answered(updated);
+        else ok(updated, 'updatePropertyRow');
+        const uv = versions(updated);
         const afterUpdate = await rowsOf(P.id, prop.id);
-        const out: string[] = [];
-        const judge = (
-          what: string,
-          v: { body: string | null; etag: string | null },
-          next: string,
-          prev: string,
-        ) => {
-          if (v.body === null) out.push(`${what} answered no version in its body (ETag ${v.etag ?? 'none'})`);
-          else if (v.body === prev) out.push(`${what} answered the version it was sent with (${v.body})`);
-          else if (v.body !== next)
-            out.push(`${what} answered ${v.body}; the next listPropertyRows gives ${next}`);
-        };
-        judge('createPropertyRow', cv, afterCreate.version, start.version);
-        judge('updatePropertyRow', uv, afterUpdate.version, afterCreate.version);
-        if (out.length > 0) fail(out.join('; '));
-        const etags = [cv.etag, uv.etag].every((e) => e === null)
-          ? 'no ETag headers'
-          : `ETag headers ${JSON.stringify([cv.etag, uv.etag])}`;
-        return `create answered ${cv.body}, update ${uv.body}; each equals the next read (${etags})`;
+        if (updated.status >= 200 && updated.status <= 299)
+          equalsNext('updatePropertyRow', uv, afterUpdate.version);
+
+        // A delete answers 204: its ETag, then, as If-Match of the next create.
+        const deleted = await raw('deletePropertyRow', 'DELETE', `${suffix}/${rowK2!.id as string}`, {
+          ifMatch: uv.etag ?? afterUpdate.version,
+        });
+        if (uv.etag !== null && deleted.status === 412)
+          problems.push(
+            `LegendKeeper refused the update's ETag ${uv.etag} as If-Match (412 ${deleted.code ?? ''})`,
+          );
+        else ok(deleted, 'deletePropertyRow');
+        const dv = versions(deleted);
+        const afterDelete = await rowsOf(P.id, prop.id);
+        if (deleted.status >= 200 && deleted.status <= 299)
+          equalsNext('deletePropertyRow (204)', dv, afterDelete.version);
+        const again = await raw('createPropertyRow', 'POST', suffix, {
+          body: { key: 'K3', text: 'three' },
+          ifMatch: dv.etag ?? afterDelete.version,
+          idempotencyKey: `lkb-assume-${mintClientId(8)}`,
+        });
+        if (dv.etag !== null && again.status === 412)
+          problems.push(
+            `LegendKeeper refused the delete's ETag ${dv.etag} as If-Match (412 ${again.code ?? ''})`,
+          );
+        else ok(again, 'createPropertyRow after the delete');
+
+        if (problems.length > 0)
+          fail(
+            `${problems.join('; ')}. Switch the project setting useEtagVersions off (the bridge then re-reads, as before).`,
+          );
+        return (
+          `each write's ETag equals the next listPropertyRows version, and each was accepted as If-Match: ` +
+          `create ${cv.etag}, update ${uv.etag}, delete ${dv.etag}` +
+          (notes.length > 0 ? ` (${notes.join('; ')})` : '; none answered a version in its body')
+        );
       },
     );
 

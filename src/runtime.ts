@@ -230,6 +230,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     policyGate: policy.gate,
     proposalSink: policy.proposals,
     ...(o.clock ? { clock: o.clock } : {}),
+    // v2 D1.1 (ADR 0039): the project setting `useEtagVersions` (default on), read when a write's version is wanted.
+    etagVersions: (projectId) => projectStore.byId(projectId)?.settings?.useEtagVersions !== false,
     customSteps: {
       [UPLOAD_PUT_STEP]: createUploadPutHandler({
         putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,

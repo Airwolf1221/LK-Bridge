@@ -217,6 +217,12 @@ export interface BatchSubmit {
    * itself at capture) and checked again at approval and inside the lock (src/policy/page-scope.ts).
    */
   readonly pageScope?: { readonly subtrees: readonly PageScopeEntryShape[] };
+  /**
+   * v2 D1.1 (ADR 0039), bridge code only: the batch becomes ONE proposal for the owner whatever the principal's scope
+   * (the dashboard's "Propose a fix"). The policy gate and the write guard still run, and a deny still denies; nothing
+   * is written until the owner approves. Nothing an agent sends reaches it (`lk_api_batch` never sets it).
+   */
+  readonly forceProposal?: boolean;
 }
 
 /** C2d: one entry of `BatchSubmit.pageScope` (src/policy/page-scope.ts has the logic). */

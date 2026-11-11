@@ -18,10 +18,23 @@ const parse = <T>(s: string | null | undefined, fallback: T): T => {
 
 // ============================================================================================ the record
 
-export type ChronologyTool = 'create_timeline_event' | 'update_timeline_event' | 'delete_timeline_event';
+export type ChronologyTool =
+  'create_timeline_event' | 'update_timeline_event' | 'delete_timeline_event' | 'sync_timeline_event';
 
 /** One write a change makes, as the record keeps it (what resuming checks against the documents as they are). */
 export type TargetWrite =
+  | {
+      /**
+       * Not a write: the table row, as the plan read it, must still be exactly so inside the lock (the compare-and-swap
+       * of a repair that writes only the timeline and takes the row as its authority).
+       */
+      readonly kind: 'row.assert';
+      readonly age: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly rowId: string;
+      readonly texts: { readonly description: string; readonly date: string; readonly kcy: string };
+    }
   | {
       readonly kind: 'row.insert';
       readonly age: string;
@@ -165,6 +178,7 @@ export interface CheckFinding {
   readonly kind:
     | 'row_without_event'
     | 'event_without_row'
+    | 'date_mismatch'
     | 'row_out_of_order'
     | 'wrong_kcy'
     | 'count_mismatch'

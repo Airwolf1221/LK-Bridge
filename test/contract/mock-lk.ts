@@ -110,6 +110,8 @@ export interface MockRequest {
 export interface MockResponse {
   readonly status: number;
   readonly body?: unknown;
+  /** Extra response headers (v2 D1.1: an `ETag`). */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 export interface MockLkOptions {
@@ -382,7 +384,7 @@ export class MockLk {
       req.raw.socket.destroy();
       return;
     }
-    this.send(reply, status, body, headers);
+    this.send(reply, status, body, { ...headers, ...(modelled?.headers ?? {}) });
   }
 
   private count(tiers: CountedTier[], items: number, now: number) {

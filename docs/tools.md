@@ -146,7 +146,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (141 tools in all, 143 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (142 tools in all, 144 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -390,10 +390,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 4 timeline tools (v2 D1), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (51 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, the 4 timeline tools of D1, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (52 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, the 5 timeline tools of D1 and D1.1, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -485,6 +485,15 @@ collection changed), 1 write per fact changed, added or removed, 1 read and 1 wr
 verify and 1 for the tree. Changing two facts: 4 reads and 2 writes. Two facts and one link: 6 reads and 3 writes. A
 dry run, or a proposal: the planning read (a proposal adds 1 read per property to capture it, and runs the job when
 approved).
+
+**Versions from the ETag (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)).** LegendKeeper
+answers a row write with no version in its body but with an `ETag` header (a delete answering 204 sends one too), so
+the bridge uses that ETag as the write's new version for the next chained If-Match, and a chained row write no longer
+reads the property inside the lock. Measured: changing two facts costs 4 reads and 2 writes with it, 6 without; a
+change, a change, an addition and a removal 6 reads against 10, with the same 4 writes. A removal reads its row for the
+journal pre-image either way. With neither a body version nor an ETag the bridge re-reads (the safe fallback). The
+project setting `useEtagVersions` (default on; Projects page) switches it off without a deploy if the sandbox's B12
+check ever fails.
 
 **Results** (each names its project and ends with its budget line):
 
@@ -878,7 +887,9 @@ Measured against the mock LegendKeeper (test/lifecycle/costs.test.ts), every rea
 lifecycle guards' reads, the in-lock reads before each write, the verify step and the tree's re-read). CR-2026-11 took
 4 reads off every job without dropping a check: the guards' entry reads of the sidebar now use the approval's re-read of
 the page, made a moment before, and the tree re-reads the page once when the job ends rather than after the rename and
-the move as well.
+the move as well. **D1.1** (the ETag as the next write's version, above) takes a further 4 reads off `archive_page`
+and 3 off `unarchive_page` (and so off their Working forms), 2 off `promote_page` and none off `move_to_working`; the
+numbers below are measured with it (test/lifecycle/etag-costs.test.ts compares the three ways a version can arrive).
 
 | Call                               | Capture reads | Job reads | Job writes |
 | ---------------------------------- | ------------- | --------- | ---------- |
@@ -993,18 +1004,19 @@ view) and one in its age's count on the Main table.
 **Before any chronology write** the owner reads and confirms the chronology on the dashboard (Chronology page): the
 Universal Chronology page, its calendar, its Main document, and per age its "- Table" page, its "- Timeline" document,
 that timeline's one lane and its Main row, plus how the tables write dates and KCY values (learned from the rows). Until
-then, or when a confirmed document has gone, been renamed or changed type, the three event tools refuse with
+then, or when a confirmed document has gone, been renamed or changed type, the four event tools refuse with
 `CHRONOLOGY_NOT_CONFIGURED` or `CHRONOLOGY_CHANGED`.
 
-| Tool                    | Access | What it does                                                                                                                                                                                                                                                                           |
-| ----------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `calendar_date`         | R      | `date` (any accepted form), `minutes` (with `detail`, `endMinutes`) or `kcy`: the form, shape and detail, minutes, KCY (and its table text), the age, LegendKeeper's formatted text and the table's text; or exactly why the date is refused. No request while the calendar is cached. |
-| `create_timeline_event` | W      | `date`, `name` (timeline), `description` (table; text or `{ markdown }`), optional `age` (to confirm the date's). One job: the row in calendar order, the event (exact minutes, detail, the age's lane, `uri` to the age's table), the count +1. An identical row is refused.          |
-| `update_timeline_event` | W      | `event` (its date with its description or name, or `row_id` / `event_id`), and a new `date`, `name` and/or `description`. Another age moves the row and the event and adjusts both counts. Refused when the row and its event have drifted apart.                                      |
-| `delete_timeline_event` | W      | `event`, `confirm: true`. Removes the row and the event, count −1; the journal keeps both.                                                                                                                                                                                             |
-| `create_timeline_lane`  | W      | `page`, `document` (a timeline), `name`, `size`, `color`. Touches only that timeline; refused on the chronology's age timelines (exactly one lane each by design).                                                                                                                     |
+| Tool                    | Access | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `calendar_date`         | R      | `date` (any accepted form, in either style), `minutes` (with `detail`, `endMinutes`) or `kcy`: the form, shape and detail, minutes, KCY (and its table text), the age, and the date's text in **both styles** (`formatted`: LegendKeeper's, no thousands separator in a year; `tableFormatted`: the table's); or exactly why the date is refused. No request while the calendar is cached.                                                                                                                                                                                                 |
+| `create_timeline_event` | W      | `date`, `name` (timeline), `description` (table; text or `{ markdown }`), optional `age` (to confirm the date's). One job: the row in calendar order, the event (exact minutes, detail, the age's lane, `uri` to the age's table), the count +1. An identical row is refused.                                                                                                                                                                                                                                                                                                              |
+| `update_timeline_event` | W      | `event` (its date with its description or name, or `row_id` / `event_id`), and a new `date`, `name` and/or `description`. Another age moves the row and the event and adjusts both counts. Refused when the row and its event have drifted apart.                                                                                                                                                                                                                                                                                                                                          |
+| `delete_timeline_event` | W      | `event`, `confirm: true`. Removes the row and the event, count −1; the journal keeps both.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `sync_timeline_event`   | W      | `row` (its `date` with its `description`, or its `row_id` with its `age`), optional `event_id` (to choose among candidates), `name`. Repairs the timeline for ONE row, **the table being the authority**: creates the row's event if it is missing (minutes, detail, an end for a range, the age's lane, `uri` to the age's table), or corrects the paired event's minutes, `detail`, shape and `uri` to match the row. Never touches the table or the Main count, never renames an event. A row whose event agrees: `nothing_to_do`. An ambiguous pairing is refused with the candidates. |
+| `create_timeline_lane`  | W      | `page`, `document` (a timeline), `name`, `size`, `color`. Touches only that timeline; refused on the chronology's age timelines (exactly one lane each by design).                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
-All four W tools take `dryRun`, `operation_id` (C2b's) and `project`, and under `propose` give ONE proposal whose page
+All five W tools take `dryRun`, `operation_id` (C2b's) and `project`, and under `propose` give ONE proposal whose page
 shows the change as a Markdown diff of the rows, the count and the event.
 
 **Accepted date forms** (from the calendar's own templates; for Kumikan): `Kumikas 1st, 1A 159` (a day), `4A 881` (a
@@ -1015,13 +1027,42 @@ Case, ordinal suffixes, extra spaces, the dash and year commas do not matter. `U
 unknown month or era, an impossible day, a date outside its era (before Azah 18th in 4A 1, say) and a reversed range,
 each with a precise message (`DATE_*`). A row is written in the form given.
 
+**Two date styles (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)).** LegendKeeper writes a
+year with **no** thousands separator on events (`Kumikas 1st, AA 1988119`, `Isar 17th, 1A 8501`); the owner's tables
+write one (`Kumikas 1st, AA 1,988,119`). `calendar_date` answers both (`formatted` for LegendKeeper's, `tableFormatted`
+for the table's; `text` is the table's) and reads either as input. A table Date or KCY cell is always written in the
+table style (the one learned from the rows and confirmed by the owner); anything compared with an event's text is
+compared in LegendKeeper's. Years under 1,000 read the same in both.
+
+**`sync_timeline_event`: repairing drift.** The chronology check reports a table row with no timeline event
+(`row_without_event`) or a row and its event that disagree about the date or shape (`date_mismatch`: a range row with a
+single-day event, another year, a missing `uri`). This tool repairs ONE such row, with the table as the authority:
+
+- **Pairing** is the check's: the bridge's own links, then the same date with the event's name the row's description (or
+  its start cut short), then the same date alone when a row and an event are the only two on it (the timeline's short
+  name differs from the table's description by design), then the same event with a different date (by name or by the
+  same start, with no other candidate). A row with **several** possible events is refused (`PAIRING_AMBIGUOUS`, with
+  the candidates) and nothing is done; pass `event_id` to choose one.
+- **A missing event is created**: the row's minutes and `detail` (1 for a year-only row), an `end` for a range, the age's
+  lane, `uri` to the age's table, a short name (the description, cut to 100 characters with `...`; `name` overrides it).
+  **A paired event is corrected** in its `start`, `end`, `detail` and `uri`, and keeps its id and its name. A single-date
+  row whose event has an end makes the event again (LegendKeeper cannot take an end away). The answer's `changes` says
+  what differed.
+- **It never touches the table or the Main count** (the row was already counted: that is the drift). The row is
+  compared again inside the lock, so a row edited meanwhile stops the job (a proposal ends `conflicted`) and nothing is
+  written.
+- **Nothing to do**: a row whose event already agrees answers `status: "nothing_to_do"` and writes nothing.
+- It is an ordinary edit (not canon); a job at scope `write`, ONE proposal at `propose`. The dashboard's **Propose a fix**
+  on each such finding makes that proposal for the owner to approve ([dashboard.md](dashboard.md#chronology-v2-d1)).
+
 **Calendar order** in a table: by year; within a year the dated rows by their start (a range by its start), then the
 year-only rows (and year ranges); a new row goes after the existing rows of the same date. The place and the new count
 are decided inside the job's lock from the documents as they are then, so concurrent writes and several approved
 proposals for one age all land correctly.
 
 **Refusals** besides the date's: `AGE_MISMATCH`, `AGE_NOT_CONFIGURED`, `DUPLICATE_EVENT`, `EVENT_NOT_FOUND`,
-`EVENT_AMBIGUOUS`, `CHRONOLOGY_DRIFT`, `CHRONOLOGY_INCOMPLETE` (another change of the age stopped part-way),
+`EVENT_AMBIGUOUS`, `PAIRING_AMBIGUOUS`, `EVENT_TAKEN`, `EVENT_MISMATCH`, `ROW_MISMATCH`, `ROW_DATE_UNREADABLE`,
+`CHRONOLOGY_DRIFT` (repaired by `sync_timeline_event`), `CHRONOLOGY_INCOMPLETE` (another change of the age stopped part-way),
 `CHRONOLOGY_IN_PROGRESS`, `CHRONOLOGY_RESUME_CONFLICT`, `CHRONOLOGY_TIMELINE` and `LANE_EXISTS`.
 
 **Stopped part-way.** The answer says which writes were made. The same request again makes only what is left
@@ -1033,16 +1074,20 @@ option (a)); only deleting a whole timeline document of an Authoritative page is
 
 ### Costs (reads and writes, measured against the mock)
 
-| Call                                 | Reads | Writes |
-| ------------------------------------ | ----- | ------ |
-| `calendar_date` (calendar cached)    | 0     | 0      |
-| `create_timeline_event`              | 10    | 3      |
-| `update_timeline_event`, same age    | 9     | 3      |
-| `update_timeline_event`, another age | 18    | 6      |
-| `delete_timeline_event`              | 12    | 3      |
-| `create_timeline_lane`               | 2     | 1      |
+| Call                                   | Reads | Writes |
+| -------------------------------------- | ----- | ------ |
+| `calendar_date` (calendar cached)      | 0     | 0      |
+| `create_timeline_event`                | 10    | 3      |
+| `update_timeline_event`, same age      | 9     | 3      |
+| `update_timeline_event`, another age   | 18    | 6      |
+| `delete_timeline_event`                | 12    | 3      |
+| `sync_timeline_event`, a missing event | 7     | 1      |
+| `sync_timeline_event`, a correction    | 6     | 1      |
+| `create_timeline_lane`                 | 2     | 1      |
 
-Add one read per 100 events of the age's timeline when an event is found by its row (update and delete). A dry run
+`sync_timeline_event` reads 3 to plan (the calendar, the table, one page of 100 events), then in the lock the table, the
+event (and, for a new event, the lane) and 1 to verify; a proposal made from the dashboard costs the 3 planning reads
+only. Add one read per 100 events of the age's timeline when an event is found by its row (update and delete). A dry run
 costs the planning reads only (3 to 5).
 
 ## Image upload

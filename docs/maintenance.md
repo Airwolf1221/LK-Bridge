@@ -105,13 +105,19 @@ for ever.
 The chronology check (ADR 0038; PLAN-v2 4.9 and 4.12): **findings only, never a repair**. Per project whose chronology
 the owner has confirmed (others are skipped, saying why), it reads the calendar and the Main table once, then each age's
 table and its timeline's events (one request per 100 events): about 18 requests on the test world, at priority **P3**,
-waiting while agents' P1 or P2 work is queued. It reports table rows without an event and events without a row (a row
-and an event are paired when the bridge linked them, or by date and text), rows out of calendar order, wrong KCY values
+waiting while agents' P1 or P2 work is queued. It reports table rows without an event and events without a row, and a
+row and an event that disagree about the date or shape (`date_mismatch`: its own finding, not two unpaired ones). A row
+and an event are paired (ADR 0039) by the bridge's link, by the same date with the event's name the row's description,
+by the same date alone when they are the only two on it (the timeline's short name differs from the table's description
+by design, so wording alone is not a finding), and, failing those, by the same event with a different date. Dates are
+compared as minutes, never as text, so the thousands separator in a year (LegendKeeper's `AA 1988119`, the tables'
+`AA 1,988,119`) is never a finding. It also reports rows out of calendar order, wrong KCY values
 and cells written differently from the confirmed style, Main counts that differ from the tables, event links that do
 not point at their age's table, and dates the engine cannot read. Default **weekly** (an interval: change it on the
 Maintenance page); a **background** job. The findings are on the dashboard's **Chronology** page, which can also run
-it at once (P2). Runs are kept in `chronology_checks` (migration 1800); a run cut off by a restart is closed as failed
-by the next.
+it at once (P2), with **Propose a fix** for a row without an event and for a date mismatch (one `sync_timeline_event`
+proposal each, for the owner to approve; the check itself still never repairs). Runs are kept in `chronology_checks`
+(migration 1800); a run cut off by a restart is closed as failed by the next.
 
 ## `link-sweep` (v2 C2c)
 

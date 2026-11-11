@@ -49,9 +49,16 @@ export interface EventDate {
   readonly era: EraRef;
 }
 
-/** Formatting choices LegendKeeper's text does not settle by itself (ADR 0038): the year's thousands separator. */
+/**
+ * Formatting choices (ADR 0038 as corrected by ADR 0039). There are two date styles and they differ in exactly this:
+ *
+ * - LegendKeeper's style, what it shows on events (`formattedStart`, `formattedEnd`): no thousands separator in a year
+ *   (`Kumikas 1st, AA 1988119`). This is the default, and the only one `format` produces.
+ * - The table style, how the owner's tables write the same year (`Kumikas 1st, AA 1,988,119`), learned from the table
+ *   rows and confirmed by the owner: `formatTable` and the parser's `render` with a `DateTextStyle`.
+ */
 export interface FormatOptions {
-  /** Between groups of three digits of a year (`1,988,119`); `''` for none. Default `,`. */
+  /** Between groups of three digits of a year (`1,988,119` in the table style); `''` (the default) for none, as LegendKeeper writes it. */
   readonly yearGrouping?: string;
 }
 
@@ -401,14 +408,22 @@ export class CalendarEngine {
           : this.formats.time;
   }
 
-  /** A minute as LegendKeeper formats it at a detail (`formattedStart`). */
-  format(minute: number, detail: Detail, o: FormatOptions = {}): string {
-    return this.render(this.templateFor(detail), this.resolve(minute), o);
+  /**
+   * A minute as LegendKeeper formats it at a detail (`formattedStart`, `formattedEnd`): LegendKeeper's style, with no
+   * thousands separator in the year. Compare LegendKeeper's event text with this and nothing else.
+   */
+  format(minute: number, detail: Detail): string {
+    return this.render(this.templateFor(detail), this.resolve(minute), { yearGrouping: '' });
+  }
+
+  /** A minute as the owner's tables write it at a detail: the table style (its year grouping). */
+  formatTable(minute: number, detail: Detail, style: { readonly yearGrouping: string }): string {
+    return this.render(this.templateFor(detail), this.resolve(minute), { yearGrouping: style.yearGrouping });
   }
 
   /** Renders tokens for a moment. */
   render(tokens: readonly Token[], m: Moment, o: FormatOptions = {}): string {
-    const grouping = o.yearGrouping ?? ',';
+    const grouping = o.yearGrouping ?? '';
     const months = this.definition.months;
     const weekdays = this.definition.weekdays ?? [];
     const num = (n: number, t: Token) => {

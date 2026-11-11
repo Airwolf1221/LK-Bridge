@@ -98,6 +98,15 @@ clean-up does.
   - **Clean-up:** a page that is already gone (404, or "… is already deleted" after an earlier cascade) counts as
     cleaned; any other failure is confirmed by a read before it is reported as left over.
   - B12 adds a page, a property and two row writes: about 104 writes in all.
+- **B12 again (D1.1, 11 November 2026, [ADR 0039](../../docs/adr/0039-date-styles-timeline-repair-and-etag-versions.md)):**
+  the owner's run showed that a row write answers no version in its body but an `ETag` header (and a delete answering
+  204 one too). The bridge now uses that ETag (unquoted) as the write's new version for the next chained If-Match
+  (project setting `useEtagVersions`, default on). B12 therefore asserts, for a row create, a row update and a row
+  delete, BOTH that (1) the ETag equals the version the next `listPropertyRows` gives and (2) LegendKeeper accepts it as
+  `If-Match` (it is sent instead of the version read). It reports PASS only if both hold for all three, and says
+  plainly which half did not. **If B12 fails on the real API, switch `useEtagVersions` off** (Projects page, or
+  `npm run projects -- set <project> useEtagVersions off`): the bridge then re-reads, with no deploy. B12 now makes a
+  create, an update, a delete and a second create: about 106 writes in all.
 
 ## The chronology (v2 D1)
 
@@ -113,10 +122,15 @@ six ages):
    is listed with its exact text, and the distinct shapes of the Date and KCY cells are summarised (digits as `9`,
    words as `Word`);
 2. every timeline event: LegendKeeper's `formattedStart` (and `formattedEnd`) read back to exactly its minutes and
-   detail, and its minutes formatted back to exactly that text;
-3. every age: row count = event count = Main count; every event's `uri` points at its age's table; rows in calendar
-   order. Rows and events that cannot be paired by date and text are listed (not failed: a short timeline name may
-   differ from the row's description).
+   detail, and its minutes formatted back to exactly that text, **in LegendKeeper's style** (no thousands separator in a
+   year: `AA 1988119`; the tables' cells, in check 1, are compared in the table style, `AA 1,988,119`: the owner's run
+   of 11 November 2026 settled this, [ADR 0039](../../docs/adr/0039-date-styles-timeline-repair-and-etag-versions.md));
+3. every age: one lane; every event's `uri` points at its age's table; the Main links; rows in calendar order;
+4. **drift**, under its own heading (reported, not a failure of the engine): rows without an event, events without a
+   row, a row and its event disagreeing about the date or shape, and the Main count against the rows and events. Rows
+   and events are paired as the chronology check pairs them (links, date and name, date alone, then a same-event date
+   mismatch). The result line says "PASS (the engine, both date styles and the structure)" and counts the drift
+   findings; the dashboard's chronology check lists the same ones, each with "Propose a fix".
 
 - **Which chronology:** the one the owner confirmed on the dashboard (the bridge's stored settings), else
   `LKB_CHRONOLOGY_RESOURCE`, else the test world's Universal Chronology (`h0gczxh7`).

@@ -36,13 +36,14 @@ import {
   type TargetWrite,
 } from '../../chronology/index.js';
 import {
-  pairRowsAndEvents,
+  matchRowsAndEvents,
   tableUri,
   uriPointsAt,
   eventOf,
   type TimelineEvent,
 } from '../../chronology/check.js';
 import { buildJob, replaceCells, type WriteContext } from '../../chronology/plan.js';
+import { planSync, syncRequestKey, SYNC_TOOL, type SyncRef } from '../../chronology/sync.js';
 import { factValueRuns, FactValueError } from '../../facts/values.js';
 import { mintClientId } from '../../jobs/ids.js';
 import { VERIFY_STEP } from '../../jobs/internal-steps.js';
@@ -271,6 +272,8 @@ function ageByName(ch: Chrono, cal: Calendar, name: string): AgeConfig | null {
 function dateView(d: ParsedDate, ch: Chrono) {
   return {
     text: d.text,
+    tableFormatted: d.tableFormatted,
+    formatted: d.formatted,
     form: d.form,
     shape: d.shape,
     detail: d.detail,
@@ -394,6 +397,11 @@ function remaining(
     r.kcyText.trim() === t.kcy.trim();
   for (const w of target.writes) {
     switch (w.kind) {
+      case 'row.assert':
+        // A compare-and-swap of a first run only: on a resume the row may have been edited since, and the repair's
+        // event writes are checked against their own state.
+        if (!rec) writes.push(w);
+        break;
       case 'row.insert':
         if (!rowOf(w.documentId, w.rowId)) writes.push(w);
         break;
@@ -590,9 +598,10 @@ function calendarDateTool(deps: ToolDeps): McpToolProvider {
       'Reads a date with the calendar engine, exactly as the timeline tools will: give `date` (any accepted form), or ' +
       '`minutes` (LegendKeeper minutes, with `detail` 1 year, 2 month or 3 day, and `endMinutes` for a range), or `kcy` (a ' +
       'continuous year). Answers the form, the shape and detail LegendKeeper stores, the minutes, the KCY as the tables ' +
-      'write it, the age (era), LegendKeeper’s own formatted text and the table’s text, or exactly why the date is ' +
-      'refused (an unknown month, an impossible day, a date outside its era, a reversed range). Use it to check a date ' +
-      'before create_timeline_event. ' +
+      'write it, the age (era), and the date’s text in BOTH styles (`formatted`: LegendKeeper’s own, with no thousands ' +
+      'separator in a year, as it shows on events; `tableFormatted`: the table’s, with the separators the owner’s tables ' +
+      'use), or exactly why the date is refused (an unknown month, an impossible day, a date outside its era, a reversed ' +
+      'range). Either style is accepted as input. Use it to check a date before create_timeline_event. ' +
       DATE_HELP +
       ' Cost: nothing when the chronology’s calendar is cached (otherwise, or with `calendar`, 1 read).',
     inputSchema: z.object({
@@ -681,9 +690,18 @@ function calendarDateTool(deps: ToolDeps): McpToolProvider {
                   eraName: y.era.name,
                   year: y.year,
                   ...ageOf(y.era.id),
+                  tableFormatted: cal.parser.render('year', y.from, null, config.style.date),
                   text: cal.parser.render('year', y.from, null, config.style.date),
-                  from: { minutes: y.from, formatted: cal.engine.format(y.from, 3) },
-                  to: { minutes: y.to, formatted: cal.engine.format(y.to, 3) },
+                  from: {
+                    minutes: y.from,
+                    formatted: cal.engine.format(y.from, 3),
+                    tableFormatted: cal.engine.formatTable(y.from, 3, config.style.date),
+                  },
+                  to: {
+                    minutes: y.to,
+                    formatted: cal.engine.format(y.to, 3),
+                    tableFormatted: cal.engine.formatTable(y.to, 3, config.style.date),
+                  },
                 })),
               },
               pd,
@@ -700,6 +718,8 @@ function calendarDateTool(deps: ToolDeps): McpToolProvider {
             {
               ...base,
               input: args.date ?? null,
+              formatted: p.formatted,
+              tableFormatted: p.tableFormatted,
               text: p.text,
               form: p.form,
               shape: p.shape,
@@ -1100,7 +1120,7 @@ async function findEvent(
   if (!er.ok) return er;
   const rows = tr.value.table.rows;
   const events = er.value;
-  const paired = pairRowsAndEvents(rows, events, store.links(ch.ctx.projectId, age.tableDocumentId), age);
+  const paired = matchRowsAndEvents(rows, events, store.links(ch.ctx.projectId, age.tableDocumentId), age);
   const pairs = paired.pairs;
   let row: AgeRow | null = null;
   let event: TimelineEvent | null = null;
@@ -1141,11 +1161,18 @@ async function findEvent(
   const drift = (message: string, more: Obj = {}) =>
     bad(
       'CHRONOLOGY_DRIFT',
-      `${message} The table and the timeline have drifted apart here; nothing was done. The chronology check reports it; it is fixed by hand.`,
+      `${message} The table and the timeline have drifted apart here; nothing was done. The chronology check reports it; ` +
+        'sync_timeline_event repairs it, with the table as the authority.',
       more,
     );
   if (row) {
     const p = pairs.find((x) => x.row === row);
+    const m = paired.mismatches.find((x) => x.row === row);
+    if (!p && m)
+      return drift(
+        `The row says “${row.dateText}” but its event is at ${m.event.formattedStart ?? m.event.start}.`,
+        { rowId: row.id, eventId: m.event.id },
+      );
     if (!p)
       return drift(
         `The row “${row.dateText}” (${row.description.slice(0, 80)}) has no matching timeline event.`,
@@ -1156,6 +1183,12 @@ async function findEvent(
     event = p.event;
   } else if (event) {
     const p = pairs.find((x) => x.event === event);
+    const m = paired.mismatches.find((x) => x.event === event);
+    if (!p && m)
+      return drift(
+        `The row “${m.row.dateText}” says one date but the event is at ${event.formattedStart ?? event.start}.`,
+        { rowId: m.row.id, eventId: event.id },
+      );
     if (!p)
       return drift(`The event “${event.name.slice(0, 80)}” has no matching table row.`, {
         eventId: event.id,
@@ -1775,6 +1808,153 @@ async function resumeChange(
   });
 }
 
+// ============================================================================================ sync
+
+/** A read that failed, with the answer the tool gives for it. */
+class ReadStopped extends Error {
+  constructor(readonly result: McpToolResult) {
+    super('read stopped');
+  }
+}
+
+const syncRowArg = z
+  .object({
+    date: z
+      .string()
+      .min(1)
+      .max(300)
+      .optional()
+      .describe('The row’s Date cell (any accepted form), with its description.'),
+    description: z
+      .string()
+      .min(1)
+      .max(20_000)
+      .optional()
+      .describe('The row’s description, as the table shows it (with its date).'),
+    row_id: z.string().min(1).max(64).optional().describe('The row’s block id, instead of a date and text.'),
+    age: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('The age (name or era abbreviation); with a row_id and no date, the table to look in.'),
+  })
+  .strict()
+  .describe('The age table row: its date with its description, or its row_id.');
+
+function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
+  const tool = SYNC_TOOL;
+  return defineTool({
+    name: tool,
+    title: 'Repair the timeline event of a chronology table row',
+    access: 'write',
+    description:
+      'Repairs timeline drift for ONE age table row, with the TABLE as the authority: creates the row’s timeline event if ' +
+      'it is missing (exact minutes and detail, linked to the age’s table), or corrects the paired event’s minutes, ' +
+      '`detail`, shape (a range or a single date) and `uri` to match the row. It never touches the table or the Main ' +
+      'count (the row was already counted: that is the drift), and never renames an event. Name the row with `row` (its ' +
+      'date with its description, or its row_id). A row whose event already agrees answers “nothing to do”. The pairing ' +
+      'is the chronology check’s (links, then date and name, then date alone, then a same-event date mismatch); when it ' +
+      'cannot settle which event is the row’s, the call is refused with the candidates and nothing is done (pass ' +
+      '`event_id` to choose one). One job holding the table and the timeline, the row compared again inside the lock, ' +
+      'then verified; one proposal under `propose`. Use `dryRun` to see the plan. The chronology check’s findings ' +
+      '(`row_without_event`, `date_mismatch`) are what this repairs. A request whose earlier job stopped part-way ' +
+      'finishes it. ' +
+      'Cost: about 3 reads to plan (the calendar, the table, one per 100 events), then 3 check reads and 1 write (2 to ' +
+      'make an event again as a single date), and 1 read to verify.',
+    inputSchema: z.object({
+      row: syncRowArg,
+      event_id: z
+        .string()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe('Only to choose among the candidate events of a refused, ambiguous pairing.'),
+      name: z
+        .string()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe(
+          'The short name of an event that is created (default: the row’s description, cut short when long).',
+        ),
+      dryRun: z.boolean().optional().describe('Show the plan; write nothing and propose nothing.'),
+      operation_id: operationIdArg,
+      project: projectArg,
+    }),
+    annotations: CHANGE_ANNOTATIONS,
+    handler: (args, mctx) =>
+      withProject(deps, args.project, 'write', (pd) => {
+        const c = chrono(pd);
+        if (!c.ok) return c.result;
+        const ch = c.value;
+        return withRequest(pd, mctx, tool, args, null, async (): Promise<CreateOutcome> => {
+          const fc = await freshCalendar(pd, mctx, tool, ch.config.calendarId!);
+          if (!fc.ok) return { kind: 'answer', result: fc.result };
+          const cal = fc.cal;
+          const ref: SyncRef = {
+            ...(args.row.date !== undefined ? { date: args.row.date } : {}),
+            ...(args.row.description !== undefined ? { description: args.row.description } : {}),
+            ...(args.row.row_id !== undefined ? { rowId: args.row.row_id } : {}),
+            ...(args.row.age !== undefined ? { age: args.row.age } : {}),
+            ...(args.event_id !== undefined ? { eventId: args.event_id } : {}),
+            ...(args.name !== undefined ? { name: args.name } : {}),
+          };
+          const requestKey = syncRequestKey(ref);
+          const store = pd.services!.chronology!.store;
+          const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
+          if (resume) return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun);
+          let plan;
+          try {
+            plan = await planSync({
+              config: ch.config,
+              calendar: cal,
+              links: store.links(ch.ctx.projectId),
+              ref,
+              read: async (op, params) => {
+                const r = await liveRead(pd, mctx, tool, op, params);
+                if (!r.ok) throw new ReadStopped(r.result);
+                return r.value;
+              },
+            });
+          } catch (e) {
+            if (e instanceof ReadStopped) return { kind: 'answer', result: e.result };
+            return { kind: 'answer', result: errorFromThrown(e, pd) };
+          }
+          if (!plan.ok) return refuse(pd, plan.code, plan.message, plan.details);
+          if (plan.action === 'nothing')
+            return {
+              kind: 'answer',
+              result: render(
+                {
+                  ...plan.head,
+                  status: 'nothing_to_do',
+                  message:
+                    'The row and its timeline event already agree (minutes, detail, shape and link); nothing was written or proposed.',
+                },
+                pd,
+              ),
+            };
+          const stopped = stoppedChange(pd, ch, requestKey, [plan.age.name]);
+          if (stopped.refusal) return stopped.refusal;
+          return submit(pd, mctx, {
+            tool,
+            ch,
+            target: plan.target,
+            writes: plan.writes,
+            ctx: plan.ctx,
+            requestKey,
+            ages: [plan.age.name],
+            summary: plan.summary,
+            head: plan.head,
+            markdown: plan.markdown,
+            dryRun: args.dryRun,
+          });
+        });
+      }),
+  });
+}
+
 // ============================================================================================ lanes
 
 function createTimelineLaneTool(deps: ToolDeps): McpToolProvider {
@@ -1916,6 +2096,7 @@ export function timelineTools(deps: ToolDeps): McpToolProvider[] {
     createTimelineEventTool(deps),
     updateTimelineEventTool(deps),
     deleteTimelineEventTool(deps),
+    syncTimelineEventTool(deps),
     createTimelineLaneTool(deps),
   ];
 }

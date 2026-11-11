@@ -14,6 +14,23 @@ export interface CapturedResponse {
   readonly retryAfterMs: number | undefined;
   readonly requestId: string | undefined;
   readonly idempotentReplay: boolean;
+  /**
+   * The response's `ETag`, unquoted (v2 D1.1, ADR 0039). LegendKeeper sends it on a row write and on a delete that
+   * answers 204, where the body carries no version; it is the version for the next chained `If-Match`.
+   */
+  readonly etag: string | undefined;
+}
+
+/** An `ETag` header value as the bare version: weak marker and quotes removed (`"6f78abcf9e74a430"` → `6f78abcf9e74a430`). */
+export function parseEtag(headers: Headers): string | undefined {
+  const raw = headers.get('etag');
+  if (raw === null) return undefined;
+  const t = raw
+    .trim()
+    .replace(/^W\//i, '')
+    .replace(/^"(.*)"$/s, '$1')
+    .trim();
+  return t === '' ? undefined : t;
 }
 
 function intHeader(headers: Headers, name: string): number | undefined {
@@ -48,6 +65,7 @@ export function captureResponse(response: Response, nowMs: number): CapturedResp
     retryAfterMs: parseRetryAfter(response.headers, nowMs),
     requestId: response.headers.get('x-request-id') ?? undefined,
     idempotentReplay: response.headers.get('idempotent-replay') === 'true',
+    etag: parseEtag(response.headers),
   };
 }
 
