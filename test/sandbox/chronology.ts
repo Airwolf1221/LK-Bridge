@@ -9,11 +9,16 @@
  *    style the tables show most); the engine's date text equals the Date cell, or the difference is reported. Every row
  *    that fails is listed with its exact text, and the distinct shapes of the Date and KCY cells are summarised;
  * 2. every timeline event: the engine reads LegendKeeper's formattedStart (and formattedEnd) to exactly its minutes and
- *    detail, and formats its minutes back to exactly that text;
- * 3. every age: row count = event count = Main count; every event's `uri` points at its age's table; rows in calendar
- *    order.
+ *    detail, and formats its minutes back to exactly that text, in LegendKeeper's own style (no thousands separator in
+ *    a year: the owner's run of 11 November 2026 settled that; the tables write the separators, check 1 compares them in
+ *    the table style);
+ * 3. every age: every event's `uri` points at its age's table; one lane; the Main links; rows in calendar order;
+ * 4. DRIFT (reported under its own heading, not as a failure of the engine): rows without an event, events without a
+ *    row, a row and an event that disagree about the date (the table is the authority), and the counts. The
+ *    chronology check lists the same, and "Propose a fix" repairs them.
  *
- * The report says what the owner sends back; anything it finds becomes a follow-up.
+ * Two date styles (ADR 0039): LegendKeeper's, for everything compared with its event text; the table's, for the Date and
+ * KCY cells. The report says what the owner sends back; anything it finds becomes a follow-up.
  */
 import { createCalendar, formatKcy, parseKcyCell, type Calendar } from '../../src/calendar/index.js';
 import {
@@ -26,13 +31,22 @@ import {
   readMainTable,
   type AgeTable,
 } from '../../src/chronology/table.js';
-import { pairRowsAndEvents, readEvents, uriPointsAt, type CheckReader } from '../../src/chronology/check.js';
+import {
+  eventText,
+  matchRowsAndEvents,
+  readEvents,
+  uriPointsAt,
+  type CheckReader,
+} from '../../src/chronology/check.js';
 
 type Obj = Record<string, unknown>;
 
 export interface ChronologyReport {
   readonly text: string;
+  /** Problems of the engine, its styles or the chronology's structure: the check FAILs on these. */
   readonly failures: readonly string[];
+  /** Table and timeline drift (the table is the authority): reported, repaired by sync_timeline_event, not a failure. */
+  readonly drift: readonly string[];
   readonly reads: number;
 }
 
@@ -49,10 +63,15 @@ export async function runChronologySandbox(o: {
   };
   const lines: string[] = [];
   const failures: string[] = [];
+  const drift: string[] = [];
   const out = (s = '') => lines.push(s);
   const fail = (s: string) => {
     failures.push(s);
     out(`  FAIL ${s}`);
+  };
+  const driftFound = (s: string) => {
+    drift.push(s);
+    out(`  DRIFT ${s}`);
   };
   const tableSuffix = o.names?.table ?? ' - Table';
   const timelineSuffix = o.names?.timeline ?? ' - Timeline';
@@ -78,7 +97,7 @@ export async function runChronologySandbox(o: {
   );
   if (!main || ages.length === 0) {
     fail('The chronology has no Main document or no ages.');
-    return { text: lines.join('\n'), failures, reads };
+    return { text: lines.join('\n'), failures, drift, reads };
   }
   // The calendar of the timelines.
   const tdoc = (await read('getDocument', {
@@ -88,7 +107,7 @@ export async function runChronologySandbox(o: {
   const def = calendars.find((c) => c.id === tdoc?.calendarId);
   if (!def) {
     fail(`The timelines' calendar ${String(tdoc?.calendarId)} was not found.`);
-    return { text: lines.join('\n'), failures, reads };
+    return { text: lines.join('\n'), failures, drift, reads };
   }
   const cal: Calendar = createCalendar(def);
   out(
@@ -214,7 +233,9 @@ export async function runChronologySandbox(o: {
 
   // 2. Every event.
   out();
-  out('## 2. Every timeline event (LegendKeeper’s minutes, detail and text)');
+  out(
+    '## 2. Every timeline event (LegendKeeper’s minutes, detail and text, in LegendKeeper’s style: no thousands separator)',
+  );
   for (const t of tables) {
     let ok = 0;
     for (const e of t.events) {
@@ -234,6 +255,7 @@ export async function runChronologySandbox(o: {
         bad = true;
         fail(`${where}: ${JSON.stringify(text)} does not parse (${(x as Error).message})`);
       }
+      // `format` is LegendKeeper's style (ADR 0039); the table style (`formatTable`) is for the Date cells only.
       const f = cal.engine.format(e.start, detail);
       if (f !== e.formattedStart) {
         bad = true;
@@ -255,9 +277,10 @@ export async function runChronologySandbox(o: {
     out(`- ${t.name}: ${t.events.length} events, ${ok} exactly as LegendKeeper has them.`);
   }
 
-  // 3. Every age.
+  // 3. Every age: structure.
   out();
-  out('## 3. Every age: counts, links, order');
+  out('## 3. Every age: lane, links, order');
+  const drifts: string[] = [];
   for (const t of tables) {
     const row = mainTable?.rows.find((r) => r.age.trim().toLowerCase() === t.name.trim().toLowerCase());
     const where = t.name;
@@ -265,10 +288,6 @@ export async function runChronologySandbox(o: {
       fail(`${where}: the timeline has ${t.lanes.length} lanes (expected exactly one).`);
     if (!row) fail(`${where}: no row on the Main table.`);
     else {
-      if (row.count !== t.table.rows.length || row.count !== t.events.length)
-        fail(
-          `${where}: Main count ${JSON.stringify(row.countText)}, table rows ${t.table.rows.length}, timeline events ${t.events.length}.`,
-        );
       if (row.table?.documentId !== t.tableId)
         fail(`${where}: the Main table's table link points at ${row.table?.documentId ?? 'nothing'}.`);
       if (row.timeline?.documentId !== t.timelineId)
@@ -282,7 +301,7 @@ export async function runChronologySandbox(o: {
         `${where}: row ${x.row.index + 1} ${JSON.stringify(x.row.dateText)} comes after row ${x.after.index + 1} ${JSON.stringify(x.after.dateText)}.`,
       );
     const lane = t.lanes[0];
-    const paired = pairRowsAndEvents(t.table.rows, t.events, [], {
+    const paired = matchRowsAndEvents(t.table.rows, t.events, [], {
       name: t.name,
       eraId: '',
       tableDocumentId: t.tableId,
@@ -291,22 +310,42 @@ export async function runChronologySandbox(o: {
       laneName: typeof lane?.name === 'string' ? lane.name : '',
       mainRowId: '',
     });
+    const byHow = (how: string) => paired.pairs.filter((p) => p.how === how).length;
     out(
-      `- ${where}: ${t.table.rows.length} rows, ${t.events.length} events, Main ${row?.countText ?? '(none)'}; ${paired.pairs.length} row–event pairs by date and text, ` +
-        `${paired.rows.length} rows and ${paired.events.length} events unpaired (reported, not failed: short names may differ from descriptions).`,
+      `- ${where}: ${t.table.rows.length} rows, ${t.events.length} events, Main ${row?.countText ?? '(none)'}; ` +
+        `${paired.pairs.length} row–event pairs (${byHow('date+name')} by date and name, ${byHow('date')} by date alone: wording differs only), ` +
+        `${paired.mismatches.length} date mismatches, ${paired.rows.length} rows and ${paired.events.length} events unpaired.`,
     );
-    for (const r of paired.rows.slice(0, 10))
-      out(
-        `    unpaired row ${r.index + 1}: ${JSON.stringify(r.dateText)} ${JSON.stringify(r.description.slice(0, 80))}`,
+    if (row && (row.count !== t.table.rows.length || row.count !== t.events.length))
+      drifts.push(
+        `${where}: Main count ${JSON.stringify(row.countText)}, table rows ${t.table.rows.length}, timeline events ${t.events.length}.`,
       );
-    for (const e of paired.events.slice(0, 10))
-      out(
-        `    unpaired event ${e.id}: ${JSON.stringify(e.formattedStart)} ${JSON.stringify(e.name.slice(0, 80))}`,
+    for (const m of paired.mismatches)
+      drifts.push(
+        `${where}: row ${m.row.index + 1} ${JSON.stringify(m.row.dateText)} (${JSON.stringify(m.row.description.slice(0, 60))}) says ` +
+          `${m.row.date!.end !== null ? 'a range' : 'one date'} but its event ${JSON.stringify(m.event.name.slice(0, 60))} is ` +
+          `${m.event.end !== null ? 'a range' : 'one date'} (${eventText(m.event)}; paired by ${m.by}).`,
+      );
+    for (const r of paired.rows)
+      drifts.push(
+        `${where}: row ${r.index + 1} ${JSON.stringify(r.dateText)} ${JSON.stringify(r.description.slice(0, 80))} has no timeline event.`,
+      );
+    for (const e of paired.events)
+      drifts.push(
+        `${where}: event ${e.id} ${JSON.stringify(eventText(e))} ${JSON.stringify(e.name.slice(0, 80))} has no table row.`,
       );
   }
   out();
   out(
-    `Result: ${failures.length === 0 ? 'PASS' : `FAIL (${failures.length})`}; ${reads} reads; nothing was written.`,
+    '## 4. Drift between the tables and the timelines (the table is the authority; reported, not a failure of the engine)',
   );
-  return { text: lines.join('\n'), failures, reads };
+  if (drifts.length === 0) out('- none.');
+  for (const d of drifts) driftFound(d);
+  out();
+  out(
+    `Result: ${failures.length === 0 ? 'PASS' : `FAIL (${failures.length})`} (the engine, both date styles and the structure); ` +
+      `${drift.length === 0 ? 'no drift' : `${drift.length} drift finding${drift.length === 1 ? '' : 's'} (run the chronology check on the dashboard and use "Propose a fix")`}; ` +
+      `${reads} reads; nothing was written.`,
+  );
+  return { text: lines.join('\n'), failures, drift, reads };
 }

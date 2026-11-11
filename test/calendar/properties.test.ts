@@ -12,6 +12,7 @@ import {
   createCalendar,
   DEFAULT_DATE_STYLE,
   DEFAULT_KCY_STYLE,
+  LK_DATE_STYLE,
   formatKcy,
   parseKcyCell,
   type DateForm,
@@ -116,7 +117,11 @@ function spanFor(
   }
 }
 
-function roundTrips(cal: ReturnType<typeof createCalendar>, label: string) {
+function roundTrips(
+  cal: ReturnType<typeof createCalendar>,
+  label: string,
+  style: typeof DEFAULT_DATE_STYLE = DEFAULT_DATE_STYLE,
+) {
   const eras = cal.engine.eras.length;
   fc.assert(
     fc.property(
@@ -137,10 +142,10 @@ function roundTrips(cal: ReturnType<typeof createCalendar>, label: string) {
         const span = spanFor(cal, form, a, b);
         if (!span) return;
         const [start, end] = span;
-        const text = cal.parser.render(form, start, end, DEFAULT_DATE_STYLE);
+        const text = cal.parser.render(form, start, end, style);
         // Case and spacing do not matter.
         const variant = shout ? text.toUpperCase().replace(/ /g, '  ') : text;
-        const p = cal.parser.parse(variant);
+        const p = cal.parser.parse(variant, style);
         expect({ label, text, start: p.start, end: p.end, form: p.form }).toEqual({
           label,
           text,
@@ -149,6 +154,11 @@ function roundTrips(cal: ReturnType<typeof createCalendar>, label: string) {
           form,
         });
         expect(p.text).toBe(text);
+        // Either style is read, whichever the text was written in, to the same minutes.
+        const other = cal.parser.parse(
+          cal.parser.render(form, start, end, style === LK_DATE_STYLE ? DEFAULT_DATE_STYLE : LK_DATE_STYLE),
+        );
+        expect([other.start, other.end, other.form]).toEqual([start, end, form]);
         // KCY is the year of the epoch frame: consistent with the start and end.
         expect(p.kcy.start).toBe(cal.engine.kcyOf(start));
       },
@@ -157,14 +167,20 @@ function roundTrips(cal: ReturnType<typeof createCalendar>, label: string) {
   );
 }
 
-describe('format then parse round-trips (10,000 runs per calendar)', () => {
-  it('Kumikan Epochal: every era, the Archon Age counting down, the era edges', () => {
-    roundTrips(kumikan, 'kumikan');
-  });
+describe('format then parse round-trips (10,000 runs per calendar and style)', () => {
+  const styles = [
+    ['the table style (thousands separators)', DEFAULT_DATE_STYLE],
+    ['LegendKeeper’s style (no thousands separator)', LK_DATE_STYLE],
+  ] as const;
+  for (const [name, style] of styles) {
+    it(`Kumikan Epochal in ${name}: every era, the Archon Age counting down, the era edges`, () => {
+      roundTrips(kumikan, 'kumikan', style);
+    });
 
-  it('a calendar with leap days, a month every 4 years, a year 0, a calendar-reset era and the default formats', () => {
-    roundTrips(createCalendar(odd), 'odd');
-  });
+    it(`a calendar with leap days, a month every 4 years, a year 0, a calendar-reset era and the default formats, in ${name}`, () => {
+      roundTrips(createCalendar(odd), 'odd', style);
+    });
+  }
 });
 
 describe('minutes resolve and compose back exactly (10,000 runs)', () => {

@@ -111,6 +111,8 @@ export interface StepExecDeps {
   readonly recordHandler?: (store: string) => RecordHandler | undefined;
   /** v2 D1: the document checkers of `bridge.expect`, by name. */
   readonly checker?: (name: string) => DocumentChecker | undefined;
+  /** v2 D1.1 (ADR 0039): whether a project uses a write's `ETag` as its new version (`useEtagVersions`, default on). */
+  readonly etagVersions?: (projectId: string) => boolean;
 }
 
 /**
@@ -1372,7 +1374,7 @@ export class StepExecutor {
           };
           return this.succeed(job, step, stats, out, false, store);
         }
-        return this.succeed(job, step, stats, value, false, store);
+        return this.succeed(job, step, stats, value, false, store, this.etagOf(job, op, stats));
       } catch (e) {
         const outcome = stats.maybeSent && !(e instanceof BudgetWaitError) ? 'unknown' : 'not_applied';
         this.d.journal.setOutcomeForStep(job.id, step.stepNo, outcome);
@@ -1402,6 +1404,16 @@ export class StepExecutor {
     } catch (e) {
       return this.fail(job, step, stats, e, ambiguous);
     }
+  }
+
+  /**
+   * v2 D1.1 (ADR 0039): the `ETag` a write answered with, when it can serve as the next chained If-Match: the project's
+   * `useEtagVersions` setting is on (default) and the write is one LegendKeeper versions (a row write, a document
+   * write), never one it does not (`updateProperty`), whose ETag, if any, would be of another kind.
+   */
+  private etagOf(job: JobView, op: OperationDef, stats: CallStats): string | undefined {
+    if (stats.etag === undefined || !op.versioned) return undefined;
+    return this.d.etagVersions?.(job.projectId) === false ? undefined : stats.etag;
   }
 
   /**
@@ -1759,10 +1771,18 @@ export class StepExecutor {
     value: unknown,
     verified = false,
     store = true,
+    /** v2 D1.1 (ADR 0039): the write's `ETag`, kept beside the result as the version for the next chained If-Match. */
+    etag?: string,
   ): StepOutcome {
     const requestIds = [...step.requestIds, ...stats.requestIds];
+    const stored =
+      etag === undefined
+        ? value
+        : value !== null && typeof value === 'object' && !Array.isArray(value)
+          ? { ...(value as Record<string, unknown>), etag }
+          : { etag };
     const { summary, artifactId } = store
-      ? this.summarise(job.id, step.stepNo, value, verified)
+      ? this.summarise(job.id, step.stepNo, stored, verified)
       : { summary: pageSummary(value), artifactId: null };
     this.d.repo.updateStep(job.id, step.stepNo, {
       status: 'succeeded',

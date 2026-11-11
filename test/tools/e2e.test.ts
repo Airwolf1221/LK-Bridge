@@ -81,6 +81,7 @@ describe('the MCP surface with the official client', () => {
         'create_timeline_event',
         'update_timeline_event',
         'delete_timeline_event',
+        'sync_timeline_event',
         'create_timeline_lane',
       ].sort(),
     );

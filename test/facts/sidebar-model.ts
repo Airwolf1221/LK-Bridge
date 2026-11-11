@@ -107,6 +107,14 @@ export class SidebarModel {
   /** Changes what a write stores (LegendKeeper storing something other than what was sent). */
   mangle: ((req: MockRequest, sidebar: MSidebar) => void) | null = null;
   propertyVersions = false;
+  /**
+   * Where a row write (and a delete) tells the new sidebar version (v2 D1.1, ADR 0039): `body` (the default, what the
+   * spec says and the older tests assume), `etag` (what the test world's LegendKeeper does, sandbox B12 and B13: no
+   * version in the body, a quoted `ETag` header, on a 204 too), `etag-wrong` (an ETag that is NOT the version the next
+   * read gives, and that LegendKeeper would not accept as If-Match: for the sandbox's B12 to fail on), or `none`
+   * (neither: the bridge must re-read).
+   */
+  rowVersions: 'body' | 'etag' | 'etag-wrong' | 'none' = 'body';
   /** A LegendKeeper that ranks a new row between its neighbours in STORED order (wrong; for the verify step). */
   placeByStoredOrder = false;
   /** C2d: trim leading and trailing breaks from row values written (LegendKeeper does); off only to show the old way. */
@@ -389,7 +397,7 @@ export class SidebarModel {
       rows.push(row);
       this.mangle?.(req, sb);
       sb.version++;
-      return { status: 201, body: { ...this.rowView(row), version: `v${sb.version}` } };
+      return this.rowWrite(201, this.rowView(row), sb);
     }
     const row = rows.find((r) => r.id === rowId);
     if (!row) return err(404, 'NOT_FOUND');
@@ -398,13 +406,25 @@ export class SidebarModel {
       row.content = contentOf(row.content);
       this.mangle?.(req, sb);
       sb.version++;
-      return { status: 200, body: { ...this.rowView(row), version: `v${sb.version}` } };
+      return this.rowWrite(200, this.rowView(row), sb);
     }
     if (M === 'DELETE') {
       prop.rows = rows.filter((r) => r !== row);
       sb.version++;
-      return { status: 204 };
+      return this.rowWrite(204, undefined, sb);
     }
     return undefined;
+  }
+
+  /** The answer of a row write, with the new version where `rowVersions` puts it. */
+  private rowWrite(status: number, view: Obj | undefined, sb: MSidebar): MockResponse {
+    const v = `v${sb.version}`;
+    if (this.rowVersions === 'body') return { status, ...(view ? { body: { ...view, version: v } } : {}) };
+    return {
+      status,
+      ...(view ? { body: view } : {}),
+      ...(this.rowVersions === 'etag' ? { headers: { etag: `"${v}"` } } : {}),
+      ...(this.rowVersions === 'etag-wrong' ? { headers: { etag: `"x${sb.version}"` } } : {}),
+    };
   }
 }

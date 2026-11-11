@@ -25,6 +25,8 @@ export interface CallStats {
   readonly requestIds: string[];
   /** True once an attempt may have reached LK and changed something (success, transport failure, 5xx). */
   maybeSent: boolean;
+  /** The `ETag` (unquoted) of the last successful write's response, when it sent one (v2 D1.1, ADR 0039). */
+  etag?: string;
 }
 
 export function newCallStats(): CallStats {
@@ -101,7 +103,12 @@ export async function callOp(
             headers,
             signal,
           });
-          if (op.method !== 'GET') stats.maybeSent = true;
+          if (op.method !== 'GET') {
+            stats.maybeSent = true;
+            const etag = lk.governor.currentResponse()?.etag;
+            if (etag !== undefined) stats.etag = etag;
+            else delete stats.etag;
+          }
           return result;
         } catch (e) {
           if (op.method !== 'GET' && !provablyNotApplied(e)) stats.maybeSent = true;

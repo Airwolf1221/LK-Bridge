@@ -140,6 +140,27 @@ Measured against the mock (`test/chronology/tools.test.ts`, `check.test.ts`, `sa
   calendar order with the count as it then is (the proposal shows the place and count as planned).
 - The table's date forms are the owner's: a row is written in the form the agent gave; `calendar_date` shows it first.
 
+## Notes added by D1.1 ([ADR 0039](0039-date-styles-timeline-repair-and-etag-versions.md), 11 November 2026)
+
+- **Decision 5's open guess is settled, and corrected:** LegendKeeper does **not** write years over 1,000 with commas on
+  events (`Kumikas 1st, AA 1988119`); the owner's tables do (`AA 1,988,119`). There are two date styles: LegendKeeper's
+  (`CalendarEngine.format`, `ParsedDate.formatted`) for everything compared with an event's text, and the table style
+  (`DateTextStyle`, `formatTable`, `ParsedDate.text`) for table cells only. The engine used the table style for both,
+  which the sandbox run reported as 242 failures (the Archon, First and Second Age events; the Third, Fourth and Fifth
+  Age events passed only because their years are under 1,000). Decision 3 stands: parsing accepts a year with or
+  without commas.
+- **The owner's sandbox run confirmed** the engine against all 695 table rows of every age (date and KCY cells, AA,
+  ranges, `Jehet 11th - 18th, 4A 424`, `Zahras 4A 367 - Attina 4A 367`), and minutes, `detail` and shape for every event.
+- **Decision 18's check** now pairs rows and events in four passes and reports a row and an event that disagree about the
+  date as their own kind, `date_mismatch`; a wording difference alone is not a finding. "Never a repair" stands: the
+  repair is `sync_timeline_event`, as a proposal the owner approves (the dashboard's "Propose a fix").
+- **Decision 13's `CHRONOLOGY_DRIFT`** refusal now points at `sync_timeline_event`, and a linked pair that disagrees
+  about its date is drift, not a pair.
+- **Decision 19's sandbox test** reports table and timeline drift under its own heading, apart from the engine's
+  failures, and compares event text in LegendKeeper's style.
+- **The Costs table** is unchanged for the three event tools; `sync_timeline_event` costs 7 reads and 1 write to create
+  an event, 6 and 1 to correct one.
+
 ## Open for the owner
 
 - The sandbox test's report confirms or corrects the learned style and the year-range end (decision 2); anything it

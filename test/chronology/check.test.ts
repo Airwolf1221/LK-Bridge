@@ -34,6 +34,22 @@ describe('the chronology check', () => {
     console.log(`chronology check cost: ${cost.reads} reads`);
   });
 
+  it('does not report the thousands separator: LegendKeeper writes years over 1,000 plain, the tables with commas (ADR 0039)', async () => {
+    // The Archon Age's rows are written `AA 1,988,119` in the table; LegendKeeper's text for its events has none.
+    const listed = await w.stack.runtime.engine.run(
+      'listEvents',
+      { path: { resourceId: 'chrono01', documentId: w.ages['Archon Age']!.timeline }, query: { limit: 100 } },
+      { project: PROJECT, origin: { kind: 'test' } },
+    );
+    if (listed.status !== 'succeeded') throw new Error(`listEvents ${listed.status}`);
+    const texts = ((listed.result as { data: Obj[] }).data ?? []).map((e) => String(e.formattedStart));
+    expect(texts).toContain('Kumikas 1st, AA 1988119');
+    expect(texts.some((x) => /\d,\d{3}/.test(x))).toBe(false);
+    expect(w.rows('Archon Age').some((r) => r.includes('AA 1,988,119'))).toBe(true);
+    const c = await run();
+    expect(c.findings).toEqual([]);
+  });
+
   it('reports every kind of drift made outside the bridge, and repairs nothing', async () => {
     const table = w.repo.blocks.get(w.ages[FOURTH]!.table)!;
     const t = (table.blocks as Obj[]).find((b) => b.kind === 'table')!;

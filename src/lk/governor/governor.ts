@@ -368,6 +368,15 @@ export class Governor {
     return response;
   };
 
+  /**
+   * What the governor captured from the response of the request in flight in this call (`execute`'s `run`), or
+   * undefined outside one or before the response: the `ETag` of a write (v2 D1.1, ADR 0039).
+   */
+  currentResponse(): CapturedResponse | undefined {
+    const ctx = this.als.getStore();
+    return ctx && ctx.governor === this ? ctx.captured : undefined;
+  }
+
   snapshot(): BudgetSnapshot {
     const now = this.clock.now();
     const tiers = Object.fromEntries(

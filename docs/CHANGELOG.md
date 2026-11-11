@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased: v2 D1.1, two date styles, timeline repair from the table, and versions from the ETag (11 November 2026)
+
+[ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md). No migration. Nothing was run against a live
+system: every test runs against the mock LegendKeeper, and the sandbox tests are written, not run. It answers the
+owner's full sandbox run of 11 November 2026 (smoke passed; assumptions 27 of 28, B12 failed; chronology 243 failures,
+242 of them one formatting difference and one real finding of data drift on the test world).
+
+- **Two date styles.** LegendKeeper writes a year with no thousands separator on events (`Kumikas 1st, AA 1988119`);
+  the tables write one (`AA 1,988,119`). The engine used the table style for both. `CalendarEngine.format` is now
+  LegendKeeper's style only (`formatTable` and the parser's `render` with a style are the table's); `ParsedDate` carries
+  `formatted` (LegendKeeper's) and `text` / `tableFormatted` (the table's); `calendar_date` returns both and reads
+  either. Table writes use the table style, every comparison with an event's text LegendKeeper's. Engine tests
+  re-pinned: the oracle, new fixtures for years over 1,000 in both styles (the Archon, First and Second Ages), and
+  property tests that round-trip both styles (10,000 runs per calendar and style). The chronology check compares
+  minutes, never text, so it never reported the 242; a regression test covers years over 1,000 in both styles. The
+  sandbox chronology test now compares event text in LegendKeeper's style.
+- **`sync_timeline_event` (W), the repair of timeline drift with the table as the authority.** Creates a table row's
+  missing event (minutes, `detail`, `uri` to the age's table), or corrects the paired event's minutes, `detail`, shape
+  and `uri`; never touches the table or the Main count, never renames an event. `nothing_to_do` for a correct event; an
+  ambiguous pairing is refused with the candidates. One job (or one proposal under `propose`) holding the age's table
+  and timeline, with `dryRun`, `operation_id`, the compare-and-swap inside the lock (including a new **row assertion**:
+  the row must still be as planned), verify, the journal and resume. 52 → 53 bridge tools.
+- **The chronology check** pairs rows and events in four passes (links; date and name; date alone; the same event with a
+  different date) and reports a row and an event that disagree about the date as their own finding kind,
+  **`date_mismatch`**; a wording difference alone is no finding. A linked pair that disagrees about its date is drift,
+  not a pair. `CHRONOLOGY_DRIFT` now points at `sync_timeline_event`.
+- **Dashboard: "Propose a fix"** on each `row_without_event` and `date_mismatch` finding: ONE `sync_timeline_event`
+  proposal (`POST /chronology/propose-fix`, `BatchSubmit.forceProposal`, bridge code only), approved as normal on the
+  Proposals page; audited `chronology.propose_fix`.
+- **Versions from the `ETag` (B12).** The governor captures a response's `ETag` (unquoted); for a write LegendKeeper
+  versions, a step keeps it beside its result, and the next chained If-Match takes the body's version, else the ETag
+  (row writes and deletes, B13 and D25), so a chained row write needs no read of its own; with neither, the bridge
+  still re-reads. Behind the per-project setting **`useEtagVersions`** (default on) until the owner's next sandbox run
+  confirms it. Measured against the mock: `set_facts` changing two facts 4 reads (6 without), a four-write call 6
+  reads (10 without); `archive_page` 4 reads fewer, `unarchive_page` 3, `promote_page` 2, `move_to_working` none.
+- **Sandbox (written, not run).** **B12** now asserts, for a row create, update and delete, that the ETag equals the
+  version the next `listPropertyRows` gives AND that LegendKeeper accepts it as If-Match; PASS only if both hold, and it
+  says plainly which half did not and that `useEtagVersions` should be switched off. The chronology test reports
+  table and timeline drift under its own heading, apart from the engine's failures.
+- **For the owner after deploying:** run the sandbox again (`sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh
+--project test`); then "Run the check now" on the Chronology page, "Propose a fix" on each finding and approve;
+  then run the check again: no findings. ChatGPT: refresh the tool list (Plugins page).
+
 ## Unreleased: v2 D1, the calendar engine, chronology sync and the timeline tools (11 November 2026)
 
 [ADR 0038](adr/0038-calendar-engine-and-chronology-sync.md). Migration **1800** (chronology calendars, records, links

@@ -288,9 +288,20 @@ project.
   audited as `project.set_chronology`. Until confirmed, the timeline tools refuse. The table is the authority; the
   timeline is a derived view.
 - **Chronology check.** The last run of the check (state, when, requests, summary) and its findings in plain words: rows
-  without an event, events without a row, rows out of order, wrong KCY values, cells written differently from the
-  confirmed style, count mismatches, event links not to their age's table, dates the engine cannot read. **Run the check
-  now** runs it (P2; reads only, never repairs); it also runs weekly (Maintenance page).
+  without an event, events without a row, a row and its event that disagree about the date or shape (**Row and event
+  disagree about the date**), rows out of order, wrong KCY values, cells written differently from the confirmed style,
+  count mismatches, event links not to their age's table, dates the engine cannot read. **Run the check now** runs it
+  (P2; reads only; the check itself never repairs); it also runs weekly (Maintenance page). Differences of wording only
+  between a row's description and its event's short name, and the thousands separator in a year (LegendKeeper writes
+  `AA 1988119`, the tables `AA 1,988,119`), are not findings.
+- **Propose a fix** (v2 D1.1, [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)). A **Row without an
+  event** or **Row and event disagree about the date** finding has a **Propose a fix** button. It plans
+  `sync_timeline_event` for that row (about 3 reads; the table is the authority) and makes ONE proposal: nothing is
+  written until you approve it, as normal, on the **Proposals** page (it shows the row and the event before and after).
+  The proposal is made by the system, audited as `chronology.propose_fix`, creates the missing event or corrects the
+  paired event's minutes, `detail`, shape and `uri`, and never touches the table or the Main count. An ambiguous pairing
+  (several events could be the row's), a change of that age that stopped part-way and a row that is gone are refused with
+  their reason; a row whose event already agrees says so. After approving, run the check again: no findings.
 - **Changes.** The record of every chronology change, newest first: the tool and summary, the ages, the writes, who made
   it (and who approved it), its state (**complete**, **incomplete**, **resolved**) and its jobs linked to the Journal
   page. A change that stopped part-way is finished by the same request again; **Mark resolved** (asks for a
@@ -298,7 +309,8 @@ project.
 
 Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lookup`, `PUT /projects/:name/chronology`
 (`{ confirm: true, settings }` or `{ confirm: true, reset: true }`), `GET /chronology/records`, `POST
-/chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`).
+/chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`), `POST /chronology/propose-fix`
+(`{ confirm: true, project, age, rowId }`: one proposal, or `nothing_to_do`).
 
 ## Canon (Projects page, v2 C2a)
 

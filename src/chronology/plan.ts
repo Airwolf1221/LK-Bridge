@@ -126,6 +126,11 @@ export function buildJob(o: {
     docs.add(w.documentId);
     if (w.kind.startsWith('row.')) tableAge.set(w.documentId, w.age);
     switch (w.kind) {
+      case 'row.assert': {
+        // Not a write: the table is locked and the row compared inside the lock (the repair's compare-and-swap).
+        pushTableOp(w.documentId, { op: 'assert', rowId: w.rowId, texts: w.texts });
+        break;
+      }
       case 'row.insert': {
         const r = o.ctx.rows[w.rowId]!;
         const key = `row:${w.rowId}`;

@@ -48,6 +48,12 @@ export const projectSettingsSchema = z
      * lifecycle module when used (an invalid value falls back to the defaults, with the indexes unconfirmed).
      */
     lifecycle: z.record(z.string(), z.unknown()).optional(),
+    /**
+     * v2 D1.1 (ADR 0039): whether a write that answers with no version in its body (a property row write, a delete)
+     * but with an `ETag` header has that ETag used as its new version for the next chained If-Match (default on).
+     * Off: the bridge re-reads, as before. The owner can switch it off without a deploy if the sandbox's B12 fails.
+     */
+    useEtagVersions: z.boolean().optional(),
   })
   .loose();
 
@@ -143,6 +149,14 @@ export const PROJECT_SETTING_KEYS: readonly {
     kind: 'rules',
     editable: false,
     help: 'Edited in the Lifecycle section of this page (each change is audited).',
+  },
+  {
+    key: 'useEtagVersions',
+    label: 'Writes: use the ETag as the new version',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'On: a row write or delete that gives no version in its body but sends an ETag has that ETag used as If-Match for the next write in the job, saving a read each. Off: the bridge re-reads instead (switch off if the sandbox’s B12 check fails).',
   },
   {
     key: 'assetRefreshEnabled',

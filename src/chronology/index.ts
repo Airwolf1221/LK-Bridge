@@ -21,6 +21,8 @@ import type { TreeNode, TreeService } from '../tree/index.js';
 import { nameKey } from '../tree/index.js';
 import { chronologyCheckers } from './checkers.js';
 import { runCheck, type CheckReader } from './check.js';
+import { buildJob } from './plan.js';
+import { planSync, SYNC_TOOL } from './sync.js';
 import {
   chronologyConfigFrom,
   chronologySchema,
@@ -38,6 +40,7 @@ export * from './store.js';
 export * from './table.js';
 export * from './checkers.js';
 export { runCheck, type CheckReader, type CheckReport } from './check.js';
+export * from './sync.js';
 
 type Obj = Record<string, unknown>;
 
@@ -155,6 +158,21 @@ export interface Chronology {
     trigger: string,
     priority?: PriorityClass,
   ): Promise<{ summary: string; changed: boolean; skipped?: boolean }>;
+  /**
+   * v2 D1.1 (ADR 0039): the dashboard's "Propose a fix" for one finding (a row without an event, or a row and its event
+   * disagreeing about the date): plans `sync_timeline_event` for that row and captures it as ONE proposal for the owner
+   * to approve as normal, whatever the caller. Nothing is written until the owner approves. Audited
+   * `chronology.propose_fix`. Throws `ChronologyError` with the refusal (an ambiguous pairing, a change that stopped
+   * part-way, a row that is gone).
+   */
+  proposeFix(
+    actor: string,
+    projectId: string,
+    fix: { readonly age: string; readonly rowId: string },
+  ): Promise<
+    | { readonly status: 'proposal_captured'; readonly proposalId: string; readonly summary: string | null }
+    | { readonly status: 'nothing_to_do'; readonly message: string }
+  >;
   attach(): () => void;
   stop(): void;
 }
@@ -701,6 +719,88 @@ export function createChronology(d: ChronologyDeps): Chronology {
     }
   };
 
+  // ------------------------------------------------------------------------------------------ propose a fix
+
+  const proposeFix: Chronology['proposeFix'] = async (actor, projectId, fix) => {
+    const ready = readiness(projectId);
+    if (!ready.ok) throw new ChronologyError(ready.code, ready.message);
+    const c = ready.config;
+    const age = c.ages.find((a) => nameKey(a.name) === nameKey(fix.age));
+    if (!age) throw new ChronologyError('AGE_NOT_FOUND', `No age of the chronology is named “${fix.age}”.`);
+    const stopped = store
+      .incomplete(projectId)
+      .find((r) => r.ages.some((a) => nameKey(a) === nameKey(age.name)));
+    if (stopped)
+      throw new ChronologyError(
+        'CHRONOLOGY_INCOMPLETE',
+        `A chronology change of ${stopped.ages.join(' and ')} stopped part-way (change ${stopped.id}: ${stopped.summary}). Finish it (repeat the same request) or mark it resolved first. Nothing was proposed.`,
+        { recordId: stopped.id },
+      );
+    const read = reader(projectId, 'P1', { n: 0 });
+    const list = (await read('listCalendars', {})) as { data?: Obj[] } | undefined;
+    const def = (list?.data ?? []).find((x) => x.id === c.calendarId);
+    if (!def)
+      throw new ChronologyError('CALENDAR_NOT_FOUND', `The calendar ${String(c.calendarId)} was not found.`);
+    const cal = remember(projectId, def);
+    const plan = await planSync({
+      config: c,
+      calendar: cal,
+      read,
+      links: store.links(projectId),
+      ref: { rowId: fix.rowId, age: age.name },
+    });
+    if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
+    if (plan.action === 'nothing')
+      return {
+        status: 'nothing_to_do',
+        message: 'The row and its timeline event already agree; nothing was proposed.',
+      };
+    const built = buildJob({
+      tool: SYNC_TOOL,
+      config: c,
+      target: plan.target,
+      writes: plan.writes,
+      ctx: plan.ctx,
+      record: { requestKey: plan.requestKey, ages: [age.name], summary: plan.summary },
+    });
+    const page = { id: c.resourceId!, name: ready.resource.rawName };
+    const parts = built.labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l));
+    const r = await d.engine.submit({
+      kind: 'batch_ops',
+      project: projectId,
+      steps: built.steps,
+      onError: 'stop',
+      priority: 'P1',
+      origin: { kind: 'ui', client: 'owner', tool: 'chronology_propose_fix' },
+      title: plan.summary.slice(0, 300),
+      holdDocuments: built.holdDocuments,
+      internal: true,
+      forceProposal: true,
+      proposal: {
+        operation: {
+          tool: SYNC_TOOL,
+          page,
+          before: plan.markdown.before,
+          after: plan.markdown.after,
+          chronology: plan.head,
+        },
+        operations: [
+          { tool: SYNC_TOOL, page, pageParts: parts, summaryLabel: plan.summary, chronology: plan.head },
+        ],
+        summary: plan.summary,
+      },
+    });
+    if (!('proposalId' in r))
+      throw new ChronologyError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
+    d.audit(actor, 'chronology.propose_fix', projectId, null, {
+      age: age.name,
+      rowId: fix.rowId,
+      proposalId: r.proposalId,
+      action: plan.action,
+    });
+    return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary ?? null };
+  };
+
   return {
     store,
     config,
@@ -713,6 +813,7 @@ export function createChronology(d: ChronologyDeps): Chronology {
     eraOf,
     resolve,
     check,
+    proposeFix,
     attach() {
       const offRecord = d.engine.registerRecordHandler(recordHandler, 'chronology');
       const checkers = chronologyCheckers((projectId) => calendar(projectId));

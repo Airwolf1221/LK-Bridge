@@ -1217,6 +1217,7 @@ export interface ChronologyLookupView extends ChronologyFindView {
 export type ChronologyFindingKind =
   | 'row_without_event'
   | 'event_without_row'
+  | 'date_mismatch'
   | 'row_out_of_order'
   | 'wrong_kcy'
   | 'count_mismatch'
@@ -1245,6 +1246,11 @@ export interface ChronologyCheckRun {
   finishedAt: number | null;
 }
 
+/** `POST /chronology/propose-fix` (v2 D1.1): the proposal made for one finding, or why there is nothing to propose. */
+export type ChronologyProposeFixResponse =
+  | { status: 'proposal_captured'; proposalId: string; summary: string | null }
+  | { status: 'nothing_to_do'; message: string };
+
 /** `GET /chronology/check`. */
 export interface ChronologyCheckResponse {
   project: ProjectRef;
@@ -1254,7 +1260,7 @@ export interface ChronologyCheckResponse {
 
 export interface ChronologyRecordView {
   id: number;
-  tool: 'create_timeline_event' | 'update_timeline_event' | 'delete_timeline_event';
+  tool: 'create_timeline_event' | 'update_timeline_event' | 'delete_timeline_event' | 'sync_timeline_event';
   summary: string;
   ages: string[];
   state: 'incomplete' | 'complete' | 'resolved';

@@ -7,7 +7,9 @@
  *   every change audited (`project.set_chronology`). Until confirmed, the chronology tools refuse;
  * - the chronology changes (the record each timeline tool's job writes), newest first, with "Mark resolved" for a
  *   change that stopped part-way and was fixed by hand (audited `chronology.resolve`);
- * - the chronology check's last findings, and a button that runs it now (findings only, never repairs).
+ * - the chronology check's last findings, and a button that runs it now (findings only, never repairs);
+ * - "Propose a fix" for a finding (a row without an event, or a row and its event disagreeing about the date): ONE
+ *   `sync_timeline_event` proposal for the owner to approve as normal on the Proposals page (v2 D1.1, ADR 0039).
  */
 import * as z from 'zod';
 import { ChronologyError, chronologySchema } from '../../chronology/index.js';
@@ -146,5 +148,41 @@ export const registerChronology: Register = (api, ctx) => {
     if (!ready.ok) throw new AdminHttpError(409, ready.code, ready.message);
     void c.check(p.id, 'manual', 'P2').catch(() => undefined);
     return { started: true };
+  });
+
+  /**
+   * "Propose a fix" for one finding of the check: `sync_timeline_event` for that table row, captured as ONE proposal (the
+   * owner approves it as normal on the Proposals page). Reads about 3 requests to plan; writes nothing. Audited
+   * `chronology.propose_fix`.
+   */
+  api.post('/chronology/propose-fix', async (req) => {
+    const b = parseInput(
+      z
+        .object({
+          confirm: z.literal(true),
+          project: projectParam,
+          age: z.string().min(1).max(200),
+          rowId: z.string().min(1).max(64),
+        })
+        .strict(),
+      req.body,
+    );
+    const p = ctx.project(b.project);
+    try {
+      return await chronology().proposeFix('owner', p.id, { age: b.age, rowId: b.rowId });
+    } catch (e) {
+      if (e instanceof ChronologyError) {
+        const conflict = [
+          'PAIRING_AMBIGUOUS',
+          'EVENT_AMBIGUOUS',
+          'CHRONOLOGY_INCOMPLETE',
+          'CHRONOLOGY_NOT_CONFIGURED',
+          'CHRONOLOGY_CHANGED',
+          'EVENT_TAKEN',
+        ];
+        throw new AdminHttpError(conflict.includes(e.code) ? 409 : 400, e.code, e.message, e.details);
+      }
+      throw e;
+    }
   });
 };

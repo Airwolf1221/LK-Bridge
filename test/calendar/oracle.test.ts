@@ -73,6 +73,11 @@ describe('the oracle (330 Fourth Age events)', () => {
     expect(bad).toEqual([]);
   });
 
+  it('writes LegendKeeper’s style: `format` never puts a thousands separator in a year (ADR 0039)', () => {
+    expect(engine.format(engine.minMinute, 3)).toBe('Kumikas 1st, AA 1988119');
+    for (const e of oracle.events) expect(engine.format(e.start, e.detail as Detail)).not.toMatch(/\d,\d/);
+  });
+
   it('gives each event the date LegendKeeper resolved (eventDate)', () => {
     for (const e of oracle.events) {
       expect(engine.eventDate(e.start)).toEqual(e.startDate);

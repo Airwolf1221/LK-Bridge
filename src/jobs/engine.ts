@@ -131,6 +131,11 @@ export interface CreateJobEngineOptions {
   readonly planners?: StepPlanners;
   /** v2 C2a: the write guard (the protected canonical facts); can also be set later with `setWriteGuard`. */
   readonly writeGuard?: WriteGuard;
+  /**
+   * v2 D1.1 (ADR 0039): whether a project uses a write's `ETag` as the write's new version for the next chained
+   * If-Match (the project setting `useEtagVersions`, default on). Absent: on.
+   */
+  readonly etagVersions?: (projectId: string) => boolean;
 }
 
 const SETTING = {
@@ -216,6 +221,7 @@ export class JobEngine {
   private readonly recordHandlers = new Map<string, RecordHandler>();
   /** v2 D1: the document checkers of `bridge.expect` (`kind: 'document'`), by name. */
   private readonly checkers = new Map<string, DocumentChecker>();
+  private readonly etagVersions: ((projectId: string) => boolean) | undefined;
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -261,7 +267,9 @@ export class JobEngine {
       writeGuard: () => this.writeGuard,
       recordHandler: (store) => this.recordHandlers.get(store),
       checker: (name) => this.checkers.get(name),
+      ...(o.etagVersions ? { etagVersions: o.etagVersions } : {}),
     });
+    this.etagVersions = o.etagVersions;
     for (const [name, fn] of Object.entries(o.planners ?? {})) this.planners.set(name, fn);
     this.writeGuard = o.writeGuard;
     const base = createJobQueries(o.db);
@@ -739,6 +747,7 @@ export class JobEngine {
         ...(jobOptions ? { jobOptions } : {}),
       },
       req.lifecycle,
+      req.forceProposal === true,
     );
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
@@ -1036,6 +1045,7 @@ export class JobEngine {
       source?.status === 'succeeded'
         ? (this.repo.stepResult(source) as {
             version?: unknown;
+            etag?: unknown;
             versions?: Record<string, unknown>;
             versionsByPage?: Record<string, Record<string, unknown>>;
           } | null)
@@ -1052,7 +1062,10 @@ export class JobEngine {
         ? result?.versionsByPage && typeof page === 'string'
           ? byPage?.[from.key]
           : result?.versions?.[from.key]
-        : result?.version;
+        : (result?.version ??
+          // v2 D1.1 (ADR 0039): a write whose body carries no version (a row write, a delete answering 204) but sent an
+          // ETag: that is its new version, unless the project switched `useEtagVersions` off.
+          (this.etagVersions?.(job.projectId) === false ? undefined : result?.etag));
     if (typeof version !== 'string' || version === '') {
       // Nothing to chain from (a delete answers 204, without a version): a step with its own in-step check reads the
       // state inside the lock instead, compares it with the plan, and sends the version it read.
@@ -2157,6 +2170,7 @@ export class JobEngine {
     project: string,
     meta: Omit<ProposalMeta, 'kind' | 'origin' | 'project'>,
     lifecycle?: LifecycleMarker,
+    forceProposal = false,
   ): Promise<ProposalCaptured | null> {
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     const batch = jobKind === 'batch_ops';
@@ -2187,6 +2201,8 @@ export class JobEngine {
       }
       if (decision.decision === 'propose') propose = true;
     }
+    // v2 D1.1 (ADR 0039): bridge code asked for a proposal whatever the gate said (the dashboard's "Propose a fix").
+    if (forceProposal && items.some((it) => it.meta.kind !== 'read')) propose = true;
     // v2 C2a (ADR 0032): the write guard sees the whole request, once the gate has let every operation through.
     let canonical: ProposalMeta['canonical'];
     if (this.writeGuard && items.some((it) => it.meta.kind !== 'read')) {

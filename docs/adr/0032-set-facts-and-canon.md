@@ -106,6 +106,12 @@ low-level tools and work that was approved for something else. C2b will build mu
   bridge records one when present and compares it only with the same kind of read), and that `createPropertyRow` and
   `updatePropertyRow` answer with the new version in the body (the bridge falls back to a read and a content check when
   they do not).
+- **Settled by D1.1 ([ADR 0039](0039-date-styles-timeline-repair-and-etag-versions.md), 11 November 2026):** the owner's
+  sandbox run (B12) showed that `createPropertyRow` and `updatePropertyRow` answer **no version in the body** but send an
+  `ETag` header (a delete answering 204 sends one too: B13, D25). Decision 4's chain now takes the body's version when
+  there is one, else the ETag (unquoted), behind the project setting `useEtagVersions` (default on), so a chained row
+  write no longer needs the in-lock read of the property; with neither, the read-and-compare fallback stands. Changing
+  two facts costs 4 reads and 2 writes with it (6 reads without); the Consequences' figures above are the ones with it.
 - **Bulk "accept as canon"** (owner, 11 November 2026). Decision 12 stands: there is still exactly one kind of canonical
   approval, and it is still per proposal. The bulk action is `approveAsCanon` called for each id, one at a time and in
   order (each approval re-reads its targets, so an earlier one may change a later one's), with the single route's

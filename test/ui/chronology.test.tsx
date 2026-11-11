@@ -133,7 +133,18 @@ const checkJson = {
     requests: 7,
     summary: '2 findings in 1 age',
     findings: [
-      { kind: 'row_without_event', age: 'Age of Dawn', message: 'The row “The first fire” has no event.' },
+      {
+        kind: 'row_without_event',
+        age: 'Age of Dawn',
+        message: 'The row “The first fire” has no event.',
+        detail: { rowId: 'rowfire1' },
+      },
+      {
+        kind: 'date_mismatch',
+        age: 'Age of Dawn',
+        message: 'The row “The flood” and its event disagree about the date.',
+        detail: { rowId: 'rowflood', eventId: 'evflood1' },
+      },
       { kind: 'wrong_uri', age: 'Age of Dawn', message: 'The event “Flood” links elsewhere.' },
     ],
     error: null,
@@ -285,6 +296,32 @@ describe('the Chronology page', () => {
     await user.click(screen.getByRole('button', { name: 'Run the check now' }));
     await waitFor(() => expect(api.find('POST', '/chronology/check')).toHaveLength(1));
     expect(api.find('POST', '/chronology/check')[0]!.body).toEqual({ confirm: true, project: 'baisheng' });
+  });
+
+  it('offers "Propose a fix" on a row without an event and on a date mismatch only, and makes one proposal for the owner', async () => {
+    const api = installApi(
+      routes({
+        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_42', summary: 'x' },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    expect(table).toHaveTextContent('Row and event disagree about the date');
+    // Two fixable findings (a row without an event, a date mismatch); the wrong link has none.
+    const buttons = within(table).getAllByRole('button', { name: 'Propose a fix' });
+    expect(buttons).toHaveLength(2);
+    await user.click(buttons[1]!);
+    await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
+    expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Age of Dawn',
+      rowId: 'rowflood',
+    });
+    expect(await screen.findByText(/Proposal prop_42 is waiting on the Proposals page/)).toBeInTheDocument();
+    // The proposal is the owner's to approve: the button is gone for that row, not for the other.
+    expect(within(table).getAllByRole('button', { name: 'Propose a fix' })).toHaveLength(1);
   });
 
   it('lists the changes with journal links, and marks an incomplete one resolved', async () => {

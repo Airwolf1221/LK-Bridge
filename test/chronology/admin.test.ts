@@ -38,6 +38,15 @@ describe('the chronology admin routes', () => {
     expect(stack.audit('project.set_chronology')).toHaveLength(1);
   });
 
+  it('refuses "Propose a fix" until the chronology is confirmed, and needs confirm', async () => {
+    const name = stack.runtime.projects.defaultProject().name;
+    const body = { project: name, age: 'Fourth Arkonan Age', rowId: 'r0000001' };
+    expect((await stack.post('/api/admin/chronology/propose-fix', body)).status).toBe(400);
+    const r = await stack.post('/api/admin/chronology/propose-fix', { confirm: true, ...body });
+    expect(r.status).toBe(409);
+    expect(r.json.error.code).toBe('CHRONOLOGY_NOT_CONFIGURED');
+  });
+
   it('refuses the check until the chronology is confirmed, and lists no changes', async () => {
     const c = await stack.post('/api/admin/chronology/check', { confirm: true });
     expect(c.status).toBe(409);
