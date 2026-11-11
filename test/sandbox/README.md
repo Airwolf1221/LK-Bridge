@@ -46,3 +46,27 @@ Only check 1 writes (a `createManyResources` batch whose parents are minted in t
 that is deleted at the end, even after a failure. Same guard as the soak; every call goes through the real engine and
 governor at P3. Code: `spike-v2.ts` (checks), `spike-report.ts` (report layout); dry run against the mock:
 `test/tools/spike-v2-dryrun.test.ts`. How to run it: docs/runbook-deploy.md, "Phase 0 spike".
+
+## The write layer's assumptions (CR-2026-11)
+
+`npm run test:sandbox` (with `LKB_SANDBOX_PROJECT`, as above; on the server `deploy/sandbox-test.sh --project test`) also
+runs `assumptions.test.ts`; `npm run test:sandbox -- assumptions` runs it alone. It checks, on the real API, every
+assumption the write layer makes about LegendKeeper that was only ever checked against the mock: the list, with what
+breaks if one is false, is [docs/reviews/CR-2026-11.md](../../docs/reviews/CR-2026-11.md), section 6. Each check
+prints PASS, FAIL or INCONCLUSIVE with what LegendKeeper answered; the run fails if any assumption FAILs or the
+clean-up does.
+
+- **What it creates:** one throwaway root resource named `lk-bridge assumptions <time>` with about 60 pages under it
+  (plain names, no `[BSRC]`/`[BWRK]`/`[BARC]`/`[INDEX]` prefix, no Status, Continuity Type or Continuity row, so the
+  canon and lifecycle guards never stand in the way), three templates (`lk-bridge assumptions template A1`, `… A2` and
+  `… H1`, the last with one page under it), and documents, rows, a link collection and a text field on its own pages.
+- **What it cleans up:** everything, at the end, even after a failure: each check's pages (one small cascade each), the
+  three templates, then the root. A delete the canon guard could not judge for lack of budget is tried again after a
+  minute (up to three times). If something is left, the report names each id to delete by hand.
+- **Cost:** about 100 writes and up to about 500 reads (measured against the mock: 102 and 485, which includes the mock
+  world's repository tree re-reading every page written; the sandbox runtime has no tree), plus up to 12 search polls
+  while it waits for new text to become searchable. The clean-up's cascades are most of the reads: the canon guard lists
+  and reads every page of a cascade at entry and again inside the lock. A few minutes at the bridge's write pacing.
+- **Dry run:** `test/tools/assumptions-dryrun.test.ts` runs the same script against the lifecycle test world's mock, to
+  check that every check runs to an answer and the clean-up works (the mock does not model every behaviour, so some
+  checks FAIL there; that is expected and shows which behaviours only the real API can confirm).

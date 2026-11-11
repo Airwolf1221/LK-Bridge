@@ -338,7 +338,7 @@ export class CanonicalGuard implements WriteGuard {
     const each = input.jobKind === 'batch_ops' && input.onError === 'continue';
     // CR-2026-11 (CR-09, CR-10): pages that a move, restore or create earlier in the same request may put under a page
     // the request deletes with a cascade, or under a template it copies with its children, cannot be listed at entry.
-    const reshapes = input.items.some((it) => RESHAPING_OPS.has(it.op));
+    const reshapes = (i: number) => input.items.some((x, j) => j !== i && RESHAPING_OPS.has(x.op));
     const live = new Map<string, SidebarProperty[] | null>();
     const readLive = async (resourceId: string): Promise<SidebarProperty[] | null> => {
       if (live.has(resourceId)) return live.get(resourceId)!;
@@ -417,7 +417,7 @@ export class CanonicalGuard implements WriteGuard {
         // CR-2026-11 (CR-10): with its children, LegendKeeper copies every page under the template too, each with its
         // sidebar: each is judged as a new page.
         if (body.includeChildren === true) {
-          if (reshapes) {
+          if (reshapes(it.i)) {
             unchecked.push({
               i: it.i,
               why: 'the template is copied with its children, and the same request moves, restores or creates pages, which may change what is under it',
@@ -467,7 +467,7 @@ export class CanonicalGuard implements WriteGuard {
         if (cascade) {
           // CR-2026-11 (CR-09): the subtree as LegendKeeper holds it now (the repository tree may not have seen pages
           // added or moved under it in the app), and none of it may change earlier in the same request.
-          if (reshapes) {
+          if (reshapes(it.i)) {
             unchecked.push({
               i: it.i,
               why: 'a cascade delete in a request that also moves, restores or creates pages, which may put pages under it first',

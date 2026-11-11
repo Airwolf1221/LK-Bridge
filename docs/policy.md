@@ -182,7 +182,12 @@ canonical approval, by any route. It is configuration, per project (Projects pag
 
 Facts are every key-value row of the page's sidebar; keys match without case and with spaces trimmed, `value` rules
 match values without case, a `change` rule compares a value's text and the pages it mentions (marks do not count). A
-second value added next to an existing one is a change. Since v2 C2c the Status of pages agents create follows the
+second value added next to an existing one is a change. Since CR-2026-11 keys and values are also compared as a reader
+sees them: compatibility forms folded (fullwidth letters), invisible characters removed (zero-width spaces and joiners,
+soft hyphens) and Cyrillic or Greek look-alike letters read as the Latin ones, so `Ｓｔａｔｕｓ` or `Authori­tative` is
+judged as Status Authoritative; and a **page mention** written into a fact a `value` rule names (Status) is itself a
+protected change, because what it shows is the mentioned page's name, which LegendKeeper fills in and which changes
+when that page is renamed. Since v2 C2c the Status of pages agents create follows the
 page lifecycle (`status: "working"` by default; [below](#the-page-lifecycle-guard-v2-c2c)); the old
 `agentDefaultStatus` setting is still accepted by the API but no longer used. Templates carry no fact defaults (the
 owner confirmed), so nothing is inherited.
@@ -218,30 +223,35 @@ the engine's write guard, src/jobs/write-guard.ts):
    writes are simulated in order on the page's sidebar as it is now (the tool's own read when it made one, else one
    `listProperties`), and the facts after each write are compared with those before it. A batch is judged as the
    sequence it is, so a protected change made in two harmless-looking steps is caught. A sidebar that cannot be read
-   counts as protected (refuse rather than guess).
+   counts as protected (refuse rather than guess). In a batch with `onError: "continue"`, where a step may fail and the
+   steps after it still run, each write is also judged on the page as it is now, as if every step before it had failed
+   (CR-2026-11, CR-08); a template copy's id is never trusted to be a new page.
 2. **At execution of an approved proposal**: the approved batch passes the same entry check. With a canonical approval
    token (minted only by "Approve and accept as canon") it runs; without one, an expansion that carries a protected
    change is refused there, the proposal fails, and **nothing is written** (a forged or stale expansion).
 3. **Inside the lock**, before each sidebar write is sent: the check is made again on what is there now (the read the
    engine makes there, or one more read when the write touches a protected fact). A job that does not carry canonical
-   approval is refused (`CANONICAL_APPROVAL_REQUIRED`); nothing is sent. A versioned row write sent with an `If-Match`
-   the bridge did not read there is left to LegendKeeper's version check, which refuses it if the rows changed since.
+   approval is refused (`CANONICAL_APPROVAL_REQUIRED`); nothing is sent. Only a row write whose `If-Match` the engine
+   chained from the job's own previous write (or its check step) is left to LegendKeeper's version check; since
+   CR-2026-11 (CR-08) a version the caller gave is read and judged there like any other write, because it proves nothing
+   about what the entry check saw.
 4. **The system principal** (the bridge's own work, the dashboard) is refused a protected change too: the bridge never
    makes one on its own.
 
 **Every write path that can reach sidebar facts, and its guard:**
 
-| Path                                                                                                                                                    | Guarded by                                                                                                                                               |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `set_facts`                                                                                                                                             | entry (with the plan's own read), execution, inside the lock                                                                                             |
-| `lk_api_write` with `createProperty`, `updateProperty` (rows), `deleteProperty`                                                                         | entry, execution, inside the lock                                                                                                                        |
-| `lk_api_write` with `createPropertyRow`, `updatePropertyRow` (key or value), `deletePropertyRow`                                                        | entry, execution, inside the lock (or LegendKeeper's If-Match, see above)                                                                                |
-| `lk_api_batch` with any of those, in any order                                                                                                          | entry (the whole sequence), execution, inside the lock                                                                                                   |
-| `lk_op_createProperty`, `lk_op_updateProperty`, `lk_op_deleteProperty`, `lk_op_createPropertyRow`, `lk_op_updatePropertyRow`, `lk_op_deletePropertyRow` | entry, execution, inside the lock                                                                                                                        |
-| `createResourceFromTemplate` (any tool): it copies the template's properties                                                                            | entry (the template's facts are read and judged as a new page's)                                                                                         |
-| C2b's tools (resources, documents, characters)                                                                                                          | the same engine guard, whatever they submit (a new page's facts judged on its template's copy); `assessFactChange` and `assessDelete` for their dry runs |
-| `deleteResource` (any tool, v2 C2b)                                                                                                                     | entry (the page, and with `cascade` its subtree), execution, inside the lock (the page)                                                                  |
-| An approved proposal's batch                                                                                                                            | execution (canonical approval token required for a protected change), inside the lock                                                                    |
+| Path                                                                                                                                                    | Guarded by                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `set_facts`                                                                                                                                             | entry (with the plan's own read), execution, inside the lock                                                                                              |
+| `lk_api_write` with `createProperty`, `updateProperty` (rows), `deleteProperty`                                                                         | entry, execution, inside the lock                                                                                                                         |
+| `lk_api_write` with `createPropertyRow`, `updatePropertyRow` (key or value), `deletePropertyRow`                                                        | entry, execution, inside the lock (a caller's If-Match included, CR-2026-11)                                                                              |
+| `lk_api_batch` with any of those, in any order                                                                                                          | entry (the whole sequence), execution, inside the lock                                                                                                    |
+| `lk_op_createProperty`, `lk_op_updateProperty`, `lk_op_deleteProperty`, `lk_op_createPropertyRow`, `lk_op_updatePropertyRow`, `lk_op_deletePropertyRow` | entry, execution, inside the lock                                                                                                                         |
+| `createResourceFromTemplate` (any tool): it copies the template's properties                                                                            | entry (the template's facts are read and judged as a new page's); with `includeChildren`, every page under the template too, at entry and inside the lock |
+| `saveResourceAsTemplate` followed by a copy of it in the same request (CR-2026-11)                                                                      | entry (the copy is judged on the saved page's facts)                                                                                                      |
+| C2b's tools (resources, documents, characters)                                                                                                          | the same engine guard, whatever they submit (a new page's facts judged on its template's copy); `assessFactChange` and `assessDelete` for their dry runs  |
+| `deleteResource` (any tool, v2 C2b)                                                                                                                     | entry (the page, and with `cascade` its subtree, listed live), execution, inside the lock (the page, and with `cascade` its subtree again, CR-2026-11)    |
+| An approved proposal's batch                                                                                                                            | execution (canonical approval token required for a protected change), inside the lock                                                                     |
 
 Operations that cannot write sidebar facts are not checked: `createResource` and `createManyResources` (their bodies
 carry no properties), `updateResource` (name, tags, aliases, icon, flags), `saveResourceAsTemplate` (it copies a page
@@ -255,12 +265,16 @@ default: `{ "id": "delete-authoritative", "key": "Status", "kind": "delete", "va
 `deleteResource` whose page holds one of the values (without case) need canonical approval, by the same machinery and
 on every path (`delete_resource`, `lk_api_write`, `lk_api_batch`, `lk_op_deleteResource`, an approved proposal):
 
-- **at entry** the page's sidebar is read live; with `cascade` so is every page under it (listed from the repository
-  tree, or live, level by level, when the tree cannot answer). At most 101 pages are read; a larger cascade, a sidebar
-  that cannot be read, or a subtree that cannot be listed counts as protected. The canonical proposal lists every
+- **at entry** the page's sidebar is read live; with `cascade` so is every page under it, listed live, level by level
+  (CR-2026-11, CR-09: the repository tree may not have seen a page added or moved under it in the app). At most 101
+  pages are read; a larger cascade, a sidebar that cannot be read, or a subtree that cannot be listed counts as
+  protected. A cascade in a request that also moves, restores or creates pages (which could put a page under it first)
+  counts as protected too. The canonical proposal lists every
   protected page (`deleting “Inae Mikumo”, whose Status is Authoritative`);
-- **inside the lock** the page itself is read again before the delete is sent (one read), so a page made Authoritative
-  in the app since the entry check is not deleted without canonical approval;
+- **inside the lock** the page itself is read again before the delete is sent, and with `cascade` every page under it is
+  listed and read again (CR-2026-11), so a page made Authoritative, or moved under it, since the entry check (in the
+  app, or by another job while this one waited) is not deleted without canonical approval. A cascade of N pages costs
+  about 4N reads in all (a listing and a sidebar read per page, at entry and in the lock);
 - under scope `write` it becomes a canonical proposal, as for a protected fact change; "Approve and accept as canon"
   runs it.
 
@@ -316,14 +330,27 @@ every write, on every path (`set_facts`, the creation and resource tools, `lk_ap
 | Status from `Working` to `Authoritative` (or another value)                                          | `promote_page` (or `archive_page`) |
 | A rename that adds, removes or changes `[BWRK]` or `[BARC]`; a page created with one by hand         | the matching tool                  |
 | A move into, out of or between `[INDEX] Working` and `[INDEX] Archived`; a page created under either | the matching tool                  |
+| A Status written as a page mention (CR-2026-11)                                                      | `set_facts` with plain text        |
+| `[INDEX] Working` or `[INDEX] Archived` itself renamed, moved or deleted; a page given its name      | none: the owner, by hand           |
 
 The refusal is `POLICY_DENIED`, at every scope (a request at scope `propose` is refused, not proposed), with a message
 naming the tool to use. `update_resource` answers a prefix change with `PREFIX_CHANGE` before it reaches the guard.
 
+Since CR-2026-11 the guard reads a prefix as a reader sees it: in any case, with or without the space after it, with
+spaces or invisible characters before it, in fullwidth or look-alike letters (`[barc] X`, `［BARC］ X` and `[BАRC] X`
+with a Cyrillic А are all `[BARC]`). A template copy given no name is judged by the template's name, and a copy's Status
+is judged whether or not the caller gave the copy an id. A page made `[BSRC]` (Authoritative) by a create or a rename
+that no creation tool or lifecycle tool declares is not refused but becomes a **canonical proposal**, at every scope, as
+an Authoritative create through the creation tools is (CR-2026-11, CR-16; ADR 0036 asks the owner to confirm).
+
 **Where it is enforced:** at entry (the request's sidebar writes simulated on the page's sidebar, as the canon guard
-does; renames and moves judged from the repository tree), at execution of an approved proposal, and inside the lock
-before each rename, move or sidebar write (one read of the page there). A versioned row write chained from the job's own
-earlier write (`ifMatch` set, no read in the lock) is left to LegendKeeper's version check, as for the canon guard.
+does; renames judged from the page's name; moves from where the page is, from the repository tree when it knows the page
+and else read, and where it goes, read up the parents when the tree does not know them), at execution of an approved
+proposal, and inside the lock before each rename, move or sidebar write: there a move is judged from the page's parent
+as LegendKeeper holds it now (the engine's own read), so a page the tree has not seen, or one moved in the app, cannot be
+taken out of a lifecycle area unseen (CR-2026-11, CR-13); a place that cannot be told counts as a crossing. A versioned
+row write chained from the job's own earlier write is left to LegendKeeper's version check, as for the canon guard; a
+caller's `If-Match` is judged.
 
 **The tools' own steps** pass through a **lifecycle marker** on the job (`BatchSubmit.lifecycle`): set only by bridge
 code, never parsed from an agent's request, stored with the job and with the proposal's job options, and naming exactly

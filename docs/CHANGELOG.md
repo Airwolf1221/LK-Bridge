@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased: CR-2026-11, the mid-point review of the write layer (11 November 2026)
+
+An independent review of C1, C2a, C2b, C2c, the connections and bulk-canon hotfixes and the engine beneath them, before
+phase D builds on them ([docs/reviews/CR-2026-11.md](reviews/CR-2026-11.md); owner decisions in
+[ADR 0036](adr/0036-cr-2026-11-owner-decisions.md), proposed). 18 findings (8 critical, 6 high, 3 medium, 1 low), all
+fixed, each with a test that fails on the old code. No migration; deploy normally. Nothing was run against a live
+system.
+
+- **The canon and lifecycle guards close every side route the review found.** A caller's `If-Match` no longer skips
+  the check inside the lock; an `onError: "continue"` batch is judged on the page as it is as well as on its
+  simulation; cascade deletes list and read their pages live, at entry and again in the lock; a template copied with
+  its children is judged page by page; a page mention in Status is a protected change (refused by the lifecycle guard);
+  look-alike keys, values and prefixes (fullwidth, zero-width, soft hyphen, Cyrillic, `[barc]`, a missing space) are
+  read as what they look like; moves are judged from the page's parent as LegendKeeper holds it; a template copy without
+  a name or id is fully judged; `[INDEX] Working` and `[INDEX] Archived` cannot be renamed, moved, deleted or imitated
+  through the bridge. (CR-08 to CR-15, CR-17.)
+- **Behaviour change for agents:** a page created or renamed `[BSRC] …` through `lk_api_write`, `lk_api_batch` or
+  `lk_op_*` is now a canonical proposal at every scope, as an Authoritative create through `create_resource` already
+  was (CR-16; ADR 0036 asks the owner to confirm). A Status written as a page mention is refused: write it as plain
+  text. `bridge_job_cancel` refuses a job the owner approved (`OWNER_APPROVED_JOB`, CR-19).
+- **Data.** `deleteProperty`, `updateProperty` (with `children`) and their infobox equivalents are guarded against
+  dropping `unsupported` content, as page and block writes are (CR-02); `deleteProperty`, `deleteEvent`,
+  `deleteFeature`, `deleteLane` and `deleteAsset` keep a pre-image in the journal, since LegendKeeper cannot restore
+  them (CR-01; a lane's events and an asset's bytes stay open for D1, D3 and E1). How to restore from each kind of
+  journal entry is in the review, section 4.
+- **The engine.** A job that holds its page's lock checks the page again when it takes the lock back after a hold,
+  budget wait, pause or restart, if nothing was sent yet, so an edit made meanwhile is never overwritten (CR-06); the
+  scheduler walks the whole queue, so held writes never hide a job that can run (CR-04).
+- **Answers.** A write whose outcome is unknown is reported as `OUTCOME_UNKNOWN` with `uncertain`, never as "not
+  written" (CR-07); a lifecycle, set_facts or resource proposal stopped by its own check after approval, with nothing
+  written, ends `conflicted`, not `failed` (CR-05).
+- **Cost.** Every lifecycle job reads 4 times less (`archive_page` and `unarchive_page` 19 → 15, `move_to_working` and
+  `promote_page` 15 → 11): the guards use the approval's re-read, and the tree re-reads the page once (CR-03). A
+  cascade delete of N pages now reads about 4N times (the price of CR-09).
+- **Sandbox (opt-in, for the owner):** `test/sandbox/assumptions.ts` checks on the real API the 28 assumptions the
+  write layer had only checked against the mock (`npm run test:sandbox -- assumptions`; what it creates, cleans up and
+  costs is in [test/sandbox/README.md](../test/sandbox/README.md)); its dry run against the mock is
+  `test/tools/assumptions-dryrun.test.ts`.
+- Docs: [policy.md](policy.md) (both guards), [tools.md](tools.md) (costs, `bridge_job_cancel`, `OUTCOME_UNKNOWN`),
+  [bridge-guide.md](bridge-guide.md) (the two new codes), ADR 0035 (costs and an amendment), [PLAN-v2](PLAN-v2.md) (CR's
+  results).
+- Tests: `test/lifecycle/cr-*.test.ts`, `test/facts/cr-*.test.ts`, `test/jobs/cr-held-backlog.test.ts`,
+  `test/admin/cr-proposal-routes.test.ts`, `test/tools/assumptions-dryrun.test.ts`; `test/lifecycle/costs.test.ts`
+  updated.
+
 ## Unreleased: bulk "Accept selected as canon" (11 November 2026)
 
 The owner asked for a bulk version of "Approve and accept as canon" ([ADR 0032](adr/0032-set-facts-and-canon.md), the

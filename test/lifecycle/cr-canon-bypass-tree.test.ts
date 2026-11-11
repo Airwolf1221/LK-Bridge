@@ -235,3 +235,19 @@ describe('F5: createResourceFromTemplate with includeChildren copies canon the g
     proposedOrRefused(r.body, r.text);
   });
 });
+
+describe('CR-10: a template copied with its children, where nothing under it is protected', () => {
+  it('is written directly (the copy itself does not count as a request that could change what is under it)', async () => {
+    w.repo.seed({ id: 'tplplain', name: 'Plain Bundle', parentId: null, props: false });
+    w.repo.seed({ id: 'tplplkid', name: 'Plain Child', parentId: 'tplplain', props: false });
+    w.sidebars.page('tplplkid', [
+      SidebarModel.kv('kvplkid1', 'PROPERTIES', [['Scope', 'nothing protected']]),
+    ]);
+    const r = await w.stack.call(writer, 'lk_api_write', {
+      project: 'test',
+      operationId: 'createResourceFromTemplate',
+      params: { body: { templateId: 'tplplain', name: 'Plain Copy', parentId: ROOT, includeChildren: true } },
+    });
+    expect(r.body, r.text).toMatchObject({ status: 'succeeded' });
+  });
+});
