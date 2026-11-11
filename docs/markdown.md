@@ -305,7 +305,11 @@ quotes, tables, images and blank lines are refused (`FACT_VALUE_NOT_INLINE`); th
 These are read-only as Markdown:
 
 - **Maps:** each feature with its type, name, position and link, folders as nested lists.
-- **Timelines:** each lane, then its events in date order with LegendKeeper's own formatted dates and their links.
+- **Timelines:** each lane, then its events in date order with LegendKeeper's own formatted dates (in the calendar's
+  formats, so `Azah 18th, 4A 1`, `Zahras 4A 367`, `4A 623`; a range as start – end) and their links. A chronology age
+  timeline links every event to its age's table document (`lk://resources/<id>/docs/<tableId>`), which is the authority:
+  read the table for the full description, the KCY and the order. Use `calendar_date` to read a date or a minute value.
 - **Boards:** each page's shapes with their text, then the connections (arrows between shapes).
 
-Change them with the map, timeline and board tools, not with Markdown.
+Change them with the map, timeline and board tools, not with Markdown (for the chronology: `create_timeline_event`,
+`update_timeline_event`, `delete_timeline_event`, which keep the table, the timeline and the counts in step).

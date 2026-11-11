@@ -146,7 +146,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (136 tools in all, 138 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (141 tools in all, 143 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -390,10 +390,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (46 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                              |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 4 timeline tools (v2 D1), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (51 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, the 4 timeline tools of D1, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -982,6 +982,68 @@ pages is refused at capture (delete it in parts).
 - LegendKeeper trims a leading or trailing line break from a row value, so the bridge does too before planning: a value
   with a trailing new line (plain) or `<br>` (Markdown) is written, verified and remembered without it; a value of only
   line breaks clears the row (as an empty value does).
+
+## The calendar and the timelines (v2 D1)
+
+Design: [ADR 0038](adr/0038-calendar-engine-and-chronology-sync.md). The calendar engine is built from the project's
+LegendKeeper calendar definition alone and matches LegendKeeper on every event of the spike's oracle. A chronology event
+is three things kept in step: a row of its age's table (the **authority**), an event of its age's timeline (a derived
+view) and one in its age's count on the Main table.
+
+**Before any chronology write** the owner reads and confirms the chronology on the dashboard (Chronology page): the
+Universal Chronology page, its calendar, its Main document, and per age its "- Table" page, its "- Timeline" document,
+that timeline's one lane and its Main row, plus how the tables write dates and KCY values (learned from the rows). Until
+then, or when a confirmed document has gone, been renamed or changed type, the three event tools refuse with
+`CHRONOLOGY_NOT_CONFIGURED` or `CHRONOLOGY_CHANGED`.
+
+| Tool                    | Access | What it does                                                                                                                                                                                                                                                                           |
+| ----------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `calendar_date`         | R      | `date` (any accepted form), `minutes` (with `detail`, `endMinutes`) or `kcy`: the form, shape and detail, minutes, KCY (and its table text), the age, LegendKeeper's formatted text and the table's text; or exactly why the date is refused. No request while the calendar is cached. |
+| `create_timeline_event` | W      | `date`, `name` (timeline), `description` (table; text or `{ markdown }`), optional `age` (to confirm the date's). One job: the row in calendar order, the event (exact minutes, detail, the age's lane, `uri` to the age's table), the count +1. An identical row is refused.          |
+| `update_timeline_event` | W      | `event` (its date with its description or name, or `row_id` / `event_id`), and a new `date`, `name` and/or `description`. Another age moves the row and the event and adjusts both counts. Refused when the row and its event have drifted apart.                                      |
+| `delete_timeline_event` | W      | `event`, `confirm: true`. Removes the row and the event, count −1; the journal keeps both.                                                                                                                                                                                             |
+| `create_timeline_lane`  | W      | `page`, `document` (a timeline), `name`, `size`, `color`. Touches only that timeline; refused on the chronology's age timelines (exactly one lane each by design).                                                                                                                     |
+
+All four W tools take `dryRun`, `operation_id` (C2b's) and `project`, and under `propose` give ONE proposal whose page
+shows the change as a Markdown diff of the rows, the count and the event.
+
+**Accepted date forms** (from the calendar's own templates; for Kumikan): `Kumikas 1st, 1A 159` (a day), `4A 881` (a
+year), `Unknown, 4A 101` (a year, stored year-only), `Zahras 4A 367` (a month), `Kumikas 19th, 4A 100 - Meshaph 10th, 4A
+102` (a date range), `Jehet 11th - 18th, 4A 424` (days of one month), `Isar 20th - Pahan 31st, 4A 32` (days of one
+year), `Kumikas - Azaakh, 4A 180` and `Zahras 4A 367 - Attina 4A 367` (month ranges), `4A 881 - 4A 900` (a year range).
+Case, ordinal suffixes, extra spaces, the dash and year commas do not matter. `Unknown` alone is refused, as are an
+unknown month or era, an impossible day, a date outside its era (before Azah 18th in 4A 1, say) and a reversed range,
+each with a precise message (`DATE_*`). A row is written in the form given.
+
+**Calendar order** in a table: by year; within a year the dated rows by their start (a range by its start), then the
+year-only rows (and year ranges); a new row goes after the existing rows of the same date. The place and the new count
+are decided inside the job's lock from the documents as they are then, so concurrent writes and several approved
+proposals for one age all land correctly.
+
+**Refusals** besides the date's: `AGE_MISMATCH`, `AGE_NOT_CONFIGURED`, `DUPLICATE_EVENT`, `EVENT_NOT_FOUND`,
+`EVENT_AMBIGUOUS`, `CHRONOLOGY_DRIFT`, `CHRONOLOGY_INCOMPLETE` (another change of the age stopped part-way),
+`CHRONOLOGY_IN_PROGRESS`, `CHRONOLOGY_RESUME_CONFLICT`, `CHRONOLOGY_TIMELINE` and `LANE_EXISTS`.
+
+**Stopped part-way.** The answer says which writes were made. The same request again makes only what is left
+(`resumes` in the answer); until then other changes of that age are refused. The owner can mark a stopped change
+resolved on the Chronology page.
+
+**Canon.** These are ordinary edits on the Authoritative chronology page, never canon-gated (ADR 0036 decision 6,
+option (a)); only deleting a whole timeline document of an Authoritative page is canonical.
+
+### Costs (reads and writes, measured against the mock)
+
+| Call                                 | Reads | Writes |
+| ------------------------------------ | ----- | ------ |
+| `calendar_date` (calendar cached)    | 0     | 0      |
+| `create_timeline_event`              | 10    | 3      |
+| `update_timeline_event`, same age    | 9     | 3      |
+| `update_timeline_event`, another age | 18    | 6      |
+| `delete_timeline_event`              | 12    | 3      |
+| `create_timeline_lane`               | 2     | 1      |
+
+Add one read per 100 events of the age's timeline when an event is found by its row (update and delete). A dry run
+costs the planning reads only (3 to 5).
 
 ## Image upload
 

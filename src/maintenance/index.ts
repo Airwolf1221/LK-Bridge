@@ -16,7 +16,12 @@ import type { ProjectRegistry, ProjectsRuntime } from '../projects/registry.js';
 import type { Policy } from '../policy/index.js';
 import { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
 import type { AssetMaintenance } from './asset-jobs.js';
-import { builtinJobs, type TreeMaintenance, type LinkMaintenance } from './jobs.js';
+import {
+  builtinJobs,
+  type ChronologyMaintenance,
+  type TreeMaintenance,
+  type LinkMaintenance,
+} from './jobs.js';
 import { MaintenanceScheduler } from './scheduler.js';
 import type { MaintenanceJobDef } from './types.js';
 
@@ -46,6 +51,8 @@ export interface CreateMaintenanceOptions {
   readonly assets?: AssetMaintenance;
   /** v2 C2c: the link index, for the `link-sweep` job. */
   readonly links?: LinkMaintenance;
+  /** v2 D1: the chronology check, for the `chronology-check` job. */
+  readonly chronology?: ChronologyMaintenance;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -69,6 +76,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         ...(o.tree ? { tree: o.tree } : {}),
         ...(o.assets ? { assets: o.assets } : {}),
         ...(o.links ? { links: o.links } : {}),
+        ...(o.chronology ? { chronology: o.chronology } : {}),
       }),
       ...(o.extraJobs ?? []),
     ],

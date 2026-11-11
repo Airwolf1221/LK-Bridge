@@ -41,3 +41,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0035](0035-page-lifecycle.md)                                                    | The page lifecycle: Working, Authoritative and Archived pages, the four tools and their guard | Accepted                   |
 | [0036](0036-cr-2026-11-owner-decisions.md)                                        | Owner decisions from the mid-point review (CR-2026-11)                                        | Accepted (1–5, 7); 6 by D1 |
 | [0037](0037-whole-set-lifecycle-and-page-scoped-ids.md)                           | Whole-set lifecycle; ids keyed by page; row values trimmed as LegendKeeper trims them         | Accepted                   |
+| [0038](0038-calendar-engine-and-chronology-sync.md)                               | The calendar engine, chronology sync and the timeline tools                                   | Accepted                   |

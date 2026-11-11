@@ -32,6 +32,7 @@ import {
 } from '../../jobs/index.js';
 import type { ProjectsRuntime } from '../../projects/registry.js';
 import type { Lifecycle } from '../../lifecycle/index.js';
+import type { Chronology } from '../../chronology/index.js';
 import type {
   ProjectSelector,
   ProjectSelectionError,
@@ -69,6 +70,8 @@ export interface DiscoverServices {
   readonly requests?: RequestRegistry;
   /** v2 C2c: the page lifecycle (settings, records, the link index; src/lifecycle). */
   readonly lifecycle?: Lifecycle;
+  /** v2 D1: chronology sync (settings, the calendar cache, records, links; src/chronology). */
+  readonly chronology?: Chronology;
 }
 
 /** What every tool handler needs. */

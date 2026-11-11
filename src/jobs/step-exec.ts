@@ -29,6 +29,7 @@ import {
   isInternalStep,
   type BlockCheck,
   type ChildrenCheck,
+  type DocumentChecker,
   type ExpectCheck,
   type ResourceCheck,
   type SubtreeCheck,
@@ -107,7 +108,9 @@ export interface StepExecDeps {
   /** v2 C2a: the write guard (protected canonical facts), asked before each write is sent, inside its lock. */
   readonly writeGuard?: () => WriteGuard | undefined;
   /** v2 C2c: the lifecycle record's handler (`bridge.record`), registered by the lifecycle module. */
-  readonly recordHandler?: () => RecordHandler | undefined;
+  readonly recordHandler?: (store: string) => RecordHandler | undefined;
+  /** v2 D1: the document checkers of `bridge.expect`, by name. */
+  readonly checker?: (name: string) => DocumentChecker | undefined;
 }
 
 /**
@@ -391,9 +394,11 @@ export class StepExecutor {
       }
       if (step.opId === RECORD_STEP) {
         // v2 C2c: the lifecycle record (the bridge's own database only; nothing is read or sent).
-        const handler = this.d.recordHandler?.();
+        const store = ((params.body ?? {}) as { store?: unknown }).store;
+        const name = typeof store === 'string' ? store : 'lifecycle';
+        const handler = this.d.recordHandler?.(name);
         if (!handler)
-          throw new JobsError('BRIDGE_ERROR', 'The lifecycle record is not available; nothing was written.');
+          throw new JobsError('BRIDGE_ERROR', `The ${name} record is not available; nothing was written.`);
         return this.succeed(job, step, stats, await handler(job, step, params));
       }
       if (step.opId !== VERIFY_STEP) throw new JobsError('BRIDGE_ERROR', `Unknown bridge step ${step.opId}`);
@@ -417,6 +422,8 @@ export class StepExecutor {
     versionsByPage: Record<string, Record<string, string | null>>;
     ids?: Record<string, string>;
     idsByPage?: Record<string, Record<string, string>>;
+    bodies?: Record<string, unknown>;
+    observed?: Record<string, unknown>;
   }> {
     const checks = ((params.body ?? {}) as { checks?: ExpectCheck[] }).checks ?? [];
     const ref = { jobId: job.id, stepNo: step.stepNo };
@@ -431,7 +438,58 @@ export class StepExecutor {
       versions[label] = v;
       (versionsByPage[resourceId] ??= {})[label] = v;
     };
+    const bodies: Record<string, unknown> = {};
+    const observed: Record<string, unknown> = {};
     for (const c of checks) {
+      // v2 D1: a whole document judged by a registered checker (the chronology's tables), one event, one lane.
+      if (c.kind === 'document') {
+        const checker = this.d.checker?.(c.checker);
+        if (!checker)
+          throw new JobsError(
+            'BRIDGE_ERROR',
+            `The check ${c.checker} is not available; nothing was written.`,
+            ref,
+          );
+        const r = await this.readOp(
+          job,
+          step,
+          'getDocumentBlocks',
+          { path: { resourceId: c.resourceId, documentId: c.documentId } },
+          stats,
+        );
+        if (!r.exists) {
+          throw new StateConflictError(
+            EXPECT_STEP,
+            c.label,
+            [{ path: c.label, expected: 'present', actual: '(gone)' }],
+            null,
+            null,
+            ref,
+          );
+        }
+        const b = (r.body ?? {}) as { version?: unknown; blocks?: unknown };
+        const version = str(b.version) ?? null;
+        const out = runChecker(checker, {
+          projectId: job.projectId,
+          jobId: job.id,
+          stepNo: step.stepNo,
+          label: c.label,
+          input: c.input,
+          document: { version, blocks: Array.isArray(b.blocks) ? (b.blocks as unknown[]) : [] },
+        });
+        if (out.differences.length > 0)
+          throw new StateConflictError(EXPECT_STEP, c.label, [...out.differences], null, version, ref);
+        Object.assign(bodies, out.bodies ?? {});
+        if (out.observed !== undefined) observed[c.label] = out.observed;
+        keep(c.resourceId, c.label, version);
+        continue;
+      }
+      if (c.kind === 'event' || c.kind === 'lane') {
+        const diffs = await this.timelineDiffs(job, step, c, stats);
+        if (diffs.length > 0) throw new StateConflictError(EXPECT_STEP, c.label, diffs, null, null, ref);
+        keep(c.resourceId, c.label, null);
+        continue;
+      }
       // v2 C2b: a page this job created from a template (its ids mapped for `bindIds`), or the whole sidebar.
       if (c.kind === 'copy' || c.kind === 'sidebar') {
         const r = await this.readOp(
@@ -518,7 +576,57 @@ export class StepExecutor {
       versions,
       versionsByPage,
       ...(Object.keys(ids).length > 0 ? { ids, idsByPage } : {}),
+      ...(Object.keys(bodies).length > 0 ? { bodies } : {}),
+      ...(Object.keys(observed).length > 0 ? { observed } : {}),
     };
+  }
+
+  /**
+   * v2 D1: an event (present with these fields, or absent) or a lane (present, with this name) as the plan expects.
+   * One read each (getEvent, getLane); a 404 is an answer.
+   */
+  private async timelineDiffs(
+    job: JobView,
+    step: StepView,
+    c:
+      | {
+          label: string;
+          kind: 'event';
+          resourceId: string;
+          documentId: string;
+          eventId: string;
+          present: boolean;
+          fields?: Readonly<Record<string, unknown>>;
+        }
+      | {
+          label: string;
+          kind: 'lane';
+          resourceId: string;
+          documentId: string;
+          laneId: string;
+          name?: string;
+        },
+    stats: CallStats,
+  ): Promise<StateDifference[]> {
+    const path = { resourceId: c.resourceId, documentId: c.documentId };
+    if (c.kind === 'lane') {
+      const r = await this.readOp(job, step, 'getLane', { path: { ...path, laneId: c.laneId } }, stats);
+      if (!r.exists) return [{ path: `${c.label}`, expected: 'present', actual: '(gone)' }];
+      const name = (r.body as { name?: unknown } | undefined)?.name;
+      return c.name !== undefined && name !== c.name
+        ? [{ path: `${c.label} name`, expected: c.name, actual: name ?? null }]
+        : [];
+    }
+    const r = await this.readOp(job, step, 'getEvent', { path: { ...path, eventId: c.eventId } }, stats);
+    if (!c.present) return r.exists ? [{ path: c.label, expected: 'absent', actual: 'present' }] : [];
+    if (!r.exists) return [{ path: c.label, expected: 'present', actual: '(gone)' }];
+    const ev = (r.body ?? {}) as Record<string, unknown>;
+    const diffs: StateDifference[] = [];
+    for (const [k, v] of Object.entries(c.fields ?? {})) {
+      if (stableJson(ev[k] ?? null) !== stableJson(v ?? null))
+        diffs.push({ path: `${c.label} ${k}`, expected: v ?? null, actual: ev[k] ?? null });
+    }
+    return diffs;
   }
 
   /** v2 C2c: the differences between a page's fields, children or one block and what the plan saw. */
@@ -723,6 +831,80 @@ export class StepExecutor {
                 ...(t.present ? {} : { absent: true }),
                 ...(t.present && t.first ? { first: true } : {}),
                 ...(t.present && t.content ? { content: t.content } : {}),
+              },
+              stats,
+            )),
+          );
+          n = diffs.length;
+        } else if (t.kind === 'checked') {
+          // v2 D1: a document read back and judged by a registered checker.
+          const checker = this.d.checker?.(t.checker);
+          if (!checker) throw new Error(`the check ${t.checker} is not available`);
+          const r = await this.readOp(
+            job,
+            step,
+            'getDocumentBlocks',
+            { path: { resourceId: t.resourceId, documentId: t.documentId } },
+            stats,
+          );
+          if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
+          else {
+            const b = (r.body ?? {}) as { version?: unknown; blocks?: unknown };
+            let input = t.input;
+            if (t.inputFrom && t.inputFrom.step < step.stepNo) {
+              const src = this.d.repo.step(job.id, t.inputFrom.step);
+              const res =
+                src?.status === 'succeeded'
+                  ? (this.d.repo.stepResult(src) as { bodies?: Record<string, unknown> } | null)
+                  : null;
+              input = res?.bodies?.[t.inputFrom.key] ?? null;
+            }
+            const out = runChecker(checker, {
+              projectId: job.projectId,
+              jobId: job.id,
+              stepNo: step.stepNo,
+              label: t.label,
+              input,
+              document: {
+                version: str(b.version) ?? null,
+                blocks: Array.isArray(b.blocks) ? (b.blocks as unknown[]) : [],
+              },
+            });
+            diffs.push(...out.differences);
+          }
+          n = diffs.length;
+        } else if (t.kind === 'lane') {
+          // v2 D1: a lane, present with its name.
+          diffs.push(
+            ...(await this.timelineDiffs(
+              job,
+              step,
+              {
+                label: t.label,
+                kind: 'lane',
+                resourceId: t.resourceId,
+                documentId: t.documentId,
+                laneId: t.laneId,
+                ...(t.name !== undefined ? { name: t.name } : {}),
+              },
+              stats,
+            )),
+          );
+          n = diffs.length;
+        } else if (t.kind === 'event') {
+          // v2 D1: a timeline event, present with these fields, or gone.
+          diffs.push(
+            ...(await this.timelineDiffs(
+              job,
+              step,
+              {
+                label: t.label,
+                kind: 'event',
+                resourceId: t.resourceId,
+                documentId: t.documentId,
+                eventId: t.eventId,
+                present: t.present,
+                ...(t.fields ? { fields: t.fields } : {}),
               },
               stats,
             )),
@@ -1501,7 +1683,50 @@ export class StepExecutor {
             : body;
     }
     const version = reader.version?.(body, entity);
+    // v2 D1 (the CR-2026-11 note on lanes): a lane's delete takes its events with it, and LegendKeeper has no restore
+    // for either, so the read that gives the journal its pre-image also lists the lane's events (every page of them):
+    // the pre-image is the lane with its `events`. This holds on every route (the timeline tools, lk_api_*, lk_op_*).
+    if (
+      _op.operationId === 'deleteLane' &&
+      entity !== undefined &&
+      params.path?.documentId &&
+      params.path.laneId
+    ) {
+      const events = await this.laneEvents(
+        job,
+        step,
+        params.path.resourceId!,
+        params.path.documentId,
+        params.path.laneId,
+      );
+      const withEvents = { ...(entity as Record<string, unknown>), events };
+      return { exists: true, body: withEvents, entity: withEvents, version };
+    }
     return { exists: entity !== undefined, body, entity, version };
+  }
+
+  /** Every event of one lane of a timeline (listEvents, paged, filtered by lane). */
+  private async laneEvents(
+    job: JobView,
+    step: StepView,
+    resourceId: string,
+    documentId: string,
+    laneId: string,
+  ): Promise<unknown[]> {
+    const out: unknown[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 1000; page++) {
+      const r = await this.readOp(job, step, 'listEvents', {
+        path: { resourceId, documentId },
+        query: { limit: 100, ...(cursor ? { cursor } : {}) },
+      });
+      const b = (r.body ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+      for (const e of Array.isArray(b.data) ? (b.data as { laneId?: unknown }[]) : [])
+        if (e && e.laneId === laneId) out.push(e);
+      if (b.hasMore !== true || typeof b.nextCursor !== 'string') break;
+      cursor = b.nextCursor;
+    }
+    return out;
   }
 
   // ------------------------------------------------------------------------------------------ bookkeeping
@@ -1806,4 +2031,20 @@ function placementDiffs(
     diffs.push({ path: `${t.label} place (after)`, expected: pl.after ?? 'first', actual: prev ?? 'first' });
   if (pl.before !== undefined && pl.before !== next)
     diffs.push({ path: `${t.label} place (before)`, expected: pl.before ?? 'last', actual: next ?? 'last' });
+}
+
+/** v2 D1: runs a document checker; a checker that throws is a conflict with its message (nothing is written). */
+function runChecker(
+  checker: DocumentChecker,
+  ctx: Parameters<DocumentChecker>[0],
+): ReturnType<DocumentChecker> {
+  try {
+    return checker(ctx);
+  } catch (e) {
+    return {
+      differences: [
+        { path: ctx.label, expected: 'the plan’s state', actual: e instanceof Error ? e.message : String(e) },
+      ],
+    };
+  }
 }

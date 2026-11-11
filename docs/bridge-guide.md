@@ -332,6 +332,39 @@ same page again (for a set: on its root, with `subtree: true`): it plans what is
 another lifecycle tool on that page, or on any page of the set, is refused (`LIFECYCLE_INCOMPLETE`). Before the owner has confirmed the project's two indexes, the tools and Working creates are
 refused (`LIFECYCLE_NOT_CONFIGURED`): tell the person.
 
+## Dates and the chronology
+
+The Universal Chronology has, for each age, a **table** (`Historical Event | Date | KCY`, in calendar order), a
+**timeline** (one lane, "Historical Events") and a **count** on its Main table. **The table is the authority**; the
+timeline is a view of it. Never edit them separately (with `write_page` or `lk_api_*`): use the timeline tools, which
+keep all three in step in one job.
+
+**Dates.** Write them in the chronology's forms: `Kumikas 1st, 1A 159` (a day), `4A 881` (a year), `Unknown, 4A 101`
+(a year whose day is unknown), `Zahras 4A 367` (a month), `Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102` (a range),
+`Jehet 11th - 18th, 4A 424` (days of one month), `Kumikas - Azaakh, 4A 180` or `Zahras 4A 367 - Attina 4A 367`
+(months), `4A 881 - 4A 900` (years). `Unknown` alone is refused. The Archon Age (`AA`) counts down: `AA 5` is five
+years before 1A. Each age begins mid-year (4A begins on Azah 18th, so `Kumikas 1st, 4A 1` does not exist). **Check a
+date with `calendar_date` first**: it answers the age, the KCY as the table writes it, LegendKeeper's text, or exactly
+why the date is refused. It costs nothing. `calendar_date` also turns minutes or a KCY into dates.
+
+**The tools.**
+
+- `create_timeline_event { date, name, description }`: `name` is short (the timeline), `description` is the full text
+  (the table). The age comes from the date. The row goes in calendar order (after rows of the same date; a year-only
+  row after the dated rows of its year), the event links to the age's table, and the count goes up by one. An
+  identical row is refused (`DUPLICATE_EVENT`).
+- `update_timeline_event { event, date?, name?, description? }`: `event` names it by its `date` with its `description`
+  or `name`, or by `row_id` / `event_id`. A date in another age moves it there (both counts change).
+- `delete_timeline_event { event, confirm: true }`.
+- `create_timeline_lane` adds a lane to an ordinary timeline; the chronology's age timelines have exactly one lane and
+  refuse more.
+
+If a table row and its event no longer agree, the tools refuse (`CHRONOLOGY_DRIFT`): tell the person; the owner fixes it
+by hand (the weekly chronology check reports it). If a change stops part-way, send **the same request again**: it does
+only what is left; other changes of that age wait for it (`CHRONOLOGY_INCOMPLETE`). Before the owner has confirmed the
+chronology, the tools refuse (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on
+an Authoritative page.
+
 ## Budget rules
 
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.

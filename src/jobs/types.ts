@@ -130,6 +130,20 @@ export interface StepOptions {
    * `path.propertyId`, `path.rowId`, `body.after`, `body.before` and `body.items[].id` are bound.
    */
   readonly bindIds?: { readonly step: number };
+  /**
+   * v2 D1 (ADR 0038), set by bridge code only: just before it runs, this step's `body` is replaced by the one the named
+   * `bridge.expect` step worked out inside the lock (its result's `bodies[key]`): a chronology row's place and a count's
+   * new value are decided from the documents as they are when the job runs, not as they were planned. The new params
+   * are checked against the registry's schema and stored before anything is sent; a step being recovered keeps what it
+   * was sent with.
+   */
+  readonly bindBody?: { readonly step: number; readonly key: string };
+  /**
+   * v2 D1 (ADR 0038), set by bridge code only: this write is judged by its job's own `bridge.expect` check inside the
+   * lock, so a proposal captures no version of its target (another approved change to the same document does not make
+   * it conflict; the check refuses what would).
+   */
+  readonly judgedInLock?: boolean;
 }
 
 export interface StepSpec extends StepOptions {
@@ -179,6 +193,12 @@ export interface BatchSubmit {
    * character writes the page and its character index). Requires `holdLock`; all are taken in sorted key order.
    */
   readonly holdAlso?: { readonly resourceId: string };
+  /**
+   * v2 D1 (ADR 0038), bridge code only: documents the job holds the locks of from start to end (a chronology event writes
+   * its age's table, its age's timeline and the Main table; a move between ages two of each). Taken with any other
+   * job-level lock in one sorted order, so two jobs can never wait on each other. Needs no `holdLock`.
+   */
+  readonly holdDocuments?: readonly string[];
   /**
    * v2 C2c (ADR 0035), bridge code only: the job IS a lifecycle change (or a create with a lifecycle status) and makes
    * exactly these changes, which the lifecycle guard then allows. Nothing an agent sends reaches it (the tools build it;

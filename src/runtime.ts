@@ -45,6 +45,7 @@ import { combineGuards } from './jobs/write-guard.js';
 import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
+import { createChronology, type Chronology } from './chronology/index.js';
 import { FactsVersions } from './facts/version.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
@@ -91,6 +92,8 @@ export interface Runtime {
   readonly assets: AssetService;
   /** v2 C2c (ADR 0035): the page lifecycle (settings, records, the link index). */
   readonly lifecycle: Lifecycle;
+  /** v2 D1 (ADR 0038): chronology sync (settings, the calendar cache, records, links, the check). */
+  readonly chronology: Chronology;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -369,6 +372,25 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachLifecycle = lifecycle.attach();
+  // v2 D1 (ADR 0038): chronology sync: its settings, the calendar cache, the record and links its jobs write (the
+  // bridge.record step), the checks inside the lock, and the chronology check.
+  const chronology = createChronology({
+    db: o.db,
+    engine,
+    tree,
+    settings: (projectId) => projectStore.byId(projectId)?.settings,
+    setSetting: (projectId, key, value) => {
+      projects.setSetting(projectId, key, value);
+    },
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    busy: (projectId) => {
+      const q = projects.anyClient(projectId)?.governor.snapshot().queues;
+      return q !== undefined && q.P1 + q.P2 > 0;
+    },
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachChronology = chronology.attach();
 
   const characterType = (projectId: string) =>
     registry
@@ -416,6 +438,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     tree,
     assets,
     links: lifecycle,
+    chronology,
   });
   maintenance.start();
   const mappings = createMappings({
@@ -452,6 +475,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         ),
         // v2 C2c: the page lifecycle (settings, records, the link index).
         lifecycle,
+        // v2 D1: chronology sync.
+        chronology,
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
@@ -475,6 +500,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     registry,
     assets,
     lifecycle,
+    chronology,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -486,6 +512,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       await tree.stopPasses();
       await assets.stopPasses();
       lifecycle.stop(); // a link sweep in flight stops, to be continued by the next run
+      chronology.stop(); // a chronology check in flight stops (the next run starts again)
       await maintenance.stop(); // stops cleanly, before the engine and database wind down
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
@@ -500,6 +527,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       unregisterPlanner();
       unregisterGuard();
       detachLifecycle();
+      detachChronology();
       await tree.stop();
       detachRegistry();
       await assets.stop();

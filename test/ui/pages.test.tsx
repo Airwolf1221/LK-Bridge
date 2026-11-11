@@ -35,6 +35,7 @@ describe('navigation', () => {
       'Clients & Access',
       'Journal',
       'Projects',
+      'Chronology',
       'Settings',
       'Maintenance Jobs',
       'Repository Mappings',

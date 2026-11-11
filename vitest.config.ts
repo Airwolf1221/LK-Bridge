@@ -23,6 +23,8 @@ export default defineConfig({
       'test/facts/**/*.test.ts',
       'test/resources/**/*.test.ts',
       'test/lifecycle/**/*.test.ts', // v2 C2c: the page lifecycle
+      'test/calendar/**/*.test.ts', // v2 D1: the calendar engine
+      'test/chronology/**/*.test.ts', // v2 D1: chronology sync and the timeline tools
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

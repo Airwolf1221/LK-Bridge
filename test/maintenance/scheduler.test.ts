@@ -65,6 +65,7 @@ describe('the registry', () => {
       'asset-refresh',
       'asset-check',
       'link-sweep', // v2 C2c
+      'chronology-check', // v2 D1
     ]);
     const now = m.rig.h.clock.now();
     expect(view('budget-sampler')).toMatchObject({
@@ -520,7 +521,7 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(14);
+    expect(m.maintenance.scheduler.list()).toHaveLength(15);
   });
 });
 

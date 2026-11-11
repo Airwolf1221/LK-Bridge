@@ -1089,3 +1089,196 @@ export interface LifecycleRecordsResponse {
   principals: Record<string, { name: string } | undefined>;
   links: { total: number; lastSweep: LinkSweepView | null; running: LinkSweepView | null };
 }
+
+// ============================================================================================ v2 D1: the chronology
+
+/** A document of the chronology resource as the repository tree knows it. */
+export interface ChronologyDocRef {
+  id: string;
+  name: string;
+  type: string | null;
+}
+
+/** What a lookup by name finds in the repository tree (free: no LegendKeeper request). */
+export interface ChronologyFindView {
+  resource:
+    | { status: 'found'; id: string; name: string; path: string }
+    | { status: 'missing'; name: string }
+    | { status: 'ambiguous'; name: string; candidates: { id: string; name: string; path: string }[] };
+  main: ChronologyDocRef | null;
+  ages: { name: string; table: ChronologyDocRef | null; timeline: ChronologyDocRef | null }[];
+  problems: string[];
+}
+
+export interface ChronologyAgeConfig {
+  name: string;
+  eraId: string;
+  tableDocumentId: string;
+  timelineDocumentId: string;
+  laneId: string;
+  laneName: string;
+  mainRowId: string;
+}
+
+/** How the tables write dates and KCY values. */
+export interface ChronologyStyle {
+  date: { rangeSeparator: string; yearGrouping: string };
+  kcy: { grouping: string; minus: string; rangeSeparator: string; sameYearRange: 'single' | 'range' };
+}
+
+export interface ChronologyNames {
+  resource: string;
+  mainDocument: string;
+  tableSuffix: string;
+  timelineSuffix: string;
+  laneName: string;
+}
+
+export interface ChronologyColumns {
+  event: string;
+  date: string;
+  kcy: string;
+  age: string;
+  count: string;
+  table: string;
+  timeline: string;
+}
+
+/** The settings as stored and as confirmed (`PUT /projects/:name/chronology` takes them back as `settings`). */
+export interface ChronologySettings {
+  resourceId?: string | null;
+  calendarId?: string | null;
+  mainDocumentId?: string | null;
+  ages?: ChronologyAgeConfig[];
+  style?: ChronologyStyle;
+  names?: ChronologyNames;
+  columns?: ChronologyColumns;
+  confirmed?: boolean;
+  confirmedAt?: number;
+}
+
+export interface ChronologyConfigView {
+  resourceId: string | null;
+  calendarId: string | null;
+  mainDocumentId: string | null;
+  ages: ChronologyAgeConfig[];
+  style: ChronologyStyle;
+  names: ChronologyNames;
+  columns: ChronologyColumns;
+  confirmed: boolean;
+  confirmedAt: number | null;
+  problem: string | null;
+}
+
+/** `GET /projects/:name/chronology` (and the reply of its PUT). */
+export interface ChronologyView {
+  project: string;
+  config: ChronologyConfigView;
+  find: ChronologyFindView;
+  ready: { ok: boolean; code?: string; message?: string };
+  calendarCached: boolean;
+}
+
+/** What the rows show of one aspect of the writing style. */
+export interface ChronologyEvidence<T extends string = string> {
+  /** The value the rows show most, or null when no row showed it (the default is proposed then). */
+  value: T | null;
+  seen: Record<string, number>;
+  examples: string[];
+}
+
+export interface ChronologyDetectedStyle {
+  date: { rangeSeparator: ChronologyEvidence; yearGrouping: ChronologyEvidence };
+  kcy: {
+    grouping: ChronologyEvidence;
+    minus: ChronologyEvidence;
+    rangeSeparator: ChronologyEvidence;
+    sameYearRange: ChronologyEvidence<'single' | 'range'>;
+  };
+  proposed: ChronologyStyle;
+  conflicts: string[];
+}
+
+/** `POST /projects/:name/chronology/lookup` ("Read the chronology"). */
+export interface ChronologyLookupView extends ChronologyFindView {
+  project: string;
+  requests: number;
+  calendar: { id: string; name: string; eras: { id: string; name: string; abbr: string }[] } | null;
+  mainTable: {
+    tableId: string | null;
+    rows: { id: string | null; age: string; count: string; table: string | null; timeline: string | null }[];
+  } | null;
+  found: (ChronologyAgeConfig & { era: string; rows: number; count: string; problems: string[] })[];
+  style: ChronologyDetectedStyle | null;
+  /** The settings to confirm, or null when something is missing (see `problems`). */
+  proposed: ChronologySettings | null;
+}
+
+export type ChronologyFindingKind =
+  | 'row_without_event'
+  | 'event_without_row'
+  | 'row_out_of_order'
+  | 'wrong_kcy'
+  | 'count_mismatch'
+  | 'wrong_uri'
+  | 'unreadable_date'
+  | 'date_text_differs'
+  | 'not_found';
+
+export interface ChronologyFinding {
+  kind: ChronologyFindingKind;
+  age: string;
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
+export interface ChronologyCheckRun {
+  id: number;
+  projectId: string;
+  trigger: string;
+  state: 'running' | 'succeeded' | 'failed';
+  requests: number;
+  summary: string | null;
+  findings: ChronologyFinding[];
+  error: string | null;
+  startedAt: number;
+  finishedAt: number | null;
+}
+
+/** `GET /chronology/check`. */
+export interface ChronologyCheckResponse {
+  project: ProjectRef;
+  last: ChronologyCheckRun | null;
+  running: boolean;
+}
+
+export interface ChronologyRecordView {
+  id: number;
+  tool: 'create_timeline_event' | 'update_timeline_event' | 'delete_timeline_event';
+  summary: string;
+  ages: string[];
+  state: 'incomplete' | 'complete' | 'resolved';
+  jobId: string | null;
+  jobs: string[];
+  principalId: string;
+  approver: string | null;
+  proposalId: string | null;
+  /** The kind of each write the change makes (`row.insert`, `event.create`, `count`, …). */
+  writes: string[];
+  detail: Record<string, unknown>;
+  createdAt: number;
+  completedAt: number | null;
+}
+
+/** `GET /chronology/records`. */
+export interface ChronologyRecordsResponse {
+  project: ProjectRef;
+  total: number;
+  incomplete: number;
+  records: ChronologyRecordView[];
+  /** Each record's connection by id, in words (as the journal shows them). */
+  principals: Record<
+    string,
+    { id: string; name: string; type: 'grant' | 'pat' | 'system' | 'removed'; removedAt: number | null }
+  >;
+}

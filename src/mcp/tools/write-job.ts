@@ -31,6 +31,8 @@ export interface WriteJobSpec {
   readonly holdMore?: { readonly resources?: readonly string[]; readonly documents?: readonly string[] };
   /** C2d (ADR 0036 decision 5): the pages the job touches without naming them (a set), as planned. */
   readonly pageScope?: BatchSubmit['pageScope'];
+  /** v2 D1: the documents the job holds the locks of, from its first step to its last (sorted). */
+  readonly holdDocuments?: readonly string[];
   /** v2 C2c: the lifecycle change the job makes (the lifecycle guard allows exactly that). */
   readonly lifecycle?: LifecycleMarker | undefined;
   readonly proposal: ProposalExtras;
@@ -76,6 +78,7 @@ export async function runWriteJob(
       ...(spec.holdAlso ? { holdAlso: spec.holdAlso } : {}),
       ...(spec.holdMore ? { holdMore: spec.holdMore } : {}),
       ...(spec.pageScope ? { pageScope: spec.pageScope } : {}),
+      ...(spec.holdDocuments && spec.holdDocuments.length > 0 ? { holdDocuments: spec.holdDocuments } : {}),
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
       internal: true,
       proposal: spec.proposal,
