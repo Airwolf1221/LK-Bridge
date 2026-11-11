@@ -41,7 +41,6 @@ import {
   type LifecycleAction,
   type LifecycleConfig,
   type LifecycleFacts,
-  type LifecycleRecord,
   type LifecycleRecordInput,
   type LifecycleSet,
   type LifecycleState,
@@ -1060,13 +1059,4 @@ async function relatedForSet(
     note: 'Related pages are reported, never edited: check each one and change it yourself if it should no longer depend on these pages.',
     ...(failed ? { textSearchFailed: true } : {}),
   };
-}
-
-/** For callers that want the set records of a page (single-page tools refusing a page whose set change stopped). */
-export function setOfRecord(
-  lcStore: { set(p: string, id: number): LifecycleSet | null },
-  projectId: string,
-  rec: LifecycleRecord,
-): LifecycleSet | null {
-  return rec.setId ? lcStore.set(projectId, rec.setId) : null;
 }
