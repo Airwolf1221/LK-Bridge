@@ -1,6 +1,7 @@
 # ADR 0036: Owner decisions from the mid-point review (CR-2026-11)
 
-Status: **Proposed** (CR session, 11 November 2026). For the owner to decide. Where a fix needed one of these decisions,
+Status: **Proposed** (CR session, 11 November 2026). For the owner to decide. **Decision 6 accepted** (option (a), 11
+November 2026; recorded by D1). Where a fix needed one of these decisions,
 the safe option is implemented and marked "implemented"; the owner may keep it or ask for the other. The findings are in
 [docs/reviews/CR-2026-11.md](../reviews/CR-2026-11.md).
 
@@ -48,6 +49,11 @@ belongs to the owner.
    deleting a map, timeline or board of an Authoritative page a canonical proposal. Emptying it is not judged:
    `deleteFeature`, `deleteEvent`, `deleteLane` and `replaceBoardContent` with no shapes. Decide before D1 and D2 build
    their tools whether these are canon too (the rule could take a `contentOps` list).
+   **Decided by the owner on 11 November 2026: option (a), accepted.** Adding, changing or deleting timeline events,
+   lanes, map features and board shapes on an Authoritative page are ordinary edits: they are not canon-gated, just as
+   `write_page` content is not. Only deleting a whole map, timeline or board document of an Authoritative page is
+   canonical (C2c's `delete-document-authoritative` rule). Nothing in the guards changes (none of those operations was
+   gated); D1's timeline tools follow it ([ADR 0038](0038-calendar-engine-and-chronology-sync.md), decision 17).
 7. **The status tags are not guarded (by design; confirm).** ADR 0035 decision 11 guards the prefix, the Status and the
    place; the tags `CANON`, `Working` and `Archived` are not, so a raw `updateResource` can take `CANON` off an
    Authoritative page. The lifecycle-consistency audit (E2) reports such pages. Decide whether the tags should be

@@ -76,6 +76,12 @@ describe('the MCP surface with the official client', () => {
         'move_to_working',
         'promote_page',
         'unarchive_page',
+        // v2 D1: the calendar and the timelines
+        'calendar_date',
+        'create_timeline_event',
+        'update_timeline_event',
+        'delete_timeline_event',
+        'create_timeline_lane',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));

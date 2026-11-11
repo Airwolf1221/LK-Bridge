@@ -45,6 +45,7 @@ import {
   internalReads,
   internalStepIssues,
   isInternalStep,
+  type DocumentChecker,
 } from './internal-steps.js';
 import type { WriteGuard } from './write-guard.js';
 import {
@@ -211,7 +212,10 @@ export class JobEngine {
   /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
   private writeGuard: WriteGuard | undefined;
   /** v2 C2c: the lifecycle record's handler (`bridge.record` steps). */
-  private recordHandler: RecordHandler | undefined;
+  /** v2 C2c: the `bridge.record` handlers by store (`lifecycle`; v2 D1 `chronology`). */
+  private readonly recordHandlers = new Map<string, RecordHandler>();
+  /** v2 D1: the document checkers of `bridge.expect` (`kind: 'document'`), by name. */
+  private readonly checkers = new Map<string, DocumentChecker>();
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
   private draining = false;
@@ -255,7 +259,8 @@ export class JobEngine {
       planner: (name) => this.planners.get(name),
       recordVerifyMismatch: (job, step, v) => this.recordVerifyMismatch(job, step, v),
       writeGuard: () => this.writeGuard,
-      recordHandler: () => this.recordHandler,
+      recordHandler: (store) => this.recordHandlers.get(store),
+      checker: (name) => this.checkers.get(name),
     });
     for (const [name, fn] of Object.entries(o.planners ?? {})) this.planners.set(name, fn);
     this.writeGuard = o.writeGuard;
@@ -450,10 +455,22 @@ export class JobEngine {
    * v2 C2c (ADR 0035): sets the handler of `bridge.record` steps (the lifecycle record). A job that reaches such a step
    * with no handler fails there, before its writes. Returns an unregister.
    */
-  registerRecordHandler(handler: RecordHandler): () => void {
-    this.recordHandler = handler;
+  registerRecordHandler(handler: RecordHandler, store = 'lifecycle'): () => void {
+    this.recordHandlers.set(store, handler);
     return () => {
-      if (this.recordHandler === handler) this.recordHandler = undefined;
+      if (this.recordHandlers.get(store) === handler) this.recordHandlers.delete(store);
+    };
+  }
+
+  /**
+   * v2 D1 (ADR 0038): registers a document checker for `bridge.expect` checks of kind `document` (src/jobs/internal-
+   * steps.ts), replacing any earlier one of that name. A job whose check names a missing checker fails at that check,
+   * before its writes. Returns an unregister.
+   */
+  registerChecker(name: string, checker: DocumentChecker): () => void {
+    this.checkers.set(name, checker);
+    return () => {
+      if (this.checkers.get(name) === checker) this.checkers.delete(name);
     };
   }
 
@@ -652,8 +669,8 @@ export class JobEngine {
     });
     // v2 C2a: a job-level lock covers every write step: each must take that same lock (or none). v2 C2c: a job may
     // hold more: a document of the page (`holdDocument`) and one more resource (`holdAlso`), all taken at its start.
-    const heldLock = req.holdLock ? projectLockKey(project, `res:${req.holdLock.resourceId}`) : null;
-    if ((req.holdDocument || req.holdAlso) && !heldLock) {
+    const heldPage = req.holdLock ? projectLockKey(project, `res:${req.holdLock.resourceId}`) : null;
+    if ((req.holdDocument || req.holdAlso) && !heldPage) {
       throw new InvalidParamsError('batch_ops', [
         {
           path: 'holdDocument',
@@ -661,11 +678,19 @@ export class JobEngine {
         },
       ]);
     }
-    const heldMore = [
-      ...(req.holdDocument ? [projectLockKey(project, `doc:${req.holdDocument.documentId}`)!] : []),
-      ...(req.holdAlso ? [projectLockKey(project, `res:${req.holdAlso.resourceId}`)!] : []),
-    ];
-    const heldKeys = heldLock ? [heldLock, ...heldMore] : [];
+    // v2 D1: documents held for the whole job (a chronology event's three documents), with or without a page lock. All
+    // the job-level locks are kept as one sorted list: the first is stored as `heldLock`, the rest as `heldMore`.
+    const heldDocs = [...new Set(req.holdDocuments ?? [])].map((d) => projectLockKey(project, `doc:${d}`)!);
+    const heldKeys = [
+      ...new Set([
+        ...(heldPage ? [heldPage] : []),
+        ...(req.holdDocument ? [projectLockKey(project, `doc:${req.holdDocument.documentId}`)!] : []),
+        ...(req.holdAlso ? [projectLockKey(project, `res:${req.holdAlso.resourceId}`)!] : []),
+        ...heldDocs,
+      ]),
+    ].sort();
+    const heldLock = heldKeys[0] ?? null;
+    const heldMore = heldKeys.slice(1);
     if (heldLock) {
       validated.forEach((v, i) => {
         if (!v.def || v.def.kind === 'read') return;
@@ -684,9 +709,10 @@ export class JobEngine {
     const onError: OnError = req.onError ?? 'stop';
     const title = req.title ?? `batch of ${validated.length} operation(s)`;
     const jobOptions: ProposalJobOptions | undefined =
-      req.holdLock || req.internal || req.lifecycle
+      req.holdLock || req.internal || req.lifecycle || heldDocs.length > 0
         ? {
             ...(req.holdLock ? { holdLock: { resourceId: req.holdLock.resourceId } } : {}),
+            ...(heldDocs.length > 0 ? { holdDocuments: [...new Set(req.holdDocuments ?? [])] } : {}),
             ...(req.internal ? { internal: true } : {}),
             ...(req.holdDocument ? { holdDocument: { documentId: req.holdDocument.documentId } } : {}),
             ...(req.holdAlso ? { holdAlso: { resourceId: req.holdAlso.resourceId } } : {}),
@@ -944,6 +970,45 @@ export class JobEngine {
       body = b;
     }
     const next: OpParams = { ...params, ...(path ? { path } : {}), ...(body !== undefined ? { body } : {}) };
+    if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
+    return null;
+  }
+
+  /**
+   * v2 D1: replaces the `body` of a step with `options.bindBody` by the one the named `bridge.expect` step worked out
+   * inside the lock (`bodies[key]`), checked against the registry's schema and stored before anything is sent. A step
+   * that may already have been sent keeps what it was sent with.
+   */
+  private bindBody(job: JobView, step: StepView): JobsError | null {
+    const from = step.options.bindBody;
+    if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
+    const result =
+      source?.status === 'succeeded'
+        ? (this.repo.stepResult(source) as { bodies?: Record<string, unknown> } | null)
+        : null;
+    const body = result?.bodies?.[from.key];
+    if (body === undefined || body === null || typeof body !== 'object') {
+      return new JobsError(
+        'BRIDGE_ERROR',
+        `${step.opId}: step ${from.step} worked out no ${from.key} to send; nothing was sent`,
+        ref,
+      );
+    }
+    const params = this.repo.stepParams(step);
+    const next: OpParams = { ...params, body };
+    if (isInternalStep(step.opId)) {
+      const issues = internalStepIssues(step.opId, next);
+      if (issues.length > 0) return new InvalidParamsError(step.opId, issues);
+    } else {
+      try {
+        this.validate(step.opId, next);
+      } catch (e) {
+        if (e instanceof JobsError) return e;
+        throw e;
+      }
+    }
     if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
     return null;
   }
@@ -1477,6 +1542,10 @@ export class JobEngine {
       let bound = this.bindIds(job, step);
       if (!bound) {
         step = this.repo.step(jobId, step.stepNo) ?? step; // the params as just bound
+        bound = this.bindBody(job, step);
+      }
+      if (!bound) {
+        step = this.repo.step(jobId, step.stepNo) ?? step;
         bound = this.bindIfMatch(job, step);
       }
       if (bound) {
@@ -2309,6 +2378,11 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
     // v2 C2b: set by bridge code only.
     ...(o.bindIds && Number.isInteger(o.bindIds.step) ? { bindIds: { step: o.bindIds.step } } : {}),
+    // v2 D1: set by bridge code only.
+    ...(o.bindBody && Number.isInteger(o.bindBody.step) && typeof o.bindBody.key === 'string'
+      ? { bindBody: { step: o.bindBody.step, key: o.bindBody.key } }
+      : {}),
+    ...(o.judgedInLock === true ? { judgedInLock: true } : {}),
   };
 }
 

@@ -70,3 +70,29 @@ clean-up does.
 - **Dry run:** `test/tools/assumptions-dryrun.test.ts` runs the same script against the lifecycle test world's mock, to
   check that every check runs to an answer and the clean-up works (the mock does not model every behaviour, so some
   checks FAIL there; that is expected and shows which behaviours only the real API can confirm).
+
+## The chronology (v2 D1)
+
+`npm run test:sandbox` (on the server `deploy/sandbox-test.sh --project test`) also runs `chronology.test.ts`;
+`npm run test:sandbox -- chronology` runs it alone (on the server `deploy/sandbox-test.sh --project test -- chronology`,
+which runs nothing that writes). It is **read-only**: it writes nothing (the run fails if the
+transport counted a single write). It checks the calendar engine and the chronology against the real tables and
+timelines of every age (the oracle in `test/fixtures/calendar/oracle.json` covers 330 Fourth Age events; this covers all
+six ages):
+
+1. every row of every age table: the Date cell parses; the engine's KCY equals the KCY cell byte for byte (in the style
+   the tables show most); the engine's date text equals the Date cell, or the difference is listed. Every failing row
+   is listed with its exact text, and the distinct shapes of the Date and KCY cells are summarised (digits as `9`,
+   words as `Word`);
+2. every timeline event: LegendKeeper's `formattedStart` (and `formattedEnd`) read back to exactly its minutes and
+   detail, and its minutes formatted back to exactly that text;
+3. every age: row count = event count = Main count; every event's `uri` points at its age's table; rows in calendar
+   order. Rows and events that cannot be paired by date and text are listed (not failed: a short timeline name may
+   differ from the row's description).
+
+- **Which chronology:** the one the owner confirmed on the dashboard (the bridge's stored settings), else
+  `LKB_CHRONOLOGY_RESOURCE`, else the test world's Universal Chronology (`h0gczxh7`).
+- **Cost:** about 15 reads plus one per 100 events (the test world: about 25), at P2.
+- **Dry run:** `test/chronology/sandbox-dryrun.test.ts` runs the same check against the mock chronology.
+- **As the service user:** the package script loads the config with `--configLoader runner` and the config turns
+  `fsModuleCache` off, so nothing is written under the release's `node_modules`.

@@ -24,6 +24,7 @@ its last run (time, outcome, duration, engine job id) and next run. The schedule
 | `asset-refresh`          | every 6 hours           | v2 A4, per project: the asset tree's regular refresh, a paced walk of every folder ([assets.md](assets.md)). Skips a project whose asset tree is not built, or whose refresh is switched off (`assetRefreshEnabled`); a manual run goes ahead.                                                                                                                                                                                       |
 | `asset-check`            | daily at 02:50 (London) | v2 A4, per project: the asset tree's nightly check, the same walk plus an audit of the cached folder paths ([assets.md](assets.md)). Runs even when the refresh is switched off.                                                                                                                                                                                                                                                     |
 | `link-sweep`             | daily at 01:15 (London) | v2 C2c, per project: the link index's paced refresh, for the related pages `archive_page` and `move_to_working` report ([below](#link-sweep-v2-c2c)). Skips a project whose tree is not built.                                                                                                                                                                                                                                       |
+| `chronology-check`       | weekly                  | v2 D1, per project: the chronology check, findings only ([below](#chronology-check-v2-d1)). Skips a project whose chronology is not confirmed.                                                                                                                                                                                                                                                                                       |
 | `assign-block-ids-sweep` | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `orphan-and-link-audit`  | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `tag-audit`              | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -98,6 +99,19 @@ for ever.
 - **Schedule:** daily at 03:45 London time, a quarter of an hour after `journal-prune` (03:30) and before the nightly
   backup (04:15). After a prune the owner's proposal list and an agent's `bridge_proposal_status` answer for that id as
   for any unknown id.
+
+## `chronology-check` (v2 D1)
+
+The chronology check (ADR 0038; PLAN-v2 4.9 and 4.12): **findings only, never a repair**. Per project whose chronology
+the owner has confirmed (others are skipped, saying why), it reads the calendar and the Main table once, then each age's
+table and its timeline's events (one request per 100 events): about 18 requests on the test world, at priority **P3**,
+waiting while agents' P1 or P2 work is queued. It reports table rows without an event and events without a row (a row
+and an event are paired when the bridge linked them, or by date and text), rows out of calendar order, wrong KCY values
+and cells written differently from the confirmed style, Main counts that differ from the tables, event links that do
+not point at their age's table, and dates the engine cannot read. Default **weekly** (an interval: change it on the
+Maintenance page); a **background** job. The findings are on the dashboard's **Chronology** page, which can also run
+it at once (P2). Runs are kept in `chronology_checks` (migration 1800); a run cut off by a restart is closed as failed
+by the next.
 
 ## `link-sweep` (v2 C2c)
 

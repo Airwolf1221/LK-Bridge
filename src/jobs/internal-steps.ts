@@ -151,6 +151,48 @@ const blockCheck = z
   })
   .strict();
 
+/**
+ * v2 D1 (ADR 0038): a whole document, read inside the lock and judged by a checker the bridge registered by name
+ * (`engine.registerChecker`): the chronology's table and Main checks. The checker gets the document as it is now and
+ * the plan's `input`, and answers the differences (a conflict: nothing is written) and the bodies of the writes that
+ * follow, worked out from the document as it is now (`bindBody`). The step's `versions[label]` is the document's version.
+ */
+const documentCheck = z
+  .object({
+    label,
+    kind: z.literal('document'),
+    resourceId: id,
+    documentId: id,
+    checker: z.string().min(1).max(100),
+    input: z.unknown(),
+  })
+  .strict();
+
+/** v2 D1: one timeline event, present with these fields (each compared when given) or absent. */
+const eventCheck = z
+  .object({
+    label,
+    kind: z.literal('event'),
+    resourceId: id,
+    documentId: id,
+    eventId: id,
+    present: z.boolean(),
+    fields: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+/** v2 D1: one lane of a timeline, present (with this name, when given). */
+const laneCheck = z
+  .object({
+    label,
+    kind: z.literal('lane'),
+    resourceId: id,
+    documentId: id,
+    laneId: id,
+    name: z.string().max(500).optional(),
+  })
+  .strict();
+
 export const expectCheckSchema = z.union([
   propertyCheck,
   copyCheck,
@@ -158,6 +200,9 @@ export const expectCheckSchema = z.union([
   resourceCheck,
   childrenCheck,
   blockCheck,
+  documentCheck,
+  eventCheck,
+  laneCheck,
 ]);
 
 export const expectParamsSchema = z
@@ -250,6 +295,45 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
       first: z.boolean().optional(),
     })
     .strict(),
+  // v2 D1: a document read back and judged by a registered checker (the chronology's row and count).
+  z
+    .object({
+      kind: z.literal('checked'),
+      label,
+      resourceId: id,
+      documentId: id,
+      checker: z.string().min(1).max(100),
+      input: z.unknown(),
+      /** The input is what an earlier `bridge.expect` step worked out inside the lock (`bodies[key]`). */
+      inputFrom: z
+        .object({ step: z.number().int().min(1), key: z.string().min(1).max(200) })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+  // v2 D1: one lane of a timeline, present with this name.
+  z
+    .object({
+      kind: z.literal('lane'),
+      label,
+      resourceId: id,
+      documentId: id,
+      laneId: id,
+      name: z.string().max(500).optional(),
+    })
+    .strict(),
+  // v2 D1: one timeline event, present with these fields, or gone.
+  z
+    .object({
+      kind: z.literal('event'),
+      label,
+      resourceId: id,
+      documentId: id,
+      eventId: id,
+      present: z.boolean(),
+      fields: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
   // v2 C2b: one document of a page, by id or by name and type (a document the job created), or gone.
   z
     .object({
@@ -278,6 +362,8 @@ export const recordParamsSchema = z
       .object({
         action: z.enum(['begin', 'complete']),
         record: z.record(z.string(), z.unknown()),
+        /** v2 D1: which record (`lifecycle`, the default, or `chronology`). */
+        store: z.enum(['lifecycle', 'chronology']).optional(),
       })
       .strict(),
   })
@@ -297,7 +383,61 @@ export type ExpectCheck =
   | SidebarCheck
   | ResourceCheck
   | ChildrenCheck
-  | BlockCheck;
+  | BlockCheck
+  | DocumentCheck
+  | EventCheck
+  | LaneCheck;
+
+/** v2 D1: a whole document judged by a registered checker. */
+export interface DocumentCheck {
+  readonly label: string;
+  readonly kind: 'document';
+  readonly resourceId: string;
+  readonly documentId: string;
+  readonly checker: string;
+  readonly input: unknown;
+}
+
+/** v2 D1: one timeline event. */
+export interface EventCheck {
+  readonly label: string;
+  readonly kind: 'event';
+  readonly resourceId: string;
+  readonly documentId: string;
+  readonly eventId: string;
+  readonly present: boolean;
+  readonly fields?: Readonly<Record<string, unknown>>;
+}
+
+/** v2 D1: one lane of a timeline. */
+export interface LaneCheck {
+  readonly label: string;
+  readonly kind: 'lane';
+  readonly resourceId: string;
+  readonly documentId: string;
+  readonly laneId: string;
+  readonly name?: string;
+}
+
+/** v2 D1: what a document checker gets: the document as read inside the lock, and the plan's input. */
+export interface DocumentCheckContext {
+  readonly projectId: string;
+  readonly jobId: string;
+  readonly stepNo: number;
+  readonly label: string;
+  readonly input: unknown;
+  readonly document: { readonly version: string | null; readonly blocks: readonly unknown[] };
+}
+
+/** A document checker's answer: differences (a conflict), and write bodies by key for `bindBody`. */
+export interface DocumentCheckResult {
+  readonly differences: readonly StateDifference[];
+  readonly bodies?: Readonly<Record<string, unknown>>;
+  /** What the checker saw, kept in the step's result (`observed[label]`). */
+  readonly observed?: unknown;
+}
+
+export type DocumentChecker = (ctx: DocumentCheckContext) => DocumentCheckResult;
 
 /** v2 C2c: a page's own fields as the plan saw them. */
 export interface ResourceCheck {
@@ -418,6 +558,32 @@ export type VerifyTarget =
       readonly present: boolean;
       readonly content?: Readonly<Record<string, unknown>>;
       readonly first?: boolean;
+    }
+  | {
+      readonly kind: 'lane';
+      readonly label: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly laneId: string;
+      readonly name?: string;
+    }
+  | {
+      readonly kind: 'checked';
+      readonly label: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly checker: string;
+      readonly input: unknown;
+      readonly inputFrom?: { readonly step: number; readonly key: string };
+    }
+  | {
+      readonly kind: 'event';
+      readonly label: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly eventId: string;
+      readonly present: boolean;
+      readonly fields?: Readonly<Record<string, unknown>>;
     }
   | {
       readonly kind: 'document';

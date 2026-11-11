@@ -367,6 +367,21 @@ Major Revision), the Continuity Type values (CANON, AU, NON-CURRENT) and the arc
 confirmed the guard still refuses Status and prefix changes (with the values above), but cannot tell a move into or out
 of a lifecycle index, and the four tools and Working creates refuse to run: confirm the indexes first.
 
+## Timeline, map and board content on Authoritative pages (ADR 0036 decision 6)
+
+**Decided by the owner on 11 November 2026: option (a).** Adding, changing or deleting timeline events, lanes, map
+features and board shapes on an Authoritative page are **ordinary edits**: they are not canon-gated, just as
+`write_page` content is not, and need only the caller's scope (`write`, or a proposal at `propose`). Only deleting a
+whole map, timeline or board **document** of an Authoritative page is canonical (C2c's `delete-document-authoritative`
+rule, switchable). The chronology's timeline tools (ADR 0038) follow this: an event added to the Authoritative
+Universal Chronology is written at scope `write`.
+
+**Chronology proposals.** A chronology change under `propose` is one proposal. Its table and Main writes are judged at
+execution by the job's own check inside the lock (the row still as planned, no identical row, the age's row still
+there), which also decides the row's place and the new count; the proposal does not capture those documents' versions,
+so a pending chronology proposal does not become conflicted because another event of the same age was approved first.
+Its events are captured and compared as any other target.
+
 ## Owner commands
 
 `createPolicy(...).commands` (`src/policy/commands.ts`): plain functions for chunk 5's dashboard routes, which must

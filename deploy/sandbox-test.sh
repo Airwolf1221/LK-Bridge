@@ -4,6 +4,9 @@
 #
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
 #
+# Anything after `--` is passed to vitest as a filter: `... --project test -- chronology` runs only the read-only
+# chronology check (v2 D1), `... -- assumptions` only the write layer's assumptions.
+#
 # Why a wrapper: vitest does not read /etc/lk-bridge/lk-bridge.env (the bridge gets it from systemd), and the file is not
 # safe to `source`. This exports only DB_PATH and the env file's path (sandbox_project_env in lib.sh) and reads no key:
 # the suite finds the project's key exactly as the bridge does (OPS2): in the bridge's encrypted store, opened with
@@ -18,6 +21,7 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${here}/lib.sh"
 
 project=""
+filters=()
 while (($# > 0)); do
   case "$1" in
     --project)
@@ -28,7 +32,12 @@ while (($# > 0)); do
       project="${1#--project=}"
       shift
       ;;
-    *) die "Unknown argument $1. Usage: sandbox-test.sh --project <name>" ;;
+    --)
+      shift
+      filters=("$@")
+      break
+      ;;
+    *) die "Unknown argument $1. Usage: sandbox-test.sh --project <name> [-- <test filter>...]" ;;
   esac
 done
 
@@ -36,4 +45,4 @@ use_private_node
 sandbox_project_env "$project"
 
 cd "${here}/.."
-LKB_SANDBOX_PROJECT="$project" npm run test:sandbox
+LKB_SANDBOX_PROJECT="$project" npm run test:sandbox -- "${filters[@]}"

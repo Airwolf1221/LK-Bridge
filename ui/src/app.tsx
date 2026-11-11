@@ -22,6 +22,7 @@ import { SettingsPage } from './pages/settings';
 import { AssetsPage } from './pages/assets';
 import { TreePage } from './pages/tree';
 import { LifecyclePage } from './pages/lifecycle';
+import { ChronologyPage } from './pages/chronology';
 import { WritersPage } from './pages/writers';
 
 type Theme = 'system' | 'light' | 'dark';
@@ -55,6 +56,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/projects', label: 'Projects' },
   { to: '/tree', label: 'Repository Tree' },
   { to: '/lifecycle', label: 'Archive and lifecycle' },
+  { to: '/chronology', label: 'Chronology' },
   { to: '/assets', label: 'Asset Tree' },
   { to: '/settings', label: 'Settings' },
   { to: '/account', label: 'Account' },
@@ -100,6 +102,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/projects') return <ProjectsPage />;
   if (path === '/tree') return <TreePage />;
   if (path === '/lifecycle') return <LifecyclePage />;
+  if (path === '/chronology') return <ChronologyPage />;
   if (path === '/assets') return <AssetsPage />;
   if (path === '/settings') return <SettingsPage />;
   if (path === '/account') return <AccountPage />;

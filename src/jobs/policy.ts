@@ -98,6 +98,8 @@ export interface ProposalJobOptions {
   /** v2 C2c: the second job-level lock (a document of the held page). */
   readonly holdDocument?: { readonly documentId: string };
   readonly holdAlso?: { readonly resourceId: string };
+  /** v2 D1: the documents the job holds the locks of (a chronology event's table, timeline and Main table). */
+  readonly holdDocuments?: readonly string[];
   /** v2 C2c: the lifecycle change the job makes (bridge code only). */
   readonly lifecycle?: LifecycleMarker;
 }

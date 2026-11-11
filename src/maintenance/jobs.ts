@@ -19,6 +19,14 @@ export interface TreeMaintenance {
 }
 
 /** v2 C2c: what the link sweep needs from the lifecycle module (src/lifecycle). */
+/** v2 D1: the chronology check (findings only). */
+export interface ChronologyMaintenance {
+  check(
+    projectId: string,
+    trigger: string,
+  ): Promise<{ readonly summary: string; readonly changed: boolean; readonly skipped?: boolean }>;
+}
+
 export interface LinkMaintenance {
   sweep(projectId: string): Promise<MaintenanceResult>;
 }
@@ -43,6 +51,8 @@ export interface BuiltinJobDeps {
   readonly assets?: AssetMaintenance;
   /** v2 C2c: the link index (its sweep). Without it the link sweep skips, saying why. */
   readonly links?: LinkMaintenance;
+  /** v2 D1: the chronology check. Without it the check skips, saying why. */
+  readonly chronology?: ChronologyMaintenance;
 }
 
 const NOT_IMPLEMENTED = 'Not implemented yet';
@@ -277,6 +287,29 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
         d.links && ctx.project
           ? d.links.sweep(ctx.project.id)
           : { skipped: true, summary: 'Skipped: the link index is not running.' },
+    },
+    // v2 D1 (ADR 0038): the chronology check. The table is the authority; the check reports, it never repairs.
+    {
+      id: 'chronology-check',
+      name: 'Chronology check',
+      description:
+        'Reads each project’s confirmed chronology (the Main table, every age table and every age timeline: about 15 ' +
+        'requests plus one per 100 events) at the lowest priority, and reports table rows without a timeline event, events ' +
+        'without a row, rows out of calendar order, wrong KCY values, Main counts that differ from the tables, and event ' +
+        'links that do not point at their age’s table. Findings only: it never repairs anything. The findings are on the ' +
+        'Chronology page. Skips projects whose chronology is not confirmed.',
+      defaultSchedule: { kind: 'interval', everySeconds: 7 * 86_400 },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: true,
+      record: 'always',
+      scope: 'project',
+      background: true,
+      run: (ctx) =>
+        d.chronology && ctx.project
+          ? d.chronology.check(ctx.project.id, ctx.trigger)
+          : { skipped: true, summary: 'Skipped: chronology sync is not running.' },
     },
   ];
 }

@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased: v2 D1, the calendar engine, chronology sync and the timeline tools (11 November 2026)
+
+[ADR 0038](adr/0038-calendar-engine-and-chronology-sync.md). Migration **1800** (chronology calendars, records, links
+and checks; 1700 is left for C2d). Nothing was run against a live system: every test runs against the mock
+LegendKeeper; the owner runs the read-only sandbox check on the server.
+
+- **The calendar engine** (`src/calendar`), built from a LegendKeeper calendar definition alone: months every N years,
+  leap-day rules, year 0 or none, the negative era counting down, `none` / `year` / `calendar` era resets and the
+  format templates. It matches LegendKeeper on all 330 oracle events (start, end, detail, shape, formatted text, parsed
+  date), round-trips 10,000 random dates per calendar in every form and era, and refuses unknown months and eras,
+  impossible days, dates outside their era and reversed ranges precisely. All the owner's date forms are accepted.
+- **New tools.** `calendar_date` (R; free while the calendar is cached), `create_timeline_event`,
+  `update_timeline_event`, `delete_timeline_event` and `create_timeline_lane` (W). A chronology event's table row, its
+  timeline event and its age's Main count change together in one job (one proposal under `propose`), with `dryRun`,
+  `operation_id`, the documents' locks held in sorted order, the row's place and the new count decided inside the lock,
+  block-level writes (an inline icon elsewhere on the page is untouched), verify, journal pre-images, and resume (never
+  replay) after a part-way stop. 47 → 52 bridge tools (51 for a write profile with the low-level tools hidden).
+- **Chronology settings** found by naming convention and confirmed by the owner on the new **Chronology** dashboard page
+  (with how the tables write dates and KCY values, learned from the rows); audited `project.set_chronology`. Until
+  confirmed, the timeline tools refuse.
+- **The `chronology-check` maintenance job** (weekly, P3) and "Run the check now": findings only (rows without events,
+  events without rows, rows out of order, wrong KCY values, count mismatches, wrong event links), never repairs.
+- **Engine** (bridge code only): `BatchSubmit.holdDocuments` (several job-level document locks, sorted, with or without
+  a page lock); `bridge.expect` checks of a whole document by a registered checker, of an event and of a lane;
+  `bridge.verify` targets `checked` (with `inputFrom`), `event` and `lane`; `StepOptions.bindBody` (a write's body
+  worked out by the check inside the lock) and `judgedInLock` (a proposal captures no version for such a write);
+  `bridge.record` steps name their store (`lifecycle`, `chronology`). **A lane's delete now keeps its events in the
+  journal pre-image, on every route** (the CR-2026-11 note).
+- **Owner decision 6 of ADR 0036 recorded (option (a)):** timeline events, lanes, map features and board shapes on an
+  Authoritative page are ordinary edits, not canon; only deleting a whole map, timeline or board document of one is.
+- **Sandbox.** `test/sandbox/chronology.test.ts` (read-only): every row, event and age of the real chronology against
+  the engine. `npm run test:sandbox` now loads its config with `--configLoader runner` and the sandbox config turns
+  `fsModuleCache` off, so it runs as the service user; `deploy/sandbox-test.sh --project test -- chronology` runs only
+  the chronology check (anything after `--` is a vitest filter).
+- **For agents:** see the bridge guide's new "Dates and the chronology". ChatGPT: refresh the tool list (Plugins page).
+
 ## Unreleased: CR-2026-11, the mid-point review of the write layer (11 November 2026)
 
 An independent review of C1, C2a, C2b, C2c, the connections and bulk-canon hotfixes and the engine beneath them, before

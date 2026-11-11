@@ -232,6 +232,8 @@ interface StoredJobOptions {
   /** v2 C2c: the second job-level lock, and the lifecycle change the job makes. */
   readonly holdDocument?: { readonly documentId: string };
   readonly holdAlso?: { readonly resourceId: string };
+  /** v2 D1: the documents a chronology job holds the locks of. */
+  readonly holdDocuments?: readonly string[];
   readonly lifecycle?: LifecycleMarker;
 }
 
@@ -483,7 +485,13 @@ export class ProposalService implements ProposalSink {
     for (let i = 0; i < ops.length; i++) {
       const o = ops[i]!;
       const rid = o.params.path?.resourceId;
-      const target = defs[i] && !(rid && created.has(rid)) ? readerTarget(o.op, o.params) : null;
+      // v2 D1 (ADR 0038): a chronology write is judged by its job's own check inside the lock (the row still as planned,
+      // no identical row, the place and the count worked out from the documents as they are then), not by the
+      // document's version: another approved event in the same table must not make it conflict.
+      const target =
+        defs[i] && !(rid && created.has(rid)) && o.judgedInLock !== true
+          ? readerTarget(o.op, o.params)
+          : null;
       for (const id of createdIds(o.op, o.params)) created.add(id);
       if (!target) {
         captured.push({ target: null, snap: null });
@@ -527,7 +535,11 @@ export class ProposalService implements ProposalSink {
     const operations = opList ? JSON.stringify(opList.map(capOperation)) : null;
     const pages = buildPageSummary(ops, opList, (rid) => this.pageName(meta.project, rid));
     const jobOptions: StoredJobOptions | null =
-      meta.jobOptions && (meta.jobOptions.holdLock || meta.jobOptions.internal || meta.jobOptions.lifecycle)
+      meta.jobOptions &&
+      (meta.jobOptions.holdLock ||
+        meta.jobOptions.internal ||
+        meta.jobOptions.lifecycle ||
+        (meta.jobOptions.holdDocuments?.length ?? 0) > 0)
         ? {
             ...(meta.jobOptions.holdLock
               ? { holdLock: { resourceId: meta.jobOptions.holdLock.resourceId } }
@@ -538,6 +550,9 @@ export class ProposalService implements ProposalSink {
               : {}),
             ...(meta.jobOptions.holdAlso
               ? { holdAlso: { resourceId: meta.jobOptions.holdAlso.resourceId } }
+              : {}),
+            ...(meta.jobOptions.holdDocuments && meta.jobOptions.holdDocuments.length > 0
+              ? { holdDocuments: meta.jobOptions.holdDocuments.filter((d) => typeof d === 'string') }
               : {}),
             ...(meta.jobOptions.lifecycle ? { lifecycle: meta.jobOptions.lifecycle } : {}),
           }
@@ -914,6 +929,9 @@ export class ProposalService implements ProposalSink {
         ...(jobOptions?.internal ? { internal: true } : {}),
         ...(jobOptions?.holdDocument ? { holdDocument: jobOptions.holdDocument } : {}),
         ...(jobOptions?.holdAlso ? { holdAlso: jobOptions.holdAlso } : {}),
+        ...(jobOptions?.holdDocuments && jobOptions.holdDocuments.length > 0
+          ? { holdDocuments: jobOptions.holdDocuments }
+          : {}),
         ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
         ...(prefetched.length > 0 ? { proposal: { prefetched } } : {}),
       });
@@ -1545,6 +1563,9 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
     // v2 C2b: a write to a page the same job creates from a template: its ids are bound in the job.
     ...(o.bindIds ? { bindIds: o.bindIds } : {}),
+    // v2 D1: a chronology write whose place or new count the job's own check works out inside the lock.
+    ...(o.bindBody ? { bindBody: o.bindBody } : {}),
+    ...(o.judgedInLock === true ? { judgedInLock: true } : {}),
   };
 }
 

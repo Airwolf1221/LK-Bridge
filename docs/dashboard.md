@@ -256,6 +256,34 @@ opens the index names, Status values, status tags, fact names, Continuity Types 
 owner's values and clears the confirmation. Every change is audited as `project.set_lifecycle` with the values before
 and after.
 
+## Chronology (v2 D1)
+
+The **Chronology** page (navigation: Chronology, after Archive and lifecycle; ADR 0038) has three cards for the selected
+project.
+
+- **Settings.** Whether the chronology is confirmed (and if not, why: `CHRONOLOGY_NOT_CONFIGURED` or
+  `CHRONOLOGY_CHANGED`, with what to do), the confirmed settings (the chronology page, its calendar, its Main document,
+  and per age its table, its timeline, that timeline's lane and its Main row), and what a lookup by name finds in the
+  repository tree now (free). **Read the chronology** reads the calendar, the Main table, every age table and every age
+  timeline's lanes (about three requests per age) and shows what it found: each age with its era, rows and count, any
+  problem, and **how the tables write** dates and KCY values (each aspect's value, how many rows showed each way, up to
+  three examples, and the aspects written more than one way). The style can be edited before **Confirm these settings**
+  (asks for a confirmation). **Clear the chronology settings** removes them (the tools refuse again). Every change is
+  audited as `project.set_chronology`. Until confirmed, the timeline tools refuse. The table is the authority; the
+  timeline is a derived view.
+- **Chronology check.** The last run of the check (state, when, requests, summary) and its findings in plain words: rows
+  without an event, events without a row, rows out of order, wrong KCY values, cells written differently from the
+  confirmed style, count mismatches, event links not to their age's table, dates the engine cannot read. **Run the check
+  now** runs it (P2; reads only, never repairs); it also runs weekly (Maintenance page).
+- **Changes.** The record of every chronology change, newest first: the tool and summary, the ages, the writes, who made
+  it (and who approved it), its state (**complete**, **incomplete**, **resolved**) and its jobs linked to the Journal
+  page. A change that stopped part-way is finished by the same request again; **Mark resolved** (asks for a
+  confirmation; audited `chronology.resolve`) is for one fixed by hand, after which other changes of its ages go ahead.
+
+Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lookup`, `PUT /projects/:name/chronology`
+(`{ confirm: true, settings }` or `{ confirm: true, reset: true }`), `GET /chronology/records`, `POST
+/chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`).
+
 ## Canon (Projects page, v2 C2a)
 
 The **Canon** section of the Projects page lists each project's protected facts as plain sentences ("Status =

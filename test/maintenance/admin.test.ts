@@ -89,6 +89,7 @@ describe('the registry', () => {
       'asset-refresh',
       'asset-check',
       'link-sweep', // v2 C2c
+      'chronology-check', // v2 D1
     ]);
     expect(r.json.jobs[0]).toMatchObject({
       name: 'Budget sampler',
