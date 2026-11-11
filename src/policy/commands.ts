@@ -36,6 +36,11 @@ export interface BulkResult {
   readonly id: string;
   readonly ok: boolean;
   readonly state?: string;
+  /**
+   * The proposal was passed over by design, not refused for a fault: a canonical proposal in the ordinary bulk Approve
+   * (it needs "accept as canon"). The result still has `ok: false` and the reason in `error`.
+   */
+  readonly skipped?: boolean;
   readonly error?: { readonly code: string; readonly message: string };
 }
 
@@ -77,7 +82,14 @@ export interface OwnerCommands {
   /** v2 C2a: "Approve and accept as canon", the only approval of a proposal flagged requiresCanonicalApproval. */
   approveAsCanon(actor: OwnerActor, id: string): Promise<ProposalView>;
   reject(actor: OwnerActor, id: string, reason?: string): ProposalView;
+  /** Ordinary approval for each id. A canonical proposal is skipped (`skipped: true`), and stays pending. */
   bulkApprove(actor: OwnerActor, ids: readonly string[]): Promise<BulkResult[]>;
+  /**
+   * "Accept selected as canon": `approveAsCanon` for each id, one at a time, in order. An ordinary proposal is refused
+   * (`NOT_CANONICAL`, "ordinary proposal; use Approve") and stays pending. Each accepted one is audited on its own as
+   * `proposal.approve_as_canon`, with `bulk: true`.
+   */
+  bulkApproveAsCanon(actor: OwnerActor, ids: readonly string[]): Promise<BulkResult[]>;
   bulkReject(actor: OwnerActor, ids: readonly string[], reason?: string): BulkResult[];
   listAudit(actor: OwnerActor, filter?: { limit?: number; before?: number; action?: string }): AuditRow[];
 }
@@ -287,7 +299,38 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
           const p = await proposals.approve(actor, id);
           out.push({ id, ok: p.state === 'executing' || p.state === 'executed', state: p.state });
         } catch (e) {
-          out.push({ id, ok: false, state: proposals.state(id) ?? 'unknown', error: errorOf(e) });
+          const skipped = e instanceof PolicyError && e.code === 'CANONICAL_APPROVAL_REQUIRED';
+          out.push({
+            id,
+            ok: false,
+            ...(skipped ? { skipped: true } : {}),
+            state: proposals.state(id) ?? 'unknown',
+            error: errorOf(e),
+          });
+        }
+      }
+      return out;
+    },
+
+    async bulkApproveAsCanon(actor, ids) {
+      assertOwner(actor);
+      const out: BulkResult[] = [];
+      // One at a time, in order, exactly like bulkApprove: each approval re-reads its targets, and an earlier one may
+      // change a later one's. The two kinds of approval stay distinct: an ordinary proposal is refused here.
+      for (const id of new Set(ids)) {
+        try {
+          const p = await proposals.approveAsCanon(actor, id, { bulk: true });
+          out.push({ id, ok: p.state === 'executing' || p.state === 'executed', state: p.state });
+        } catch (e) {
+          const ordinary = e instanceof PolicyError && e.code === 'NOT_CANONICAL';
+          out.push({
+            id,
+            ok: false,
+            state: proposals.state(id) ?? 'unknown',
+            error: ordinary
+              ? { code: 'NOT_CANONICAL', message: 'ordinary proposal; use Approve' }
+              : errorOf(e),
+          });
         }
       }
       return out;

@@ -199,7 +199,17 @@ protected behave exactly as before. The dashboard shows such a proposal with a b
 the only approval is **"Approve and accept as canon"** (`approveAsCanon`, `POST /api/admin/proposals/:id/approve-as-canon`
 with `{ confirm: true }`), a separate action audited as `proposal.approve_as_canon` that records `canonicalApprovedBy`
 (and when). The ordinary Approve, and bulk approval, are refused for it (`CANONICAL_APPROVAL_REQUIRED`); "accept as
-canon" is refused for a proposal that is not canonical (`NOT_CANONICAL`). Reject works as normal.
+canon" is refused for a proposal that is not canonical (`NOT_CANONICAL`). Reject works as normal, one at a time or in
+bulk.
+
+**In bulk** (owner, 11 November 2026). `bulkApproveAsCanon` is `approveAsCanon` for each id, one at a time and in order
+(each re-reads its targets, and an earlier one may change a later one's), exactly as `bulkApprove` is `approve`. The two
+kinds stay distinct: an ordinary proposal is refused there ("ordinary proposal; use Approve", code `NOT_CANONICAL`) and
+stays pending, and a canonical proposal in `bulkApprove` is reported as `skipped: true` (`CANONICAL_APPROVAL_REQUIRED`),
+not as a fault. Each accepted proposal is audited on its own as `proposal.approve_as_canon`, with `canonicalApprovedBy`
+and `bulk: true`; the guards run again at its execution, so a target changed after capture ends _conflicted_, not
+executed. `bulkReject` needs no canon decision and takes canonical proposals as it takes any other. The admin route is
+`POST /api/admin/proposals/bulk` with `action: "approve-as-canon"`, `confirm: true` and at most 100 ids.
 
 **Where it is enforced.** In the job engine, on every request and every write, not in each tool (src/facts/canonical.ts,
 the engine's write guard, src/jobs/write-guard.ts):
@@ -337,27 +347,28 @@ authenticate the owner (session cookie and CSRF) first. Each takes `actor: 'owne
 checked at run time). Every change writes an `audit_log` row (`at`, `actor`, `action`, `target`, `before`, `after`) and
 emits a `policy` event on the engine's event emitter; proposal state changes also emit `proposal` events.
 
-| Command                                                      | What it does                                                                                            | Audit action                                     |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `listProfiles(actor)`                                        | Profiles with their count of active connections                                                         | –                                                |
-| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                                | `profile.create`                                 |
-| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                                           | `profile.set_scope`                              |
-| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                              | `policy.set_default_scope`                       |
-| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                                | –                                                |
-| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                                   | `connection.set_profile`                         |
-| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                                | `connection.revoke`                              |
-| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                                      | –                                                |
-| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks               | –                                                |
-| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`). Refused for a canonical proposal    | `proposal.approve` (then `proposal.executed`, …) |
-| `approveAsCanon(actor, id)` (v2 C2a)                         | "Approve and accept as canon": the only approval of a canonical proposal; records `canonicalApprovedBy` | `proposal.approve_as_canon`                      |
-| `reject(actor, id, reason?)`                                 | A pending or conflicted proposal                                                                        | `proposal.reject`                                |
-| `removeConnection(actor, id)`                                | Removes a revoked or expired connection (tombstone); an active one: `CONNECTION_ACTIVE`                 | `connection.remove`                              |
-| `removeInactiveConnections(actor)`                           | Removes every revoked and expired connection, in one transaction                                        | `connection.remove` (each)                       |
-| `revokeStaleConnections(actor, profileId)`                   | Revokes the profile's stale connections                                                                 | `connection.revoke` (`via: 'stale'`)             |
-| `getAutoRemoveDays` / `setAutoRemoveDays(actor, days)`       | Days before the daily sweep removes dead connections (0 = never; default 30)                            | `policy.set_auto_remove_days`                    |
-| `getStaleAfterDays` / `setStaleAfterDays(actor, days)`       | Days of disuse before a connection is stale (0 = never; default 14)                                     | `policy.set_stale_after_days`                    |
-| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id                                                                | as above                                         |
-| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                                             | –                                                |
+| Command                                                      | What it does                                                                                             | Audit action                                        |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `listProfiles(actor)`                                        | Profiles with their count of active connections                                                          | –                                                   |
+| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                                 | `profile.create`                                    |
+| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                                            | `profile.set_scope`                                 |
+| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                               | `policy.set_default_scope`                          |
+| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                                 | –                                                   |
+| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                                    | `connection.set_profile`                            |
+| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                                 | `connection.revoke`                                 |
+| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                                       | –                                                   |
+| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks                | –                                                   |
+| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`). Refused for a canonical proposal     | `proposal.approve` (then `proposal.executed`, …)    |
+| `approveAsCanon(actor, id)` (v2 C2a)                         | "Approve and accept as canon": the only approval of a canonical proposal; records `canonicalApprovedBy`  | `proposal.approve_as_canon`                         |
+| `reject(actor, id, reason?)`                                 | A pending or conflicted proposal                                                                         | `proposal.reject`                                   |
+| `removeConnection(actor, id)`                                | Removes a revoked or expired connection (tombstone); an active one: `CONNECTION_ACTIVE`                  | `connection.remove`                                 |
+| `removeInactiveConnections(actor)`                           | Removes every revoked and expired connection, in one transaction                                         | `connection.remove` (each)                          |
+| `revokeStaleConnections(actor, profileId)`                   | Revokes the profile's stale connections                                                                  | `connection.revoke` (`via: 'stale'`)                |
+| `getAutoRemoveDays` / `setAutoRemoveDays(actor, days)`       | Days before the daily sweep removes dead connections (0 = never; default 30)                             | `policy.set_auto_remove_days`                       |
+| `getStaleAfterDays` / `setStaleAfterDays(actor, days)`       | Days of disuse before a connection is stale (0 = never; default 14)                                      | `policy.set_stale_after_days`                       |
+| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id. `bulkApprove` skips a canonical proposal (`skipped: true`)     | as above                                            |
+| `bulkApproveAsCanon(actor, ids)`                             | `approveAsCanon` for each id, one at a time, in order; an ordinary proposal is refused and stays pending | `proposal.approve_as_canon` each, with `bulk: true` |
+| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                                              | –                                                   |
 
 The system writes its own rows with actor `system`: `proposal.conflicted`, `proposal.executed`, `proposal.failed`,
 `proposal.expired`, `proposal.approval_reverted` and `proposal.approval_interrupted`. Read-only commands are not

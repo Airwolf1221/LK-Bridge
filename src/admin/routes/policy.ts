@@ -116,20 +116,28 @@ export const registerPolicy: Register = (api, ctx) => {
     return { proposal: redactDeep(actions.reject(project.id, id, b.reason)) };
   });
 
+  /**
+   * Bulk decisions, at most 100 ids. `approve` skips canonical proposals (reported as skipped); `approve-as-canon` is the
+   * bulk "Approve and accept as canon" and, like the single route, needs `confirm: true`. Each id is decided on its own,
+   * one at a time, in order.
+   */
   api.post('/proposals/bulk', async (req) => {
+    const ids = z.array(idSchema).min(1).max(100);
     const b = parseInput(
-      z.object({
-        action: z.enum(['approve', 'reject']),
-        ids: z.array(idSchema).min(1).max(100),
-        reason: z.string().max(1000).optional(),
-      }),
+      z.discriminatedUnion('action', [
+        z.object({ action: z.literal('approve'), ids }),
+        z.object({ action: z.literal('reject'), ids, reason: z.string().max(1000).optional() }),
+        z.object({ action: z.literal('approve-as-canon'), ids, confirm: z.literal(true) }),
+      ]),
       req.body,
     );
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     const results =
       b.action === 'approve'
         ? await actions.bulkApprove(project.id, b.ids)
-        : actions.bulkReject(project.id, b.ids, b.reason);
+        : b.action === 'approve-as-canon'
+          ? await actions.bulkApproveAsCanon(project.id, b.ids)
+          : actions.bulkReject(project.id, b.ids, b.reason);
     return { results };
   });
 

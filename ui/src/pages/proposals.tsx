@@ -46,7 +46,13 @@ export function ProposalsPage() {
   useProjectReloadOn(['proposal'], reloadAll, 300);
   const now = useNow();
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  useEffect(() => setPicked(new Set()), [tab]);
+  const [report, setReport] = useState<BulkReport | null>(null);
+  useEffect(() => {
+    setPicked(new Set());
+    setReport(null);
+  }, [tab]);
+  // The selected proposals, in list order, split by kind: the two kinds of approval stay distinct.
+  const chosen = (list.data?.proposals ?? []).filter((p) => picked.has(p.id));
   const go = (patch: { tab?: Tab; id?: string | null }) =>
     navigate(
       `/proposals${qs({ tab: (patch.tab ?? tab) === 'pending' ? undefined : (patch.tab ?? tab), id: patch.id === undefined ? openId : patch.id })}`,
@@ -78,13 +84,15 @@ export function ProposalsPage() {
       <ErrorNote error={list.error} onRetry={list.reload} />
       {tab === 'pending' && picked.size > 0 && (
         <BulkBar
-          ids={[...picked]}
+          chosen={chosen}
+          onReport={setReport}
           onDone={() => {
             setPicked(new Set());
             reloadAll();
           }}
         />
       )}
+      {report && <BulkResults report={report} onClose={() => setReport(null)} />}
       {!list.data ? (
         <Loading />
       ) : list.data.proposals.length === 0 ? (
@@ -187,57 +195,270 @@ export function ProposalsPage() {
   );
 }
 
-function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+type BulkAction = 'approve' | 'approve-as-canon' | 'reject';
+type BulkResult = {
+  id: string;
+  ok: boolean;
+  skipped?: boolean;
+  state?: string;
+  error?: { code?: string; message: string };
+};
+
+/** One line per proposal of a bulk action: what happened to it, and why when it was refused or passed over. */
+interface BulkReport {
+  action: BulkAction;
+  rows: { id: string; title: string; outcome: 'done' | 'conflicted' | 'skipped' | 'refused'; text: string }[];
+}
+
+const DONE_TEXT: Record<BulkAction, string> = {
+  approve: 'Approved',
+  'approve-as-canon': 'Accepted as canon',
+  reject: 'Rejected',
+};
+
+/** The per-proposal outcome of a bulk call; `titles` names each proposal as the list shows it. */
+function reportOf(
+  action: BulkAction,
+  results: BulkResult[],
+  titles: Map<string, string>,
+): BulkReport['rows'] {
+  return results.map((r) => {
+    const title = titles.get(r.id) ?? r.id;
+    if (r.ok) return { id: r.id, title, outcome: 'done', text: DONE_TEXT[action] };
+    if (r.skipped)
+      return {
+        id: r.id,
+        title,
+        outcome: 'skipped',
+        text: 'Skipped: it changes protected canon, so it needs “Accept selected as canon”',
+      };
+    if (r.state === 'conflicted')
+      return {
+        id: r.id,
+        title,
+        outcome: 'conflicted',
+        text: 'Conflicted: a target changed after it was proposed, so nothing ran',
+      };
+    return {
+      id: r.id,
+      title,
+      outcome: 'refused',
+      text: `Refused: ${r.error?.message ?? r.state ?? 'unknown'}`,
+    };
+  });
+}
+
+function BulkResults({ report, onClose }: { report: BulkReport; onClose: () => void }) {
+  return (
+    <section className="card" aria-label="Bulk results">
+      <div className="row row-between">
+        <h3>Results</h3>
+        <button type="button" className="small" onClick={onClose}>
+          Dismiss
+        </button>
+      </div>
+      <ul className="plain small-text">
+        {report.rows.map((r) => (
+          <li key={r.id} data-outcome={r.outcome} data-proposal={r.id}>
+            <Badge tone={r.outcome === 'done' ? 'ok' : r.outcome === 'refused' ? 'bad' : 'warn'}>
+              {r.outcome === 'done' ? 'done' : r.outcome}
+            </Badge>{' '}
+            <strong>{r.title}</strong>: {r.text}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** The related pages a lifecycle proposal reports (reported, never edited), or null when it reports none. */
+function relatedCount(p: ProposalDetail): number | null {
+  for (const o of p.operations ?? []) {
+    const rel = (o as { relatedPages?: { pages: unknown[]; textSearch: unknown[] } }).relatedPages;
+    if (rel) return rel.pages.length + rel.textSearch.length;
+  }
+  return null;
+}
+
+/** The page-level summary lines of a proposal, or its summary when it has none. */
+const summaryLines = (p: Pick<Proposal, 'pages' | 'summary'>) =>
+  p.pages && p.pages.length > 0 ? p.pages : [p.summary];
+
+/**
+ * v2 C2d-prep (owner, 11 November): the bulk bar. "Approve selected" takes the ordinary proposals and passes the
+ * canonical ones over (and says so); "Accept selected as canon" takes only the canonical ones, after a confirmation that
+ * lists each change with its reasons and needs the owner to tick that they accept them. The confirmation sends exactly
+ * the ids it showed.
+ */
+function BulkBar({
+  chosen,
+  onReport,
+  onDone,
+}: {
+  chosen: Proposal[];
+  onReport: (r: BulkReport) => void;
+  onDone: () => void;
+}) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
   const toast = useToast();
   const [reason, setReason] = useState('');
-  type Result = { id: string; ok: boolean; state?: string; error?: { message: string } };
   const { withProject } = useProject();
-  const act = (action: 'approve' | 'reject') =>
+  const ordinary = chosen.filter((p) => !p.requiresCanonicalApproval);
+  const canon = chosen.filter((p) => p.requiresCanonicalApproval);
+  const titles = new Map(chosen.map((p) => [p.id, p.title || p.summary]));
+
+  const act = (action: BulkAction, ids: string[], skipped: Proposal[] = []) =>
     run(() =>
-      api.post<{ results: Result[] }>(withProject('/proposals/bulk'), {
+      api.post<{ results: BulkResult[] }>(withProject('/proposals/bulk'), {
         action,
         ids,
         ...(action === 'reject' && reason ? { reason } : {}),
+        ...(action === 'approve-as-canon' ? { confirm: true } : {}),
       }),
     ).then((r) => {
       if (r) {
-        const bad = r.results.filter((x) => !x.ok);
+        const bad = r.results.filter((x) => !x.ok && !x.skipped);
+        const passed = skipped.length + r.results.filter((x) => x.skipped).length;
+        const verb =
+          action === 'approve' ? 'approved' : action === 'reject' ? 'rejected' : 'accepted as canon';
+        const rows = reportOf(action, r.results, titles);
+        for (const p of skipped)
+          rows.push(...reportOf(action, [{ id: p.id, ok: false, skipped: true }], titles));
+        onReport({ action, rows });
+        const note =
+          passed > 0
+            ? ` ${passed} canonical proposal${passed === 1 ? ' was' : 's were'} skipped: use “Accept selected as canon”.`
+            : '';
         if (bad.length > 0)
           toast(
             'error',
-            `${bad.length} of ${r.results.length} could not be ${action === 'approve' ? 'approved' : 'rejected'}: ${bad.map((b) => b.error?.message ?? b.state).join('; ')}`,
+            `${bad.length} of ${r.results.length} could not be ${verb}: ${bad.map((b) => b.error?.message ?? b.state).join('; ')}${note}`,
           );
-        else toast('ok', `${r.results.length} ${action === 'approve' ? 'approved' : 'rejected'}.`);
+        else toast('ok', `${r.results.length} ${verb}.${note}`);
       }
       onDone();
     });
+
+  /** Reads each canonical proposal as it stands now, shows what it changes, and sends only the ids it showed. */
+  const acceptAsCanon = async () => {
+    const loaded = await run(() =>
+      Promise.all(
+        canon.map((p) =>
+          api.get<{ proposal: ProposalDetail }>(withProject(`/proposals/${encodeURIComponent(p.id)}`)),
+        ),
+      ),
+    );
+    if (!loaded) return;
+    const shown = loaded
+      .map((x) => x.proposal)
+      .filter((p) => p.state === 'pending' && p.requiresCanonicalApproval);
+    if (shown.length === 0) {
+      toast('error', 'None of the selected proposals is still waiting for canonical approval.');
+      onDone();
+      return;
+    }
+    const m = shown.length;
+    const ok = await confirm({
+      title: `Accept ${m} selected as canon?`,
+      message: (
+        <>
+          <p>
+            These changes touch <strong>protected canon</strong>. Accepting them records each as canon with
+            your name. Each is checked against LegendKeeper again and run one at a time, in this order; one
+            whose target has changed becomes conflicted and runs nothing.
+          </p>
+          {shown.length < canon.length && (
+            <p className="note note-warn small-text">
+              {canon.length - shown.length} selected proposal
+              {canon.length - shown.length === 1 ? ' is' : 's are'} no longer waiting for canonical approval
+              and {canon.length - shown.length === 1 ? 'is' : 'are'} left out.
+            </p>
+          )}
+          <ul className="plain" aria-label="Changes to accept as canon">
+            {shown.map((p) => {
+              const reasons = (p.canonical?.changes ?? [])
+                .map((c) => c.text ?? c.unchecked)
+                .filter((t): t is string => Boolean(t));
+              const related = relatedCount(p);
+              return (
+                <li key={p.id} data-proposal={p.id}>
+                  {summaryLines(p).map((l) => (
+                    <div key={l}>
+                      <strong>{l}</strong>
+                    </div>
+                  ))}
+                  <ul className="small-text" aria-label="Canonical reasons">
+                    {(reasons.length > 0
+                      ? reasons
+                      : [p.canonical?.reason ?? 'Protected canonical change']
+                    ).map((t, i) => (
+                      <li key={i}>{t}</li>
+                    ))}
+                  </ul>
+                  {related !== null && (
+                    <div className="muted small-text">Related pages: {related} (reported, never edited)</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      ),
+      acknowledge: m === 1 ? 'I accept this change as canon' : `I accept these ${m} changes as canon`,
+      confirmLabel: `Accept ${m} as canon`,
+    });
+    if (ok)
+      void act(
+        'approve-as-canon',
+        shown.map((p) => p.id),
+      );
+  };
+
   return (
     <div className="card" role="group" aria-label="Bulk actions">
       <div className="row">
-        <strong>{ids.length} selected</strong>
+        <strong>{chosen.length} selected</strong>
         <Button
           variant="primary"
           busy={busy}
+          disabled={ordinary.length === 0}
           onClick={() => {
             void confirm({
-              title: `Approve ${ids.length} proposal${ids.length === 1 ? '' : 's'}?`,
+              title: `Approve ${ordinary.length} proposal${ordinary.length === 1 ? '' : 's'}?`,
               message: (
-                <p>
-                  Each one is checked against LegendKeeper again, then run one at a time. A proposal whose
-                  targets have changed becomes conflicted and runs nothing. A proposal that touches protected
-                  canon is not approved here: open it and use “Approve and accept as canon”.
-                </p>
+                <>
+                  <p>
+                    Each one is checked against LegendKeeper again, then run one at a time. A proposal whose
+                    targets have changed becomes conflicted and runs nothing.
+                  </p>
+                  {canon.length > 0 && (
+                    <p className="note note-warn small-text">
+                      {canon.length} selected proposal{canon.length === 1 ? ' touches' : 's touch'} protected
+                      canon and {canon.length === 1 ? 'is' : 'are'} skipped here: use “Accept selected as
+                      canon”.
+                    </p>
+                  )}
+                </>
               ),
               confirmLabel: 'Approve all',
             }).then((ok) => {
-              if (ok) void act('approve');
+              if (ok)
+                void act(
+                  'approve',
+                  ordinary.map((p) => p.id),
+                  canon,
+                );
             });
           }}
         >
-          Approve selected
+          Approve selected ({ordinary.length})
         </Button>
+        {canon.length > 0 && (
+          <Button variant="primary" busy={busy} onClick={() => void acceptAsCanon()}>
+            Accept selected as canon ({canon.length})
+          </Button>
+        )}
         <label className="inline" htmlFor="bulk-reason">
           Reason
         </label>
@@ -252,12 +473,16 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
           busy={busy}
           onClick={() => {
             void confirm({
-              title: `Reject ${ids.length} proposal${ids.length === 1 ? '' : 's'}?`,
+              title: `Reject ${chosen.length} proposal${chosen.length === 1 ? '' : 's'}?`,
               message: <p>Nothing is sent to LegendKeeper. The agents can read your reason.</p>,
               confirmLabel: 'Reject all',
               danger: true,
             }).then((ok) => {
-              if (ok) void act('reject');
+              if (ok)
+                void act(
+                  'reject',
+                  chosen.map((p) => p.id),
+                );
             });
           }}
         >

@@ -127,7 +127,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Budgets †   | `GET /budgets` (one project's snapshot, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                                                                                                                 |
-| Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk`                                                                                                                                                                                                                                                                                                         |
+| Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk` (`action`: `approve`, `reject`, or `approve-as-canon` with `{ confirm: true }`; at most 100 ids)                                                                                                                                                                                                        |
 | Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Maintenance | `GET /maintenance`, `GET /maintenance/:id` (with history), `POST /maintenance/:id/enable\|disable\|run`, `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -182,8 +182,36 @@ writes was exactly what was planned.
 banner listing the protected changes (for example "Status would be set to Authoritative"). Its only approval is
 **Approve and accept as canon**, which asks for a confirmation naming the changes, is recorded with who accepted it as
 canon (`proposal.approve_as_canon` in the audit log) and is shown on the proposal afterwards. The ordinary **Approve** is
-disabled for it, and bulk approval skips it (the bulk result names it). **Reject** works as normal. See
+disabled for it, and the ordinary bulk Approve skips it (reported as skipped, not as a failure); several canonical
+proposals are accepted together with **Accept selected as canon** (see
+[the bulk actions](#proposals-the-bulk-actions-11-november-2026)). **Reject** works as normal. See
 [policy.md](policy.md#protected-canonical-facts-v2-c2a).
+
+## Proposals: the bulk actions (11 November 2026)
+
+Tick several pending proposals and the bulk bar shows what the selection holds, by kind. The two kinds of approval stay
+distinct:
+
+- **Approve selected (N)** counts only the **ordinary** proposals and runs those. A canonical proposal in the selection is
+  skipped, and the confirmation and the result say so ("1 canonical proposal was skipped: use Accept selected as canon");
+  it is listed in the results as _skipped_, never as a failure, and stays pending.
+- **Accept selected as canon (M)** appears only when the selection holds canonical proposals, and takes only those. It
+  opens a confirmation that lists **each** canonical proposal: its page-level summary line, its canonical reasons (the
+  same ones the single view's banner shows, such as "Status → Authoritative", "Archive" or "Delete Authoritative page")
+  and, for a lifecycle proposal, how many related pages it reports. **Accept M as canon** stays disabled until you tick
+  **I accept these M changes as canon**. The confirmation sends exactly the ids it showed: a proposal ticked behind it,
+  or one decided elsewhere since the list loaded, is not accepted (the latter is left out, and the dialog says so).
+- **Reject selected** takes every selected proposal, canonical or not: rejecting needs no canon decision. Conflicted
+  proposals can be rejected in bulk from the Conflicted tab's selection as before.
+
+Each approval is decided on its own, **one at a time, in the order listed**: each re-reads its targets from LegendKeeper
+first, an earlier one may change a later one's, and one whose target changed becomes _conflicted_ and runs nothing while
+the others go ahead. Results appear per proposal under the bar: _done_ (accepted as canon, approved or rejected),
+_conflicted_, _skipped_, or _refused_ with the reason (for example "ordinary proposal; use Approve" when an ordinary
+proposal reaches the canon action through the API). Each accepted proposal gets its own `proposal.approve_as_canon`
+audit row with `canonicalApprovedBy` and `bulk: true`. The API is `POST /proposals/bulk` with `action:
+"approve-as-canon"`, `ids` (at most 100, as for the other actions) and `confirm: true` (without it: `400`); it is owner
+only, behind the same session, CSRF and same-site checks as every admin route.
 
 ## Proposals: new pages, moves and deletes (v2 C2b)
 

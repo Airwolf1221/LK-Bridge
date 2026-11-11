@@ -147,6 +147,6 @@ document per page document: about 2,500–2,900 reads a pass on the test world, 
 
 ## Open for the owner
 
-- Whether `unarchive_page` and `promote_page` should also list related pages.
-- Whether a page with pages under it should be archivable as a subtree (refused for now).
+- Whether `unarchive_page` and `promote_page` should also list related pages. **Decided by the owner on 11 November 2026: no.** Related pages stay listed only by `archive_page` and `move_to_working`, the two tools that take a page out of canon.
+- Whether a page with pages under it should be archivable as a subtree (refused for now). **Decided by the owner on 11 November 2026: yes**, in session C2d ("Subtree lifecycle", [PLAN-v2](../PLAN-v2.md)): archiving a whole character (its index, Core and specialist pages) needs one canonical approval for the set, with the index archived too. Until C2d is built, the refusal stands.
 - Whether the Working index should allow sub-indexes other than a character's own (flat for now, as decided).
