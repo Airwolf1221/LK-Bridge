@@ -1030,6 +1030,8 @@ export interface LifecycleConfigView {
     scopePrefix: string;
     temporalFromAuthoritative: string;
     temporalFromWorking: string;
+    /** C2d: the note an index archived with its set gets. */
+    noteForIndex: string;
   };
   problem: string | null;
 }
@@ -1044,6 +1046,8 @@ export interface LifecycleView {
 
 export interface LifecycleRecordView {
   id: number;
+  /** C2d: the whole-set change this record belongs to, if any. */
+  setId?: number | null;
   pageId: string;
   pageName: string;
   action: 'archive' | 'unarchive' | 'move_to_working' | 'promote';

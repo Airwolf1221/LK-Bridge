@@ -1097,6 +1097,7 @@ const GROUPS: { key: Group; label: string; fields: [string, string][] }[] = [
       ['scopePrefix', 'Scope prefix (then one space and the original)'],
       ['temporalFromAuthoritative', 'Temporal Scope, from Authoritative'],
       ['temporalFromWorking', 'Temporal Scope, from Working'],
+      ['noteForIndex', 'Note on an index archived with its set'],
     ],
   },
 ];

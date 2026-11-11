@@ -62,6 +62,8 @@ export const lifecycleSchema = z
         scopePrefix: text(500),
         temporalFromAuthoritative: text(500),
         temporalFromWorking: text(500),
+        /** C2d (ADR 0037): an index of an archived set gets this note (optional: settings stored before keep working). */
+        noteForIndex: text(2000).optional(),
       })
       .strict()
       .optional(),
@@ -90,6 +92,8 @@ export interface LifecycleConfig {
     readonly scopePrefix: string;
     readonly temporalFromAuthoritative: string;
     readonly temporalFromWorking: string;
+    /** C2d (ADR 0037): the note an index of an archived set gets as its first block. */
+    readonly noteForIndex: string;
   };
   /** Why the stored value could not be used (the defaults then apply), or null. */
   readonly problem: string | null;
@@ -118,6 +122,9 @@ export const DEFAULT_LIFECYCLE: Omit<LifecycleConfig, 'problem'> = Object.freeze
     scopePrefix: 'Archived record of the retired',
     temporalFromAuthoritative: 'Former Main CANON. Retired on {date}.',
     temporalFromWorking: 'Former Working concept. Retired on {date}.',
+    // C2d (ADR 0037): the owner's proposed wording for an index archived with its set, to be confirmed by the owner.
+    noteForIndex:
+      'Archived - {date}. The author retired {source} and the pages beneath it. They are kept for provenance.',
   },
 });
 
@@ -141,7 +148,12 @@ export function lifecycleFrom(settings: Readonly<Record<string, unknown>> | unde
     tags: d.tags ?? DEFAULT_LIFECYCLE.tags,
     fields: d.fields ?? DEFAULT_LIFECYCLE.fields,
     continuityTypes: d.continuityTypes ?? DEFAULT_LIFECYCLE.continuityTypes,
-    texts: d.texts ?? DEFAULT_LIFECYCLE.texts,
+    // C2d: a text missing from settings stored before it existed (noteForIndex) takes its default.
+    texts: {
+      ...DEFAULT_LIFECYCLE.texts,
+      ...(d.texts ?? {}),
+      noteForIndex: d.texts?.noteForIndex ?? DEFAULT_LIFECYCLE.texts.noteForIndex,
+    },
     problem: null,
   };
 }

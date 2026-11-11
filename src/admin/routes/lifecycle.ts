@@ -53,6 +53,8 @@ const patchSchema = z
         scopePrefix: text(500),
         temporalFromAuthoritative: text(500),
         temporalFromWorking: text(500),
+        // C2d (ADR 0037): the note an index of an archived set gets (a proposed default; the owner edits it here).
+        noteForIndex: text(2000).optional(),
       })
       .strict()
       .optional(),
@@ -141,8 +143,23 @@ export const registerLifecycle: Register = (api, ctx) => {
         jobs: r.jobs,
         proposalId: r.proposalId,
         detail: r.detail ?? {},
+        // C2d (ADR 0037): the whole-set change this page's record belongs to, if any.
+        setId: r.setId ?? null,
         createdAt: r.createdAt,
         completedAt: r.completedAt,
+      })),
+      // C2d: the newest whole-set changes (the root, the action, how many pages, complete or not).
+      sets: store.recentSets(p.id, { limit: 20 }).map((x) => ({
+        id: x.id,
+        rootId: x.rootId,
+        rootName: x.rootName,
+        action: x.action,
+        date: x.date,
+        state: x.state,
+        pages: x.pages.length,
+        previousState: x.previousState,
+        jobs: x.jobs,
+        proposalId: x.proposalId,
       })),
       principals: ctx.principals(rows.map((r) => r.principalId)),
       links: {

@@ -63,6 +63,6 @@ describe('re-authentication for the canon rules and the lifecycle settings', () 
     expect(late.status).toBe(403);
     const lateLc = await s.admin.put('/projects/alpha/lifecycle', { confirm: true, reset: true });
     expect(lateLc.status).toBe(403);
-    expect((await rulesNow()).rules[0].enabled).toBe(false);
+    expect((await rulesNow()).rules[0]!.enabled).toBe(false);
   });
 });
