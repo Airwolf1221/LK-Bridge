@@ -185,6 +185,30 @@ export interface BatchSubmit {
    * `lk_api_batch` never sets it).
    */
   readonly lifecycle?: LifecycleMarker;
+  /**
+   * C2d (ADR 0037), bridge code only: further job-level locks, any number (a whole-set lifecycle change holds every page
+   * of the set, and each page's main document). Requires `holdLock`; with it, `holdDocument` and `holdAlso` they are all
+   * taken in sorted key order at the job's start, so two such jobs can never wait on each other.
+   */
+  readonly holdMore?: { readonly resources?: readonly string[]; readonly documents?: readonly string[] };
+  /**
+   * C2d (ADR 0036 decision 5), bridge code only: the pages a request touches without naming them (a cascade's, a copy's
+   * children, a lifecycle set), as listed when it was planned. Kept with a proposal (which lists the implicit ones
+   * itself at capture) and checked again at approval and inside the lock (src/policy/page-scope.ts).
+   */
+  readonly pageScope?: { readonly subtrees: readonly PageScopeEntryShape[] };
+}
+
+/** C2d: one entry of `BatchSubmit.pageScope` (src/policy/page-scope.ts has the logic). */
+export interface PageScopeEntryShape {
+  readonly step?: number;
+  readonly rootId: string;
+  readonly label: string;
+  readonly pages: readonly {
+    readonly id: string;
+    readonly parentId: string | null;
+    readonly name?: string | null;
+  }[];
 }
 
 /**

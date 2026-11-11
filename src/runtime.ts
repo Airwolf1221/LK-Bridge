@@ -42,6 +42,7 @@ import {
 } from './pages/index.js';
 import { CanonicalGuard } from './facts/index.js';
 import { combineGuards } from './jobs/write-guard.js';
+import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { FactsVersions } from './facts/version.js';
@@ -305,6 +306,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   const unregisterGuard = engine.setWriteGuard(
     combineGuards(
+      // C2d (ADR 0036 decision 5): an approval covers only the pages it listed (checked again inside the lock).
+      new PageScopeGuard(),
       new CanonicalGuard({
         settings: (projectId) => projectStore.byId(projectId)?.settings,
         engine,

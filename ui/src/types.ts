@@ -566,7 +566,7 @@ export interface CanonRule {
    * (deleting a page of these kinds, by prefix) and `deleteDocument` (deleting a document of these types of a page whose
    * fact holds one of `values`).
    */
-  kind: 'value' | 'change' | 'delete' | 'deleteKind' | 'deleteDocument';
+  kind: 'value' | 'change' | 'delete' | 'deleteKind' | 'deleteDocument' | 'statusTags';
   values?: string[];
   kinds?: string[];
   documentTypes?: string[];

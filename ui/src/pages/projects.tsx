@@ -809,7 +809,9 @@ const ruleText = (r: CanonRule) =>
         ? `Deleting a ${(r.kinds ?? []).map((k) => `[${k.toUpperCase()}]`).join(' or ')} page (or a subtree holding one) needs canonical approval (recommended)`
         : r.kind === 'deleteDocument'
           ? `${r.key} = ${(r.values ?? []).join(' or ')}: deleting a ${(r.documentTypes ?? []).map((t) => (t === 'time' ? 'timeline' : t)).join(', ')} of such a page needs canonical approval (recommended)`
-          : `${r.key}: changing an existing value needs canonical approval (setting it where empty is allowed)`;
+          : r.kind === 'statusTags'
+            ? 'Status tags (CANON, Working, Archived): added or removed only by the lifecycle tools and by creates according to their status; any other route is refused (every other tag stays free)'
+            : `${r.key}: changing an existing value needs canonical approval (setting it where empty is allowed)`;
 
 /**
  * v2 C2a (ADR 0032): each project's protected canonical facts. A change that touches one becomes a proposal only the
@@ -835,6 +837,8 @@ function CanonCard({ data }: { data: ProjectsResponse }) {
 function CanonEditor({ project: p }: { project: ProjectInfo }) {
   const c = useApi<CanonConfig>(`/projects/${encodeURIComponent(p.name)}/canon`);
   const { run, busy } = useAction();
+  // C2d (ADR 0036 decision 4): saving the rules asks the owner to sign in again (within 5 minutes).
+  const withReauth = useReauth();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<CanonRule[] | null>(null);
   const [key, setKey] = useState('');
@@ -862,10 +866,12 @@ function CanonEditor({ project: p }: { project: ProjectInfo }) {
       if (!ok) return;
       void run(
         () =>
-          api.put(`/projects/${encodeURIComponent(p.name)}/canon`, {
-            rules: next,
-            confirm: true,
-          }),
+          withReauth(() =>
+            api.put(`/projects/${encodeURIComponent(p.name)}/canon`, {
+              rules: next,
+              confirm: true,
+            }),
+          ),
         'Canon rules saved.',
       ).then((r) => {
         if (r) {
@@ -1098,6 +1104,8 @@ const GROUPS: { key: Group; label: string; fields: [string, string][] }[] = [
 function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
   const v = useApi<LifecycleView>(`/projects/${encodeURIComponent(p.name)}/lifecycle`);
   const { run, busy } = useAction();
+  // C2d (ADR 0036 decision 4): saving the lifecycle settings asks the owner to sign in again (within 5 minutes).
+  const withReauth = useReauth();
   const confirm = useConfirm();
   const [draft, setDraft] = useState<Partial<Record<Group, Record<string, string>>>>({});
   if (!v.data) return v.error ? <ErrorNote error={v.error} onRetry={v.reload} /> : <Loading />;
@@ -1110,7 +1118,10 @@ function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
       (ok) => {
         if (!ok) return;
         void run(
-          () => api.put(`/projects/${encodeURIComponent(p.name)}/lifecycle`, { ...body, confirm: true }),
+          () =>
+            withReauth(() =>
+              api.put(`/projects/${encodeURIComponent(p.name)}/lifecycle`, { ...body, confirm: true }),
+            ),
           'Lifecycle settings saved.',
         ).then((r) => {
           if (r) {

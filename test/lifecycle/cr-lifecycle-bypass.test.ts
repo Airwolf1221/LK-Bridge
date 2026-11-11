@@ -388,9 +388,17 @@ describe('F10 (canon, decision 5): an Authoritative page created through the low
   it('lk_api_write createResource “[BSRC] …” with the CANON tag is written directly at scope write', async () => {
     // create_resource / create_bare_resource with status "authoritative" are canonical proposals (createMarker); the
     // lifecycle guard sees no lifecycle change in a [BSRC] create and the canon guard judges only template copies.
-    const r = await call('lk_api_write', {
+    // C2d (ADR 0036 decision 7, accepted): a create body that adds the CANON status tag is refused outright, naming the
+    // tool; the same create without it is the canonical proposal of decision 1 (accepted).
+    const tagged = await call('lk_api_write', {
       operationId: 'createResource',
       params: { body: { name: '[BSRC] Instant Canon', parentId: LOCS, tags: ['CANON'] } },
+    });
+    expect(tagged.isError, tagged.text).toBe(true);
+    expect(tagged.text).toMatch(/status tag CANON would be added — use promote_page/);
+    const r = await call('lk_api_write', {
+      operationId: 'createResource',
+      params: { body: { name: '[BSRC] Instant Canon', parentId: LOCS } },
     });
     expect({ status: r.body.status, canonical: r.body.requiresCanonicalApproval ?? false }, r.text).toEqual({
       status: 'proposal_captured',
