@@ -293,7 +293,7 @@ describe('Proposals', () => {
     await user.click(pick()[0]!);
     await user.click(pick()[1]!);
     expect(screen.getByRole('group', { name: 'Bulk actions' })).toHaveTextContent('2 selected');
-    await user.click(screen.getByRole('button', { name: 'Approve selected' }));
+    await user.click(screen.getByRole('button', { name: 'Approve selected (2)' }));
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Approve all' }));
     await waitFor(() => expect(api.find('POST', '/proposals/bulk')).toHaveLength(1));
     expect(api.find('POST', '/proposals/bulk')[0]!.body).toEqual({

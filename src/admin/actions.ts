@@ -800,6 +800,11 @@ export function createAdminActions(d: AdminDeps) {
       for (const id of ids) if (policy.proposals.get(id)) proposalIn(projectId, id);
       return cmd.bulkApprove(OWNER, ids);
     },
+    /** v2 C2d-prep (11 Nov): "Accept selected as canon": one canonical approval per id, in order. */
+    bulkApproveAsCanon: (projectId: string, ids: readonly string[]) => {
+      for (const id of ids) if (policy.proposals.get(id)) proposalIn(projectId, id);
+      return cmd.bulkApproveAsCanon(OWNER, ids);
+    },
     bulkReject: (projectId: string, ids: readonly string[], reason?: string) => {
       for (const id of ids) if (policy.proposals.get(id)) proposalIn(projectId, id);
       return cmd.bulkReject(OWNER, ids, reason);

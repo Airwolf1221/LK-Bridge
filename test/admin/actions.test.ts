@@ -507,6 +507,65 @@ describe('proposals', () => {
     expect(app.json.results[1]).toMatchObject({ ok: false, error: { code: 'PROPOSAL_NOT_FOUND' } });
   });
 
+  it('bulk accept as canon: needs confirm: true, takes at most 100 ids, needs the owner session and CSRF', async () => {
+    const id = await propose('Scribe');
+    const url = '/api/admin/proposals/bulk';
+    for (const body of [
+      { action: 'approve-as-canon', ids: [id] },
+      { action: 'approve-as-canon', ids: [id], confirm: false },
+      { action: 'approve-as-canon', ids: [id], confirm: 'yes' },
+    ]) {
+      const r = await stack.post(url, body);
+      expect(r.status, JSON.stringify(body)).toBe(400);
+      expect(r.json.error.code).toBe('INVALID_INPUT');
+    }
+    // The cap is the same as the other bulk actions: 100 are taken, 101 are refused, for every action.
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => `prop_none${i}`);
+    for (const extra of [
+      { action: 'approve-as-canon', confirm: true },
+      { action: 'approve' },
+      { action: 'reject' },
+    ]) {
+      expect((await stack.post(url, { ...extra, ids: ids(101) })).status, extra.action).toBe(400);
+      expect((await stack.post(url, { ...extra, ids: ids(100) })).status, extra.action).toBe(200);
+    }
+    expect((await stack.post(url, { action: 'approve-as-canon', confirm: true, ids: [] })).status).toBe(400);
+    // Nothing was decided by any of those refusals.
+    expect(stack.policy.proposals.state(id)).toBe('pending');
+    // Owner only: no session, no CSRF token, or another site is refused before anything runs.
+    const body = { action: 'approve-as-canon', confirm: true, ids: [id] };
+    expect((await stack.post(url, body, { cookie: null })).status).toBe(401);
+    const noCsrf = await stack.post(url, body, { csrf: null });
+    expect(noCsrf.status).toBe(403);
+    expect(noCsrf.json.error.code).toBe('BAD_CSRF');
+    expect((await stack.post(url, body, { headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403);
+    expect(stack.policy.proposals.state(id)).toBe('pending');
+    stack.policy.commands.reject('owner', id);
+  });
+
+  it('bulk accept as canon refuses an ordinary proposal ("use Approve") and leaves it pending; no canon audit row', async () => {
+    const id = await propose('Scribe');
+    const rows = stack.audit('proposal.approve_as_canon').length;
+    const r = await stack.post('/api/admin/proposals/bulk', {
+      action: 'approve-as-canon',
+      confirm: true,
+      ids: [id, 'prop_missing'],
+    });
+    expect(r.status).toBe(200);
+    expect(r.json.results[0]).toEqual({
+      id,
+      ok: false,
+      state: 'pending',
+      error: { code: 'NOT_CANONICAL', message: 'ordinary proposal; use Approve' },
+    });
+    expect(r.json.results[1]).toMatchObject({ ok: false, error: { code: 'PROPOSAL_NOT_FOUND' } });
+    expect(stack.policy.proposals.state(id)).toBe('pending');
+    expect(stack.audit('proposal.approve_as_canon').length).toBe(rows);
+    // The ordinary Approve still works for it.
+    const ok = await stack.post('/api/admin/proposals/bulk', { action: 'approve', ids: [id] });
+    expect(ok.json.results[0]).toMatchObject({ id, ok: true });
+  });
+
   it('shows a conflicted proposal and offers reject only', async () => {
     const id = await propose('Scribe');
     // Someone edits the document in LegendKeeper after the capture.

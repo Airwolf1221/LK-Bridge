@@ -61,6 +61,8 @@ export interface ConfirmOptions {
   confirmLabel?: string;
   /** Styles the confirm button as risky. */
   danger?: boolean;
+  /** A tick box the owner must tick before the confirm button enables (for decisions that need a deliberate yes). */
+  acknowledge?: string;
 }
 type Confirm = (o: ConfirmOptions) => Promise<boolean>;
 const ConfirmContext = createContext<Confirm>(() => Promise.resolve(false));
@@ -68,7 +70,15 @@ export const useConfirm = () => useContext(ConfirmContext);
 
 export function ConfirmProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
-  const confirm = useCallback<Confirm>((o) => new Promise((resolve) => setState({ ...o, resolve })), []);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const confirm = useCallback<Confirm>(
+    (o) =>
+      new Promise((resolve) => {
+        setAcknowledged(false);
+        setState({ ...o, resolve });
+      }),
+    [],
+  );
   const done = (ok: boolean) => {
     state?.resolve(ok);
     setState(null);
@@ -81,6 +91,17 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
           <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
             <h2 id="confirm-title">{state.title}</h2>
             <div className="dialog-body">{state.message}</div>
+            {state.acknowledge && (
+              <label className="inline" htmlFor="confirm-acknowledge">
+                <input
+                  id="confirm-acknowledge"
+                  type="checkbox"
+                  checked={acknowledged}
+                  onChange={(e) => setAcknowledged(e.target.checked)}
+                />{' '}
+                {state.acknowledge}
+              </label>
+            )}
             <div className="actions">
               <button type="button" onClick={() => done(false)}>
                 Cancel
@@ -88,7 +109,8 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
               <button
                 type="button"
                 className={state.danger ? 'danger' : 'primary'}
-                autoFocus
+                autoFocus={!state.acknowledge}
+                disabled={Boolean(state.acknowledge) && !acknowledged}
                 onClick={() => done(true)}
               >
                 {state.confirmLabel ?? 'Confirm'}

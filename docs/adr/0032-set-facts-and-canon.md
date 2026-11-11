@@ -106,3 +106,14 @@ low-level tools and work that was approved for something else. C2b will build mu
   bridge records one when present and compares it only with the same kind of read), and that `createPropertyRow` and
   `updatePropertyRow` answer with the new version in the body (the bridge falls back to a read and a content check when
   they do not).
+- **Bulk "accept as canon"** (owner, 11 November 2026). Decision 12 stands: there is still exactly one kind of canonical
+  approval, and it is still per proposal. The bulk action is `approveAsCanon` called for each id, one at a time and in
+  order (each approval re-reads its targets, so an earlier one may change a later one's), with the single route's
+  `confirm: true`, the same 100-id cap, and the owner's session, CSRF and same-site checks. Nothing about the token or the
+  guard changes: each proposal mints its own canonical token, and the guard runs again at its execution, so a target
+  changed after capture ends conflicted. Each accepted proposal has its own `proposal.approve_as_canon` row, with
+  `canonicalApprovedBy` and `bulk: true` in its details. The two kinds of approval stay distinct: an ordinary proposal
+  is refused in the canon action (`NOT_CANONICAL`, "ordinary proposal; use Approve"), and a canonical one in the ordinary
+  bulk Approve is reported as skipped, never as a failure. Bulk reject, which needs no canon decision, already takes
+  canonical proposals (tested). The dashboard's confirmation lists each proposal's summary line, canonical reasons and
+  related-pages count, needs a ticked acknowledgement, and sends only the ids it showed.

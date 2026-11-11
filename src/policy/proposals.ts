@@ -705,20 +705,30 @@ export class ProposalService implements ProposalSink {
    * then stays `pending`.
    */
   async approve(actor: OwnerActor, id: string): Promise<ProposalView> {
-    return this.approveWith(actor, id, false);
+    return this.approveWith(actor, id, false, false);
   }
 
   /**
    * v2 C2a (ADR 0032): "Approve and accept as canon" (owner command layer only): the one way to approve a proposal
    * flagged `requiresCanonicalApproval`. A separate, audited action (`proposal.approve_as_canon`) that records
    * `canonicalApprovedBy`; the approved work carries a canonical approval token, the only thing that lets the write
-   * guard pass its protected changes. Everything else is as `approve`.
+   * guard pass its protected changes. Everything else is as `approve`. `bulk` (the dashboard's "Accept selected as
+   * canon") is recorded in the audit row's details and changes nothing else: each proposal is approved on its own.
    */
-  async approveAsCanon(actor: OwnerActor, id: string): Promise<ProposalView> {
-    return this.approveWith(actor, id, true);
+  async approveAsCanon(
+    actor: OwnerActor,
+    id: string,
+    opts: { readonly bulk?: boolean } = {},
+  ): Promise<ProposalView> {
+    return this.approveWith(actor, id, true, opts.bulk === true);
   }
 
-  private async approveWith(actor: OwnerActor, id: string, canonical: boolean): Promise<ProposalView> {
+  private async approveWith(
+    actor: OwnerActor,
+    id: string,
+    canonical: boolean,
+    bulk: boolean,
+  ): Promise<ProposalView> {
     assertOwner(actor);
     const engine = this.requireEngine();
     const p = this.require(id);
@@ -780,7 +790,12 @@ export class ProposalService implements ProposalSink {
         'proposal.approve_as_canon',
         id,
         { state: 'pending' },
-        { state: 'approved', canonicalApprovedBy: 'owner', canonical: changes },
+        {
+          state: 'approved',
+          canonicalApprovedBy: 'owner',
+          canonical: changes,
+          ...(bulk ? { bulk: true } : {}),
+        },
       );
     } else this.store.audit('owner', 'proposal.approve', id, { state: 'pending' }, { state: 'approved' });
     const unapprove = {

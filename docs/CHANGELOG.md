@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased: bulk "Accept selected as canon" (11 November 2026)
+
+The owner asked for a bulk version of "Approve and accept as canon" ([ADR 0032](adr/0032-set-facts-and-canon.md), the
+note on bulk; [policy.md](policy.md#protected-canonical-facts-v2-c2a); [dashboard.md](dashboard.md#proposals-the-bulk-actions-11-november-2026)).
+All four lifecycle tools, Authoritative creates and the two delete rules always produce canonical proposals, which had to
+be accepted one at a time. No migration; deploy normally. Rebuild the UI (`npm run build`) as usual.
+
+- **`POST /api/admin/proposals/bulk` takes `action: "approve-as-canon"`**, with `confirm: true` (without it: `400`), at
+  most 100 ids, owner only (session, CSRF and same-site checks as on every admin route). It is `approveAsCanon` for each
+  id, one at a time and in order, exactly like the bulk Approve: each approval re-reads its targets, an earlier one may
+  change a later one's, and a target changed after capture ends _conflicted_, not executed. Each accepted proposal has
+  its own `proposal.approve_as_canon` audit row with `canonicalApprovedBy` and `bulk: true`.
+- **The two kinds of approval stay distinct.** An ordinary proposal in the canon action is refused ("ordinary proposal;
+  use Approve", `NOT_CANONICAL`) and left pending. A canonical proposal in the ordinary bulk Approve is still refused and
+  now reported as `skipped: true` rather than as a failure.
+- **The bulk bar on the Proposals page**: "Approve selected (N)" counts only ordinary proposals and says when it skipped
+  canonical ones; "Accept selected as canon (M)" appears when the selection holds canonical proposals and opens a
+  confirmation listing each (page-level summary line, canonical reasons, related-pages count for lifecycle proposals)
+  with an "I accept these M changes as canon" box that must be ticked before the button enables. It sends the ids it
+  showed, so nothing ticked afterwards is accepted, and a proposal decided elsewhere meanwhile is left out. Results
+  appear per proposal: done, conflicted, skipped, or refused with the reason. The confirmation dialog gained an optional
+  acknowledgement box for this.
+- **Bulk reject on canonical proposals** works (rejecting needs no canon decision); now covered by a test.
+- Tests: `test/lifecycle/bulk-canon.test.ts` (three canonical kinds in one bulk, one conflicted after capture, ordinary ids
+  refused, plain bulk approve skipping canonical ones, bulk reject, owner only), the route's input checks in
+  `test/admin/actions.test.ts`, and the confirmation in `test/ui/canon.test.tsx`.
+- **Plan** ([PLAN-v2](PLAN-v2.md)): owner decisions of 11 November recorded: subtree archiving is wanted (new session
+  C2d, "Subtree lifecycle", after CR, Opus 5.5 · high, can run alongside D1); related pages stay listed only by
+  `archive_page` and `move_to_working`; no legacy lifecycle-inconsistent pages exist on Arkona, so no "adopt" tool is
+  needed.
+
 ## Unreleased: v2 C2c, the page lifecycle (10 November 2026)
 
 The page lifecycle as the owner decided it on 10 November 2026: Authoritative (`[BSRC]`), Working (`[BWRK]`) and
