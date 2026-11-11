@@ -410,11 +410,26 @@ export class StepExecutor {
     step: StepView,
     params: OpParams,
     stats: CallStats,
-  ): Promise<{ checked: string[]; versions: Record<string, string | null>; ids?: Record<string, string> }> {
+  ): Promise<{
+    checked: string[];
+    versions: Record<string, string | null>;
+    versionsByPage: Record<string, Record<string, string | null>>;
+    ids?: Record<string, string>;
+    idsByPage?: Record<string, Record<string, string>>;
+  }> {
     const checks = ((params.body ?? {}) as { checks?: ExpectCheck[] }).checks ?? [];
     const ref = { jobId: job.id, stepNo: step.stepNo };
     const versions: Record<string, string | null> = {};
     const ids: Record<string, string> = {};
+    // C2d (ADR 0037): property, row and item ids are unique only within a page (copies of one template share them),
+    // so the versions a check read and the ids a copy check mapped are also kept per page; `bindIfMatch` and
+    // `bindIds` take them from the page the bound write names (the flat maps stay for jobs stored before).
+    const versionsByPage: Record<string, Record<string, string | null>> = {};
+    const idsByPage: Record<string, Record<string, string>> = {};
+    const keep = (resourceId: string, label: string, v: string | null) => {
+      versions[label] = v;
+      (versionsByPage[resourceId] ??= {})[label] = v;
+    };
     for (const c of checks) {
       // v2 C2b: a page this job created from a template (its ids mapped for `bindIds`), or the whole sidebar.
       if (c.kind === 'copy' || c.kind === 'sidebar') {
@@ -441,10 +456,11 @@ export class StepExecutor {
             throw new StateConflictError(EXPECT_STEP, c.label, m.differences, null, null, ref);
           }
           Object.assign(ids, m.ids);
+          Object.assign((idsByPage[c.resourceId] ??= {}), m.ids);
         } else {
           const now = sidebarState(r.body);
           const diffs = compareSidebarStates(c.properties, now);
-          const version = factsVersionOf(now);
+          const version = factsVersionOf(c.resourceId, now);
           if (diffs.length === 0 && version !== c.factsVersion) {
             diffs.push({ path: `${c.label} factsVersion`, expected: c.factsVersion, actual: version });
           }
@@ -452,14 +468,14 @@ export class StepExecutor {
             throw new StateConflictError(EXPECT_STEP, c.label, diffs, c.factsVersion, version, ref);
           }
         }
-        versions[c.label] = null;
+        keep(c.resourceId, c.label, null);
         continue;
       }
       // v2 C2c: a page's own fields, the pages under it, or one block of a document, as the plan saw them.
       if (c.kind === 'resource' || c.kind === 'children' || c.kind === 'block') {
         const diffs = await this.expectStructure(job, step, c, stats);
         if (diffs.length > 0) throw new StateConflictError(EXPECT_STEP, c.label, diffs, null, null, ref);
-        versions[c.label] = null;
+        keep(c.resourceId, c.label, null);
         continue;
       }
       const path = { resourceId: c.resourceId, propertyId: c.propertyId };
@@ -494,12 +510,13 @@ export class StepExecutor {
       if (diffs.length > 0) {
         throw new StateConflictError(EXPECT_STEP, c.label, diffs, c.version ?? null, version, ref);
       }
-      versions[c.label] = version;
+      keep(c.resourceId, c.label, version);
     }
     return {
       checked: checks.map((c) => c.label),
       versions,
-      ...(Object.keys(ids).length > 0 ? { ids } : {}),
+      versionsByPage,
+      ...(Object.keys(ids).length > 0 ? { ids, idsByPage } : {}),
     };
   }
 
@@ -721,9 +738,9 @@ export class StepExecutor {
           } else if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
           else if (t.kind === 'facts') {
             compareFacts(t, res, diffs);
-            factsVersion = factsVersionOf(sidebarState(res));
+            factsVersion = factsVersionOf(t.resourceId, sidebarState(res));
           } else if (t.kind === 'sidebar') {
-            factsVersion = factsVersionOf(sidebarState(res));
+            factsVersion = factsVersionOf(t.resourceId, sidebarState(res));
             const props = Array.isArray(res.properties) ? (res.properties as Record<string, unknown>[]) : [];
             for (const p of t.properties) {
               const actual = props.find((x) => x && x.id === p.id);

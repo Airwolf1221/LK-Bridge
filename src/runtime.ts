@@ -5,6 +5,8 @@ import {
   defaultMaintenanceSettings,
   defaultPolicySettings,
   jobsSettingsFrom,
+  MASTER_KEY_NOT_SET_WARNING,
+  MASTER_KEY_SHORT_WARNING,
   type AdminSettings,
   type Config,
   type MaintenanceSettings,
@@ -123,6 +125,13 @@ export interface RuntimeOptions {
   readonly instanceGuard?: boolean;
   /** Delays before a project whose key could not be checked is checked again (tests). */
   readonly projectRetryMs?: { readonly first: number; readonly max: number };
+  /**
+   * `unused` (C2d): this runtime keeps no secrets: the sandbox, soak, spike and round-trip scripts run on a temporary
+   * database of their own, with the project's key handed to them directly (test/sandbox/target.ts opens the bridge's
+   * store itself). Their wrappers deliberately keep `SECRETS_MASTER_KEY` out of every environment, so its absence is
+   * expected there and is logged at debug instead of as a warning. Default `required` (the bridge).
+   */
+  readonly secretStore?: 'required' | 'unused';
   /** The runtime's log level and destination (default: LOG_LEVEL, to stdout). `createBridge` passes the server's. */
   readonly logLevel?: string;
   readonly logStream?: Writable;
@@ -148,7 +157,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     lk: o.lkTransport ?? defaultTransport,
     ...uploadGuard,
   });
-  for (const w of config.warnings) log.warn({}, w);
+  // C2d: a runtime that keeps no secrets (the sandbox scripts) expects no master key; nothing else is quietened.
+  const secretsUnused = o.secretStore === 'unused';
+  const masterKeyWarnings = new Set([MASTER_KEY_NOT_SET_WARNING, MASTER_KEY_SHORT_WARNING]);
+  for (const w of config.warnings) {
+    if (secretsUnused && masterKeyWarnings.has(w)) log.debug({}, w);
+    else log.warn({}, w);
+  }
   // ADR 0023: exactly one bridge process serves a database (and so its projects). Refuses a second one.
   const guard = o.instanceGuard === false ? null : new InstanceGuard({ db: o.db });
   const took = guard?.acquire();
@@ -164,7 +179,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // (each affected project is stopped with the reason; the dashboard shows it); nothing here throws.
   const secrets = new SecretStore(o.db, config.secrets, () => (o.clock ?? systemClock).now());
   const storeState = secrets.state();
-  if (storeState.problem) log.warn({ keyId: storeState.keyId }, storeState.problem);
+  if (storeState.problem) {
+    if (secretsUnused) log.debug({ keyId: storeState.keyId }, storeState.problem);
+    else log.warn({ keyId: storeState.keyId }, storeState.problem);
+  }
   // Env keys imported into the store are audited once the policy layer (which holds the audit log) exists; an import
   // made later, at a project's first key check, is audited as it happens.
   const importsToAudit: { project: string; variable: string; hint: string }[] = [];

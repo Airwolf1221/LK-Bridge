@@ -19,6 +19,17 @@ const SINCE: [string, string][] = [
  * The write journal: every write the bridge has sent, newest first, and for destructive writes what they replaced.
  * View only: nothing here changes anything. Pages of 100, older pages through the `before` cursor (chunk 8).
  */
+/**
+ * C2d (ADR 0037): a property, row, link-item or block id is unique only within its page (copies of one template share
+ * them), so a target below a page is always shown with its page (and a block with its document).
+ */
+export function targetText(e: Pick<JournalEntry, 'targetId' | 'resourceId' | 'documentId'>): string {
+  const parts = [e.resourceId, e.documentId, e.targetId].filter(
+    (v, i, all): v is string => typeof v === 'string' && v !== '' && all.indexOf(v) === i,
+  );
+  return parts.length ? parts.join(' › ') : '–';
+}
+
 export function JournalPage() {
   // v2 C2c: the Archive and lifecycle page links here with a job's id.
   const { query } = useRoute();
@@ -179,9 +190,7 @@ export function JournalPage() {
                   <td className="mono">{e.opId}</td>
                   <td>
                     {e.targetKind}
-                    <div className="mono muted small-text">
-                      {e.documentId ?? e.targetId ?? e.resourceId ?? '–'}
-                    </div>
+                    <div className="mono muted small-text">{targetText(e)}</div>
                   </td>
                   <td title={e.principalId}>
                     {principalText(e.principalId, list.data?.principals, e.profile)}

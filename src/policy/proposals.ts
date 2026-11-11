@@ -302,8 +302,10 @@ function describe(opId: string, params: OpParams): string {
     p.featureId ??
     p.documentId ??
     p.resourceId;
+  // C2d (ADR 0037): a row, property or block id is unique only within its page, so it is named with the page.
+  const on = id && p.resourceId && id !== p.resourceId ? `${p.resourceId} › ${id}` : id;
   const name = (params.body as { name?: unknown } | undefined)?.name;
-  return `${opId}${id ? ` on ${id}` : ''}${typeof name === 'string' ? ` ("${name.slice(0, 40)}")` : ''}`;
+  return `${opId}${on ? ` on ${on}` : ''}${typeof name === 'string' ? ` ("${name.slice(0, 40)}")` : ''}`;
 }
 
 export function proposalSummary(ops: readonly { op: string; params: OpParams }[]): string {

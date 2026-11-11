@@ -3,6 +3,7 @@
  * published rate limits and counts any 429 it really had to send, so this checks the guard, the workload, the clean-up
  * and the report without touching a real project.
  */
+import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { systemClock } from '../../src/lk/index.js';
 import { MockLk } from '../contract/mock-lk.js';
@@ -20,7 +21,7 @@ afterEach(async () => {
   mock = undefined;
 });
 
-async function start(projectSeen: string) {
+async function start(projectSeen: string, logStream?: Writable) {
   mock = new MockLk({
     clock: systemClock,
     apiKey: API_KEY,
@@ -38,11 +39,27 @@ async function start(projectSeen: string) {
     baseUrl: url,
     // The real pacing would make this take minutes; the published limits are still enforced by the mock.
     env: { WRITE_SPACING_MS: '0', WRITE_SPACING_STRETCHED_MS: '0' },
+    ...(logStream ? { logStream } : {}),
   });
   return { mock, soak };
 }
 
 describe('sandbox soak (dry run)', () => {
+  it('C2d: starts with no SECRETS_MASTER_KEY warning (the wrappers keep the master key out of the environment)', async () => {
+    // The owner's run of 11 November 2026 printed four: the config's and the secret store's, from each of the smoke's
+    // and the assumptions' runtimes. These runtimes keep no secrets (a temporary database; the key is handed over).
+    const lines: string[] = [];
+    const sink = new Writable({
+      write(chunk: Buffer, _enc, done) {
+        lines.push(chunk.toString('utf8'));
+        done();
+      },
+    });
+    expect(process.env.SECRETS_MASTER_KEY).toBeUndefined();
+    await start(PROJECT, sink);
+    expect(lines.filter((l) => l.includes('SECRETS_MASTER_KEY'))).toEqual([]);
+  });
+
   it('refuses, writing nothing, when the key belongs to another project', async () => {
     const { mock, soak } = await start('proj_somebody_else');
     await expect(

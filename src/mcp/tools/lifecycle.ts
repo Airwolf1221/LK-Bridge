@@ -26,6 +26,7 @@
 import * as z from 'zod';
 import { factKey, factRows, sidebarFrom, valueText, type SidebarProperty } from '../../facts/index.js';
 import { FactsPlanError, planFacts, rowStates, type FactsPlan } from '../../facts/plan.js';
+import { rowTextRuns } from '../../facts/values.js';
 import {
   EXPECT_STEP,
   RECORD_STEP,
@@ -305,7 +306,8 @@ async function build(
     (r) => target.facts[r] !== undefined,
   ).map((r) => {
     const v = target.facts[r]!;
-    return { key: c.fields[r], value: v === null ? null : v === '' ? [] : [{ text: v }] };
+    // C2d: as LegendKeeper stores it (lines with breaks between them, none leading or trailing).
+    return { key: c.fields[r], value: v === null ? null : rowTextRuns(v) };
   });
   const kv = page.sidebar.filter((p) => p.kind === 'keyValue' && factKey(p.title) === factKey(propertyTitle));
   let factsPlan: FactsPlan | null = null;

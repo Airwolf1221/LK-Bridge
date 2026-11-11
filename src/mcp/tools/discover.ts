@@ -979,7 +979,7 @@ function blocksText(blocks: unknown): string {
  * set_facts later is answered with what changed).
  */
 export function factsVersionOfRead(ctx: RepoCtx, resourceId: string, resource: unknown): string {
-  const { version, state } = factsVersionFrom(resource);
+  const { version, state } = factsVersionFrom(resourceId, resource);
   ctx.pd.services?.factsVersions?.store(ctx.projectId, resourceId, version, state);
   return version;
 }
