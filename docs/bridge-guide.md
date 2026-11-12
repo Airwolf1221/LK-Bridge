@@ -238,7 +238,8 @@ the same write, never move or reclassify anything else, verify what they did, an
 new pages are fixed in the proposal.
 
 **New pages are Working by default.** Every page create takes `status`: `"working"` (the default) makes a `[BWRK]`
-page directly under `[INDEX] Working` (leave `parent` out), with Status `Working` and the `Working` tag;
+page under `[INDEX] Working` (leave `parent` out) or, with `parent`, under an `[INDEX]` page inside a Working set (a
+Working character's own index, below), with Status `Working` and the `Working` tag;
 `"authoritative"` makes a `[BSRC]` page in its normal place (give `parent`), with Status `Authoritative` and the
 `CANON` tag, and is always a proposal for the owner. Write new material as Working; the owner promotes it.
 
@@ -254,6 +255,16 @@ page directly under `[INDEX] Working` (leave `parent` out), with Status `Working
   follow that one.
 - **A page from a template:** `create_resource` `{ name, template, parent?, status?, facts?, links? }` (see
   `list_templates`).
+- **Building a Working character one page at a time.** `create_character` (Working) makes `[INDEX] {name}` under
+  `[INDEX] Working` with the Core beneath it. Then call `create_resource` (Working) for each specialist page (Art,
+  Relationship, ...) with `parent` = that character's `[INDEX]` (its name or the id the result gave). Each page lands
+  alphabetically among the index's children, so the character is one set from the start and
+  `promote_page` with `subtree: true` on the index promotes the whole set in one approval. A Working page's `parent`
+  is `[INDEX] Working` itself (the default) or an `[INDEX]` inside a Working set; any other parent is refused
+  (`WORKING_PARENT`, naming the allowed ones), and nothing goes under a `[BWRK]` page. `create_bare_resource` and the
+  items of `create_many_resources` follow the same rule. Do not leave a character's specialist pages flat under
+  `[INDEX] Working`: a set promotion would not take them (its dry run lists them as `outsiders`; bring them in with
+  `move_resource`, then promote).
 - **An index:** `create_index` `{ name, parent }`, or `{ name, type, category }` (for example a category of a race). An
   index has no status, and none is made under `[INDEX] Working` or `[INDEX] Archived`.
 - **Many pages at once:** `create_many_resources` `{ items }` (up to 100; nest them with `key` and `parent_key`; each
@@ -261,7 +272,7 @@ page directly under `[INDEX] Working` (leave `parent` out), with Status `Working
 - **A page with no template:** `create_bare_resource` `{ name, parent?, status? }`, the name with its prefix:
   `[BWRK] …` (Working), `[BSRC] …` (Authoritative) or `[INDEX] …`.
 - **Rename, tags, aliases, icon, banner, hidden, locked:** `update_resource` (a rename keeps the prefix and re-places
-  the page). **Move:** `move_resource` `{ page, to }`.
+  the page). **Move:** `move_resource` `{ page, to }`; within a lifecycle area it is an ordinary move (below).
 - **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
   lists every page removed). **Undo a delete:** `restore_resource` `{ page: "<id>" }`.
 - **Maps, timelines, boards:** `create_document`, `update_document` (settings only) and `delete_document`.
@@ -285,7 +296,8 @@ A page is in one of three states, and its prefix, Status, status tag and place a
 | Working       | `[BWRK]` | `Working`       | `Working`  | directly under `[INDEX] Working`, flat  |
 | Archived      | `[BARC]` | `Archived`      | `Archived` | directly under `[INDEX] Archived`, flat |
 
-(The one exception to "flat": a whole set kept together, below.)
+(The exception to "flat": a whole set kept together, below. A Working page may also sit under an `[INDEX]` inside a
+Working set, and an archived page under an `[INDEX]` inside an archived set.)
 
 **Four tools change a page's state, and nothing else can.** Each one is always a proposal that only the owner can
 accept as canon, whatever your scope: you get `proposal_captured` with `requiresCanonicalApproval`. Never retry it;
@@ -314,6 +326,19 @@ its top. A set must be all in one state, at most 100 pages, with no unclassified
 (refused with `SET_NOT_ELIGIBLE`, listing each page). Use `dryRun: true` first: it shows every page's plan, the page
 count and the estimated reads and writes. Changing ONE page of a set takes it out of the set; unarchiving one page alone
 from inside an archived set needs `destination`.
+
+**Moves within a lifecycle area are ordinary moves** (`move_resource`; no lifecycle change, no canonical approval; the
+page's prefix, Status and tags never change). In the Working area: a `[BWRK]` page (or a Working set's `[INDEX]` with its
+pages) between `[INDEX] Working` and an `[INDEX]` inside a Working set, and back. In the Archived area: a `[BARC]` page,
+or an archived set's `[INDEX]` together with its pages, between `[INDEX] Archived` and an `[INDEX]` inside an archived
+set, and back. The lifecycle record keeps each page's ORIGINAL previous place, so `unarchive_page` still returns it to
+where it came from, not to where it was moved within the archive. A move into or out of either area, and between the
+two, is still refused (`POLICY_DENIED`, naming the lifecycle tool).
+
+**Promoting a set: outsiders.** The dry run of `promote_page` with `subtree: true` lists under `outsiders` any Working
+page of the same subject (`subjectOf`: its Subject row, else the name before " - ") that sits flat under
+`[INDEX] Working` outside the set, and suggests `move_resource` to bring it in first, so the owner does not approve a
+partial promotion by accident.
 
 **Related pages.** `archive_page` and `move_to_working` list the pages that link to or mention the page (from the
 bridge's link index, with how fresh it is, and one text search marked "may be incomplete"); for a set, every page's,

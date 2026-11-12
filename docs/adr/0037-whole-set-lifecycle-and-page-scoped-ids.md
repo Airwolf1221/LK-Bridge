@@ -143,3 +143,26 @@ run shows the page count and `bridge_estimate`'s reading of the job's reads and 
   Core and two specialist pages, the conflict when a page is added between proposal and approval, and the sandbox
   assumptions check again (A1 should now report the reused ids as a note, B12 should pass on its own page, B16 should
   pass with every break trimmed).
+
+## Amendment (C2d.1, 12 November 2026)
+
+[ADR 0035's C2d.1 amendment](0035-page-lifecycle.md) lets a Working character's set be built one page at a time, so a
+set under `[INDEX] Working` now also holds the specialist pages made under its index, and the owner moves pages within a
+lifecycle area. What this changes for sets (no decision above is overturned):
+
+- **Decision 10, layout.** A Working set's root may sit under `[INDEX] Working` or, once the owner has moved it, under
+  an `[INDEX]` inside another Working set; an archived set's root under `[INDEX] Archived` or an `[INDEX]` inside an
+  archived set. `unarchive_page` with `subtree` still returns the root to the previous parent in the set's own record (a
+  Working set to `[INDEX] Working` or the Working-set index it came from, when that index still exists), never to where
+  it was moved within the archive. A set unarchived while its root sits inside another archived set works from its
+  record alone; unarchiving the OUTER set refuses the moved-in set's pages as "not archived with this set" (decision 17),
+  listing them: move the inner set out first.
+- **Decision 9, what a set may hold.** Unchanged. A set promoted with `promote_page` and `subtree: true` takes every page
+  beneath the character's index, which is why specialist pages are now created under it.
+- **Outsiders (new).** The set promotion plan, and so its dry run and its proposal, lists under `outsiders` the
+  `[BWRK]` pages directly under `[INDEX] Working` that are outside the set but share its subject (`subjectOf`: the
+  Subject row, else the display name before " - "; the root index's own name for a plain index; a character role from
+  the registry wins), suggests `move_resource` (page: its id, to: the set's root) to bring each in first, and adds one flag
+  to the proposal, so the owner does not approve a partial promotion by accident. It never moves anything for the agent,
+  and it does not change what the proposal covers (decision 14: an approval covers only the listed pages). It runs for
+  `promote_page` only; a resumed promotion (an open set record) is not re-checked.

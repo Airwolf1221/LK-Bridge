@@ -233,8 +233,9 @@ export function createCtx(pd: ProjectDeps, mctx: McpToolContext, ctx: RepoCtx, t
 export type CreateStatus = 'working' | 'authoritative';
 
 export const STATUS_DESCRIPTION =
-  'The new page’s lifecycle status. "working" (the default): a [BWRK] page directly under [INDEX] Working, ' +
-  'alphabetically, with Status Working and the Working tag. "authoritative": a [BSRC] page in its normal place, with ' +
+  'The new page’s lifecycle status. "working" (the default): a [BWRK] page under [INDEX] Working (or, with `parent`, ' +
+  'under an [INDEX] inside a Working set, such as a Working character’s own index), alphabetically, with Status Working ' +
+  'and the Working tag. "authoritative": a [BSRC] page in its normal place, with ' +
   'Status Authoritative and the CANON tag: this is canon, so it always becomes a proposal only the owner can accept as ' +
   'canon (proposal_captured with requiresCanonicalApproval), whatever your scope.';
 

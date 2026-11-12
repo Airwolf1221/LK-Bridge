@@ -47,7 +47,7 @@ import {
   type LifecycleTarget,
   type SetPage,
 } from '../../lifecycle/index.js';
-import { key } from '../../registry/names.js';
+import { key, subjectOf } from '../../registry/names.js';
 import { SiblingSim } from '../../resources/plan.js';
 import { KIND_PREFIX, classifyName, isPageKind, type TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
@@ -442,7 +442,10 @@ async function planSet(
       const usable =
         prev !== null &&
         prev.kind !== 'root' &&
-        (toState === 'working' ? prev.id === idx.working.id : lifecycleArea(prev) === null) &&
+        (toState === 'working'
+          ? // C2d.1: a Working set goes back under [INDEX] Working or the Working-set index it came from.
+            lifecycleArea(prev) === 'working' && (prev.id === idx.working.id || prev.kind === 'index')
+          : lifecycleArea(prev) === null) &&
         !prev.path.ids.includes(root.id);
       if (args.destination !== undefined || !usable) {
         if (args.destination === undefined) {
@@ -456,14 +459,14 @@ async function planSet(
         if (!d.ok) return { kind: 'answer', result: d.result };
         const dArea = lifecycleArea(d.value);
         if (
-          (toState === 'working' ? d.value.id !== idx.working.id : dArea !== null) ||
+          (toState === 'working' ? dArea !== 'working' : dArea !== null) ||
           d.value.path.ids.includes(root.id)
         ) {
           return refuse(
             pd,
             'LIFECYCLE_AREA',
             toState === 'working'
-              ? `A Working set goes back under [INDEX] ${c.indexNames.working}.`
+              ? `A Working set goes back under [INDEX] ${c.indexNames.working} or an [INDEX] inside a Working set.`
               : `“${d.value.displayName}” is a lifecycle index or under one; an Authoritative set goes back to its normal place.`,
           );
         }
@@ -798,6 +801,22 @@ async function planSet(
   }
   steps.push({ op: VERIFY_STEP, params: { body: { targets: verify } } });
   labels.push('verify');
+  // C2d.1: Working pages of the same subject left flat under [INDEX] Working are not in the set; say so, so the owner
+  // does not approve a partial promotion by accident.
+  const outsiders =
+    action === 'promote' && !open
+      ? workingOutsiders(ctx, idx.working.id, root, new Set(members.map((m) => m.page.node.id)))
+      : [];
+  if (outsiders.length > 0) {
+    flags.push(
+      `${outsiders.length} Working page${outsiders.length === 1 ? '' : 's'} of the same subject sit outside this set, flat under [INDEX] ${c.indexNames.working}, and would stay Working: ${outsiders
+        .slice(0, 10)
+        .map((o) => o.name)
+        .join(
+          ', ',
+        )}${outsiders.length > 10 ? ', …' : ''}. Move them in first with move_resource (to: “${root.rawName}”), then promote the whole set.`,
+    );
+  }
   const allFlags = [...flags, ...parts.flatMap((x) => [...x.m.flags, ...x.part.noteFlags])];
   steps.push({ op: RECORD_STEP, params: { body: { action: 'complete_set', record: { flags: allFlags } } } });
   labels.push('record complete');
@@ -877,6 +896,14 @@ async function planSet(
     estimate,
     ...(allFlags.length ? { flags: allFlags } : {}),
     ...(open ? { resumes: { setId: open.id } } : {}),
+    ...(outsiders.length > 0
+      ? {
+          outsiders: {
+            pages: outsiders,
+            suggestion: `These Working pages have the same subject as the set but sit flat under [INDEX] ${c.indexNames.working}, so this promotion would leave them Working. Move each in with move_resource (page: its id, to: ${root.id}), then promote the whole set in one approval.`,
+          },
+        }
+      : {}),
     ...(related ? { relatedPages: related } : {}),
   };
   if (writes === 0 && !open) {
@@ -968,6 +995,45 @@ async function planSet(
       return { kind: 'job', head, labels, ...out };
     },
   };
+}
+
+/**
+ * C2d.1: Working pages that look as if they belong to a Working set but sit outside it: directly under
+ * `[INDEX] Working` (flat) with the same subject as the set's root (`subjectOf`: a Subject row, else the name before
+ * " - "; a character index's own subject). A promotion would leave them behind, so the dry run lists them and suggests
+ * `move_resource` first.
+ */
+function workingOutsiders(
+  ctx: RepoCtx,
+  workingId: string,
+  root: TreeNode,
+  inSet: ReadonlySet<string>,
+): { id: string; name: string; subject: string }[] {
+  const pid = ctx.projectId;
+  const flat = ctx.tree
+    .children(pid, workingId)
+    .data.filter((k) => k.kind === 'bwrk' && !inSet.has(k.id) && k.id !== root.id);
+  if (flat.length === 0) return [];
+  const sidebars = ctx.tree.sidebars(
+    pid,
+    flat.map((k) => k.id),
+  ).data;
+  const subjectRow = (id: string): string | null => {
+    for (const b of sidebars.get(id) ?? []) {
+      if (b.kind !== 'keyValue') continue;
+      const row = (b.rows ?? []).find((r) => key(r.key) === 'subject');
+      if (row && row.text.trim() !== '') return row.text.trim();
+    }
+    return null;
+  };
+  const want = key(ctx.types.characterRole?.(root.id)?.subject ?? root.displayName);
+  return flat
+    .map((k) => ({
+      id: k.id,
+      name: k.rawName,
+      subject: ctx.types.characterRole?.(k.id)?.subject ?? subjectOf(k.displayName, subjectRow(k.id)),
+    }))
+    .filter((k) => key(k.subject) === want);
 }
 
 const EMPTY: LifecycleFacts = {
