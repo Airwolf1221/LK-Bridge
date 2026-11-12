@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useState, type DragEvent, type FormEvent } from 'react';
 import {
   Badge,
   CopyButton,
@@ -11,11 +11,12 @@ import {
 } from '../components';
 import { fmtAgo, fmtBytes, fmtTime } from '../format';
 import { useNow } from '../hooks';
-import { useProject, useProjectApi, useScopedApi } from '../project';
+import { useProject, useProjectApi, useProjectReloadOn, useScopedApi } from '../project';
 import { useReauth } from '../reauth';
 import type {
   StagedImageView,
   StagingActionResponse,
+  StagingPreviewResponse,
   StagingResponse,
   StagingUploadResponse,
 } from '../types';
@@ -30,12 +31,79 @@ import type {
 
 type Kind = 'character' | 'folder' | 'page';
 
-function destinationOf(kind: Kind, a: string, b: string): Record<string, unknown> | null {
+/**
+ * The destination the form describes. `sub` is the subfolder path as the owner wrote it (`Wardrobe / Qipao`): it goes to
+ * the bridge as it is (the `subfolders` of the destination), which splits it on `/`, trims each part and refuses an empty
+ * part, `.` and `..`. Only a character or a page takes one; a folder path already says where.
+ */
+function destinationOf(kind: Kind, a: string, b: string, sub = ''): Record<string, unknown> | null {
   if (!a.trim()) return null;
+  const subfolders = sub.trim() ? { subfolders: sub.trim() } : {};
   if (kind === 'character')
-    return { for_character: { name: a.trim(), ...(b.trim() ? { race: b.trim() } : {}) } };
-  if (kind === 'page') return { for_page: a.trim(), ...(b.trim() ? { folder: b.trim() } : {}) };
+    return { for_character: { name: a.trim(), ...(b.trim() ? { race: b.trim() } : {}) }, ...subfolders };
+  if (kind === 'page')
+    return { for_page: a.trim(), ...(b.trim() ? { folder: b.trim() } : {}), ...subfolders };
   return { folder: a.trim() };
+}
+
+/**
+ * Where it will land, worked out by the bridge as a dry run (nothing is written): the full path, each new folder marked,
+ * and how many would be created, or the reason it would be refused. Follows what the owner types (after a short pause).
+ */
+function PathPreview({ destination }: { destination: Record<string, unknown> | null }) {
+  const projectApi = useProjectApi();
+  const [state, setState] = useState<
+    { kind: 'idle' } | { kind: 'ok'; p: StagingPreviewResponse } | { kind: 'bad'; message: string }
+  >({ kind: 'idle' });
+  const key = JSON.stringify(destination);
+  useEffect(() => {
+    const destination = JSON.parse(key) as Record<string, unknown> | null; // `key` is the destination's value
+    if (!destination) {
+      setState({ kind: 'idle' });
+      return;
+    }
+    let live = true;
+    const t = setTimeout(() => {
+      projectApi
+        .post<StagingPreviewResponse>('/staging/preview', { destination })
+        .then((p) => live && setState({ kind: 'ok', p }))
+        .catch((e: unknown) => live && setState({ kind: 'bad', message: (e as Error).message }));
+    }, 350);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [key, projectApi]);
+  if (state.kind === 'idle') return null;
+  if (state.kind === 'bad')
+    return (
+      <p role="alert" className="bad">
+        {state.message}
+      </p>
+    );
+  const { p } = state;
+  return (
+    <p aria-label="Where it will land" data-testid="path-preview">
+      <span className="muted">It will land in: </span>
+      <span className="path-preview">
+        {p.segments.map((s, i) => (
+          <span key={i}>
+            {i > 0 ? ' / ' : ''}
+            {s.new ? (
+              <em className="new-folder" title="a new folder">
+                {s.name}
+              </em>
+            ) : (
+              s.name
+            )}
+          </span>
+        ))}
+      </span>
+      {p.newFolders > 0 && (
+        <span className="muted">{` (${p.newFolders} new folder${p.newFolders === 1 ? '' : 's'})`}</span>
+      )}
+    </p>
+  );
 }
 
 function PlaceForm({ image, onDone }: { image: StagedImageView; onDone: () => void }) {
@@ -44,10 +112,11 @@ function PlaceForm({ image, onDone }: { image: StagedImageView; onDone: () => vo
   const [kind, setKind] = useState<Kind>('character');
   const [a, setA] = useState('');
   const [b, setB] = useState('');
+  const [subfolder, setSubfolder] = useState('');
   const [name, setName] = useState('');
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    const destination = destinationOf(kind, a, b);
+    const destination = destinationOf(kind, a, b, subfolder);
     void run(
       () =>
         projectApi.post<StagingActionResponse>(`/staging/${image.stagedId}/place`, {
@@ -85,6 +154,25 @@ function PlaceForm({ image, onDone }: { image: StagedImageView; onDone: () => vo
           <input id={`${id}-b`} value={b} onChange={(e) => setB(e.target.value)} />
         </>
       )}
+      {kind !== 'folder' && (
+        <>
+          <label htmlFor={`${id}-sub`}>Subfolder (optional)</label>
+          <input
+            id={`${id}-sub`}
+            value={subfolder}
+            placeholder="Wardrobe, or Wardrobe / Qipao"
+            aria-describedby={`${id}-sub-help`}
+            disabled={!a.trim()}
+            onChange={(e) => setSubfolder(e.target.value)}
+          />
+          <p id={`${id}-sub-help`} className="muted">
+            Written like the folder chain: Wardrobe, or Wardrobe / Qipao (Qipao inside Wardrobe). Folders that
+            exist are used; missing ones are created. Give the {kind === 'character' ? 'character' : 'page'}{' '}
+            first.
+          </p>
+        </>
+      )}
+      <PathPreview destination={destinationOf(kind, a, b, subfolder)} />
       <label htmlFor={`${id}-name`}>New name (optional)</label>
       <input id={`${id}-name`} value={name} onChange={(e) => setName(e.target.value)} />
       <div className="actions">
@@ -220,6 +308,9 @@ export function StagingPage() {
   const { run, busy } = useAction();
   const [placing, setPlacing] = useState<string | null>(null);
   const r = useScopedApi<StagingResponse>('/staging');
+  // v2 D3.1: the list follows the bridge's own `staging` event (an agent's stage, an approved placement, a job ending or
+  // failing, the owner's other tabs), not only this tab's own actions. The event names the project; others are ignored.
+  useProjectReloadOn(['staging'], r.reload);
   if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
   const d = r.data;
   const discard = (img: StagedImageView) =>

@@ -45,6 +45,34 @@ the mock, and the sandbox changes are written and dry-run against the mock, not 
   advice depends on the set: move them in first (promote, archive of a Working set); a Working page cannot be moved into an
   Authoritative set, so archive each as well; after `move_to_working`, bring them in once the set is Working. `unarchive_page`
   lists none. Tests in `test/lifecycle/working-sets.test.ts`.
+- **The Staging page follows agents' uploads** (owner's addendum, 12 November 2026). The page reloaded only after the owner's
+  own actions in that tab (there was no stream event for staging, and it neither polled nor listened). The image service now
+  sends a **`staging` event** on the engine's bus, which the dashboard's stream relays, from its own store whenever a staged
+  upload is created, finishes converting or verifying (`uploaded`), is placed, discarded or fails: whatever the route (an MCP
+  tool, `upload_image` with `stage: true` or any upload at `propose`, a proposal's approval, a job ending, the binary
+  endpoint, the dashboard), not from the dashboard's routes. The data is `{ projectId, stagedId, change, name, state, source,
+staged, old }` (the counts after the change, for the old-images report and any badge; there is no navigation count yet).
+  The service now also follows a placement proposal itself: on the proposal's own events, and when any job ends, it settles
+  open placements, so an approval is announced when it happens and not when someone next reads the list (a proposal approved
+  with nobody looking left the record stale until then). The page listens (`useProjectReloadOn`), ignores other projects'
+  events and reloads once for a burst; `staging` is in the UI's event list. Tests: `test/images/staging-events.test.ts` (an
+  MCP stage, a propose-scope stage, an approval's placement, a rejected proposal, a failed upload, a discard: each on the
+  engine's bus and in the real `/api/admin/stream` frames) and `test/ui/staging.test.tsx` (the list gains, loses and recounts
+  without a reload; another project's event is ignored; a burst is one reload).
+- **A subfolder for character and page destinations** (owner's addendum 2, 12 November 2026). Placing a staged image in, say,
+  a character's Wardrobe folder was awkward: the Place form had no subfolder. It now has a **Subfolder** field for a character
+  and for a page (not for a folder path, which already says where), written like the folder chain, `Wardrobe` or
+  `Wardrobe / Qipao`. The bridge splits it on `/`, trims each part and refuses an empty part, `.` and `..` with a message that
+  shows how to write it (`INVALID_SUBFOLDER`, one parser, `parseSubfolders`, used by every route), and passes the result as the
+  existing `subfolders` list, so the folder rules are untouched (reuse, create in order, a non-folder of the same name is
+  `ASSET_NAME_CONFLICT`). **Preview:** as the owner types, the form asks `POST /api/admin/staging/preview` (a dry run of the same
+  planner, nothing written) and shows `Characters / Beastkin / Qishen / Mehrana al-Khalid / Wardrobe / Qipao (2 new folders)`,
+  each new folder marked, or the reason it would be refused. **`upload_image`** (and so a staged image's intended destination)
+  also takes `subfolders` as one path string as well as a list. The dashboard's upload box has no destination options (an
+  upload is staged in the staging folder and placed afterwards), so there was nothing to add there. Tests:
+  `test/images/subfolders.test.ts` (the parser, one and two levels, existing and missing folders, a non-folder conflict, bad
+  paths, the string form in the MCP tool, for_page, the preview and placing), and `test/ui/staging.test.tsx` (the field, the
+  preview with new folders marked and counted, the refusal shown, the body sent). Docs: dashboard, tools, bridge guide.
 - **Docs:** ADR 0040 (the probe results and a corrected decision 9), ADR 0041 (the image directory), ADR 0037 (outsiders),
   `docs/tools.md`, the bridge guide, the runbook (the image directory is created on first use), `test/sandbox/README.md` and
   PLAN-v2.

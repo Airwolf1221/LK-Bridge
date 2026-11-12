@@ -1346,6 +1346,16 @@ export interface StagingUploadResponse {
   image: StagedImageView;
 }
 
+/** `POST /staging/preview`: the folder plan of a destination as a dry run (v2 D3.2). */
+export interface StagingPreviewResponse {
+  path: string;
+  segments: { name: string; new: boolean }[];
+  newFolders: number;
+  exists: boolean;
+  notes: string[];
+  dryRun: true;
+}
+
 export interface StagingActionResponse {
   jobId?: string;
   proposalId?: string;

@@ -117,6 +117,12 @@ pre,
   outline-offset: 2px;
   border-radius: 4px;
 }
+.new-folder {
+  font-style: normal;
+  font-weight: 600;
+  text-decoration: underline dotted;
+}
+
 .muted {
   color: var(--muted);
 }

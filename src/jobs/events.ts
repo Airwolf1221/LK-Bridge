@@ -30,6 +30,22 @@ export interface JobEngineEvents {
     readonly before?: unknown;
     readonly after?: unknown;
   };
+  /**
+   * v2 D3.1: the project's staged images changed (src/images). Sent by the image service itself, whatever the route: an MCP
+   * tool, a proposal's approval, a job ending, the binary endpoint or the dashboard. `staged` and `old` are the counts after
+   * the change, so a navigation badge or the old-images report can update without a fetch.
+   */
+  staging: {
+    readonly projectId: string;
+    readonly stagedId: string;
+    /** What happened to this image: created, uploaded (converted, stored, verified), failed, placed, discarded, or changed. */
+    readonly change: 'created' | 'uploaded' | 'failed' | 'placed' | 'discarded' | 'updated';
+    readonly name: string;
+    readonly state: string;
+    readonly source: string;
+    readonly staged: number;
+    readonly old: number;
+  };
   /** A proposal was captured or changed state (src/policy). */
   proposal: {
     readonly type: 'captured' | 'updated';

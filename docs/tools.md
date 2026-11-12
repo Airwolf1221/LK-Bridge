@@ -1239,7 +1239,11 @@ asset id is still returned, nothing is retried), and for a staged image `updateA
   `create_character`);
 - `for_page`: a Core, Reference or character index page gives its character (the race from where the page is); any other
   page needs `folder` too (`FOLDER_REQUIRED`);
-- `subfolders`: literal folder names appended, created in order.
+- `subfolders`: literal folders appended, created in order: a list of names, **or one path string written like the folder
+  chain** (`"Wardrobe"`, `"Wardrobe / Qipao"`, Qipao inside Wardrobe). A string is split on `/` and each part trimmed; an empty
+  part, `.` and `..` are refused (`INVALID_SUBFOLDER`, before anything is sent). Existing folders are reused, missing ones
+  created in order, and a non-folder with the same name is a conflict, as for any folder. The dashboard's Staging page
+  takes the same form and shows the full resolved path before placing.
 
 Folders are never moved; a non-folder asset with a needed folder's name is refused (`ASSET_NAME_CONFLICT`).
 

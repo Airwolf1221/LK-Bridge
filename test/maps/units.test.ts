@@ -1004,7 +1004,8 @@ describe('the top level, however a feature says it (the owner’s probe of 12 No
       ...o,
     });
     const end = buildUpdate(s, mv());
-    expect(end).toMatchObject({ ok: true, changes: ['parentId', 'rank'] });
+    expect(end).toMatchObject({ ok: true });
+    expect([...(end as { changes: readonly string[] }).changes].sort()).toEqual(['parentId', 'rank']);
     expect((end as { body: Obj }).body.parentId).toBe('');
     // after "Empty" (a feature that says "" itself): between it and "Null"
     const after = buildUpdate(s, mv({ placement: { at: 'after', siblingId: 'top00002' } })) as {

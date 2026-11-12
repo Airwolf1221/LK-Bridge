@@ -141,6 +141,17 @@ body to the public address and expects the live bridge's generic refusal.
 - Open: a thumbnail on the Staging page uses the asset's URL, so a project whose assets are served from another host
   (`LK_ASSET_HOSTS`) shows none until the CSP names it; restore tools for kept bytes are E1's.
 
+## Notes: the Staging page's live updates (12 November 2026, the owner's addendum)
+
+The page listed staged images on load and after its own actions only; an agent's stage, an approved placement or a failed
+job never reached it. Decision 11's page now listens. `ImageStore` calls a change listener after every insert and update of
+an upload record, the one place every route passes (the service's steps, a job ending, a proposal, the dashboard), and
+`ImageService` turns a change to a staged image into the engine bus's `staging` event (`created`, `uploaded`, `failed`,
+`placed`, `discarded`, `updated`, with the staged and old counts after it), which the dashboard's stream relays. It is sent
+from the service, not the dashboard's routes. A placement proposed at `propose` was only noticed when a read next settled the
+record; the service now follows the proposal's events and settles open placements whenever a job ends. An image that was never
+staged sends nothing. See docs/dashboard.md, Staging and Stream.
+
 ## Notes: the image directory (12 November 2026, the owner's full sandbox run)
 
 All five sandbox files failed in their first second with `EACCES: mkdir '/opt/lk-bridge/app/data/images/upload-tmp'`.

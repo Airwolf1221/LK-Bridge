@@ -23,6 +23,7 @@ import type { Db } from '../db/open.js';
 import {
   TERMINAL_JOB_STATUSES,
   type JobEngine,
+  type JobEngineEvents,
   type JobOrigin,
   type JobView,
   type PriorityClass,
@@ -135,6 +136,9 @@ export class ImageService {
 
   constructor(private readonly o: ImageServiceOptions) {
     this.store = new ImageStore(o.db, o.now);
+    // v2 D3.1: every change to a staged image is announced here, from the service's own store, so it does not depend on
+    // the route (MCP tool, proposal approval, job ending, binary endpoint, dashboard).
+    this.store.onChange((after, before) => this.announce(after, before));
     this.dir = imageDataDir(o.images, o.dbPath);
     this.slots = new UploadSlots(this.store, join(this.dir, 'upload-tmp'));
     this.bytes = new ByteStore(join(this.dir, 'kept-bytes'));
@@ -175,6 +179,17 @@ export class ImageService {
           ...(this.o.log ? { log: this.o.log } : {}),
         }),
       ),
+    );
+    // A proposal approved, rejected, expired or conflicted: the staged image it would place follows it.
+    this.detach.push(
+      this.o.engine.events.on('proposal', (e) => {
+        try {
+          for (const r of this.store.withPlacementProposal(e.projectId))
+            if (r.placementProposalId === e.proposalId) this.settle(r);
+        } catch (err) {
+          this.o.log?.warn({ err, proposalId: e.proposalId }, 'a staged image could not follow its proposal');
+        }
+      }),
     );
     this.detach.push(
       this.o.engine.events.on('job', (e) => {
@@ -346,13 +361,50 @@ export class ImageService {
     return { row, submitted };
   }
 
+  // ============================================================================================ announcing
+
+  /** Sends the dashboard's `staging` event for a change to a staged image (never for an image that was never staged). */
+  private announce(after: ImageUploadRow, before: ImageUploadRow | undefined): void {
+    if (!after.staged && !before?.staged) return;
+    const change: JobEngineEvents['staging']['change'] =
+      before === undefined
+        ? 'created'
+        : after.state === 'failed' && before.state !== 'failed'
+          ? 'failed'
+          : after.state === 'discarded' && before.state !== 'discarded'
+            ? 'discarded'
+            : before.staged && !after.staged && after.state === 'uploaded'
+              ? 'placed'
+              : before.state === 'uploading' && after.state === 'uploaded'
+                ? 'uploaded'
+                : 'updated';
+    try {
+      const staged = this.store.staged(after.projectId).filter((r) => r.staged && r.state !== 'failed');
+      const oldBefore = this.o.now() - this.o.images.stagingReportDays * DAY;
+      this.o.engine.events.emit('staging', {
+        projectId: after.projectId,
+        stagedId: after.id,
+        change,
+        name: after.name,
+        state: after.state,
+        source: after.source,
+        staged: staged.length,
+        old: staged.filter((r) => r.createdAt < oldBefore).length,
+      });
+    } catch (err) {
+      this.o.log?.warn({ err, stagedId: after.id }, 'the staging event could not be sent');
+    }
+  }
+
   // ============================================================================================ following the jobs
 
   private onJobEnded(job: JobView): void {
     try {
       for (const r of this.store.uploading(job.projectId)) if (r.jobId === job.id) this.settle(r);
+      // A placement proposed at scope `propose` and approved since has no job id on its record yet: settle every open one
+      // (the approval's job is this one, or another's; settling reads the proposal and the job and does only what is due).
       for (const r of this.store.staged(job.projectId))
-        if (r.placementJobId === job.id || r.discardJobId === job.id) this.settle(r);
+        if (r.placementJobId === job.id || r.discardJobId === job.id || r.placementProposalId) this.settle(r);
     } catch (err) {
       this.o.log?.warn({ err, jobId: job.id }, 'an image record could not be settled from its job');
     }

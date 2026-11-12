@@ -473,8 +473,10 @@ transparency and every animation frame kept; a WebP is stored as it is; metadata
 `for_character { name, race }` (a folder named after the character is reused wherever it is; otherwise
 `Characters / Group / Race / Name`, created as needed; an unknown race goes to `Undetermined / Unknown`; a race that does
 not resolve fails), `for_page` (a character page gives its character's folder; any other page needs a `folder` too),
-`folder` (an id or a path such as `Characters / Beastkin / Qishen / Mehrana al-Khalid`), plus `subfolders`. Check with
-`dryRun: true` first if unsure.
+`folder` (an id or a path such as `Characters / Beastkin / Qishen / Mehrana al-Khalid`), plus `subfolders`: a list, or one
+path written like the folder chain (`"Wardrobe / Qipao"`: Qipao inside Wardrobe; an empty part, `.` and `..` are refused).
+Existing folders are reused and missing ones created. Check with `dryRun: true` first if unsure: it lists the folders that
+would be created.
 
 **Staging.** `stage: true` uploads and verifies the image but keeps it hidden in the staging folder; place it later with
 `staged_id` (and a `destination`, or the one you gave when staging). With a `propose` connection every upload is staged

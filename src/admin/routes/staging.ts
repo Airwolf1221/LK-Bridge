@@ -7,6 +7,9 @@
  *   kept before deletes, and the owner's delete permissions.
  * - `POST /staging/upload?name=…` with the image as the raw body (`application/octet-stream`): the same pipeline and
  *   limits as `upload_image` (magic bytes, the caps, one conversion at a time, deduplication), staged, verified.
+ * - `POST /staging/preview` (a destination, or a staged id for its intended one): a dry run of the folder plan, with no
+ *   write: the full resolved path, the folders that would be created, and the refusal (a bad subfolder path, an
+ *   ambiguous folder, a non-folder of the same name) exactly as placing would give it.
  * - `POST /staging/:id/place` (a destination; an optional new name) and `POST /staging/:id/discard` (the bytes are kept
  *   before the delete).
  * - `POST /staging/allow-delete` (re-authenticated): lets ONE delete of an asset go ahead although its bytes could not
@@ -38,7 +41,7 @@ const destination = z
       })
       .strict()
       .optional(),
-    subfolders: z.array(name200).max(10).optional(),
+    subfolders: z.union([z.string().min(1).max(2000), z.array(name200).max(10)]).optional(),
   })
   .strict();
 
@@ -188,6 +191,56 @@ export const registerStaging: Register = (api, ctx) => {
     return { deduplicated: false, image: view(svc, row, project.id, urlOf(project.id, row.assetId)) };
   });
 
+  api.post('/staging/preview', (req) => {
+    const q = parseInput(projectQuery, req.query);
+    const b = parseInput(
+      z
+        .object({
+          destination: destination.optional(),
+          stagedId: z
+            .string()
+            .regex(/^img_[A-Za-z0-9_-]{8,40}$/)
+            .optional(),
+        })
+        .strict(),
+      req.body,
+    );
+    const project = ctx.project(q.project);
+    const svc = images(ctx);
+    let dest = b.destination;
+    if (!dest && b.stagedId) {
+      const row = svc.staged(project.id, b.stagedId);
+      if (!row)
+        throw new AdminHttpError(404, 'STAGED_NOT_FOUND', `No staged image ${b.stagedId} in this project.`);
+      dest = (row.intended as { destination?: z.infer<typeof destination> } | null)?.destination;
+    }
+    if (!dest) throw new AdminHttpError(400, 'DESTINATION_REQUIRED', 'Choose where the image goes.');
+    const plan = svc.plan(project.id, dest);
+    if (!plan.ok) {
+      throw new AdminHttpError(
+        plan.error.code === 'INVALID_SUBFOLDER' ? 400 : 409,
+        plan.error.code,
+        plan.error.message,
+        plan.error.details,
+      );
+    }
+    const p = plan.plan;
+    const created = new Set(p.wouldCreate.map((s) => s.path.join('\u0000')));
+    return {
+      // The whole path, folder by folder, each marked as existing or new (a new folder under another new one is new too).
+      path: p.destination.path.join(' / '),
+      segments: p.destination.path.map((name, i) => ({
+        name,
+        new: created.has(p.destination.path.slice(0, i + 1).join('\u0000')),
+      })),
+      newFolders: p.wouldCreate.length,
+      exists: p.destination.exists,
+      notes: p.notes,
+      described: plan.described,
+      dryRun: true,
+    };
+  });
+
   api.post('/staging/:id/place', async (req) => {
     const q = parseInput(projectQuery, req.query);
     const { id } = parseInput(idParams, req.params);
@@ -203,7 +256,14 @@ export const registerStaging: Register = (api, ctx) => {
       b.destination ?? (row.intended as { destination?: z.infer<typeof destination> } | null)?.destination;
     if (!dest) throw new AdminHttpError(400, 'DESTINATION_REQUIRED', 'Choose where the image goes.');
     const plan = svc.plan(project.id, dest);
-    if (!plan.ok) throw new AdminHttpError(409, plan.error.code, plan.error.message, plan.error.details);
+    if (!plan.ok) {
+      throw new AdminHttpError(
+        plan.error.code === 'INVALID_SUBFOLDER' ? 400 : 409,
+        plan.error.code,
+        plan.error.message,
+        plan.error.details,
+      );
+    }
     let placed;
     try {
       placed = await svc.place({

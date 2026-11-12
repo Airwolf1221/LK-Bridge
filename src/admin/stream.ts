@@ -72,6 +72,8 @@ export class StreamHub {
       e.on('controls', (x) => this.publish('controls', x)),
       e.on('policy', (x) => this.publish('policy', x)),
       e.on('proposal', (x) => this.publish('proposal', x)),
+      // v2 D3.1: a staged image changed (sent by the image service, whatever the route).
+      e.on('staging', (x) => this.publish('staging', x)),
       // v2 A1: a project's status or flags changed (verified, stopped, read-only).
       projects.onChange((v) => {
         this.watchGovernors();
