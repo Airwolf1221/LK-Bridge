@@ -8,6 +8,7 @@
  *   `formattedEnd` (the calendar engine comes in D1).
  * - Boards: each page's shapes with their text, then the connections (arrows bound to shapes).
  */
+import { posToPixel, type MapFrame } from '../maps/geometry.js';
 import { escapeLineStart, escapeText } from './inline.js';
 import { isObj, type Obj } from './model.js';
 
@@ -42,14 +43,74 @@ function centre(points: unknown): { lat: number; lng: number; count: number } | 
   return { lat, lng, count: flat.length };
 }
 
-function featureLine(f: Obj): string {
+/** What a map's document says about its image, for the header and the pixel positions (v2 D2, ADR 0040). */
+export type MapImageInfo =
+  | { readonly kind: 'image'; readonly frame: MapFrame; readonly assetId?: string | null }
+  | { readonly kind: 'legacy' }
+  | { readonly kind: 'none' };
+
+/** A region or path's points are listed in pixels up to this many; beyond it they are summarised (unless `full`). */
+const POINTS_LISTED = 6;
+
+const px = (v: number): string => String(Math.round(v * 10) / 10);
+
+function polys(f: Obj): number[][][] | null {
+  const pairs = (v: unknown): number[][] | null =>
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'number' && typeof p[1] === 'number')
+      ? (v as number[][])
+      : null;
+  if (Array.isArray(f.polygons) && f.polygons.length > 0) {
+    const all = (f.polygons as unknown[]).map(pairs);
+    if (all.every((x) => x !== null)) return all;
+  }
+  const one = pairs(f.polygon) ?? pairs(f.polyline);
+  return one ? [one] : null;
+}
+
+function featureLine(f: Obj, image: MapImageInfo | undefined, full: boolean): string {
   const type = str(f.type) || 'feature';
   const name = txt(f.name) || '(unnamed)';
+  const frame = image?.kind === 'image' ? image.frame : null;
+  const pixel = (p: number[]) => {
+    const v = posToPixel(frame!, [p[0]!, p[1]!]);
+    return `(${px(v.x)}, ${px(v.y)})`;
+  };
   let where = '';
-  if (Array.isArray(f.pos)) where = ` at (${num(f.pos[0])}, ${num(f.pos[1])})`;
-  else {
+  if (Array.isArray(f.pos)) {
+    where = ` at (${num(f.pos[0])}, ${num(f.pos[1])})`;
+    if (frame && typeof f.pos[0] === 'number' && typeof f.pos[1] === 'number')
+      where += `, pixel ${pixel(f.pos as number[])}`;
+  } else {
     const c = centre(f.polygons ?? f.polygon ?? f.polyline);
-    if (c) where = ` around (${num(c.lat)}, ${num(c.lng)}), ${c.count} points`;
+    if (c) {
+      where = ` around (${num(c.lat)}, ${num(c.lng)}), ${c.count} points`;
+      const shapes = polys(f);
+      if (shapes) {
+        if (frame) {
+          const listAll = full || c.count <= POINTS_LISTED;
+          if (listAll) {
+            where += `: pixels ${shapes
+              .map((poly) =>
+                shapes.length > 1 ? `[${poly.map(pixel).join(' ')}]` : poly.map(pixel).join(' '),
+              )
+              .join(' ')}`;
+          } else {
+            const all = shapes.flat().map((p) => posToPixel(frame, [p[0]!, p[1]!]));
+            where += `, pixel box (${px(Math.min(...all.map((p) => p.x)))}, ${px(Math.min(...all.map((p) => p.y)))}) to (${px(Math.max(...all.map((p) => p.x)))}, ${px(Math.max(...all.map((p) => p.y)))}) (detail "full" lists every point)`;
+          }
+        } else if (full) {
+          where += `: ${shapes
+            .map((poly) =>
+              shapes.length > 1
+                ? `[${poly.map((p) => `(${num(p[0])}, ${num(p[1])})`).join(' ')}]`
+                : poly.map((p) => `(${num(p[0])}, ${num(p[1])})`).join(' '),
+            )
+            .join(' ')}`;
+        }
+      }
+    }
   }
   const link = uriLink(f.uri);
   const hidden = f.isHidden === true ? ' (hidden)' : '';
@@ -59,6 +120,10 @@ function featureLine(f: Obj): string {
 export interface MapInput {
   readonly name?: string;
   readonly features: readonly unknown[];
+  /** v2 D2: the map's image frame. Left out, the output is as it was before D2 (no header line, no pixels). */
+  readonly image?: MapImageInfo;
+  /** `full` lists every point of a long region or path (default: summarised). */
+  readonly detail?: 'summary' | 'full';
 }
 
 /** A map document's features as Markdown. */
@@ -76,9 +141,21 @@ export function renderMap(input: MapInput): string {
     `${features.length} feature(s).`,
     '',
   ];
+  const img = input.image;
+  if (img?.kind === 'image') {
+    const [[south, west], [north, east]] = img.frame.bounds;
+    lines.push(
+      `Image: ${img.frame.width}×${img.frame.height} pixels; bounds [[${num(south)}, ${num(west)}], [${num(north)}, ${num(east)}]] as [[south, west], [north, east]]. Positions are (lat, lng); a pixel is counted from the image’s top-left corner (x right, y down).`,
+      '',
+    );
+  } else if (img?.kind === 'legacy') {
+    lines.push('Legacy tiled map: no single image, so no pixel positions; use lat/lng.', '');
+  } else if (img?.kind === 'none') {
+    lines.push('The map has no image yet, so no pixel positions.', '');
+  }
   const walk = (parent: string | null, depth: number) => {
     for (const f of [...(children.get(parent) ?? [])].sort(byRank)) {
-      lines.push(`${'  '.repeat(depth)}${featureLine(f)}`);
+      lines.push(`${'  '.repeat(depth)}${featureLine(f, img, input.detail === 'full')}`);
       if (depth < 20) walk(str(f.id), depth + 1);
     }
   };

@@ -20,6 +20,7 @@ import { createCharacterTool } from './create-character.js';
 import { lifecycleTools } from './lifecycle.js';
 import { documentTools } from './documents.js';
 import { timelineTools } from './timelines.js';
+import { mapFeatureTools } from './map-features.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -51,6 +52,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     ...documentTools(deps),
     // v2 D1 (ADR 0038): the calendar engine and the timeline tools.
     ...timelineTools(deps),
+    // v2 D2 (ADR 0040): the map-feature tools.
+    ...mapFeatureTools(deps),
     ...guideTools(deps),
     ...lkApiTools(deps),
     ...uploadTools(deps),

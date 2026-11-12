@@ -21,7 +21,14 @@ import type {
 
 export { toMarkdown, projectDocument } from './render.js';
 export { outline, getSection } from './sections.js';
-export { renderMap, renderTimeline, renderBoard, type MapInput, type TimelineInput } from './documents.js';
+export {
+  renderMap,
+  renderTimeline,
+  renderBoard,
+  type MapInput,
+  type MapImageInfo,
+  type TimelineInput,
+} from './documents.js';
 export { collectMentionNames } from './parse.js';
 export {
   checkRoundTrip,

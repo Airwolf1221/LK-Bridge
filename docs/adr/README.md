@@ -43,4 +43,5 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0037](0037-whole-set-lifecycle-and-page-scoped-ids.md)                           | Whole-set lifecycle; ids keyed by page; row values trimmed as LegendKeeper trims them           | Accepted                   |
 | [0038](0038-calendar-engine-and-chronology-sync.md)                               | The calendar engine, chronology sync and the timeline tools                                     | Accepted                   |
 | [0039](0039-date-styles-timeline-repair-and-etag-versions.md)                     | Two date styles, timeline repair from the table (`sync_timeline_event`), versions from the ETag | Accepted                   |
+| [0040](0040-map-feature-tools.md)                                                 | The map-feature tools, map images and pixel coordinates                                         | Accepted                   |
 | [0041](0041-image-pipeline.md)                                                    | The image pipeline: four ways in, sharp, the binary endpoint, staging, deletes keep their bytes | Accepted                   |
