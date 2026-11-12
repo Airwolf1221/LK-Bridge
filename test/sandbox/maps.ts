@@ -38,7 +38,7 @@ import {
   type MapState,
   type UpdateRequest,
 } from '../../src/maps/index.js';
-import { BridgeLkError } from '../../src/lk/errors.js';
+import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
 
@@ -171,6 +171,47 @@ export async function runMapsSandbox(
     }
   };
   const p = (path: Obj, rest: Obj = {}) => ({ path, ...rest });
+  /**
+   * One RAW `updateFeature` through the governor, with a body the bridge's own validation would refuse before sending
+   * (`parentId: null`): the answer LegendKeeper itself gives, `{ status, code, issues }`. A write the governor parks for
+   * budget is made again once it allows (nothing was sent when it was parked).
+   */
+  const rawUpdateFeature = async (
+    featureId: string,
+    body: Obj,
+  ): Promise<{ status: number; code?: string; issues: string[] }> => {
+    for (let tries = 0; ; tries++) {
+      try {
+        const res = await t.lk.call<Response>({
+          operationId: 'updateFeature',
+          priority: 'P1',
+          input: { body },
+          run: () =>
+            t.lk.fetch(
+              `${t.baseUrl}/api/v3/projects/${t.projectId}/resources/${rootId}/docs/${mapDoc}/features/${featureId}`,
+              {
+                method: 'PATCH',
+                headers: { authorization: `Bearer ${t.apiKey}`, 'content-type': 'application/json' },
+                body: JSON.stringify(body),
+              },
+            ),
+        });
+        return { status: res.status, issues: [] };
+      } catch (e) {
+        if (e instanceof BudgetWaitError && tries < 5) {
+          await sleep(Math.max(1000, e.retryAtMs - Date.now()));
+          continue;
+        }
+        if (e instanceof BridgeLkError)
+          return {
+            status: e.status ?? 0,
+            ...(e.code ? { code: e.code } : {}),
+            issues: e.errors.map((i) => `${i.path}: ${i.message}`),
+          };
+        throw e;
+      }
+    }
+  };
 
   // ---- guard: the key must belong to exactly the sandbox project --------------------------------------------------
   const projects = (await run('listProjects')) as { data?: { id: string }[] };
@@ -575,22 +616,83 @@ export async function runMapsSandbox(
       });
       await check(
         'M6c',
-        'parentId null moves a pin out to the top level (ADR 0040: assumed from the spec’s “null = root”)',
+        'a move to the top level: parentId "" works (with a rank between two siblings), and reads back as the top level',
         async () => {
           if (!made.pin) throw new Unclear('no pin');
+          // The owner's probe of 12 November 2026: LegendKeeper moves a feature to the top level with `parentId: ""`.
+          // The bridge's own move sends exactly that (buildUpdate), so this goes through the tools' job.
+          let sent: Obj;
           try {
-            await update(made.pin, { parentId: null });
+            ({ sent } = await update(made.pin, { parentId: null }));
           } catch (e) {
             fail(
-              `LegendKeeper refused it: ${(e as Error).message}. update_map_feature's \`folder: null\` will fail until another way is found (docs/adr/0040-map-feature-tools.md).`,
+              `LegendKeeper refused the move to the top level: ${(e as Error).message}. update_map_feature's \`folder: null\` fails (docs/adr/0040-map-feature-tools.md, decision 9).`,
             );
           }
+          if (sent!.parentId !== '')
+            fail(`the bridge sent parentId ${JSON.stringify(sent!.parentId)}, not ""`);
           const s = await stored(made.pin);
           if (s.parentId !== undefined && s.parentId !== null && s.parentId !== '')
-            fail(`the pin's parentId is still ${JSON.stringify(s.parentId)} after parentId: null`);
-          return `pin at the top level (parentId ${JSON.stringify(s.parentId ?? null)}), rank ${s.rank}`;
+            fail(`the pin's parentId is still ${JSON.stringify(s.parentId)} after parentId: ""`);
+          // A midpoint rank between two top-level siblings is accepted on a move (base-62, "a1V" between "a1" and "a2").
+          const top = (await features())
+            .filter((f) => f.id !== made.pin && !(typeof f.parentId === 'string' && f.parentId !== ''))
+            .filter((f) => typeof f.rank === 'string')
+            .sort((x, y) => (String(x.rank) < String(y.rank) ? -1 : 1));
+          let midpoint = '';
+          if (top.length >= 2 && made.folder) {
+            await update(made.pin, { parentId: made.folder, placement: { at: 'end' } });
+            const a = top[0]!;
+            const b = top[1]!;
+            await update(made.pin, { parentId: null, placement: { at: 'after', siblingId: a.id as string } });
+            const m = await stored(made.pin);
+            if (!(String(m.rank) > String(a.rank) && String(m.rank) < String(b.rank)))
+              fail(
+                `after "${a.name}" the pin's rank is ${m.rank}, which is not between ${a.rank} and ${b.rank}`,
+              );
+            midpoint = `; a move after “${a.name}” took the midpoint rank ${m.rank} (between ${a.rank} and ${b.rank})`;
+          }
+          const sibs = (await features()).filter(
+            (f) => !(typeof f.parentId === 'string' && f.parentId !== ''),
+          );
+          if (!sibs.some((f) => f.id === made.pin)) fail('the pin is not among the top-level features');
+          return `pin at the top level (parentId ${JSON.stringify(s.parentId ?? null)} on the read; the bridge sent ""), rank ${s.rank}${midpoint}`;
         },
       );
+      // The other half of the probe, recorded as a NOTED fact about LegendKeeper (never a failure of the bridge): the
+      // schema says "(null = root)" but types parentId as a string, and LegendKeeper enforces the type.
+      try {
+        if (!made.pin) throw new Unclear('no pin');
+        // The governor's own validation (the registry's) refuses null before it is sent, so this is a raw governed call.
+        const r = await rawUpdateFeature(made.pin, { parentId: null });
+        const title =
+          'parentId null on updateFeature is refused by LegendKeeper (the owner’s probe of 12 November 2026)';
+        if (r.status >= 200 && r.status < 300) {
+          record(
+            'M6c-null',
+            title,
+            'inconclusive',
+            'LegendKeeper ACCEPTED parentId null this time; the probe of 12 November 2026 was refused (400, parentId: "Expected string, received null"). The bridge sends "" either way, so nothing needs changing; tell the maintainer.',
+          );
+        } else {
+          const refused = r.status === 400 && r.code === 'VALIDATION_ERROR';
+          record(
+            'M6c-null',
+            title,
+            refused ? 'noted' : 'inconclusive',
+            refused
+              ? `NOTED: LegendKeeper answers 400 VALIDATION_ERROR (${r.issues.join('; ') || 'no issue listed'}); nothing was written. The schema's “(null = root)” is wrong: its type is a string. The bridge sends "" to move to the top level (M6c).`
+              : `answered ${r.status} ${r.code ?? ''} ${r.issues.join('; ')}`.trim(),
+          );
+        }
+      } catch (e) {
+        record(
+          'M6c-null',
+          'parentId null on updateFeature is refused by LegendKeeper (the owner’s probe of 12 November 2026)',
+          'inconclusive',
+          e instanceof Unclear ? e.message : `the check could not complete: ${(e as Error).message}`,
+        );
+      }
       await check(
         'M6d',
         'a region’s geometry is replaced by several polygons (stored as polygons, with no stale polygon)',
@@ -831,7 +933,13 @@ export async function runMapsSandbox(
 }
 
 export function formatMapsReport(findings: readonly Finding[]): string {
-  const mark = { pass: 'PASS', fail: 'FAIL', inconclusive: 'INCONCLUSIVE', skipped: 'SKIPPED' } as const;
+  const mark = {
+    pass: 'PASS',
+    fail: 'FAIL',
+    inconclusive: 'INCONCLUSIVE',
+    skipped: 'SKIPPED',
+    noted: 'NOTED',
+  } as const;
   const count = (v: Verdict) => findings.filter((f) => f.verdict === v && f.id !== 'cleanup').length;
   return [
     '',
@@ -839,7 +947,7 @@ export function formatMapsReport(findings: readonly Finding[]): string {
     '============================================================================================',
     ...findings.map((f) => `[${mark[f.verdict]}] (${f.id}) ${f.title}\n        ${f.detail}`),
     '',
-    `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE, ${count('skipped')} SKIPPED`,
+    `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE, ${count('skipped')} SKIPPED, ${count('noted')} NOTED`,
     '',
   ].join('\n');
 }

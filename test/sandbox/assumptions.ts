@@ -1242,7 +1242,13 @@ export async function runAssumptions(
 }
 
 export function formatAssumptionsReport(findings: readonly Finding[]): string {
-  const mark = { pass: 'PASS', fail: 'FAIL', inconclusive: 'INCONCLUSIVE', skipped: 'SKIPPED' } as const;
+  const mark = {
+    pass: 'PASS',
+    fail: 'FAIL',
+    inconclusive: 'INCONCLUSIVE',
+    skipped: 'SKIPPED',
+    noted: 'NOTED',
+  } as const;
   const count = (v: Verdict) => findings.filter((f) => f.verdict === v && f.id !== 'cleanup').length;
   return [
     '',

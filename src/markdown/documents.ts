@@ -8,6 +8,7 @@
  *   `formattedEnd` (the calendar engine comes in D1).
  * - Boards: each page's shapes with their text, then the connections (arrows bound to shapes).
  */
+import { parentOf } from '../maps/features.js';
 import { posToPixel, type MapFrame } from '../maps/geometry.js';
 import { escapeLineStart, escapeText } from './inline.js';
 import { isObj, type Obj } from './model.js';
@@ -132,7 +133,8 @@ export function renderMap(input: MapInput): string {
   const children = new Map<string | null, Obj[]>();
   const ids = new Set(features.map((f) => str(f.id)));
   for (const f of features) {
-    const p = typeof f.parentId === 'string' && ids.has(f.parentId) ? f.parentId : null;
+    const parent = parentOf(f);
+    const p = parent !== null && ids.has(parent) ? parent : null;
     children.set(p, [...(children.get(p) ?? []), f]);
   }
   const lines: string[] = [

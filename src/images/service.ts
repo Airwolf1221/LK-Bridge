@@ -59,7 +59,10 @@ export interface ImageServiceOptions {
   readonly projectSettings: (projectId: string) => ProjectSettings;
   readonly upload: ToolsSettings['upload'];
   readonly images: ImageSettings;
-  /** DB_PATH, for the default image directory (`images/` next to it). */
+  /**
+   * The database file the runtime was given (`databaseFile`; `:memory:` for an in-memory one), for the default image
+   * directory (`images/` next to it). Never the config's DB_PATH: that is relative to the working directory.
+   */
   readonly dbPath: string;
   /** The proposal states, for placements proposed at scope `propose`. */
   readonly proposals?: {
@@ -74,7 +77,10 @@ export interface ImageServiceOptions {
   readonly timers?: boolean;
 }
 
-/** The directory the bridge keeps image files in (IMAGE_DATA_DIR, or `images/` next to the database). */
+/**
+ * The directory the bridge keeps image files in (IMAGE_DATA_DIR, or `images/` next to the database it was given). Only
+ * a name: nothing is created until the first binary upload or the first kept file (ADR 0041, the image directory).
+ */
 export function imageDataDir(images: ImageSettings, dbPath: string): string {
   if (images.dataDir) return resolve(images.dataDir);
   if (dbPath === ':memory:' || dbPath === '') {

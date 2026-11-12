@@ -801,20 +801,20 @@ async function planSet(
   }
   steps.push({ op: VERIFY_STEP, params: { body: { targets: verify } } });
   labels.push('verify');
-  // C2d.1: Working pages of the same subject left flat under [INDEX] Working are not in the set; say so, so the owner
-  // does not approve a partial promotion by accident.
+  // C2d.1 (promote), C2d.2 (archive and move to Working): Working pages of the same subject left flat under
+  // [INDEX] Working are not in the set; say so, so the owner does not approve a partial change by accident. A resumed
+  // change (open) lists nothing: it finishes what the earlier plan began.
   const outsiders =
-    action === 'promote' && !open
+    OUTSIDER_ACTIONS.has(action) && !open
       ? workingOutsiders(ctx, idx.working.id, root, new Set(members.map((m) => m.page.node.id)))
       : [];
+  const outsiderWords = outsiderWording(action, root, c.indexNames.working, fromState);
   if (outsiders.length > 0) {
     flags.push(
-      `${outsiders.length} Working page${outsiders.length === 1 ? '' : 's'} of the same subject sit outside this set, flat under [INDEX] ${c.indexNames.working}, and would stay Working: ${outsiders
+      `${outsiders.length} Working page${outsiders.length === 1 ? '' : 's'} of the same subject sit outside this set, flat under [INDEX] ${c.indexNames.working}, and ${outsiderWords.consequence}: ${outsiders
         .slice(0, 10)
         .map((o) => o.name)
-        .join(
-          ', ',
-        )}${outsiders.length > 10 ? ', …' : ''}. Move them in first with move_resource (to: “${root.rawName}”), then promote the whole set.`,
+        .join(', ')}${outsiders.length > 10 ? ', …' : ''}. ${outsiderWords.advice}`,
     );
   }
   const allFlags = [...flags, ...parts.flatMap((x) => [...x.m.flags, ...x.part.noteFlags])];
@@ -900,7 +900,7 @@ async function planSet(
       ? {
           outsiders: {
             pages: outsiders,
-            suggestion: `These Working pages have the same subject as the set but sit flat under [INDEX] ${c.indexNames.working}, so this promotion would leave them Working. Move each in with move_resource (page: its id, to: ${root.id}), then promote the whole set in one approval.`,
+            suggestion: `These Working pages have the same subject as the set but sit flat under [INDEX] ${c.indexNames.working}, so ${outsiderWords.why}. ${outsiderWords.suggestionAdvice(root.id)}`,
           },
         }
       : {}),
@@ -998,10 +998,67 @@ async function planSet(
 }
 
 /**
+ * The set changes that list same-subject Working pages outside the set (C2d.1: promote; C2d.2, the owner's request of
+ * 12 November 2026: archive and move to Working, the same listing and flag). Unarchive does not: it brings pages back
+ * from the Archived area, where this trap does not arise.
+ */
+const OUTSIDER_ACTIONS: ReadonlySet<LifecycleAction> = new Set<LifecycleAction>([
+  'promote',
+  'archive',
+  'move_to_working',
+]);
+
+/**
+ * What each set change would do to the outsiders, in the words of the flag and of the suggestion. The advice depends on
+ * where the set is: a Working page can only be moved into the Working area, so into a Working set's index, never into
+ * an Authoritative set's (or one about to leave for the Working area, which it has not yet).
+ */
+function outsiderWording(
+  action: LifecycleAction,
+  root: TreeNode,
+  workingName: string,
+  fromState: SetState | null,
+): { consequence: string; why: string; advice: string; suggestionAdvice: (rootId: string) => string } {
+  const moveIn = (rootId: string) => `Move each in with move_resource (page: its id, to: ${rootId})`;
+  switch (action) {
+    case 'archive':
+      return fromState === 'working'
+        ? {
+            consequence: 'would stay Working, left behind when the set is archived',
+            why: 'archiving the set would leave them Working, behind it',
+            advice: `Move them in first with move_resource (to: “${root.rawName}”), then archive the whole set.`,
+            suggestionAdvice: (id) => `${moveIn(id)}, then archive the whole set in one approval.`,
+          }
+        : {
+            consequence: 'would stay Working, left behind when the set is archived',
+            why: 'archiving the set would leave them Working, behind it',
+            advice:
+              'A Working page cannot be moved into an Authoritative set, so archive each of them with archive_page as well (or leave them Working on purpose).',
+            suggestionAdvice: () =>
+              'A Working page cannot be moved into an Authoritative set: archive each with archive_page too, or leave them Working on purpose.',
+          };
+    case 'move_to_working':
+      return {
+        consequence: `would stay where they are, apart from the Working set under “${root.rawName}”`,
+        why: `they would not be part of the Working set this makes (they stay flat under [INDEX] ${workingName})`,
+        advice: `Once the set is Working, bring them in with move_resource (to: “${root.rawName}”).`,
+        suggestionAdvice: (id) => `Once the set is Working, ${moveIn(id).replace('Move', 'move')}.`,
+      };
+    default:
+      return {
+        consequence: 'would stay Working',
+        why: 'this promotion would leave them Working',
+        advice: `Move them in first with move_resource (to: “${root.rawName}”), then promote the whole set.`,
+        suggestionAdvice: (id) => `${moveIn(id)}, then promote the whole set in one approval.`,
+      };
+  }
+}
+
+/**
  * C2d.1: Working pages that look as if they belong to a Working set but sit outside it: directly under
  * `[INDEX] Working` (flat) with the same subject as the set's root (`subjectOf`: a Subject row, else the name before
- * " - "; a character index's own subject). A promotion would leave them behind, so the dry run lists them and suggests
- * `move_resource` first.
+ * " - "; a character index's own subject). A set change would leave them behind (promote, archive) or apart (move to
+ * Working), so the dry run and the proposal list them and suggest `move_resource` first.
  */
 function workingOutsiders(
   ctx: RepoCtx,

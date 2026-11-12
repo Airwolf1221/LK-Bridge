@@ -17,7 +17,7 @@
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
-import { childNames, facts, T } from '../resources/world.js';
+import { childNames, facts, SidebarModel, T } from '../resources/world.js';
 import { fact, kids, seedSet, type SetIds } from './sets.js';
 import { accept, L, LIFECYCLE, lifecycleWorld, type LifecycleWorld } from './world.js';
 
@@ -359,6 +359,154 @@ describe('promoting a set: Working pages of the same subject outside it', () => 
       expect(res(id).parentId).toBe(idx.id);
     }
     expect(res(idx.id).parentId).toBe('moonelf1');
+  });
+});
+
+/** A Working page of `subject` made the old way: flat under [INDEX] Working, with the lifecycle facts. */
+let flatSeq = 0;
+async function seedFlat(subject: string, suffix: string): Promise<string> {
+  const id = `fo${(++flatSeq).toString().padStart(6, '0')}`;
+  w.repo.seed({ id, name: `[BWRK] ${subject} - ${suffix}`, parentId: LIFECYCLE.working, tags: ['Working'] });
+  w.sidebars.page(id, [
+    SidebarModel.kv(`kv${id.slice(0, 6)}`, 'PROPERTIES', [
+      ['Reference Type', 'General Source'],
+      ['Status', 'Working'],
+      ['Continuity Type', 'AU'],
+      ['Scope', `Scope of ${id}`],
+      ['Temporal Scope', 'Fourth Age'],
+      ['Last Major Revision', '2026-10-01'],
+    ]),
+  ]);
+  w.repo.blocks.set(w.main(id), {
+    version: 2,
+    blocks: [{ id: `${id}b1`, kind: 'paragraph', content: [{ text: `Body of ${id}.` }] }],
+  });
+  await w.stack.runtime.tree.sweep(PROJECT);
+  return id;
+}
+
+describe('archiving and moving to Working a set: Working pages of the same subject outside it (C2d.2)', () => {
+  const names = (b: { outsiders?: unknown }): string[] =>
+    (b.outsiders as { pages: { name: string }[] }).pages.map((p) => p.name).sort();
+
+  it('archive_page with subtree lists them in the dry run and the proposal, and after they are moved in the archive takes them all', async () => {
+    const s = await seedSet(w, 'working');
+    const art = await seedFlat(s.name, 'Character Art');
+    const rel = await seedFlat(s.name, 'Relationship');
+    await seedFlat('Somebody Else', 'Notes'); // an unrelated Working page: never listed
+    const dry = await call('archive_page', { page: s.root, subtree: true, dryRun: true });
+    expect(dry.body, dry.text).toMatchObject({
+      status: 'dry_run',
+      set: { pages: 4, from: 'working', to: 'archived' },
+    });
+    expect(names(dry.body)).toEqual([`[BWRK] ${s.name} - Character Art`, `[BWRK] ${s.name} - Relationship`]);
+    expect(dry.body.outsiders.suggestion).toMatch(/move_resource/);
+    expect(dry.body.outsiders.suggestion).toMatch(/archiving the set would leave them Working/);
+    expect(dry.body.outsiders.suggestion).toMatch(/archive the whole set/);
+    expect(dry.body.outsiders.suggestion).toContain(s.root);
+    expect(dry.body.flags.join(' ')).toMatch(
+      /2 Working pages of the same subject sit outside this set, flat under \[INDEX\] Working, and would stay Working, left behind when the set is archived/,
+    );
+    expect(JSON.stringify(dry.body.outsiders)).not.toContain('Somebody Else');
+    // Move them in, as suggested: the dry run is clean and covers all six pages; the archive takes them all.
+    for (const id of [art, rel]) {
+      const m = await call('move_resource', { page: id, to: s.root });
+      expect(m.body, m.text).toMatchObject({ status: 'written', verified: true });
+    }
+    const clean = await call('archive_page', { page: s.root, subtree: true, dryRun: true });
+    expect(clean.body, clean.text).toMatchObject({ status: 'dry_run', set: { pages: 6 } });
+    expect(clean.body.outsiders).toBeUndefined();
+    const a = await accept(w, await call('archive_page', { page: s.root, subtree: true }));
+    expect(a.body, a.text).toMatchObject({ status: 'written', verified: true });
+    for (const id of [art, rel, s.core, s.portraits]) {
+      expect(res(id).name.startsWith('[BARC] ')).toBe(true);
+      expect(res(id).tags).toContain('Archived');
+    }
+    expect(res(s.root).parentId).toBe(LIFECYCLE.archived);
+  });
+
+  it('the proposal carries the same listing and flag, so the owner sees them before approving', async () => {
+    const s = await seedSet(w, 'working');
+    await seedFlat(s.name, 'Character Art');
+    await seedFlat(s.name, 'Relationship');
+    const before = writes().length;
+    const proposal = await call('archive_page', { page: s.root, subtree: true });
+    expect(proposal.body, proposal.text).toMatchObject({ status: 'proposal_captured' });
+    expect(names(proposal.body)).toEqual([
+      `[BWRK] ${s.name} - Character Art`,
+      `[BWRK] ${s.name} - Relationship`,
+    ]);
+    expect(proposal.body.flags.join(' ')).toMatch(/2 Working pages of the same subject sit outside this set/);
+    expect(writes().length).toBe(before); // proposing wrote nothing
+    // and what the owner is shown of it (the stored operation, on the dashboard) has them too
+    const stored = w.stack.runtime.policy.proposals.detail(proposal.body.proposalId as string)!;
+    const op = stored.operations[0] as { lifecycle: { outsiders: { pages: unknown[] }; flags: string[] } };
+    expect(op.lifecycle.outsiders.pages).toHaveLength(2);
+    expect(op.lifecycle.flags.join(' ')).toMatch(/2 Working pages of the same subject sit outside this set/);
+  });
+
+  it('archive_page with subtree on an Authoritative set lists same-subject Working pages too, and says they cannot be moved in', async () => {
+    const s = await seedSet(w, 'authoritative');
+    const draft = await seedFlat(s.name, 'Draft Notes');
+    const dry = await call('archive_page', { page: s.root, subtree: true, dryRun: true });
+    expect(dry.body, dry.text).toMatchObject({
+      status: 'dry_run',
+      set: { from: 'authoritative', to: 'archived' },
+    });
+    expect(dry.body.outsiders.pages).toEqual([
+      { id: draft, name: `[BWRK] ${s.name} - Draft Notes`, subject: s.name },
+    ]);
+    expect(dry.body.flags.join(' ')).toMatch(/1 Working page of the same subject sit outside this set/);
+    // a Working page cannot be moved into an Authoritative set: the advice is to archive each, not to move_resource it in
+    expect(dry.body.flags.join(' ')).toContain('cannot be moved into an Authoritative set');
+    expect(dry.body.outsiders.suggestion).toMatch(/archive each with archive_page too/);
+    const refused = await call('move_resource', { page: draft, to: s.root });
+    expect(refused.body.error?.message).toMatch(/use promote_page|moved out of \[INDEX\] Working|lifecycle/);
+  });
+
+  it('move_to_working with subtree lists them, with the words for that change, in the dry run and the proposal', async () => {
+    const s = await seedSet(w, 'authoritative');
+    const draft = await seedFlat(s.name, 'Working Notes');
+    const dry = await call('move_to_working', { page: s.root, subtree: true, dryRun: true });
+    expect(dry.body, dry.text).toMatchObject({
+      status: 'dry_run',
+      set: { from: 'authoritative', to: 'working' },
+    });
+    expect(dry.body.outsiders.pages.map((p: { id: string }) => p.id)).toEqual([draft]);
+    expect(dry.body.outsiders.suggestion).toMatch(/not be part of the Working set this makes/);
+    expect(dry.body.outsiders.suggestion).toMatch(/Once the set is Working, move each in with move_resource/);
+    expect(dry.body.flags.join(' ')).toContain(`apart from the Working set under “[INDEX] ${s.name}”`);
+    expect(dry.body.flags.join(' ')).toContain('Once the set is Working, bring them in with move_resource');
+    const proposal = await call('move_to_working', { page: s.root, subtree: true });
+    expect(proposal.body, proposal.text).toMatchObject({ status: 'proposal_captured' });
+    expect(proposal.body.outsiders.pages.map((p: { id: string }) => p.id)).toEqual([draft]);
+  });
+
+  it('after move_to_working the outsider can be brought into the set, as the advice says', async () => {
+    const s = await seedSet(w, 'authoritative');
+    const draft = await seedFlat(s.name, 'Working Notes 2');
+    const m = await accept(w, await call('move_to_working', { page: s.root, subtree: true }));
+    expect(m.body, m.text).toMatchObject({ status: 'written', verified: true });
+    const mv = await call('move_resource', { page: draft, to: s.root });
+    expect(mv.body, mv.text).toMatchObject({ status: 'written', verified: true });
+    expect(res(draft).parentId).toBe(s.root);
+    expect(res(draft).name).toBe(`[BWRK] ${s.name} - Working Notes 2`);
+  });
+
+  it('a set with no same-subject Working page outside it lists nothing, and unarchive never does', async () => {
+    const s = await seedSet(w, 'authoritative');
+    await seedFlat('Someone Unrelated', 'Notes');
+    for (const tool of ['archive_page', 'move_to_working'] as const) {
+      const dry = await call(tool, { page: s.root, subtree: true, dryRun: true });
+      expect(dry.body.status, dry.text).toBe('dry_run');
+      expect(dry.body.outsiders, tool).toBeUndefined();
+    }
+    // A Working page of the set's own subject exists, but unarchive brings pages back from the Archived area only.
+    await accept(w, await call('archive_page', { page: s.root, subtree: true }));
+    await seedFlat(s.name, 'Late Notes');
+    const un = await call('unarchive_page', { page: s.root, subtree: true, dryRun: true });
+    expect(un.body.status, un.text).toBe('dry_run');
+    expect(un.body.outsiders).toBeUndefined();
   });
 });
 

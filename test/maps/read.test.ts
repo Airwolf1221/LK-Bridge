@@ -99,6 +99,22 @@ describe('a map with an image', () => {
   });
 });
 
+describe('a feature moved to the top level', () => {
+  it('reads with parentId "" (the real API’s answer after a move) as at the top level, never under a folder', async () => {
+    const live = w.liveFeatures(w.md.map);
+    live.find((f) => f.id === w.f['Frost Altar'])!.parentId = ''; // as LegendKeeper reads one back after a move
+    const r = await read('Arkona map');
+    expect(r.isError, r.text).toBe(false);
+    const md = r.body.markdown as string;
+    expect(line(md, 'Frost Altar').startsWith('- **Frost Altar**')).toBe(true);
+    // it is no longer listed under North, and North still lists nothing else
+    const north = md.split('\n').findIndex((l) => l.includes('**North**'));
+    expect(md.split('\n')[north + 1] ?? '').not.toContain('Frost Altar');
+    // a feature created at the top level (no field) is listed alongside it
+    expect(line(md, 'Qishen lands').startsWith('- **Qishen lands**')).toBe(true);
+  });
+});
+
 describe('legacy tiled maps and maps with no image', () => {
   it('say so, and show lat/lng only', async () => {
     const legacy = await read('Old tiled map');

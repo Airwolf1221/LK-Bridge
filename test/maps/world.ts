@@ -11,7 +11,7 @@
  *   the page do not), setting an image from a library asset sets the app's frame and turns a `blank` document into a
  *   map, a first feature written to a `blank` document does too, `uri` must name a live resource (and a document of it),
  *   the colour fields refuse the wrong types, a duplicate id is `DUPLICATE_ID`, deleting a folder leaves what was in it
- *   (its `parentId` still names the folder that is gone), and `parentId: null` moves a feature to the top level;
+ *   (its `parentId` still names the folder that is gone), and `parentId: ""` moves a feature to the top level (it then reads back with `parentId: ""`; one created there has no field) while `parentId: null` is refused with LegendKeeper's own 400 issue (the owner's probe of 12 November 2026);
  * - failures can be injected at a chosen write, and the stored features are open to edits made "in the app".
  */
 import { keyBetween } from '../../src/maps/rank.js';
@@ -85,10 +85,19 @@ export interface MapsWorld extends ResourcesWorld {
   docType(docId: string): string;
 }
 
-const err = (status: number, code: string, message = `model ${code}`): MockResponse => ({
+const err = (
+  status: number,
+  code: string,
+  message = `model ${code}`,
+  errors?: { path: string; message: string }[],
+): MockResponse => ({
   status,
-  body: { message, code, requestId: `model-${code}` },
+  body: { message, code, requestId: `model-${code}`, ...(errors ? { errors } : {}) },
 });
+
+/** A feature's parent as the app reads it: no field or `""` is the top level (so is null, which is never stored). */
+const parentKey = (x: Obj): string | null =>
+  typeof x.parentId === 'string' && x.parentId !== '' ? x.parentId : null;
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 const ID = /^[a-z](?:[0-9a-z]{7}|[0-9a-z]{23})$/;
@@ -402,13 +411,13 @@ export async function mapsWorld(o: Parameters<typeof resourcesWorld>[0] = {}): P
           if (bad) return bad;
           const id = typeof body.id === 'string' ? body.id : fid('x');
           if (list.some((x) => x.id === id)) return err(409, 'DUPLICATE_ID');
-          if (typeof body.parentId === 'string' && !list.some((x) => x.id === body.parentId))
+          if (parentKey(body) !== null && !list.some((x) => x.id === body.parentId))
             return err(404, 'NOT_FOUND');
           const created: Obj = { ...structuredClone(body), id, updatedAt: new Date().toISOString() };
           if (created.uri === '') delete created.uri;
           if (created.rank === undefined) {
             const sibs = list
-              .filter((x) => (x.parentId ?? null) === (created.parentId ?? null))
+              .filter((x) => parentKey(x) === parentKey(created))
               .map((x) => (typeof x.rank === 'string' ? x.rank : ''))
               .sort();
             created.rank = keyBetween(sibs.at(-1) || null, null);
@@ -426,12 +435,19 @@ export async function mapsWorld(o: Parameters<typeof resourcesWorld>[0] = {}): P
       if (method === 'PATCH') {
         const f2 = fault('updateFeature');
         if (f2) return f2;
+        // The owner's probe of 12 November 2026: `updateFeature` enforces the schema's `type: string` for `parentId`, so
+        // `null` is a 400 ("the schema's “(null = root)” text is wrong") and `""` is how a feature goes to the top level.
+        if ('parentId' in body && typeof body.parentId !== 'string')
+          return err(400, 'VALIDATION_ERROR', 'Validation failed', [
+            { path: 'parentId', message: 'Expected string, received null' },
+          ]);
         const bad = validate(body, String(body.type ?? cur.type), false);
         if (bad) return bad;
-        if (typeof body.parentId === 'string' && !list.some((x) => x.id === body.parentId))
+        if (parentKey(body) !== null && !list.some((x) => x.id === body.parentId))
           return err(404, 'NOT_FOUND');
         for (const [k, v] of Object.entries(structuredClone(body))) {
-          if ((k === 'parentId' && v === null) || (k === 'uri' && v === '')) delete cur[k];
+          // A moved-to-top-level feature reads back with `parentId: ""` (kept as sent); a uri of '' clears the link.
+          if (k === 'uri' && v === '') delete cur[k];
           else cur[k] = v;
         }
         // one shape or the other: a region given `polygons` has no `polygon` left, and the other way round

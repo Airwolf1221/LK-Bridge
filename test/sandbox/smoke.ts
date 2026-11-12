@@ -11,7 +11,8 @@ import type { JobEngine } from '../../src/jobs/index.js';
 import type { LkClient } from '../../src/lk/index.js';
 import { runSettled, waitForJob, type WaitOptions } from './wait.js';
 
-export type Verdict = 'pass' | 'fail' | 'inconclusive' | 'skipped';
+/** `noted` is a fact about LegendKeeper the run records (never a failure of the bridge): a refusal the bridge works around. */
+export type Verdict = 'pass' | 'fail' | 'inconclusive' | 'skipped' | 'noted';
 export interface Finding {
   readonly id: string;
   readonly title: string;
@@ -423,7 +424,13 @@ export async function runSmoke(
 }
 
 export function formatReport(findings: readonly Finding[]): string {
-  const mark = { pass: 'PASS', fail: 'FAIL', inconclusive: 'INCONCLUSIVE', skipped: 'SKIPPED' } as const;
+  const mark = {
+    pass: 'PASS',
+    fail: 'FAIL',
+    inconclusive: 'INCONCLUSIVE',
+    skipped: 'SKIPPED',
+    noted: 'NOTED',
+  } as const;
   return [
     '',
     'LK-Bridge sandbox smoke report',

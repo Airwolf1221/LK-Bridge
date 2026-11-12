@@ -423,7 +423,7 @@ judges the plan's resolved request against the map as it is then and works out t
 coordinates, the rank between the real neighbours: `bindBody`). Features go at the end of their parent or `after` / `before` a
 named sibling (never sorted alphabetically); `link` is a page by name or id (optionally a document), checked live, with an
 ambiguous name refused with each candidate and `link: null` clearing it; `folder` by name or id, ambiguity refused;
-`folder: null` moves to the top level (to verify). Deleting a folder does not delete its features in LegendKeeper, so a folder
+`folder: null` moves to the top level (sent as `parentId: ""`: LegendKeeper refuses `null`, ADR 0040 notes, 12 November 2026). Deleting a folder does not delete its features in LegendKeeper, so a folder
 that holds features needs `cascade: true`, which deletes them deepest first as one job, lists everything removed and keeps every
 removed feature in full in the journal; a stopped cascade is resumed by asking again, never replayed (no record table: one
 document, atomic writes). Feature edits are ordinary edits on an Authoritative page (ADR 0036 decision 6, option (a)); only

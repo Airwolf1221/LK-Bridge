@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased: the owner's live checks of 12 November 2026: root moves on maps, the sandbox image folder, outsiders on archive and move to Working
+
+Notes in [ADR 0040](adr/0040-map-feature-tools.md) (root moves), [ADR 0041](adr/0041-image-pipeline.md) (the image directory) and
+[ADR 0037](adr/0037-whole-set-lifecycle-and-page-scoped-ids.md) (outsiders); no migration, no new decision. Nothing was run
+against a live system (the owner's LegendKeeper bridge connector was not called, not even for reads): every test runs against
+the mock, and the sandbox changes are written and dry-run against the mock, not run against LegendKeeper.
+
+- **Moving a map feature to the top level now works.** `update_map_feature` with `folder: null` failed live with
+  `VALIDATION_ERROR` (nothing written). The owner's probe on the real API: `updateFeature` with `parentId: null` is a 400
+  (`parentId: "Expected string, received null"`: the schema's "(null = root)" is wrong, its `type: string` is enforced);
+  `parentId: ""` with a rank succeeds and the feature reads back with `parentId: ""`; the bridge's base-62 midpoint ranks are
+  accepted; a feature created at the top level reads back with no `parentId` at all. So **a move to the top level sends
+  `parentId: ""`, never `null`**, and the bridge's own validation of `updateFeature` no longer lets `parentId` be null (a raw
+  `lk_api_write` with null is refused locally, before it spends budget).
+  - **One reading of a feature's parent** (`parentOf`, `src/maps/features.ts`): absent, `""` and `null` are the top level.
+    Planning, siblings, the checks inside the lock, verify, `read_document`'s tree, the cascade, `featureFolder: null` and the
+    journal summaries all use it. Asking for the top level of a feature already there sends nothing.
+  - **The mock reproduces the real API**: a moved-to-top-level feature reads back with `parentId: ""`, one created there has no
+    field, and `null` on `updateFeature` is refused with the same 400 and issue.
+  - **Sandbox M6c** asserts `""` works (also with a midpoint rank between two siblings); a new **M6c-null** sends a raw
+    `parentId: null` through the governor and records the refusal as **NOTED**, a fact about LegendKeeper and not a failure
+    (the report has a new NOTED verdict and count; INCONCLUSIVE if LegendKeeper starts to accept it).
+  - **Tests:** pure functions (`parentOf`, `holds`, `siblingsOf`, `findFeature`, `descendantsOf`, `verifyFeatures`,
+    `buildUpdate` for the top level plain and with `after` / `before`, `buildCreate`, the registry's refusal of null), and
+    through the tools: move to the top level plain and beside a named sibling, into a folder and back, verify reading `""` as the
+    top level, siblings with `""` and with no field, a cascade, `read_document`, the dry run, and the mock refusing null.
+- **The sandbox runtime no longer touches the app folder.** All five sandbox files failed in their first second with
+  `EACCES: mkdir '/opt/lk-bridge/app/data/images/upload-tmp'`: `createSoakRuntime` passed the default tool settings
+  (`images.dataDir: null`) and the runtime resolved "next to the database" from the config's `./data/bridge.db`, under the
+  read-only app folder, not from the temporary database it was given. The live bridge was unaffected; CI did not notice because
+  its working directory is writable (every test with default settings had been creating `./data/images/` there).
+  - `createSoakRuntime` sets the image directory inside its own temporary directory.
+  - **The runtime derives the default image directory from the database it was actually given** (`databaseFile`, from
+    `PRAGMA database_list`), never from a working-directory-relative default. The live bridge's directory is the same.
+  - **`upload-tmp/` and `kept-bytes/` are created lazily** (my call): by the first binary upload and the first kept file. A
+    runtime that handles neither touches no folder at all; the start-up clean and the sweep treat a missing directory as empty.
+  - **CI:** `test/tools/sandbox-runtime-readonly.test.ts` builds the sandbox runtime, and the real boot path with default
+    settings, under Node's permission model with the app folder read-only, as the loader test does (it fails on the old code);
+    `test/images/directory.test.ts` covers the derivation and the lazy creation.
+- **Outsiders on `archive_page` and `move_to_working` with `subtree: true`.** C2d.1 listed same-subject Working pages outside a
+  set only for `promote_page`; it was **not** present for the other two, so it is now: the same `outsiders` listing and flag in
+  the dry run and the proposal. Archiving a Working character would have left its flat specialist pages Working, behind it. The
+  advice depends on the set: move them in first (promote, archive of a Working set); a Working page cannot be moved into an
+  Authoritative set, so archive each as well; after `move_to_working`, bring them in once the set is Working. `unarchive_page`
+  lists none. Tests in `test/lifecycle/working-sets.test.ts`.
+- **Docs:** ADR 0040 (the probe results and a corrected decision 9), ADR 0041 (the image directory), ADR 0037 (outsiders),
+  `docs/tools.md`, the bridge guide, the runbook (the image directory is created on first use), `test/sandbox/README.md` and
+  PLAN-v2.
+
 ## Unreleased: v2 C2d.1, Working sets built one page at a time, and moves within a lifecycle area (12 November 2026)
 
 Notes in [ADR 0035](adr/0035-page-lifecycle.md) and [ADR 0037](adr/0037-whole-set-lifecycle-and-page-scoped-ids.md); no

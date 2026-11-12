@@ -18,3 +18,13 @@ export function openDatabase(path: string): Db {
   db.pragma('synchronous = NORMAL');
   return db;
 }
+
+/**
+ * The absolute path of the file a database was actually opened from, or null for an in-memory or temporary one. Read from
+ * SQLite itself (`PRAGMA database_list`), so it is the database the handle really is, whatever configuration said.
+ */
+export function databaseFile(db: Db): string | null {
+  const rows = db.pragma('database_list') as { name: string; file: string }[];
+  const main = rows.find((r) => r.name === 'main');
+  return main && main.file !== '' ? main.file : null;
+}

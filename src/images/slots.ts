@@ -12,8 +12,8 @@
  *   at start-up and swept every minute.
  */
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { createWriteStream, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { readFile, rename, rm } from 'node:fs/promises';
+import { createWriteStream, readdirSync, rmSync } from 'node:fs';
+import { mkdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { detectImageType, ImageError, normaliseContentType } from './convert.js';
@@ -51,11 +51,24 @@ export interface PreparedSlot {
 }
 
 export class UploadSlots {
+  /**
+   * `dir` is created on the first binary upload, not here (ADR 0041): a runtime that never handles an upload touches no
+   * folder at all, so one started where nothing may be written (the sandbox scripts, a read-only app folder) cannot
+   * fail on it.
+   */
   constructor(
     private readonly store: ImageStore,
     readonly dir: string,
-  ) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ) {}
+
+  /** The files in the directory, or none when it has not been created yet. */
+  private files(): string[] {
+    try {
+      return readdirSync(this.dir);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw e;
+    }
   }
 
   /** At start-up: every file in the directory is left over from a previous run (or junk): removed. */
@@ -63,7 +76,7 @@ export class UploadSlots {
     this.store.resetReceiving();
     let n = 0;
     const live = this.store.liveFileNames();
-    for (const f of readdirSync(this.dir)) {
+    for (const f of this.files()) {
       if (live.has(f)) continue;
       rmSync(join(this.dir, f), { force: true, recursive: true });
       n++;
@@ -83,7 +96,7 @@ export class UploadSlots {
     this.store.pruneSlots(now - 24 * 3_600_000);
     // Files no live slot names (a crash between writing and recording): removed too.
     const live = this.store.liveFileNames();
-    for (const f of readdirSync(this.dir)) {
+    for (const f of this.files()) {
       if (live.has(f) || f.endsWith('.part')) continue;
       rmSync(join(this.dir, f), { force: true });
     }
@@ -152,6 +165,13 @@ export class UploadSlots {
   ): Promise<{ sha256: string; bytes: number }> {
     const fileName = `${randomBytes(16).toString('hex')}.bin`;
     const part = join(this.dir, `${fileName}.part`);
+    // The first upload creates the directory (private: 0700); later ones find it.
+    try {
+      await mkdir(this.dir, { recursive: true, mode: 0o700 });
+    } catch (e) {
+      this.store.transitionSlot(slot.id, 'receiving', 'expired'); // the slot is spent, as for any other refusal
+      throw e;
+    }
     const out = createWriteStream(part, { mode: 0o600, flags: 'wx' });
     const hash = createHash('sha256');
     const head: Buffer[] = [];

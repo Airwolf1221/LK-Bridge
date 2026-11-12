@@ -127,7 +127,13 @@ export async function createSoakRuntime(o: {
   const counters = newCounters();
   const runtime = createRuntime({
     config,
-    toolsSettings: DEFAULT_TOOLS_SETTINGS,
+    // The owner's sandbox run of 12 November 2026: DEFAULT_TOOLS_SETTINGS has `images.dataDir: null` ("`images/` next to the
+    // database"), which was resolved from the config's default path under the read-only app folder, so all five sandbox
+    // files failed at `mkdir upload-tmp`. This runtime's image directory is inside its own temporary directory.
+    toolsSettings: {
+      ...DEFAULT_TOOLS_SETTINGS,
+      images: { ...DEFAULT_TOOLS_SETTINGS.images, dataDir: join(dir, 'images') },
+    },
     db,
     version: 'soak',
     lkTransport: countingTransport(o.transport ?? defaultTransport, counters),

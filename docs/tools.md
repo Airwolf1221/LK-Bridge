@@ -948,13 +948,17 @@ canonical proposal** (the only approval is "Approve and accept as canon"). The m
   state from its record; the root goes back to its previous parent, which must still exist (otherwise `destination` is
   required). `previousState` and `restore` are for one hand-archived page only (refused with `subtree`).
 - **`move_to_working`** `{ page, subtree: true, dryRun?, project }`: an Authoritative set's root moves under
-  `[INDEX] Working`.
+  `[INDEX] Working`. Lists `outsiders` as `promote_page` does (C2d.2): same-subject Working pages flat under
+  `[INDEX] Working` stay apart from the set; bring them in with `move_resource` once it is Working.
 - **`promote_page`** `{ page, subtree: true, destination, dryRun?, project }`: a Working set's root moves to `destination`
   (required); without it, `DESTINATION_REQUIRED` offers the place `move_to_working` remembered (`suggestedDestination`).
   **Outsiders (C2d.1):** the plan (and so the dry run) lists under `outsiders` any `[BWRK]` page of the same subject
   (`subjectOf`: a Subject row, else the name before " - "; the set root's own name for a plain index) that sits flat
   directly under `[INDEX] Working` outside the set, with a `suggestion` to bring each in with `move_resource` first, and
   a flag in the proposal, so the owner does not approve a partial promotion by accident. Nothing is moved for you.
+  **`archive_page` with `subtree: true` lists the same `outsiders` (C2d.2)**: archiving a Working character would leave its
+  flat specialist pages Working, behind it. Move them in first with `move_resource`; for an Authoritative set, which a
+  Working page cannot be moved into, archive each with `archive_page` as well. `unarchive_page` lists none.
 
 **Layout: the set stays together.** Its root moves as a group, placed alphabetically among its new parent's children;
 the structure beneath it is unchanged (`[INDEX] Archived / [INDEX] Asagiri Miyabi / [BARC] Asagiri Miyabi - Character
@@ -1129,11 +1133,11 @@ costs the planning reads only (3 to 5).
 Design: [ADR 0040](adr/0040-map-feature-tools.md). Features are ordinary edits: **not canon-gated, even on an Authoritative
 page** (ADR 0036 decision 6, option (a)); only deleting the whole map document of an Authoritative page is canonical.
 
-| Tool                 | Access | What it does                                                                                                                                                                                                                                                                                                                   |
-| -------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `create_map_feature` | W      | `page`, `document` (optional when the page has one map), `type`, `name`, coordinates (below), `link`, `folder`, `after` / `before`, `hidden`, `style`, `allowOutside`, `dryRun`, `operation_id`. One job: the check inside the lock, the write, the verify.                                                                    |
-| `update_map_feature` | W      | `feature` (an id, or a name with `featureFolder`, the folder it is in now or `null` for the top level), then any of `name`, coordinates, `link` (`null` clears it), `folder` (a folder, or `null` for the top level), `after` / `before`, `hidden`, `style`. Only what differs is sent; nothing to change answers `no_change`. |
-| `delete_map_feature` | W      | `feature` (as above), `confirm: true`, `cascade`. A folder that holds features is refused (`HAS_FEATURES`) unless `cascade: true`; the answer lists everything removed and the journal keeps every removed feature in full.                                                                                                    |
+| Tool                 | Access | What it does                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create_map_feature` | W      | `page`, `document` (optional when the page has one map), `type`, `name`, coordinates (below), `link`, `folder`, `after` / `before`, `hidden`, `style`, `allowOutside`, `dryRun`, `operation_id`. One job: the check inside the lock, the write, the verify.                                                                                                          |
+| `update_map_feature` | W      | `feature` (an id, or a name with `featureFolder`, the folder it is in now or `null` for the top level), then any of `name`, coordinates, `link` (`null` clears it), `folder` (a folder, or `null` for the top level: sent as `parentId: ""`, never `null`), `after` / `before`, `hidden`, `style`. Only what differs is sent; nothing to change answers `no_change`. |
+| `delete_map_feature` | W      | `feature` (as above), `confirm: true`, `cascade`. A folder that holds features is refused (`HAS_FEATURES`) unless `cascade: true`; the answer lists everything removed and the journal keeps every removed feature in full.                                                                                                                                          |
 
 **Coordinates.** A pin or label takes `latlng` `[lat, lng]` **or** `pixel` `{ x, y }`; a region takes `points` (one polygon, 3
 or more) or `polygons` (several); a path takes `points` (2 or more); a folder none. Each point of `points` is `[lat, lng]` or
@@ -1154,7 +1158,10 @@ candidate with its role, never a guess; the page (and document) is checked to ex
 created in the app can take a few seconds to become linkable. `link: null` clears the link explicitly.
 
 **Folder.** `folder` is the parent, by name or id; a name that matches more than one folder is refused with each one's path.
-Moving into another folder (or out, `folder: null`) is `update_map_feature`'s `folder`. A folder cannot be moved into itself or
+Moving into another folder (or out, `folder: null`) is `update_map_feature`'s `folder`. `folder: null` works: the bridge sends
+`parentId: ""`, which is how LegendKeeper moves a feature to the top level (it refuses `null`, whatever the schema's "(null =
+root)" says; the owner's probe of 12 November 2026). A feature made at the top level reads back with no `parentId`, a moved one
+with `""`, and both are the top level everywhere in the bridge. A folder cannot be moved into itself or
 beneath itself.
 
 **Place.** A feature goes at the **end** of its parent unless `after` or `before` names a sibling (under the same parent). The
