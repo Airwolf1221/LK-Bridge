@@ -246,8 +246,10 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
       'by id or by name as list_assets shows it (a name that matches several assets is refused with each candidate): it sets ' +
       'or replaces the map’s image, as “Add map” and “Replace map” do, and a BLANK document given one becomes a map. ' +
       'Features keep their `pos` when the image changes, so a replacement with an image of a different size puts them over ' +
-      'different pixels: the answer carries a warning with how many, and NOTHING is moved (you or the owner decide; ' +
-      'update_map_feature moves them). The map’s frame (width, height, bounds) is then in read_document. Page documents ' +
+      'different pixels: when the map has features that is REFUSED (CONFIRMATION_REQUIRED, with how many and the old and new ' +
+      'size, nothing written) unless `confirm: true`; under propose scope the proposal shows the count and the owner’s approval ' +
+      'is the confirmation; the same size, or a map with no features, needs none. The warning stays in the result, and NOTHING ' +
+      'is moved (you or the owner decide; update_map_feature moves them). The map’s frame (width, height, bounds) is then in read_document. Page documents ' +
       '(and blank documents without a map image) are refused: change pages with write_page. An unchanged setting sends ' +
       'nothing. Uploading a new image is upload_image. Cost: 1 read (the document’s settings), 1 write (1 read more for a ' +
       'calendar; for a map image 1 read for the asset, and 1 more for the warning), the journal’s read of the document, 1 ' +
@@ -264,6 +266,12 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
         .optional()
         .describe(
           'Maps (and blank documents, which become maps): the image asset, by id or by name (see list_assets); { assetId } also works.',
+        ),
+      confirm: z
+        .literal(true)
+        .optional()
+        .describe(
+          'Required to replace a map’s image with one of a different pixel size when the map has features (they would sit over different pixels). Under propose scope the owner’s approval is the confirmation.',
         ),
       dryRun: z.boolean().optional(),
       project: projectArg,
@@ -327,6 +335,7 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
           height: number | null;
         } | null = null;
         let imageChange: Obj | undefined;
+        let shifted: { features: number; old: Obj; new: Obj } | null = null;
         if (args.mapImage !== undefined) {
           const query = typeof args.mapImage === 'string' ? args.mapImage : args.mapImage.assetId;
           const a = await resolveMapAsset(pd, mctx, 'update_document', query);
@@ -355,16 +364,22 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
               if (!f.ok) return f.result;
               const list = (((f.value ?? {}) as { data?: unknown }).data ?? []) as Obj[];
               const n = list.filter((x) => featurePoints(x).length > 0).length;
-              warnings.push({
-                code: 'FEATURES_OVER_DIFFERENT_PIXELS',
-                message:
-                  `The new image is ${a.width}×${a.height}; the old one was ${now.frame.width}×${now.frame.height}. Features keep ` +
-                  `their positions (lat/lng), so ${n} feature(s) will now sit over different pixels of the new image. ` +
-                  'Nothing is moved automatically: read the map (read_document) and move them with update_map_feature, or ask the owner.',
-                features: n,
-                old: { width: now.frame.width, height: now.frame.height },
-                new: { width: a.width, height: a.height },
-              });
+              // A map with no features has nothing to shift: no warning, no confirmation.
+              if (n > 0) {
+                shifted = {
+                  features: n,
+                  old: { width: now.frame.width, height: now.frame.height },
+                  new: { width: a.width, height: a.height },
+                };
+                warnings.push({
+                  code: 'FEATURES_OVER_DIFFERENT_PIXELS',
+                  message:
+                    `The new image is ${a.width}×${a.height}; the old one was ${now.frame.width}×${now.frame.height}. Features keep ` +
+                    `their positions (lat/lng), so ${n} feature(s) will now sit over different pixels of the new image. ` +
+                    'Nothing is moved automatically: read the map (read_document) and move them with update_map_feature, or ask the owner.',
+                  ...shifted,
+                });
+              }
             }
           } else if (!same && now.kind === 'legacy') {
             warnings.push({
@@ -415,8 +430,46 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
           ...(imageChange ? { mapImage: imageChange } : {}),
           ...(warnings.length > 0 ? { warnings } : {}),
         };
-        if (args.dryRun === true)
-          return render({ ...head, status: 'dry_run', message: 'Dry run: nothing was written.' }, pd);
+        // Replacing the image with one of another pixel size puts features over different pixels: that needs `confirm`
+        // (v2 D2 addendum, 12 November 2026). Under `propose` the proposal shows the count and the owner's approval IS the
+        // confirmation; a dry run shows whether it would be asked for.
+        const propose = mctx.scope === 'propose';
+        const needsConfirm = shifted !== null && args.confirm !== true && !propose;
+        if (args.dryRun === true) {
+          return render(
+            {
+              ...head,
+              ...(shifted
+                ? {
+                    confirmation: needsConfirm
+                      ? 'required: pass confirm: true'
+                      : args.confirm !== true
+                        ? 'the owner’s approval of the proposal'
+                        : 'given',
+                  }
+                : {}),
+              status: 'dry_run',
+              message: 'Dry run: nothing was written.',
+            },
+            pd,
+          );
+        }
+        if (needsConfirm && shifted) {
+          return errorResult(
+            {
+              code: 'CONFIRMATION_REQUIRED',
+              message:
+                `Replacing the image would put ${shifted.features} feature(s) over different pixels (the old image is ` +
+                `${String(shifted.old.width)}×${String(shifted.old.height)}, the new one ${String(shifted.new.width)}×${String(shifted.new.height)}): ` +
+                'features keep their lat/lng, and nothing is moved automatically. NOTHING was written. Pass confirm: true to replace it anyway.',
+              features: shifted.features,
+              old: shifted.old,
+              new: shifted.new,
+              ...head,
+            },
+            pd,
+          );
+        }
         const steps: StepSpec[] = [
           {
             op: 'updateDocument',
@@ -453,13 +506,28 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
             },
           },
         ];
-        const summary = `update_document: “${doc.name}” on ${node.rawName} (${Object.keys(body).join(', ')})`;
+        const summary =
+          `update_document: “${doc.name}” on ${node.rawName} (${Object.keys(body).join(', ')})` +
+          (shifted
+            ? `: replaces the image (${String(shifted.old.width)}×${String(shifted.old.height)} → ${String(shifted.new.width)}×${String(shifted.new.height)}), ${shifted.features} feature(s) will sit over different pixels; approving confirms it`
+            : '');
         const out = await runWriteJob(pd, mctx, 'update_document', {
           steps,
           labels: [`change ${Object.keys(body).join(', ')} of “${doc.name}”`, 'verify'],
           title: summary,
           proposal: {
-            operations: [{ tool: 'update_document', page, pageParts: [`“${doc.name}” settings changed`] }],
+            operations: [
+              {
+                tool: 'update_document',
+                page,
+                pageParts: [
+                  shifted
+                    ? `“${doc.name}” image replaced: ${shifted.features} feature(s) will sit over different pixels`
+                    : `“${doc.name}” settings changed`,
+                ],
+                ...(shifted ? { imageReplacement: shifted } : {}),
+              },
+            ],
             summary,
           },
           head,

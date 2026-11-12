@@ -1152,8 +1152,11 @@ left is deleted.
 
 **Map images (`update_document`).** `mapImage` is an asset of the library by id or name (`list_assets`): it sets or replaces the
 image, and a **blank** document given one becomes a map. Features keep their `pos`, so a replacement with an image of a
-different pixel size answers with a warning (`FEATURES_OVER_DIFFERENT_PIXELS`: how many features will now sit over different
-pixels); **nothing is moved automatically**. A legacy map replaced warns that its pixels cannot be compared
+different pixel size **needs `confirm: true` when the map has features**: without it the call is refused and nothing is written
+(`CONFIRMATION_REQUIRED`, with how many features will now sit over different pixels and the old and new dimensions); with it
+the call goes ahead and the warning (`FEATURES_OVER_DIFFERENT_PIXELS`) stays in the result. The same size, or a map with no
+features, needs none. Under `propose` scope the proposal shows the count and sizes, and approving it is the confirmation.
+**Nothing is moved automatically**. A legacy map replaced warns that its pixels cannot be compared
 (`LEGACY_MAP_REPLACED`).
 
 **Reading** (`read_document`): the header gives `width`, `height` and `bounds`, and each feature its pixel position beside its

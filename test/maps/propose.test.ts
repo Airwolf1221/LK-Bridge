@@ -157,6 +157,7 @@ describe('conflicts: what changed since the plan is refused inside the lock, and
       page: 'Atlas of Arkona',
       document: 'Arkona map',
       mapImage: 'Square 1024',
+      confirm: true,
     });
     expect(swap.body.status, swap.text).toBe('written');
     const before = mapWrites();
@@ -169,6 +170,7 @@ describe('conflicts: what changed since the plan is refused inside the lock, and
       page: 'Atlas of Arkona',
       document: 'Arkona map',
       mapImage: 'Arkona 2048x1024',
+      confirm: true,
     });
     expect(back.body.status, back.text).toBe('written');
   });

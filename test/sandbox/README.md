@@ -206,6 +206,8 @@ clean-up does.
   the new size (M8, the basis of the replacement warning). The writes are the jobs the tools submit (`src/maps/jobs.ts`: the
   check inside the lock, the write with its body bound from it, the verify), because the sandbox runtime has no repository tree
   to call the tools with.
+- **Held writes:** every write, the clean-up's included, goes through `test/sandbox/wait.ts` (as the smoke, assumptions and images
+  scripts do): a write parked for budget (`waiting_budget`) or queued is waited for, never sent again.
 - **What it cleans up:** everything, at the end, even after a failure: both pages (a cascade, which takes the document and its
   features), then both uploaded images. **A page or image that is already gone (404, "already deleted") counts as cleaned**
   (C2d's rule); any other failure is confirmed by a read before it is reported, and the report names each id to delete by hand.
@@ -213,5 +215,6 @@ clean-up does.
   world's repository tree re-reading every page written; the sandbox runtime has no tree, so fewer on the real run), two image
   uploads, and a few minutes at the bridge's write pacing. The link checks wait up to 8 × 4 s for a new page to become linkable.
 - **Dry run:** `test/maps/sandbox-dryrun.test.ts` runs the same script against the mock map world: every check runs to an answer
-  (19 PASS), the upload step is stood in for (the mock cannot take a signed PUT), the generated PNG is decoded and its CRCs
+  (19 PASS), once plainly and once with three writes really held for budget (a map job, a document write and the clean-up's
+  delete, each parked for 31 s), which it waits for without sending any twice, the upload step is stood in for (the mock cannot take a signed PUT), the generated PNG is decoded and its CRCs
   checked, and the clean-up is verified. A FAIL on the real API is where LegendKeeper differs from what ADR 0040 relies on.

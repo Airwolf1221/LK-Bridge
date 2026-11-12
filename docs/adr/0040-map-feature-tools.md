@@ -148,10 +148,18 @@ the generated registry (`src/lk/registry.defs.generated.ts`), the spec and the S
     in the asset tree and read live (`getAsset`: it must be an `IMAGE` or `MAP` asset); a name that matches several assets is
     refused with each candidate and its folder (`ASSET_AMBIGUOUS`); a missing one is `ASSET_NOT_FOUND`. **A blank document
     becomes a map** when given one (a blank document with no `mapImage` is still refused, now with a message that says so; a
-    page is refused as before). **A replacement with a different pixel size returns a warning**
-    (`FEATURES_OVER_DIFFERENT_PIXELS`) with how many features (pins, labels, regions, paths; folders hold no position) will
-    now sit over different pixels, and the old and new size; a legacy map replaced gets `LEGACY_MAP_REPLACED`. **Nothing is
-    moved**: features keep their `pos` (the schema says so; sandbox M8 checks it) and the owner decides. The same asset again
+    page is refused as before). **A replacement with a different pixel size
+    needs confirmation when features would shift** (owner decision, 12 November 2026; first built as a warning only). If the
+    new image's pixel size differs from the old one's and the map has features with a position (pins, labels, regions, paths;
+    folders hold none), `update_document` without `confirm: true` **refuses and writes nothing** (`CONFIRMATION_REQUIRED`):
+    the answer gives how many features will sit over different pixels and the old and new dimensions. With `confirm: true`
+    it goes ahead and the warning stays in the result (`FEATURES_OVER_DIFFERENT_PIXELS`, the same figures). The same size,
+    or a map with no such features (or no image yet), needs no confirmation and carries no warning. **Under `propose` scope
+    the tool captures the proposal instead of refusing**: its summary and page line show the count and the sizes ("replaces
+    the image (2048×1024 → 4096×1024), 12 feature(s) will sit over different pixels; approving confirms it"), and **approving
+    it counts as the confirmation** (the owner sees the count before approving). A dry run says whether confirmation is
+    required. A legacy map replaced gets `LEGACY_MAP_REPLACED` (its pixels cannot be compared, so it asks for nothing).
+    **Nothing is moved**: features keep their `pos` (the schema says so; sandbox M8 checks it) and the owner decides. The same asset again
     sends nothing. The image is verified (`maps.image`). Uploading a new image is D3's.
 16. **`read_document` on a map** reads the document's settings too (one more read: a map costs 2) and adds the map's `width`,
     `height` and `bounds` to the header (`map` in the answer and an `Image:` line in the Markdown) and each feature's **pixel
@@ -205,7 +213,6 @@ Each is a check in `test/sandbox/maps.ts` that prints PASS, FAIL or INCONCLUSIVE
 
 ## Open for the owner
 
-- Whether the replacement warning should become a refusal unless the owner confirms it (it warns and proceeds now: nothing is
-  lost, the map can be put back).
+- (Decided 12 November 2026: an image replacement that would shift features needs `confirm: true`, decision 15.)
 - The live checks on the test world are in the session summary (a test map, a pin by pixel linked to a page, a region by
   pixels, a folder with a label, moving the label out, a cascade delete and the journal).

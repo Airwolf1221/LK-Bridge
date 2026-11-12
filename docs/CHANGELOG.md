@@ -36,8 +36,12 @@ dry-run against the mock, not run against LegendKeeper.
     deleting the whole map document stays canonical.
 - **`update_document` sets a map's image.** `mapImage` is a library asset by id or name (a name matching several is refused
   with each candidate and its folder); a **blank document becomes a map** when given one (still refused without); a
-  replacement with a different pixel size answers with a **warning** (`FEATURES_OVER_DIFFERENT_PIXELS`, how many features will
-  sit over different pixels) and moves nothing; a legacy map replaced warns too. Verified (`maps.image`).
+  replacement with a different pixel size **needs `confirm: true` when the map has features** (owner decision, 12 November
+  2026): without it the call is refused and nothing is written (`CONFIRMATION_REQUIRED`, how many features will sit over
+  different pixels and the old and new dimensions); with it the call goes ahead and the warning
+  (`FEATURES_OVER_DIFFERENT_PIXELS`) stays in the result. The same size, or a map with no features, needs none. Under
+  `propose` scope the proposal shows the count and approving it is the confirmation. It moves nothing; a legacy map replaced
+  warns too. Verified (`maps.image`).
 - **`read_document` on a map** now costs 2 reads (the document's settings carry the image) and adds the map's `width`,
   `height` and `bounds` to the header and each position in pixels beside its lat/lng (a region's or path's points too; long
   lists summarised unless `detail: "full"`); a legacy tiled map and a map with no image say so. The JSON form is unchanged.
@@ -46,6 +50,14 @@ dry-run against the mock, not run against LegendKeeper.
 - **Tests:** 127 map tests (unit, create, update, delete, propose and conflicts, canon, image, read, and the sandbox script's dry
   run) on a mock map world (a 2048×1024 map, a legacy tiled map, a blank document, folders, every type, linked and unlinked
   features, names that occur twice). The existing `read_document` map test moved from 1 read to 2.
+- **Merged `main` (D3) and the sandbox wait helper.** Every write of `test/sandbox/maps.ts`, its clean-up included, now goes
+  through D3's `test/sandbox/wait.ts` (`runSettled`, `waitForJob`), as the smoke, assumptions and images scripts do, so a write
+  parked for budget (`waiting_budget`) or queued is waited for and never sent again. The dry run was extended: with three
+  writes really held for budget on the mock (a map job's `createFeature`, a document write and the clean-up's page delete,
+  each throttled for 31 s) it waits for all three, sends none twice and leaves nothing behind. D3 keeps an asset's bytes
+  before any `deleteAsset`, so the dry run stands in for that download, and the clean-up now believes "already gone" only
+  after a read says so (a failure that merely sounds like it no longer counts as cleaned). Tool counts: 56 → 58 bridge tools
+  with D3's two (147 with the per-operation tools).
 - **Sandbox (written, dry-run, not run).** `deploy/sandbox-test.sh --project test -- maps`: a throwaway page and map, two
   generated PNGs, a feature of every type by pixel position, links, a folder with a nested pin, a move, a cascade delete, an
   image replacement; PASS / FAIL / INCONCLUSIVE per check; cleans up everything (a 404 counts as cleaned). See

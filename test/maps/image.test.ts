@@ -130,14 +130,33 @@ describe('a blank document', () => {
 });
 
 describe('replacing an image', () => {
-  it('with another pixel size warns how many features will sit over different pixels, and moves nothing', async () => {
+  it('with another pixel size is REFUSED without confirm when the map has features: the count and sizes, nothing written', async () => {
     const before = JSON.stringify(w.features(w.md.map));
+    const sent = writes().length;
     const r = await setImage('Arkona map', 'Square 1024');
+    expect(r.isError, r.text).toBe(true);
+    expect(r.body.error).toMatchObject({
+      code: 'CONFIRMATION_REQUIRED',
+      features: 12, // pins, labels, regions and paths; the folders hold no position
+      old: { width: 2048, height: 1024 },
+      new: { width: 1024, height: 1024 },
+    });
+    expect(r.body.error.message).toMatch(
+      /12 feature\(s\).*2048×1024.*1024×1024.*NOTHING was written.*confirm: true/s,
+    );
+    expect(writes().length).toBe(sent);
+    expect(JSON.stringify(w.features(w.md.map))).toBe(before);
+    expect(w.image(w.md.map)).toMatchObject(appFrame(2048, 1024));
+  });
+
+  it('with confirm: true goes ahead, the warning stays in the result, and nothing is moved', async () => {
+    const before = JSON.stringify(w.features(w.md.map));
+    const r = await setImage('Arkona map', 'Square 1024', { confirm: true });
     expect(r.body.status, r.text).toBe('written');
     expect(r.body.warnings).toHaveLength(1);
     expect(r.body.warnings[0]).toMatchObject({
       code: 'FEATURES_OVER_DIFFERENT_PIXELS',
-      features: 12, // pins, labels, regions and paths; the folders hold no position
+      features: 12,
       old: { width: 2048, height: 1024 },
       new: { width: 1024, height: 1024 },
     });
@@ -146,6 +165,26 @@ describe('replacing an image', () => {
     );
     expect(JSON.stringify(w.features(w.md.map))).toBe(before);
     expect(w.image(w.md.map)).toMatchObject(appFrame(1024, 1024));
+  });
+
+  it('a map with no features needs no confirmation (and no warning)', async () => {
+    // "Unpainted map" has an image now (set above) and no features
+    expect(w.features(w.md.noImage)).toHaveLength(0);
+    const r = await setImage('Unpainted map', 'Canon 1500x700');
+    expect(r.body.status, r.text).toBe('written');
+    expect(r.body.warnings).toBeUndefined();
+    expect(w.image(w.md.noImage)).toMatchObject(appFrame(1500, 700));
+    // a map holding only a folder has nothing to shift either
+    const f = await call('create_map_feature', {
+      page: 'Atlas of Arkona',
+      document: 'Unpainted map',
+      type: 'folder',
+      name: 'Only a folder',
+    });
+    expect(f.body.status, f.text).toBe('written');
+    const r2 = await setImage('Unpainted map', 'Wide 4096x1024');
+    expect(r2.body.status, r2.text).toBe('written');
+    expect(r2.body.warnings).toBeUndefined();
   });
 
   it('with an image of the same size warns of nothing; with the same image sends nothing', async () => {
@@ -185,10 +224,45 @@ describe('replacing an image', () => {
   it('a dry run shows the warning and writes nothing', async () => {
     const before = writes().length;
     const r = await setImage('Arkona map', 'Wide 4096x1024', { dryRun: true });
-    expect(r.body, r.text).toMatchObject({ status: 'dry_run' });
+    expect(r.body, r.text).toMatchObject({ status: 'dry_run', confirmation: 'required: pass confirm: true' });
     expect(r.body.warnings[0].code).toBe('FEATURES_OVER_DIFFERENT_PIXELS');
     expect(writes().length).toBe(before);
     expect(w.image(w.md.map)).toMatchObject(appFrame(2048, 1024));
+  });
+});
+
+describe('under propose scope', () => {
+  it('the proposal shows the count, and approving it is the confirmation', async () => {
+    const proposer = await w.stack.connect(w.stack.newToken('image-proposer', 'propose').token);
+    const before = JSON.stringify(w.features(w.md.map));
+    const sent = writes().length;
+    const r = await w.stack.call(proposer, 'update_document', {
+      project: 'test',
+      page: 'Atlas of Arkona',
+      document: 'Arkona map',
+      mapImage: 'Wide 4096x1024',
+    });
+    // not refused for want of confirm: captured, with the count, and nothing written yet
+    expect(r.body, r.text).toMatchObject({ status: 'proposal_captured' });
+    expect(r.body.warnings[0]).toMatchObject({ code: 'FEATURES_OVER_DIFFERENT_PIXELS', features: 12 });
+    expect(writes().length).toBe(sent);
+    expect(w.image(w.md.map)).toMatchObject(appFrame(2048, 1024));
+    const proposals = w.stack.runtime.policy.proposals;
+    const id = String(r.body.proposalId);
+    const view = proposals.get(id)!;
+    expect(view.summary).toMatch(
+      /2048×1024 → 4096×1024.*12 feature\(s\) will sit over different pixels.*approving confirms it/,
+    );
+    expect(JSON.stringify(view)).toContain('12 feature(s) will sit over different pixels');
+    // approved: it runs with no further confirmation, and moves nothing
+    await w.stack.runtime.policy.commands.approve('owner', id);
+    for (let i = 0; i < 300 && !['executed', 'failed', 'conflicted'].includes(proposals.get(id)!.state); i++)
+      await new Promise((res) => setTimeout(res, 20));
+    expect(proposals.get(id)!.state).toBe('executed');
+    expect(w.image(w.md.map)).toMatchObject(appFrame(4096, 1024));
+    expect(JSON.stringify(w.features(w.md.map))).toBe(before);
+    // the same size needs no proposal's worth of ceremony either way
+    w.setImage(w.md.map, 'Arkona 2048x1024');
   });
 });
 

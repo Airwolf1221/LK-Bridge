@@ -15,7 +15,6 @@
  * place where LegendKeeper differs from what the bridge relies on (docs/adr/0040-map-feature-tools.md, "To verify").
  */
 import { deflateSync } from 'node:zlib';
-import { BudgetExhaustedError } from '../../src/jobs/errors.js';
 import { mintClientId } from '../../src/jobs/ids.js';
 import {
   appBounds,
@@ -41,11 +40,14 @@ import {
 } from '../../src/maps/index.js';
 import { BridgeLkError } from '../../src/lk/errors.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
+import { runSettled, waitForJob, type WaitOptions } from './wait.js';
 
 type Obj = Record<string, any>;
 
 export interface MapsOptions {
   readonly sleep?: (ms: number) => Promise<void>;
+  /** How long a write parked for budget or queued is waited for (test/sandbox/wait.ts; the defaults are 24 × 25 s). */
+  readonly wait?: WaitOptions;
   /** How long a freshly created page may take to become linkable (default 8 tries, 4 s apart). */
   readonly linkTries?: number;
   readonly linkWaitMs?: number;
@@ -140,27 +142,25 @@ export async function runMapsSandbox(
   const record = (id: string, title: string, verdict: Verdict, detail: string) =>
     findings.push({ id, title, verdict, detail });
 
-  /** One governed call at P1; a read refused for budget is made again once the budget allows (at most 5 times). */
-  const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> => {
-    let r: Awaited<ReturnType<typeof t.engine.run>> | undefined;
-    for (let i = 0; !r; i++) {
-      try {
-        r = await t.engine.run(op, params, { origin, priority: 'P1', project: t.projectId, ...extra });
-      } catch (e) {
-        if (!(e instanceof BudgetExhaustedError) || i >= 5) throw e;
-        await sleep(Math.max(1000, e.retryAtMs - Date.now()));
-      }
+  /**
+   * One governed call at P1, settled (test/sandbox/wait.ts): a read refused for budget is made again when the budget
+   * allows; a write the governor PARKS for budget (`waiting_budget`) or queues behind the pacing has not failed, and is
+   * waited for, never sent again. Every write of this script, the clean-up's too, goes through here or `settle`.
+   */
+  const wait: WaitOptions = { ...(o.sleep ? { sleep: o.sleep } : {}), ...o.wait };
+  const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> =>
+    runSettled(t, op, params, { origin, priority: 'P1', project: t.projectId, ...extra }, wait);
+  /** A submitted job (a map job or an upload), waited for the same way; the job when it succeeded. */
+  const settle = async (jobId: string, what: string) => {
+    try {
+      return await waitForJob(t.engine, t.projectId, jobId, what, wait);
+    } catch (e) {
+      const err = (t.engine.queries.getJob(t.projectId, jobId)?.lastError ?? {}) as Obj;
+      throw new Error(
+        `${(e as Error).message} ${err.differences ? JSON.stringify(err.differences).slice(0, 300) : ''}`.trim(),
+        { cause: e },
+      );
     }
-    if (r.status === 'succeeded') return r.result;
-    if ((r.status === 'waiting_budget' || r.status === 'queued') && r.jobId) {
-      for (let i = 0; i < 24; i++) {
-        const job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-        if (job.status === 'succeeded') return t.engine.stepResults(t.projectId, r.jobId)?.[0]?.value;
-        if (['failed', 'cancelled'].includes(job.status))
-          throw new Error(`${op} ${job.status}: ${job.lastError?.message ?? ''}`);
-      }
-    }
-    throw new Error(`${op} did not complete: ${r.status}`);
   };
   /** A call whose refusal is an answer: `{ status, code, message }` from LegendKeeper, or `{ status: 200, body }`. */
   const attempt = async (op: string, params: Obj = {}, extra: Obj = {}) => {
@@ -232,15 +232,7 @@ export async function runMapsSandbox(
       internal: true,
     });
     if (!('jobId' in r)) throw new Error(`${title}: not queued (${JSON.stringify(r).slice(0, 200)})`);
-    let view = await t.engine.wait(t.projectId, r.jobId, 25_000);
-    for (let i = 0; i < 24 && !['succeeded', 'failed', 'cancelled'].includes(view.status); i++)
-      view = await t.engine.wait(t.projectId, r.jobId, 25_000);
-    if (view.status !== 'succeeded') {
-      const err = (view.lastError ?? {}) as Obj;
-      throw new Error(
-        `${title}: the job ${view.status}: ${err.message ?? ''} ${err.differences ? JSON.stringify(err.differences).slice(0, 300) : ''}`.trim(),
-      );
-    }
+    const view = await settle(r.jobId, title);
     const res = (view.result ?? {}) as Obj;
     if (res.verified === false)
       throw new Error(
@@ -302,11 +294,9 @@ export async function runMapsSandbox(
         priority: 'P1',
       });
       if (!('jobId' in r)) throw new Unclear(`not queued: ${r.status}`);
-      let job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-      for (let i = 0; i < 8 && !['succeeded', 'failed'].includes(job.status); i++)
-        job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-      if (job.status !== 'succeeded')
-        throw new Unclear(`the upload job ${job.status}: ${job.lastError?.message ?? ''}`);
+      const job = await settle(r.jobId, 'the upload').catch((e: Error) => {
+        throw new Unclear(e.message);
+      });
       const asset = (job.result as Obj).asset as Obj;
       assets.push(asset.id);
       png1500 = { id: asset.id, url: asset.url };
@@ -740,11 +730,9 @@ export async function runMapsSandbox(
           priority: 'P1',
         });
         if (!('jobId' in r)) throw new Unclear(`not queued: ${r.status}`);
-        let job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-        for (let i = 0; i < 8 && !['succeeded', 'failed'].includes(job.status); i++)
-          job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-        if (job.status !== 'succeeded')
-          throw new Unclear(`the second upload ${job.status}: ${job.lastError?.message ?? ''}`);
+        const job = await settle(r.jobId, 'the second upload').catch((e: Error) => {
+          throw new Unclear(e.message);
+        });
         const asset = (job.result as Obj).asset as Obj;
         assets.push(asset.id);
         await run(
@@ -788,8 +776,8 @@ export async function runMapsSandbox(
     };
     const isGone = async (op: string, params: Obj): Promise<boolean> => {
       try {
-        const r = await t.engine.run(op, params, { origin, priority: 'P1', project: t.projectId });
-        return r.status === 'succeeded' && (r.result as Obj)?.deletedAt != null;
+        const r = (await run(op, params)) as Obj;
+        return r?.deletedAt != null;
       } catch (e) {
         return goneAlready(e);
       }
@@ -800,8 +788,10 @@ export async function runMapsSandbox(
           await run(op, params, extra);
           return null;
         } catch (e) {
-          if (goneAlready(e)) return null;
           const m = (e as Error).message;
+          // "Already gone" is believed only after a read says so (a failure that merely sounds like it, such as the
+          // image's bytes not being kept before its delete, must not count as cleaned).
+          if (goneAlready(e)) return (await isGone(readOp, { path: params.path })) ? null : m;
           if (attemptNo >= 3 || !/could not (be read|be listed|all be checked)|budget/i.test(m))
             return (await isGone(readOp, { path: params.path })) ? null : m;
           await sleep(65_000);

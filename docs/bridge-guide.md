@@ -414,8 +414,12 @@ cascade stops part-way, ask again: it deletes only what is left.
 
 **Images.** `update_document` with `mapImage` (an image asset of the library, by name or id: see `list_assets`) sets or
 replaces a map's image, and a blank document given one becomes a map. Features keep their positions when the image changes, so
-a replacement with an image of a different size puts them over different pixels: the answer carries a warning with how many.
-**Nothing is moved automatically**; tell the person, and move them with `update_map_feature` if asked.
+a replacement with an image of a different size puts them over different pixels. When the map has features, the call is
+refused unless you pass `confirm: true` (`CONFIRMATION_REQUIRED`: nothing is written, and the answer says how many features
+will sit over different pixels, with the old and new sizes): **tell the person that count and ask before you confirm**. With
+`confirm: true` it goes ahead and the warning stays in the result; under `propose` scope the proposal shows the count and the
+owner's approval is the confirmation. The same size, or a map with no features, needs none. **Nothing is moved
+automatically**; move features with `update_map_feature` if asked.
 
 These are ordinary edits, not canon, even on an Authoritative page (only deleting the whole map document of an Authoritative
 page is canonical).

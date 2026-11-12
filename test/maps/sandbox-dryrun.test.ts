@@ -66,45 +66,82 @@ describe('the generated PNG', () => {
   });
 });
 
-describe('the maps sandbox script, dry run', () => {
-  it('runs every check to an answer, writes through the tools’ own jobs, and cleans up everything it made', async () => {
-    const engine = w.stack.runtime.engine;
-    // The upload step stands in for a signed PUT: decode the PNG, put an asset of that size in the library.
-    const uploads = new Map<
-      string,
-      { id: string; name: string; width: number; height: number; url: string }
-    >();
-    let n = 0;
-    const wrapped = new Proxy(engine, {
-      get(target, prop, receiver) {
-        if (prop === 'submit') {
-          return (o: { kind: string; dataBase64?: string; name?: string }, ...rest: unknown[]) => {
-            if (o.kind !== 'upload_image') return (target.submit as (...a: unknown[]) => unknown)(o, ...rest);
-            const { width, height } = decodePng(Buffer.from(o.dataBase64!, 'base64'));
-            const id = w.assets.image(o.name!, null, { width, height });
-            const a = w.assets.assets.get(id)!;
-            const jobId = `jupload${++n}`;
-            uploads.set(jobId, { id, name: o.name!, width, height, url: a.url! });
-            return Promise.resolve({ jobId, status: 'queued', eta: 1 });
-          };
-        }
-        if (prop === 'wait') {
-          return (project: string, jobId: string, ms: number) => {
-            const u = uploads.get(jobId);
-            return u
-              ? Promise.resolve({
-                  id: jobId,
-                  status: 'succeeded',
-                  result: { asset: { id: u.id, name: u.name, url: u.url, width: u.width, height: u.height } },
-                })
-              : (target.wait as (...a: unknown[]) => unknown)(project, jobId, ms);
-          };
-        }
-        const v = Reflect.get(target, prop, receiver) as unknown;
-        return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
-      },
-    });
-    const done = w.mark();
+/**
+ * Runs the script against the mock map world. With `hold`, three writes are throttled for 31 s (longer than the
+ * governor waits inline), so each is PARKED (`waiting_budget`): a map job's createFeature, a plain updateDocument and the
+ * clean-up's first page delete. The script must wait for them (test/sandbox/wait.ts), never send them again, and still
+ * leave nothing behind (the owner's sandbox run of 12 November 2026).
+ */
+async function runScript(hold: boolean) {
+  const engine = w.stack.runtime.engine;
+  const parked = new Set<string>();
+  const off = engine.events.on('job', (e) => {
+    if (e.job.status === 'waiting_budget') parked.add(`${e.job.id} ${e.job.title ?? ''}`);
+  });
+  // D3 keeps an asset's bytes (downloaded from the asset host) before any deleteAsset; the mock has no asset host, so
+  // the dry run stands in for that download.
+  const offKeeper = engine.setAssetDeleteKeeper(() => Promise.resolve({ keptBytes: 'dry run' }));
+  const held = { feature: false, doc: false, cleanup: false };
+  const throttle = (match: (c: { method: string; path: string }) => boolean) =>
+    w.stack.mock.inject(
+      (c) => match({ method: c.method, path: c.path.replace(/\/$/, '') }),
+      { kind: 'rate-limit', tier: 'write-min', retryAfterS: 31 },
+      1,
+    );
+  // The upload step stands in for a signed PUT: decode the PNG, put an asset of that size in the library.
+  const uploads = new Map<string, { id: string; name: string; width: number; height: number; url: string }>();
+  let n = 0;
+  const wrapped = new Proxy(engine, {
+    get(target, prop, receiver) {
+      if (prop === 'submit') {
+        return (
+          o: { kind: string; dataBase64?: string; name?: string; steps?: { op: string }[] },
+          ...rest: unknown[]
+        ) => {
+          if (hold && !held.feature && o.steps?.some((x) => x.op === 'createFeature')) {
+            held.feature = true;
+            throttle((c) => c.method === 'POST' && c.path.endsWith('/features'));
+          }
+          if (o.kind !== 'upload_image') return (target.submit as (...a: unknown[]) => unknown)(o, ...rest);
+          const { width, height } = decodePng(Buffer.from(o.dataBase64!, 'base64'));
+          const id = w.assets.image(o.name!, null, { width, height });
+          const a = w.assets.assets.get(id)!;
+          const jobId = `jupload${++n}`;
+          uploads.set(jobId, { id, name: o.name!, width, height, url: a.url! });
+          return Promise.resolve({ jobId, status: 'queued', eta: 1 });
+        };
+      }
+      if (prop === 'run') {
+        return (op: string, ...rest: unknown[]) => {
+          if (hold && op === 'updateDocument' && !held.doc) {
+            held.doc = true;
+            throttle((c) => c.method === 'PATCH' && !c.path.includes('/features'));
+          }
+          if (hold && op === 'deleteResource' && !held.cleanup) {
+            held.cleanup = true;
+            throttle((c) => c.method === 'DELETE' && /\/resources\/[^/]+$/.test(c.path));
+          }
+          return (target.run as (...a: unknown[]) => unknown)(op, ...rest);
+        };
+      }
+      if (prop === 'wait') {
+        return (project: string, jobId: string, ms: number) => {
+          const u = uploads.get(jobId);
+          return u
+            ? Promise.resolve({
+                id: jobId,
+                status: 'succeeded',
+                result: { asset: { id: u.id, name: u.name, url: u.url, width: u.width, height: u.height } },
+              })
+            : (target.wait as (...a: unknown[]) => unknown)(project, jobId, ms);
+        };
+      }
+      const v = Reflect.get(target, prop, receiver) as unknown;
+      return typeof v === 'function' ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+  const done = w.mark();
+  try {
     const { findings, assets } = await runMapsSandbox(
       {
         engine: wrapped,
@@ -114,45 +151,71 @@ describe('the maps sandbox script, dry run', () => {
         apiKey: API_KEY,
       },
       PROJECT,
-      { sleep: () => Promise.resolve(), linkWaitMs: 0 },
+      { sleep: () => Promise.resolve(), linkWaitMs: 0, wait: hold ? { waitMs: 5_000, maxWaits: 30 } : {} },
     );
-    const cost = done();
-    const report = formatMapsReport(findings);
-    process.stdout.write(`${report}requests on the mock: ${cost.reads} reads, ${cost.writes} writes\n`);
+    return { findings, assets, parked, cost: done(), held };
+  } finally {
+    off();
+    offKeeper();
+  }
+}
+
+describe('the maps sandbox script, dry run', () => {
+  const IDS = [
+    'M1',
+    'M2',
+    'M3',
+    'M4a',
+    'M4b',
+    'M4c',
+    'M4d',
+    'M4e',
+    'M4f',
+    'M5a',
+    'M5b',
+    'M5c',
+    'M6a',
+    'M6b',
+    'M6c',
+    'M6d',
+    'M7a',
+    'M7b',
+    'M8',
+    'cleanup',
+  ];
+  const expectClean = (r: Awaited<ReturnType<typeof runScript>>) => {
+    const report = formatMapsReport(r.findings);
+    process.stdout.write(`${report}requests on the mock: ${r.cost.reads} reads, ${r.cost.writes} writes\n`);
     // Every check ran to an answer: none is skipped, none could not complete.
-    for (const id of [
-      'M1',
-      'M2',
-      'M3',
-      'M4a',
-      'M4b',
-      'M4c',
-      'M4d',
-      'M4e',
-      'M4f',
-      'M5a',
-      'M5b',
-      'M5c',
-      'M6a',
-      'M6b',
-      'M6c',
-      'M6d',
-      'M7a',
-      'M7b',
-      'M8',
-      'cleanup',
-    ]) {
-      const f = findings.find((x) => x.id === id);
+    for (const id of IDS) {
+      const f = r.findings.find((x) => x.id === id);
       expect(f, `${id} is reported`).toBeDefined();
       expect(f!.verdict, `${id}: ${f!.detail}`).toBe('pass');
     }
-    expect(findings.map((f) => f.verdict)).not.toContain('skipped');
+    expect(r.findings.map((f) => f.verdict)).not.toContain('skipped');
     // Cleaned up: the throwaway pages and both uploaded images are gone.
-    expect(assets).toHaveLength(2);
-    for (const a of assets) expect(w.assets.assets.has(a), `asset ${a}`).toBe(false);
+    expect(r.assets).toHaveLength(2);
+    for (const a of r.assets) expect(w.assets.assets.has(a), `asset ${a}`).toBe(false);
     expect(
-      [...w.repo.res.values()].filter((r) => r.name.startsWith('lk-bridge maps') && r.deletedAt === null),
+      [...w.repo.res.values()].filter((x) => x.name.startsWith('lk-bridge maps') && x.deletedAt === null),
     ).toEqual([]);
-    expect(report).toContain('PASS');
+  };
+
+  it('runs every check to an answer, writes through the tools’ own jobs, and cleans up everything it made', async () => {
+    expectClean(await runScript(false));
   });
+
+  it('waits for writes parked for budget (a map job, a document write, the clean-up) and sends none twice', async () => {
+    const writesBefore = w.sent.length;
+    const r = await runScript(true);
+    expect(r.held).toEqual({ feature: true, doc: true, cleanup: true });
+    expect([...r.parked], 'jobs parked for budget').toHaveLength(3);
+    expectClean(r);
+    // None of the held writes was sent again once it ran: one createFeature per feature the script made, no duplicates.
+    const features = w.sent
+      .slice(writesBefore)
+      .filter((s) => s.method === 'POST' && s.path.endsWith('/features'));
+    const ids = features.map((s) => s.body.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  }, 300_000);
 });
