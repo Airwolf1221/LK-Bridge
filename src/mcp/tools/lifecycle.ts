@@ -1173,8 +1173,9 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
     description:
       'Reverses an archiving from its lifecycle record: a formerly Authoritative page goes back under its previous parent ' +
       '(alphabetical) as [BSRC] with its Status, Continuity Type, Scope and Temporal Scope restored and the CANON tag; a ' +
-      'formerly Working page back under [INDEX] Working as [BWRK] with Status Working and the Working tag, its other values ' +
-      'restored. Last Major Revision becomes today. The archive note is removed only if it is still exactly as inserted ' +
+      'formerly Working page back under [INDEX] Working (or the [INDEX] inside a Working set it came from) as [BWRK] with ' +
+      'Status Working and the Working tag, its other values restored. Moves made within the archive since (move_resource) ' +
+      'do not matter: it goes back to where the record says. Last Major Revision becomes today. The archive note is removed only if it is still exactly as inserted ' +
       '(otherwise kept, and flagged); a Scope edited since archiving is flagged (the recorded original is restored). When ' +
       'the previous parent is gone or outside the repository, give `destination`. A page archived by hand (no record) ' +
       'needs `destination` (for an Authoritative page), `previousState` and `restore` (continuityType, scope, ' +
@@ -1278,8 +1279,17 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
             if (rec) {
               state = rec.previousState === 'working' ? 'working' : 'authoritative';
               restore = rec.previousFacts;
-              if (state === 'working') parentId = idx.working.id;
-              else {
+              if (state === 'working') {
+                // C2d.1: back where it came from when that is an [INDEX] inside a Working set that is still there
+                // (a Working character's own index, say), else under [INDEX] Working.
+                const was = rec.previousParentId
+                  ? ctx.tree.node(ctx.projectId, rec.previousParentId).data
+                  : null;
+                parentId =
+                  was && was.kind === 'index' && was.path.ids.includes(idx.working.id)
+                    ? was.id
+                    : idx.working.id;
+              } else {
                 const prev = rec.previousParentId
                   ? ctx.tree.node(ctx.projectId, rec.previousParentId).data
                   : null;

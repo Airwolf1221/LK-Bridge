@@ -120,40 +120,68 @@ function sibling(
 }
 
 /**
- * v2 C2c: where a new page of this status goes: a Working page directly under `[INDEX] Working` (a given parent must be
- * it, or for `allowCharacterIndex` a character index directly under it); an Authoritative page under the given parent,
- * which must not be in a lifecycle area.
+ * The `[INDEX]` pages inside the Working area (below `[INDEX] Working`, at any depth): the places besides
+ * `[INDEX] Working` itself where a Working page may go (v2 C2d.1). A Working character's own index is one; so is any
+ * index within a Working set kept together (C2d).
+ */
+function workingSetIndexes(cc: CreateCtx, workingId: string): TreeNode[] {
+  const { ctx } = cc;
+  return ctx.tree
+    .subtree(ctx.projectId, workingId, { limit: 5000 })
+    .data.entries.filter((e) => e.relativeDepth > 0 && e.node.kind === 'index')
+    .map((e) => e.node);
+}
+
+/**
+ * v2 C2c, C2d.1: where a new page of this status goes. A Working page goes under `[INDEX] Working` itself (the
+ * default) or under an `[INDEX]` page inside a Working set (a Working character's index, or any index within a Working
+ * set kept together), alphabetically among that index's children: the same rule for a single create, a batch item and a
+ * character. Any other parent, and any page (nothing goes under a `[BWRK]` page), is `WORKING_PARENT`, naming the
+ * allowed ones. An Authoritative page goes under the given parent, which must not be in a lifecycle area.
  */
 function parentForStatus(
   cc: CreateCtx,
   status: CreateStatus,
   given: string | undefined,
-  o: { readonly allowCharacterIndex?: boolean; readonly what?: string } = {},
+  o: { readonly what?: string } = {},
 ): { ok: true; value: TreeNode } | { ok: false; result: McpToolResult } {
   const { pd, ctx } = cc;
   if (status === 'working') {
     const wi = workingIndex(cc);
     if (!wi.ok) return wi;
     if (given === undefined) return { ok: true, value: wi.value };
-    const r = resolveParent(ctx, given, o.what ? { what: o.what } : {});
+    const r = resolvePage(ctx, given, { what: o.what ?? `the parent “${given}”` });
     if (!r.ok) return r;
+    const node = r.node;
     const underWorking =
-      r.value.id === wi.value.id ||
-      (o.allowCharacterIndex === true && r.value.kind === 'index' && r.value.parentId === wi.value.id);
+      node.id === wi.value.id || (node.kind === 'index' && node.path.ids.includes(wi.value.id));
     if (!underWorking) {
+      const sets = workingSetIndexes(cc, wi.value.id);
+      const named = sets.slice(0, 10).map((n) => n.rawName);
       return {
         ok: false,
         result: errorResult(
           {
             code: 'WORKING_PARENT',
-            message: `A Working page goes directly under ${wi.value.rawName}${o.allowCharacterIndex ? ' (or a character index directly under it)' : ''}, flat and alphabetical; “${r.value.displayName}” is not. Leave parent out, or pass status "authoritative" to place it there (a canonical proposal). It goes to its normal place when it is promoted.`,
+            message:
+              `A Working page goes under ${wi.value.rawName} itself (leave parent out) or under an [INDEX] page inside a Working set ` +
+              `(a Working character’s own index, made by create_character), alphabetically among its pages; ` +
+              `${node.kind === 'index' || node.kind === 'root' ? `“${node.displayName}” is not in the Working area` : `“${node.displayName}” is a page, and nothing goes under a Working page`}. ` +
+              `Allowed: ${wi.value.rawName}${named.length > 0 ? `, ${named.join(', ')}${sets.length > named.length ? `, and ${sets.length - named.length} more` : ''}` : ' (no Working set index exists yet)'}. ` +
+              'Or pass status "authoritative" to place it in its normal place (a canonical proposal); it goes there when it is promoted.',
             workingIndex: { id: wi.value.id, name: wi.value.rawName },
+            allowedParents: [
+              { id: wi.value.id, name: wi.value.rawName },
+              ...sets
+                .slice(0, 50)
+                .map((n) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') })),
+            ],
           },
           pd,
         ),
       };
     }
-    return { ok: true, value: r.value };
+    return { ok: true, value: node };
   }
   if (given === undefined) {
     return {
@@ -505,8 +533,11 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
     access: 'write',
     description:
       'Creates a page from a template (required: name or id; see list_templates) inside the AI REPOSITORY, in its ' +
-      'alphabetical place. `status` (default "working"): a [BWRK] page directly under [INDEX] Working with Status Working ' +
-      'and the Working tag (leave `parent` out); or "authoritative": a [BSRC] page under `parent` with Status ' +
+      'alphabetical place. `status` (default "working"): a [BWRK] page with Status Working and the Working tag, directly ' +
+      'under [INDEX] Working (leave `parent` out) or, to build up a Working character one page at a time, under that ' +
+      'character’s own [INDEX] (`parent` = the index create_character made: create_character (Working) first, then this ' +
+      'for each specialist page, so promote_page with subtree later takes the whole set); any other parent is refused, ' +
+      'naming the allowed ones; or "authoritative": a [BSRC] page under `parent` with Status ' +
       'Authoritative and the CANON tag, which is canon and always becomes a proposal only the owner can accept as canon. ' +
       'The page’s name follows the template role’s pattern. Optional `facts` and `links` as in set_facts are written in ' +
       'the same job, in template order (Status comes from `status`). A page of the same name under the same parent is ' +
@@ -523,7 +554,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
       parent: pageRef
         .optional()
         .describe(
-          'The index it goes under (name or id). Required for an Authoritative page; a Working page goes under [INDEX] Working.',
+          'The index it goes under (name or id). Required for an Authoritative page. A Working page goes under [INDEX] Working (leave out) or an [INDEX] inside a Working set: a Working character’s own index.',
         ),
       status: statusArg,
       facts: factsArg,
@@ -656,7 +687,8 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
     description:
       'Creates a page with no template (no sidebar facts) inside the AI REPOSITORY, in its alphabetical place. The name ' +
       'starts with exactly “[INDEX] ” (an index, under `parent`; no status), or for a page “[BSRC] ” or “[BWRK] ”: a ' +
-      'page’s prefix follows `status` (default "working": [BWRK] directly under [INDEX] Working with the Working tag; ' +
+      'page’s prefix follows `status` (default "working": [BWRK] under [INDEX] Working or an [INDEX] inside a Working set, ' +
+      'such as a Working character’s own index, with the Working tag; ' +
       '"authoritative": [BSRC] under `parent` with the CANON tag, a canonical proposal). Anything else is refused, and ' +
       '[BARC] too (only archive_page archives). A page of the same kind and name under the same parent is refused. ' +
       'Prefer create_resource (a template gives the page its sidebar). Cost: 1 write, then the verify step (1 read, 1 ' +
@@ -669,7 +701,9 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
         .describe('The full name, with its prefix: “[INDEX] …”, or “[BSRC] …” / “[BWRK] …” for a page.'),
       parent: pageRef
         .optional()
-        .describe('The index it goes under (name or id). A Working page goes under [INDEX] Working.'),
+        .describe(
+          'The index it goes under (name or id). A Working page goes under [INDEX] Working (leave out) or an [INDEX] inside a Working set.',
+        ),
       status: statusArg,
       tags: tagsArg,
       aliases: aliasesArg,
@@ -774,7 +808,7 @@ const manyItem = z
       .enum(['working', 'authoritative'])
       .optional()
       .describe(
-        'A page’s status (default "working": [BWRK] under [INDEX] Working or a character index directly under it; "authoritative": [BSRC] in its normal place, canon). Indexes take none.',
+        'A page’s status (default "working": [BWRK] under [INDEX] Working or an [INDEX] inside a Working set; "authoritative": [BSRC] in its normal place, canon). Indexes take none.',
       ),
     facts: factsArg,
     links: linksArg,
@@ -792,7 +826,8 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
       'Creates up to 100 pages in ONE request, nested with `key` and `parent_key` (a parent made in the same request works), ' +
       'each in its alphabetical place. Each item follows the single-create rules: with a `template`, as create_resource (name ' +
       'pattern, facts, links); without, as create_bare_resource (name with its prefix). Each page item has a `status` ' +
-      '(default "working": a [BWRK] page under [INDEX] Working, or a character index directly under it; never under another ' +
+      '(default "working": a [BWRK] page under [INDEX] Working, or an [INDEX] inside a Working set (the same rule as ' +
+      'create_resource); never under another ' +
       'item, as Working pages are flat; "authoritative": a [BSRC] page in its normal place, canon); mixed batches are fine, ' +
       'and a batch with any Authoritative page is one canonical proposal. Indexes take no status and are never made under ' +
       '[INDEX] Working or [INDEX] Archived. Pages without a ' +
@@ -888,14 +923,14 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
               return refusal(
                 pd,
                 'WORKING_PARENT',
-                `Item “${it.key}”: a Working page goes directly under [INDEX] ${cc.lifecycle.indexNames.working} (or a character index directly under it), never under another item of the request: Working pages are flat.`,
+                `Item “${it.key}”: a Working page goes under [INDEX] ${cc.lifecycle.indexNames.working} or an [INDEX] inside a Working set, never under another item of the request: Working pages are flat.`,
                 { key: it.key },
               );
             }
             if (it.parent_key === undefined) {
               let p: { ok: true; value: TreeNode } | { ok: false; result: McpToolResult };
               if (status !== null) {
-                p = parentForStatus(cc, status, it.parent, { allowCharacterIndex: true, what });
+                p = parentForStatus(cc, status, it.parent, { what });
               } else if (it.parent === undefined) {
                 return refusal(
                   pd,
@@ -1341,6 +1376,12 @@ function moveResourceTool(deps: ToolDeps): McpToolProvider {
     description:
       'Moves a page (and everything under it) to a new parent index inside the AI REPOSITORY, in its alphabetical place ' +
       'there (one write). A move under the page itself or one of its descendants, or out of the repository, is refused. ' +
+      'MOVES WITHIN A LIFECYCLE AREA are ordinary moves (no lifecycle change, no canonical approval; prefix, Status and ' +
+      'tags never change): a [BWRK] page between [INDEX] Working and an [INDEX] inside a Working set (to build a Working ' +
+      'character’s set before promote_page with subtree), a [BARC] page, or an archived set’s [INDEX] with its pages, ' +
+      'between [INDEX] Archived and an [INDEX] inside an archived set. unarchive_page still returns an archived page or ' +
+      'set to where its lifecycle record says it came from. A move into or out of [INDEX] Working or [INDEX] Archived, or ' +
+      'between the two, is refused (POLICY_DENIED, naming archive_page, unarchive_page, move_to_working or promote_page). ' +
       'Cost: 1 write, then the verify step (1 read, 1 listing of the new parent’s children per 100) and the tree’s re-read.',
     inputSchema: z.object({
       page: pageRef.describe('The page to move (name or id).'),

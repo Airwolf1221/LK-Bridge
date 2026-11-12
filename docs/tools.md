@@ -631,6 +631,8 @@ is one proposal.
   (by `status`), then your `facts` and `links` (a fact that contradicts one of the first four is refused);
 - **`status`** (since v2 C2c; default `working`): a Working Core goes under its own `[INDEX] {name}` directly under
   `[INDEX] Working` as `[BWRK] {name} - Character Core`; a Working compact page goes directly under `[INDEX] Working`.
+  To add specialist pages to a Working Core, call `create_resource` (Working) with `parent` = the character's index
+  (v2 C2d.1), one page at a time; `promote_page` with `subtree` then takes the whole set.
   The race is still validated (and recorded), and `promote_page` later takes the character to its race index. An
   existing Core or Reference is looked for in both places;
 - an unknown or omitted race (`null`, blank, `Unknown`, `Undetermined`, `Unestablished`, `Undetermined / Unknown`) goes
@@ -661,6 +663,17 @@ are compared without case. An unchanged request sends nothing (`no_change`).
 the repository, in its alphabetical place there (one `moveResource`, journalled with the page as it was).
 `MOVE_CYCLE` for a move under itself or a descendant; `NOT_IN_REPOSITORY` for a destination outside; `NAME_TAKEN` for a
 sibling of the same kind and name there.
+
+**Moves within a lifecycle area** (v2 C2d.1, decided by the owner on 12 November 2026) are ordinary moves: no lifecycle
+change, no canonical approval, and the page's prefix, Status and tags never change. **Working:** a `[BWRK]` page (or a
+Working set's `[INDEX]`, which moves with its pages) between `[INDEX] Working` and an `[INDEX]` inside a Working set, and
+back. **Archived:** a `[BARC]` page, or an archived set's `[INDEX]` together with its pages, between `[INDEX] Archived`
+and an `[INDEX]` inside an archived set, and back. The destination must be an `[INDEX]` (`PARENT_NOT_INDEX` for a page).
+The lifecycle guard (unchanged) still refuses a move into or out of either area, and between the two (`POLICY_DENIED`,
+naming `archive_page`, `unarchive_page`, `move_to_working` or `promote_page`). A move writes no lifecycle record: each
+page's record keeps its original previous place, so `unarchive_page` (single or `subtree`) returns it to where it came
+from, not to where it was moved within the archive. (A Working page archived from a Working set's index and then
+unarchived also returns to that index when it still exists, else to `[INDEX] Working`.)
 
 **`delete_resource`** `{ page, confirm: true, cascade?: true, dryRun?, project }`: `confirm: true` is required; a page
 with pages under it is refused (`HAS_CHILDREN`, listing them) unless `cascade: true` is passed too. The result lists
@@ -755,8 +768,12 @@ dashboard's tree counts them. When one name could be several pages of the same s
 `status: "working" | "authoritative"`. **The default is `working`**, which changes C2b's behaviour: a page created
 without a status is now a `[BWRK]` page under `[INDEX] Working`, not a `[BSRC]` page under the given parent.
 
-- **`working`**: `[BWRK] {name}` directly under `[INDEX] Working` (alphabetical), Status `Working`, the `Working` tag
-  added and `CANON` removed. Leave `parent` out, or give `[INDEX] Working` itself (`WORKING_PARENT` otherwise).
+- **`working`**: `[BWRK] {name}` under `[INDEX] Working` (alphabetical), Status `Working`, the `Working` tag added and
+  `CANON` removed. Leave `parent` out (the default), or give `[INDEX] Working` itself, or (C2d.1) an `[INDEX]` page
+  inside a Working set: a Working character's own index, or any index within a Working set kept together. The page is
+  placed alphabetically among that index's children. Any other parent is `WORKING_PARENT`, naming the allowed ones
+  (`allowedParents`); nothing goes under a `[BWRK]` page. A Working character is built by `create_character` (Working),
+  then `create_resource` (Working) with `parent` = the character's index, one page at a time.
 - **`authoritative`**: `[BSRC] {name}` in its normal place, Status `Authoritative`, the `CANON` tag. This is canon:
   the call is always a canonical proposal (`proposal_captured`, `requiresCanonicalApproval`), whatever the scope. A
   parent in a lifecycle area is refused (`LIFECYCLE_AREA`).
@@ -768,8 +785,9 @@ without a status is now a `[BWRK]` page under `[INDEX] Working`, not a `[BSRC]` 
 - **`create_index`** takes no status: an index has no lifecycle state and gets no Status. It is refused under
   `[INDEX] Working` or `[INDEX] Archived` (`LIFECYCLE_AREA`; a Working character's own index is made by
   `create_character`).
-- **`create_many_resources`**: a Working item's parent must be `[INDEX] Working` (or left out) or, for a character, a
-  character index directly under it; nothing goes under a Working item (`WORKING_PARENT`: Working pages are flat). A
+- **`create_many_resources`**: a Working item's parent follows the same rule as a single create (`[INDEX] Working`, left
+  out, or an `[INDEX]` inside a Working set); nothing goes under a Working item (`WORKING_PARENT`: no `parent_key` under
+  a `[BWRK]` item). A
   batch may mix Working and Authoritative items; any Authoritative item makes the whole batch one canonical proposal.
 
 A Status in `facts` must agree with `status` (`INVALID_FACTS`). No lifecycle record is written for a create.
@@ -923,6 +941,10 @@ canonical proposal** (the only approval is "Approve and accept as canon"). The m
   `[INDEX] Working`.
 - **`promote_page`** `{ page, subtree: true, destination, dryRun?, project }`: a Working set's root moves to `destination`
   (required); without it, `DESTINATION_REQUIRED` offers the place `move_to_working` remembered (`suggestedDestination`).
+  **Outsiders (C2d.1):** the plan (and so the dry run) lists under `outsiders` any `[BWRK]` page of the same subject
+  (`subjectOf`: a Subject row, else the name before " - "; the set root's own name for a plain index) that sits flat
+  directly under `[INDEX] Working` outside the set, with a `suggestion` to bring each in with `move_resource` first, and
+  a flag in the proposal, so the owner does not approve a partial promotion by accident. Nothing is moved for you.
 
 **Layout: the set stays together.** Its root moves as a group, placed alphabetically among its new parent's children;
 the structure beneath it is unchanged (`[INDEX] Archived / [INDEX] Asagiri Miyabi / [BARC] Asagiri Miyabi - Character

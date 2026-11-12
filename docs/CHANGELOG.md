@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased: v2 C2d.1, Working sets built one page at a time, and moves within a lifecycle area (12 November 2026)
+
+Notes in [ADR 0035](adr/0035-page-lifecycle.md) and [ADR 0037](adr/0037-whole-set-lifecycle-and-page-scoped-ids.md); no
+migration, no new decision. Nothing was run against a live system: every test runs against the mock LegendKeeper. It
+answers the owner's live test of 12 November: a Working character with a Core and two specialist pages could not be built
+up one page at a time, so the set promotion covered only the index and the Core.
+
+- **Single Working creates follow the batch rule.** `create_resource` and `create_bare_resource` with
+  `status: "working"` take a `parent` that is `[INDEX] Working` (the default, unchanged) or an `[INDEX]` page inside a
+  Working set (a character's own index, or any index within a Working set kept together), and place the page
+  alphabetically among that index's children. Any other parent, including a `[BWRK]` page, a normal-tree index and
+  anything in the Archived area, is `WORKING_PARENT`, naming the allowed ones (`allowedParents`). `create_many_resources`
+  now uses the same rule (it allowed only a character index directly under Working). To build a Working character:
+  `create_character` (Working), then `create_resource` (Working) with `parent` = the character's index.
+- **Moves within a lifecycle area are ordinary moves** (owner, 12 November). `move_resource` of a `[BWRK]` page (or a
+  Working set's `[INDEX]`, with its pages) between `[INDEX] Working` and an `[INDEX]` inside a Working set, and of a
+  `[BARC]` page or an archived set's `[INDEX]` with its pages between `[INDEX] Archived` and an `[INDEX]` inside an
+  archived set, and back: no lifecycle change, no canonical approval, prefix, Status and tags never change. The lifecycle
+  guard is unchanged and still refuses a move into or out of either area and between the two. A move writes no record, so
+  each page's record keeps its original previous place and `unarchive_page` (single or `subtree`) still returns it there;
+  a Working page or set now goes back to the Working-set index it came from when that still exists, else to
+  `[INDEX] Working`.
+- **The set promotion lists outsiders.** The plan and dry run of `promote_page` with `subtree: true` list under
+  `outsiders` the `[BWRK]` pages flat directly under `[INDEX] Working` that share the set's subject (`subjectOf`), with a
+  `suggestion` to bring each in with `move_resource` first and a flag in the proposal, so the owner does not approve a
+  partial promotion by accident. Nothing is moved for the agent.
+- **Guidance.** The bridge guide, `docs/tools.md` and the `create_resource`, `create_bare_resource`,
+  `create_many_resources`, `create_character`, `move_resource` and `unarchive_page` descriptions explain how to build a
+  Working character and what a move within an area is. PLAN-v2 gains a C2d.1 row.
+- **Unchanged:** the status-tag, canon and decision-5 guards, the lifecycle marker and record, and `create_index` (no
+  index under a lifecycle index).
+- **Tests (mock):** `test/lifecycle/working-sets.test.ts`, 13 tests: single Working creates under a Working character
+  index, a nested Working set index and `[INDEX] Working`, alphabetical, refused under a `[BWRK]` page, a normal-tree
+  index, `[INDEX] Archived` and an archived set; moves within each area with no approval (a page, and a set's index with
+  its pages), refused into, out of and between the areas, and `unarchive_page` restoring from the record after a move
+  within the archive (a page and a set); the dry run's outsiders, then a promotion that covers them once moved in; and
+  the owner's scenario end to end (a Working character, two specialist pages one at a time, one approval, all four pages
+  under the race index as `[BSRC]`).
+
 ## Unreleased: v2 D1.1, two date styles, timeline repair from the table, and versions from the ETag (11 November 2026)
 
 [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md). No migration. Nothing was run against a live

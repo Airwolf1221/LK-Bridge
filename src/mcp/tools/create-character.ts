@@ -47,7 +47,10 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
       'Creates a character’s pages by the bridge’s fixed rules. `status` (default "working"): the whole set goes under ' +
       '[INDEX] Working: kind "core" gets [INDEX] {name} there with “[BWRK] {name} - Character Core” beneath it; kind ' +
       '"compact" gets “[BWRK] {name} - Character Reference” directly under [INDEX] Working; it goes under its race only ' +
-      'when promoted (promote_page). "authoritative": under its race inside the Characters index, as [BSRC] (core: the ' +
+      'when promoted (promote_page). TO BUILD A WORKING CHARACTER: create_character (kind "core", Working) first, then ' +
+      'create_resource (Working) for each specialist page (Art, Relationship, …) with `parent` = the character’s [INDEX] ' +
+      'the result names, one page at a time if you like; promote_page with subtree: true on that index then promotes the ' +
+      'whole set in one approval. "authoritative": under its race inside the Characters index, as [BSRC] (core: the ' +
       'character’s own [INDEX] {name}, an existing one reused, with the Core beneath it; compact: directly under the race), ' +
       'with Status Authoritative and the CANON tag: canon, so always a proposal only the owner can accept as canon. An ' +
       'existing Core or Reference (under the race or under [INDEX] Working) is returned, not duplicated. In the same job ' +

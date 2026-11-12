@@ -162,3 +162,37 @@ with its children, was half judged; a Status could be written as a page mention;
 fullwidth or Cyrillic letters, a missing space) were not read as prefixes. Each is now refused (decision 11's rule,
 unchanged). One addition is proposed to the owner in [ADR 0036](0036-cr-2026-11-owner-decisions.md): a page made
 `[BSRC]` by a create or rename that no tool declares is a canonical proposal (decision 5 applied to every route).
+
+## Amendment (C2d.1, 12 November 2026)
+
+The owner's live test of 12 November built a Working character with `create_character` (a Core under its own index) and
+then made two specialist pages with `create_resource`. Decision 5's rule for a single Working create (`parent` is
+`[INDEX] Working` or nothing) put them flat beside the character's index, while `create_many_resources` could place a
+Working item under a character index, so a Working character's set could not be built up one page at a time, and the
+set promotion later took only the index and the Core. Decided by the owner and built in C2d.1 (no new decision is
+overturned; decision 5's single-create rule is widened and the C2d layout rule applied to it):
+
+- **Decision 5, widened.** A single Working create (`create_resource`, `create_bare_resource`) takes a `parent` that is
+  `[INDEX] Working` itself (the default, unchanged) or an `[INDEX]` page inside a Working set: a character's index
+  directly under `[INDEX] Working`, or any index within a Working set kept together (ADR 0037 decision 10). The page is
+  placed alphabetically among that index's children. Any other parent, including every `[BWRK]` page, a normal-tree
+  index and anything in the Archived area, is `WORKING_PARENT`, whose message and `allowedParents` name the allowed
+  ones. `create_many_resources` follows the same rule (it was "a character index directly under Working"); a Working
+  item is still never under another item (`parent_key`). `create_index` is unchanged: no index is made under a lifecycle
+  index, so a Working set's index is a character's (`create_character`) or one the owner moved there.
+- **Decision 11, clarified.** The guard already judges a move by the area of its source and its destination, so a move
+  inside one area has always been allowed; the owner confirmed that it is meant to be. **Within the Working area** a
+  `[BWRK]` page (or a Working set's `[INDEX]`, with its pages) moves between `[INDEX] Working` and an `[INDEX]` inside a
+  Working set, and back; **within the Archived area** a `[BARC]` page, or an archived set's `[INDEX]` together with its
+  pages, moves between `[INDEX] Archived` and an `[INDEX]` inside an archived set, and back. These are ordinary moves
+  by `move_resource`: no lifecycle change, no marker, no canonical approval; prefix, Status and tags never change. A
+  move into or out of either area, or between the two, is refused as before (`POLICY_DENIED`, naming the lifecycle
+  tool). A page still cannot go under a content page (`PARENT_NOT_INDEX`).
+- **Decision 9, clarified.** A move writes no lifecycle record, so each page's record keeps its original previous place
+  and `unarchive_page` returns it there, not to where it was moved within the archive. One addition: a formerly
+  Working page now goes back to the `[INDEX]` inside a Working set that its record names when that index is still in the
+  Working area (a Working specialist page archived on its own returns to its character's index), else to
+  `[INDEX] Working` as before; a Working set's root likewise (ADR 0037 decision 10). Authoritative pages are unchanged.
+- **For agents.** The bridge guide and the `create_resource`, `create_character` and `move_resource` descriptions say
+  how to build a Working character: `create_character` (Working), then `create_resource` (Working) with `parent` = the
+  character's index.
