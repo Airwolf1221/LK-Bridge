@@ -25,6 +25,8 @@ export type JobsErrorCode =
   | 'UNKNOWN_PROJECT'
   | 'PROJECT_UNAVAILABLE'
   | 'CANONICAL_APPROVAL_REQUIRED'
+  /** v2 D3 (ADR 0041): an asset delete refused because its bytes could not be kept first. */
+  | 'ASSET_BYTES_NOT_KEPT'
   | 'BRIDGE_ERROR';
 
 export interface JobRef {

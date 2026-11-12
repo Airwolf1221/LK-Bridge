@@ -19,6 +19,7 @@ import { OverviewPage } from './pages/overview';
 import { ProjectsPage } from './pages/projects';
 import { ProposalsPage } from './pages/proposals';
 import { SettingsPage } from './pages/settings';
+import { StagingPage } from './pages/staging';
 import { AssetsPage } from './pages/assets';
 import { TreePage } from './pages/tree';
 import { LifecyclePage } from './pages/lifecycle';
@@ -58,6 +59,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/lifecycle', label: 'Archive and lifecycle' },
   { to: '/chronology', label: 'Chronology' },
   { to: '/assets', label: 'Asset Tree' },
+  { to: '/staging', label: 'Staging' },
   { to: '/settings', label: 'Settings' },
   { to: '/account', label: 'Account' },
   { to: '/maintenance', label: 'Maintenance Jobs' },
@@ -104,6 +106,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/lifecycle') return <LifecyclePage />;
   if (path === '/chronology') return <ChronologyPage />;
   if (path === '/assets') return <AssetsPage />;
+  if (path === '/staging') return <StagingPage />;
   if (path === '/settings') return <SettingsPage />;
   if (path === '/account') return <AccountPage />;
   if (path === '/maintenance') return <MaintenancePage />;

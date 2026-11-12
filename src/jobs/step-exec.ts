@@ -113,7 +113,25 @@ export interface StepExecDeps {
   readonly checker?: (name: string) => DocumentChecker | undefined;
   /** v2 D1.1 (ADR 0039): whether a project uses a write's `ETag` as its new version (`useEtagVersions`, default on). */
   readonly etagVersions?: (projectId: string) => boolean;
+  /** v2 D3 (ADR 0041): keeps an asset's bytes before any `deleteAsset` (see `AssetDeleteKeeper`). */
+  readonly assetDeleteKeeper?: () => AssetDeleteKeeper | undefined;
 }
+
+/**
+ * v2 D3 (ADR 0041, the CR open item): called inside the read that gives a `deleteAsset` its journal pre-image, on EVERY
+ * route (the tools, `lk_api_write`, `lk_api_batch`, `lk_op_*`). It downloads and stores the asset's bytes (and, for a
+ * folder, lists its children and keeps theirs) and returns what the pre-image records about them. It throws (a
+ * `JobsError` with code `ASSET_BYTES_NOT_KEPT`) to refuse the delete: nothing is then sent.
+ */
+export type AssetDeleteKeeper = (ctx: {
+  readonly job: JobView;
+  readonly step: StepView;
+  readonly lk: LkClient;
+  /** The asset as `getAsset` gave it. */
+  readonly asset: Record<string, unknown>;
+  /** A governed read in the job's name (listAssets for a folder's children). */
+  readonly read: (opId: string, params: OpParams) => Promise<unknown>;
+}) => Promise<Record<string, unknown>>;
 
 /**
  * v2 C2c (ADR 0035): writes the lifecycle record for a `bridge.record` step (the bridge's own database only) and returns
@@ -837,6 +855,26 @@ export class StepExecutor {
               stats,
             )),
           );
+          n = diffs.length;
+        } else if (t.kind === 'asset') {
+          // v2 D3 (ADR 0041): an asset read back with getAsset: its folder (or the folder an earlier step of the job
+          // created), hidden flag and name.
+          const r = await this.readOp(job, step, 'getAsset', { path: { assetId: t.assetId } }, stats);
+          if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
+          else {
+            const a = (r.body ?? {}) as Record<string, unknown>;
+            const want: Record<string, unknown> = { ...t.fields };
+            if (t.folderFrom) {
+              const src = this.d.repo.step(job.id, t.folderFrom.step);
+              const made = src ? (this.d.repo.stepResult(src) as { id?: unknown } | null) : null;
+              want.folderId = typeof made?.id === 'string' ? made.id : '(the folder the job created)';
+            }
+            for (const [k, v] of Object.entries(want)) {
+              const actual = k === 'folderId' ? (a.folderId ?? null) : a[k];
+              if (JSON.stringify(actual ?? null) !== JSON.stringify(v ?? null))
+                diffs.push({ path: `${t.label} ${k}`, expected: v, actual: actual ?? null });
+            }
+          }
           n = diffs.length;
         } else if (t.kind === 'checked') {
           // v2 D1: a document read back and judged by a registered checker.
@@ -1713,6 +1751,27 @@ export class StepExecutor {
       );
       const withEvents = { ...(entity as Record<string, unknown>), events };
       return { exists: true, body: withEvents, entity: withEvents, version };
+    }
+    // v2 D3 (ADR 0041): an asset's bytes (and a folder's children's) are kept before it is deleted, on every route; the
+    // pre-image records where. A keeper that cannot keep them refuses the delete (nothing is sent).
+    if (
+      _op.operationId === 'deleteAsset' &&
+      entity !== undefined &&
+      entity !== null &&
+      typeof entity === 'object'
+    ) {
+      const keeper = this.d.assetDeleteKeeper?.();
+      if (keeper) {
+        const kept = await keeper({
+          job,
+          step,
+          lk: this.lk(job),
+          asset: entity as Record<string, unknown>,
+          read: async (opId, p) => (await this.readOp(job, step, opId, p)).body,
+        });
+        const withBytes = { ...(entity as Record<string, unknown>), ...kept };
+        return { exists: true, body: withBytes, entity: withBytes, version };
+      }
     }
     return { exists: entity !== undefined, body, entity, version };
   }

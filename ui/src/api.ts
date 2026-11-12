@@ -35,10 +35,11 @@ export const apiConfig: ApiConfig = {
   },
 };
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, binary?: Blob): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
   if (method !== 'GET') {
-    headers['content-type'] = 'application/json';
+    // v2 D3: a file is sent as it is (the Staging page's upload), everything else as JSON.
+    headers['content-type'] = binary ? 'application/octet-stream' : 'application/json';
     headers['x-csrf-token'] = apiConfig.csrfToken;
   }
   let res: Response;
@@ -48,7 +49,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       headers,
       credentials: 'same-origin',
       cache: 'no-store',
-      ...(method !== 'GET' ? { body: JSON.stringify(body ?? {}) } : {}),
+      ...(method !== 'GET' ? { body: binary ?? JSON.stringify(body ?? {}) } : {}),
     });
   } catch {
     throw new ApiError(0, 'NETWORK', 'The bridge could not be reached. Check your connection.');
@@ -78,6 +79,8 @@ export const api = {
   get: <T>(path: string) => request<T>('GET', path),
   post: <T>(path: string, body?: unknown) => request<T>('POST', path, body),
   put: <T>(path: string, body?: unknown) => request<T>('PUT', path, body),
+  /** v2 D3: POSTs a file as the raw body (`application/octet-stream`), with the CSRF token. */
+  upload: <T>(path: string, file: Blob) => request<T>('POST', path, undefined, file),
 };
 
 export const qs = (params: Record<string, string | number | boolean | undefined | null>): string => {

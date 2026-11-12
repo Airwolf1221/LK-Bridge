@@ -1,3 +1,5 @@
+import { uploadsPlugin } from './images/http.js';
+import type { ImageService } from './images/service.js';
 import { createRequire } from 'node:module';
 import type { Writable } from 'node:stream';
 import { dirname, resolve } from 'node:path';
@@ -79,6 +81,8 @@ export interface BuildServerOptions {
   readonly policy?: Policy;
   /** OPS2: the encrypted secret store (the owner's credentials live there). Without it, the env file's values only. */
   readonly secrets?: SecretStore;
+  /** v2 D3 (ADR 0041): the image pipeline; with it, the binary endpoint `POST /uploads/<upload_id>` exists. */
+  readonly images?: ImageService;
   /** The dashboard and its admin API (chunk 5). Without it, `/ui` and `/api/admin` do not exist. */
   readonly admin?: {
     readonly runtime: AdminRuntime;
@@ -220,6 +224,15 @@ export async function buildServer(
     });
   }
 
+  // v2 D3 (ADR 0041): the single-use binary image endpoint, in its own scope (its own body handling).
+  if (o.images) {
+    await app.register(uploadsPlugin, {
+      images: o.images,
+      scopeOf: (principalId) => policy.gate.scopeOf(principalId),
+      audit: (actor, action, target, after) => policy.store.audit(actor, action, target, undefined, after),
+    });
+  }
+
   app.get('/healthz', () => ({ ok: true, version: BRIDGE_VERSION }));
   return { app, services, policy };
 }
@@ -289,6 +302,7 @@ export async function createBridge(
     mcpMaxBodyBytes: mcpMaxBodyBytes(o.toolsSettings.upload.maxBytes),
     policy: runtime.policy,
     secrets: runtime.secrets,
+    images: runtime.images,
     admin: {
       runtime,
       ...(o.adminSettings ? { settings: o.adminSettings } : {}),

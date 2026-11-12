@@ -273,7 +273,18 @@ export interface UploadTransportOptions extends GuardOptions {
   readonly lk: Transport;
   /** Deadline for one exchange with the storage host. */
   readonly timeoutMs?: number;
+  /**
+   * v2 D3 (ADR 0041): the hosts LegendKeeper serves asset files from (LK_ASSET_HOSTS). A `GET` to one of them (https,
+   * no credentials, through the same address and port checks) downloads a stored asset anonymously: the upload's
+   * verification and the bytes kept before a delete. Every other GET is refused. Default: none.
+   */
+  readonly assetHosts?: readonly string[];
+  /** The largest asset file downloaded (default 100 MiB). */
+  readonly maxDownloadBytes?: number;
 }
+
+/** The default cap of an asset download (v2 D3). */
+export const DEFAULT_MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 
 /**
  * A governor `Transport` that sends the LegendKeeper host through `lk` and every other host (the signed storage
@@ -291,8 +302,50 @@ export function createUploadTransport(o: UploadTransportOptions): Transport {
     if (origin !== undefined && origin === o.lkOrigin) return o.lk(input, init);
 
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    // v2 D3: an anonymous download of an asset file, from a configured asset host only.
+    const assetHost = (() => {
+      try {
+        return (o.assetHosts ?? []).includes(new URL(raw).hostname.toLowerCase());
+      } catch {
+        return false;
+      }
+    })();
+    if (method === 'GET' && assetHost) {
+      let url: URL;
+      try {
+        url = checkTargetUrl(raw, o);
+      } catch (e) {
+        throw refused(e instanceof UploadHttpError ? e.message : 'The asset URL is not allowed');
+      }
+      try {
+        const res = await guardedRequest({
+          ...o,
+          url,
+          method: 'GET',
+          headers: { accept: 'image/*', 'user-agent': 'LK-Bridge asset reader' },
+          signal: init?.signal ?? undefined,
+          timeoutMs: o.timeoutMs ?? 120_000,
+          maxResponseBytes: o.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES,
+        });
+        return toResponse(res);
+      } catch (e) {
+        if (e instanceof UploadHttpError) {
+          if (e.reason === 'blocked_address' || e.reason === 'blocked_port' || e.reason === 'invalid_url')
+            throw refused(e.message);
+          if (e.reason === 'too_large') {
+            throw new BridgeLkError({
+              message: `The asset file is larger than ${o.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES} bytes`,
+              code: 'ASSET_DOWNLOAD_TOO_LARGE',
+              retryable: false,
+              classification: 'bridge',
+            });
+          }
+        }
+        throw e;
+      }
+    }
     if (method !== 'PUT') {
-      throw refused('Only PUT is sent to an upload host');
+      throw refused('Only PUT is sent to an upload host, and GET to an asset host');
     }
     let url: URL;
     try {

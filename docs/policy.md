@@ -44,6 +44,18 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
   `createImageAsset` calls through `lk_api_write` or `lk_api_batch`, are refused before anything is sent, with a
   message that uploads need scope `write` and that the owner can raise the profile's scope. (A proposal would have to
   hold the image bytes and a signed URL that expires within minutes.)
+- **Staging is allowed at `propose` (v2 D3, [ADR 0041](adr/0041-image-pipeline.md)).** `upload_image` at scope
+  `propose` always **stages**: the image is converted, uploaded, verified and hidden in the project's staging folder,
+  then its placement (when a destination was given) is the proposal. The gate allows an `upload_image` job only when the
+  engine marks it `staging` (hidden, verified, into the staging folder), which only bridge code can set; the two
+  refusals above stay. So a `propose` connection can add hidden images to the staging folder, which the owner sees on
+  the Staging page and can discard, and nothing else; the proposal holds the staged asset's id and the folders, never
+  bytes. Placing a staged image (`staged_id`) at `propose` is an ordinary proposal.
+- **Asset deletes keep their bytes (v2 D3).** Every `deleteAsset`, by any route and at any scope, first downloads the
+  asset's file into the bridge's kept-bytes store (a folder's: its children's), referenced from the journal's
+  pre-image; if that fails the delete is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner allows that one asset on the
+  Staging page (re-authenticated). The binary upload endpoint's capabilities (`prepare_image_upload`) are covered in ADR
+  0041's threat review: scope `write` or `propose`, read again when the file arrives, rate-limited and audited.
 - The `system` principal (internal and dashboard work) is always allowed, except on an MCP origin, where it could only
   mean a tool forgot to pass the caller: denied.
 - Unknown, revoked or expired principals are denied, reads included.
