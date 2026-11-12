@@ -487,7 +487,7 @@ async function planDocument(
     const w = (op: string, params: OpParams, what: string) =>
       writes.push({ op, params, journalOperation: { ...journalOperation, write: what } });
     for (const l of wantLanes.filter((l) => !liveL.has(String(l.id))))
-      w('createLane', { path, body: pick(l, laneCreate) }, `create lane ${String(l.name ?? l.id)}`);
+      w('createLane', { path, body: { size: 'sm', ...pick(l, laneCreate) } }, `create lane ${String(l.name ?? l.id)}`);
     for (const l of wantLanes) {
       const now = liveL.get(String(l.id));
       if (!now || same(pick(now, laneUpdate), pick(l, laneUpdate))) continue;
@@ -1385,7 +1385,7 @@ async function planDeleted(
       for (const l of (t.piece.lanes ?? []) as Obj[])
         steps.push({
           op: 'createLane',
-          params: { path: p, body: pick(l, laneCreate) },
+          params: { path: p, body: { size: 'sm', ...pick(l, laneCreate) } },
           bindFrom: bound(ref),
           journalOperation: { ...journal, write: `lane ${String(l.name ?? l.id)}` },
         });

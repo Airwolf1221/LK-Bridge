@@ -292,8 +292,8 @@ export async function snapshotsWorld(
   ]);
   docExtra.set(d.chronicle, { calendarId: 'rp86pkdr' });
   lanes.set(d.chronicle, [
-    { id: 'lane0001', name: 'Historical Events', rank: 'a' },
-    { id: 'lane0002', name: 'Rumours', rank: 'b' },
+    { id: 'lane0001', name: 'Historical Events', rank: 'a', size: 'sm' },
+    { id: 'lane0002', name: 'Rumours', rank: 'b', size: 'lg' },
   ]);
   events.set(d.chronicle, [
     {
@@ -350,7 +350,9 @@ export async function snapshotsWorld(
         },
         { id: 'shape:3', type: 'arrow', parentId: 'page:1', index: 'a3', props: { text: 'sisters' } },
       ],
-      bindings: [{ id: 'binding:1', fromId: 'shape:3', toId: 'shape:1', props: { terminal: 'start' } }],
+      bindings: [
+        { id: 'binding:1', type: 'arrow', fromId: 'shape:3', toId: 'shape:1', props: { terminal: 'start' } },
+      ],
       assets: [],
     },
   });
@@ -576,6 +578,28 @@ export async function snapshotsWorld(
     return undefined;
   };
   w.overrides.set(docPath, docRoute);
+
+  // createResource with `documents` (the spec: 1–5 documents created in order, a page's blocks inline): the tree model
+  // makes the resource with its blank Main, which becomes the first document; the rest are added.
+  w.overrides.set(/\/resources$/, (req) => {
+    if (req.method !== 'POST') return undefined;
+    const body = (req.body ?? {}) as Obj;
+    const docs = Array.isArray(body.documents) ? (body.documents as Obj[]) : null;
+    if (!docs) return undefined;
+    const r = w.repo.respond({ ...req, body: { ...body, documents: undefined } });
+    if (!r || r.status !== 201) return r;
+    const res = w.repo.live((r.body as Obj).id as string)!;
+    const main = w.repo.liveDocs(res)[0]!;
+    docs.forEach((spec, i) => {
+      const doc = i === 0 ? main : w.repo.outside.addDocument(res.id, 'Main', 'blank');
+      doc.name = typeof spec.name === 'string' ? spec.name : 'Main';
+      doc.type = typeof spec.type === 'string' ? spec.type : Array.isArray(spec.blocks) ? 'page' : 'blank';
+      if (Array.isArray(spec.blocks))
+        w.repo.blocks.set(doc.id, { version: 1, blocks: structuredClone(spec.blocks) });
+      if (typeof spec.calendarId === 'string') docExtra.set(doc.id, { calendarId: spec.calendarId });
+    });
+    return { status: 201, body: w.repo.resourceView(res) };
+  });
 
   // Image uploads (a restored image becomes a new asset): the signed PUT goes to the local storage host.
   let uploads = 0;

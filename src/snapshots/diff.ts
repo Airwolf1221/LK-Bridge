@@ -69,6 +69,7 @@ export function renderSidebar(piece: SidebarPiece | null): string {
 function settingsLine(s: Obj): string {
   const parts = Object.entries(s)
     .filter(([k]) => k !== 'mapImage' && k !== 'rank')
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`);
   return `<!-- document settings: ${parts.join('; ')} -->`;
 }
