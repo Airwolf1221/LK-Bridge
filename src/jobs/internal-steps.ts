@@ -338,6 +338,20 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
         .optional(),
     })
     .strict(),
+  // v2 D3 (ADR 0041): an asset, read back: its fields (folderId, isHidden, name), the folder possibly one an earlier
+  // step of the job created (`folderFrom`: that step's result id).
+  z
+    .object({
+      kind: z.literal('asset'),
+      label,
+      assetId: id,
+      fields: z.record(z.string(), z.unknown()),
+      folderFrom: z
+        .object({ step: z.number().int().min(1) })
+        .strict()
+        .optional(),
+    })
+    .strict(),
   // v2 D1: one lane of a timeline, present with this name.
   z
     .object({
@@ -591,6 +605,13 @@ export type VerifyTarget =
       }[];
     }
   | { readonly kind: 'gone'; readonly label: string; readonly resourceId: string }
+  | {
+      readonly kind: 'asset';
+      readonly label: string;
+      readonly assetId: string;
+      readonly fields: Readonly<Record<string, unknown>>;
+      readonly folderFrom?: { readonly step: number };
+    }
   | {
       readonly kind: 'block';
       readonly label: string;

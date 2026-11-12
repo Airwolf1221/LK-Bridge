@@ -27,8 +27,10 @@ import type { DriftReport } from './drift.js';
 import { outOfOrder, placementFor, type OutOfOrderParent } from './ordering.js';
 import {
   planCharacterPlacement,
+  resolveCharacterRaceFolders,
   type CharacterPlacementInput,
   type CharacterPlacementPlan,
+  type CharacterRaceFolders,
 } from './placement.js';
 import { NameResolver } from './resolve.js';
 import { RegistryStore } from './store.js';
@@ -60,6 +62,8 @@ export interface ProjectTypes {
   outOfOrder(parentId?: string): OutOfOrderParent[];
   /** Where a character page goes (PLAN-v2 section 9), with no write. */
   planCharacterPlacement(input: CharacterPlacementInput): CharacterPlacementPlan;
+  /** v2 D3 (ADR 0041): a declared race's asset folder names (`[group, race]` or `[race]`), or unknown. */
+  raceFolders(race: string | null | undefined, type?: string): CharacterRaceFolders;
 }
 
 export interface Registry {
@@ -149,6 +153,8 @@ export function createRegistry(o: RegistryOptions): Registry {
       outOfOrder: (parentId?: string) => outOfOrder(tree(), parentId),
       planCharacterPlacement: (input: CharacterPlacementInput) =>
         planCharacterPlacement(tree(), store, input),
+      raceFolders: (race: string | null | undefined, type?: string) =>
+        resolveCharacterRaceFolders(tree(), store, { race, type }),
     });
     cache.set(projectId, p);
     return p;
@@ -190,6 +196,8 @@ export {
 } from './ordering.js';
 export {
   planCharacterPlacement,
+  resolveCharacterRaceFolders,
+  type CharacterRaceFolders,
   type CharacterPlacementInput,
   type CharacterPlacementPlan,
   type IndexPlan,

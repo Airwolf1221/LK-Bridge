@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased: v2 D3, the image pipeline (12 November 2026)
+
+[ADR 0041](adr/0041-image-pipeline.md) (with the threat review of the new endpoint). Migration 1950. Nothing was run
+against a live system: every test runs against the mock LegendKeeper, and the sandbox test is written, not run.
+
+- **`upload_image`** (W): exactly one source: `data_base64`, `url`, `upload_id` (the binary endpoint) or `staged_id`.
+  The image is converted with **sharp 0.35.5** (pinned; a prebuilt binary, no compiler): WebP at quality 90, dimensions
+  kept, the EXIF orientation applied, metadata dropped, transparency and every animation frame kept; a WebP is stored
+  byte for byte. The type comes from the file's first bytes only. Bytes, pixels (`IMAGE_MAX_PIXELS`, 100 MP, all frames
+  together) and frames (`IMAGE_MAX_FRAMES`) are capped from the header; truncated files and decompression bombs are
+  refused with precise codes; one conversion at a time with a time limit.
+- **One job per upload**: missing folders, the upload, then a **verification** that downloads the stored file
+  (anonymously, governed and guarded, from `LK_ASSET_HOSTS`) and compares its SHA-256 (`storedBytesVerified`).
+- **Deduplication** per project by the original's SHA-256 (`deduplicated: true`; `deduplicate: false` needs a new
+  `operation_id`). Every upload records the original's and the WebP's hashes and sizes, dimensions, frames, alpha,
+  orientation and the conversion mode.
+- **Destinations** by the old bridge's rules: `folder` (id or path), `for_character` (name and race as in
+  `create_character`; the taxonomy's asset folder names; an existing character folder reused wherever it is),
+  `for_page`, `subfolders`; missing folders created in order, never moved; conflicts and ambiguities refused.
+- **`prepare_image_upload`** (W) and the public **`POST /uploads/<upload_id>`**: a 256-bit, single-use, 5-minute
+  capability bound to the file's hash, length and type, the project and the connection, sent in a header; streamed to a
+  private temporary file; one generic refusal; rate limits per connection and per address; ready-made Python and curl
+  scripts.
+- **Staging**: `stage: true` uploads, verifies and hides an image in the project's staging folder (`imageStagingFolder`,
+  default `LK-Bridge staging`); `staged_id` places it (move, unhide, rename, read back). **At scope `propose` uploads
+  are staged** and the placement is the proposal (no bytes in it): the one, narrow change to chunk 8's rule.
+- **The dashboard's Staging page**: upload (choose or drag), list with thumbnails, place, discard, old ones reported,
+  allow a delete without bytes (re-authenticated). The CSP allows images from `assets.legendkeeper.com`.
+- **Asset deletes keep their bytes** on every route (the CR-2026-11 open item): downloaded and stored
+  content-addressed before `deleteAsset` is sent, referenced from the journal's pre-image; a folder's children listed
+  and kept; refused (`ASSET_BYTES_NOT_KEPT`) unless the owner allows it; kept 90 days (`ASSET_BYTES_RETENTION_DAYS`).
+- **Reading**: `list_assets` and `browse_asset_tree` show `bridgeUpload` (original format, dimensions, frames,
+  `storedBytesVerified`, staged).
+- **Engine**: `StepOptions.bindFrom` (an id an earlier step created, bound before sending; kept by proposals), the
+  `upload_image` job kind's folders, verify and hide steps, a `bridge.verify` `asset` target, and the delete keeper hook.
+- **Deploy**: the unit's memory ceiling is raised to `MemoryHigh=1400M` / `MemoryMax=1536M` (a conversion at the pixel
+  limit peaks at about 0.5 GiB of native memory); twelve new optional settings (env.template, "Images"). No Caddy change.
+- **Sandbox (the owner's run of 12 November 2026)**: the sandbox files run one after another (`fileParallelism:
+false`); `smoke.ts`, `assumptions.ts` and the new `images.ts` wait for parked or queued writes, the clean-up's too
+  (`test/sandbox/wait.ts`), checked against the mock with a write parked for budget. New: `images.test.ts`
+  (`deploy/sandbox-test.sh --project test -- images`).
+- Tools: 54 visible to a `write` or `propose` profile with the low-level tools hidden (was 52).
+
 ## Unreleased: v2 D1.1, two date styles, timeline repair from the table, and versions from the ETag (11 November 2026)
 
 [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md). No migration. Nothing was run against a live

@@ -7,15 +7,20 @@ import { readFile, stat } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { safeReturnTo } from '../auth/routes/login.js';
+import { DEFAULT_LK_ASSET_HOST } from '../lk/constants.js';
 import { OAUTH_PATHS } from '../auth/routes/metadata.js';
 import type { AuthServices } from '../auth/services.js';
 
-/** The Content-Security-Policy of the dashboard: same-origin everything, scripts only from files, no framing. */
+/**
+ * The Content-Security-Policy of the dashboard: same-origin everything, scripts only from files, no framing. v2 D3 (ADR
+ * 0041): images may also come from LegendKeeper's asset host (the Staging page's thumbnails are the assets' own URLs;
+ * nothing else is loaded from it, and a thumbnail sends no cookie of the bridge's and, with `no-referrer`, no referrer).
+ */
 export const UI_CSP = [
   "default-src 'none'",
   "script-src 'self'",
   "style-src 'self'",
-  "img-src 'self' data:",
+  `img-src 'self' data: https://${DEFAULT_LK_ASSET_HOST}`,
   "font-src 'self'",
   "connect-src 'self'",
   "manifest-src 'self'",

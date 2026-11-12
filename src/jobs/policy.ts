@@ -50,6 +50,11 @@ export interface PolicyContext {
    * `allow` then stops the job.
    */
   readonly phase?: 'entry' | 'execute';
+  /**
+   * v2 D3 (ADR 0041): an `upload_image` job that stages the image (hidden, in the project's staging folder) for a later
+   * placement. Set by the engine from bridge code only (`UploadImageSubmit.staging`); never from an agent's input.
+   */
+  readonly staging?: boolean;
 }
 
 export type PolicyDecision =

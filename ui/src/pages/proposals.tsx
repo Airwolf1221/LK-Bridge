@@ -271,6 +271,43 @@ function BulkResults({ report, onClose }: { report: BulkReport; onClose: () => v
   );
 }
 
+/** v2 D3 (ADR 0041): a staged image to be placed (the proposal holds its asset id, never its bytes). */
+interface PlaceImageOperation {
+  stagedId: string;
+  assetId: string;
+  name: string;
+  from: string[] | null;
+  to: string[];
+  createsFolders: string[];
+  image: {
+    format: string;
+    width: number;
+    height: number;
+    frames: number;
+    bytes: number;
+    storedBytesVerified: boolean | null;
+  };
+}
+
+function PlaceImageView({ o }: { o: PlaceImageOperation }) {
+  return (
+    <section className="card" aria-label="Image placement">
+      <h3>Place a staged image</h3>
+      <p>
+        <strong>{o.name}</strong> (<code>{o.stagedId}</code>, asset <code>{o.assetId}</code>; {o.image.width}{' '}
+        × {o.image.height}
+        {o.image.frames > 1 ? `, ${o.image.frames} frames` : ''}, WebP from {o.image.format.toUpperCase()};{' '}
+        {o.image.storedBytesVerified ? 'stored bytes verified' : 'stored bytes not verified'})
+      </p>
+      <p>
+        From {o.from ? o.from.join(' / ') : 'the staging folder'} (hidden) to{' '}
+        <strong>{o.to.join(' / ')}</strong>
+        {o.createsFolders.length > 0 ? `, creating ${o.createsFolders.join(', ')}` : ''}; then shown.
+      </p>
+    </section>
+  );
+}
+
 /** The related pages a lifecycle proposal reports (reported, never edited), or null when it reports none. */
 function relatedCount(p: ProposalDetail): number | null {
   for (const o of p.operations ?? []) {
@@ -884,6 +921,11 @@ function ProposalReview({
             .filter((o) => o.tool === 'set_facts')
             .map((o, i) => (
               <FactsView key={i} o={o as unknown as FactsOperation} execution={p.execution ?? null} />
+            ))}
+          {(p.operations ?? [])
+            .filter((o) => o.kind === 'place_image')
+            .map((o, i) => (
+              <PlaceImageView key={`img${i}`} o={o as unknown as PlaceImageOperation} />
             ))}
           {(p.operations ?? [])
             .filter((o) => typeof o.lifecycle === 'object' && o.lifecycle !== null)

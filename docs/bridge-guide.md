@@ -373,6 +373,39 @@ only what is left; other changes of that age wait for it (`CHRONOLOGY_INCOMPLETE
 chronology, the tools refuse (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on
 an Authoritative page.
 
+## Images
+
+`upload_image` stores an image as a LegendKeeper image asset: converted to WebP at quality 90 (dimensions, orientation,
+transparency and every animation frame kept; a WebP is stored as it is; metadata dropped), checked after storing
+(`storedBytesVerified`), and filed in the right folder. Give exactly **one source**:
+
+1. **`data_base64`**: fine for small images. A chat cannot pass a large one: a 2 MB image is about 2.7 million
+   characters. For an image the person has in hand, ask them to upload it on the dashboard's **Staging** page and give
+   you its staged id.
+2. **`url`**: a public https image.
+3. **`upload_id`**: if you have a shell or sandbox. Call `prepare_image_upload` with the file's `sha256`, `byte_length`,
+   `content_type` and `name`; run the Python or curl script it returns with the file's path (it checks the hash and sends
+   the file; it answers "received"); then call `upload_image` with the `upload_id` within 15 minutes. The capability in
+   the script works once, for 5 minutes, for that file only: never put it in a URL or a page.
+4. **`staged_id`**: place an image that is already staged.
+
+`destination` says where it goes; the bridge plans it from the asset tree and refuses rather than guesses:
+`for_character { name, race }` (a folder named after the character is reused wherever it is; otherwise
+`Characters / Group / Race / Name`, created as needed; an unknown race goes to `Undetermined / Unknown`; a race that does
+not resolve fails), `for_page` (a character page gives its character's folder; any other page needs a `folder` too),
+`folder` (an id or a path such as `Characters / Beastkin / Qishen / Mehrana al-Khalid`), plus `subfolders`. Check with
+`dryRun: true` first if unsure.
+
+**Staging.** `stage: true` uploads and verifies the image but keeps it hidden in the staging folder; place it later with
+`staged_id` (and a `destination`, or the one you gave when staging). With a `propose` connection every upload is staged
+and the placement is a proposal for the owner: do not retry it. The same image sent again returns the existing asset
+(`deduplicated: true`); never upload a copy to "move" an image.
+
+**Using it.** Put an image on a page with `write_page`: `![alt text](asset url)` (only this project's assets). It can
+also go in an image block (an `lk-block`), as a map pin's image, or as a map's image (`update_document`'s settings).
+`list_assets` and `browse_asset_tree` show what the bridge knows of images it uploaded (`bridgeUpload`). Deleting an
+asset keeps its bytes in the bridge first; if they cannot be kept the delete is refused until the owner allows it.
+
 ## Budget rules
 
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.

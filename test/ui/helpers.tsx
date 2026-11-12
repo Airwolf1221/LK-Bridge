@@ -104,7 +104,8 @@ export function installApi(routes: Routes): Api {
         method,
         path,
         query: url.search,
-        body: init?.body ? JSON.parse(init.body as string) : undefined,
+        // v2 D3: a file (the Staging page's upload) is kept as it is; everything else is JSON.
+        body: init?.body ? (typeof init.body === 'string' ? JSON.parse(init.body) : init.body) : undefined,
         headers: Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>)),
       };
       api.calls.push(call);

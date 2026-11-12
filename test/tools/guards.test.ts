@@ -193,7 +193,8 @@ describe('the tool list', () => {
     // chunk 3's 16, chunk 2b's two proposal tools, v2 A1's list_projects, v2 B2's twelve (nine Discover tools,
     // read_document and two guides), v2 C1's write_page, v2 C2a's set_facts and v2 C2b's twelve
     // v2 C2c's four lifecycle tools and v2 D1's five calendar and timeline tools and D1.1's sync_timeline_event.
-    expect(tools).toHaveLength(55);
+    // v2 D3: upload_image and prepare_image_upload.
+    expect(tools).toHaveLength(57);
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');
@@ -211,7 +212,7 @@ describe('the tool list', () => {
       );
       const c = await on.connect();
       const { tools } = await c.listTools();
-      expect(tools).toHaveLength(55 + 89);
+      expect(tools).toHaveLength(57 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));

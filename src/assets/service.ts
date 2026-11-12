@@ -350,6 +350,17 @@ export class AssetService {
    * Where an asset for a character (or a literal folder path) goes: a PURE PLAN from the stored models. Nothing is
    * written and nothing is requested from LegendKeeper. See `planAssetDestination`.
    */
+  /** v2 D3: what the planner reads (the image pipeline plans with it too), or null without a repository tree. */
+  planDeps(): PlanDeps | null {
+    if (!this.o.tree) return null;
+    return {
+      assets: this.queries,
+      tree: this.o.tree,
+      charactersRootId: (p) => this.settings(p).charactersRootId,
+      ...(this.o.characterType ? { characterType: this.o.characterType } : {}),
+    };
+  }
+
   plan(projectId: string, request: PlanRequest): PlanResult {
     if (!this.o.tree) {
       return {

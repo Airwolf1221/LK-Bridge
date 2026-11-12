@@ -83,6 +83,9 @@ describe('the MCP surface with the official client', () => {
         'delete_timeline_event',
         'sync_timeline_event',
         'create_timeline_lane',
+        // v2 D3: the image pipeline
+        'prepare_image_upload',
+        'upload_image',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));
