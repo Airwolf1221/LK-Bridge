@@ -40,6 +40,8 @@ type Obj = Record<string, any>;
 export const S = {
   locations: 'locs0001',
   atlas: 'atlas5np',
+  /** An Authoritative page (Status Authoritative, CANON), for the lifecycle tools and the canon guard. */
+  harbour: 'harbour1',
   folderA: 'fldra001',
   folderB: 'fldrb001',
   imgSea: 'imgsea01',
@@ -181,6 +183,14 @@ export async function snapshotsWorld(
       d.chronicle = world.repo.outside.addDocument(atlas.id, 'Chronicle', 'time').id;
       d.plot = world.repo.outside.addDocument(atlas.id, 'Plot', 'board').id;
       d.notes = world.repo.outside.addDocument(atlas.id, 'Notes', 'blank').id;
+      world.repo.seed({
+        id: S.harbour,
+        name: '[BSRC] Old Harbour',
+        parentId: S.locations,
+        referenceType: 'General Source',
+        scope: 'A harbour town on the Weeping Sea',
+        tags: ['CANON', 'port'],
+      });
       o.seed?.(world);
     },
   })) as SnapshotsWorld;
@@ -219,7 +229,7 @@ export async function snapshotsWorld(
           { text: '.' },
         ],
       },
-      { id: 'aimg', kind: 'image', url: url(S.imgSea), caption: 'The Weeping Sea' },
+      { id: 'aimg', kind: 'image', url: url(S.imgSea), alt: 'The Weeping Sea' },
       { id: 'aun1', kind: 'unsupported' },
       {
         id: 'atb1',
@@ -256,7 +266,7 @@ export async function snapshotsWorld(
     },
   });
   features.set(d.map, [
-    { id: 'fold0001', type: 'folder', name: 'Towns', rank: 'a' },
+    { id: 'fold0001', type: 'folder', name: 'Towns', rank: 'a0' },
     {
       id: 'pin00001',
       type: 'pin',
@@ -264,9 +274,9 @@ export async function snapshotsWorld(
       pos: [-10, 20],
       parentId: 'fold0001',
       uri: 'lk://resources/ashg0001',
-      rank: 'b',
+      rank: 'a1',
     },
-    { id: 'pin00002', type: 'pin', name: 'Isar', pos: [-40, 60], parentId: 'fold0001', rank: 'c' },
+    { id: 'pin00002', type: 'pin', name: 'Isar', pos: [-40, 60], parentId: 'fold0001', rank: 'a2' },
     {
       id: 'reg00001',
       type: 'region',
@@ -277,7 +287,7 @@ export async function snapshotsWorld(
         [-3, 1],
       ],
       color: '#336699',
-      rank: 'd',
+      rank: 'a3',
     },
   ]);
   docExtra.set(d.chronicle, { calendarId: 'rp86pkdr' });
@@ -289,6 +299,7 @@ export async function snapshotsWorld(
     {
       id: 'evt00001',
       laneId: 'lane0001',
+      type: 'event',
       name: 'Founding of Ashgate',
       start: 100,
       end: 100,
@@ -299,6 +310,7 @@ export async function snapshotsWorld(
     {
       id: 'evt00002',
       laneId: 'lane0001',
+      type: 'event',
       name: 'The Long Winter',
       start: 200,
       end: 260,
@@ -308,6 +320,7 @@ export async function snapshotsWorld(
     {
       id: 'evt00003',
       laneId: 'lane0002',
+      type: 'note',
       name: 'A ghost on the road',
       start: 300,
       end: 300,
@@ -340,6 +353,23 @@ export async function snapshotsWorld(
       bindings: [{ id: 'binding:1', fromId: 'shape:3', toId: 'shape:1', props: { terminal: 'start' } }],
       assets: [],
     },
+  });
+  w.sidebars.page(S.harbour, [
+    SidebarModel.kv('kvharb01', 'PROPERTIES', [
+      ['Reference Type', 'General Source'],
+      ['Status', 'Authoritative'],
+      ['Continuity Type', 'CANON'],
+      ['Scope', 'A harbour town on the Weeping Sea'],
+      ['Temporal Scope', 'Fourth Age'],
+    ]),
+    SidebarModel.links('depharb1', 'Dependencies', []),
+  ]);
+  w.repo.blocks.set(w.repo.liveDocs(w.repo.res.get(S.harbour)!).find((x) => x.name === 'Main')!.id, {
+    version: 2,
+    blocks: [
+      { id: 'hb1', kind: 'heading', level: 1, content: [{ text: 'Old Harbour' }] },
+      { id: 'hp1', kind: 'paragraph', content: [{ text: 'A harbour town.' }] },
+    ],
   });
   w.sidebars.page(S.atlas, [
     SidebarModel.kv('kvatlas1', 'PROPERTIES', [

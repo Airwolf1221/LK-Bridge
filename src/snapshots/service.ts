@@ -379,6 +379,15 @@ export class SnapshotService {
     };
   }
 
+  /** Whether a stored object has an open verify finding (it is then written again when the same content comes). */
+  isDamaged(sha256: string): boolean {
+    return (
+      this.o.db
+        .prepare(`SELECT 1 FROM snapshot_findings WHERE sha256 = ? AND resolved_at IS NULL AND problem <> 'manifest' LIMIT 1`)
+        .get(sha256) !== undefined
+    );
+  }
+
   /** An image URL's hash, when a snapshot or the asset tree already knows it. */
   knownImage(projectId: string, url: string): { sha256: string; size: number } | null {
     const r = this.o.db
@@ -420,6 +429,7 @@ export class SnapshotService {
       assetHosts: this.o.assetHosts,
       image: this.imageFetcher(projectId, priority),
       ...(cached ? { cached } : {}),
+      damaged: (sha) => this.isDamaged(sha),
     };
   }
 

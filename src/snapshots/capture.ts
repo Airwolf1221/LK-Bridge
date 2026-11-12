@@ -77,6 +77,8 @@ export interface CaptureDeps {
   image(url: string): Promise<ImageResult>;
   /** Reads the verify step (or another read of the same job) already made, by `op` and path: used before reading. */
   readonly cached?: (op: string, params: OpParams) => unknown;
+  /** Whether a stored object is known to be damaged (an open verify finding): it is then written again. */
+  readonly damaged?: (sha256: string) => boolean;
 }
 
 export interface PageNode {
@@ -109,9 +111,16 @@ function counted(read: Reader, c: Counters, cached?: CaptureDeps['cached']): Rea
   };
 }
 
-async function putPiece(store: SnapshotStore, piece: unknown, c: Counters): Promise<PieceRef> {
+async function putPiece(
+  store: SnapshotStore,
+  piece: unknown,
+  c: Counters,
+  damaged?: (sha256: string) => boolean,
+): Promise<PieceRef> {
   const bytes = canonicalBytes(piece);
-  const r = await store.lock.shared(() => store.putBytes(bytes, { compress: 'text' }));
+  const r = await store.lock.shared(() =>
+    store.putBytes(bytes, { compress: 'text', ...(damaged ? { repair: damaged } : {}) }),
+  );
   c.pieces++;
   c.logicalBytes += r.size;
   if (r.created) {
@@ -221,7 +230,7 @@ export async function capturePage(
   const keep = async (piece: unknown, what: string, ref?: string): Promise<PieceRef | null> => {
     try {
       for (const u of imageUrls(piece, deps.assetHosts)) urls.add(u);
-      return await putPiece(deps.store, piece, c);
+      return await putPiece(deps.store, piece, c, deps.damaged);
     } catch (e) {
       missing.push({
         piece: what,
@@ -371,7 +380,7 @@ export async function captureLibrary(deps: CaptureDeps, readRaw: Reader, c: Coun
   }
   let piece: PieceRef | null = null;
   try {
-    piece = await putPiece(deps.store, libraryPiece(folders, withHashes), c);
+    piece = await putPiece(deps.store, libraryPiece(folders, withHashes), c, deps.damaged);
   } catch (e) {
     missing.push({
       piece: 'library',

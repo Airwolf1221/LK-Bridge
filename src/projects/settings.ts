@@ -56,6 +56,13 @@ export const projectSettingsSchema = z
     useEtagVersions: z.boolean().optional(),
     /** v2 D3 (ADR 0041): the name of the asset folder (in the library's root) staged images go to. */
     imageStagingFolder: label.optional(),
+    /**
+     * v2 E1a (ADR 0042): the daily changed-pages snapshot (default OFF): pages whose `updatedAt` moved are snapshotted
+     * between the weekly full snapshots. On only once the owner's sandbox run confirms `updatedAt` moves with content.
+     */
+    snapshotDailyPass: z.boolean().optional(),
+    /** v2 E1a: the daily pass also lists each page's documents (one request per page) and compares their `updatedAt`. */
+    snapshotDailyPassDocuments: z.boolean().optional(),
   })
   .loose();
 
@@ -175,6 +182,22 @@ export const PROJECT_SETTING_KEYS: readonly {
     default: 'LK-Bridge staging',
     editable: true,
     help: 'The asset folder, in the library’s root, that staged images go to (hidden until placed). Found by name, or created on first use.',
+  },
+  {
+    key: 'snapshotDailyPass',
+    label: 'Snapshots: daily changed-pages pass',
+    kind: 'on/off',
+    default: false,
+    editable: true,
+    help: 'On: every night the resources are listed and the pages whose updatedAt moved since a snapshot saw them are snapshotted (edits made in the app between the weekly full snapshots). Switch on only once the sandbox run’s updatedAt checks (snapshots, U1 to U5) pass.',
+  },
+  {
+    key: 'snapshotDailyPassDocuments',
+    label: 'Snapshots: daily pass reads documents too',
+    kind: 'on/off',
+    default: false,
+    editable: true,
+    help: 'On: the daily pass also lists each page’s documents (one request per page) and compares their updatedAt. Needed only if the sandbox run shows a document change does not move its page’s updatedAt.',
   },
 ];
 
