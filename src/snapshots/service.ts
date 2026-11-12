@@ -383,7 +383,9 @@ export class SnapshotService {
   isDamaged(sha256: string): boolean {
     return (
       this.o.db
-        .prepare(`SELECT 1 FROM snapshot_findings WHERE sha256 = ? AND resolved_at IS NULL AND problem <> 'manifest' LIMIT 1`)
+        .prepare(
+          `SELECT 1 FROM snapshot_findings WHERE sha256 = ? AND resolved_at IS NULL AND problem <> 'manifest' LIMIT 1`,
+        )
         .get(sha256) !== undefined
     );
   }

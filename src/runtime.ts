@@ -37,6 +37,7 @@ import { createImages, imageDataDir, type ImageService } from './images/service.
 import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
 import { snapshotMapCheckers } from './snapshots/restore.js';
+import { Rehearsals } from './snapshots/rehearsal.js';
 import { DEFAULT_SNAPSHOT_SETTINGS } from './config/tools.js';
 import { createTree, type TreeService } from './tree/index.js';
 import { SecretStore } from './secrets/store.js';
@@ -108,6 +109,8 @@ export interface Runtime {
   readonly snapshots: SnapshotService;
   /** v2 E1a: restore proposals (always proposals) and their follow-ups. */
   readonly restores: Restores;
+  /** v2 E1a: restore rehearsals into a throwaway root of a sandbox project. */
+  readonly rehearsals: Rehearsals;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -496,6 +499,22 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachRestores = restores.attach();
+  const rehearsals = new Rehearsals({
+    svc: snapshots,
+    engine,
+    projects: {
+      find: (ref) => {
+        const p = projects.find(ref);
+        return p ? { id: p.id, name: p.name, isSandbox: p.isSandbox, status: p.status } : undefined;
+      },
+      list: () => projects.list().map((p) => ({ id: p.id, name: p.name, isSandbox: p.isSandbox, status: p.status })),
+      client: (id) => projects.client(id),
+    },
+    projectSettings: (pid) => projectStore.byId(pid)?.settings ?? {},
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  rehearsals.markInterrupted();
   const detachSnapshotCheckers = Object.entries(snapshotMapCheckers()).map(([name, fn]) =>
     engine.registerMapChecker(name, fn as Parameters<JobEngine['registerMapChecker']>[1]),
   );
@@ -605,6 +624,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     images,
     snapshots,
     restores,
+    rehearsals,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,

@@ -607,6 +607,19 @@ export async function snapshotsWorld(
     return { status: 201, body: w.repo.resourceView(res) };
   });
 
+  // A property created on a page the sidebar model does not hold yet (a recreated or rehearsed page): the page joins the
+  // model, so rows keep their runs and collections their items, as the spec says LegendKeeper stores them.
+  w.overrides.set(/\/resources\/[^/]+\/properties$/, (req) => {
+    if (req.method !== 'POST') return undefined;
+    const rid = req.path.replace(/\/$/, '').split('/').at(-2)!;
+    if (!w.repo.live(rid)) return undefined;
+    if (!w.sidebars.pages.has(rid)) w.sidebars.page(rid, []);
+    return w.sidebars.respond(req, (x) => {
+      const r = w.repo.live(x);
+      return r ? w.repo.resourceView(r) : undefined;
+    });
+  });
+
   // Image uploads (a restored image becomes a new asset): the signed PUT goes to the local storage host.
   let uploads = 0;
   w.overrides.set(/\/assets\/uploads$/, (req) => {
