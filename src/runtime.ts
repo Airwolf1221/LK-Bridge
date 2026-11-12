@@ -507,7 +507,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         const p = projects.find(ref);
         return p ? { id: p.id, name: p.name, isSandbox: p.isSandbox, status: p.status } : undefined;
       },
-      list: () => projects.list().map((p) => ({ id: p.id, name: p.name, isSandbox: p.isSandbox, status: p.status })),
+      list: () =>
+        projects.list().map((p) => ({ id: p.id, name: p.name, isSandbox: p.isSandbox, status: p.status })),
       client: (id) => projects.client(id),
     },
     projectSettings: (pid) => projectStore.byId(pid)?.settings ?? {},
