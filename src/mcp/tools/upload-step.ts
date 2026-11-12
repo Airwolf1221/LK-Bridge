@@ -8,7 +8,8 @@
  * result of step 1, handed straight to the transport and never written to a log, message or error.
  */
 import { createHash } from 'node:crypto';
-import { UPLOAD_PUT_STEP, type CustomStepHandler } from '../../jobs/index.js';
+import { UPLOAD_PUT_STEP, UPLOAD_VERIFY_STEP, type CustomStepHandler } from '../../jobs/index.js';
+import { AssetDownloadError, downloadAsset } from '../../images/download.js';
 import { BridgeLkError } from '../../lk/index.js';
 import { assertPublicTarget, UploadHttpError, type GuardOptions } from './upload-http.js';
 
@@ -50,7 +51,8 @@ export function createUploadPutHandler(
         'The image bytes were discarded after an earlier successful upload. Upload the image again.',
       );
     }
-    const created = (ctx.resultOf(1) ?? {}) as CreatedUpload;
+    // v2 D3: folders may be created first; the upload is always the step just before this one.
+    const created = (ctx.resultOf(ctx.stepNo - 1) ?? {}) as CreatedUpload;
     const url = created.uploadUrl;
     if (typeof url !== 'string' || url.length === 0) {
       throw fail('UPLOAD_NO_URL', 'createImageUpload returned no upload URL', 'bridge');
@@ -107,5 +109,74 @@ export function createUploadPutHandler(
       body: { contentType: body.contentType, contentLength: body.contentLength, purged: true },
     });
     return { uploaded: true, bytes: bytes.length, contentType: body.contentType };
+  };
+}
+
+// ================================================================================================ v2 D3: verification
+
+interface VerifyBody {
+  readonly assetStep?: number;
+  readonly contentHash?: string;
+  readonly contentLength?: number;
+}
+
+/** What the verify step records (the job's `stored`; the tool's `storedBytesVerified`). */
+export interface StoredVerification {
+  readonly storedBytesVerified: boolean;
+  readonly assetId: string | null;
+  readonly expectedSha256: string | null;
+  readonly storedSha256?: string;
+  readonly storedBytes?: number;
+  /** Why it is not verified, in words. */
+  readonly reason?: string;
+}
+
+/**
+ * v2 D3 (ADR 0041): the `upload_image.verify` step. Downloads the asset createImageAsset made (anonymously, from the
+ * asset host) and compares its SHA-256 with the bytes the bridge uploaded. It never fails the job: a mismatch or a
+ * failed download is reported as unverified (the asset id is still returned), and nothing is retried.
+ */
+export function createUploadVerifyHandler(opts: {
+  readonly assetHosts: readonly string[];
+  readonly timeoutMs?: number;
+}): CustomStepHandler {
+  return async (ctx) => {
+    const body = (ctx.params.body ?? {}) as VerifyBody;
+    const expected = typeof body.contentHash === 'string' ? body.contentHash : null;
+    const asset = (typeof body.assetStep === 'number' ? ctx.resultOf(body.assetStep) : null) as {
+      id?: unknown;
+      url?: unknown;
+    } | null;
+    const assetId = typeof asset?.id === 'string' ? asset.id : null;
+    const out = (o: Omit<StoredVerification, 'assetId' | 'expectedSha256'>): StoredVerification => ({
+      assetId,
+      expectedSha256: expected,
+      ...o,
+    });
+    if (!expected)
+      return out({ storedBytesVerified: false, reason: 'no hash of the uploaded bytes was kept' });
+    try {
+      const got = await downloadAsset(ctx.lk, asset?.url, {
+        hosts: opts.assetHosts,
+        priority: ctx.priority,
+        opId: UPLOAD_VERIFY_STEP,
+        jobId: ctx.jobId,
+        ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
+      });
+      const same = got.sha256 === expected;
+      return out({
+        storedBytesVerified: same,
+        storedSha256: got.sha256,
+        storedBytes: got.bytes.length,
+        ...(same
+          ? {}
+          : {
+              reason: `the stored file (${got.bytes.length} bytes, SHA-256 ${got.sha256.slice(0, 12)}…) differs from the bytes uploaded (${body.contentLength ?? '?'} bytes, ${expected.slice(0, 12)}…)`,
+            }),
+      });
+    } catch (e) {
+      if (e instanceof AssetDownloadError) return out({ storedBytesVerified: false, reason: e.message });
+      throw e;
+    }
   };
 }

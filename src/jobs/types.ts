@@ -124,6 +124,12 @@ export interface StepOptions {
    */
   readonly journalPreImage?: unknown;
   /**
+   * v2 D2 (ADR 0040), set by bridge code only: added to the pre-image the read inside the lock gave (an object), under
+   * `with`: a folder's cascade delete keeps every feature it removes in the folder's own journal entry (as a lane's
+   * delete keeps its events), the same lesson as D1's.
+   */
+  readonly journalPreImageWith?: unknown;
+  /**
    * v2 C2b (ADR 0034), set by bridge code only: this step writes to a page the same job created from a template, and
    * its params name the TEMPLATE's sidebar ids (properties, rows, items). Just before it runs they are replaced by the
    * copy's ids, from the `ids` map of the `bridge.expect` step it names (a `copy` check, made inside the job). Only
@@ -144,6 +150,12 @@ export interface StepOptions {
    * it conflict; the check refuses what would).
    */
   readonly judgedInLock?: boolean;
+  /**
+   * v2 D3 (ADR 0041), set by bridge code only: just before it runs, this step takes the `id` of what an earlier step of
+   * the same job created (a folder `createAssetFolder` made, an asset `createImageAsset` made) into `body.folderId` or
+   * `path.assetId`. Done once, before anything is sent, and stored; a step being recovered keeps what it was sent with.
+   */
+  readonly bindFrom?: { readonly step: number; readonly to: 'body.folderId' | 'path.assetId' };
 }
 
 export interface StepSpec extends StepOptions {
@@ -286,10 +298,30 @@ export interface UploadImageSubmit {
   readonly dataBase64: string;
   readonly name: string;
   readonly description?: string;
+  /** The folder the asset goes in (root if omitted); with `createFolders`, the folder the first new folder goes in. */
   readonly folderId?: string;
   readonly priority?: PriorityClass;
   readonly origin: JobOrigin;
   readonly title?: string;
+  /**
+   * v2 D3 (ADR 0041): folders created first, in order, each inside the one before (the first inside `folderId`, or the
+   * root); the asset then goes in the last one.
+   */
+  readonly createFolders?: readonly string[];
+  /**
+   * v2 D3: after createImageAsset, download the stored file (anonymously, from the asset host) and compare its SHA-256
+   * with `contentHash` (the `upload_image.verify` step). A mismatch or a failed download is recorded, never retried, and
+   * does not fail the job.
+   */
+  readonly verifyStored?: boolean;
+  /** v2 D3: then hide the new asset (`updateAsset` with `isHidden: true`): a staged image. */
+  readonly hide?: boolean;
+  /**
+   * v2 D3, bridge code only: the upload goes to the project's staging folder, hidden, and is placed later by a separate
+   * job or proposal. The policy gate lets a `propose`-scope connection do this (the proposal then holds no bytes).
+   * Requires `hide` and `verifyStored`.
+   */
+  readonly staging?: boolean;
 }
 
 export type SubmitRequest = BatchSubmit | PaginateSubmit | UploadImageSubmit;

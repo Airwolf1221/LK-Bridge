@@ -2,6 +2,7 @@ import { pino } from 'pino';
 import type { Writable } from 'node:stream';
 import { applyStoredSettings } from './admin/index.js';
 import {
+  DEFAULT_IMAGE_SETTINGS,
   defaultMaintenanceSettings,
   defaultPolicySettings,
   jobsSettingsFrom,
@@ -14,13 +15,14 @@ import {
   type ToolsSettings,
 } from './config/index.js';
 import type { Db } from './db/open.js';
-import { createJobEngine, UPLOAD_PUT_STEP, type JobEngine } from './jobs/index.js';
+import { createJobEngine, UPLOAD_PUT_STEP, UPLOAD_VERIFY_STEP, type JobEngine } from './jobs/index.js';
 import { defaultTransport, type Clock, type Transport } from './lk/index.js';
 import type { McpResourceProvider, McpToolProvider } from './mcp/server.js';
 import {
   BRIDGE_INSTRUCTIONS,
   createBridgeTools,
   createUploadPutHandler,
+  createUploadVerifyHandler,
   guideResources,
   createUploadTransport,
 } from './mcp/tools/index.js';
@@ -31,6 +33,7 @@ import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 import { createAssets, type AssetService } from './assets/index.js';
+import { createImages, type ImageService } from './images/service.js';
 import { createTree, type TreeService } from './tree/index.js';
 import { SecretStore } from './secrets/store.js';
 import { createRegistry, type Registry } from './registry/index.js';
@@ -46,6 +49,7 @@ import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
+import { mapCheckers } from './maps/index.js';
 import { FactsVersions } from './facts/version.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
@@ -94,6 +98,8 @@ export interface Runtime {
   readonly lifecycle: Lifecycle;
   /** v2 D1 (ADR 0038): chronology sync (settings, the calendar cache, records, links, the check). */
   readonly chronology: Chronology;
+  /** v2 D3 (ADR 0041): the image pipeline (conversion, the binary endpoint's slots, staging, kept bytes). */
+  readonly images: ImageService;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -156,10 +162,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     allowedPorts: o.toolsSettings.outboundExtraPorts ?? new Set<string>(),
     ...(o.uploadGuard ?? {}),
   };
+  const imageSettings = o.toolsSettings.images ?? DEFAULT_IMAGE_SETTINGS;
   const transport = createUploadTransport({
     lkOrigin: new URL(config.lk.baseUrl).origin,
     lk: o.lkTransport ?? defaultTransport,
     ...uploadGuard,
+    // v2 D3: anonymous downloads of stored asset files (verification, bytes kept before a delete).
+    assetHosts: imageSettings.assetHosts,
   });
   // C2d: a runtime that keeps no secrets (the sandbox scripts) expects no master key; nothing else is quietened.
   const secretsUnused = o.secretStore === 'unused';
@@ -237,6 +246,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,
         guard: uploadGuard,
       }),
+      [UPLOAD_VERIFY_STEP]: createUploadVerifyHandler({ assetHosts: imageSettings.assetHosts }),
     },
     autoStart: false,
   });
@@ -393,6 +403,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachChronology = chronology.attach();
+  // v2 D2 (ADR 0040): the map-feature checks inside the lock (the compare-and-swap for writes LegendKeeper does not
+  // version, and the verify after them). Pure functions; nothing to configure.
+  const detachMaps = Object.entries(mapCheckers()).map(([name, fn]) => engine.registerMapChecker(name, fn));
 
   const characterType = (projectId: string) =>
     registry
@@ -424,6 +437,20 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   assets.attach();
   assets.start();
+  const images = createImages({
+    db: o.db,
+    engine,
+    assets,
+    registry,
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    upload: o.toolsSettings.upload,
+    images: imageSettings,
+    dbPath: config.server.dbPath,
+    proposals: { get: (id) => policy.proposals.get(id) },
+    now: () => (o.clock ?? systemClock).now(),
+    log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  images.start();
 
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
@@ -459,6 +486,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       version: o.version,
       principalNames: (ids) => policy.store.describePrincipals(ids),
       configuredReadOnly: config.lk.readOnly,
+      publicUrl: config.server.publicUrl,
       uploadGuard,
       services: {
         tree,
@@ -479,6 +507,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         lifecycle,
         // v2 D1: chronology sync.
         chronology,
+        images,
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
@@ -503,6 +532,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     assets,
     lifecycle,
     chronology,
+    images,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -516,6 +546,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       lifecycle.stop(); // a link sweep in flight stops, to be continued by the next run
       chronology.stop(); // a chronology check in flight stops (the next run starts again)
       await maintenance.stop(); // stops cleanly, before the engine and database wind down
+      images.stop();
       let timer: NodeJS.Timeout | undefined;
       await Promise.race([
         engine.controls.drain(),
@@ -530,6 +561,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       unregisterGuard();
       detachLifecycle();
       detachChronology();
+      for (const off of detachMaps) off();
       await tree.stop();
       detachRegistry();
       await assets.stop();

@@ -312,6 +312,36 @@ Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lo
 /chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`), `POST /chronology/propose-fix`
 (`{ confirm: true, project, age, rowId }`: one proposal, or `nothing_to_do`).
 
+## Staging (v2 D3)
+
+The **Staging** page (navigation: Staging, after Asset Tree; [ADR 0041](adr/0041-image-pipeline.md)) shows the selected
+project's staged images: uploaded, converted to WebP, checked, and hidden in the project's staging folder
+(`imageStagingFolder`, default `LK-Bridge staging`), not yet placed.
+
+- **Upload.** Choose image files or drag them onto the box. Each goes to the bridge as it is (the raw body, with the
+  session's CSRF token) and through exactly the pipeline and limits of `upload_image`: the type from its first bytes,
+  `UPLOAD_MAX_BYTES`, the pixel and frame limits, one conversion at a time, deduplication by the original's hash. Each
+  answer shows its **staged id** (with a copy button). This is the practical route for images you have in hand: a chat
+  assistant cannot pass a multi-megabyte image in a tool call. Then tell an agent “place staged image img_… for Asagiri
+  Miyabi”, or place it here.
+- **The list**: a thumbnail (the asset's own URL; the dashboard's CSP allows images from `https://assets.legendkeeper.com`
+  and nothing else from outside), name and staged id, dimensions, frames and sizes (WebP and original), whether the
+  stored bytes were verified, who staged it (an agent, or “Owner (dashboard)”), when, and the intended destination if
+  one was given. Images older than `IMAGE_STAGING_REPORT_DAYS` (30) are counted at the top and marked **old**: they are
+  reported, never removed.
+- **Place**: a character (name and race, the rules of `create_character`), a folder (path or id) or a page; empty fields
+  place it at the intended destination. Optionally a new name. One job moves it, unhides it, renames it and reads it back.
+- **Discard**: deletes the asset after a confirmation. Its bytes are kept by the bridge first (90 days), as for every
+  asset delete.
+- **Bytes kept before deletes**: how many files the bridge keeps, and **Allow one delete** for an asset whose file
+  cannot be downloaded (so its delete is refused, `ASSET_BYTES_NOT_KEPT`): asks for your password again, then lets that
+  one delete go ahead within an hour. It cannot be restored afterwards.
+
+API: `GET /api/admin/staging`, `POST /api/admin/staging/upload?name=…` (`application/octet-stream`), `POST
+/api/admin/staging/<staged id>/place` `{ destination?, name? }`, `POST /api/admin/staging/<staged id>/discard`
+`{ confirm: true }`, `POST /api/admin/staging/allow-delete` `{ assetId, confirm: true }` (re-authenticated); all with
+`?project=`. Audited as `staging.upload`, `staging.place`, `staging.discard` and `asset.delete_without_bytes`.
+
 ## Canon (Projects page, v2 C2a)
 
 The **Canon** section of the Projects page lists each project's protected facts as plain sentences ("Status =

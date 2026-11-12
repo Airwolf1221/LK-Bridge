@@ -304,12 +304,20 @@ quotes, tables, images and blank lines are refused (`FACT_VALUE_NOT_INLINE`); th
 
 These are read-only as Markdown:
 
-- **Maps:** each feature with its type, name, position and link, folders as nested lists.
+- **Maps:** each feature with its type, name, position and link, folders as nested lists. When the map has an image, a header
+  line gives its size and bounds (`Image: 2048×1024 pixels; bounds [[-128, 0], [0, 256]] as [[south, west], [north, east]]`)
+  and each position is shown in pixels too: `- **Torii Gate** (pin) at (-32, 64), pixel (512, 256) → [link](lk://resources/…)`
+  (pixels count from the image's top-left corner, x right, y down; they are what `create_map_feature` takes as `pixel`). A
+  region's or path's points follow in pixels when there are six or fewer (`around (-43.75, 50), 4 points: pixels (200, 200)
+(600, 200) (600, 500) (200, 500)`), and as a pixel box when there are more (`detail: "full"` lists every point; several
+  polygons are bracketed). A legacy tiled map ("Legacy tiled map: no single image, so no pixel positions") and a map with no
+  image ("The map has no image yet") show lat/lng only.
 - **Timelines:** each lane, then its events in date order with LegendKeeper's own formatted dates (in the calendar's
   formats, so `Azah 18th, 4A 1`, `Zahras 4A 367`, `4A 623`; a range as start – end) and their links. A chronology age
   timeline links every event to its age's table document (`lk://resources/<id>/docs/<tableId>`), which is the authority:
   read the table for the full description, the KCY and the order. Use `calendar_date` to read a date or a minute value.
 - **Boards:** each page's shapes with their text, then the connections (arrows between shapes).
 
-Change them with the map, timeline and board tools, not with Markdown (for the chronology: `create_timeline_event`,
+Change them with the map, timeline and board tools, not with Markdown (for a map: `create_map_feature`, `update_map_feature`,
+`delete_map_feature`, and `update_document` for its image; for the chronology: `create_timeline_event`,
 `update_timeline_event`, `delete_timeline_event`, which keep the table, the timeline and the counts in step).

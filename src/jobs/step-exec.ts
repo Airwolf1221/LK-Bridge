@@ -31,6 +31,7 @@ import {
   type ChildrenCheck,
   type DocumentChecker,
   type ExpectCheck,
+  type MapChecker,
   type ResourceCheck,
   type SubtreeCheck,
   type TargetVerification,
@@ -111,9 +112,29 @@ export interface StepExecDeps {
   readonly recordHandler?: (store: string) => RecordHandler | undefined;
   /** v2 D1: the document checkers of `bridge.expect`, by name. */
   readonly checker?: (name: string) => DocumentChecker | undefined;
+  /** v2 D2: the map checkers of `bridge.expect` (`kind: 'map'`) and `bridge.verify` (`kind: 'mapChecked'`), by name. */
+  readonly mapChecker?: (name: string) => MapChecker | undefined;
   /** v2 D1.1 (ADR 0039): whether a project uses a write's `ETag` as its new version (`useEtagVersions`, default on). */
   readonly etagVersions?: (projectId: string) => boolean;
+  /** v2 D3 (ADR 0041): keeps an asset's bytes before any `deleteAsset` (see `AssetDeleteKeeper`). */
+  readonly assetDeleteKeeper?: () => AssetDeleteKeeper | undefined;
 }
+
+/**
+ * v2 D3 (ADR 0041, the CR open item): called inside the read that gives a `deleteAsset` its journal pre-image, on EVERY
+ * route (the tools, `lk_api_write`, `lk_api_batch`, `lk_op_*`). It downloads and stores the asset's bytes (and, for a
+ * folder, lists its children and keeps theirs) and returns what the pre-image records about them. It throws (a
+ * `JobsError` with code `ASSET_BYTES_NOT_KEPT`) to refuse the delete: nothing is then sent.
+ */
+export type AssetDeleteKeeper = (ctx: {
+  readonly job: JobView;
+  readonly step: StepView;
+  readonly lk: LkClient;
+  /** The asset as `getAsset` gave it. */
+  readonly asset: Record<string, unknown>;
+  /** A governed read in the job's name (listAssets for a folder's children). */
+  readonly read: (opId: string, params: OpParams) => Promise<unknown>;
+}) => Promise<Record<string, unknown>>;
 
 /**
  * v2 C2c (ADR 0035): writes the lifecycle record for a `bridge.record` step (the bridge's own database only) and returns
@@ -486,6 +507,42 @@ export class StepExecutor {
         keep(c.resourceId, c.label, version);
         continue;
       }
+      // v2 D2: a map's settings and features judged by a registered map checker.
+      if (c.kind === 'map') {
+        const checker = this.d.mapChecker?.(c.checker);
+        if (!checker)
+          throw new JobsError(
+            'BRIDGE_ERROR',
+            `The check ${c.checker} is not available; nothing was written.`,
+            ref,
+          );
+        const m = await this.readMap(job, step, c.resourceId, c.documentId, true, stats);
+        if (!m.exists) {
+          throw new StateConflictError(
+            EXPECT_STEP,
+            c.label,
+            [{ path: c.label, expected: 'present', actual: '(gone)' }],
+            null,
+            null,
+            ref,
+          );
+        }
+        const out = runMapChecker(checker, {
+          projectId: job.projectId,
+          jobId: job.id,
+          stepNo: step.stepNo,
+          label: c.label,
+          input: c.input,
+          document: m.document,
+          features: m.features,
+        });
+        if (out.differences.length > 0)
+          throw new StateConflictError(EXPECT_STEP, c.label, [...out.differences], null, null, ref);
+        Object.assign(bodies, out.bodies ?? {});
+        if (out.observed !== undefined) observed[c.label] = out.observed;
+        keep(c.resourceId, c.label, null);
+        continue;
+      }
       if (c.kind === 'event' || c.kind === 'lane') {
         const diffs = await this.timelineDiffs(job, step, c, stats);
         if (diffs.length > 0) throw new StateConflictError(EXPECT_STEP, c.label, diffs, null, null, ref);
@@ -580,6 +637,39 @@ export class StepExecutor {
       ...(Object.keys(ids).length > 0 ? { ids, idsByPage } : {}),
       ...(Object.keys(bodies).length > 0 ? { bodies } : {}),
       ...(Object.keys(observed).length > 0 ? { observed } : {}),
+    };
+  }
+
+  /**
+   * v2 D2: a map's settings (`getDocument`, for its type and `mapImage`; only when asked) and every feature
+   * (`listFeatures`, not paged). A deleted or missing document is `exists: false`.
+   */
+  private async readMap(
+    job: JobView,
+    step: StepView,
+    resourceId: string,
+    documentId: string,
+    withDocument: boolean,
+    stats: CallStats,
+  ): Promise<{
+    exists: boolean;
+    document: Record<string, unknown> | null;
+    features: Record<string, unknown>[];
+  }> {
+    let document: Record<string, unknown> | null = null;
+    if (withDocument) {
+      const d = await this.readOp(job, step, 'getDocument', { path: { resourceId, documentId } }, stats);
+      if (!d.exists) return { exists: false, document: null, features: [] };
+      document = (d.body ?? {}) as Record<string, unknown>;
+      if (typeof document.deletedAt === 'string') return { exists: false, document: null, features: [] };
+    }
+    const f = await this.readOp(job, step, 'listFeatures', { path: { resourceId, documentId } }, stats);
+    if (!f.exists) return { exists: false, document: null, features: [] };
+    const data = (f.body as { data?: unknown } | undefined)?.data;
+    return {
+      exists: true,
+      document,
+      features: Array.isArray(data) ? (data as Record<string, unknown>[]) : [],
     };
   }
 
@@ -838,6 +928,26 @@ export class StepExecutor {
             )),
           );
           n = diffs.length;
+        } else if (t.kind === 'asset') {
+          // v2 D3 (ADR 0041): an asset read back with getAsset: its folder (or the folder an earlier step of the job
+          // created), hidden flag and name.
+          const r = await this.readOp(job, step, 'getAsset', { path: { assetId: t.assetId } }, stats);
+          if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
+          else {
+            const a = (r.body ?? {}) as Record<string, unknown>;
+            const want: Record<string, unknown> = { ...t.fields };
+            if (t.folderFrom) {
+              const src = this.d.repo.step(job.id, t.folderFrom.step);
+              const made = src ? (this.d.repo.stepResult(src) as { id?: unknown } | null) : null;
+              want.folderId = typeof made?.id === 'string' ? made.id : '(the folder the job created)';
+            }
+            for (const [k, v] of Object.entries(want)) {
+              const actual = k === 'folderId' ? (a.folderId ?? null) : a[k];
+              if (JSON.stringify(actual ?? null) !== JSON.stringify(v ?? null))
+                diffs.push({ path: `${t.label} ${k}`, expected: v, actual: actual ?? null });
+            }
+          }
+          n = diffs.length;
         } else if (t.kind === 'checked') {
           // v2 D1: a document read back and judged by a registered checker.
           const checker = this.d.checker?.(t.checker);
@@ -871,6 +981,34 @@ export class StepExecutor {
                 version: str(b.version) ?? null,
                 blocks: Array.isArray(b.blocks) ? (b.blocks as unknown[]) : [],
               },
+            });
+            diffs.push(...out.differences);
+          }
+          n = diffs.length;
+        } else if (t.kind === 'mapChecked') {
+          // v2 D2: a map's features read back and judged by a registered map checker.
+          const checker = this.d.mapChecker?.(t.checker);
+          if (!checker) throw new Error(`the check ${t.checker} is not available`);
+          const m = await this.readMap(job, step, t.resourceId, t.documentId, t.withDocument === true, stats);
+          if (!m.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
+          else {
+            let input = t.input;
+            if (t.inputFrom && t.inputFrom.step < step.stepNo) {
+              const src = this.d.repo.step(job.id, t.inputFrom.step);
+              const res =
+                src?.status === 'succeeded'
+                  ? (this.d.repo.stepResult(src) as { bodies?: Record<string, unknown> } | null)
+                  : null;
+              input = res?.bodies?.[t.inputFrom.key] ?? null;
+            }
+            const out = runMapChecker(checker, {
+              projectId: job.projectId,
+              jobId: job.id,
+              stepNo: step.stepNo,
+              label: t.label,
+              input,
+              document: m.document,
+              features: m.features,
             });
             diffs.push(...out.differences);
           }
@@ -1334,7 +1472,17 @@ export class StepExecutor {
             : {}),
           ...(created.length > 1 ? { targets: created } : {}),
           ...(meta.journal === 'pre-image' && current
-            ? { preImage: current.entity ?? current.body }
+            ? {
+                preImage:
+                  step.options.journalPreImageWith !== undefined &&
+                  current.entity !== null &&
+                  typeof current.entity === 'object'
+                    ? {
+                        ...(current.entity as Record<string, unknown>),
+                        with: step.options.journalPreImageWith,
+                      }
+                    : (current.entity ?? current.body),
+              }
             : step.options.journalPreImage !== undefined
               ? { preImage: step.options.journalPreImage }
               : {}),
@@ -1714,6 +1862,27 @@ export class StepExecutor {
       const withEvents = { ...(entity as Record<string, unknown>), events };
       return { exists: true, body: withEvents, entity: withEvents, version };
     }
+    // v2 D3 (ADR 0041): an asset's bytes (and a folder's children's) are kept before it is deleted, on every route; the
+    // pre-image records where. A keeper that cannot keep them refuses the delete (nothing is sent).
+    if (
+      _op.operationId === 'deleteAsset' &&
+      entity !== undefined &&
+      entity !== null &&
+      typeof entity === 'object'
+    ) {
+      const keeper = this.d.assetDeleteKeeper?.();
+      if (keeper) {
+        const kept = await keeper({
+          job,
+          step,
+          lk: this.lk(job),
+          asset: entity as Record<string, unknown>,
+          read: async (opId, p) => (await this.readOp(job, step, opId, p)).body,
+        });
+        const withBytes = { ...(entity as Record<string, unknown>), ...kept };
+        return { exists: true, body: withBytes, entity: withBytes, version };
+      }
+    }
     return { exists: entity !== undefined, body, entity, version };
   }
 
@@ -2058,6 +2227,19 @@ function runChecker(
   checker: DocumentChecker,
   ctx: Parameters<DocumentChecker>[0],
 ): ReturnType<DocumentChecker> {
+  try {
+    return checker(ctx);
+  } catch (e) {
+    return {
+      differences: [
+        { path: ctx.label, expected: 'the plan’s state', actual: e instanceof Error ? e.message : String(e) },
+      ],
+    };
+  }
+}
+
+/** v2 D2: runs a map checker; one that throws is a conflict with its message (nothing is written). */
+function runMapChecker(checker: MapChecker, ctx: Parameters<MapChecker>[0]): ReturnType<MapChecker> {
   try {
     return checker(ctx);
   } catch (e) {

@@ -120,8 +120,10 @@ describe('read_document: maps, timelines and boards', () => {
     const before = w.seen.length;
     const r = await call('read_document', { resource: 'World Maps', document: 'Arkona map' });
     expect(r.isError, r.text).toBe(false);
-    expect(reads(before)).toHaveLength(1);
+    // v2 D2: the document's settings first (its image frame, for the pixel positions), then the features.
+    expect(reads(before)).toHaveLength(2);
     expect(r.body.document.type).toBe('map');
+    expect(r.body.map).toEqual({ image: 'none' }); // this old world's map has no image
     expect(r.body.markdown).toContain('# Map: Arkona map');
     expect(r.body.markdown).toContain(
       '- **Ashgate** (pin) at (12.5, 40.25) → [link](lk://resources/ashg0001)',

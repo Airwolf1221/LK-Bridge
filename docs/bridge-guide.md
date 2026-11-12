@@ -398,6 +398,90 @@ only what is left; other changes of that age wait for it (`CHRONOLOGY_INCOMPLETE
 chronology, the tools refuse (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on
 an Authoritative page.
 
+## Maps
+
+A map is a document of a page. Read it with `read_document` (the page, and the document by name or id); change it with
+`create_map_feature`, `update_map_feature` and `delete_map_feature`; give it an image with `update_document` (`mapImage`).
+
+**Reading a map.** The header gives the image's `width`, `height` and `bounds` (`[[south, west], [north, east]]`), and every
+feature its type, name, position and link, with a folder's features nested under it. When the map has an image each
+position is given twice: as `(lat, lng)`, which is what LegendKeeper stores, and as `pixel (x, y)`, counted from the image's
+**top-left corner** (x to the right, y downwards). A region's or path's points are listed in pixels when there are six or
+fewer, and summarised as a pixel box when there are more (`detail: "full"` lists every point).
+
+**Pixels or lat/lng.** Give a feature's coordinates in ONE system per request: `pixel` (`{ x, y }`) or `latlng`
+(`[lat, lng]`); never both. A pin or label takes one position; a region takes `points` (a polygon of 3 or more) or
+`polygons` (several); a path takes `points` (2 or more); each point is `[lat, lng]` or `{ x, y }`, all one kind. **Use pixels
+when you are working from the image** (the numbers you read off `read_document` are the numbers you write back): the bridge
+converts them with the map's live image, so a pin you place at pixel (1024, 512) is at pixel (1024, 512) in LegendKeeper.
+Anything outside the image is refused unless `allowOutside: true`. A **legacy tiled map** has no single image and a map with
+no image has none yet: pixels are refused on both (use `latlng`; set an image with `update_document` for pixels).
+
+**Adding and changing features.** `create_map_feature` takes `type` (`pin`, `label`, `region`, `path` or `folder`), `name`
+and the coordinates; `folder` names the parent folder; `after` or `before` names a sibling to put it beside; `style` takes
+LegendKeeper's style fields (`iconShape`, `iconColor`, `color`, `fillStyle`…). A feature goes at the **end** of its parent
+unless you place it: the bridge never sorts a map alphabetically, because the owner orders it by hand. `update_map_feature`
+finds a feature by its id, or by its name (with `featureFolder`, the folder it is in now, when the name occurs more than
+once: an ambiguous name is refused with each candidate); only what you give changes, and a change that changes nothing is
+`no_change`.
+
+**Links.** `link` is a page by name or id (or `{ page, document }` for one document of it). A name that matches several pages
+is refused with every candidate and its role; nothing is guessed. The page must exist and not be deleted. A page the owner
+made in the app a few seconds ago may not be linkable yet: wait and try again. `link: null` on `update_map_feature` clears the
+link; leaving `link` out leaves it alone.
+
+**Folders.** Name the folder with `folder`; a name that matches more than one folder is refused with their paths (pass the id).
+`update_map_feature` with `folder` moves a feature, or a whole folder with its features, into another folder, and
+`folder: null` moves it out to the top level. LegendKeeper does **not** delete a folder's features when it deletes the folder,
+so `delete_map_feature` refuses a folder that holds features unless you pass `cascade: true`; the answer then lists everything
+removed, and the journal (`bridge_journal_lookup`) keeps every removed feature in full, so each can be added again. If a
+cascade stops part-way, ask again: it deletes only what is left.
+
+**Images.** `update_document` with `mapImage` (an image asset of the library, by name or id: see `list_assets`) sets or
+replaces a map's image, and a blank document given one becomes a map. Features keep their positions when the image changes, so
+a replacement with an image of a different size puts them over different pixels. When the map has features, the call is
+refused unless you pass `confirm: true` (`CONFIRMATION_REQUIRED`: nothing is written, and the answer says how many features
+will sit over different pixels, with the old and new sizes): **tell the person that count and ask before you confirm**. With
+`confirm: true` it goes ahead and the warning stays in the result; under `propose` scope the proposal shows the count and the
+owner's approval is the confirmation. The same size, or a map with no features, needs none. **Nothing is moved
+automatically**; move features with `update_map_feature` if asked.
+
+These are ordinary edits, not canon, even on an Authoritative page (only deleting the whole map document of an Authoritative
+page is canonical).
+
+## Images
+
+`upload_image` stores an image as a LegendKeeper image asset: converted to WebP at quality 90 (dimensions, orientation,
+transparency and every animation frame kept; a WebP is stored as it is; metadata dropped), checked after storing
+(`storedBytesVerified`), and filed in the right folder. Give exactly **one source**:
+
+1. **`data_base64`**: fine for small images. A chat cannot pass a large one: a 2 MB image is about 2.7 million
+   characters. For an image the person has in hand, ask them to upload it on the dashboard's **Staging** page and give
+   you its staged id.
+2. **`url`**: a public https image.
+3. **`upload_id`**: if you have a shell or sandbox. Call `prepare_image_upload` with the file's `sha256`, `byte_length`,
+   `content_type` and `name`; run the Python or curl script it returns with the file's path (it checks the hash and sends
+   the file; it answers "received"); then call `upload_image` with the `upload_id` within 15 minutes. The capability in
+   the script works once, for 5 minutes, for that file only: never put it in a URL or a page.
+4. **`staged_id`**: place an image that is already staged.
+
+`destination` says where it goes; the bridge plans it from the asset tree and refuses rather than guesses:
+`for_character { name, race }` (a folder named after the character is reused wherever it is; otherwise
+`Characters / Group / Race / Name`, created as needed; an unknown race goes to `Undetermined / Unknown`; a race that does
+not resolve fails), `for_page` (a character page gives its character's folder; any other page needs a `folder` too),
+`folder` (an id or a path such as `Characters / Beastkin / Qishen / Mehrana al-Khalid`), plus `subfolders`. Check with
+`dryRun: true` first if unsure.
+
+**Staging.** `stage: true` uploads and verifies the image but keeps it hidden in the staging folder; place it later with
+`staged_id` (and a `destination`, or the one you gave when staging). With a `propose` connection every upload is staged
+and the placement is a proposal for the owner: do not retry it. The same image sent again returns the existing asset
+(`deduplicated: true`); never upload a copy to "move" an image.
+
+**Using it.** Put an image on a page with `write_page`: `![alt text](asset url)` (only this project's assets). It can
+also go in an image block (an `lk-block`), as a map pin's image, or as a map's image (`update_document`'s settings).
+`list_assets` and `browse_asset_tree` show what the bridge knows of images it uploaded (`bridgeUpload`). Deleting an
+asset keeps its bytes in the bridge first; if they cannot be kept the delete is refused until the owner allows it.
+
 ## Budget rules
 
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.

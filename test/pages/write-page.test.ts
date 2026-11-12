@@ -263,7 +263,7 @@ describe('every refusal is typed, and nothing is written', () => {
   it('maps, timelines and boards point to the right tool; pages outside the root and unknown documents are refused', async () => {
     const map = await refused({ page: 'maps0001', document: 'Arkona map', mode: 'append', markdown: 'x' });
     expect(map).toMatchObject({ code: 'WRONG_TOOL_FOR_DOCUMENT' });
-    expect(map.message).toMatch(/map.*createFeature/);
+    expect(map.message).toMatch(/map.*create_map_feature.*update_map_feature.*delete_map_feature/); // v2 D2
     expect(
       (await refused({ page: 'age4tl01', document: 'Fourth Age - Timeline', mode: 'append', markdown: 'x' }))
         .message,

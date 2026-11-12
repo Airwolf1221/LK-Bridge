@@ -1,3 +1,4 @@
+import type { ImageService } from '../images/service.js';
 import type { Lifecycle } from '../lifecycle/index.js';
 import type { Chronology } from '../chronology/index.js';
 import type { AuthServices } from '../auth/services.js';
@@ -36,6 +37,8 @@ export interface AdminRuntime {
   readonly lifecycle?: Lifecycle;
   /** v2 D1: chronology sync (settings, records, the check); optional for tests' runtimes. */
   readonly chronology?: Chronology;
+  /** v2 D3: the image pipeline (the Staging page); optional for tests' runtimes. */
+  readonly images?: ImageService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

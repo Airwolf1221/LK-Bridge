@@ -138,3 +138,83 @@ six ages):
 - **Dry run:** `test/chronology/sandbox-dryrun.test.ts` runs the same check against the mock chronology.
 - **As the service user:** the package script loads the config with `--configLoader runner` and the config turns
   `fsModuleCache` off, so nothing is written under the release's `node_modules`.
+
+## Waiting for parked writes (the owner's run of 12 November 2026)
+
+The sandbox files run **one after another** (`fileParallelism: false` in `vitest.sandbox.config.ts`). In parallel the
+smoke and assumptions tests shared the test project's 120 writes a minute; the smoke test's writes were parked
+(`waiting_budget`), it reported them as failures instead of waiting, and it left its throwaway page and image behind.
+Now every script settles each operation through `wait.ts`: a read refused for budget is made again when the budget
+allows; a write parked for budget or queued behind the pacing is **waited for** (up to 10 minutes) and never sent again,
+in the clean-up too. `test/tools/sandbox-dryrun.test.ts` and `test/images/sandbox-dryrun.test.ts` check it against the
+mock, which throttles a write and the clean-up for longer than the governor waits inline, so both are really parked.
+
+## The image pipeline (v2 D3)
+
+`images.test.ts` (on the server `deploy/sandbox-test.sh --project test -- images`) **writes, then cleans up**
+([ADR 0041](../../docs/adr/0041-image-pipeline.md)). It builds the project's asset tree (one listing per folder), then:
+
+1. **The ways in.** `1.base64`: the fixtures (`test/fixtures/images`: PNG with alpha, JPEG with EXIF orientation 6, an
+   animated GIF, a WebP) converted and uploaded, each verified. `1.binary`: a single-use capability, the file POSTed
+   over real HTTP to the pipeline's own endpoint (on loopback, in the test's runtime), then uploaded. `1.caddy`: a
+   large POST (8 MiB, no valid capability) to `<BRIDGE_PUBLIC_URL>/uploads/…`, which must come back from the **live**
+   bridge as its generic refusal: Caddy passes the path and the body (PASS on 403; FAIL on 404 or 413; INCONCLUSIVE on a
+   proxy error). `1.url`: only when `LKB_SANDBOX_IMAGE_URL` names a stable public test image.
+2. **What LegendKeeper stored**: each asset downloaded; SHA-256, dimensions, alpha, orientation (none left) and frames
+   as stored, and LegendKeeper's recorded width and height.
+3. **Staging**: one image staged (hidden), placed (moved, unhidden, renamed, read back); another staged and discarded,
+   its bytes kept first.
+4. **A nested destination** (`… / Characters / Group / Race / Name`) created in order under the throwaway folder.
+5. **Clean-up**: the throwaway folder `lk-bridge images sandbox <time>` (everything inside goes with it) and the run's own
+   staging folder (`<that name> staging`, set as the run's `imageStagingFolder` in its temporary database) are deleted;
+   404 or "already deleted" counts as cleaned. Anything left is named: delete it by hand.
+
+Each line is PASS, FAIL or INCONCLUSIVE with its cost. **Cost** (measured against a mock library shaped like the test
+world's, 18 folders and 559 images): about **68 reads (32 of them listings), 34 writes and 24 downloads** from the asset
+host (downloads draw on no API tier), about 0.2 % of the key's daily budget; a few minutes with the pacing.
+`test/images/sandbox-dryrun.test.ts` runs the same script against the mock. The URL check needs
+`LKB_SANDBOX_IMAGE_URL`; the Caddy check reads `BRIDGE_PUBLIC_URL` from the env file (or `LKB_PUBLIC_URL`).
+
+## The maps (v2 D2)
+
+`npm run test:sandbox` (on the server `deploy/sandbox-test.sh --project test`) also runs `maps.test.ts`;
+`npm run test:sandbox -- maps` runs it alone:
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- maps
+```
+
+PLAN-v2 says D2 makes its own test map; with the rule that a build session touches no live system, this is the test the
+owner runs. Unlike the chronology test it **writes**, then cleans up. It prints PASS, FAIL or INCONCLUSIVE per check
+(M1 to M8, [ADR 0040](../../docs/adr/0040-map-feature-tools.md) "To verify"), and the run fails if a check FAILs or the
+clean-up does.
+
+- **What it creates:** one throwaway page `lk-bridge maps <time>` (a plain name: no `[BSRC]`, `[BWRK]`, `[BARC]` or `[INDEX]`
+  prefix and no Status, so the canon and lifecycle guards never stand in the way) whose first, blank document becomes the
+  map; one more page under it to link to; **two generated PNGs** (1500×700, a non-square, non-power-of-two size, then
+  1024×1024; valid 8-bit RGB files made in the test, a few kilobytes each, uploaded through the existing `upload_image`
+  job); and on the map a feature of every type (a pin, a label, a region with one polygon and one with two, a path, folders)
+  with pixel coordinates, nested pins, linked pins and a small tree for the cascade.
+- **What it checks:** the image uploads at exactly 1500×700 (M1); a blank document given it becomes a map and `MapImage`
+  reads back `width`, `height` and `bounds` (M2); **the app's zoom formula `z = ceil(log2(max(w, h)/256))` gives the bounds
+  LegendKeeper reports** (M3); each type created by pixel is stored at the schema's lat/lng (to 1e-6) and reads back as the
+  same pixel (M4a to f); a link to the throwaway page, to one of its documents, and clearing it with an empty `uri` (M5); a
+  nested pin, **the rank LegendKeeper stores equals the rank sent** and a pin placed after a sibling sorts between its
+  neighbours, an update moving a pin into the folder, `parentId: null` moving it out (assumed from the spec), a region given
+  several polygons (M6); **deleting a folder leaves its features**, and a cascade delete removes a nested tree deepest first
+  with every removed feature in the journal in full (M7); replacing the image keeps every feature's `pos` and the frame follows
+  the new size (M8, the basis of the replacement warning). The writes are the jobs the tools submit (`src/maps/jobs.ts`: the
+  check inside the lock, the write with its body bound from it, the verify), because the sandbox runtime has no repository tree
+  to call the tools with.
+- **Held writes:** every write, the clean-up's included, goes through `test/sandbox/wait.ts` (as the smoke, assumptions and images
+  scripts do): a write parked for budget (`waiting_budget`) or queued is waited for, never sent again.
+- **What it cleans up:** everything, at the end, even after a failure: both pages (a cascade, which takes the document and its
+  features), then both uploaded images. **A page or image that is already gone (404, "already deleted") counts as cleaned**
+  (C2d's rule); any other failure is confirmed by a read before it is reported, and the report names each id to delete by hand.
+- **Cost:** about 35 writes and 100 to 160 reads (measured against the mock: 161 reads and 35 writes, which includes the mock
+  world's repository tree re-reading every page written; the sandbox runtime has no tree, so fewer on the real run), two image
+  uploads, and a few minutes at the bridge's write pacing. The link checks wait up to 8 × 4 s for a new page to become linkable.
+- **Dry run:** `test/maps/sandbox-dryrun.test.ts` runs the same script against the mock map world: every check runs to an answer
+  (19 PASS), once plainly and once with three writes really held for budget (a map job, a document write and the clean-up's
+  delete, each parked for 31 s), which it waits for without sending any twice, the upload step is stood in for (the mock cannot take a signed PUT), the generated PNG is decoded and its CRCs
+  checked, and the clean-up is verified. A FAIL on the real API is where LegendKeeper differs from what ADR 0040 relies on.

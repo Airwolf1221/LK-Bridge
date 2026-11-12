@@ -12,6 +12,11 @@ import type { OpParams, PriorityClass } from './types.js';
 
 /** The step id of the signed-URL PUT in an `upload_image` job. */
 export const UPLOAD_PUT_STEP = 'upload_image.put';
+/**
+ * v2 D3 (ADR 0041): the step after createImageAsset that downloads the stored file from the asset host (anonymous GET,
+ * through the governor and the guarded transport) and compares its SHA-256 with the bytes the bridge uploaded.
+ */
+export const UPLOAD_VERIFY_STEP = 'upload_image.verify';
 
 export interface CustomStepContext {
   readonly jobId: string;

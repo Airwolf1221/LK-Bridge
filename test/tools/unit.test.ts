@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON */
 import { describe, expect, it } from 'vitest';
-import { ConfigError, loadToolsConfig } from '../../src/config/index.js';
+import { ConfigError, DEFAULT_IMAGE_SETTINGS, loadToolsConfig } from '../../src/config/index.js';
 import { mcpOrigin, project, summarise } from '../../src/mcp/tools/shape.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
 import { sniffImageType, checkTargetUrl, UploadHttpError } from '../../src/mcp/tools/upload-http.js';
@@ -19,7 +19,27 @@ describe('tools configuration', () => {
       },
       resultMaxChars: 40_000,
       outboundExtraPorts: new Set(),
+      images: DEFAULT_IMAGE_SETTINGS,
     });
+    // v2 D3 (ADR 0041): the image settings' defaults, spelled out.
+    expect(DEFAULT_IMAGE_SETTINGS).toEqual({
+      maxPixels: 100_000_000,
+      maxFrames: 300,
+      convertTimeoutMs: 60_000,
+      convertConcurrency: 1,
+      dataDir: null,
+      ratePerPrincipalPerHour: 30,
+      ratePerIpPerHour: 60,
+      bodyTimeoutMs: 120_000,
+      idleTimeoutMs: 15_000,
+      stagingReportDays: 30,
+      keptBytesRetentionDays: 90,
+      assetHosts: ['assets.legendkeeper.com'],
+    });
+    expect(() => loadToolsConfig({ LK_ASSET_HOSTS: 'https://evil.example/x' })).toThrow(/LK_ASSET_HOSTS/);
+    expect(
+      loadToolsConfig({ LK_ASSET_HOSTS: 'Assets.LegendKeeper.com, cdn.example.org' }).images.assetHosts,
+    ).toEqual(['assets.legendkeeper.com', 'cdn.example.org']);
   });
   it('parses OUTBOUND_EXTRA_PORTS_ALLOWLIST and refuses a malformed entry (v1.0.1)', () => {
     expect([

@@ -950,3 +950,23 @@ ul.plain.taxonomy {
 ul.taxonomy li {
   margin: 0.25rem 0;
 }
+
+/* v2 D3: the Staging page */
+.dropzone {
+  border: 2px dashed var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+.dropzone.over {
+  border-color: var(--accent);
+}
+.bad {
+  color: var(--bad);
+}
+img.thumb {
+  max-height: 64px;
+  object-fit: contain;
+  border-radius: 4px;
+}

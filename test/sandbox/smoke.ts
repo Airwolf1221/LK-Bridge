@@ -9,6 +9,7 @@
  */
 import type { JobEngine } from '../../src/jobs/index.js';
 import type { LkClient } from '../../src/lk/index.js';
+import { runSettled, waitForJob, type WaitOptions } from './wait.js';
 
 export type Verdict = 'pass' | 'fail' | 'inconclusive' | 'skipped';
 export interface Finding {
@@ -33,17 +34,20 @@ type Obj = Record<string, any>;
 const PNG_1PX =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
-export async function runSmoke(t: SmokeTarget, expectedProjectId: string): Promise<Finding[]> {
+export async function runSmoke(
+  t: SmokeTarget,
+  expectedProjectId: string,
+  wait: WaitOptions = {},
+): Promise<Finding[]> {
   const findings: Finding[] = [];
   const origin = { kind: 'test' as const, client: 'sandbox-smoke', tool: 'sandbox-smoke' };
   const record = (id: string, title: string, verdict: Verdict, detail: string) =>
     findings.push({ id, title, verdict, detail });
 
-  const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> => {
-    const r = await t.engine.run(op, params, { origin, priority: 'P1', project: t.projectId, ...extra });
-    if (r.status !== 'succeeded') throw new Error(`${op} did not complete: ${r.status}`);
-    return r.result;
-  };
+  // The owner's run of 12 November 2026: a write parked for budget (`waiting_budget`) or queued behind the pacing has
+  // not failed. Wait for it (never send it again), as assumptions.ts does, here and in the clean-up.
+  const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> =>
+    runSettled(t, op, params, { origin, priority: 'P1', project: t.projectId, ...extra }, wait);
   const p = (path: Obj, rest: Obj = {}) => ({ path, ...rest });
 
   // ---- guard: the key must belong to exactly the sandbox project --------------------------------------------------
@@ -366,10 +370,7 @@ export async function runSmoke(t: SmokeTarget, expectedProjectId: string): Promi
         priority: 'P1',
       });
       if (!('jobId' in r)) throw new Error(`not queued: ${r.status}`);
-      let job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-      for (let i = 0; i < 4 && job.status !== 'succeeded' && job.status !== 'failed'; i++)
-        job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-      if (job.status !== 'succeeded') throw new Error(`job ${job.status}: ${job.lastError?.message ?? ''}`);
+      const job = await waitForJob(t.engine, t.projectId, r.jobId, 'the upload job', wait);
       const asset = (job.result as Obj).asset as Obj;
       await run('getAsset', p({ assetId: asset.id }));
       await run('deleteAsset', p({ assetId: asset.id }));

@@ -218,6 +218,23 @@ const laneCheck = z
   })
   .strict();
 
+/**
+ * v2 D2 (ADR 0040): a map document, read inside the lock (its settings with `mapImage`, and every feature) and judged by
+ * a map checker the bridge registered by name (`engine.registerMapChecker`): the map-feature tools' compare-and-swap for
+ * writes LegendKeeper does not version. The checker answers the differences (a conflict: nothing is written) and the
+ * bodies of the writes that follow (the converted coordinates and the rank between the real neighbours: `bindBody`).
+ */
+const mapCheck = z
+  .object({
+    label,
+    kind: z.literal('map'),
+    resourceId: id,
+    documentId: id,
+    checker: z.string().min(1).max(100),
+    input: z.unknown(),
+  })
+  .strict();
+
 export const expectCheckSchema = z.union([
   propertyCheck,
   copyCheck,
@@ -229,6 +246,7 @@ export const expectCheckSchema = z.union([
   documentCheck,
   eventCheck,
   laneCheck,
+  mapCheck,
 ]);
 
 // C2d: a whole set checks up to a hundred pages' rows and notes in one step (it was 50).
@@ -338,6 +356,38 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
         .optional(),
     })
     .strict(),
+  // v2 D2: a map's features read back and judged by a registered map checker (each present as written, or gone).
+  z
+    .object({
+      kind: z.literal('mapChecked'),
+      label,
+      resourceId: id,
+      documentId: id,
+      checker: z.string().min(1).max(100),
+      input: z.unknown(),
+      /** Also read the document's own settings (`getDocument`: its type and `mapImage`), for the checker. */
+      withDocument: z.boolean().optional(),
+      /** The input is what an earlier `bridge.expect` step worked out inside the lock (`bodies[key]`). */
+      inputFrom: z
+        .object({ step: z.number().int().min(1), key: z.string().min(1).max(200) })
+        .strict()
+        .optional(),
+    })
+    .strict(),
+  // v2 D3 (ADR 0041): an asset, read back: its fields (folderId, isHidden, name), the folder possibly one an earlier
+  // step of the job created (`folderFrom`: that step's result id).
+  z
+    .object({
+      kind: z.literal('asset'),
+      label,
+      assetId: id,
+      fields: z.record(z.string(), z.unknown()),
+      folderFrom: z
+        .object({ step: z.number().int().min(1) })
+        .strict()
+        .optional(),
+    })
+    .strict(),
   // v2 D1: one lane of a timeline, present with this name.
   z
     .object({
@@ -415,7 +465,32 @@ export type ExpectCheck =
   | BlockCheck
   | DocumentCheck
   | EventCheck
-  | LaneCheck;
+  | LaneCheck
+  | MapCheck;
+
+/** v2 D2: a map document and its features, judged by a registered map checker. */
+export interface MapCheck {
+  readonly label: string;
+  readonly kind: 'map';
+  readonly resourceId: string;
+  readonly documentId: string;
+  readonly checker: string;
+  readonly input: unknown;
+}
+
+/** v2 D2: what a map checker gets: the map's document settings and features as read inside the lock, and the plan's input. */
+export interface MapCheckContext {
+  readonly projectId: string;
+  readonly jobId: string;
+  readonly stepNo: number;
+  readonly label: string;
+  readonly input: unknown;
+  /** `getDocument`'s answer (type, `mapImage`), or null when it was not read (a verify step reads the features only). */
+  readonly document: Readonly<Record<string, unknown>> | null;
+  readonly features: readonly Record<string, unknown>[];
+}
+
+export type MapChecker = (ctx: MapCheckContext) => DocumentCheckResult;
 
 /** v2 D1: a whole document judged by a registered checker. */
 export interface DocumentCheck {
@@ -592,6 +667,13 @@ export type VerifyTarget =
     }
   | { readonly kind: 'gone'; readonly label: string; readonly resourceId: string }
   | {
+      readonly kind: 'asset';
+      readonly label: string;
+      readonly assetId: string;
+      readonly fields: Readonly<Record<string, unknown>>;
+      readonly folderFrom?: { readonly step: number };
+    }
+  | {
       readonly kind: 'block';
       readonly label: string;
       readonly resourceId: string;
@@ -616,6 +698,16 @@ export type VerifyTarget =
       readonly documentId: string;
       readonly checker: string;
       readonly input: unknown;
+      readonly inputFrom?: { readonly step: number; readonly key: string };
+    }
+  | {
+      readonly kind: 'mapChecked';
+      readonly label: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly checker: string;
+      readonly input: unknown;
+      readonly withDocument?: boolean;
       readonly inputFrom?: { readonly step: number; readonly key: string };
     }
   | {
@@ -682,7 +774,11 @@ export function internalPolicyMeta(op: string, options: StepOptions): PolicyOpMe
 export function internalReads(op: string, params: unknown): number {
   if (op === RECORD_STEP) return 0;
   const body = (params as { body?: { checks?: unknown[]; targets?: unknown[] } } | undefined)?.body;
-  if (op === EXPECT_STEP) return body?.checks?.length ?? 1;
+  // A map check reads the map's settings and its features (two reads); every other check one.
+  if (op === EXPECT_STEP)
+    return body?.checks
+      ? (body.checks as { kind?: unknown }[]).reduce((n, c) => n + (c && c.kind === 'map' ? 2 : 1), 0)
+      : 1;
   const targets = (body?.targets ?? []) as { placement?: unknown }[];
   return Math.max(1, targets.length + targets.filter((t) => t && t.placement !== undefined).length);
 }

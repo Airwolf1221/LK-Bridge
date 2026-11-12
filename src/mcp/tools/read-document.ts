@@ -12,6 +12,7 @@ import {
   renderTimeline,
   toMarkdown,
 } from '../../markdown/index.js';
+import { frameState } from '../../maps/index.js';
 import type { TreeDocument, TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
@@ -79,6 +80,8 @@ interface Loaded {
   readonly blockCount?: number;
   readonly raw: unknown;
   readonly note?: string;
+  /** v2 D2: a map's image frame (width, height, bounds), or why it has none. */
+  readonly map?: Record<string, unknown>;
 }
 
 async function load(
@@ -86,6 +89,7 @@ async function load(
   mctx: McpToolContext,
   node: TreeNode,
   doc: TreeDocument,
+  detail?: 'summary' | 'full',
 ): Promise<
   { readonly ok: true; readonly loaded: Loaded } | { readonly ok: false; readonly result: McpToolResult }
 > {
@@ -94,16 +98,44 @@ async function load(
     liveRead(ctx.pd, mctx, 'read_document', opId, { path, ...(query ? { query } : {}) });
   switch (doc.type) {
     case 'map': {
+      // v2 D2: the map's settings too (its image frame), so each position can be given in pixels as well.
+      const d = await read('getDocument');
+      if (!d.ok) return d;
       const r = await read('listFeatures');
       if (!r.ok) return r;
       const features = (r.value as { data?: unknown[] })?.data ?? [];
+      const fs = frameState((d.value as { mapImage?: unknown } | undefined)?.mapImage);
+      const image =
+        fs.kind === 'image'
+          ? ({ kind: 'image', frame: fs.frame, assetId: fs.assetId } as const)
+          : fs.kind === 'legacy'
+            ? ({ kind: 'legacy' } as const)
+            : ({ kind: 'none' } as const);
       return {
         ok: true,
         loaded: {
-          markdown: renderMap({ ...(doc.name ? { name: doc.name } : {}), features }),
+          markdown: renderMap({
+            ...(doc.name ? { name: doc.name } : {}),
+            features,
+            image,
+            ...(detail ? { detail } : {}),
+          }),
           regions: [],
           warnings: [],
           raw: r.value,
+          map:
+            fs.kind === 'image'
+              ? {
+                  image: 'single',
+                  width: fs.frame.width,
+                  height: fs.frame.height,
+                  bounds: fs.frame.bounds,
+                  ...(fs.assetId ? { assetId: fs.assetId } : {}),
+                }
+              : {
+                  image:
+                    fs.kind === 'legacy' ? 'legacy tiled map (no single image: no pixel positions)' : 'none',
+                },
         },
       };
     }
@@ -192,8 +224,11 @@ export function readDocumentTool(deps: ToolDeps): McpToolProvider {
       '`format: "json"` returns the raw blocks instead. Maps, timelines and boards come back as read-only Markdown (features, lanes and ' +
       'events, shapes and connections). Read get_markdown_guide before you write Markdown back. ' +
       'Example: { "resource": "Asagiri Miyabi", "section": "Biography" }. ' +
-      'Cost: 1 read for a page, map or board; a timeline needs 2 plus 1 per 100 events. A long page is stored and returned as a ' +
-      'handle for bridge_result_page.',
+      'Cost: 1 read for a page or board, 2 for a map; a timeline needs 2 plus 1 per 100 events. A long page is stored and returned as a ' +
+      'handle for bridge_result_page. A MAP shows each feature’s type, name, position and link, and when the map has an image its ' +
+      'width, height and bounds in the header and each position in pixels too (from the image’s top-left corner; a region’s or ' +
+      'path’s points in pixels, summarised when long unless detail: "full"); a legacy tiled map has no pixels. A map costs 2 ' +
+      'reads.',
     inputSchema: z.object({
       resource: z.string().min(1).max(500).describe('Page name or id.'),
       document: z.string().min(1).max(500).optional().describe('Document name or id. Default "Main".'),
@@ -208,10 +243,14 @@ export function readDocumentTool(deps: ToolDeps): McpToolProvider {
         .enum(['markdown', 'json'])
         .optional()
         .describe('markdown (default) or json (the raw blocks).'),
+      detail: z
+        .enum(['summary', 'full'])
+        .optional()
+        .describe('Maps only: "full" lists every point of a long region or path (default: summarised).'),
       project: projectArg,
     }),
     annotations: READ_ANNOTATIONS,
-    handler: ({ resource, document, outline: wantOutline, section, format, project }, mctx) =>
+    handler: ({ resource, document, outline: wantOutline, section, format, detail, project }, mctx) =>
       withProject(deps, project, 'read', async (pd) => {
         if (wantOutline === true && section !== undefined) {
           return errorResult(
@@ -236,7 +275,7 @@ export function readDocumentTool(deps: ToolDeps): McpToolProvider {
         const picked = pickDocument(ctx, r.node, document);
         if (!picked.ok) return picked.result;
         const doc = picked.doc;
-        const l = await load(ctx, mctx, r.node, doc);
+        const l = await load(ctx, mctx, r.node, doc, detail);
         if (!l.ok) return l.result;
         const loaded = l.loaded;
         // v2 C1: remember this version's Markdown, so a section edit made from it can be checked later.
@@ -248,6 +287,7 @@ export function readDocumentTool(deps: ToolDeps): McpToolProvider {
           page: { id: r.node.id, name: r.node.displayName, path: r.node.path.names.join(' / ') },
           document: { id: doc.id, name: doc.name, type: doc.type },
           ...(loaded.version ? { version: loaded.version } : {}),
+          ...(loaded.map ? { map: loaded.map } : {}),
           ...(picked.note || loaded.note
             ? { note: [picked.note, loaded.note].filter(Boolean).join(' ') }
             : {}),

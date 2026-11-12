@@ -54,6 +54,8 @@ export const projectSettingsSchema = z
      * Off: the bridge re-reads, as before. The owner can switch it off without a deploy if the sandbox's B12 fails.
      */
     useEtagVersions: z.boolean().optional(),
+    /** v2 D3 (ADR 0041): the name of the asset folder (in the library's root) staged images go to. */
+    imageStagingFolder: label.optional(),
   })
   .loose();
 
@@ -165,6 +167,14 @@ export const PROJECT_SETTING_KEYS: readonly {
     default: true,
     editable: true,
     help: 'Off: the regular asset-tree refresh (every 6 hours by default) skips this project; the nightly asset check still runs.',
+  },
+  {
+    key: 'imageStagingFolder',
+    label: 'Images: staging folder',
+    kind: 'name',
+    default: 'LK-Bridge staging',
+    editable: true,
+    help: 'The asset folder, in the library’s root, that staged images go to (hidden until placed). Found by name, or created on first use.',
   },
 ];
 
