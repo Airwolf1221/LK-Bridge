@@ -32,6 +32,7 @@ const EVENTS = [
   'controls',
   'policy',
   'proposal',
+  'staging',
   'throttled',
   'budget-wait',
   'project',

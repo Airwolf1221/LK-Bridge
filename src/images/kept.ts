@@ -11,7 +11,6 @@
  * Kept bytes are removed after ASSET_BYTES_RETENTION_DAYS (default 90); E1's backups will reuse this store.
  */
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { JobsError, type AssetDeleteKeeper } from '../jobs/index.js';
@@ -22,9 +21,8 @@ const SHA = /^[0-9a-f]{64}$/;
 
 /** Content-addressed files: `<dir>/<first two hex>/<sha256>`, written once, read back checked. */
 export class ByteStore {
-  constructor(readonly dir: string) {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
+  /** `dir` is created by the first file kept (`put`), not here: see UploadSlots (ADR 0041, the image directory). */
+  constructor(readonly dir: string) {}
 
   private pathOf(sha256: string): string {
     if (!SHA.test(sha256)) throw new Error('not a SHA-256');

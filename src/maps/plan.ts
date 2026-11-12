@@ -14,6 +14,7 @@ import {
   misplacedStyles,
   nameOf,
   parentOf,
+  wireParent,
   rankOf,
   shapeProblem,
   shapesFor,
@@ -164,7 +165,10 @@ export function findFeature(
   );
 }
 
-/** Features directly under a parent (the top level: no parent, or a parent that no longer exists), in rank order. */
+/**
+ * Features directly under a parent (the top level: no `parentId`, `""`, null, or a parent that no longer exists), in
+ * rank order.
+ */
 export function siblingsOf(features: readonly Obj[], parentId: string | null, exceptId?: string): Obj[] {
   const ids = new Set(features.map(idOf));
   return features.filter((f) => {
@@ -356,7 +360,7 @@ export interface UpdateRequest {
   readonly geometry?: Geometry;
   readonly allowOutside: boolean;
   readonly frame: MapFrame | null;
-  /** undefined: unchanged; null: the top level; a string: that folder. */
+  /** undefined: unchanged; null: the top level (sent as `""`, never null); a string: that folder. */
   readonly parentId?: string | null;
   readonly placement?: Placement;
   /** '' clears the link; undefined leaves it. */
@@ -441,7 +445,7 @@ export function buildUpdate(state: MapState, req: UpdateRequest): Built | Fail {
       want.rank = rank.rank;
       place = { parentId: newParent, after: rank.after, before: rank.before };
     }
-    if (moved) want.parentId = newParent;
+    if (moved) want.parentId = wireParent(newParent);
   }
   // Only what differs.
   const body: Obj = {};

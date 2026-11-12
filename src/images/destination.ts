@@ -9,7 +9,10 @@
  *   or omitted race is `Undetermined / Unknown`; a declared race that does not resolve fails and never falls back.
  * - `for_page`: the character of a character page (Core, Reference or the character's index), by the same rules with
  *   the race read from where the page is; any other page needs an explicit `folder`.
- * - `subfolders`: literal folder names appended to the derived path.
+ * - `subfolders`: literal folder names appended to the derived path, as a list or as ONE path written like the folder chain
+ *   (`Wardrobe`, `Wardrobe / Qipao`): split on `/`, each part trimmed; an empty part, `.` and `..` are refused
+ *   ({@link parseSubfolders}). The folder rules are unchanged: reuse what exists, create what is missing in order, a
+ *   non-folder with the same name is a conflict.
  *
  * Missing folders are created in order; folders are never moved; a non-folder asset with a needed folder's name is a
  * conflict (refused).
@@ -31,7 +34,8 @@ export interface DestinationInput {
   readonly for_character?:
     | { readonly name: string; readonly race?: string | null | undefined; readonly type?: string | undefined }
     | undefined;
-  readonly subfolders?: readonly string[] | undefined;
+  /** A list of folder names, or one path string (`"Wardrobe / Qipao"`): see {@link parseSubfolders}. */
+  readonly subfolders?: string | readonly string[] | undefined;
 }
 
 export interface DestinationDeps {
@@ -55,6 +59,55 @@ export type DestinationResult =
   | { readonly ok: false; readonly error: DestinationError };
 
 const FOLDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+export const MAX_SUBFOLDERS = 10;
+
+const badSubfolder = (message: string): { ok: false; error: DestinationError } => ({
+  ok: false,
+  error: { code: 'INVALID_SUBFOLDER', message },
+});
+
+/**
+ * The subfolder path as a list of folder names, for the existing `subfolders` list. A string is split on `/` and each part
+ * trimmed (`"Wardrobe / Qipao"` is `["Wardrobe", "Qipao"]`); a list is taken as it is, each name trimmed. An empty part (a
+ * slash at either end, two in a row, a blank name), `.` and `..` are refused with a message that says which and shows how to
+ * write it. A name's length and characters are checked by the planner, as for any folder name. Used by every route in (the
+ * MCP tool, the dashboard, a stored intended destination), so they all read it the same way.
+ */
+export function parseSubfolders(
+  input: string | readonly string[] | undefined,
+):
+  { readonly ok: true; readonly names: string[] } | { readonly ok: false; readonly error: DestinationError } {
+  if (input === undefined) return { ok: true, names: [] };
+  const given = typeof input === 'string' ? input : null;
+  if (given !== null && given.trim() === '') {
+    return badSubfolder(
+      'The subfolder is empty. Write it like the folder chain, for example “Wardrobe” or “Wardrobe / Qipao”, or leave it out.',
+    );
+  }
+  const parts = (given !== null ? given.split('/') : [...(input as readonly string[])]).map((p) =>
+    typeof p === 'string' ? p.trim() : p,
+  );
+  const shown = given ?? parts.join(' / ');
+  const names: string[] = [];
+  for (const part of parts) {
+    if (typeof part !== 'string') return badSubfolder('A subfolder must be text.');
+    if (part === '') {
+      return badSubfolder(
+        `The subfolder path “${shown.trim()}” has an empty part (a slash at the start or the end, two slashes in a row, or a blank name). Write it like “Wardrobe / Qipao”.`,
+      );
+    }
+    if (part === '.' || part === '..') {
+      return badSubfolder(
+        `“${part}” is not a folder name: a subfolder path goes down from the destination, never to “.” or “..”. Write it like “Wardrobe / Qipao”.`,
+      );
+    }
+    names.push(part);
+  }
+  if (names.length > MAX_SUBFOLDERS) {
+    return badSubfolder(`At most ${MAX_SUBFOLDERS} subfolder levels; ${names.length} given.`);
+  }
+  return { ok: true, names };
+}
 
 const fromPlan = (
   r: ReturnType<typeof planAssetDestination>,
@@ -80,7 +133,9 @@ export function planDestination(
   input: DestinationInput,
   deps: DestinationDeps,
 ): DestinationResult {
-  const subfolders = [...(input.subfolders ?? [])];
+  const parsed = parseSubfolders(input.subfolders);
+  if (!parsed.ok) return parsed;
+  const subfolders = parsed.names;
   const given = [input.folder !== undefined, input.for_page !== undefined, input.for_character !== undefined];
   if (input.for_character !== undefined && (input.folder !== undefined || input.for_page !== undefined)) {
     return {
@@ -142,7 +197,7 @@ export function planDestination(
           },
         };
       }
-      return fromPlan(r, { for_page: pageNote });
+      return fromPlan(r, { for_page: pageNote, ...(subfolders.length ? { subfolders } : {}) });
     }
     if (input.folder === undefined) {
       return {
@@ -159,7 +214,11 @@ export function planDestination(
   // ---- folder: an id, or a path.
   if (input.folder !== undefined) {
     const f = input.folder;
-    const described = { folder: f, ...(pageNote ? { for_page: pageNote } : {}) };
+    const described = {
+      folder: f,
+      ...(pageNote ? { for_page: pageNote } : {}),
+      ...(subfolders.length ? { subfolders } : {}),
+    };
     if (
       typeof f === 'string' &&
       FOLDER_ID.test(f.trim()) &&
@@ -205,10 +264,13 @@ export function planDestination(
     return {
       ok: true,
       plan: { ...r.plan, notes: [...r.plan.notes, ...notes] },
-      described: { for_character: { name: fc.name, race } },
+      described: { for_character: { name: fc.name, race }, ...(subfolders.length ? { subfolders } : {}) },
     };
   }
-  return fromPlan(r, { for_character: { name: fc.name, race } });
+  return fromPlan(r, {
+    for_character: { name: fc.name, race },
+    ...(subfolders.length ? { subfolders } : {}),
+  });
 }
 
 /** The project's staging folder, found by name in the library's root or to be created. */

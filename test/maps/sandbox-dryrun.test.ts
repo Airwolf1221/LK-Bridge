@@ -161,6 +161,7 @@ async function runScript(hold: boolean) {
 }
 
 describe('the maps sandbox script, dry run', () => {
+  let scriptRuns = 0;
   const IDS = [
     'M1',
     'M2',
@@ -193,6 +194,17 @@ describe('the maps sandbox script, dry run', () => {
       expect(f!.verdict, `${id}: ${f!.detail}`).toBe('pass');
     }
     expect(r.findings.map((f) => f.verdict)).not.toContain('skipped');
+    // The null probe of M6c is a noted fact about LegendKeeper (the model refuses it as the real API did), not a failure.
+    const nullProbe = r.findings.find((x) => x.id === 'M6c-null');
+    expect(nullProbe, 'M6c-null is reported').toBeDefined();
+    expect(nullProbe!.verdict, nullProbe!.detail).toBe('noted');
+    expect(nullProbe!.detail).toContain('parentId: Expected string, received null');
+    expect(r.findings.map((f) => f.verdict)).not.toContain('fail');
+    // The bridge's own moves sent "" and never null: the probe is the only null, once per run, and wrote nothing.
+    scriptRuns++;
+    const nulls = w.sent.filter((c) => c.method === 'PATCH' && c.body.parentId === null);
+    expect(nulls).toHaveLength(scriptRuns);
+    expect(w.sent.some((c) => c.method === 'PATCH' && c.body.parentId === '')).toBe(true);
     // Cleaned up: the throwaway pages and both uploaded images are gone.
     expect(r.assets).toHaveLength(2);
     for (const a of r.assets) expect(w.assets.assets.has(a), `asset ${a}`).toBe(false);

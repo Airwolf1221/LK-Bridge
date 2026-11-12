@@ -245,3 +245,39 @@ describe('measured costs', () => {
     expect(costs.delete_cascade_6).toEqual({ reads: 11, writes: 6 });
   });
 });
+
+describe('features at the top level, whichever way they say so', () => {
+  it('a cascade takes what is in the folder, never a top-level feature that reads back with parentId "" (or none)', async () => {
+    const live = w.liveFeatures(w.md.map);
+    const at = '2026-11-12T09:00:00Z';
+    live.push(
+      { id: 'zone0001', type: 'folder', name: 'Zone', rank: 'b0', parentId: '', updatedAt: at },
+      {
+        id: 'zpin0001',
+        type: 'pin',
+        name: 'Zone pin',
+        rank: 'a0',
+        parentId: 'zone0001',
+        pos: [-1, 1],
+        updatedAt: at,
+      },
+      { id: 'loose001', type: 'pin', name: 'Loose', rank: 'b1', parentId: '', pos: [-2, 2], updatedAt: at },
+      { id: 'loose002', type: 'pin', name: 'Looser', rank: 'b2', pos: [-3, 3], updatedAt: at },
+    );
+    const plain = await del({ feature: 'Zone' });
+    expect(plain.body.error?.code).toBe('HAS_FEATURES');
+    expect(plain.body.error.count).toBe(1);
+    const dry = await del({ feature: 'Zone', cascade: true, dryRun: true });
+    expect(dry.body.removed.map((x: { name: string }) => x.name)).toEqual(['Zone pin', 'Zone']);
+    const r = await del({ feature: 'Zone', cascade: true });
+    expect(r.body, r.text).toMatchObject({ status: 'written', verified: true, removedCount: 2 });
+    expect(exists('zone0001')).toBe(false);
+    expect(exists('zpin0001')).toBe(false);
+    expect(exists('loose001')).toBe(true);
+    expect(exists('loose002')).toBe(true);
+    // a loose one is found by name at the top level, and deleted alone (it holds nothing)
+    const one = await del({ feature: 'Loose', featureFolder: null });
+    expect(one.body, one.text).toMatchObject({ status: 'written', verified: true, removedCount: 1 });
+    expect(exists('loose001')).toBe(false);
+  });
+});

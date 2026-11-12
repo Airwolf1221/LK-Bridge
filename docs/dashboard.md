@@ -328,9 +328,24 @@ project's staged images: uploaded, converted to WebP, checked, and hidden in the
   and nothing else from outside), name and staged id, dimensions, frames and sizes (WebP and original), whether the
   stored bytes were verified, who staged it (an agent, or “Owner (dashboard)”), when, and the intended destination if
   one was given. Images older than `IMAGE_STAGING_REPORT_DAYS` (30) are counted at the top and marked **old**: they are
-  reported, never removed.
+  reported, never removed. **The list updates by itself** (v2 D3.1, 12 November 2026): the page listens for the stream's
+  `staging` event, sent by the image service whenever a staged image is created, finishes uploading or verifying, is
+  placed, discarded or fails, by whatever route (an agent's `upload_image` with `stage: true`, any upload at `propose`
+  scope, an approved proposal placing one, a job ending, the binary endpoint, this page). Its data is `{ projectId, stagedId, change, name, state, source, staged, old }`, the last two the counts after the change; other projects' events
+  are ignored and a burst costs one reload. There is no count on the navigation yet; the event carries the counts for one.
 - **Place**: a character (name and race, the rules of `create_character`), a folder (path or id) or a page; empty fields
   place it at the intended destination. Optionally a new name. One job moves it, unhides it, renames it and reads it back.
+  - **Subfolder (v2 D3.2)**: a character or a page also takes a **Subfolder**, written like the folder chain: `Wardrobe`, or
+    `Wardrobe / Qipao` (Qipao inside Wardrobe). The bridge splits it on `/`, trims each part and refuses an empty part, `.`
+    and `..` with a message that says how to write it; the result is the destination's `subfolders` list, so the folder rules
+    are the same as ever: folders that exist are reused, missing ones are created in order, and a non-folder with the same name
+    is a conflict (`ASSET_NAME_CONFLICT`). The field needs the character or page first, and a folder path has none (it already
+    says where). The upload box has no destination of its own: an uploaded image is staged in the staging folder, and is placed
+    here or by an agent.
+  - **Where it will land**: as you type, the form asks the bridge for a dry run (`POST /staging/preview`, nothing is written)
+    and shows the full resolved path with the new folders marked and counted, for example `Characters / Beastkin / Qishen /
+Mehrana al-Khalid / Wardrobe / Qipao (2 new folders)`, or the reason it would be refused (a bad path, an ambiguous
+    folder, a conflict). It is worked out the same way placing works it out.
 - **Discard**: deletes the asset after a confirmation. Its bytes are kept by the bridge first (90 days), as for every
   asset delete.
 - **Bytes kept before deletes**: how many files the bridge keeps, and **Allow one delete** for an asset whose file
@@ -338,6 +353,8 @@ project's staged images: uploaded, converted to WebP, checked, and hidden in the
   one delete go ahead within an hour. It cannot be restored afterwards.
 
 API: `GET /api/admin/staging`, `POST /api/admin/staging/upload?name=…` (`application/octet-stream`), `POST
+/api/admin/staging/preview` `{ destination? | stagedId? }` (the dry run: `path`, `segments` with `new`, `newFolders`; a bad path is
+400 `INVALID_SUBFOLDER`), `POST
 /api/admin/staging/<staged id>/place` `{ destination?, name? }`, `POST /api/admin/staging/<staged id>/discard`
 `{ confirm: true }`, `POST /api/admin/staging/allow-delete` `{ assetId, confirm: true }` (re-authenticated); all with
 `?project=`. Audited as `staging.upload`, `staging.place`, `staging.discard` and `asset.delete_without_bytes`.
@@ -365,7 +382,7 @@ needs a restart.
 ## Stream
 
 `GET /api/admin/stream` carries the engine's events (`job`, `step`, `lock`, `writers`, `error`, `controls`), the policy
-layer's (`policy`, `proposal`), the governor's (`throttled`, `budget-wait`), the registry's (`project`: a project's
+layer's (`policy`, `proposal`), the image service's (`staging`: a staged image was created, finished uploading, was placed, discarded or failed; v2 D3.1), the governor's (`throttled`, `budget-wait`), the registry's (`project`: a project's
 status or flags changed) and a `budget` snapshot every 2 seconds, holding every project's (`projects`, by LegendKeeper
 id). Events about one project carry its id, and the project-scoped pages ignore other projects' events. Each frame's
 data is `{ "at": <ms>, "data": … }`.

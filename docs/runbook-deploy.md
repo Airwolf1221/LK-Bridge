@@ -883,10 +883,12 @@ lowers a conversion's peak in proportion.
   sudo -u lkbridge /opt/lk-bridge/runtime/node/bin/node -e "console.log(require('/opt/lk-bridge/app/node_modules/sharp').versions)"
   ```
 
-- **The image directory** is created by the bridge at start-up: `images/` next to the database
-  (`/var/lib/lk-bridge/images`, mode 0700, owned by `lkbridge`, files 0600, inside the unit's only writable path), with
-  `upload-tmp/` (the binary endpoint's temporary files: emptied at every start, swept every minute, a file lives at most
-  15 minutes) and `kept-bytes/` (the bytes of deleted assets, 90 days). `IMAGE_DATA_DIR` moves it (it must stay inside
+- **The image directory** is `images/` next to the database the bridge is running on
+  (`/var/lib/lk-bridge/images`, mode 0700, owned by `lkbridge`, files 0600, inside the unit's only writable path). It is
+  created on first use, not at start-up (ADR 0041, the image directory), so it does not exist until the first binary upload
+  or kept file: `upload-tmp/` (the binary endpoint's temporary files: emptied at every start, swept every minute, a file lives
+  at most 15 minutes) appears with the first upload, `kept-bytes/` (the bytes of deleted assets, 90 days) with the first
+  deleted image. `IMAGE_DATA_DIR` moves it (it must stay inside
   `ReadWritePaths`). It is not in the nightly SQLite backup; E1's backups will take `kept-bytes/`.
 - **The memory limits** of the unit are raised (above, "Memory"); the deploy installs them.
 - **New settings**, all optional with sensible defaults (env.template, "Images"): `IMAGE_MAX_PIXELS`, `IMAGE_MAX_FRAMES`,

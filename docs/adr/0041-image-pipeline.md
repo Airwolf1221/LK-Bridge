@@ -136,6 +136,53 @@ body to the public address and expects the live bridge's generic refusal.
 - A deleted asset is restorable from the bridge for 90 days (restore tools are E1's). A delete whose file cannot be
   fetched waits for the owner. Each image delete costs 1 download more.
 - The server needs nothing beyond a normal deploy: `npm ci` installs sharp's prebuilt binary, the deploy installs the
-  unit's new memory limits, and the image directory is created under `/var/lib/lk-bridge` at start-up.
+  unit's new memory limits, and the image directory under `/var/lib/lk-bridge` is created by the first upload or the first
+  kept file (amended 12 November 2026: it used to be created at start-up, see "Notes: the image directory").
 - Open: a thumbnail on the Staging page uses the asset's URL, so a project whose assets are served from another host
   (`LK_ASSET_HOSTS`) shows none until the CSP names it; restore tools for kept bytes are E1's.
+
+## Notes: the Staging page's live updates (12 November 2026, the owner's addendum)
+
+The page listed staged images on load and after its own actions only; an agent's stage, an approved placement or a failed
+job never reached it. Decision 11's page now listens. `ImageStore` calls a change listener after every insert and update of
+an upload record, the one place every route passes (the service's steps, a job ending, a proposal, the dashboard), and
+`ImageService` turns a change to a staged image into the engine bus's `staging` event (`created`, `uploaded`, `failed`,
+`placed`, `discarded`, `updated`, with the staged and old counts after it), which the dashboard's stream relays. It is sent
+from the service, not the dashboard's routes. A placement proposed at `propose` was only noticed when a read next settled the
+record; the service now follows the proposal's events and settles open placements whenever a job ends. An image that was never
+staged sends nothing. See docs/dashboard.md, Staging and Stream.
+
+## Notes: the image directory (12 November 2026, the owner's full sandbox run)
+
+All five sandbox files failed in their first second with `EACCES: mkdir '/opt/lk-bridge/app/data/images/upload-tmp'`.
+`createSoakRuntime` (`test/sandbox/soak.ts`) handed over `DEFAULT_TOOLS_SETTINGS`, whose `images.dataDir` is `null`
+("`images/` next to the database"), and the runtime then resolved "the database" from the config's default path
+(`./data/bridge.db`, relative to the working directory, the app folder owned by the build user), not from the temporary
+database it had been given. The live bridge was unaffected (its `DB_PATH` is `/var/lib/lk-bridge/bridge.db`), and CI did not
+notice because its working directory is writable: every test that built a runtime with the default settings had been
+quietly creating `./data/images/` in the repository. Three changes, amending decision 3 of the server layout and the
+"created at start-up" line of Consequences:
+
+1. **The runtime derives the default directory from the database it was actually given**, never from a working-directory
+   relative default. `src/db/open.ts` has `databaseFile(db)`, which asks SQLite itself (`PRAGMA database_list`) for the
+   absolute path of the open file (null for an in-memory or temporary database), and `src/runtime.ts` passes that, not
+   `config.server.dbPath`, to the image service. `IMAGE_DATA_DIR` and the project setting still win when given. On the live
+   bridge the two are the same file, so nothing moves.
+2. **`createSoakRuntime` sets the image directory inside its own temporary directory** (`<temp>/images`), as it already does
+   for its database.
+3. **The directories are created lazily (my call; the brief left it open).** `upload-tmp/` is created by the first binary upload
+   (in `UploadSlots.receive`, `mkdir -p`, mode 0700), `kept-bytes/` by the first file kept (`ByteStore.put`), and the image
+   directory itself with the first of them. Constructing the service and starting it touch no folder, and the start-up clean
+   and the minute sweep treat a missing directory as an empty one. So a runtime that never handles an upload (the sandbox
+   scripts, the maps and chronology tests, a bridge nobody has uploaded to) writes nothing under its data directory, and the
+   class of bug cannot come back through a runtime that merely starts. Rejected: creating them at start-up but tolerating
+   EACCES, which would hide a real misconfiguration until the first upload. A failure to create the directory at the first
+   upload surfaces then, as that upload's error, and spends its slot like any other refusal.
+
+**Tests.** `test/images/directory.test.ts` (derivation from the given database, the explicit settings winning, nothing created
+at construction or by a sweep, `upload-tmp` 0700 at the first upload and not before, `kept-bytes` 0700 at the first kept file).
+`test/tools/sandbox-runtime-readonly.test.ts` runs `test/sandbox/soak-runtime-readonly.test.ts` under Node's permission model
+(`--permission`, writes allowed only in one temporary directory, which holds even for root), as C2d's loader test does for
+`node_modules`: the working directory is then a read-only app folder, the inner file first checks the harness really refuses a
+write there, then builds `createSoakRuntime` and the real boot path with the default tool settings. It fails with the old code
+(checked by restoring it) and passes now.

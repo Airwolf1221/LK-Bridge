@@ -182,7 +182,8 @@ export function sameValue(a: unknown, b: unknown): boolean {
 
 /**
  * Whether a stored feature holds `fields` (the values a write intended). A region's `polygon` and `polygons` are one
- * list of polygons; `parentId: null` is "no parent"; `uri: ''` is "no link"; numbers compare with a tolerance.
+ * list of polygons; a `parentId` that is absent, `""` or null is "the top level" (see {@link parentOf}); `uri: ''` is
+ * "no link"; numbers compare with a tolerance.
  */
 export function holds(stored: Obj, fields: Obj): { field: string; expected: unknown; actual: unknown }[] {
   const out: { field: string; expected: unknown; actual: unknown }[] = [];
@@ -196,8 +197,9 @@ export function holds(stored: Obj, fields: Obj): { field: string; expected: unkn
       continue;
     }
     if (k === 'parentId') {
-      const actual = typeof stored.parentId === 'string' && stored.parentId !== '' ? stored.parentId : null;
-      if ((want ?? null) !== actual) out.push({ field: k, expected: want ?? null, actual });
+      const expected = parentOfValue(want);
+      const actual = parentOf(stored);
+      if (expected !== actual) out.push({ field: k, expected, actual });
       continue;
     }
     if (k === 'uri') {
@@ -220,8 +222,21 @@ export function featureHash(f: Obj): string {
   return createHash('sha256').update(JSON.stringify(clean)).digest('hex').slice(0, 32);
 }
 
-export const parentOf = (f: Obj): string | null =>
-  typeof f.parentId === 'string' && f.parentId !== '' ? f.parentId : null;
+/**
+ * The ONE reading of a feature's parent (ADR 0040 decision 9, the owner's probe of 12 November 2026): LegendKeeper
+ * reports a feature created at the top level with NO `parentId` field and one moved there with `parentId: ""`, and both
+ * mean the top level; `null` is read the same way (the bridge's own plans use it for "no parent"). Anything else is the
+ * id of the folder. Planning, siblings, the checks inside the lock, verify, `read_document`, the cascade and the
+ * journal summaries all read a parent through this and nothing else.
+ */
+export const parentOfValue = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+export const parentOf = (f: Obj): string | null => parentOfValue(f.parentId);
+/**
+ * What to SEND to put a feature under `parent`: the folder's id, or `""` for the top level. LegendKeeper enforces the
+ * schema's `type: string` and refuses `null` (400, `parentId: "Expected string, received null"`); the schema's "(null =
+ * root)" text is wrong.
+ */
+export const wireParent = (parent: string | null): string => parent ?? '';
 export const idOf = (f: Obj): string => (typeof f.id === 'string' ? f.id : '');
 export const rankOf = (f: Obj): string | null =>
   typeof f.rank === 'string' && f.rank !== '' ? f.rank : null;

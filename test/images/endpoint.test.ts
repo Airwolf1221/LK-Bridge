@@ -3,7 +3,7 @@
  * `POST /uploads/<upload_id>`, then upload_image with the upload_id. Every refusal of the threat review is exercised.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -335,6 +335,8 @@ describe('the binary endpoint', () => {
     w = await imagesWorld();
     const svc = w.stack.runtime.images;
     const tmp = join(w.dataDir, 'upload-tmp');
+    // the directory appears with the first upload (ADR 0041): a leftover of an earlier run is what makes it exist here
+    mkdirSync(tmp, { recursive: true });
     writeFileSync(join(tmp, 'left-over.bin'), 'junk');
     expect(svc.slots.cleanAtStart()).toBe(1);
     expect(existsSync(join(tmp, 'left-over.bin'))).toBe(false);

@@ -24,6 +24,15 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
 ```
 
 `lkbridge` cannot write to `node_modules` (it belongs to the build user), so nothing in the run writes there:
+**Nothing is written under the app folder** (the owner's runs of 11 and 12 November 2026). Besides `node_modules` (below), the
+sandbox runtimes keep their image directory in their own temporary directory (`createSoakRuntime` sets `images.dataDir`), and
+the runtime derives the default one from the database it was given, never from the config's `./data/bridge.db`, which is under
+the app folder owned by the build user: all five files once failed in their first second with `EACCES: mkdir
+'/opt/lk-bridge/app/data/images/upload-tmp'`. `upload-tmp/` and `kept-bytes/` are created only by the first upload or kept
+file. `test/tools/sandbox-runtime-readonly.test.ts` (with `soak-runtime-readonly.test.ts`, its inner half, which does nothing
+unless that test starts it) builds the sandbox runtime under Node's permission model with the app folder read-only. A
+verdict **NOTED** in a report is a fact about LegendKeeper the run records (a refusal the bridge works around), never a failure.
+
 `npm run test:sandbox` loads `vitest.sandbox.config.ts` with `--configLoader runner` (evaluated in memory; the default
 loader wrote a bundled copy to `node_modules/.vite-temp` and failed with `EACCES` on the owner's first run, 11 November
 2026), and the config switches off Vitest's module cache (`fsModuleCache: false`, which removes the "could not create
@@ -200,8 +209,9 @@ clean-up does.
   LegendKeeper reports** (M3); each type created by pixel is stored at the schema's lat/lng (to 1e-6) and reads back as the
   same pixel (M4a to f); a link to the throwaway page, to one of its documents, and clearing it with an empty `uri` (M5); a
   nested pin, **the rank LegendKeeper stores equals the rank sent** and a pin placed after a sibling sorts between its
-  neighbours, an update moving a pin into the folder, `parentId: null` moving it out (assumed from the spec), a region given
-  several polygons (M6); **deleting a folder leaves its features**, and a cascade delete removes a nested tree deepest first
+  neighbours, an update moving a pin into the folder, **`parentId: ""` moving it out to the top level, also with a midpoint rank
+  (M6c), and a raw `parentId: null` being refused (M6c-null: reported NOTED, a fact about LegendKeeper, not a failure; the owner's
+  probe of 12 November 2026)**, a region given several polygons (M6); **deleting a folder leaves its features**, and a cascade delete removes a nested tree deepest first
   with every removed feature in the journal in full (M7); replacing the image keeps every feature's `pos` and the frame follows
   the new size (M8, the basis of the replacement warning). The writes are the jobs the tools submit (`src/maps/jobs.ts`: the
   check inside the lock, the write with its body bound from it, the verify), because the sandbox runtime has no repository tree

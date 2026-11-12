@@ -164,5 +164,15 @@ lifecycle area. What this changes for sets (no decision above is overturned):
   Subject row, else the display name before " - "; the root index's own name for a plain index; a character role from
   the registry wins), suggests `move_resource` (page: its id, to: the set's root) to bring each in first, and adds one flag
   to the proposal, so the owner does not approve a partial promotion by accident. It never moves anything for the agent,
-  and it does not change what the proposal covers (decision 14: an approval covers only the listed pages). It runs for
-  `promote_page` only; a resumed promotion (an open set record) is not re-checked.
+  and it does not change what the proposal covers (decision 14: an approval covers only the listed pages). It ran for
+  `promote_page` only (C2d.1); a resumed change (an open set record) is not re-checked.
+- **Outsiders on archive and move to Working (C2d.2, 12 November 2026: the owner's request).** Already present for
+  `promote_page`; **it was not present for `archive_page` and `move_to_working` with `subtree: true`**, so it is now: the same
+  listing (`outsiders.pages`, found by `workingOutsiders`), the same flag, in the dry run and in the proposal (the stored
+  operation's `lifecycle` head carries both). Archiving a Working character left its flat specialist pages behind, still
+  Working; moving an Authoritative set to Working left same-subject Working pages apart from it. `unarchive_page` does not
+  list them (it brings pages back from the Archived area, where the trap does not arise). The words differ by action,
+  because **a Working page can only be moved into the Working area**: promote and archive of a Working set say "move them in
+  first with `move_resource`, then …"; archive of an **Authoritative** set says a Working page cannot be moved into it, so
+  archive each with `archive_page` as well (or leave them on purpose); `move_to_working` says to bring them in with
+  `move_resource` once the set is Working. Nothing is moved for the agent and the proposal still covers only the listed pages.

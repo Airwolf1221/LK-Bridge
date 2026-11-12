@@ -14,7 +14,7 @@ import {
   type PolicySettings,
   type ToolsSettings,
 } from './config/index.js';
-import type { Db } from './db/open.js';
+import { databaseFile, type Db } from './db/open.js';
 import { createJobEngine, UPLOAD_PUT_STEP, UPLOAD_VERIFY_STEP, type JobEngine } from './jobs/index.js';
 import { defaultTransport, type Clock, type Transport } from './lk/index.js';
 import type { McpResourceProvider, McpToolProvider } from './mcp/server.js';
@@ -445,7 +445,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
     upload: o.toolsSettings.upload,
     images: imageSettings,
-    dbPath: config.server.dbPath,
+    // The database this runtime was GIVEN, never the config's default path (relative to the working directory): the
+    // owner's sandbox run of 12 November 2026 resolved `images/` from `./data/bridge.db` in the read-only app folder.
+    dbPath: databaseFile(o.db) ?? ':memory:',
     proposals: { get: (id) => policy.proposals.get(id) },
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },

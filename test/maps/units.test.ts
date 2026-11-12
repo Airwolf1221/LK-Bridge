@@ -6,6 +6,7 @@
 import { pixelToPos as sdkPixelToPos, posToPixel as sdkPosToPixel } from '@legendkeeper/sdk';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { operationInputSchema } from '../../src/lk/registry.js';
 import {
   appBounds,
   buildCreate,
@@ -23,6 +24,8 @@ import {
   keyBetween,
   mapState,
   misplacedStyles,
+  parentOf,
+  parentOfValue,
   pixelInside,
   pixelToPos,
   planDelete,
@@ -36,6 +39,7 @@ import {
   siblingsOf,
   styleSchema,
   verifyFeatures,
+  wireParent,
   zoomOf,
   type CreateRequest,
   type MapFrame,
@@ -760,7 +764,9 @@ describe('buildUpdate', () => {
     });
     expect(into).toMatchObject({ ok: true, body: { parentId: 'fold0001', rank: 'a2' } });
     const out = buildUpdate(s, { ...base, parentId: null });
-    expect(out).toMatchObject({ ok: true, body: { parentId: null, rank: 'a2' } });
+    // The owner's probe of 12 November 2026: LegendKeeper refuses null; "" is the top level.
+    expect(out).toMatchObject({ ok: true, body: { parentId: '', rank: 'a2' } });
+    expect((out as { body: Obj }).body.parentId).not.toBeNull();
     const after = buildUpdate(s, { ...base, placement: { at: 'before', siblingId: 'fold0002' } });
     expect(after).toMatchObject({ ok: true, body: { rank: 'Zz' } });
     // already at the end of its parent: no write
@@ -919,5 +925,133 @@ describe('featureView', () => {
         }),
       ),
     ).toMatchObject({ polygons: 1, points: 3 });
+  });
+});
+
+describe('the top level, however a feature says it (the owner’s probe of 12 November 2026)', () => {
+  // created at the top level: no field; moved there: ""; the bridge's own plans: null
+  const topNone = feat('top00001', 'pin', 'None', { rank: 'a0', pos: [-1, 1] });
+  const topEmpty = feat('top00002', 'pin', 'Empty', { parentId: '', rank: 'a1', pos: [-2, 2] });
+  const topNull = feat('top00003', 'pin', 'Null', { parentId: null, rank: 'a2', pos: [-3, 3] });
+  const inFolder = feat('in000001', 'pin', 'Inside', { parentId: 'fold0001', rank: 'a0', pos: [-4, 4] });
+  const folder = feat('fold0001', 'folder', 'Shrines', { rank: 'a3' });
+  const ALL = [topNone, topEmpty, topNull, inFolder, folder];
+
+  it('reads absent, "" and null as the top level, and a folder id as itself, through one function', () => {
+    expect([topNone, topEmpty, topNull].map(parentOf)).toEqual([null, null, null]);
+    expect(parentOf(inFolder)).toBe('fold0001');
+    expect(parentOfValue(undefined)).toBeNull();
+    expect(parentOfValue('')).toBeNull();
+    expect(parentOfValue(null)).toBeNull();
+    expect(parentOfValue('fold0001')).toBe('fold0001');
+    expect(wireParent(null)).toBe('');
+    expect(wireParent('fold0001')).toBe('fold0001');
+  });
+
+  it('lists top-level features among the siblings whichever way they say it, and keeps folders’ members apart', () => {
+    const names = (parent: string | null) => siblingsOf(ALL, parent).map((f) => f.name);
+    expect(names(null)).toEqual(['None', 'Empty', 'Null', 'Shrines']);
+    expect(names('fold0001')).toEqual(['Inside']);
+    expect(siblingsOf(ALL, null, 'top00002').map((f) => f.name)).toEqual(['None', 'Null', 'Shrines']);
+    // a parent that no longer exists is the top level too
+    const orphan = feat('orph0001', 'pin', 'Orphan', { parentId: 'gone0000', rank: 'a9', pos: [0, 0] });
+    expect(siblingsOf([...ALL, orphan], null).map((f) => f.name)).toContain('Orphan');
+  });
+
+  it('finds a feature by name at the top level whichever way it says so, and a folder holds none of them', () => {
+    for (const name of ['None', 'Empty', 'Null']) {
+      expect(findFeature(ALL, name, null)).toMatchObject({ ok: true });
+      expect(findFeature(ALL, name, 'Shrines')).toMatchObject({ ok: false, code: 'FEATURE_NOT_FOUND' });
+    }
+    expect(descendantsOf(ALL, 'fold0001').map((f) => f.name)).toEqual(['Inside']);
+  });
+
+  it('compares a wanted parent with what is stored: "", null and no field agree; a folder differs', () => {
+    for (const stored of [topNone, topEmpty, topNull]) {
+      expect(holds(stored, { parentId: '' })).toEqual([]);
+      expect(holds(stored, { parentId: null })).toEqual([]);
+      expect(holds(stored, { parentId: 'fold0001' })).toHaveLength(1);
+    }
+    expect(holds(inFolder, { parentId: '' })).toEqual([
+      { field: 'parentId', expected: null, actual: 'fold0001' },
+    ]);
+    expect(holds(inFolder, { parentId: 'fold0001' })).toEqual([]);
+  });
+
+  it('verifies a feature read back with "" as at the top level, and one still in a folder as a difference', () => {
+    const want = {
+      present: [{ id: 'top00002', label: 'pin “Empty”', fields: { parentId: '' } }],
+      gone: [],
+    };
+    expect(verifyFeatures(ALL, want)).toEqual([]);
+    expect(verifyFeatures([topEmpty], want)).toEqual([]);
+    expect(
+      verifyFeatures([topNone], { ...want, present: [{ ...want.present[0]!, id: 'top00001' }] }),
+    ).toEqual([]);
+    const stuck = verifyFeatures([inFolder], { ...want, present: [{ ...want.present[0]!, id: 'in000001' }] });
+    expect(stuck).toMatchObject([{ path: 'pin “Empty” parentId', expected: null, actual: 'fold0001' }]);
+  });
+
+  it('plans a move to the top level as "", plain and beside a named sibling, never null', () => {
+    const s = state(ALL);
+    const mv = (o: Obj = {}) => ({
+      featureId: 'in000001',
+      expectedHash: featureHash(inFolder),
+      allowOutside: false,
+      frame: frameOf(2048, 1024),
+      style: {},
+      parentId: null as string | null,
+      ...o,
+    });
+    const end = buildUpdate(s, mv());
+    expect(end).toMatchObject({ ok: true });
+    expect([...(end as { changes: readonly string[] }).changes].sort()).toEqual(['parentId', 'rank']);
+    expect((end as { body: Obj }).body.parentId).toBe('');
+    // after "Empty" (a feature that says "" itself): between it and "Null"
+    const after = buildUpdate(s, mv({ placement: { at: 'after', siblingId: 'top00002' } })) as {
+      body: Obj;
+    };
+    expect(after.body.parentId).toBe('');
+    expect(String(after.body.rank) > 'a1' && String(after.body.rank) < 'a2').toBe(true);
+    // before the first top-level feature, which has no field at all
+    const before = buildUpdate(s, mv({ placement: { at: 'before', siblingId: 'top00001' } })) as {
+      body: Obj;
+    };
+    expect(before.body.parentId).toBe('');
+    expect(String(before.body.rank) < 'a0').toBe(true);
+    // a feature already at the top level, whichever way, is not moved by asking for the top level
+    for (const [id, f] of [
+      ['top00001', topNone],
+      ['top00002', topEmpty],
+      ['top00003', topNull],
+    ] as const) {
+      expect(buildUpdate(s, mv({ featureId: id, expectedHash: featureHash(f) }))).toMatchObject({
+        ok: true,
+        noChange: true,
+      });
+    }
+  });
+
+  it('plans a move into a folder as the folder’s id, and a create at the top level with no parentId at all', () => {
+    const s = state(ALL);
+    const into = buildUpdate(s, {
+      featureId: 'top00002',
+      expectedHash: featureHash(topEmpty),
+      allowOutside: false,
+      frame: frameOf(2048, 1024),
+      style: {},
+      parentId: 'fold0001',
+    });
+    expect((into as { body: Obj }).body.parentId).toBe('fold0001');
+    const created = buildCreate(s, req({ parentId: null })) as { body: Obj };
+    expect('parentId' in created.body).toBe(false);
+  });
+
+  it('is what LegendKeeper’s own validation says: the bridge refuses null for updateFeature, and takes ""', () => {
+    const schema = operationInputSchema('updateFeature');
+    const path = { resourceId: 'abcdefgh', documentId: 'abcdefgh', featureId: 'abcdefgh' };
+    expect(schema.safeParse({ path, body: { parentId: '', rank: 'a1' } }).success).toBe(true);
+    const bad = schema.safeParse({ path, body: { parentId: null } });
+    expect(bad.success).toBe(false);
   });
 });

@@ -26,6 +26,7 @@ import {
   frameOfState,
   idOf,
   nameOf,
+  parentOf,
   planDelete,
   styleFields,
   styleSchema,
@@ -338,7 +339,7 @@ function updateMapFeatureTool(deps: ToolDeps): McpToolProvider {
           let placement: Placement | undefined;
           const sib = args.after ?? args.before;
           if (sib !== undefined) {
-            const target = parentId !== undefined ? parentId : parentIdOf(cur);
+            const target = parentId !== undefined ? parentId : parentOf(cur);
             const s = siblingIdOf(pd, state, target, sib, idOf(cur));
             if (!s.ok) return answer(s.result);
             placement = { at: args.after !== undefined ? 'after' : 'before', siblingId: s.id };
@@ -442,9 +443,6 @@ function updateMapFeatureTool(deps: ToolDeps): McpToolProvider {
       }),
   });
 }
-
-const parentIdOf = (f: Obj): string | null =>
-  typeof f.parentId === 'string' && f.parentId !== '' ? f.parentId : null;
 
 // ============================================================================================ delete
 

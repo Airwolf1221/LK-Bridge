@@ -98,11 +98,17 @@ the generated registry (`src/lk/registry.defs.generated.ts`), the spec and the S
 8. **Folders** by name or id, with one lookup: several folders of one name are refused with the candidates and their paths
    (`FOLDER_AMBIGUOUS`); a feature that is no folder is `FOLDER_NOT_FOUND`. `update_map_feature` moves a feature or a whole
    folder into another folder (a folder moved into itself or beneath itself is `FOLDER_CYCLE`).
-9. **Moving to the top level: `folder: null`** sends `parentId: null`, as the spec's description says (`null = root`) while its
-   type is a string only. The generated registry is unchanged (the drift check compares it); `src/lk/registry.ts` lets
-   `updateFeature`'s `parentId` be null in the bridge's own validation. **To verify** (sandbox M6c): if LegendKeeper answers
-   400, nothing is written and the answer says so; the live check "move the label out of the folder" is the owner's first test
-   of it.
+9. **Moving to the top level: `folder: null` sends `parentId: ""`, never `null`** (amended 12 November 2026 by the owner's
+   probe, see "Notes: root moves" below). The first build sent `null`, because the spec's description says "(null = root)"
+   while its type is a string only; LegendKeeper enforces the type and answered the owner's live check with a
+   `VALIDATION_ERROR`. The bridge's own plan still says "no parent" as `null` (`UpdateRequest.parentId`), and
+   `wireParent()` turns it into `""` only where a body is built. **One reading of a feature's parent**, `parentOf()` in
+   `src/maps/features.ts`: a `parentId` that is absent, `""` or `null` is the top level, anything else is the folder's id.
+   Planning, siblings, the checks inside the lock, verify (`holds`), `read_document`'s tree (`renderMap`), the cascade
+   (`descendantsOf`), `findFeature`'s `featureFolder: null`, the tool's placement and the journal's summaries all use it.
+   The generated registry is unchanged (the drift check compares it), and the bridge's own validation no longer lets
+   `updateFeature`'s `parentId` be null (the earlier amendment is removed): a raw `lk_api_write` with null is refused
+   locally, before it spends budget, as LegendKeeper would refuse it.
 10. **Links.** `link` is a page by name or id, optionally a document of it (`{ page, document }`), turned into
     `lk://resources/<id>` or `lk://resources/<id>/docs/<documentId>`. Names resolve as write targets do (C2b): an ambiguous
     name is refused with each candidate and its role (`AMBIGUOUS`), nothing is guessed; the page must be inside the AI
@@ -204,15 +210,38 @@ Each is a check in `test/sandbox/maps.ts` that prints PASS, FAIL or INCONCLUSIVE
 - **M5** a link to a page and to one of its documents is stored as sent (a page created a moment ago may need a few seconds),
   and an empty `uri` clears it.
 - **M6a** LegendKeeper stores the rank the bridge sent (and ranks sort as the bridge assumes); **M6b** an update moves a pin into
-  a folder; **M6c** `parentId: null` moves a pin out to the top level (decision 9); **M6d** a region given several polygons
-  has no stale `polygon` (INCONCLUSIVE if both are kept: which one the app draws is not known).
+  a folder; **M6c** `parentId: ""` moves a pin out to the top level, also with a midpoint rank between two siblings
+  (decision 9); **M6c-null** a raw `parentId: null` is refused by LegendKeeper, reported as **NOTED**, a fact about
+  LegendKeeper and never a failure (INCONCLUSIVE if LegendKeeper has begun to accept it: the bridge sends `""` either way);
+  **M6d** a region given several polygons has no stale `polygon` (INCONCLUSIVE if both are kept: which one the app draws is
+  not known).
 - **M7a** deleting a folder leaves its features in place; **M7b** a cascade removes a nested tree deepest first and the journal
   holds every removed feature in full.
 - **M8** replacing the image with one of another size keeps every feature's `pos` and the frame follows the new size (the basis
   of the replacement warning).
 
+## Notes: root moves (12 November 2026, the owner's live check)
+
+`update_map_feature` with `folder: null` failed live with LegendKeeper `VALIDATION_ERROR` and nothing written (the journal's
+`changes: ["rank","parentId"]` lists what was being changed, not what LegendKeeper objected to). The owner probed the real API
+on the test world (map `b8zos6tn` on `sp0ko4hnx2eihcznb944ibp4`, the probe features since deleted):
+
+| Probe                                                                                                         | Answer                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `updateFeature` with `parentId: null`                                                                         | 400, issue `parentId: "Expected string, received null"`. The schema's "(null = root)" is wrong; its `type: string` is what is enforced. |
+| `updateFeature` with `parentId: ""` and a rank                                                                | Succeeds; the feature is at the top level and reads back with `parentId: ""`.                                                           |
+| Into a folder (`parentId: <folder id>`, `rank: "a0"`), then out with `""` and `"a1V"` (between `a1` and `a2`) | Both succeed: the bridge's base-62 fractional ranks are accepted.                                                                       |
+| A feature **created** at the top level                                                                        | Reads back with **no `parentId` field at all**. One **moved** there reads back with `""`. Both mean the top level.                      |
+
+What changed (decision 9): a move to the top level sends `parentId: ""`; every reader treats absent, `""` and `null` as the
+top level (`parentOf`, one function); the mock (`test/maps/world.ts`) reads a moved feature back with `parentId: ""`, leaves a
+created one with no field and refuses `null` on `updateFeature` with the same 400 and issue, so the tests reproduce the real
+API; sandbox M6c asserts `""` works and M6c-null records the refusal as a noted fact. A create at the top level still sends no
+`parentId`. Only `updateFeature` was probed: `createFeature` was never sent a null (the bridge never does).
+
 ## Open for the owner
 
 - (Decided 12 November 2026: an image replacement that would shift features needs `confirm: true`, decision 15.)
 - The live checks on the test world are in the session summary (a test map, a pin by pixel linked to a page, a region by
-  pixels, a folder with a label, moving the label out, a cascade delete and the journal).
+  pixels, a folder with a label, moving the label out, a cascade delete and the journal). **Moving the label out with
+  `folder: null` is to be redone after the fix** (12 November 2026: the first attempt failed on `null`, see "Notes: root moves").

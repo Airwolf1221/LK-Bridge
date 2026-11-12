@@ -272,11 +272,37 @@ const slotView = (r: SlotRaw): UploadSlotRow => ({
 
 // ---------------------------------------------------------------------------------------------- the store
 
+/** A change to an upload record: `before` is undefined for a new one. */
+export type UploadChangeListener = (after: ImageUploadRow, before: ImageUploadRow | undefined) => void;
+
 export class ImageStore {
+  private readonly changeListeners = new Set<UploadChangeListener>();
+
   constructor(
     private readonly db: Db,
     readonly now: () => number,
   ) {}
+
+  /**
+   * Calls `cb` after every insert or update of an upload record, whatever made it (the service's own steps, a job
+   * ending, a proposal's approval, the dashboard): the one place every change to a staged image passes. A listener that
+   * throws is ignored (it can never break a write). Returns the unsubscribe function.
+   */
+  onChange(cb: UploadChangeListener): () => void {
+    this.changeListeners.add(cb);
+    return () => this.changeListeners.delete(cb);
+  }
+
+  private notify(after: ImageUploadRow | undefined, before: ImageUploadRow | undefined): void {
+    if (!after) return;
+    for (const cb of this.changeListeners) {
+      try {
+        cb(after, before);
+      } catch {
+        // a listener must not break the write it follows
+      }
+    }
+  }
 
   // ---- uploads
 
@@ -317,7 +343,9 @@ export class ImageStore {
         now,
         now,
       );
-    return this.upload(u.projectId, u.id)!;
+    const row = this.upload(u.projectId, u.id)!;
+    this.notify(row, undefined);
+    return row;
   }
 
   upload(projectId: string, id: string): ImageUploadRow | undefined {
@@ -410,6 +438,7 @@ export class ImageStore {
   }
 
   updateUpload(projectId: string, id: string, patch: UploadPatch): ImageUploadRow | undefined {
+    const before = this.changeListeners.size > 0 ? this.upload(projectId, id) : undefined;
     const sets: string[] = [];
     const values: unknown[] = [];
     for (const [k, v] of Object.entries(patch) as [keyof UploadPatch, unknown][]) {
@@ -432,7 +461,9 @@ export class ImageStore {
         )
         .run(...values, this.now(), projectId, id);
     }
-    return this.upload(projectId, id);
+    const after = this.upload(projectId, id);
+    if (sets.length > 0) this.notify(after, before);
+    return after;
   }
 
   // ---- slots

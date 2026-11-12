@@ -335,10 +335,13 @@ set, and back. The lifecycle record keeps each page's ORIGINAL previous place, s
 where it came from, not to where it was moved within the archive. A move into or out of either area, and between the
 two, is still refused (`POLICY_DENIED`, naming the lifecycle tool).
 
-**Promoting a set: outsiders.** The dry run of `promote_page` with `subtree: true` lists under `outsiders` any Working
-page of the same subject (`subjectOf`: its Subject row, else the name before " - ") that sits flat under
-`[INDEX] Working` outside the set, and suggests `move_resource` to bring it in first, so the owner does not approve a
-partial promotion by accident.
+**Promoting, archiving and moving a set to Working: outsiders.** The dry run (and the proposal) of `promote_page`,
+`archive_page` and `move_to_working` with `subtree: true` lists under `outsiders` any Working page of the same subject
+(`subjectOf`: its Subject row, else the name before " - ") that sits flat under `[INDEX] Working` outside the set, so the owner
+does not approve a partial change by accident: a promotion or an archive would leave it behind, still Working. Bring it in
+first with `move_resource` (to the set's index) when the set is Working; a Working page cannot be moved into an Authoritative
+set, so for one of those archive each such page with `archive_page` as well. After `move_to_working`, bring them in with
+`move_resource` once the set is Working. `unarchive_page` lists none.
 
 **Related pages.** `archive_page` and `move_to_working` list the pages that link to or mention the page (from the
 bridge's link index, with how fresh it is, and one text search marked "may be incomplete"); for a set, every page's,
@@ -432,7 +435,8 @@ link; leaving `link` out leaves it alone.
 
 **Folders.** Name the folder with `folder`; a name that matches more than one folder is refused with their paths (pass the id).
 `update_map_feature` with `folder` moves a feature, or a whole folder with its features, into another folder, and
-`folder: null` moves it out to the top level. LegendKeeper does **not** delete a folder's features when it deletes the folder,
+`folder: null` moves it out to the top level (the bridge sends `parentId: ""`, as LegendKeeper requires; a feature made at the
+top level has no `parentId` and one moved there has `""`, and both are the top level). LegendKeeper does **not** delete a folder's features when it deletes the folder,
 so `delete_map_feature` refuses a folder that holds features unless you pass `cascade: true`; the answer then lists everything
 removed, and the journal (`bridge_journal_lookup`) keeps every removed feature in full, so each can be added again. If a
 cascade stops part-way, ask again: it deletes only what is left.
@@ -469,8 +473,10 @@ transparency and every animation frame kept; a WebP is stored as it is; metadata
 `for_character { name, race }` (a folder named after the character is reused wherever it is; otherwise
 `Characters / Group / Race / Name`, created as needed; an unknown race goes to `Undetermined / Unknown`; a race that does
 not resolve fails), `for_page` (a character page gives its character's folder; any other page needs a `folder` too),
-`folder` (an id or a path such as `Characters / Beastkin / Qishen / Mehrana al-Khalid`), plus `subfolders`. Check with
-`dryRun: true` first if unsure.
+`folder` (an id or a path such as `Characters / Beastkin / Qishen / Mehrana al-Khalid`), plus `subfolders`: a list, or one
+path written like the folder chain (`"Wardrobe / Qipao"`: Qipao inside Wardrobe; an empty part, `.` and `..` are refused).
+Existing folders are reused and missing ones created. Check with `dryRun: true` first if unsure: it lists the folders that
+would be created.
 
 **Staging.** `stage: true` uploads and verifies the image but keeps it hidden in the staging folder; place it later with
 `staged_id` (and a `destination`, or the one you gave when staging). With a `propose` connection every upload is staged

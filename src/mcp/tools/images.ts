@@ -72,10 +72,13 @@ const destinationArg = z
         'The character’s folder (an existing one reused wherever it is), else Characters / Group / Race / Name.',
       ),
     subfolders: z
-      .array(name200)
-      .max(10)
+      .union([z.string().min(1).max(2000), z.array(name200).max(10)])
       .optional()
-      .describe('Literal folder names appended to the derived path, in order.'),
+      .describe(
+        'Literal folders appended to the derived path, in order: a list of names, or ONE path written like the folder chain, ' +
+          'for example "Wardrobe" or "Wardrobe / Qipao" (Qipao inside Wardrobe). An empty part, "." and ".." are refused. ' +
+          'Existing folders are reused, missing ones created in order, a non-folder of the same name is a conflict.',
+      ),
   })
   .strict();
 
@@ -251,7 +254,7 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
         ', upload_id (from prepare_image_upload: best for agents with a shell), or staged_id (place a staged image). ' +
         `PNG, JPEG, GIF or WebP up to ${max} bytes, decided by the file's own bytes. ` +
         'destination: folder (id or path), for_page, or for_character { name, race } (the character’s folder, else ' +
-        'Characters / Group / Race / Name, missing folders created), plus subfolders. stage: true stages it instead. ' +
+        'Characters / Group / Race / Name, missing folders created), plus subfolders (a list, or one path such as "Wardrobe / Qipao"). stage: true stages it instead. ' +
         'The same original sent again returns the existing asset (deduplicated: true). At scope propose the image is ' +
         'staged and its placement is a proposal for the owner. Example: { "upload_id": "upl_…", "destination": ' +
         '{ "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "project": "test" }. Cost: one write per ' +

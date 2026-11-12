@@ -21,7 +21,7 @@ const stored = (id: string, doc = w.md.map) => w.features(doc).find((f) => f.id 
 const order = (parent: string | null, doc = w.md.map) =>
   w
     .features(doc)
-    .filter((f) => (f.parentId ?? null) === parent)
+    .filter((f) => (typeof f.parentId === 'string' && f.parentId !== '' ? f.parentId : null) === parent)
     .sort((a, b) => (String(a.rank) < String(b.rank) ? -1 : 1))
     .map((f) => f.name as string);
 const writes = () => w.seen.filter((l) => !l.startsWith('GET'));
@@ -112,15 +112,102 @@ describe('moving between folders', () => {
     expect(order(w.f.Cities!).at(-1)).toBe('Frost Altar');
     const out = await update({ feature: 'Frost Altar', folder: null });
     expect(out.body, out.text).toMatchObject({ status: 'written', verified: true });
-    expect(stored(w.f['Frost Altar']!).parentId).toBeUndefined();
+    // As the real API does (the owner's probe of 12 November 2026): it reads back with `parentId: ""`.
+    expect(stored(w.f['Frost Altar']!).parentId).toBe('');
     expect(order(null).at(-1)).toBe('Frost Altar');
-    // the PATCH sent a null parent
+    // the PATCH sent an empty parent, never null
     const patch = w.sent.filter((c) => c.method === 'PATCH').at(-1)!;
-    expect(patch.body).toMatchObject({ parentId: null });
+    expect(patch.body).toMatchObject({ parentId: '' });
+    expect(patch.body.parentId).not.toBeNull();
     // putting it back into a folder by id, after a named sibling
     const back = await update({ feature: w.f['Frost Altar'], folder: w.f.Shrines, after: 'Torii Gate' });
     expect(back.body.status, back.text).toBe('written');
     expect(order(w.f.Shrines!).slice(0, 3)).toEqual(['Torii Gate', 'Frost Altar', 'Hollow Shrine (old)']);
+  });
+
+  it('moves to the top level beside a named sibling, after or before, with a rank between the real neighbours', async () => {
+    // top level before: ..., Ruins(a2), Qishen lands(a3), Weeping Sea(a4), Old Road(a5), Arkona(a6), Secret(a7)
+    const a = await update({ feature: 'Frost Altar', folder: null, after: 'Qishen lands' });
+    expect(a.body, a.text).toMatchObject({ status: 'written', verified: true });
+    expect(stored(w.f['Frost Altar']!)).toMatchObject({ parentId: '' });
+    let names = order(null);
+    expect(names.indexOf('Frost Altar')).toBe(names.indexOf('Qishen lands') + 1);
+    expect(
+      String(stored(w.f['Frost Altar']!).rank) > 'a3' && String(stored(w.f['Frost Altar']!).rank) < 'a4',
+    ).toBe(true);
+    const sent = w.sent.filter((c) => c.method === 'PATCH').at(-1)!;
+    expect(sent.body).toMatchObject({ parentId: '' });
+    // out of a folder again, this time before a top-level feature (one that was created at the top level: no field)
+    const into = await update({ feature: 'Frost Altar', folder: 'Cities' });
+    expect(into.body.status, into.text).toBe('written');
+    expect(stored(w.f['Frost Altar']!).parentId).toBe(w.f.Cities);
+    const b = await update({ feature: 'Frost Altar', folder: null, before: 'Weeping Sea' });
+    expect(b.body, b.text).toMatchObject({ status: 'written', verified: true });
+    names = order(null);
+    expect(names.indexOf('Frost Altar')).toBe(names.indexOf('Weeping Sea') - 1);
+    expect(stored(w.f['Weeping Sea']!).parentId).toBeUndefined();
+    expect(stored(w.f['Frost Altar']!).parentId).toBe('');
+    // a sibling that lives in the folder is not a sibling at the top level
+    const wrong = await update({ feature: w.f['Hollow Shrine'], folder: null, after: 'Isar Harbour' });
+    expect(wrong.body.error?.code).toBe('SIBLING_NOT_FOUND');
+  });
+
+  it('a feature moved to the top level (parentId "") is top level everywhere: siblings, names, a dry run, a second move', async () => {
+    const out = await update({ feature: 'Torii Gate', folder: null });
+    expect(out.body.status, out.text).toBe('written');
+    expect(stored(w.f['Torii Gate']!).parentId).toBe('');
+    // asking for the top level again changes nothing and sends nothing
+    const before = writes().length;
+    const again = await update({ feature: 'Torii Gate', folder: null });
+    expect(again.body.status, again.text).toBe('no_change');
+    expect(writes().length).toBe(before);
+    // found by name at the top level only; not in its old folder
+    const top = await update({ feature: 'Torii Gate', featureFolder: null, hidden: true });
+    expect(top.body.status, top.text).toBe('written');
+    const old = await update({ feature: 'Torii Gate', featureFolder: 'Shrines', hidden: false });
+    expect(old.body.error?.code).toBe('FEATURE_NOT_FOUND');
+    // a sibling named for placement is found among the top-level features, "" or no field alike
+    const place = await update({ feature: 'Old Road', after: 'Torii Gate' });
+    expect(place.body.status, place.text).toBe('written');
+    // a dry run into a folder shows the id it would send; back out it would send ""
+    const dryIn = await update({ feature: 'Torii Gate', folder: 'Cities', dryRun: true });
+    expect(dryIn.body.wouldSend).toMatchObject({ parentId: w.f.Cities });
+    const into = await update({ feature: 'Torii Gate', folder: 'Cities' });
+    expect(into.body.status, into.text).toBe('written');
+    const dryOut = await update({ feature: 'Torii Gate', folder: null, dryRun: true });
+    expect(dryOut.body, dryOut.text).toMatchObject({ status: 'dry_run', wouldSend: { parentId: '' } });
+  });
+
+  it('no request of the whole run ever sent a null parent, and the model refuses one with LegendKeeper’s 400', () => {
+    const nulls = w.sent.filter((c) => 'parentId' in c.body && c.body.parentId === null);
+    expect(nulls).toEqual([]);
+    // the model, as the real API answered the probe: 400, the issue named, nothing written
+    const path = `/api/v3/projects/x/resources/${M.atlas}/docs/${w.md.map}/features/${w.f.Arkona}`;
+    const handler = [...w.overrides].find(([re]) => re.test(path))![1];
+    const before = JSON.stringify(stored(w.f.Arkona!));
+    const r = handler({
+      method: 'PATCH',
+      path,
+      query: {},
+      body: { parentId: null, rank: 'a1' },
+      headers: {},
+    })!;
+    expect(r.status).toBe(400);
+    expect(r.body).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      errors: [{ path: 'parentId', message: 'Expected string, received null' }],
+    });
+    expect(JSON.stringify(stored(w.f.Arkona!))).toBe(before);
+    // and "" is accepted
+    const ok = handler({
+      method: 'PATCH',
+      path,
+      query: {},
+      body: { parentId: '', rank: 'a9' },
+      headers: {},
+    })!;
+    expect(ok.status).toBe(200);
+    expect(stored(w.f.Arkona!).parentId).toBe('');
   });
 
   it('moves a folder with its features, and refuses a folder moved into itself or beneath itself', async () => {
