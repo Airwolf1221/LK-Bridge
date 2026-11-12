@@ -20,6 +20,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type Server } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
+import sharp from 'sharp';
 import { join } from 'node:path';
 import { parseOutboundPortAllowlist } from '../../src/auth/ports.js';
 import {
@@ -207,9 +208,14 @@ export async function snapshotsWorld(
     served.set(aid, bytes);
     return aid;
   };
-  addImage('Weeping Sea', fA, Buffer.from('RIFF....WEBPVP8 the weeping sea'), S.imgSea);
-  addImage('Crest', fA, Buffer.from('RIFF....WEBPVP8 the crest of Ashgate'), S.imgCrest);
-  addImage('Arkona map', fB, Buffer.from('RIFF....WEBPVP8 a map of Arkona, 2048 by 1024'), S.imgMap);
+  // Real (tiny) WebP files, each its own colour: a restored image goes through D3's converter, which decodes them.
+  const webp = (r: number, g: number, b: number) =>
+    sharp({ create: { width: 8, height: 4, channels: 3, background: { r, g, b } } })
+      .webp()
+      .toBuffer();
+  addImage('Weeping Sea', fA, await webp(20, 60, 140), S.imgSea);
+  addImage('Crest', fA, await webp(180, 30, 30), S.imgCrest);
+  addImage('Arkona map', fB, await webp(40, 140, 60), S.imgMap);
   w.stack.db.prepare('DELETE FROM asset_items WHERE project_id = ?').run(PROJECT);
   w.stack.db.prepare('DELETE FROM asset_folders WHERE project_id = ?').run(PROJECT);
   // The bridge's models again (the asset tree from the small library; the repository tree already has the Atlas).

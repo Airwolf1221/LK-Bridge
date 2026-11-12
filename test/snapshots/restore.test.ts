@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-call -- parsed tool results */
 /**
  * v2 E1a (ADR 0042): restore_snapshot, always a proposal (here at scope `write`), approved by the owner and run through
  * the ordinary machinery: every document type, the sidebar, a deleted page (undeleted, or recreated with its original or
@@ -516,5 +517,73 @@ describe('list_snapshots and snapshot_diff', () => {
     expect(between.body).toMatchObject({ added: 2, reads: 0 });
     const sb = await call('snapshot_diff', { page: S.atlas, piece: 'sidebar', from: snap });
     expect(sb.body.identical).toBe(true);
+  });
+});
+
+describe('restore_snapshot: a deleted image', () => {
+  it('comes back as a new asset (staged now, placed by the proposal), and the pages that showed it are updated when asked', async () => {
+    const snap = await setup();
+    const oldUrl = w!.url(S.imgSea);
+    const del = await call('lk_api_write', {
+      operationId: 'deleteAsset',
+      params: { path: { assetId: S.imgSea } },
+    });
+    expect(del.isError, JSON.stringify(del.body)).toBe(false);
+    const dry = await call('restore_snapshot', {
+      snapshot: snap,
+      scope: 'image',
+      asset: S.imgSea,
+      dryRun: true,
+    });
+    expect(dry.body).toMatchObject({
+      status: 'dry_run',
+      old: { assetId: S.imgSea, name: 'Weeping Sea', url: oldUrl },
+    });
+    expect(dry.body.references).toEqual([
+      expect.objectContaining({
+        pageId: S.atlas,
+        documents: [expect.objectContaining({ what: 'image blocks' }) as unknown],
+      }) as unknown,
+    ]);
+    const r = await call('restore_snapshot', {
+      snapshot: snap,
+      scope: 'image',
+      asset: S.imgSea,
+      updateReferences: true,
+    });
+    expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
+    const newId = r.body.newAsset.id as string;
+    expect(newId).not.toBe(S.imgSea);
+    // Staged: in the library, hidden, until the owner approves.
+    expect(w!.assets.assets.get(newId)).toMatchObject({ isHidden: true });
+    expect((await approve(r)).state).toBe('executed');
+    expect(w!.assets.assets.get(newId)).toMatchObject({
+      isHidden: false,
+      name: 'Weeping Sea',
+      folderId: S.folderA,
+    });
+    const img = mainBlocks().find((b) => b.id === 'aimg') as unknown as { url: string };
+    expect(img.url).toBe(w!.url(newId));
+    // The same bytes: the snapshot store's object.
+    expect(w!.sha(newId)).toBe(w!.sha(S.imgSea));
+  });
+
+  it('without updateReferences, the pages are listed and left as they are', async () => {
+    const snap = await setup();
+    await call('lk_api_write', { operationId: 'deleteAsset', params: { path: { assetId: S.imgSea } } });
+    const r = await call('restore_snapshot', { snapshot: snap, scope: 'image', asset: S.imgSea });
+    expect(r.body.notes).toEqual([
+      expect.objectContaining({ what: '1 page(s) refer to the old URL' }) as unknown,
+    ]);
+    expect((await approve(r)).state).toBe('executed');
+    expect((mainBlocks().find((b) => b.id === 'aimg') as unknown as { url: string }).url).toBe(
+      w!.url(S.imgSea),
+    );
+  });
+
+  it('an image still in the library is refused', async () => {
+    const snap = await setup();
+    const r = await call('restore_snapshot', { snapshot: snap, scope: 'image', asset: S.imgSea });
+    expect(r.body.error).toMatchObject({ code: 'IMAGE_NOT_DELETED' });
   });
 });

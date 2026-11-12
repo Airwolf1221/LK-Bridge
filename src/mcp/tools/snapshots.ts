@@ -36,6 +36,7 @@ import {
 } from '../../snapshots/canonical.js';
 import type { PieceRow } from '../../snapshots/db.js';
 import { stateAt } from '../../snapshots/restore.js';
+import { restoreImage } from '../../snapshots/image-restore.js';
 
 type Obj = Record<string, unknown>;
 const ID_ONLY = /^(lk:\/\/resources\/)?([a-z][0-9a-z]{5,31})$/;
@@ -354,16 +355,37 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
       'inline icons, board pages) and what is left alone (documents added since). A restore never changes a page’s ' +
       'lifecycle state (refused: use the lifecycle tools); one that makes something canon needs the owner’s canonical ' +
       'approval. A deleted page is undeleted while LegendKeeper keeps it (its content then follows as a second proposal), ' +
-      'or recreated under its snapshot parent (`mode: "recreate"`; `ids: "new"` when its old id is refused). `dryRun: ' +
+      'or recreated under its snapshot parent (`mode: "recreate"`; `ids: "new"` when its old id is refused). A deleted ' +
+      'image (`scope: "image"`, `asset`: its old id) comes back as a NEW asset with a new URL: it is staged (hidden) at ' +
+      'once and the proposal places it; `updateReferences: true` also updates the pages that showed the old URL. `dryRun: ' +
       'true` shows the plan and its diff and proposes nothing. Cost to plan: 1–2 reads plus the documents’ own reads.',
     inputSchema: z.object({
-      page: z.string().min(1).max(500).describe('The page: a name or id (a deleted page: its id).'),
+      page: z
+        .string()
+        .min(1)
+        .max(500)
+        .optional()
+        .describe('The page: a name or id (a deleted page: its id). Not used for scope "image".'),
       snapshot: z
         .string()
         .min(1)
         .max(64)
         .describe('The snapshot to restore to (list_snapshots gives its id).'),
-      scope: z.enum(['page', 'sidebar', 'document', 'deleted']).describe('What to restore.'),
+      scope: z.enum(['page', 'sidebar', 'document', 'deleted', 'image']).describe('What to restore.'),
+      asset: z
+        .string()
+        .min(1)
+        .max(64)
+        .optional()
+        .describe(
+          'For scope "image": the deleted image’s old asset id (it comes back as a new asset, with a new URL).',
+        ),
+      updateReferences: z
+        .boolean()
+        .optional()
+        .describe(
+          'For scope "image": also update the pages that referred to the old URL (page documents and map images).',
+        ),
       document: z
         .string()
         .min(1)
@@ -394,6 +416,12 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
         if (!restores)
           return errorResult(
             { code: 'TOOL_UNAVAILABLE', message: 'Snapshots are not running in this bridge.' },
+            pd,
+          );
+        if (args.scope === 'image') return imageScope(pd, args, mctx);
+        if (!args.page)
+          return errorResult(
+            { code: 'INVALID_PARAMS', message: `Scope "${args.scope}" needs page (a name or id).` },
             pd,
           );
         const page = pageOf(pd, args.page);
@@ -487,6 +515,78 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
         }
       }),
   });
+}
+
+/** Scope "image": a deleted image back as a new asset (staged now, placed by the proposal), its references optional. */
+async function imageScope(
+  pd: ProjectDeps,
+  args: {
+    snapshot: string;
+    asset?: string | undefined;
+    updateReferences?: boolean | undefined;
+    dryRun?: boolean | undefined;
+  },
+  mctx: Parameters<typeof mcpOrigin>[0],
+) {
+  const s = pd.services!;
+  if (!args.asset)
+    return errorResult(
+      { code: 'INVALID_PARAMS', message: 'Scope "image" needs asset: the deleted image’s old asset id.' },
+      pd,
+    );
+  if (!s.images || !s.snapshots)
+    return errorResult(
+      { code: 'TOOL_UNAVAILABLE', message: 'The image pipeline is not running in this bridge.' },
+      pd,
+    );
+  try {
+    const r = await restoreImage(
+      {
+        svc: s.snapshots,
+        engine: pd.engine,
+        images: s.images,
+        read: s.snapshots.reader(pd.project.id, 'P1', { wait: false }),
+        asset: (pid, id) => {
+          const a = s.assets.queries.asset(pid, id).data;
+          return a ? { id: a.id, url: a.url, folderId: a.folderId } : null;
+        },
+        folderLive: (pid, id) => s.assets.queries.folder(pid, id).data !== null,
+        pageName: (pid, id) => s.tree.queries.node(pid, id).data?.rawName ?? null,
+      },
+      {
+        projectId: pd.project.id,
+        snapshotId: args.snapshot,
+        assetId: args.asset,
+        updateReferences: args.updateReferences === true,
+      },
+      mcpOrigin(mctx, 'restore_snapshot'),
+      { ...(args.dryRun ? { dryRun: true } : {}) },
+    );
+    if (r.status === 'dry_run') return render({ ...r, scope: 'image' }, pd);
+    if (r.status === 'staging')
+      return render(
+        {
+          ...r,
+          scope: 'image',
+          hint: 'The image is being staged (uploaded and hidden) first; call restore_snapshot again with the same arguments once its job ends (bridge_job_status). It is not uploaded twice.',
+        },
+        pd,
+      );
+    return render(
+      {
+        ...r,
+        scope: 'image',
+        ...canonicalBody(
+          r,
+          'A restore is always a proposal (whatever your scope): the image is staged (hidden) and waits for the owner.',
+        ),
+      },
+      pd,
+    );
+  } catch (e) {
+    if (e instanceof RestoreError) return errorResult({ code: e.code, message: e.message, ...e.details }, pd);
+    return errorFromThrown(e, pd);
+  }
 }
 
 export function snapshotTools(deps: ToolDeps): McpToolProvider[] {
