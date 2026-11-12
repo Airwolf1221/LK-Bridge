@@ -7,7 +7,22 @@ import { Link } from '../router';
 
 /** Maintenance Jobs (PLAN §8 page 6, docs/maintenance.md): the registry, toggles, schedule editing and Run now. */
 
-export type Schedule = { kind: 'interval'; everySeconds: number } | { kind: 'daily'; time: string };
+export type Weekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+export type Schedule =
+  | { kind: 'interval'; everySeconds: number }
+  | { kind: 'daily'; time: string }
+  // v2 E1a: a day of the week and a time (the weekly full snapshot).
+  | { kind: 'weekly'; day: Weekday; time: string };
+
+const WEEKDAYS: [Weekday, string][] = [
+  ['mon', 'Monday'],
+  ['tue', 'Tuesday'],
+  ['wed', 'Wednesday'],
+  ['thu', 'Thursday'],
+  ['fri', 'Friday'],
+  ['sat', 'Saturday'],
+  ['sun', 'Sunday'],
+];
 
 export interface MaintenanceRun {
   at: number;
@@ -305,10 +320,16 @@ function ScheduleEditor({ job: j, onDone }: { job: MaintenanceJob; onDone: () =>
   const [kind, setKind] = useState<Schedule['kind']>(j.schedule.kind);
   const [value, setValue] = useState(String(start.value));
   const [unit, setUnit] = useState(start.secs);
-  const [time, setTime] = useState(j.schedule.kind === 'daily' ? j.schedule.time : '03:30');
+  const [time, setTime] = useState(j.schedule.kind === 'interval' ? '03:30' : j.schedule.time);
+  const [day, setDay] = useState<Weekday>(j.schedule.kind === 'weekly' ? j.schedule.day : 'sun');
   const n = Number(value);
   const intervalOk = Number.isInteger(n) && n * unit >= 10 && n * unit <= 31 * 86_400;
-  const schedule: Schedule = kind === 'interval' ? { kind, everySeconds: n * unit } : { kind, time };
+  const schedule: Schedule =
+    kind === 'interval'
+      ? { kind, everySeconds: n * unit }
+      : kind === 'weekly'
+        ? { kind, day, time }
+        : { kind, time };
   const valid = kind === 'interval' ? intervalOk : /^([01]\d|2[0-3]):[0-5]\d$/.test(time);
   const save = (s: Schedule | null) =>
     run(() => api.put(`/maintenance/${j.id}/schedule`, { schedule: s }), `Schedule of ${j.name} saved.`).then(
@@ -335,6 +356,7 @@ function ScheduleEditor({ job: j, onDone }: { job: MaintenanceJob; onDone: () =>
             >
               <option value="interval">at a fixed interval</option>
               <option value="daily">once a day, at a time</option>
+              <option value="weekly">once a week, on a day at a time</option>
             </select>
           </div>
           {kind === 'interval' ? (
@@ -361,10 +383,29 @@ function ScheduleEditor({ job: j, onDone }: { job: MaintenanceJob; onDone: () =>
               </div>
             </>
           ) : (
-            <div>
-              <label htmlFor={`time-${j.id}`}>Time (London, 24-hour)</label>
-              <input id={`time-${j.id}`} type="time" value={time} onChange={(e) => setTime(e.target.value)} />
-            </div>
+            <>
+              {kind === 'weekly' && (
+                <div>
+                  <label htmlFor={`day-${j.id}`}>Day</label>
+                  <select id={`day-${j.id}`} value={day} onChange={(e) => setDay(e.target.value as Weekday)}>
+                    {WEEKDAYS.map(([v, label]) => (
+                      <option key={v} value={v}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <div>
+                <label htmlFor={`time-${j.id}`}>Time (London, 24-hour)</label>
+                <input
+                  id={`time-${j.id}`}
+                  type="time"
+                  value={time}
+                  onChange={(e) => setTime(e.target.value)}
+                />
+              </div>
+            </>
           )}
           <Button variant="primary" busy={busy} disabled={!valid} type="submit">
             Save schedule
@@ -381,8 +422,8 @@ function ScheduleEditor({ job: j, onDone }: { job: MaintenanceJob; onDone: () =>
           </p>
         )}
         <p className="muted small-text">
-          Daily times follow the London clock, including the change to and from summer time. The next run is
-          counted from now; a changed schedule never queues missed runs.
+          Daily and weekly times follow the London clock, including the change to and from summer time. The
+          next run is counted from now; a changed schedule never queues missed runs.
         </p>
       </fieldset>
     </form>

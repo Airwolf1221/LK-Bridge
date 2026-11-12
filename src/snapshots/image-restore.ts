@@ -9,7 +9,9 @@
  * a lane's image, a board asset) is listed for the owner to change by hand.
  */
 import { randomBytes } from 'node:crypto';
+import type { AssetService } from '../assets/index.js';
 import type { ImageService } from '../images/service.js';
+import type { TreeService } from '../tree/index.js';
 import { verifyStep } from '../jobs/internal-steps.js';
 import type { JobEngine, JobOrigin, StepSpec } from '../jobs/index.js';
 import { replaceUrls, stripVersions, type LibraryPiece } from './canonical.js';
@@ -33,6 +35,29 @@ export interface ImageRestoreDeps {
   ) => { id: string; url: string | null; folderId: string | null } | null;
   readonly folderLive: (projectId: string, folderId: string) => boolean;
   readonly pageName: (projectId: string, pageId: string) => string | null;
+}
+
+/** The deps from the running bridge's services (the snapshot tools and the dashboard build them the same way). */
+export function imageRestoreDeps(o: {
+  readonly svc: SnapshotService;
+  readonly engine: JobEngine;
+  readonly images: ImageService;
+  readonly assets: Pick<AssetService, 'queries'>;
+  readonly tree: Pick<TreeService, 'queries'>;
+  readonly projectId: string;
+}): ImageRestoreDeps {
+  return {
+    svc: o.svc,
+    engine: o.engine,
+    images: o.images,
+    read: o.svc.reader(o.projectId, 'P1', { wait: false }),
+    asset: (pid, id) => {
+      const a = o.assets.queries.asset(pid, id).data;
+      return a ? { id: a.id, url: a.url, folderId: a.folderId } : null;
+    },
+    folderLive: (pid, id) => o.assets.queries.folder(pid, id).data !== null,
+    pageName: (pid, id) => o.tree.queries.node(pid, id).data?.rawName ?? null,
+  };
 }
 
 export interface ImageRestoreInput {

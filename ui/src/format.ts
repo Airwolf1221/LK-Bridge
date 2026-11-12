@@ -45,8 +45,17 @@ export function fmtDuration(ms: number): string {
   return `${Math.floor(h / 24)} d ${h % 24} h`;
 }
 
+/** Bytes in binary units (v2 E1a added GB and TB: the snapshot store and the disk's free space). */
 export const fmtBytes = (n: number): string =>
-  n < 1024 ? `${n} B` : n < 1024 ** 2 ? `${(n / 1024).toFixed(1)} KB` : `${(n / 1024 ** 2).toFixed(1)} MB`;
+  n < 1024
+    ? `${n} B`
+    : n < 1024 ** 2
+      ? `${(n / 1024).toFixed(1)} KB`
+      : n < 1024 ** 3
+        ? `${(n / 1024 ** 2).toFixed(1)} MB`
+        : n < 1024 ** 4
+          ? `${(n / 1024 ** 3).toFixed(1)} GB`
+          : `${(n / 1024 ** 4).toFixed(1)} TB`;
 
 export const pct = (used: number, limit: number | null): number =>
   limit === null || limit <= 0 ? 0 : Math.min(100, Math.round((used / limit) * 100));

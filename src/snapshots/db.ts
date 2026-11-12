@@ -373,20 +373,23 @@ export class SnapshotDb {
     const like = o.query ? `%${o.query.replace(/[%_]/g, (c) => `\\${c}`)}%` : null;
     const rows = this.db
       .prepare(
-        `SELECT page_id, MAX(taken_at) AS last_at,
-           (SELECT name FROM snapshot_pieces q WHERE q.project_id = p.project_id AND q.page_id = p.page_id AND q.name IS NOT NULL
-              AND q.piece IN ('resource', 'sidebar', 'deleted') ORDER BY q.taken_at DESC LIMIT 1) AS name,
-           (SELECT piece FROM snapshot_pieces q WHERE q.project_id = p.project_id AND q.page_id = p.page_id
-              AND q.piece IN ('resource', 'deleted') ORDER BY q.taken_at DESC LIMIT 1) AS last_piece
-         FROM snapshot_pieces p WHERE project_id = ? AND page_id <> '*'
-         GROUP BY page_id
-         ${like ? `HAVING name LIKE ? ESCAPE '\\'` : ''}
+        // The page's latest name is a subquery's; it is filtered in an outer query, because inside the grouped one
+        // `name` would be the table's own column (a document's name, of an arbitrary row).
+        `SELECT * FROM (
+           SELECT page_id, MAX(taken_at) AS last_at,
+             (SELECT name FROM snapshot_pieces q WHERE q.project_id = p.project_id AND q.page_id = p.page_id AND q.name IS NOT NULL
+                AND q.piece IN ('resource', 'sidebar', 'deleted') ORDER BY q.taken_at DESC LIMIT 1) AS page_name,
+             (SELECT piece FROM snapshot_pieces q WHERE q.project_id = p.project_id AND q.page_id = p.page_id
+                AND q.piece IN ('resource', 'deleted') ORDER BY q.taken_at DESC LIMIT 1) AS last_piece
+           FROM snapshot_pieces p WHERE project_id = ? AND page_id <> '*'
+           GROUP BY page_id)
+         ${like ? `WHERE page_name LIKE ? ESCAPE '\\'` : ''}
          ORDER BY last_at DESC LIMIT ?`,
       )
       .all(...(like ? [projectId, like] : [projectId]), o.limit ?? 200) as Raw[];
     return rows.map((r) => ({
       pageId: String(r.page_id),
-      name: strOrNull(r.name),
+      name: strOrNull(r.page_name),
       lastAt: num(r.last_at),
       deleted: r.last_piece === 'deleted',
     }));

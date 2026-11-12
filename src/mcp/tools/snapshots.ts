@@ -26,19 +26,10 @@ import {
   type ToolDeps,
 } from './shape.js';
 import { RestoreError } from '../../snapshots/restore.js';
-import { documentPieceOf } from '../../snapshots/capture.js';
-import { diffText, renderDocument, renderSidebar, renderResource } from '../../snapshots/diff.js';
-import {
-  sidebarPiece,
-  type DocumentPiece,
-  type ResourcePiece,
-  type SidebarPiece,
-} from '../../snapshots/canonical.js';
-import type { PieceRow } from '../../snapshots/db.js';
-import { stateAt } from '../../snapshots/restore.js';
-import { restoreImage } from '../../snapshots/image-restore.js';
+import { diffText } from '../../snapshots/diff.js';
+import { historyOf, pieceFilterOf, pieceNow, pieceThen } from '../../snapshots/history.js';
+import { imageRestoreDeps, restoreImage } from '../../snapshots/image-restore.js';
 
-type Obj = Record<string, unknown>;
 const ID_ONLY = /^(lk:\/\/resources\/)?([a-z][0-9a-z]{5,31})$/;
 
 const pieceArg = z
@@ -75,65 +66,6 @@ function pageOf(
   return { ok: false, result: rc.result };
 }
 
-/** The piece filter: `sidebar`, `settings` (the resource), a document (by id or by a name the page's snapshots know). */
-function pieceFilter(
-  pd: ProjectDeps,
-  pageId: string,
-  piece: string | undefined,
-):
-  | { piece?: 'resource' | 'sidebar' | 'document'; ref?: string; label: string }
-  | { error: string; documents: unknown[] } {
-  if (!piece) return { label: 'everything' };
-  const p = piece.trim();
-  if (p.toLowerCase() === 'sidebar') return { piece: 'sidebar', label: 'sidebar' };
-  if (p.toLowerCase() === 'settings' || p.toLowerCase() === 'resource')
-    return { piece: 'resource', label: 'page settings' };
-  const rows = pd.services!.snapshots!.index.pageHistory(pd.project.id, pageId, {
-    piece: 'document',
-    limit: 5000,
-  });
-  const docs = new Map<string, string | null>();
-  for (const r of rows)
-    if (r.piece === 'document' || r.piece === 'document-deleted')
-      if (!docs.has(r.ref) || (r.name && !docs.get(r.ref))) docs.set(r.ref, r.name);
-  if (docs.has(p)) return { piece: 'document', ref: p, label: `document ${docs.get(p) ?? p}` };
-  const byName = [...docs].filter(([, n]) => n !== null && n.toLowerCase() === p.toLowerCase());
-  if (byName.length === 1)
-    return { piece: 'document', ref: byName[0]![0], label: `document ${byName[0]![1]}` };
-  return {
-    error:
-      byName.length > 1
-        ? `Several documents of this page were named “${p}”; give its id.`
-        : `No document “${p}” in this page’s snapshots.`,
-    documents: [...docs].map(([id, name]) => ({ id, name })),
-  };
-}
-
-function rowView(r: PieceRow, prev: PieceRow | undefined) {
-  const change =
-    r.piece === 'deleted' || r.piece === 'document-deleted'
-      ? 'deleted'
-      : r.sha256 === null
-        ? 'missing (a partial snapshot)'
-        : !prev
-          ? 'first seen'
-          : prev.piece === 'deleted' || prev.piece === 'document-deleted'
-            ? 'back'
-            : prev.sha256 === r.sha256
-              ? 'unchanged'
-              : 'changed';
-  return {
-    piece:
-      r.piece === 'document' || r.piece === 'document-deleted'
-        ? `document ${r.name ?? r.ref}`
-        : r.piece === 'resource'
-          ? 'settings'
-          : r.piece,
-    ...(r.piece === 'document' || r.piece === 'document-deleted' ? { documentId: r.ref } : {}),
-    change,
-  };
-}
-
 function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
   return defineTool({
     name: 'list_snapshots',
@@ -167,51 +99,20 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
           );
         const page = pageOf(pd, args.page);
         if (!page.ok) return page.result;
-        const f = pieceFilter(pd, page.id, args.piece);
+        const f = pieceFilterOf(svc, pd.project.id, page.id, args.piece);
         if ('error' in f)
           return errorResult({ code: 'NOT_FOUND', message: f.error, documents: f.documents }, pd);
-        const rows = svc.index.pageHistory(pd.project.id, page.id, {
-          ...(f.piece ? { piece: f.piece } : {}),
-          ...(f.ref !== undefined ? { ref: f.ref } : {}),
-          limit: 5000,
-        });
-        // Group by snapshot, newest first; each piece compared with the same piece's previous row.
-        const asc = [...rows].reverse();
-        const prevOf = new Map<PieceRow, PieceRow | undefined>();
-        const lastBy = new Map<string, PieceRow>();
-        for (const r of asc) {
-          const k =
-            r.piece === 'deleted' ? '*' : `${r.piece === 'document-deleted' ? 'document' : r.piece}:${r.ref}`;
-          const prev = r.piece === 'deleted' ? undefined : (lastBy.get(k) ?? lastBy.get('*'));
-          prevOf.set(r, prev);
-          lastBy.set(k, r);
-          if (r.piece === 'deleted') for (const key of [...lastBy.keys()]) lastBy.set(key, r);
-        }
-        const bySnap = new Map<string, PieceRow[]>();
-        for (const r of rows) bySnap.set(r.snapshotId, [...(bySnap.get(r.snapshotId) ?? []), r]);
         const limit = args.limit ?? 30;
-        const snapshots = [...bySnap.entries()].slice(0, limit).map(([id, list]) => {
-          const s = svc.index.snapshot(id);
-          return {
-            snapshot: id,
-            takenAt: new Date(list[0]!.takenAt).toISOString(),
-            kind: list[0]!.kind,
-            ...(list[0]!.state === 'partial'
-              ? { partial: true, ...(s?.damaged ? { damaged: s.damaged } : {}) }
-              : {}),
-            ...(s?.trigger && typeof s.trigger.tool === 'string' ? { madeBy: s.trigger.tool } : {}),
-            pieces: list.map((r) => rowView(r, prevOf.get(r))),
-          };
-        });
+        const h = historyOf(svc, pd.project.id, page.id, f, limit);
         return render(
           {
             page: { id: page.id, name: page.name, deleted: !page.live },
             of: f.label,
-            count: bySnap.size,
-            snapshots,
-            ...(bySnap.size > limit ? { more: bySnap.size - limit } : {}),
+            count: h.count,
+            snapshots: h.snapshots,
+            ...(h.more ? { more: h.more } : {}),
             hint:
-              bySnap.size === 0
+              h.count === 0
                 ? 'The bridge holds no snapshot of this page yet (the weekly full snapshot takes every page; every bridge write takes a change snapshot).'
                 : 'snapshot_diff shows what changed; restore_snapshot proposes bringing a snapshot back (the owner approves it).',
           },
@@ -219,58 +120,6 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
         );
       }),
   });
-}
-
-async function pieceNow(
-  pd: ProjectDeps,
-  pageId: string,
-  f: { piece?: 'resource' | 'sidebar' | 'document'; ref?: string },
-): Promise<{ text: string; reads: number }> {
-  const svc = pd.services!.snapshots!;
-  const read = svc.reader(pd.project.id, 'P1');
-  let reads = 1;
-  const res = (await read('getResource', { path: { resourceId: pageId } })) as Obj | undefined;
-  if (!res) return { text: '(the page is deleted)', reads };
-  if (f.piece === 'sidebar') return { text: renderSidebar(sidebarPiece(res.properties ?? [])), reads };
-  if (f.piece === 'resource') {
-    const { resourcePiece } = await import('../../snapshots/canonical.js');
-    return { text: renderResource(resourcePiece(res)), reads };
-  }
-  const doc = (Array.isArray(res.documents) ? (res.documents as Obj[]) : []).find(
-    (d) => d.id === f.ref && d.deletedAt == null,
-  );
-  if (!doc) return { text: '(the document is not on the page now)', reads };
-  const counted = async (op: string, params: Parameters<typeof read>[1]) => {
-    reads++;
-    return read(op, params);
-  };
-  const piece = (await documentPieceOf(counted, pageId, doc)) as DocumentPiece | undefined;
-  return { text: renderDocument(piece ?? null), reads };
-}
-
-async function pieceThen(
-  pd: ProjectDeps,
-  pageId: string,
-  f: { piece?: 'resource' | 'sidebar' | 'document'; ref?: string },
-  snapshotId: string,
-): Promise<string> {
-  const svc = pd.services!.snapshots!;
-  const s = svc.index.snapshot(snapshotId);
-  if (!s || s.projectId !== pd.project.id)
-    throw new RestoreError('SNAPSHOT_NOT_FOUND', `No snapshot ${snapshotId} of this project.`);
-  const row = stateAt(svc, pd.project.id, pageId, f.piece!, f.ref ?? '', { id: s.id, takenAt: s.takenAt });
-  if (!row)
-    return f.piece === 'document' ? '(the document did not exist then)' : '(no state at that snapshot)';
-  if (!row.sha256) return '(missing from that snapshot: it was partial)';
-  const v = await svc.store.getJson<unknown>(row.sha256);
-  if (v === null)
-    throw new RestoreError(
-      'SNAPSHOT_PIECE_DAMAGED',
-      `The stored piece ${row.sha256.slice(0, 12)}… is missing or damaged.`,
-    );
-  if (f.piece === 'sidebar') return renderSidebar(v as SidebarPiece);
-  if (f.piece === 'resource') return renderResource(v as ResourcePiece);
-  return renderDocument(v as DocumentPiece);
 }
 
 function snapshotDiffTool(deps: ToolDeps): McpToolProvider {
@@ -305,16 +154,16 @@ function snapshotDiffTool(deps: ToolDeps): McpToolProvider {
           );
         const page = pageOf(pd, args.page);
         if (!page.ok) return page.result;
-        const f = pieceFilter(pd, page.id, args.piece);
+        const f = pieceFilterOf(svc, pd.project.id, page.id, args.piece);
         if ('error' in f)
           return errorResult({ code: 'NOT_FOUND', message: f.error, documents: f.documents }, pd);
         try {
-          const before = await pieceThen(pd, page.id, f, args.from);
+          const before = await pieceThen(svc, pd.project.id, page.id, f, args.from);
           let after: string;
           let reads = 0;
-          if (args.to) after = await pieceThen(pd, page.id, f, args.to);
+          if (args.to) after = await pieceThen(svc, pd.project.id, page.id, f, args.to);
           else {
-            const now = await pieceNow(pd, page.id, f);
+            const now = await pieceNow(svc, pd.project.id, page.id, f);
             after = now.text;
             reads = now.reads;
           }
@@ -441,7 +290,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
               { code: 'INVALID_PARAMS', message: 'Scope "document" needs document (its name or id).' },
               pd,
             );
-          const f = pieceFilter(pd, page.id, args.document);
+          const f = pieceFilterOf(pd.services.snapshots!, pd.project.id, page.id, args.document);
           if ('error' in f)
             return errorResult({ code: 'NOT_FOUND', message: f.error, documents: f.documents }, pd);
           documentId = f.ref;
@@ -541,18 +390,14 @@ async function imageScope(
     );
   try {
     const r = await restoreImage(
-      {
+      imageRestoreDeps({
         svc: s.snapshots,
         engine: pd.engine,
         images: s.images,
-        read: s.snapshots.reader(pd.project.id, 'P1', { wait: false }),
-        asset: (pid, id) => {
-          const a = s.assets.queries.asset(pid, id).data;
-          return a ? { id: a.id, url: a.url, folderId: a.folderId } : null;
-        },
-        folderLive: (pid, id) => s.assets.queries.folder(pid, id).data !== null,
-        pageName: (pid, id) => s.tree.queries.node(pid, id).data?.rawName ?? null,
-      },
+        assets: s.assets,
+        tree: s.tree,
+        projectId: pd.project.id,
+      }),
       {
         projectId: pd.project.id,
         snapshotId: args.snapshot,

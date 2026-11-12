@@ -56,9 +56,7 @@ export interface RehearsalDeps {
   readonly svc: SnapshotService;
   readonly engine: JobEngine;
   readonly projects: {
-    find(
-      ref: string,
-    ):
+    find(ref: string):
       | {
           readonly id: string | null;
           readonly name: string;
@@ -72,9 +70,7 @@ export interface RehearsalDeps {
       readonly isSandbox: boolean;
       readonly status: string;
     }[];
-    client(
-      id: string,
-    ):
+    client(id: string):
       | {
           governor: {
             estimate(i: { reads: number; writes: number; priority?: 'P3' }): {
@@ -515,12 +511,13 @@ export class Rehearsals {
         'REHEARSAL_NEEDS_FULL',
         'A rehearsal restores a full snapshot (the others hold only what changed).',
       );
-    const target = this.targetOf(o.targetProject);
-    if (target.id === row.projectId)
+    // The project the snapshot came from is refused first, whatever else is true of it.
+    if (this.d.projects.find(o.targetProject)?.id === row.projectId)
       throw new RestoreError(
         'REHEARSAL_SAME_PROJECT',
         'A rehearsal never goes into the project the snapshot came from; choose the test world.',
       );
+    const target = this.targetOf(o.targetProject);
     const manifest = await this.d.svc.manifest(row.id);
     if (!manifest)
       throw new RestoreError('SNAPSHOT_DAMAGED', `The manifest of ${row.id} is missing or unreadable.`);
@@ -646,12 +643,7 @@ export class Rehearsals {
   }
 
   /** Submits a batch to the target and waits for it to end. */
-  private async job(
-    projectId: string,
-    steps: StepSpec[],
-    title: string,
-    o: { confirm?: boolean } = {},
-  ): Promise<JobView> {
+  private async job(projectId: string, steps: StepSpec[], title: string): Promise<JobView> {
     const r = await this.d.engine.submit({
       kind: 'batch_ops',
       project: projectId,
@@ -660,7 +652,6 @@ export class Rehearsals {
       priority: 'P3',
       origin: this.origin(),
       title: title.slice(0, 300),
-      ...(o.confirm ? {} : {}),
     });
     if (!('jobId' in r))
       throw new RestoreError(
@@ -699,8 +690,17 @@ export class Rehearsals {
     const stamp = new Date(started).toISOString().replace(/\.\d+Z$/, 'Z');
     const rootName = `lk-bridge rehearsal ${stamp}`;
     const rootId = mintClientId(8);
+    let assetFolder: string | null = null;
+    // The asset folder's id rides along with the progress, so "Delete its root" later removes it too.
     const progress = (p: Obj) =>
-      idx.updateRehearsal(id, { progress: { ...p, writes: counts.writes, reads: counts.reads } });
+      idx.updateRehearsal(id, {
+        progress: {
+          ...p,
+          writes: counts.writes,
+          reads: counts.reads,
+          ...(assetFolder ? { assetFolder } : {}),
+        },
+      });
 
     /** Every write the rehearsal makes stays in its root (or its own asset folder): checked before each job. */
     const inside = (steps: readonly StepSpec[], assetFolder: string | null) => {
@@ -751,7 +751,6 @@ export class Rehearsals {
       );
     created.add(rootId);
     idx.updateRehearsal(id, { rootId, rootName, rootState: 'kept' });
-    let assetFolder: string | null = null;
     const images = [
       ...new Set(
         pick
@@ -772,6 +771,7 @@ export class Rehearsals {
       counts.writes++;
       const v = this.results(target, j)[0]?.value as Obj | undefined;
       assetFolder = str(v?.id);
+      progress({ stage: 'images', images: images.length });
     }
     // ---- 2. images: their bytes from the store, uploaded as they are; the upload's verify compares the SHA-256
     for (const img of images) {
@@ -1224,6 +1224,7 @@ export class Rehearsals {
     const row = this.d.svc.index.rehearsal(id);
     if (!row?.rootId) throw new RestoreError('NO_ROOT', 'This rehearsal has no root to delete.');
     if (row.rootState === 'deleted') return row;
+    const folder = str(row.progress.assetFolder);
     const r = await this.d.engine.submit({
       kind: 'batch_ops',
       project: row.projectId,
@@ -1233,8 +1234,9 @@ export class Rehearsals {
           params: { path: { resourceId: row.rootId }, query: { cascade: true } },
           confirm: 'cascade',
         },
+        ...(folder ? [{ op: 'deleteAsset', params: { path: { assetId: folder } } }] : []),
       ],
-      onError: 'stop',
+      onError: 'continue',
       priority: 'P2',
       origin: this.origin(),
       title: `rehearsal ${id}: delete its root`,

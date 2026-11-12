@@ -1,0 +1,1215 @@
+import { useEffect, useState, type FormEvent } from 'react';
+import { api, qs } from '../api';
+import {
+  Badge,
+  Button,
+  Empty,
+  ErrorNote,
+  Loading,
+  PageHeader,
+  StatusBadge,
+  useAction,
+  useConfirm,
+} from '../components';
+import { fmtAgo, fmtBytes, fmtDuration, fmtInt, fmtTime } from '../format';
+import { useNow } from '../hooks';
+import { useProject, useProjectApi, useProjectReloadOn, useScopedApi } from '../project';
+import { Link } from '../router';
+import type {
+  ImageRestoreResponse,
+  PlanNoteView,
+  RehearsalPlanResponse,
+  RehearsalView,
+  RestorePlanView,
+  RestoreRecordView,
+  RestoreResponse,
+  SnapshotDiffResponse,
+  SnapshotHistoryEntry,
+  SnapshotPageResponse,
+  SnapshotPagesResponse,
+  SnapshotRowView,
+  SnapshotsResponse,
+} from '../types';
+import { MarkdownDiffView } from './proposals';
+
+/**
+ * Snapshots (v2 E1a, ADR 0042; docs/dashboard.md › Snapshots): the bridge's own copies of each page, taken weekly in
+ * full, after every bridge write, and (when switched on) daily for edits made in the app. The store's size, how much
+ * deduplication saves and the disk's free space against the minimum; the runs; any missing or damaged piece; each page's
+ * history with its diffs and "Propose a restore" (always a proposal, approved on the Proposals page); a deleted image
+ * back as a new asset; the restore rehearsal into the test world; and the nightly database copies.
+ */
+
+const KIND_LABEL: Record<string, string> = {
+  full: 'full',
+  change: 'after a bridge write',
+  daily: 'daily (app edits)',
+};
+
+const ratio = (r: number | null | undefined) => (r === null || r === undefined ? '—' : `${r.toFixed(1)}×`);
+
+function Notes({ title, notes, tone }: { title: string; notes: PlanNoteView[]; tone?: 'warn' }) {
+  if (notes.length === 0) return null;
+  return (
+    <div className={tone === 'warn' ? 'note note-warn' : 'note'}>
+      <strong>{title}</strong>
+      <ul>
+        {notes.map((n, i) => (
+          <li key={i}>
+            {n.what}
+            {n.where ? <span className="muted"> ({n.where})</span> : null}: {n.why}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** A unified diff as text: “-” lines are now (removed by the restore), “+” lines the snapshot. */
+function TextDiff({ text, label }: { text: string; label: string }) {
+  return (
+    <div className="diff" role="group" aria-label={label}>
+      {text.split('\n').map((l, i) => (
+        <div
+          key={i}
+          className={`diff-line ${l.startsWith('+') ? 'diff-add' : l.startsWith('-') ? 'diff-del' : ''}`}
+        >
+          <span className="mono">{l}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PlanView({ plan }: { plan: RestorePlanView }) {
+  return (
+    <div className="stack" aria-label="Restore plan">
+      <p>
+        {plan.summary}{' '}
+        <span className="muted">
+          ({plan.writes} write{plan.writes === 1 ? '' : 's'}; planning read {plan.reads})
+        </span>
+      </p>
+      {plan.pieces.map((p) => (
+        <details key={p.label} open>
+          <summary>{p.label}</summary>
+          <TextDiff text={p.diff} label={`Changes to ${p.label}`} />
+        </details>
+      ))}
+      <Notes title="Cannot be restored exactly" notes={plan.lost} tone="warn" />
+      <Notes title="Kept as they are now" notes={plan.kept} />
+      <Notes title="Left alone" notes={plan.notRestored} />
+      {plan.warnings.length > 0 && (
+        <div className="note note-warn">
+          {plan.warnings.map((w, i) => (
+            <p key={i}>{w}</p>
+          ))}
+        </div>
+      )}
+      {plan.idMap && Object.keys(plan.idMap).length > 0 && (
+        <details>
+          <summary>New ids ({Object.keys(plan.idMap).length})</summary>
+          <ul className="plain mono small-text">
+            {Object.entries(plan.idMap).map(([a, b]) => (
+              <li key={a}>
+                {a} → {b}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {plan.followUp && (
+        <p className="muted">
+          Once it has run, a second proposal brings the page’s content back to the snapshot.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------------------------------ propose a restore
+
+function RestoreForm({
+  page,
+  snapshot,
+  documents,
+  onDone,
+}: {
+  page: SnapshotPageResponse['page'];
+  snapshot: SnapshotHistoryEntry;
+  documents: SnapshotPageResponse['documents'];
+  onDone: () => void;
+}) {
+  const projectApi = useProjectApi();
+  const { run, busy } = useAction();
+  const [scope, setScope] = useState<'page' | 'sidebar' | 'document' | 'deleted'>(
+    page.live ? 'page' : 'deleted',
+  );
+  const [doc, setDoc] = useState(documents[0]?.id ?? '');
+  const [mode, setMode] = useState<'auto' | 'undelete' | 'recreate'>('auto');
+  const [ids, setIds] = useState<'original' | 'new'>('original');
+  const [result, setResult] = useState<RestoreResponse | null>(null);
+  const body = (dryRun: boolean) => ({
+    page: page.id,
+    snapshot: snapshot.snapshot,
+    scope,
+    ...(scope === 'document' ? { document: doc } : {}),
+    ...(scope === 'deleted' ? { mode, ids } : {}),
+    ...(dryRun ? { dryRun: true } : {}),
+  });
+  const preview = (e: FormEvent) => {
+    e.preventDefault();
+    void run(() => projectApi.post<RestoreResponse>('/snapshots/restore', body(true))).then(
+      (r) => r && setResult(r),
+    );
+  };
+  const propose = () =>
+    void run(
+      () => projectApi.post<RestoreResponse>('/snapshots/restore', body(false)),
+      'Proposed: approve it on the Proposals page.',
+    ).then((r) => {
+      if (!r) return;
+      setResult(r);
+      onDone();
+    });
+  const id = `restore-${snapshot.snapshot}`;
+  return (
+    <form className="stack card" onSubmit={preview} aria-label={`Propose a restore to ${snapshot.snapshot}`}>
+      <h4>
+        Propose a restore of {page.name} to {fmtTime(Date.parse(snapshot.takenAt))}
+      </h4>
+      <label htmlFor={`${id}-scope`}>What to restore</label>
+      <select
+        id={`${id}-scope`}
+        value={scope}
+        onChange={(e) => {
+          setScope(e.target.value as typeof scope);
+          setResult(null);
+        }}
+      >
+        {page.live && <option value="page">The page’s documents</option>}
+        {page.live && <option value="sidebar">Its sidebar</option>}
+        {page.live && documents.length > 0 && <option value="document">One document</option>}
+        <option value="deleted">A deleted page (with its content)</option>
+      </select>
+      {scope === 'document' && (
+        <>
+          <label htmlFor={`${id}-doc`}>Document</label>
+          <select id={`${id}-doc`} value={doc} onChange={(e) => setDoc(e.target.value)}>
+            {documents.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name ?? d.id}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      {scope === 'deleted' && (
+        <>
+          <label htmlFor={`${id}-mode`}>How</label>
+          <select id={`${id}-mode`} value={mode} onChange={(e) => setMode(e.target.value as typeof mode)}>
+            <option value="auto">Undelete while LegendKeeper keeps it, else recreate</option>
+            <option value="undelete">Undelete</option>
+            <option value="recreate">Recreate under its snapshot parent</option>
+          </select>
+          <label htmlFor={`${id}-ids`}>Ids of a recreated page</label>
+          <select id={`${id}-ids`} value={ids} onChange={(e) => setIds(e.target.value as typeof ids)}>
+            <option value="original">Its original ids (when LegendKeeper accepts them)</option>
+            <option value="new">New ids</option>
+          </select>
+        </>
+      )}
+      <div className="actions">
+        <button type="submit" disabled={busy}>
+          Preview
+        </button>
+        {result?.status === 'dry_run' && (
+          <Button variant="primary" busy={busy} onClick={propose}>
+            Propose this restore
+          </Button>
+        )}
+      </div>
+      {result && (
+        <div role="status">
+          {result.status === 'nothing_to_do' && (
+            <p className="note">The page already matches the snapshot here; there is nothing to restore.</p>
+          )}
+          {result.status === 'proposal_captured' && result.proposalId && (
+            <p className="note">
+              Proposed as <code>{result.proposalId}</code>.{' '}
+              <Link to={`/proposals${qs({ id: result.proposalId })}`}>Open it on the Proposals page</Link>
+              {result.canonical ? ` (it needs canonical approval: ${result.canonical.reason})` : ''}.
+            </p>
+          )}
+          <PlanView plan={result.plan} />
+        </div>
+      )}
+    </form>
+  );
+}
+
+// ------------------------------------------------------------------------------------------ a page's history
+
+function DiffPanel({
+  page,
+  piece,
+  from,
+}: {
+  page: string;
+  piece: { piece: 'resource' | 'sidebar' | 'document'; ref?: string; label: string };
+  from: string;
+}) {
+  const r = useScopedApi<SnapshotDiffResponse>(
+    `/snapshots/diff${qs({ page, from, piece: piece.piece, ref: piece.ref })}`,
+  );
+  if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
+  return r.data.identical ? (
+    <p className="muted">{piece.label}: the same now as at this snapshot.</p>
+  ) : (
+    <MarkdownDiffView
+      diff={r.data.diff}
+      title={`${piece.label}: this snapshot (−) against the page now (+), ${r.data.reads} read${r.data.reads === 1 ? '' : 's'}`}
+    />
+  );
+}
+
+function PageHistory({ pageId, onClose }: { pageId: string; onClose: () => void }) {
+  const r = useScopedApi<SnapshotPageResponse>(`/snapshots/pages/${pageId}${qs({ limit: 50 })}`);
+  const [diff, setDiff] = useState<{
+    snapshot: string;
+    piece: 'resource' | 'sidebar' | 'document';
+    ref?: string;
+    label: string;
+  } | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
+  if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
+  const d = r.data;
+  return (
+    <section className="card" aria-labelledby="page-history-h">
+      <div className="row row-between">
+        <h3 id="page-history-h">
+          {d.page.name} <span className="muted mono small-text">{d.page.id}</span>{' '}
+          {!d.page.live && <Badge tone="warn">deleted</Badge>}
+        </h3>
+        <button type="button" className="small" onClick={onClose}>
+          Close
+        </button>
+      </div>
+      {d.history.count === 0 ? (
+        <Empty>No snapshot holds this page yet.</Empty>
+      ) : (
+        <table aria-label="Page history">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Kind</th>
+              <th>Pieces</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.history.snapshots.map((s) => (
+              <tr key={s.snapshot} data-snapshot={s.snapshot}>
+                <td>
+                  {fmtTime(Date.parse(s.takenAt))}
+                  <br />
+                  <span className="mono small-text muted">{s.snapshot}</span>
+                </td>
+                <td>
+                  {KIND_LABEL[s.kind] ?? s.kind}
+                  {s.madeBy ? <span className="muted"> ({s.madeBy})</span> : null}
+                  {s.partial && (
+                    <>
+                      {' '}
+                      <Badge tone="warn">partial</Badge>
+                    </>
+                  )}
+                </td>
+                <td>
+                  <ul className="plain">
+                    {s.pieces.map((p, i) => {
+                      const piece: 'resource' | 'sidebar' | 'document' | null =
+                        p.piece === 'settings'
+                          ? 'resource'
+                          : p.piece === 'sidebar'
+                            ? 'sidebar'
+                            : p.documentId
+                              ? 'document'
+                              : null;
+                      return (
+                        <li key={i}>
+                          {p.piece}:{' '}
+                          <span className={p.change === 'unchanged' ? 'muted' : ''}>{p.change}</span>
+                          {piece && d.page.live && p.change !== 'deleted' && (
+                            <>
+                              {' '}
+                              <button
+                                type="button"
+                                className="small"
+                                onClick={() =>
+                                  setDiff({
+                                    snapshot: s.snapshot,
+                                    piece,
+                                    ...(p.documentId ? { ref: p.documentId } : {}),
+                                    label: p.piece,
+                                  })
+                                }
+                              >
+                                Diff with now
+                              </button>
+                            </>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    className="small"
+                    onClick={() => setRestoring(restoring === s.snapshot ? null : s.snapshot)}
+                  >
+                    Propose a restore
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {d.history.more ? <p className="muted">{d.history.more} older snapshots not shown.</p> : null}
+      {diff && (
+        <div className="stack">
+          <DiffPanel
+            key={`${diff.snapshot}:${diff.piece}:${diff.ref ?? ''}`}
+            page={d.page.id}
+            piece={diff}
+            from={diff.snapshot}
+          />
+          <button type="button" className="small" onClick={() => setDiff(null)}>
+            Hide the diff
+          </button>
+        </div>
+      )}
+      {restoring && (
+        <RestoreForm
+          key={restoring}
+          page={d.page}
+          snapshot={d.history.snapshots.find((s) => s.snapshot === restoring)!}
+          documents={d.documents}
+          onDone={r.reload}
+        />
+      )}
+      {d.restores.length > 0 && <RestoresTable rows={d.restores} title="Restores of this page" />}
+    </section>
+  );
+}
+
+function PageFinder() {
+  const [q, setQ] = useState('');
+  const [term, setTerm] = useState('');
+  const [open, setOpen] = useState<string | null>(null);
+  const r = useScopedApi<SnapshotPagesResponse>(`/snapshots/pages${qs({ q: term, limit: 50 })}`);
+  return (
+    <section className="card" aria-labelledby="snap-pages-h">
+      <h2 id="snap-pages-h">Page history</h2>
+      <form
+        className="row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setTerm(q.trim());
+        }}
+      >
+        <label htmlFor="snap-page-q" className="offscreen">
+          Page name
+        </label>
+        <input
+          id="snap-page-q"
+          placeholder="A page’s name (a deleted page too)"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button type="submit">Find</button>
+      </form>
+      {!r.data ? (
+        r.error ? (
+          <ErrorNote error={r.error} onRetry={r.reload} />
+        ) : (
+          <Loading />
+        )
+      ) : r.data.pages.length === 0 ? (
+        <Empty>No page in the snapshots{term ? ` matches “${term}”` : ''}.</Empty>
+      ) : (
+        <ul className="plain" aria-label="Pages in the snapshots">
+          {r.data.pages.map((p) => (
+            <li key={p.pageId}>
+              <button type="button" className="link" onClick={() => setOpen(p.pageId)}>
+                {p.name ?? p.pageId}
+              </button>{' '}
+              {p.deleted && <Badge tone="warn">deleted</Badge>}{' '}
+              <span className="muted small-text">last snapshot {fmtTime(p.lastAt)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && <PageHistory key={open} pageId={open} onClose={() => setOpen(null)} />}
+    </section>
+  );
+}
+
+// ------------------------------------------------------------------------------------------ a deleted image
+
+function ImageRestore({ snapshots }: { snapshots: SnapshotRowView[] }) {
+  const projectApi = useProjectApi();
+  const { run, busy } = useAction();
+  const [snapshot, setSnapshot] = useState(snapshots[0]?.id ?? '');
+  const [asset, setAsset] = useState('');
+  const [update, setUpdate] = useState(false);
+  const [result, setResult] = useState<ImageRestoreResponse | null>(null);
+  const send = (dryRun: boolean) =>
+    void run(
+      () =>
+        projectApi.post<ImageRestoreResponse>('/snapshots/restore-image', {
+          snapshot,
+          asset: asset.trim(),
+          updateReferences: update,
+          ...(dryRun ? { dryRun: true } : {}),
+        }),
+      dryRun ? undefined : 'Done: see below.',
+    ).then((r) => r && setResult(r));
+  return (
+    <section className="card" aria-labelledby="snap-image-h">
+      <h2 id="snap-image-h">Restore a deleted image</h2>
+      <p className="muted">
+        LegendKeeper cannot undelete an image, so it comes back as a <strong>new</strong> asset with a new
+        URL: staged (hidden) first, then one proposal puts it back in its folder. Tick the box to update the
+        pages that showed the old URL in the same proposal.
+      </p>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(true);
+        }}
+      >
+        <label htmlFor="img-snap">Snapshot</label>
+        <select id="img-snap" value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
+          {snapshots.map((s) => (
+            <option key={s.id} value={s.id}>
+              {fmtTime(s.takenAt)} ({KIND_LABEL[s.kind] ?? s.kind})
+            </option>
+          ))}
+        </select>
+        <label htmlFor="img-asset">The deleted image’s asset id</label>
+        <input id="img-asset" value={asset} onChange={(e) => setAsset(e.target.value)} />
+        <label className="row">
+          <input type="checkbox" checked={update} onChange={(e) => setUpdate(e.target.checked)} /> Also update
+          the pages that referred to the old URL
+        </label>
+        <div className="actions">
+          <button type="submit" disabled={busy || !asset.trim() || !snapshot}>
+            Preview
+          </button>
+          {result?.status === 'dry_run' && (
+            <Button variant="primary" busy={busy} onClick={() => send(false)}>
+              Stage it and propose
+            </Button>
+          )}
+          {result?.status === 'staging' && (
+            <Button busy={busy} onClick={() => send(false)}>
+              Check again (it is being staged)
+            </Button>
+          )}
+        </div>
+      </form>
+      {result && (
+        <div className="stack" role="status">
+          {result.status === 'proposal_captured' && result.proposalId && (
+            <p className="note">
+              Proposed as <code>{result.proposalId}</code>.{' '}
+              <Link to={`/proposals${qs({ id: result.proposalId })}`}>Open it on the Proposals page</Link>.
+            </p>
+          )}
+          {result.status === 'staging' && (
+            <p className="note">
+              It is being staged (<code>{result.stagedId}</code>). Press “Check again” once its upload has
+              ended; it is not uploaded twice.
+            </p>
+          )}
+          {result.references.length === 0 ? (
+            <p className="muted">No page the snapshots hold showed the old URL.</p>
+          ) : (
+            <>
+              <p>Pages that showed the old URL:</p>
+              <ul>
+                {result.references.map((ref) => (
+                  <li key={ref.pageId}>
+                    <strong>{ref.page}</strong>
+                    {ref.documents.length > 0 &&
+                      `: ${ref.documents.map((d) => `${d.name} (${d.what})`).join(', ')}`}
+                    {ref.byHand.length > 0 && (
+                      <span className="muted"> — change by hand: {ref.byHand.join(', ')}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {result.notes && <Notes title="Notes" notes={result.notes} />}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ------------------------------------------------------------------------------------------ the rehearsal
+
+function RehearsalResult({ r, onChanged }: { r: RehearsalView; onChanged: () => void }) {
+  const confirm = useConfirm();
+  const { run, busy } = useAction();
+  const res = r.result;
+  return (
+    <div className="stack">
+      {r.error && <p className="note note-bad">{r.error}</p>}
+      {res && (
+        <>
+          <p>
+            {res.exact ?? 0} of {res.pagesCompared ?? 0} pages restored exactly
+            {res.images ? `; ${res.images.uploaded} of ${res.images.of} images uploaded` : ''}
+            {res.ms !== undefined ? `; took ${fmtDuration(res.ms)}` : ''}
+            {res.cost ? ` (${fmtInt(res.cost.writes)} writes, ${fmtInt(res.cost.reads)} reads)` : ''}.
+          </p>
+          {(res.differences?.length ?? 0) > 0 && (
+            <div className="note note-warn">
+              <strong>Differences</strong>
+              <ul>
+                {res.differences!.map((x, i) => (
+                  <li key={i}>
+                    <strong>{x.page}</strong>, {x.piece}: {x.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(res.cannotRestore?.length ?? 0) > 0 && (
+            <details>
+              <summary>What a restore cannot bring back ({res.cannotRestore!.length})</summary>
+              <ul>
+                {res.cannotRestore!.map((x, i) => (
+                  <li key={i}>
+                    {x.page ? <strong>{x.page}: </strong> : null}
+                    {x.what ? `${x.what}: ` : ''}
+                    {x.reason}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+      {r.rootId && (r.rootState === 'kept' || r.rootState === 'delete_failed') && r.state !== 'running' && (
+        <p>
+          Its root “{r.rootName}” is {r.rootState === 'kept' ? 'kept to inspect' : 'not deleted (it failed)'}.{' '}
+          <Button
+            variant="danger"
+            busy={busy}
+            onClick={() =>
+              void confirm({
+                title: 'Delete the rehearsal’s root?',
+                message: `“${r.rootName}” and everything under it are deleted from the sandbox project.`,
+                confirmLabel: 'Delete',
+                danger: true,
+              }).then((ok) => {
+                if (!ok) return;
+                void run(
+                  () => api.post(`/snapshots/rehearsals/${r.id}/delete-root`, { confirm: true }),
+                  'Deleted.',
+                ).then(onChanged);
+              })
+            }
+          >
+            Delete its root
+          </Button>
+        </p>
+      )}
+    </div>
+  );
+}
+
+function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void }) {
+  const confirm = useConfirm();
+  const { run, busy } = useAction();
+  const fulls = d.snapshots.filter((s) => s.kind === 'full');
+  const targets = d.sandboxes.filter((s) => s.name !== d.project);
+  const [snapshot, setSnapshot] = useState(fulls[0]?.id ?? '');
+  const [target, setTarget] = useState(targets[0]?.name ?? '');
+  const [mode, setMode] = useState<'sampled' | 'full'>('sampled');
+  const [keep, setKeep] = useState(false);
+  const [plan, setPlan] = useState<RehearsalPlanResponse['plan'] | null>(null);
+  const [open, setOpen] = useState<string | null>(null);
+  useEffect(() => setPlan(null), [snapshot, target, mode]);
+  const estimate = (e: FormEvent) => {
+    e.preventDefault();
+    void run(() =>
+      api.post<RehearsalPlanResponse>('/snapshots/rehearsals/plan', { target, snapshot, mode }),
+    ).then((r) => r && setPlan(r.plan));
+  };
+  const start = () =>
+    void confirm({
+      title: 'Start the rehearsal?',
+      message: `About ${fmtInt(plan!.estimate.writes)} writes and ${fmtInt(plan!.estimate.reads)} reads into ${target}, under a new top-level page that is ${keep ? 'kept afterwards' : 'deleted at the end'}. Nothing outside it is written.`,
+      confirmLabel: 'Start',
+    }).then((ok) => {
+      if (!ok) return;
+      void run(
+        () => api.post('/snapshots/rehearsals', { target, snapshot, mode, keep, confirm: true }),
+        'Started: it runs in the background.',
+      ).then(() => {
+        setPlan(null);
+        onChanged();
+      });
+    });
+  return (
+    <section className="card" aria-labelledby="snap-rh-h">
+      <h2 id="snap-rh-h">Restore rehearsal</h2>
+      <p className="muted">
+        Restores a full snapshot into a throwaway page of a sandbox project (the test world), with new ids,
+        compares every page with the snapshot, then deletes it. Sampled: about 50 pages covering every kind of
+        block and document, maps, boards, the chronology and images. Never into the project the snapshot came
+        from.
+      </p>
+      {targets.length === 0 ? (
+        <p className="note">
+          No sandbox project to rehearse into. Mark the test world as a sandbox on the{' '}
+          <Link to="/projects">Projects</Link> page.
+        </p>
+      ) : fulls.length === 0 ? (
+        <p className="note">There is no full snapshot of {d.project} yet.</p>
+      ) : (
+        <form className="stack" onSubmit={estimate}>
+          <label htmlFor="rh-snap">Full snapshot of {d.project}</label>
+          <select id="rh-snap" value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
+            {fulls.map((s) => (
+              <option key={s.id} value={s.id}>
+                {fmtTime(s.takenAt)} ({fmtInt(s.pages)} pages{s.state === 'partial' ? ', partial' : ''})
+              </option>
+            ))}
+          </select>
+          <label htmlFor="rh-target">Into</label>
+          <select id="rh-target" value={target} onChange={(e) => setTarget(e.target.value)}>
+            {targets.map((t) => (
+              <option key={t.name} value={t.name} disabled={!t.active}>
+                {t.name}
+                {t.active ? '' : ' (not served now)'}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="rh-mode">Pages</label>
+          <select id="rh-mode" value={mode} onChange={(e) => setMode(e.target.value as 'sampled' | 'full')}>
+            <option value="sampled">A sample (about 50)</option>
+            <option value="full">Every page</option>
+          </select>
+          <label className="row">
+            <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} /> Keep the copy
+            afterwards to inspect it
+          </label>
+          <div className="actions">
+            <button type="submit" disabled={busy || !snapshot || !target}>
+              Estimate
+            </button>
+            {plan && (
+              <Button variant="primary" busy={busy} onClick={start}>
+                Start the rehearsal
+              </Button>
+            )}
+          </div>
+          {plan && (
+            <p role="status" aria-label="Rehearsal estimate">
+              {fmtInt(plan.pages.length)} pages, {fmtInt(plan.images)} images: about{' '}
+              {fmtInt(plan.estimate.writes)} writes and {fmtInt(plan.estimate.reads)} reads
+              {plan.estimate.wallClockMs !== null
+                ? `, about ${fmtDuration(plan.estimate.wallClockMs)} at background priority`
+                : ''}
+              {plan.estimate.fitsToday === false ? ' (more than today’s budget has left)' : ''}.
+            </p>
+          )}
+        </form>
+      )}
+      {d.rehearsals.length > 0 && (
+        <table aria-label="Rehearsals">
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Snapshot</th>
+              <th>Pages</th>
+              <th>State</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.rehearsals.map((r) => (
+              <tr key={r.id} data-rehearsal={r.id}>
+                <td>{fmtTime(r.startedAt)}</td>
+                <td className="mono small-text">{r.snapshotId}</td>
+                <td>{r.mode}</td>
+                <td>
+                  <StatusBadge status={r.state} />
+                  {r.state === 'running' && typeof r.progress.stage === 'string' ? (
+                    <span className="muted"> {r.progress.stage}</span>
+                  ) : null}
+                </td>
+                <td>
+                  {r.result
+                    ? `${r.result.exact ?? 0} of ${r.result.pagesCompared ?? 0} exact`
+                    : (r.error ?? '—')}{' '}
+                  <button
+                    type="button"
+                    className="small"
+                    onClick={() => setOpen(open === r.id ? null : r.id)}
+                  >
+                    {open === r.id ? 'Hide' : 'Details'}
+                  </button>
+                  {open === r.id && <RehearsalResult r={r} onChanged={onChanged} />}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+// ------------------------------------------------------------------------------------------ the page
+
+function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: string }) {
+  return (
+    <div className="table-wrap">
+      <h3>{title}</h3>
+      <table aria-label={title}>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Page</th>
+            <th>What</th>
+            <th>State</th>
+            <th>Proposal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id}>
+              <td>{fmtTime(r.createdAt)}</td>
+              <td>{r.pageName}</td>
+              <td>
+                {r.scope}
+                {r.mode ? ` (${r.mode})` : ''} to <span className="mono small-text">{r.snapshotId}</span>
+              </td>
+              <td>{r.state}</td>
+              <td>
+                {r.proposalId && <Link to={`/proposals${qs({ id: r.proposalId })}`}>{r.proposalId}</Link>}
+                {r.followUpProposalId && (
+                  <>
+                    {', then '}
+                    <Link to={`/proposals${qs({ id: r.followUpProposalId })}`}>{r.followUpProposalId}</Link>
+                  </>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function StoreCard({ d }: { d: SnapshotsResponse }) {
+  const o = d.overview;
+  const est = o.nextFullEstimate ?? null;
+  const tight = est !== null && o.headroom !== null && est > o.headroom;
+  return (
+    <section className="card" aria-labelledby="snap-store-h">
+      <h2 id="snap-store-h">The store</h2>
+      <dl className="settings-list" aria-label="Snapshot store">
+        <dt>Size on disk</dt>
+        <dd data-testid="store-size">
+          {fmtBytes(o.store.bytes)} ({fmtInt(o.store.objects)} pieces, {fmtInt(o.store.manifests)} manifests)
+        </dd>
+        <dt>Deduplication</dt>
+        <dd data-testid="dedup">
+          {ratio(o.dedupRatio)}: the snapshots hold {fmtBytes(o.logical.referenced)} of pieces, stored once as{' '}
+          {fmtBytes(o.logical.unique)}
+          {o.compressionRatio ? `, compressed ${ratio(o.compressionRatio)}` : ''}
+        </dd>
+        <dt>Free space</dt>
+        <dd data-testid="free-space">
+          {o.disk ? (
+            <>
+              {fmtBytes(o.disk.free)} free of {fmtBytes(o.disk.total)}; the minimum kept free is{' '}
+              {fmtBytes(o.minFreeBytes)}
+              {o.headroom !== null && o.headroom < 0 ? (
+                <>
+                  {' '}
+                  <Badge tone="bad">below the minimum: full snapshots are refused</Badge>
+                </>
+              ) : null}
+            </>
+          ) : (
+            'unknown'
+          )}
+        </dd>
+        <dt>Next full snapshot</dt>
+        <dd data-testid="next-estimate">
+          {est === null ? (
+            '—'
+          ) : (
+            <>
+              at most about {fmtBytes(est)} new
+              {o.headroom !== null ? ` against ${fmtBytes(Math.max(0, o.headroom))} of headroom` : ''}{' '}
+              {tight ? <Badge tone="bad">does not fit</Badge> : <Badge tone="ok">fits</Badge>}
+            </>
+          )}
+        </dd>
+        <dt>Kept</dt>
+        <dd>
+          {o.retention.keepWeekly} weekly full snapshots; {o.retention.keepDays} days of change and daily
+          snapshots
+        </dd>
+        <dt>Directory</dt>
+        <dd className="mono small-text">{o.dir}</dd>
+      </dl>
+      {(o.owed ?? 0) > 0 && (
+        <p className="muted">{o.owed} change snapshots are waiting to be taken (they follow the writes).</p>
+      )}
+    </section>
+  );
+}
+
+function Problems({ d }: { d: SnapshotsResponse }) {
+  const { findings, notices } = d.overview;
+  if (findings.length === 0 && notices.length === 0) return null;
+  return (
+    <section className="card" aria-labelledby="snap-problems-h">
+      <h2 id="snap-problems-h">Findings</h2>
+      {findings.length > 0 && (
+        <div className="note note-bad" role="alert">
+          <strong>
+            {findings.length} stored piece{findings.length === 1 ? ' is' : 's are'} missing or damaged.
+          </strong>{' '}
+          The snapshots that use them are partial: a restore from them cannot bring those pieces back.
+          <ul>
+            {findings.map((f) => (
+              <li key={f.id}>
+                <span className="mono small-text">{f.sha256.slice(0, 16)}…</span> {f.problem}
+                {f.detail ? `: ${f.detail}` : ''} ({f.snapshots.length} snapshot
+                {f.snapshots.length === 1 ? '' : 's'}; found {fmtTime(f.foundAt)})
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {notices.length > 0 && (
+        <ul aria-label="Notices">
+          {notices.map((n) => (
+            <li key={n.id}>
+              <Badge tone={n.level === 'error' ? 'bad' : n.level === 'warning' ? 'warn' : 'info'}>
+                {n.code}
+              </Badge>{' '}
+              {n.message} <span className="muted small-text">{fmtTime(n.at)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function Runs({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void }) {
+  const confirm = useConfirm();
+  const { run, busy } = useAction();
+  const runs = d.overview.runs ?? [];
+  const project = d.project;
+  const settings = d.overview.dailyPass;
+  const setPass = (key: string, value: boolean) =>
+    void run(
+      () => api.put(`/projects/${encodeURIComponent(project)}/settings`, { key, value }),
+      'Saved.',
+    ).then(onChanged);
+  return (
+    <section className="card" aria-labelledby="snap-runs-h">
+      <h2 id="snap-runs-h">Runs and schedules</h2>
+      <ul className="plain" aria-label="Snapshot jobs">
+        {d.jobs.map((j) => (
+          <li key={j.id}>
+            <strong>{j.name}</strong>: {j.enabled ? j.scheduleText : 'switched off'}
+            {j.enabled && j.nextRunAt ? <span className="muted"> (next {fmtTime(j.nextRunAt)})</span> : null}
+            {j.lastRun ? (
+              <span className="muted">
+                ; last {fmtTime(j.lastRun.at)}, {j.lastRun.outcome}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      <p className="muted small-text">
+        Schedules are changed on the <Link to="/maintenance">Maintenance Jobs</Link> page.
+      </p>
+      {settings && (
+        <div className="stack">
+          <label className="row">
+            <input
+              type="checkbox"
+              checked={settings.enabled}
+              disabled={busy}
+              onChange={(e) => setPass('snapshotDailyPass', e.target.checked)}
+            />{' '}
+            Daily changed-pages pass for {project} (edits made in the LegendKeeper app)
+          </label>
+          <label className="row">
+            <input
+              type="checkbox"
+              checked={settings.documents}
+              disabled={busy || !settings.enabled}
+              onChange={(e) => setPass('snapshotDailyPassDocuments', e.target.checked)}
+            />{' '}
+            Also look at each page’s documents (one request per page)
+          </label>
+          <p className="muted small-text">
+            Off until the sandbox check confirms which edits move a page’s updatedAt (see the runbook). The
+            weekly full snapshot catches app edits either way.
+          </p>
+        </div>
+      )}
+      {runs.length === 0 ? (
+        <Empty>No run yet.</Empty>
+      ) : (
+        <table aria-label="Runs">
+          <thead>
+            <tr>
+              <th>Started</th>
+              <th>Kind</th>
+              <th>State</th>
+              <th>Pages</th>
+              <th>Requests</th>
+              <th>New</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((r) => (
+              <tr key={r.id} data-run={r.id}>
+                <td>{fmtTime(r.startedAt)}</td>
+                <td>
+                  {r.kind} <span className="muted">({r.trigger})</span>
+                </td>
+                <td>
+                  <StatusBadge status={r.state} />
+                  {r.error && <div className="small-text">{r.error}</div>}
+                </td>
+                <td>
+                  {fmtInt(r.done)} of {fmtInt(r.total)}
+                </td>
+                <td>
+                  {fmtInt(r.reads)} reads{r.downloads ? `, ${fmtInt(r.downloads)} downloads` : ''}
+                </td>
+                <td>
+                  {fmtInt(r.newObjects)} pieces ({fmtBytes(r.newBytes)})
+                  {r.finishedAt ? (
+                    <div className="muted small-text">took {fmtDuration(r.finishedAt - r.startedAt)}</div>
+                  ) : null}
+                </td>
+                <td>
+                  {r.state === 'running' && (
+                    <Button
+                      className="small"
+                      busy={busy}
+                      onClick={() =>
+                        void confirm({
+                          title: 'Abandon this run?',
+                          message:
+                            'It stops for good and is not continued; nothing it took becomes a snapshot. The next full snapshot starts afresh.',
+                          confirmLabel: 'Abandon',
+                          danger: true,
+                        }).then((ok) => {
+                          if (!ok) return;
+                          void run(
+                            () => api.post(`/snapshots/runs/${r.id}/abandon`, { confirm: true }),
+                            'Abandoned.',
+                          ).then(onChanged);
+                        })
+                      }
+                    >
+                      Abandon
+                    </Button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function SnapshotList({ d }: { d: SnapshotsResponse }) {
+  return (
+    <section className="card table-wrap" aria-labelledby="snap-list-h">
+      <h2 id="snap-list-h">Snapshots ({d.snapshots.length})</h2>
+      {d.snapshots.length === 0 ? (
+        <Empty>No snapshot yet. The first full snapshot runs at night, or take one now.</Empty>
+      ) : (
+        <table aria-label="Snapshots">
+          <thead>
+            <tr>
+              <th>Taken</th>
+              <th>Kind</th>
+              <th>Pages</th>
+              <th>New</th>
+              <th>Requests</th>
+              <th>State</th>
+            </tr>
+          </thead>
+          <tbody>
+            {d.snapshots.map((s) => (
+              <tr key={s.id} data-snapshot={s.id}>
+                <td>
+                  {fmtTime(s.takenAt)}
+                  <br />
+                  <span className="mono small-text muted">{s.id}</span>
+                </td>
+                <td>
+                  {KIND_LABEL[s.kind] ?? s.kind}
+                  {typeof s.trigger.tool === 'string' ? (
+                    <span className="muted"> ({s.trigger.tool})</span>
+                  ) : null}
+                </td>
+                <td>{fmtInt(s.pages)}</td>
+                <td>
+                  {fmtInt(s.newObjects)} pieces ({fmtBytes(s.newBytes)})
+                </td>
+                <td>
+                  {fmtInt(s.reads)}
+                  {s.downloads ? ` + ${fmtInt(s.downloads)} downloads` : ''}
+                </td>
+                <td>
+                  {s.state === 'partial' ? (
+                    <Badge tone="warn">
+                      partial{s.missing ? `: ${s.missing} missing` : ''}
+                      {s.damaged ? `: ${s.damaged}` : ''}
+                    </Badge>
+                  ) : (
+                    <Badge tone="ok">complete</Badge>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+function Backups({ d, now }: { d: SnapshotsResponse; now: number }) {
+  const b = d.backups;
+  const newest = b.files.find((f) => f.label === 'nightly');
+  const stale = !newest || now - newest.at > 36 * 3_600_000;
+  return (
+    <section className="card table-wrap" aria-labelledby="snap-backups-h">
+      <h2 id="snap-backups-h">Database copies</h2>
+      <p className="muted">
+        The nightly copies of the bridge’s database (deploy/backup.sh): its settings, journal, proposals and
+        the snapshot index. The snapshot store itself is copied off the server in E1b.{' '}
+        <span className="mono small-text">{b.dir}</span>
+      </p>
+      {stale && (
+        <p className="note note-warn" role="alert">
+          {newest
+            ? `The newest nightly copy is ${fmtAgo(newest.at, now)} old.`
+            : `No nightly copy found${b.error ? ` (${b.error})` : ''}.`}
+        </p>
+      )}
+      {b.files.length > 0 && (
+        <table aria-label="Database copies">
+          <thead>
+            <tr>
+              <th>Copy</th>
+              <th>Taken</th>
+              <th>Age</th>
+              <th>Size</th>
+            </tr>
+          </thead>
+          <tbody>
+            {b.files.slice(0, 20).map((f) => (
+              <tr key={f.name}>
+                <td className="mono small-text">{f.name}</td>
+                <td>{fmtTime(f.at)}</td>
+                <td>{fmtAgo(f.at, now)}</td>
+                <td>{fmtBytes(f.size)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+export function SnapshotsPage() {
+  const { selected } = useProject();
+  const projectApi = useProjectApi();
+  const now = useNow(10_000);
+  const { run, busy } = useAction();
+  const r = useScopedApi<SnapshotsResponse>('/snapshots');
+  useProjectReloadOn(['proposal', 'job'], r.reload, 1000);
+  const active =
+    (r.data?.overview.runs ?? []).some((x) => x.state === 'running') ||
+    (r.data?.rehearsals ?? []).some((x) => x.state === 'running');
+  useEffect(() => {
+    const t = setInterval(r.reload, active ? 3000 : 60_000);
+    return () => clearInterval(t);
+  }, [active, r.reload]);
+  if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
+  const d = r.data;
+  return (
+    <>
+      <PageHeader title="Snapshots" project={selected}>
+        <button type="button" className="small" onClick={r.reload}>
+          Refresh
+        </button>
+        <Button
+          variant="primary"
+          busy={busy}
+          onClick={() =>
+            void run(
+              () => projectApi.post('/snapshots/full'),
+              'A full snapshot is running in the background.',
+            ).then(r.reload)
+          }
+        >
+          Take a full snapshot now
+        </Button>
+      </PageHeader>
+      <p className="muted">
+        The bridge keeps its own copies of every page under the AI REPOSITORY: a full snapshot each week, one
+        after every bridge write, and (when switched on) a daily one for edits made in the app. Each piece is
+        stored once. A restore is always a proposal you approve on the Proposals page.
+      </p>
+      <StoreCard d={d} />
+      <Problems d={d} />
+      <Runs d={d} onChanged={r.reload} />
+      <PageFinder />
+      {d.restores.length > 0 && (
+        <section className="card">
+          <RestoresTable rows={d.restores} title="Restores proposed" />
+        </section>
+      )}
+      <ImageRestore snapshots={d.snapshots} />
+      <Rehearsals d={d} onChanged={r.reload} />
+      <SnapshotList d={d} />
+      <Backups d={d} now={now} />
+    </>
+  );
+}

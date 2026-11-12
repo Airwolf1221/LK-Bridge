@@ -673,6 +673,120 @@ function PageWriteView({ p }: { p: ProposalDetail }) {
   );
 }
 
+type RestoreNote = { what: string; where?: string; why: string };
+
+/** v2 E1a: a restore from a snapshot (always a proposal): what comes back, the diff, and what cannot. */
+function RestoreSnapshotView({ p }: { p: ProposalDetail }) {
+  const o = p.operationDetail as
+    | (Record<string, unknown> & {
+        tool?: string;
+        scope?: string;
+        mode?: string;
+        page?: { id: string; name: string };
+        snapshot?: { id: string; takenAt: string; kind: string };
+        pieces?: { label: string; diff: string }[];
+        lost?: RestoreNote[];
+        kept?: RestoreNote[];
+        notRestored?: RestoreNote[];
+        warnings?: string[];
+        idMap?: Record<string, string>;
+        followUp?: string;
+        old?: { name?: string | null; url?: string | null };
+        newAsset?: { id: string; url: string | null };
+        references?: { pageId: string; page: string; documents: { name: string; what: string }[] }[];
+        updateReferences?: boolean;
+        notes?: RestoreNote[];
+      })
+    | null
+    | undefined;
+  if (!o || o.tool !== 'restore_snapshot') return null;
+  const notes = (title: string, list: RestoreNote[] | undefined, warn = false) =>
+    list && list.length > 0 ? (
+      <div className={warn ? 'note note-warn' : 'note'}>
+        <strong>{title}</strong>
+        <ul>
+          {list.map((n, i) => (
+            <li key={i}>
+              {n.what}
+              {n.where ? <span className="muted"> ({n.where})</span> : null}: {n.why}
+            </li>
+          ))}
+        </ul>
+      </div>
+    ) : null;
+  return (
+    <section className="card" aria-label="Restore from a snapshot">
+      <h3>
+        Restore{' '}
+        {o.scope === 'image' ? (
+          'a deleted image'
+        ) : (
+          <>
+            the {o.scope} of <strong>{o.page?.name}</strong>
+          </>
+        )}
+        {o.mode ? ` (${o.mode})` : ''}
+        {o.snapshot ? (
+          <span className="muted">
+            {' '}
+            to the {o.snapshot.kind} snapshot of {fmtTime(Date.parse(o.snapshot.takenAt))}
+          </span>
+        ) : null}
+      </h3>
+      <p className="muted small-text">
+        Approving writes the snapshot’s state back. If the page changed since this was planned, the proposal
+        becomes conflicted instead and nothing is written; the journal keeps what each write replaces.
+      </p>
+      {o.scope === 'image' && (
+        <div>
+          “{o.old?.name ?? 'the image'}” comes back as a new asset{' '}
+          {o.newAsset?.url ? <span className="mono small-text">{o.newAsset.url}</span> : null} (its old URL{' '}
+          <span className="mono small-text">{o.old?.url ?? '?'}</span> no longer works).{' '}
+          {o.updateReferences
+            ? 'The pages below that showed the old URL are updated too.'
+            : 'The pages below that showed the old URL are not changed.'}
+          {o.references && o.references.length > 0 && (
+            <ul>
+              {o.references.map((r) => (
+                <li key={r.pageId}>
+                  <strong>{r.page}</strong>: {r.documents.map((d) => `${d.name} (${d.what})`).join(', ')}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+      {p.markdownDiff ? (
+        <MarkdownDiffView diff={p.markdownDiff} title="Diff (now, then as at the snapshot)" />
+      ) : null}
+      {notes('Cannot be restored exactly', o.lost, true)}
+      {notes('Kept as they are now', o.kept)}
+      {notes('Left alone', o.notRestored)}
+      {notes('Notes', o.notes)}
+      {o.warnings && o.warnings.length > 0 && (
+        <div className="note note-warn">
+          {o.warnings.map((w, i) => (
+            <p key={i}>{w}</p>
+          ))}
+        </div>
+      )}
+      {o.idMap && Object.keys(o.idMap).length > 0 && (
+        <details>
+          <summary className="small-text">New ids ({Object.keys(o.idMap).length})</summary>
+          <ul className="plain mono small-text">
+            {Object.entries(o.idMap).map(([a, b]) => (
+              <li key={a}>
+                {a} → {b}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {o.followUp && <p className="muted">{o.followUp}</p>}
+    </section>
+  );
+}
+
 /** v2 C2a: the proposal's operations grouped by the page they affect, shown first. */
 function PageSummaryView({ p }: { p: ProposalDetail }) {
   const pages = p.pageSummary ?? [];
@@ -917,6 +1031,7 @@ function ProposalReview({
           <PageSummaryView p={p} />
           <CanonBanner p={p} />
           <PageWriteView p={p} />
+          <RestoreSnapshotView p={p} />
           {(p.operations ?? [])
             .filter((o) => o.tool === 'set_facts')
             .map((o, i) => (
