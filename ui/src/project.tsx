@@ -130,6 +130,7 @@ export function useProjectApi(): typeof api {
       get: <T,>(path: string) => api.get<T>(withProject(path)),
       post: <T,>(path: string, body?: unknown) => api.post<T>(withProject(path), body),
       put: <T,>(path: string, body?: unknown) => api.put<T>(withProject(path), body),
+      upload: <T,>(path: string, file: Blob) => api.upload<T>(withProject(path), file),
     }),
     [withProject],
   );

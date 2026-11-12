@@ -26,6 +26,7 @@ export default defineConfig({
       'test/calendar/**/*.test.ts', // v2 D1: the calendar engine
       'test/chronology/**/*.test.ts', // v2 D1: chronology sync and the timeline tools
       'test/maps/**/*.test.ts', // v2 D2: the map-feature tools
+      'test/images/**/*.test.ts', // v2 D3: the image pipeline
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

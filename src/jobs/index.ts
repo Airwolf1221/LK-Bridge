@@ -46,12 +46,18 @@ export {
 } from './policy.js';
 export {
   UPLOAD_PUT_STEP,
+  UPLOAD_VERIFY_STEP,
   type CustomStepContext,
   type CustomStepHandler,
   type CustomStepHandlers,
 } from './custom-steps.js';
 export { matchesIntent, type CompareMode } from './compare.js';
-export { lockKeyFor, type WriteVerification, type VerifiedWriteValue } from './step-exec.js';
+export {
+  lockKeyFor,
+  type AssetDeleteKeeper,
+  type WriteVerification,
+  type VerifiedWriteValue,
+} from './step-exec.js';
 export type { StepPlanner, StepPlanners, ReplanContext, ReplanResult } from './planners.js';
 export {
   compareStoredBlocks,

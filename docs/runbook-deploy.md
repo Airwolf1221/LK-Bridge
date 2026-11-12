@@ -457,7 +457,16 @@ that is not marked as a sandbox, one with a key in neither place (add it on the 
 whose own project (from `listProjects`) is not that project's stored id.
 
 It uses its own temporary database, not the production one, and does not need the service stopped. Read the report at the
-end (PASS / FAIL / INCONCLUSIVE / SKIPPED per item; see `test/sandbox/README.md`). Keep the output for chunk 8's review.
+end (PASS / FAIL / INCONCLUSIVE / SKIPPED per item; see `test/sandbox/README.md`).
+
+The sandbox files run **one after another** (`fileParallelism: false`, the owner's run of 12 November 2026: in parallel
+they shared the test project's 120 writes a minute), and every script waits for a write the governor parks for budget or
+queues, its clean-up included, rather than reporting it failed. The image pipeline alone (v2 D3; it writes, then deletes
+what it made):
+
+````bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- images
+``` Keep the output for chunk 8's review.
 This is the same as `npm run test:sandbox`, which on its own cannot read `/etc/lk-bridge/lk-bridge.env`: vitest does not
 load env files and the file is not safe to `source`.
 
@@ -485,7 +494,7 @@ claude mcp add --transport http lk-bridge https://lk.ottomoons.co.uk/mcp --scope
 # Option B, personal access token. Create the token on the server (shown once), then add it.
 sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run pat -- create --name "Claude Code" --profile claude-code --scope read   # 🔒 sudo
 claude mcp add --transport http lk-bridge https://lk.ottomoons.co.uk/mcp --scope user -H "Authorization: Bearer <the token>"
-```
+````
 
 The consent page for OAuth from Claude Code shows `localhost (this computer)` and a warning that the application only
 accepts sign-ins on your own computer: that is expected. Treat a PAT like a password.
@@ -836,10 +845,13 @@ in, open each page, watch a job on the Jobs page).
 
 ## Memory
 
-The unit sets `MemoryHigh=900M` (the kernel starts reclaiming), `MemoryMax=1G` (the hard ceiling) and
+The unit sets `MemoryHigh=1400M` (the kernel starts reclaiming), `MemoryMax=1536M` (the hard ceiling) and
 `NODE_OPTIONS=--max-old-space-size=700` (the V8 heap ceiling, so a runaway fails inside Node with a clear "heap out of
 memory" error and a restart, before the kernel kills it). They are consistent: 700 MB of heap plus young generation, code
-and buffers outside the heap (image uploads) stays under 900 MB. The bridge needs far less (see the review report,
+and buffers outside the heap (image uploads), plus one image conversion (v2 D3: sharp works in native memory outside the
+heap, about 0.5 GiB at its peak for an image at the 100-megapixel limit, `IMAGE_MAX_PIXELS`; conversions run one at a
+time) stays under 1400 MB. They were 900M and 1G before v2 D3; a normal deploy installs the new unit (the deploy script
+compares it, backs up the old one and runs `daemon-reload`). The bridge needs far less (see the review report,
 docs/review/2026-11-hardening.md, item 15, for the soak measurement), so the ceilings are generous on purpose; leave them
 unless the measurements below say otherwise.
 
@@ -851,9 +863,48 @@ sudo journalctl -u lk-bridge --since "7 days ago" | grep -iE 'heap out of memory
 ps -o rss=,vsz= -p "$(systemctl show lk-bridge -p MainPID --value)"                   # RSS in KiB, right now
 ```
 
-If `MemoryPeak` over a busy week stays below about 300 MB, the values can be tightened to `MemoryHigh=500M`,
-`MemoryMax=640M` and `--max-old-space-size=400`; there is no need to. If it ever approaches 900 MB, look for a cause
-before raising anything.
+If `MemoryPeak` over a busy week (with images converted) stays well below 1 GB, there is no need to change anything. If
+it approaches 1400 MB, look for a cause before raising anything; lowering `IMAGE_MAX_PIXELS` (for example to 50000000)
+lowers a conversion's peak in proportion.
+
+## Images (v2 D3)
+
+[ADR 0041](adr/0041-image-pipeline.md); tools in [tools.md](tools.md#images-v2-d3); the Staging page in
+[dashboard.md](dashboard.md#staging-v2-d3).
+
+**What the server needs: nothing beyond a normal deploy.**
+
+- **sharp** (0.35.5, pinned) comes with `npm ci` as `lkbuild`: its prebuilt binary for linux-x64 (`@img/sharp-linux-x64`
+  and `@img/sharp-libvips-linux-x64`, glibc 2.26 or later; Ubuntu has it) is an optional dependency in the lockfile, the
+  package has no install script, so no compiler, no build tools and no extra download host are needed. Check it after a
+  deploy with:
+
+  ```bash
+  sudo -u lkbridge /opt/lk-bridge/runtime/node/bin/node -e "console.log(require('/opt/lk-bridge/app/node_modules/sharp').versions)"
+  ```
+
+- **The image directory** is created by the bridge at start-up: `images/` next to the database
+  (`/var/lib/lk-bridge/images`, mode 0700, owned by `lkbridge`, files 0600, inside the unit's only writable path), with
+  `upload-tmp/` (the binary endpoint's temporary files: emptied at every start, swept every minute, a file lives at most
+  15 minutes) and `kept-bytes/` (the bytes of deleted assets, 90 days). `IMAGE_DATA_DIR` moves it (it must stay inside
+  `ReadWritePaths`). It is not in the nightly SQLite backup; E1's backups will take `kept-bytes/`.
+- **The memory limits** of the unit are raised (above, "Memory"); the deploy installs them.
+- **New settings**, all optional with sensible defaults (env.template, "Images"): `IMAGE_MAX_PIXELS`, `IMAGE_MAX_FRAMES`,
+  `IMAGE_CONVERT_TIMEOUT_MS`, `IMAGE_CONVERT_CONCURRENCY`, `IMAGE_DATA_DIR`, `IMAGE_UPLOAD_RATE_PER_PRINCIPAL`,
+  `IMAGE_UPLOAD_RATE_PER_IP`, `IMAGE_UPLOAD_BODY_TIMEOUT_MS`, `IMAGE_UPLOAD_IDLE_TIMEOUT_MS`,
+  `IMAGE_STAGING_REPORT_DAYS`, `ASSET_BYTES_RETENTION_DAYS`, `LK_ASSET_HOSTS`; and one project setting,
+  `imageStagingFolder` (Projects page). `env-sync` adds them to the env file commented out, as usual.
+- **Caddy: no change.** The site block proxies every path, `POST /uploads/*` included, and sets no `request_body`
+  limit, so a large binary upload reaches the bridge as it is; the bridge applies its own limits on that route (the
+  declared length, the time limits). `flush_interval -1` is fine for it. Caddy's access log records the path
+  (`/uploads/upl_…`, an id, not a secret); the capability travels in the `Authorization` header, which Caddy does not
+  log by default. If the Caddyfile ever gains a `request_body { max_size … }`, it must allow at least `UPLOAD_MAX_BYTES`
+  on `/uploads/*`.
+- **Outbound:** the bridge now also downloads asset files from `assets.legendkeeper.com` (anonymous GET, port 443) to
+  verify uploads and to keep bytes before deletes. Nothing to open if outbound https already works.
+
+After the deploy, refresh ChatGPT's tools (Plugins → the bridge → Refresh) and disconnect and reconnect the connector on
+claude.ai: two new tools, `upload_image` and `prepare_image_upload`.
 
 ## Moving to several projects (v2 A1)
 

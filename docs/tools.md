@@ -93,6 +93,8 @@ budget (arkona): writes 0/120·min …
 | `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority                                                                   |
 | `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                                                                              |
 | `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)                                                                    |
+| `upload_image`              | write  | false / false / false / **true**                                | 2 writes, 1 read, 1 download; +1 write and read per new folder; see [Images](#images-v2-d3)         |
+| `prepare_image_upload`      | write  | false / false / false / false                                   | none                                                                                                |
 | `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                                                                       |
 | `bridge_budget`             | read   | true / false / true / false                                     | none                                                                                                |
 | `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                |
@@ -147,9 +149,9 @@ budget (arkona): writes 0/120·min …
 
 **`lk_api_paginate_all`** `{ operationId, params?, maxItems?, maxPages? }`: a `paginate_all` job over a paged read (`listResources`, `listTemplates`, `listEvents`, `listAssets`, `listProjects`). Each page is its own governed read at job priority. Returns `{ jobId, handle }`; the items are readable through `bridge_result_page` while the job runs.
 
-**`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
+**`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (145 tools in all, 147 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (147 tools in all, 149 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -396,10 +398,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (52 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, the 5 timeline tools of D1 and D1.1, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (54 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, the 5 timeline tools of D1 and D1.1, `upload_image`, `prepare_image_upload`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -1171,9 +1173,97 @@ pixels); **nothing is moved automatically**. A legacy map replaced warns that it
 Plan 2 (the map's settings, its features) and check 2, then 1 read to verify; a delete also reads each feature for its journal
 pre-image. A `link` adds one read (the page, live). A dry run costs the plan's reads only.
 
-## Image upload
+## Images (v2 D3)
 
-`lk_upload_image` runs one `upload_image` job of three steps (it needs scope `write`: uploads are not proposable in v1, so at `propose` it, and raw `createImageUpload` / `createImageAsset` calls, are refused before anything is sent):
+[ADR 0041](adr/0041-image-pipeline.md) has the decisions and the threat review. `upload_image` is the tool to use;
+`lk_upload_image` (below) stays as it was, for raw uploads.
+
+**`upload_image`** `{ data_base64 | url | upload_id | staged_id, name?, description?, destination?, stage?, deduplicate?,
+dryRun?, waitSeconds?, operation_id?, project }`. Exactly one source:
+
+| Source        | For                                                                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `data_base64` | Small images inline (a `data:` URI is accepted). A 2 MB image is about 2.7 million characters, so chat assistants should prefer staging.   |
+| `url`         | A public https image, through the guarded fetch (`UPLOAD_ALLOW_URL_SOURCE`).                                                               |
+| `upload_id`   | A file sent beforehand to the binary endpoint (`prepare_image_upload`, then its script). Same connection and project, once, within 15 min. |
+| `staged_id`   | A staged image to place (from `stage: true`, or the dashboard's Staging page). `name` renames it.                                          |
+
+What happens to the bytes: the type is decided by the file's first bytes (PNG, JPEG, GIF or WebP; a declared type and a
+file name are never trusted); bytes, pixels (all frames together) and frames are capped before anything is decoded; a
+truncated or corrupt file is refused with the decoder's words; a WebP is stored byte for byte; anything else becomes WebP
+at quality 90, the EXIF orientation applied, every frame of an animation kept, no resize, no metadata. Then ONE job:
+the missing folders in order, the upload (createImageUpload, the signed PUT, createImageAsset), a download of the stored
+file compared by SHA-256 (`storedBytesVerified`; a mismatch or a failed download is reported with `unverifiedReason`, the
+asset id is still returned, nothing is retried), and for a staged image `updateAsset { isHidden: true }`.
+
+`destination` (planned, and refused if it cannot work, before anything is uploaded):
+
+- `folder`: an asset folder id, a path from the library's root (`"Characters / Beastkin / Qishen / Mehrana al-Khalid"`;
+  `Undetermined / Unknown` is one folder) or a list of names;
+- `for_character { name, race?, type? }`: a folder named after the character is reused wherever it is (several:
+  `AMBIGUOUS_FOLDER`, listed); otherwise `Characters / Group / Race / Name` (or `Characters / Race / Name` for a race with
+  no group), the folder names from the taxonomy's asset folder field; an unknown or omitted race goes to
+  `Undetermined / Unknown`; a declared race that does not resolve fails (`RACE_NOT_FOUND` and the other refusals of
+  `create_character`);
+- `for_page`: a Core, Reference or character index page gives its character (the race from where the page is); any other
+  page needs `folder` too (`FOLDER_REQUIRED`);
+- `subfolders`: literal folder names appended, created in order.
+
+Folders are never moved; a non-folder asset with a needed folder's name is refused (`ASSET_NAME_CONFLICT`).
+
+**Deduplication.** The same original (by its SHA-256) sent again to the same project returns the existing asset, staged
+or placed, with `deduplicated: true`, and sends nothing. `deduplicate: false` uploads it again and needs a new
+`operation_id`.
+
+**Staging and `propose`.** `stage: true` uploads, verifies and hides the image in the project's staging folder
+(`imageStagingFolder`, default `LK-Bridge staging`, found by name or created), keeping a `destination` as the intended
+one; the answer has `staged_id`. Place it later with `staged_id` (the intended destination unless another is given): ONE
+job moves it, unhides it, optionally renames it, and reads it back (`placementVerified`). **At scope `propose` every
+upload is staged** and its placement (when a destination is given) is the proposal: the proposal holds no image bytes,
+and the owner's approval places it. A `staged_id` placed at `propose` is a proposal too.
+
+Answers: `status` (`uploaded`, `staged`, `placed`, `proposal_captured`, `deduplicated` with the earlier asset, `queued`,
+`waiting_budget`, `dry_run`), `asset { id, name, url, folderId, folderPath, hidden }`, `storedBytesVerified`, `image`
+(original format and size, width, height, frames, alpha, WebP size and hash, conversion, quality, orientation applied),
+`destination` (path, folders created), `staged_id`, `jobId`, `proposalId`. Put the image on a page with `write_page`:
+`![alt](url)` (same-project assets only).
+
+Codes before any job: `INVALID_REQUEST`, `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`,
+`UPLOAD_URL_SOURCE_DISABLED`, `UPLOAD_URL_REFUSED`, `UPLOAD_URL_FAILED`, `UPLOAD_ID_UNKNOWN`, `UPLOAD_NOT_RECEIVED`,
+`UPLOAD_ID_USED`, `UPLOAD_EXPIRED`, `IMAGE_EMPTY`, `IMAGE_TYPE_UNSUPPORTED`, `IMAGE_TOO_LARGE`, `IMAGE_TOO_MANY_PIXELS`,
+`IMAGE_TOO_MANY_FRAMES`, `IMAGE_TRUNCATED`, `IMAGE_CORRUPT`, `IMAGE_CONVERT_TIMEOUT`, `IMAGE_CONVERTER_BUSY`,
+`DESTINATION_REQUIRED`, `INVALID_DESTINATION`, `FOLDER_REQUIRED`, `PAGE_NOT_UNDER_CHARACTERS`, `ASSET_TREE_NOT_READY`,
+`AMBIGUOUS_FOLDER`, `ASSET_NAME_CONFLICT`, `RACE_NOT_FOUND`, `STAGED_NOT_FOUND`, `STAGED_NOT_READY`, `ALREADY_PLACED`,
+`STAGED_BUSY`; after: `UPLOAD_FAILED`, `PLACE_FAILED`.
+
+**`prepare_image_upload`** `{ sha256, byte_length, content_type, name, project }` (scope `write` or `propose`): an
+`upload_id`, a single-use capability (256 bits; once, 5 minutes, only that file in that project for that connection),
+the endpoint (`POST <BRIDGE_PUBLIC_URL>/uploads/<upload_id>`, the capability in `Authorization: Upload <token>`, never in
+the URL) and two scripts that read a local file, check its SHA-256 and send it: Python with the standard library only,
+and curl. The endpoint answers `201 { "status": "received", "upload_id", "sha256", "bytes" }`, or a refusal: `403
+upload_refused` for any problem with the capability (one generic answer), `413` for a body longer than prepared (declared
+or not), `422` for a different SHA-256, length or magic-byte type, `408` for a body too slow, `429` past the rate limits.
+Then call `upload_image` with the `upload_id` within 15 minutes. Rate limits: `IMAGE_UPLOAD_RATE_PER_PRINCIPAL` (30
+prepares and 30 accepted uploads an hour per connection) and `IMAGE_UPLOAD_RATE_PER_IP` (60 requests an hour per
+address).
+
+**Reading.** `list_assets` and `browse_asset_tree` add `bridgeUpload` to an image the bridge uploaded: original format,
+width, height, frames, conversion, `storedBytesVerified`, `staged` (and its `staged_id`).
+
+**Asset deletes keep their bytes**, by any route (`lk_api_write`, `lk_api_batch`, `lk_op_deleteAsset`, the Staging
+page): before `deleteAsset` is sent the file is downloaded and kept by the bridge (90 days), the journal's pre-image says
+where (`keptBytes`), a folder's delete lists its children and keeps their images; if a file cannot be fetched the delete
+is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner allows it on the Staging page.
+
+**Costs** (reads and writes to LegendKeeper, measured against the mock): an upload into an existing folder 2 writes, 1
+read (the asset tree's re-read) and 1 download (the verification), plus the PUT on the upload tier; each folder created
+1 write and 1 read more; staging 1 write and 1 read more (the hide); placing a staged image 1 write and 2 reads; a
+deduplicated call nothing; an image delete 1 write, 2 reads and 1 download. Conversion is local: about 3 s for a 12 MP
+photo, one at a time.
+
+## Image upload (v1: `lk_upload_image`)
+
+`lk_upload_image` runs one `upload_image` job of three steps (it needs scope `write`: uploads are not proposable in v1, so at `propose` it, and raw `createImageUpload` / `createImageAsset` calls, are refused before anything is sent; v2 D3's `upload_image` stages instead):
 
 1. `createImageUpload` (an LK call through the governor, with an idempotency key);
 2. `upload_image.put`, a custom step: a `PUT` of the file to the signed `uploadUrl` with exactly the headers LK returned. This is **not** an LK API call and goes to another host, but it still runs inside `governor.execute`, on the reactive-only `upload` tier;
@@ -1199,16 +1289,28 @@ Codes: `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`, `UPLO
 
 ## Settings
 
-| Variable                         | Default            | Meaning                                                                                                                                                                                                                |
-| -------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REQUIRE_PROJECT_FOR_WRITES`     | `true`             | A write tool called without `project` is refused while the bridge serves more than one project (v2 A1)                                                                                                                 |
-| `MCP_EXPOSE_PER_OP_TOOLS`        | `false`            | Also register `lk_op_<operationId>` for all 89 operations                                                                                                                                                              |
-| `MCP_RESULT_MAX_CHARS`           | `40000`            | Results longer than this are stored and returned as a handle                                                                                                                                                           |
-| `UPLOAD_MAX_BYTES`               | `10485760` (10 MB) | Largest image `lk_upload_image` accepts. The `/mcp` request body limit is sized from it (below)                                                                                                                        |
-| `UPLOAD_ALLOW_URL_SOURCE`        | `true`             | `false`: base64 only                                                                                                                                                                                                   |
-| `UPLOAD_FETCH_TIMEOUT_MS`        | `15000`            | Deadline for fetching an image from a URL                                                                                                                                                                              |
-| `UPLOAD_PUT_TIMEOUT_MS`          | `120000`           | Per-attempt deadline of the signed-URL PUT (5 s to 10 min), separate from the 30 s LegendKeeper request timeout                                                                                                        |
-| `OUTBOUND_EXTRA_PORTS_ALLOWLIST` | empty              | Exact `host:port` pairs, comma-separated, that the image fetch, its redirects, the PUT and the CIMD fetch may use besides 443 (v1.0.1). No wildcards; a malformed entry stops the bridge at start-up, naming the entry |
+| Variable                          | Default                     | Meaning                                                                                                                                                                                                                |
+| --------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REQUIRE_PROJECT_FOR_WRITES`      | `true`                      | A write tool called without `project` is refused while the bridge serves more than one project (v2 A1)                                                                                                                 |
+| `MCP_EXPOSE_PER_OP_TOOLS`         | `false`                     | Also register `lk_op_<operationId>` for all 89 operations                                                                                                                                                              |
+| `MCP_RESULT_MAX_CHARS`            | `40000`                     | Results longer than this are stored and returned as a handle                                                                                                                                                           |
+| `UPLOAD_MAX_BYTES`                | `10485760` (10 MB)          | Largest image `lk_upload_image` accepts. The `/mcp` request body limit is sized from it (below)                                                                                                                        |
+| `UPLOAD_ALLOW_URL_SOURCE`         | `true`                      | `false`: base64 only                                                                                                                                                                                                   |
+| `UPLOAD_FETCH_TIMEOUT_MS`         | `15000`                     | Deadline for fetching an image from a URL                                                                                                                                                                              |
+| `UPLOAD_PUT_TIMEOUT_MS`           | `120000`                    | Per-attempt deadline of the signed-URL PUT (5 s to 10 min), separate from the 30 s LegendKeeper request timeout                                                                                                        |
+| `OUTBOUND_EXTRA_PORTS_ALLOWLIST`  | empty                       | Exact `host:port` pairs, comma-separated, that the image fetch, its redirects, the PUT and the CIMD fetch may use besides 443 (v1.0.1). No wildcards; a malformed entry stops the bridge at start-up, naming the entry |
+| `IMAGE_MAX_PIXELS`                | `100000000`                 | v2 D3: most pixels an image may have, all frames together (sharp's `limitInputPixels`)                                                                                                                                 |
+| `IMAGE_MAX_FRAMES`                | `300`                       | v2 D3: most frames of an animation                                                                                                                                                                                     |
+| `IMAGE_CONVERT_TIMEOUT_MS`        | `60000`                     | v2 D3: time limit of one conversion                                                                                                                                                                                    |
+| `IMAGE_CONVERT_CONCURRENCY`       | `1`                         | v2 D3: conversions at once (1 to 4)                                                                                                                                                                                    |
+| `IMAGE_DATA_DIR`                  | `images/` next to `DB_PATH` | v2 D3: the private directory of the binary endpoint's temporary files (`upload-tmp/`) and the kept bytes (`kept-bytes/`)                                                                                               |
+| `IMAGE_UPLOAD_RATE_PER_PRINCIPAL` | `30`                        | v2 D3: prepares, and accepted binary uploads, per connection per hour                                                                                                                                                  |
+| `IMAGE_UPLOAD_RATE_PER_IP`        | `60`                        | v2 D3: requests to `POST /uploads/*` per address per hour, refused ones included                                                                                                                                       |
+| `IMAGE_UPLOAD_BODY_TIMEOUT_MS`    | `120000`                    | v2 D3: deadline for a whole binary upload body                                                                                                                                                                         |
+| `IMAGE_UPLOAD_IDLE_TIMEOUT_MS`    | `15000`                     | v2 D3: longest silence within a binary upload body                                                                                                                                                                     |
+| `IMAGE_STAGING_REPORT_DAYS`       | `30`                        | v2 D3: staged images older than this are reported on the dashboard (never removed)                                                                                                                                     |
+| `ASSET_BYTES_RETENTION_DAYS`      | `90`                        | v2 D3: how long the bytes kept before an asset delete are kept                                                                                                                                                         |
+| `LK_ASSET_HOSTS`                  | `assets.legendkeeper.com`   | v2 D3: the hosts asset files are downloaded from (anonymous GET, no key): verification and kept bytes                                                                                                                  |
 
 The governor's per-attempt timeout (30 s) also bounds the PUT.
 

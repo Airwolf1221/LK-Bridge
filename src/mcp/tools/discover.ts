@@ -6,6 +6,7 @@
  * Every tool works only inside the project's AI REPOSITORY root, and every answer from the tree states the tree's
  * status and when it was last confirmed.
  */
+import type { ImageUploadRow } from '../../images/store.js';
 import { factsVersionFrom } from '../../facts/version.js';
 import * as z from 'zod';
 import type { AssetFolder, AssetItem, AssetMeta } from '../../assets/index.js';
@@ -722,7 +723,8 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
             assetCount: here.data.total,
           };
           if (includeAssets && here.data.assets.length > 0) {
-            out.assets = here.data.assets.map(assetBrief);
+            const uploads = uploadsOf(pd, here.data.assets);
+            out.assets = here.data.assets.map((a) => assetBrief(a, uploads));
             if (here.data.total > here.data.assets.length) out.assetsShown = here.data.assets.length;
           }
           if (levels > 0 && subs.length > 0) {
@@ -798,6 +800,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
           offset: from,
         }).data;
         const next = from + page.assets.length;
+        const uploads = uploadsOf(pd, page.assets);
         return finish(
           pd,
           mctx,
@@ -811,9 +814,9 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
             count: page.assets.length,
             offset: from,
             nextOffset: next < page.total ? next : null,
-            assets: page.assets.map((a) => ({ ...assetBrief(a), ...(a.url ? { url: a.url } : {}) })),
+            assets: page.assets.map((a) => ({ ...assetBrief(a, uploads), ...(a.url ? { url: a.url } : {}) })),
           },
-          () => ({ total: page.total, first: page.assets.slice(0, 10).map(assetBrief) }),
+          () => ({ total: page.total, first: page.assets.slice(0, 10).map((a) => assetBrief(a)) }),
         );
       }),
   });
@@ -1153,7 +1156,8 @@ function assetInfo(meta: AssetMeta, now: number): Record<string, unknown> {
   };
 }
 
-function assetBrief(a: AssetItem): Record<string, unknown> {
+function assetBrief(a: AssetItem, uploads?: ReadonlyMap<string, ImageUploadRow>): Record<string, unknown> {
+  const u = uploads?.get(a.id);
   return {
     id: a.id,
     name: a.name,
@@ -1161,7 +1165,32 @@ function assetBrief(a: AssetItem): Record<string, unknown> {
     ...(a.width && a.height ? { width: a.width, height: a.height } : {}),
     ...(a.size !== null ? { size: a.size } : {}),
     ...(a.isHidden ? { hidden: true } : {}),
+    // v2 D3 (ADR 0041): what the bridge knows of an image it uploaded itself.
+    ...(u
+      ? {
+          bridgeUpload: {
+            originalFormat: u.original.format,
+            width: u.width,
+            height: u.height,
+            frames: u.frames,
+            conversion: u.conversionMode,
+            storedBytesVerified: u.storedVerified === true,
+            staged: u.staged,
+            ...(u.staged ? { staged_id: u.id } : {}),
+          },
+        }
+      : {}),
   };
+}
+
+/** v2 D3: the bridge's upload records of these assets (empty without the image pipeline). */
+function uploadsOf(pd: ProjectDeps, assets: readonly AssetItem[]): ReadonlyMap<string, ImageUploadRow> {
+  const images = pd.services?.images;
+  if (!images || assets.length === 0) return new Map();
+  return images.store.uploadsOfAssets(
+    pd.project.id,
+    assets.map((a) => a.id),
+  );
 }
 
 function assetContext(pd: ProjectDeps):

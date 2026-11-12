@@ -12,6 +12,7 @@ import { lkApiTools } from './lk-api.js';
 import { perOpTools } from './per-op.js';
 import type { ToolDeps } from './shape.js';
 import { uploadTools } from './upload.js';
+import { imageTools } from './images.js';
 import { writePageTool } from './write-page.js';
 import { setFactsTool } from './set-facts.js';
 import { resourceTools } from './resources.js';
@@ -23,7 +24,7 @@ import { mapFeatureTools } from './map-features.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
-export { createUploadPutHandler } from './upload-step.js';
+export { createUploadPutHandler, createUploadVerifyHandler } from './upload-step.js';
 export { createUploadTransport } from './upload-http.js';
 
 /**
@@ -56,6 +57,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     ...guideTools(deps),
     ...lkApiTools(deps),
     ...uploadTools(deps),
+    // v2 D3 (ADR 0041): the image pipeline.
+    ...imageTools(deps),
     ...(opts.exposePerOpTools ? perOpTools(deps) : []),
   ];
 }

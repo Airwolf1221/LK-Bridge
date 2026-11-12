@@ -139,6 +139,42 @@ six ages):
 - **As the service user:** the package script loads the config with `--configLoader runner` and the config turns
   `fsModuleCache` off, so nothing is written under the release's `node_modules`.
 
+## Waiting for parked writes (the owner's run of 12 November 2026)
+
+The sandbox files run **one after another** (`fileParallelism: false` in `vitest.sandbox.config.ts`). In parallel the
+smoke and assumptions tests shared the test project's 120 writes a minute; the smoke test's writes were parked
+(`waiting_budget`), it reported them as failures instead of waiting, and it left its throwaway page and image behind.
+Now every script settles each operation through `wait.ts`: a read refused for budget is made again when the budget
+allows; a write parked for budget or queued behind the pacing is **waited for** (up to 10 minutes) and never sent again,
+in the clean-up too. `test/tools/sandbox-dryrun.test.ts` and `test/images/sandbox-dryrun.test.ts` check it against the
+mock, which throttles a write and the clean-up for longer than the governor waits inline, so both are really parked.
+
+## The image pipeline (v2 D3)
+
+`images.test.ts` (on the server `deploy/sandbox-test.sh --project test -- images`) **writes, then cleans up**
+([ADR 0041](../../docs/adr/0041-image-pipeline.md)). It builds the project's asset tree (one listing per folder), then:
+
+1. **The ways in.** `1.base64`: the fixtures (`test/fixtures/images`: PNG with alpha, JPEG with EXIF orientation 6, an
+   animated GIF, a WebP) converted and uploaded, each verified. `1.binary`: a single-use capability, the file POSTed
+   over real HTTP to the pipeline's own endpoint (on loopback, in the test's runtime), then uploaded. `1.caddy`: a
+   large POST (8 MiB, no valid capability) to `<BRIDGE_PUBLIC_URL>/uploads/…`, which must come back from the **live**
+   bridge as its generic refusal: Caddy passes the path and the body (PASS on 403; FAIL on 404 or 413; INCONCLUSIVE on a
+   proxy error). `1.url`: only when `LKB_SANDBOX_IMAGE_URL` names a stable public test image.
+2. **What LegendKeeper stored**: each asset downloaded; SHA-256, dimensions, alpha, orientation (none left) and frames
+   as stored, and LegendKeeper's recorded width and height.
+3. **Staging**: one image staged (hidden), placed (moved, unhidden, renamed, read back); another staged and discarded,
+   its bytes kept first.
+4. **A nested destination** (`… / Characters / Group / Race / Name`) created in order under the throwaway folder.
+5. **Clean-up**: the throwaway folder `lk-bridge images sandbox <time>` (everything inside goes with it) and the run's own
+   staging folder (`<that name> staging`, set as the run's `imageStagingFolder` in its temporary database) are deleted;
+   404 or "already deleted" counts as cleaned. Anything left is named: delete it by hand.
+
+Each line is PASS, FAIL or INCONCLUSIVE with its cost. **Cost** (measured against a mock library shaped like the test
+world's, 18 folders and 559 images): about **68 reads (32 of them listings), 34 writes and 24 downloads** from the asset
+host (downloads draw on no API tier), about 0.2 % of the key's daily budget; a few minutes with the pacing.
+`test/images/sandbox-dryrun.test.ts` runs the same script against the mock. The URL check needs
+`LKB_SANDBOX_IMAGE_URL`; the Caddy check reads `BRIDGE_PUBLIC_URL` from the env file (or `LKB_PUBLIC_URL`).
+
 ## The maps (v2 D2)
 
 `npm run test:sandbox` (on the server `deploy/sandbox-test.sh --project test`) also runs `maps.test.ts`;

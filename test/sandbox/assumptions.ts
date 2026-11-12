@@ -14,7 +14,6 @@
  * guards never stand in the way. Cost: about 75 writes and 85 reads (plus up to 12 search polls), about 2 minutes at
  * the bridge's write pacing.
  */
-import { BudgetExhaustedError } from '../../src/jobs/errors.js';
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { mintClientId } from '../../src/jobs/ids.js';
 import {
@@ -29,6 +28,7 @@ import { parseEtag } from '../../src/lk/governor/headers.js';
 import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
 import { fromMarkdown, stubResolver } from '../../src/markdown/index.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
+import { runSettled } from './wait.js';
 
 type Obj = Record<string, any>;
 
@@ -61,29 +61,10 @@ export async function runAssumptions(
   const record = (id: string, title: string, verdict: Verdict, detail: string) =>
     findings.push({ id, title, verdict, detail });
 
-  const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> => {
-    let r: Awaited<ReturnType<typeof t.engine.run>> | undefined;
-    // A read refused for budget (the key's minute) is made again once the budget allows (at most 5 times).
-    for (let i = 0; !r; i++) {
-      try {
-        r = await t.engine.run(op, params, { origin, priority: 'P1', project: t.projectId, ...extra });
-      } catch (e) {
-        if (!(e instanceof BudgetExhaustedError) || i >= 5) throw e;
-        await sleep(Math.max(1000, e.retryAtMs - Date.now()));
-      }
-    }
-    if (r.status === 'succeeded') return r.result;
-    // Parked for budget or queued behind the pacing: wait for it (at most 10 minutes), never send it again.
-    if ((r.status === 'waiting_budget' || r.status === 'queued') && r.jobId) {
-      for (let i = 0; i < 24; i++) {
-        const job = await t.engine.wait(t.projectId, r.jobId, 25_000);
-        if (job.status === 'succeeded') return t.engine.stepResults(t.projectId, r.jobId)?.[0]?.value;
-        if (['failed', 'cancelled'].includes(job.status))
-          throw new Error(`${op} ${job.status}: ${job.lastError?.message ?? ''}`);
-      }
-    }
-    throw new Error(`${op} did not complete: ${r.status}`);
-  };
+  // A read refused for budget is made again once the budget allows; a write parked for budget or queued behind the
+  // pacing is waited for (at most 10 minutes) and never sent again (test/sandbox/wait.ts, shared with smoke and images).
+  const run = async (op: string, params: Obj = {}, extra: Obj = {}): Promise<any> =>
+    runSettled(t, op, params, { origin, priority: 'P1', project: t.projectId, ...extra }, { sleep });
   /** A raw call through the governor: the status, headers and body LegendKeeper answered, or its error. */
   const raw = async (
     operationId: string,

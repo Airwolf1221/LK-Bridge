@@ -221,6 +221,17 @@ export class AssetStore {
   }
 
   /** What the model holds under an id: a folder, an asset, or nothing. */
+  /**
+   * v2 D3 (ADR 0041): the SHA-256 and size of an asset's stored file, once the bridge has read the file (the upload's
+   * verification, or the bytes kept before a delete). Kept until the asset's url changes (another file).
+   */
+  recordHash(projectId: string, id: string, sha256: string, size: number): boolean {
+    const r = this.db
+      .prepare('UPDATE asset_items SET sha256 = ?, sha256_at = ?, size = ? WHERE project_id = ? AND id = ?')
+      .run(sha256, this.now(), size, projectId, id);
+    return r.changes > 0;
+  }
+
   has(projectId: string, id: string): 'folder' | 'asset' | undefined {
     if (this.folder(projectId, id)) return 'folder';
     if (this.item(projectId, id)) return 'asset';

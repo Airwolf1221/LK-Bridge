@@ -7,6 +7,7 @@
  */
 import * as z from 'zod';
 import { ConfigError } from './index.js';
+import { DEFAULT_LK_ASSET_HOST } from '../lk/constants.js';
 import { type OutboundPortAllowlist, parseOutboundPortAllowlist } from '../auth/ports.js';
 
 const bool = (def: boolean) => z.stringbool().default(def);
@@ -29,6 +30,33 @@ const toolsEnvSchema = z.object({
   MCP_RESULT_MAX_CHARS: intFrom(40_000, 4_000, 400_000),
   /** `host:port` pairs the image fetch and the upload PUT may use besides 443 (v1.0.1). Parsed below. */
   OUTBOUND_EXTRA_PORTS_ALLOWLIST: z.string().optional(),
+  // ---- v2 D3 (ADR 0041): the image pipeline
+  /** Most pixels an image may have, all frames together (sharp's `limitInputPixels`). About 100 megapixels. */
+  IMAGE_MAX_PIXELS: intFrom(100_000_000, 1_000, 1_000_000_000),
+  /** Most frames an animation may have. */
+  IMAGE_MAX_FRAMES: intFrom(300, 1, 10_000),
+  /** Time limit of one conversion. */
+  IMAGE_CONVERT_TIMEOUT_MS: intFrom(60_000, 1_000, 600_000),
+  /** Conversions that may run at once (each holds a decoded image in memory). */
+  IMAGE_CONVERT_CONCURRENCY: intFrom(1, 1, 4),
+  /**
+   * The bridge's private image directory: the binary endpoint's temporary files (`upload-tmp/`) and the bytes kept
+   * before an asset is deleted (`kept-bytes/`). Default: `images/` next to the database (DB_PATH's directory).
+   */
+  IMAGE_DATA_DIR: z.string().min(1).optional(),
+  /** Accepted binary uploads per connection (principal) per hour, and `prepare_image_upload` calls likewise. */
+  IMAGE_UPLOAD_RATE_PER_PRINCIPAL: intFrom(30, 1, 10_000),
+  /** Requests to the binary endpoint per client address per hour, refused ones included. */
+  IMAGE_UPLOAD_RATE_PER_IP: intFrom(60, 1, 100_000),
+  /** Deadline for receiving a whole upload body, and the longest silence within it (slow-loris). */
+  IMAGE_UPLOAD_BODY_TIMEOUT_MS: intFrom(120_000, 5_000, 1_800_000),
+  IMAGE_UPLOAD_IDLE_TIMEOUT_MS: intFrom(15_000, 1_000, 300_000),
+  /** Staged images older than this are reported on the dashboard (never removed automatically). */
+  IMAGE_STAGING_REPORT_DAYS: intFrom(30, 1, 3650),
+  /** How long the bytes kept before an asset delete are kept. */
+  ASSET_BYTES_RETENTION_DAYS: intFrom(90, 1, 3650),
+  /** The hosts LegendKeeper serves asset files from; the bridge downloads (GET, no credentials) only from these. */
+  LK_ASSET_HOSTS: z.string().default(DEFAULT_LK_ASSET_HOST),
 });
 
 export interface ToolsSettings {
@@ -46,12 +74,47 @@ export interface ToolsSettings {
   readonly outboundExtraPorts: OutboundPortAllowlist;
   /** Results above this many characters become artefact handles (PLAN §7: about 40,000). */
   readonly resultMaxChars: number;
+  /** v2 D3 (ADR 0041): the image pipeline. */
+  readonly images: ImageSettings;
 }
+
+export interface ImageSettings {
+  readonly maxPixels: number;
+  readonly maxFrames: number;
+  readonly convertTimeoutMs: number;
+  readonly convertConcurrency: number;
+  /** IMAGE_DATA_DIR, or null for `images/` next to the database. */
+  readonly dataDir: string | null;
+  readonly ratePerPrincipalPerHour: number;
+  readonly ratePerIpPerHour: number;
+  readonly bodyTimeoutMs: number;
+  readonly idleTimeoutMs: number;
+  readonly stagingReportDays: number;
+  readonly keptBytesRetentionDays: number;
+  /** Lowercase host names asset files are downloaded from. */
+  readonly assetHosts: readonly string[];
+}
+
+export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
+  maxPixels: 100_000_000,
+  maxFrames: 300,
+  convertTimeoutMs: 60_000,
+  convertConcurrency: 1,
+  dataDir: null,
+  ratePerPrincipalPerHour: 30,
+  ratePerIpPerHour: 60,
+  bodyTimeoutMs: 120_000,
+  idleTimeoutMs: 15_000,
+  stagingReportDays: 30,
+  keptBytesRetentionDays: 90,
+  assetHosts: [DEFAULT_LK_ASSET_HOST],
+};
 
 export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   upload: { maxBytes: 10 * 1024 * 1024, allowUrlSource: true, fetchTimeoutMs: 15_000, putTimeoutMs: 120_000 },
   resultMaxChars: 40_000,
   outboundExtraPorts: new Set<string>(),
+  images: DEFAULT_IMAGE_SETTINGS,
 };
 
 /** Parses and validates the tool-layer environment variables. Never echoes values, only names. */
@@ -76,5 +139,36 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
     },
     resultMaxChars: e.MCP_RESULT_MAX_CHARS,
     outboundExtraPorts,
+    images: {
+      maxPixels: e.IMAGE_MAX_PIXELS,
+      maxFrames: e.IMAGE_MAX_FRAMES,
+      convertTimeoutMs: e.IMAGE_CONVERT_TIMEOUT_MS,
+      convertConcurrency: e.IMAGE_CONVERT_CONCURRENCY,
+      dataDir: e.IMAGE_DATA_DIR ?? null,
+      ratePerPrincipalPerHour: e.IMAGE_UPLOAD_RATE_PER_PRINCIPAL,
+      ratePerIpPerHour: e.IMAGE_UPLOAD_RATE_PER_IP,
+      bodyTimeoutMs: e.IMAGE_UPLOAD_BODY_TIMEOUT_MS,
+      idleTimeoutMs: e.IMAGE_UPLOAD_IDLE_TIMEOUT_MS,
+      stagingReportDays: e.IMAGE_STAGING_REPORT_DAYS,
+      keptBytesRetentionDays: e.ASSET_BYTES_RETENTION_DAYS,
+      assetHosts: parseHosts(e.LK_ASSET_HOSTS),
+    },
   };
+}
+
+/** LK_ASSET_HOSTS: comma-separated exact host names (no scheme, port, path or wildcard). */
+function parseHosts(raw: string): string[] {
+  const hosts = raw
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => h !== '');
+  for (const h of hosts) {
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(h)) {
+      throw new ConfigError([
+        `LK_ASSET_HOSTS: "${h}" is not a host name (no scheme, port, path or wildcard)`,
+      ]);
+    }
+  }
+  if (hosts.length === 0) throw new ConfigError(['LK_ASSET_HOSTS: at least one host is needed']);
+  return hosts;
 }

@@ -9,6 +9,7 @@
  * - failures become typed `{ error: { code, message, … } }` results, never thrown exceptions.
  */
 import * as z from 'zod';
+import type { ImageService } from '../../images/service.js';
 import type { AssetQueries } from '../../assets/index.js';
 import type { DocumentVersions } from '../../pages/versions.js';
 import type { TemplateKeys } from '../../facts/templates.js';
@@ -72,6 +73,8 @@ export interface DiscoverServices {
   readonly lifecycle?: Lifecycle;
   /** v2 D1: chronology sync (settings, the calendar cache, records, links; src/chronology). */
   readonly chronology?: Chronology;
+  /** v2 D3 (ADR 0041): the image pipeline (upload_image, prepare_image_upload, staging). */
+  readonly images?: ImageService;
 }
 
 /** What every tool handler needs. */
@@ -92,6 +95,8 @@ export interface ToolDeps {
   readonly principalNames?: ((ids: Iterable<string>) => Map<string, { readonly name: string }>) | undefined;
   /** LK_READ_ONLY as configured (the effective flag, which can be overridden at runtime, comes from the engine). */
   readonly configuredReadOnly: boolean;
+  /** BRIDGE_PUBLIC_URL: where agents reach the bridge (the binary upload endpoint's address). */
+  readonly publicUrl?: string | undefined;
   /** Test seam for the upload guard (resolver, CA, allowed addresses). Never set in production. */
   readonly uploadGuard?: GuardOptions | undefined;
   readonly now?: () => number;

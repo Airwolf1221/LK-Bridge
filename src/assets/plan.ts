@@ -41,6 +41,17 @@ export type PlanRequest =
       /** Literal folder names under the character's folder, in order. */
       readonly subfolders?: readonly string[] | undefined;
       readonly folderPath?: undefined;
+      /**
+       * v2 D3 (ADR 0041): the group and race folder names, already worked out from a DECLARED race (the taxonomy's
+       * asset folder names, `[group, race]` or `[race]`), or null for an unknown race. Given, they replace the labels
+       * read from the character page's ancestry. Rule 1 (an existing folder named after the character) still comes first.
+       */
+      readonly raceLabels?: readonly string[] | null | undefined;
+      /**
+       * v2 D3: with `characterResourceId`, the character's name when the page's own name is not it (a Compact Character
+       * Reference is named “{name} - Character Reference”; the registry knows its subject).
+       */
+      readonly subjectName?: string | undefined;
     }
   | {
       /** A literal path from the library's root, one folder name per entry. */
@@ -48,6 +59,8 @@ export type PlanRequest =
       readonly characterResourceId?: undefined;
       readonly characterName?: undefined;
       readonly subfolders?: undefined;
+      readonly raceLabels?: undefined;
+      readonly subjectName?: undefined;
     };
 
 /** The parts of A3's character type that placement planning uses. */
@@ -122,7 +135,7 @@ export interface AssetPlan {
     /** Null when not needed (an existing folder was reused) or unknown. */
     readonly group: string | null;
     readonly race: string | null;
-    readonly raceSource: 'page_ancestry' | 'unknown_race' | 'not_needed';
+    readonly raceSource: 'page_ancestry' | 'taxonomy' | 'unknown_race' | 'not_needed';
   } | null;
   /** Every folder from the root to the destination, in order. */
   readonly steps: readonly PlanStep[];
@@ -270,6 +283,11 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
     const r = characterFromPage(projectId, deps, request.characterResourceId, rules);
     if (!r.ok) return r.result;
     page = r.value;
+    if (request.subjectName !== undefined && request.subjectName.trim() !== '') {
+      const c = cleanName(request.subjectName, 'subjectName', rules.unknownFolder);
+      if (!c.ok) return { ok: false, error: c.error };
+      page = { ...page, name: c.name };
+    }
     name = page.name;
   } else {
     const c = cleanName(request.characterName, 'characterName', rules.unknownFolder);
@@ -309,6 +327,34 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
         raceSource: 'not_needed',
       },
       [...steps, ...walk.value],
+      notes,
+      assetTree,
+    );
+  }
+
+  // v2 D3: the race was declared and resolved through the taxonomy by the caller.
+  if (request.raceLabels !== undefined) {
+    const labels: string[] = [];
+    for (const [i, raw] of (request.raceLabels ?? [rules.unknownFolder]).entries()) {
+      const c = cleanName(raw, `raceLabels[${i}]`, rules.unknownFolder);
+      if (!c.ok) return { ok: false, error: c.error };
+      labels.push(c.name);
+    }
+    if (request.raceLabels === null) notes.push('The race is unknown or was not given.');
+    const walk = walkPath(projectId, deps, null, [], [rules.rootName, ...labels, name, ...subfolders], notes);
+    if (!walk.ok) return walk.result;
+    const known = request.raceLabels !== null;
+    return done(
+      projectId,
+      'character_path',
+      {
+        name,
+        resourceId: page?.resourceId ?? null,
+        group: known && labels.length === 2 ? labels[0]! : null,
+        race: known ? labels.at(-1)! : rules.unknownFolder,
+        raceSource: known ? 'taxonomy' : 'unknown_race',
+      },
+      walk.value,
       notes,
       assetTree,
     );
@@ -614,4 +660,82 @@ function characterFromName(projectId: string, deps: PlanDeps, name: string, rule
     };
   }
   return { ok: true, value: [...seen.values()][0]! };
+}
+
+/**
+ * v2 D3 (ADR 0041): plans `segments` (literal folder names, possibly none) below an existing folder given by id, or the
+ * library's root for null. Each segment reuses the one folder of that name there, or is created; ambiguity and a
+ * non-folder of that name are refused, as for every plan.
+ */
+export function planUnderFolder(
+  projectId: string,
+  folderId: string | null,
+  segments: readonly string[],
+  deps: PlanDeps,
+): PlanResult {
+  const meta = deps.assets.status(projectId);
+  if (meta.status === 'not_built' || meta.status === 'building') {
+    return fail(
+      'ASSET_TREE_NOT_READY',
+      `The asset tree of this project is ${meta.status === 'building' ? 'still being built' : 'not built yet'}, so no folder can be told from one that is missing.`,
+    );
+  }
+  const assetTree = { status: meta.status, reason: meta.reason, confirmedAt: meta.confirmedAt };
+  const notes: string[] = [];
+  const rules = rulesFor(projectId, deps);
+  const names: string[] = [];
+  for (const [i, raw] of segments.entries()) {
+    const c = cleanName(raw, `subfolders[${i}]`, rules.unknownFolder);
+    if (!c.ok) return { ok: false, error: c.error };
+    names.push(c.name);
+  }
+  let start: PlanStep[] = [];
+  let startPath: readonly string[] = [];
+  if (folderId !== null) {
+    const f = deps.assets.folder(projectId, folderId).data;
+    if (!f) {
+      return fail('INVALID_REQUEST', `No asset folder ${folderId} is in the asset tree of this project.`, {
+        folderId,
+      });
+    }
+    start = f.path.ids.map((id, i) => ({
+      name: f.path.names[i]!,
+      action: 'reuse' as const,
+      folderId: id,
+      parentFolderId: i === 0 ? null : f.path.ids[i - 1]!,
+      path: f.path.names.slice(0, i + 1),
+    }));
+    startPath = f.path.names;
+  }
+  if (folderId === null && names.length === 0) {
+    return fail('INVALID_REQUEST', 'Name a folder: the library’s root is not a destination here.');
+  }
+  const walk = walkPath(projectId, deps, folderId, startPath, names, notes);
+  if (!walk.ok) return walk.result;
+  return done(projectId, 'folder_path', null, [...start, ...walk.value], notes, assetTree);
+}
+
+/**
+ * Splits a written folder path (`Characters / Beastkin / Qishen`) into folder names. The unknown-race folder's own name
+ * contains " / " (`Undetermined / Unknown`), so its two halves next to each other are joined back into one name.
+ */
+export function splitFolderPath(path: string, unknownFolder = UNKNOWN_RACE_FOLDER): string[] {
+  const raw = path
+    .split('/')
+    .map((p) => p.trim())
+    .filter((p) => p !== '');
+  const halves = unknownFolder.split('/').map((p) => p.trim());
+  const out: string[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (
+      halves.length === 2 &&
+      nameKey(raw[i]!) === nameKey(halves[0]!) &&
+      i + 1 < raw.length &&
+      nameKey(raw[i + 1]!) === nameKey(halves[1]!)
+    ) {
+      out.push(unknownFolder);
+      i++;
+    } else out.push(raw[i]!);
+  }
+  return out;
 }

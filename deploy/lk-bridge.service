@@ -34,9 +34,11 @@ KillSignal=SIGTERM
 TimeoutStopSec=45
 TimeoutStartSec=60
 
-# Resource limits. The bridge is one Node process plus SQLite; 1 GiB is generous.
-MemoryHigh=900M
-MemoryMax=1G
+# Resource limits. The bridge is one Node process plus SQLite. v2 D3 (ADR 0041): image conversion (sharp, libvips) uses
+# native memory outside the V8 heap: about 0.5 GiB for an image at the IMAGE_MAX_PIXELS limit (100 megapixels), one at a
+# time. So the ceiling is the V8 heap (700 MB) plus that, with room to spare.
+MemoryHigh=1400M
+MemoryMax=1536M
 TasksMax=256
 LimitNOFILE=8192
 

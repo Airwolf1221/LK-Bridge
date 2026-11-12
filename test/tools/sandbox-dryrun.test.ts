@@ -99,7 +99,42 @@ describe('sandbox smoke script (dry run)', () => {
     writeFileSync('/tmp/dry.txt', formatReport(findings));
     // Checks that need real LK data or semantics (an echoed request id, block ids and versions, a real signed URL)
     // cannot pass against generated bodies; every other family must run clean.
-    const needsRealLk = ['a:', 'b:', 'd.blocks:', 'd.infobox:', 'e:'];
+    // v2 D3 (ADR 0041): an asset delete keeps the file first, and the spec's example asset has no file on an asset host,
+    // so d.assets' delete is refused here (against LegendKeeper the file is on its asset host).
+    const needsRealLk = ['a:', 'b:', 'd.blocks:', 'd.infobox:', 'd.assets:', 'e:'];
     expect(failed.filter((f) => !needsRealLk.some((p) => f.startsWith(p)))).toEqual([]);
   });
+
+  // The owner's sandbox run of 12 November 2026: writes parked for budget were reported as failures and the throwaway
+  // root was left behind. Here LegendKeeper throttles the first write and the clean-up for longer than the governor waits
+  // inline (Retry-After 31 s), so both are PARKED (`waiting_budget`); the script must wait for them, not fail.
+  it('waits for a parked write instead of failing, the clean-up included', async () => {
+    const parked = new Set<string>();
+    const off = stack.runtime.engine.events.on('job', (e) => {
+      if (e.job.status === 'waiting_budget') parked.add(e.job.id);
+    });
+    const throttle = { kind: 'rate-limit' as const, tier: 'write-min' as const, retryAfterS: 31 };
+    stack.mock.inject((c) => c.method === 'POST' && /\/resources\/?$/.test(c.path), throttle, 1);
+    // The clean-up's cascade delete is throttled too: armed just before the script sends it.
+    const engine = stack.runtime.engine;
+    const wrapped = Object.create(engine) as typeof engine;
+    wrapped.run = (op, params, opts) => {
+      if (op === 'deleteResource' && (params?.query as { cascade?: unknown } | undefined)?.cascade === true) {
+        stack.mock.inject((c) => c.method === 'DELETE', throttle, 1);
+      }
+      return engine.run(op, params, opts);
+    };
+    try {
+      const findings = await runSmoke({ ...target(), engine: wrapped }, PROJECT, {
+        waitMs: 5_000,
+        maxWaits: 30,
+      });
+      expect(parked.size).toBeGreaterThanOrEqual(2);
+      expect(findings.find((f) => f.id === 'cleanup')).toMatchObject({ verdict: 'pass' });
+      expect(findings.find((f) => f.id === 'd.resources')).toMatchObject({ verdict: 'pass' });
+      expect(findings.filter((f) => /did not complete|waiting_budget/.test(f.detail))).toEqual([]);
+    } finally {
+      off();
+    }
+  }, 180_000);
 });

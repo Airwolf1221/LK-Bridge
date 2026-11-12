@@ -1655,6 +1655,8 @@ function stepOptions(o: StepOptions): StepOptions {
     // v2 D1: a chronology write whose place or new count the job's own check works out inside the lock.
     ...(o.bindBody ? { bindBody: o.bindBody } : {}),
     ...(o.judgedInLock === true ? { judgedInLock: true } : {}),
+    // v2 D3 (ADR 0041): a folder (or asset) the same job creates, its id bound in the job (an image placement).
+    ...(o.bindFrom ? { bindFrom: o.bindFrom } : {}),
   };
 }
 

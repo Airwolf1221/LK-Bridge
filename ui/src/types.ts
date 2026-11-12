@@ -1288,3 +1288,68 @@ export interface ChronologyRecordsResponse {
     { id: string; name: string; type: 'grant' | 'pat' | 'system' | 'removed'; removedAt: number | null }
   >;
 }
+
+// ---------------------------------------------------------------------------------------------- v2 D3: staging
+
+export interface StagedImageView {
+  stagedId: string;
+  state: 'uploading' | 'uploaded' | 'failed' | 'discarded';
+  staged: boolean;
+  name: string;
+  assetId: string | null;
+  url: string | null;
+  width: number;
+  height: number;
+  frames: number;
+  bytes: number;
+  originalFormat: string;
+  originalBytes: number;
+  conversion: 'converted' | 'webp_passthrough';
+  storedVerified: boolean | null;
+  verifyReason: string | null;
+  principalId: string;
+  source: string;
+  createdAt: number;
+  intended: string | null;
+  intendedDestination: Record<string, unknown> | null;
+  placing: { proposalId?: string; jobId?: string } | null;
+  discarding: { jobId: string } | null;
+  error: string | null;
+  old: boolean;
+}
+
+export interface StagingResponse {
+  project: string;
+  folder: string;
+  reportDays: number;
+  staged: StagedImageView[];
+  old: number;
+  limits: { maxBytes: number; maxPixels: number; maxFrames: number };
+  kept: {
+    files: number;
+    bytes: number;
+    retentionDays: number;
+    recent: {
+      assetId: string;
+      name: string | null;
+      sha256: string;
+      size: number;
+      keptAt: number;
+      expiresAt: number;
+    }[];
+  };
+  overrides: { assetId: string; grantedAt: number; expiresAt: number; usedAt: number | null }[];
+}
+
+export interface StagingUploadResponse {
+  deduplicated: boolean;
+  image: StagedImageView;
+}
+
+export interface StagingActionResponse {
+  jobId?: string;
+  proposalId?: string;
+  status?: string;
+  verified?: boolean | null;
+  image?: StagedImageView;
+}

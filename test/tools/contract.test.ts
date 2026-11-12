@@ -28,6 +28,17 @@ describe('all registry operations through lk_api_read / lk_api_write', () => {
     const tool = op.kind === 'read' ? 'lk_api_read' : 'lk_api_write';
     const args: Record<string, unknown> = { operationId: op.operationId, params };
     // The only operation whose example needs an extra confirmation is a cascading delete; the example has none.
+    // v2 D3 (ADR 0041): a delete keeps the asset's bytes first, and the spec's example asset has no file on an asset
+    // host, so it would be refused; the owner allows this one delete (test/images/kept.test.ts covers the keeping).
+    if (op.operationId === 'deleteAsset') {
+      const assetId = (params as { path?: { assetId?: string } }).path?.assetId ?? '';
+      stack.runtime.images.store.grantOverride(
+        stack.runtime.projects.defaultProject().id!,
+        assetId,
+        'owner',
+        60_000,
+      );
+    }
     const r = await stack.call(client, tool, args);
     expect(r.isError, r.text.slice(0, 600)).toBe(false);
     expect(r.footer).toMatch(/^budget \(test\): /); // v2 A1: the footer names the project

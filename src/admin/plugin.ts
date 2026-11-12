@@ -17,6 +17,7 @@ import { registerPolicy } from './routes/policy.js';
 import { registerProjects } from './routes/projects.js';
 import { registerSecurity } from './routes/security.js';
 import { registerSettings } from './routes/settings.js';
+import { registerStaging } from './routes/staging.js';
 import { registerAssets } from './routes/assets.js';
 import { registerTree } from './routes/tree.js';
 import { registerRegistry } from './routes/registry.js';
@@ -99,6 +100,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerLifecycle(api, ctx); // v2 C2c
       registerChronology(api, ctx); // v2 D1
       registerAssets(api, ctx); // v2 A4
+      registerStaging(api, ctx); // v2 D3
 
       /** The one live stream (docs/dashboard.md › Stream). */
       api.get('/stream', (req, reply) => {

@@ -87,6 +87,9 @@ describe('the MCP surface with the official client', () => {
         'create_map_feature',
         'update_map_feature',
         'delete_map_feature',
+        // v2 D3: the image pipeline
+        'prepare_image_upload',
+        'upload_image',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));

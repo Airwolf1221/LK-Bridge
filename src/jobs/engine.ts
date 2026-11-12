@@ -32,7 +32,7 @@ import {
   errorToJson,
 } from './errors.js';
 import { JobEventEmitter } from './events.js';
-import { UPLOAD_PUT_STEP, type CustomStepHandlers } from './custom-steps.js';
+import { UPLOAD_PUT_STEP, UPLOAD_VERIFY_STEP, type CustomStepHandlers } from './custom-steps.js';
 import { checkSubmitGuards, isWriteOp } from './guards.js';
 import { isClientId, mintClientId, newJobId } from './ids.js';
 import { WriteJournal, journalLookup, type JournalFilter } from './journal.js';
@@ -70,6 +70,7 @@ import {
   type WriteHold,
   type WriteVerification,
   type RecordHandler,
+  type AssetDeleteKeeper,
 } from './step-exec.js';
 import type { StepPlanner, StepPlanners } from './planners.js';
 import {
@@ -217,6 +218,7 @@ export class JobEngine {
   private readonly planners = new Map<string, StepPlanner>();
   /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
   private writeGuard: WriteGuard | undefined;
+  private assetDeleteKeeper: AssetDeleteKeeper | undefined;
   /** v2 C2c: the lifecycle record's handler (`bridge.record` steps). */
   /** v2 C2c: the `bridge.record` handlers by store (`lifecycle`; v2 D1 `chronology`). */
   private readonly recordHandlers = new Map<string, RecordHandler>();
@@ -272,6 +274,7 @@ export class JobEngine {
       checker: (name) => this.checkers.get(name),
       mapChecker: (name) => this.mapCheckers.get(name),
       ...(o.etagVersions ? { etagVersions: o.etagVersions } : {}),
+      assetDeleteKeeper: () => this.assetDeleteKeeper,
     });
     this.etagVersions = o.etagVersions;
     for (const [name, fn] of Object.entries(o.planners ?? {})) this.planners.set(name, fn);
@@ -456,6 +459,17 @@ export class JobEngine {
    * v2 C2a: sets the write guard (src/jobs/write-guard.ts), asked about every request at entry and before every write
    * step inside its lock. Returns an unregister.
    */
+  /**
+   * v2 D3 (ADR 0041): sets the keeper every `deleteAsset` runs first (the bytes kept before a delete). Returns an
+   * unregister.
+   */
+  setAssetDeleteKeeper(keeper: AssetDeleteKeeper): () => void {
+    this.assetDeleteKeeper = keeper;
+    return () => {
+      if (this.assetDeleteKeeper === keeper) this.assetDeleteKeeper = undefined;
+    };
+  }
+
   setWriteGuard(guard: WriteGuard): () => void {
     this.writeGuard = guard;
     return () => {
@@ -867,6 +881,12 @@ export class JobEngine {
   private async submitUpload(req: UploadImageSubmit): Promise<SubmitResult | ProposalCaptured> {
     const project = this.requireAdmission(this.requireProject(req.project));
     const origin = normaliseOrigin(req.origin);
+    if (req.staging === true && (req.hide !== true || req.verifyStored !== true)) {
+      throw new InvalidParamsError('upload_image', [
+        { path: 'staging', message: 'a staged upload is hidden and verified' },
+      ]);
+    }
+    const folders = req.createFolders ?? [];
     const uploadParams: OpParams = {
       body: {
         contentType: req.contentType,
@@ -874,49 +894,101 @@ export class JobEngine {
         ...(req.contentHash ? { contentHash: req.contentHash } : {}),
       },
     };
+    // v2 D3: the folders to create first, each inside the one before (its id bound when it runs).
+    const folderItems = folders.map((name, i) => {
+      const params: OpParams = {
+        body: { name, ...(i === 0 && req.folderId !== undefined ? { folderId: req.folderId } : {}) },
+      };
+      const options: StepOptions = i === 0 ? {} : { bindFrom: { step: i, to: 'body.folderId' } };
+      return { def: this.validate('createAssetFolder', params), params, options };
+    });
     const assetBody = {
       name: req.name,
       ...(req.description !== undefined ? { description: req.description } : {}),
-      ...(req.folderId !== undefined ? { folderId: req.folderId } : {}),
+      ...(folders.length === 0 && req.folderId !== undefined ? { folderId: req.folderId } : {}),
     };
-    // The upload key does not exist yet; validate the rest with a stand-in.
+    // The upload key (and a new folder's id) do not exist yet; validate the rest with stand-ins.
     const upload = this.validate('createImageUpload', uploadParams);
-    const asset = this.validate('createImageAsset', { body: { uploadKey: 'pending', ...assetBody } });
+    const asset = this.validate('createImageAsset', {
+      body: { uploadKey: 'pending', ...assetBody, ...(folders.length > 0 ? { folderId: 'pending' } : {}) },
+    });
+    const assetStepNo = folders.length + 3;
+    const assetOptions: StepOptions =
+      folders.length > 0 ? { bindFrom: { step: folders.length, to: 'body.folderId' } } : {};
+    const hideParams: OpParams = { path: { assetId: 'pending' }, body: { isHidden: true } };
+    const hide = req.hide === true ? this.validate('updateAsset', hideParams) : null;
     const priority = req.priority ?? 'P2';
     const title = req.title ?? `upload image: ${req.name}`;
-    const items = [authItem(upload, uploadParams, {}), authItem(asset, { body: assetBody }, {})];
-    const proposal = await this.authorize(items, origin, 'upload_image', project, { title, priority });
+    const items = [
+      ...folderItems.map((f) => authItem(f.def, f.params, {})),
+      authItem(upload, uploadParams, {}),
+      authItem(asset, { body: assetBody }, {}),
+      ...(hide ? [authItem(hide, hideParams, {})] : []),
+    ];
+    const proposal = await this.authorize(
+      items,
+      origin,
+      'upload_image',
+      project,
+      { title, priority },
+      undefined,
+      false,
+      {
+        staging: req.staging === true,
+      },
+    );
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
     const guard = this.guardContext(project);
     for (const v of items) if (v.def) checkSubmitGuards(v.def, v.params, v.options, guard);
+    const custom = (opId: string, params: OpParams): Pick<PreparedStep, 'step'> => ({
+      step: { opId, opKind: 'upload', params, options: {}, clientIds: [], post: false },
+    });
     const steps: Pick<PreparedStep, 'step'>[] = [
+      ...folderItems.map((f) => this.prepare(f.def, f.params, f.options)),
       this.prepare(upload, uploadParams, {}),
-      {
-        step: {
-          opId: UPLOAD_PUT_STEP,
-          opKind: 'upload',
-          params: {
-            body: {
-              contentType: req.contentType,
-              contentLength: req.contentLength,
-              ...(req.contentHash ? { contentHash: req.contentHash } : {}),
-              dataBase64: req.dataBase64,
-            },
-          },
-          options: {},
-          clientIds: [],
-          post: false,
+      custom(UPLOAD_PUT_STEP, {
+        body: {
+          contentType: req.contentType,
+          contentLength: req.contentLength,
+          ...(req.contentHash ? { contentHash: req.contentHash } : {}),
+          dataBase64: req.dataBase64,
         },
-      },
-      this.prepare(asset, { body: assetBody }, {}),
+      }),
+      this.prepare(asset, { body: assetBody }, assetOptions),
+      ...(req.verifyStored === true
+        ? [
+            custom(UPLOAD_VERIFY_STEP, {
+              body: {
+                assetStep: assetStepNo,
+                contentLength: req.contentLength,
+                ...(req.contentHash ? { contentHash: req.contentHash } : {}),
+              },
+            }),
+          ]
+        : []),
+      ...(hide
+        ? [this.prepare(hide, hideParams, { bindFrom: { step: assetStepNo, to: 'path.assetId' } })]
+        : []),
     ];
-    const job = this.createJob(project, 'upload_image', title, origin, priority, 'stop', steps, 'queued');
+    const job = this.createJob(
+      project,
+      'upload_image',
+      title,
+      origin,
+      priority,
+      'stop',
+      steps,
+      'queued',
+      req.staging === true ? { staging: true } : undefined,
+    );
     const estimate = this.estimateFor(
       project,
       [
+        ...folderItems.map((f) => ({ def: f.def, params: f.params })),
         { def: upload, params: uploadParams },
         { def: asset, params: { body: assetBody } },
+        ...(hide ? [{ def: hide, params: hideParams }] : []),
       ],
       priority,
     );
@@ -936,8 +1008,12 @@ export class JobEngine {
     if (step.opId !== 'createImageAsset') return false;
     const params = this.repo.stepParams(step);
     const body = (params.body ?? {}) as Record<string, unknown>;
-    if (typeof body.uploadKey === 'string' && body.uploadKey.length > 0) return false;
-    const first = this.repo.step(jobId, 1);
+    if (typeof body.uploadKey === 'string' && body.uploadKey.length > 0 && body.uploadKey !== 'pending')
+      return false;
+    // v2 D3: folders may be created first, so the upload is the createImageUpload step before this one.
+    const first = this.repo
+      .steps(jobId)
+      .find((s) => s.opId === 'createImageUpload' && s.stepNo < step.stepNo);
     const created = first ? (this.repo.stepResult(first) as { uploadKey?: unknown } | null) : null;
     if (typeof created?.uploadKey !== 'string' || created.uploadKey.length === 0) {
       throw new JobsError('BRIDGE_ERROR', 'createImageUpload returned no uploadKey', {
@@ -1047,6 +1123,40 @@ export class JobEngine {
         if (e instanceof JobsError) return e;
         throw e;
       }
+    }
+    if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
+    return null;
+  }
+
+  /**
+   * v2 D3 (ADR 0041): puts the `id` an earlier step's create returned (a new folder, a new asset) into this step's
+   * `body.folderId` or `path.assetId`, just before it runs (see `StepOptions.bindFrom`). Stored before anything is sent;
+   * a step that may already have been sent keeps what it was sent with.
+   */
+  private bindFrom(job: JobView, step: StepView): JobsError | null {
+    const from = step.options.bindFrom;
+    if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
+    const result =
+      source?.status === 'succeeded' ? (this.repo.stepResult(source) as { id?: unknown } | null) : null;
+    if (typeof result?.id !== 'string' || result.id.length === 0) {
+      return new JobsError(
+        'BRIDGE_ERROR',
+        `${step.opId}: step ${from.step} gave no id to use as ${from.to}; nothing was sent`,
+        ref,
+      );
+    }
+    const params = this.repo.stepParams(step);
+    const next: OpParams =
+      from.to === 'path.assetId'
+        ? { ...params, path: { ...(params.path ?? {}), assetId: result.id } }
+        : { ...params, body: { ...((params.body ?? {}) as Record<string, unknown>), folderId: result.id } };
+    try {
+      this.validate(step.opId, next);
+    } catch (e) {
+      if (e instanceof JobsError) return e;
+      throw e;
     }
     if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
     return null;
@@ -1605,6 +1715,10 @@ export class JobEngine {
       }
       if (!bound) {
         step = this.repo.step(jobId, step.stepNo) ?? step;
+        bound = this.bindFrom(job, step);
+      }
+      if (!bound) {
+        step = this.repo.step(jobId, step.stepNo) ?? step;
         bound = this.bindIfMatch(job, step);
       }
       if (bound) {
@@ -1757,8 +1871,18 @@ export class JobEngine {
         if (s) result = { ...result, step: s.resultSummary, resultArtifactId: s.resultArtifactId };
       }
       if (job.kind === 'upload_image') {
-        const s = this.repo.step(jobId, 3);
-        if (s?.status === 'succeeded') result = { ...result, asset: s.resultSummary };
+        // v2 D3: folders may come first, and a verify and a hide step after.
+        const all = this.repo.steps(jobId);
+        const assetStep = all.find((s) => s.opId === 'createImageAsset');
+        if (assetStep?.status === 'succeeded') result = { ...result, asset: assetStep.resultSummary };
+        const folders = all
+          .filter((s) => s.opId === 'createAssetFolder' && s.status === 'succeeded')
+          .map((s) => s.resultSummary);
+        if (folders.length > 0) result = { ...result, folders };
+        const verify = all.find((s) => s.opId === UPLOAD_VERIFY_STEP);
+        if (verify?.status === 'succeeded') result = { ...result, stored: verify.resultSummary };
+        const hidden = all.find((s) => s.opId === 'updateAsset');
+        if (hidden) result = { ...result, hidden: hidden.status === 'succeeded' };
       }
       // v2 C1: what the read after each verified page write found, on the job itself. v2 C2a: and what every generic
       // verify step found (`bridge.verify`), the same way.
@@ -2187,6 +2311,7 @@ export class JobEngine {
     meta: Omit<ProposalMeta, 'kind' | 'origin' | 'project'>,
     lifecycle?: LifecycleMarker,
     forceProposal = false,
+    extra: { readonly staging?: boolean } = {},
   ): Promise<ProposalCaptured | null> {
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     const batch = jobKind === 'batch_ops';
@@ -2201,6 +2326,7 @@ export class JobEngine {
           jobKind,
           phase: 'entry',
           ...(batch ? { stepIndex: i } : {}),
+          ...(extra.staging === true ? { staging: true } : {}),
         });
       } catch (e) {
         decision = {
@@ -2323,6 +2449,9 @@ export class JobEngine {
           jobKind: job.kind,
           phase: 'execute',
           ...(job.kind === 'batch_ops' ? { stepIndex: step.stepNo - 1 } : {}),
+          ...(job.kind === 'upload_image' && this.repo.jobOptions(job.id).staging === true
+            ? { staging: true }
+            : {}),
         },
       );
     } catch (e) {
@@ -2447,6 +2576,12 @@ function stepOptions(o: StepOptions): StepOptions {
       ? { bindBody: { step: o.bindBody.step, key: o.bindBody.key } }
       : {}),
     ...(o.judgedInLock === true ? { judgedInLock: true } : {}),
+    // v2 D3: set by bridge code only.
+    ...(o.bindFrom &&
+    Number.isInteger(o.bindFrom.step) &&
+    (o.bindFrom.to === 'body.folderId' || o.bindFrom.to === 'path.assetId')
+      ? { bindFrom: { step: o.bindFrom.step, to: o.bindFrom.to } }
+      : {}),
   };
 }
 

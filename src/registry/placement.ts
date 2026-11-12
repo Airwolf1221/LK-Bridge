@@ -459,3 +459,68 @@ function resolveRace(
   }
   return { node: hit.node, entry: hit.entry, matchedBy: hit.by };
 }
+
+/** v2 D3 (ADR 0041): a character's race as the image pipeline needs it, by the same rules as `create_character`. */
+export type CharacterRaceFolders =
+  | { readonly unknown: true; readonly type: string }
+  | {
+      readonly unknown: false;
+      readonly type: string;
+      readonly race: { readonly plural: string; readonly matchedBy: 'plural' | 'singular' | 'alias' };
+      /** The asset folder names below the type's asset root: `[group, race]`, or `[race]` when the race has no group. */
+      readonly folders: readonly string[];
+      readonly notes: readonly string[];
+    };
+
+/**
+ * v2 D3 (ADR 0041): resolves a DECLARED race to its asset folder names, from the taxonomy's asset folder field (the
+ * race's entry, and its group's entry when the race sits under a group). An unknown or omitted race (null, blank or one
+ * of the type's unknown values) is `unknown`; a race that does not resolve throws (`RACE_NOT_FOUND`, and the other
+ * refusals of `create_character`), never falling back. Makes no request and writes nothing.
+ */
+export function resolveCharacterRaceFolders(
+  tree: ProjectTree,
+  store: RegistryStore,
+  input: { readonly race: string | null | undefined; readonly type?: string | undefined },
+): CharacterRaceFolders {
+  tree.requireUsable();
+  const type = characterType(store, input.type);
+  const p = type.placement!;
+  if (isUnknownRace(input.race, p)) return { unknown: true, type: type.singular };
+  const root = type.rootIndexId ? tree.node(type.rootIndexId) : null;
+  if (!root) {
+    throw new RegistryError(
+      'TYPE_ROOT_MISSING',
+      `The type ${type.singular} has no root index in the repository tree${type.rootIndexId ? ` (${type.rootIndexId} is not in it)` : ''}.`,
+      { typeId: type.id },
+    );
+  }
+  const r = resolveRace(tree, store, type, root, input.race!);
+  const notes: string[] = [];
+  const raceFolder = r.entry.assetFolder.trim() || r.entry.plural;
+  if (!r.entry.assetFolder.trim())
+    notes.push(`The race “${r.entry.plural}” has no asset folder name; its plural is used.`);
+  const folders: string[] = [];
+  if (r.node.parentId !== null && r.node.parentId !== root.id) {
+    const groupNode = tree.node(r.node.parentId);
+    const groupEntry = store.entries(type.id).find((e) => e.sourceNodeId === r.node.parentId) ?? null;
+    const groupFolder =
+      groupEntry?.assetFolder.trim() || groupEntry?.plural || groupNode?.displayName || null;
+    if (groupFolder === null) {
+      throw new RegistryError(
+        'RACE_SOURCE_MISSING',
+        `The group of the race “${r.entry.plural}” is not in the tree.`,
+      );
+    }
+    if (!groupEntry) notes.push(`The group “${groupFolder}” has no taxonomy entry; its index name is used.`);
+    folders.push(groupFolder);
+  }
+  folders.push(raceFolder);
+  return {
+    unknown: false,
+    type: type.singular,
+    race: { plural: r.entry.plural, matchedBy: r.matchedBy },
+    folders,
+    notes,
+  };
+}
