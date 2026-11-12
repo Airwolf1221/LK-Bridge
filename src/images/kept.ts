@@ -8,7 +8,9 @@
  * hash. A folder's children are listed (every depth) and each image's bytes kept the same way. If the bytes cannot be
  * fetched, the delete is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner has allowed this one asset on the dashboard.
  *
- * Kept bytes are removed after ASSET_BYTES_RETENTION_DAYS (default 90); E1's backups will reuse this store.
+ * Kept bytes are removed after ASSET_BYTES_RETENTION_DAYS (default 90). v2 E1a (ADR 0042): they are objects of the
+ * snapshot store (one store, not two); their reference rows expire after the retention, and the snapshot store's
+ * collector removes the bytes once no reference and no snapshot needs them.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
@@ -66,9 +68,21 @@ export class ByteStore {
   }
 }
 
+/**
+ * v2 E1a (ADR 0042): where kept bytes go. The runtime hands the snapshot store's `KeptBytes` (one store, not two);
+ * `ByteStore` above is the stand-alone store D3 used, kept for callers without a snapshot store.
+ */
+export interface KeptByteStore {
+  readonly dir: string;
+  has(sha256: string): Promise<boolean>;
+  put(bytes: Uint8Array): Promise<string>;
+  get(sha256: string): Promise<Buffer | null>;
+  remove(sha256: string): Promise<void>;
+}
+
 export interface KeeperOptions {
   readonly store: ImageStore;
-  readonly bytes: ByteStore;
+  readonly bytes: KeptByteStore;
   readonly assetHosts: readonly string[];
   readonly retentionMs: () => number;
   /** Most assets inside one folder delete (every depth) whose bytes are kept; more is refused without an override. */
@@ -124,7 +138,7 @@ export function createAssetDeleteKeeper(o: KeeperOptions): AssetDeleteKeeper {
             sha256: sha,
             size: got.bytes.length,
             contentType: got.contentType,
-            store: 'kept-bytes',
+            store: 'snapshots',
             refId,
           },
         };

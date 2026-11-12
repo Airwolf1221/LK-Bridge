@@ -36,7 +36,8 @@ describe('where the image directory is', () => {
     expect(stack.runtime.config.server.dbPath).toBe('./data/bridge.db');
     expect(images.dir).toBe(join(dirname(stack.dbPath), 'images'));
     expect(images.slots.dir).toBe(join(images.dir, 'upload-tmp'));
-    expect(images.bytes.dir).toBe(join(images.dir, 'kept-bytes'));
+    // v2 E1a (ADR 0042): kept bytes are objects of the snapshot store, next to the database too (one store, not two).
+    expect(images.bytes.dir).toBe(join(dirname(stack.dbPath), 'snapshots'));
     // and nowhere under the working directory
     expect(images.dir.startsWith(process.cwd())).toBe(false);
   });

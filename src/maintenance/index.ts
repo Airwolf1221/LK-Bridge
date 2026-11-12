@@ -19,6 +19,7 @@ import type { AssetMaintenance } from './asset-jobs.js';
 import {
   builtinJobs,
   type ChronologyMaintenance,
+  type SnapshotMaintenance,
   type TreeMaintenance,
   type LinkMaintenance,
 } from './jobs.js';
@@ -53,6 +54,8 @@ export interface CreateMaintenanceOptions {
   readonly links?: LinkMaintenance;
   /** v2 D1: the chronology check, for the `chronology-check` job. */
   readonly chronology?: ChronologyMaintenance;
+  /** v2 E1a: snapshots, for the `snapshot-*` jobs. */
+  readonly snapshots?: SnapshotMaintenance;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -77,6 +80,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         ...(o.assets ? { assets: o.assets } : {}),
         ...(o.links ? { links: o.links } : {}),
         ...(o.chronology ? { chronology: o.chronology } : {}),
+        ...(o.snapshots ? { snapshots: o.snapshots } : {}),
       }),
       ...(o.extraJobs ?? []),
     ],

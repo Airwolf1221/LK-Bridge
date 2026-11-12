@@ -19,6 +19,7 @@
 import { isCanonicalApproval } from '../policy/approval.js';
 import { PolicyDeniedError, type JobEngine, LkOperationError } from '../jobs/index.js';
 import { SYSTEM_PRINCIPAL, type LifecycleMarker, type OpParams } from '../jobs/types.js';
+import { ownerForcedProposal } from '../jobs/write-guard.js';
 import type {
   WriteGuard,
   WriteGuardEntry,
@@ -323,7 +324,10 @@ export class LifecycleGuard implements WriteGuard {
         reason: `refused at execution: ${reason}, and this proposal was not approved as canon; nothing was written`,
       };
     }
-    if (input.principal.principalId === SYSTEM_PRINCIPAL.principalId) {
+    // v2 E1a (ADR 0042): the bridge never makes it on its own; but a proposal the OWNER asked for on the dashboard
+    // (bridge code forcing a proposal from a dashboard origin: "Propose a restore") becomes a canonical proposal, which
+    // only "Approve and accept as canon" runs.
+    if (input.principal.principalId === SYSTEM_PRINCIPAL.principalId && !ownerForcedProposal(input)) {
       return {
         decision: 'deny',
         opId: input.items[0]?.op ?? 'operation',

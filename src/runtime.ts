@@ -33,7 +33,11 @@ import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 import { createAssets, type AssetService } from './assets/index.js';
-import { createImages, type ImageService } from './images/service.js';
+import { createImages, imageDataDir, type ImageService } from './images/service.js';
+import { SnapshotService } from './snapshots/index.js';
+import { Restores } from './snapshots/restores.js';
+import { snapshotMapCheckers } from './snapshots/restore.js';
+import { DEFAULT_SNAPSHOT_SETTINGS } from './config/tools.js';
 import { createTree, type TreeService } from './tree/index.js';
 import { SecretStore } from './secrets/store.js';
 import { createRegistry, type Registry } from './registry/index.js';
@@ -100,6 +104,10 @@ export interface Runtime {
   readonly chronology: Chronology;
   /** v2 D3 (ADR 0041): the image pipeline (conversion, the binary endpoint's slots, staging, kept bytes). */
   readonly images: ImageService;
+  /** v2 E1a (ADR 0042): snapshots (the store, full, change and daily snapshots, retention, verify, restore, rehearsal). */
+  readonly snapshots: SnapshotService;
+  /** v2 E1a: restore proposals (always proposals) and their follow-ups. */
+  readonly restores: Restores;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -437,6 +445,60 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   assets.attach();
   assets.start();
+  // v2 E1a (ADR 0042): the snapshot store, beside the database the runtime was GIVEN (as the images' directory is). It
+  // follows every write (change snapshots) and holds D3's kept bytes too (one store, not two).
+  const runtimeDbPath = databaseFile(o.db) ?? ':memory:';
+  const snapshots = new SnapshotService({
+    db: o.db,
+    engine,
+    projects,
+    tree,
+    settings: o.toolsSettings.snapshots ?? DEFAULT_SNAPSHOT_SETTINGS,
+    assetHosts: imageSettings.assetHosts,
+    dbPath: runtimeDbPath,
+    imageDir: imageDataDir(imageSettings, runtimeDbPath),
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    busy: (projectId) => {
+      const q = projects.anyClient(projectId)?.governor.snapshot().queues;
+      return q !== undefined && q.P1 + q.P2 > 0;
+    },
+    now: () => (o.clock ?? systemClock).now(),
+    log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  void snapshots.start();
+  // v2 E1a: restores are always proposals; the plan reads the page live at P1 and the tree for names and places.
+  const restores = new Restores({
+    db: o.db,
+    svc: snapshots,
+    engine,
+    deps: (projectId) => ({
+      svc: snapshots,
+      read: snapshots.reader(projectId, 'P1', { wait: false }),
+      projectSettings: (pid) => projectStore.byId(pid)?.settings ?? {},
+      node: (pid, id) => treeNode(pid, id),
+      children: (pid, id) => {
+        try {
+          return tree.queries.children(pid, id).data.map((n) => ({ id: n.id, rank: n.rank }));
+        } catch {
+          return [];
+        }
+      },
+      assetLive: (pid, id) => {
+        try {
+          return assets.queries.asset(pid, id).data !== null;
+        } catch {
+          return false;
+        }
+      },
+      now: () => (o.clock ?? systemClock).now(),
+    }),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachRestores = restores.attach();
+  const detachSnapshotCheckers = Object.entries(snapshotMapCheckers()).map(([name, fn]) =>
+    engine.registerMapChecker(name, fn as Parameters<JobEngine['registerMapChecker']>[1]),
+  );
   const images = createImages({
     db: o.db,
     engine,
@@ -447,7 +509,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     images: imageSettings,
     // The database this runtime was GIVEN, never the config's default path (relative to the working directory): the
     // owner's sandbox run of 12 November 2026 resolved `images/` from `./data/bridge.db` in the read-only app folder.
-    dbPath: databaseFile(o.db) ?? ':memory:',
+    dbPath: runtimeDbPath,
+    keptBytes: snapshots.keptBytes,
     proposals: { get: (id) => policy.proposals.get(id) },
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
@@ -470,6 +533,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     assets,
     links: lifecycle,
     chronology,
+    snapshots,
   });
   maintenance.start();
   const mappings = createMappings({
@@ -510,6 +574,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         // v2 D1: chronology sync.
         chronology,
         images,
+        snapshots,
+        restores,
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
@@ -519,6 +585,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const tools = [...bridgeTools, ...policy.tools];
   // Each project's key is checked now; a project is served from the moment its check passes.
   const ready = projects.verifyAll().catch((err: unknown) => log.error({ err }, 'project checks failed'));
+  // v2 E1a: a full snapshot or daily pass a restart interrupted continues once the projects are served.
+  void ready.then(() => snapshots.resumeInterrupted());
 
   return {
     projects,
@@ -535,6 +603,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     lifecycle,
     chronology,
     images,
+    snapshots,
+    restores,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -547,6 +617,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       await assets.stopPasses();
       lifecycle.stop(); // a link sweep in flight stops, to be continued by the next run
       chronology.stop(); // a chronology check in flight stops (the next run starts again)
+      snapshots.stop(); // a full snapshot in flight stops after its current read (it continues at the next start)
       await maintenance.stop(); // stops cleanly, before the engine and database wind down
       images.stop();
       let timer: NodeJS.Timeout | undefined;
@@ -564,6 +635,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachLifecycle();
       detachChronology();
       for (const off of detachMaps) off();
+      for (const off of detachSnapshotCheckers) off();
+      detachRestores();
       await tree.stop();
       detachRegistry();
       await assets.stop();

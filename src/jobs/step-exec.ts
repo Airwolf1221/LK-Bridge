@@ -60,7 +60,7 @@ import { callOp, isNotFound, newCallStats, type CallStats } from './lk-call.js';
 import type { LockManager } from './locks.js';
 import { READERS, opMeta, type OpMeta, type ReaderDef } from './op-meta.js';
 import type { JobsRepo } from './repo.js';
-import type { JobView, OpParams, StepView } from './types.js';
+import type { JobView, OpParams, ReadInfo, StepView } from './types.js';
 import type { WriterPool } from './writers.js';
 
 export type StepOutcome =
@@ -118,6 +118,8 @@ export interface StepExecDeps {
   readonly etagVersions?: (projectId: string) => boolean;
   /** v2 D3 (ADR 0041): keeps an asset's bytes before any `deleteAsset` (see `AssetDeleteKeeper`). */
   readonly assetDeleteKeeper?: () => AssetDeleteKeeper | undefined;
+  /** v2 E1a (ADR 0042): told about every read a job makes for its own checks (the snapshot service's read tap). */
+  readonly onRead?: (info: ReadInfo) => void;
 }
 
 /**
@@ -179,6 +181,8 @@ interface Current {
   /** The targeted entity (list readers select it; otherwise the body). */
   readonly entity: unknown;
   readonly version: string | undefined;
+  /** v2 E1a: the read made (its operation and path), for the read tap. */
+  readonly read?: { readonly op: string; readonly path: Record<string, string> };
 }
 
 type Recovery =
@@ -1252,10 +1256,39 @@ export class StepExecutor {
           if (!isNotFound(err)) opts.onError(err);
         },
       });
+      this.tapRead(job, opId, params, body);
       return { exists: true, body };
     } catch (e) {
-      if (isNotFound(e)) return { exists: false, body: undefined };
+      if (isNotFound(e)) {
+        this.tapRead(job, opId, params, undefined);
+        return { exists: false, body: undefined };
+      }
       throw e;
+    }
+  }
+
+  /**
+   * v2 E1a: hands a read to the read tap (never fails the step). `afterOwnWriteOf`: the step whose own write this read
+   * shows (the in-step verify), so the tap counts it as made after that write.
+   */
+  private tapRead(
+    job: JobView,
+    opId: string,
+    params: OpParams,
+    value: unknown,
+    afterOwnWriteOf?: number,
+  ): void {
+    try {
+      this.d.onRead?.({
+        projectId: job.projectId,
+        jobId: job.id,
+        opId,
+        params,
+        value,
+        ...(afterOwnWriteOf !== undefined ? { afterOwnWriteOf } : {}),
+      });
+    } catch {
+      /* a listener can never break a job */
     }
   }
 
@@ -1581,6 +1614,8 @@ export class StepExecutor {
     const planned = (params.body as { blocks?: unknown } | undefined)?.blocks;
     try {
       const after = await this.readCurrent(job, step, op, meta, params, step.clientIds);
+      // v2 E1a: this read shows the step's own write: the snapshot service may use it for the change snapshot.
+      if (after.read) this.tapRead(job, after.read.op, { path: after.read.path }, after.body, step.stepNo);
       const stored = (after.body as { blocks?: unknown } | undefined)?.blocks;
       const cmp = compareStoredBlocks(planned, stored);
       return cmp.ok
@@ -1831,6 +1866,9 @@ export class StepExecutor {
       if (isNotFound(e)) return { exists: false, body: undefined, entity: undefined, version: undefined };
       throw e;
     }
+    // v2 E1a: the in-step verify of a page write reads here; the snapshot service reuses what it read.
+    this.tapRead(job, readOp.operationId, { path }, body);
+    const read = { op: readOp.operationId, path };
     let entity: unknown = body;
     if (reader.list) {
       const data = (body as { data?: unknown } | undefined)?.data;
@@ -1883,7 +1921,7 @@ export class StepExecutor {
         return { exists: true, body: withBytes, entity: withBytes, version };
       }
     }
-    return { exists: entity !== undefined, body, entity, version };
+    return { exists: entity !== undefined, body, entity, version, read };
   }
 
   /** Every event of one lane of a timeline (listEvents, paged, filtered by lane). */

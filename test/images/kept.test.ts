@@ -40,8 +40,9 @@ function preImageOf(world: ImagesWorld, assetId: string): Record<string, unknown
   return e!.preImage as Record<string, unknown>;
 }
 
+/** v2 E1a (ADR 0042): kept bytes are objects of the snapshot store (gzip, named by the bytes' SHA-256). */
 function keptPath(world: ImagesWorld, hash: string): string {
-  return join(world.dataDir, 'kept-bytes', hash.slice(0, 2), hash);
+  return world.stack.runtime.snapshots.store.objectPath(hash);
 }
 
 describe('asset deletes keep their bytes', () => {
@@ -61,7 +62,7 @@ describe('asset deletes keep their bytes', () => {
     expect(pre).toMatchObject({
       id,
       type: 'IMAGE',
-      keptBytes: { sha256: sha(stored), size: stored.length, store: 'kept-bytes' },
+      keptBytes: { sha256: sha(stored), size: stored.length, store: 'snapshots' },
     });
     const path = keptPath(w, sha(stored));
     expect(existsSync(path)).toBe(true);
@@ -164,6 +165,17 @@ describe('asset deletes keep their bytes', () => {
     expect(await svc.expireKept()).toBe(0);
     w.stack.db.prepare('UPDATE asset_kept_refs SET expires_at = ?').run(Date.now() - 1);
     expect(await svc.expireKept()).toBe(1);
+    // v2 E1a (ADR 0042): the reference is gone, but the change snapshots of the library (after the upload) still hold
+    // the image, so the collector keeps its bytes; once those snapshots pass their retention, the bytes go.
+    const snaps = w.stack.runtime.snapshots;
+    await snaps.settled();
+    expect(snaps.index.referencedBySnapshots().has(sha(stored))).toBe(true);
+    await snaps.gc({ graceMs: 0 });
+    expect(existsSync(keptPath(w, sha(stored)))).toBe(true);
+    w.stack.db.prepare('UPDATE snapshots SET taken_at = ?').run(Date.now() - 400 * 86_400_000);
+    const pruned = await snaps.prune();
+    expect(pruned.removed).toBeGreaterThan(0);
+    await snaps.gc({ graceMs: 0 });
     expect(existsSync(keptPath(w, sha(stored)))).toBe(false);
   });
 });

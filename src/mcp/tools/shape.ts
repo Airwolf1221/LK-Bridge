@@ -10,6 +10,8 @@
  */
 import * as z from 'zod';
 import type { ImageService } from '../../images/service.js';
+import type { SnapshotService } from '../../snapshots/service.js';
+import type { Restores } from '../../snapshots/restores.js';
 import type { AssetQueries } from '../../assets/index.js';
 import type { DocumentVersions } from '../../pages/versions.js';
 import type { TemplateKeys } from '../../facts/templates.js';
@@ -75,6 +77,9 @@ export interface DiscoverServices {
   readonly chronology?: Chronology;
   /** v2 D3 (ADR 0041): the image pipeline (upload_image, prepare_image_upload, staging). */
   readonly images?: ImageService;
+  /** v2 E1a (ADR 0042): snapshots (list_snapshots, snapshot_diff) and restore proposals (restore_snapshot). */
+  readonly snapshots?: SnapshotService;
+  readonly restores?: Restores;
 }
 
 /** What every tool handler needs. */

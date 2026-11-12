@@ -21,6 +21,7 @@ import { lifecycleTools } from './lifecycle.js';
 import { documentTools } from './documents.js';
 import { timelineTools } from './timelines.js';
 import { mapFeatureTools } from './map-features.js';
+import { snapshotTools } from './snapshots.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -54,6 +55,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     ...timelineTools(deps),
     // v2 D2 (ADR 0040): the map-feature tools.
     ...mapFeatureTools(deps),
+    // v2 E1a (ADR 0042): snapshots and restores (always proposals).
+    ...snapshotTools(deps),
     ...guideTools(deps),
     ...lkApiTools(deps),
     ...uploadTools(deps),

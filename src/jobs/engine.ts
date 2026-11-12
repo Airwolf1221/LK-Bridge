@@ -79,6 +79,7 @@ import {
   type BatchSubmit,
   type ControlsView,
   type InternalReadOptions,
+  type ReadInfo,
   type WriteObserver,
   type WriteStepInfo,
   type JobKind,
@@ -275,6 +276,7 @@ export class JobEngine {
       mapChecker: (name) => this.mapCheckers.get(name),
       ...(o.etagVersions ? { etagVersions: o.etagVersions } : {}),
       assetDeleteKeeper: () => this.assetDeleteKeeper,
+      onRead: (info) => this.notifyRead(info),
     });
     this.etagVersions = o.etagVersions;
     for (const [name, fn] of Object.entries(o.planners ?? {})) this.planners.set(name, fn);
@@ -549,8 +551,15 @@ export class JobEngine {
    * Registers a write observer (the repository tree): told before each write step is sent and after its final
    * outcome, inside the job. Returns an unsubscribe function.
    */
-  observeWrites(observer: WriteObserver): () => void {
-    this.writeObservers.add(observer);
+  observeWrites(observer: WriteObserver, o: { readonly first?: boolean } = {}): () => void {
+    if (o.first) {
+      // v2 E1a: told before the others (the snapshot service records a write before the tree re-reads what it changed,
+      // so that re-read counts as a read of the write's result).
+      const rest = [...this.writeObservers];
+      this.writeObservers.clear();
+      this.writeObservers.add(observer);
+      for (const x of rest) this.writeObservers.add(x);
+    } else this.writeObservers.add(observer);
     return () => this.writeObservers.delete(observer);
   }
 
@@ -573,7 +582,7 @@ export class JobEngine {
       throw new InvalidParamsError(opId, [{ path: 'op', message: 'internalRead only reads' }]);
     }
     try {
-      return await callOp(this.clientOf(project), def, params, {
+      const value = await callOp(this.clientOf(project), def, params, {
         priority: opts.priority,
         jobId: opts.jobId,
         signal: opts.signal,
@@ -590,12 +599,36 @@ export class JobEngine {
           });
         },
       });
+      // v2 E1a: a read named with a job (the tree's re-read after the job's writes) goes to the read tap too.
+      if (opts.jobId !== undefined)
+        this.notifyRead({ projectId: project, jobId: opts.jobId, opId: def.operationId, params, value });
+      return value;
     } catch (e) {
+      if (opts.jobId !== undefined && isNotFound(e))
+        this.notifyRead({
+          projectId: project,
+          jobId: opts.jobId,
+          opId: def.operationId,
+          params,
+          value: undefined,
+        });
       if (e instanceof BudgetWaitError)
         throw new BudgetExhaustedError(def.operationId, e.tier, e.retryAtMs, e);
       if (e instanceof BridgeLkError) throw new LkOperationError(e);
       if (e instanceof JobsError) throw e;
       throw new JobsError('BRIDGE_ERROR', e instanceof Error ? e.message : String(e), {}, { cause: e });
+    }
+  }
+
+  /** v2 E1a (ADR 0042): a read a job made, to every observer that asks for reads. Listeners never break a job. */
+  private notifyRead(info: ReadInfo): void {
+    if (this.writeObservers.size === 0) return;
+    for (const o of [...this.writeObservers]) {
+      try {
+        o.afterRead?.(info);
+      } catch (e) {
+        this.log.warn({ err: e, jobId: info.jobId }, 'a write observer failed');
+      }
     }
   }
 
@@ -621,10 +654,24 @@ export class JobEngine {
   /** v2 C2a: the observers re-read now what the job's `deferTreeReread` steps changed (awaited, inside the job). */
   private async flushDeferred(job: JobView, signal: AbortSignal): Promise<void> {
     if (this.writeObservers.size === 0) return;
-    if (!this.repo.steps(job.id).some((s) => s.options.deferTreeReread === true)) return;
+    if (this.repo.steps(job.id).some((s) => s.options.deferTreeReread === true)) {
+      for (const o of [...this.writeObservers]) {
+        try {
+          await o.flushDeferred?.({
+            projectId: job.projectId,
+            jobId: job.id,
+            priority: job.priority,
+            signal,
+          });
+        } catch (e) {
+          this.log.warn({ err: e, jobId: job.id }, 'a write observer failed');
+        }
+      }
+    }
+    // v2 E1a (ADR 0042): the job is ending (the change snapshot of what it wrote is taken now, inside the job).
     for (const o of [...this.writeObservers]) {
       try {
-        await o.flushDeferred?.({ projectId: job.projectId, jobId: job.id, priority: job.priority, signal });
+        await o.jobEnding?.({ projectId: job.projectId, jobId: job.id, priority: job.priority, signal });
       } catch (e) {
         this.log.warn({ err: e, jobId: job.id }, 'a write observer failed');
       }
@@ -1139,8 +1186,17 @@ export class JobEngine {
     const ref = { jobId: job.id, stepNo: step.stepNo };
     const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
     const result =
-      source?.status === 'succeeded' ? (this.repo.stepResult(source) as { id?: unknown } | null) : null;
-    if (typeof result?.id !== 'string' || result.id.length === 0) {
+      source?.status === 'succeeded'
+        ? (this.repo.stepResult(source) as { id?: unknown; documents?: unknown } | null)
+        : null;
+    // v2 E1a: the n-th document of a page the job created, or a created entity's own id.
+    const docAt = from.from !== undefined ? /^documents\.([0-4])\.id$/.exec(from.from) : null;
+    const id = docAt
+      ? Array.isArray(result?.documents)
+        ? (result.documents as { id?: unknown }[])[Number(docAt[1])]?.id
+        : undefined
+      : result?.id;
+    if (typeof id !== 'string' || id.length === 0) {
       return new JobsError(
         'BRIDGE_ERROR',
         `${step.opId}: step ${from.step} gave no id to use as ${from.to}; nothing was sent`,
@@ -1150,8 +1206,10 @@ export class JobEngine {
     const params = this.repo.stepParams(step);
     const next: OpParams =
       from.to === 'path.assetId'
-        ? { ...params, path: { ...(params.path ?? {}), assetId: result.id } }
-        : { ...params, body: { ...((params.body ?? {}) as Record<string, unknown>), folderId: result.id } };
+        ? { ...params, path: { ...(params.path ?? {}), assetId: id } }
+        : from.to === 'path.documentId'
+          ? { ...params, path: { ...(params.path ?? {}), documentId: id } }
+          : { ...params, body: { ...((params.body ?? {}) as Record<string, unknown>), folderId: id } };
     try {
       this.validate(step.opId, next);
     } catch (e) {
@@ -2579,8 +2637,18 @@ function stepOptions(o: StepOptions): StepOptions {
     // v2 D3: set by bridge code only.
     ...(o.bindFrom &&
     Number.isInteger(o.bindFrom.step) &&
-    (o.bindFrom.to === 'body.folderId' || o.bindFrom.to === 'path.assetId')
-      ? { bindFrom: { step: o.bindFrom.step, to: o.bindFrom.to } }
+    (o.bindFrom.to === 'body.folderId' ||
+      o.bindFrom.to === 'path.assetId' ||
+      o.bindFrom.to === 'path.documentId')
+      ? {
+          bindFrom: {
+            step: o.bindFrom.step,
+            to: o.bindFrom.to,
+            ...(typeof o.bindFrom.from === 'string' && /^documents\.[0-4]\.id$/.test(o.bindFrom.from)
+              ? { from: o.bindFrom.from }
+              : {}),
+          },
+        }
       : {}),
   };
 }
