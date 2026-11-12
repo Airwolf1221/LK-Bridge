@@ -124,6 +124,12 @@ export interface StepOptions {
    */
   readonly journalPreImage?: unknown;
   /**
+   * v2 D2 (ADR 0040), set by bridge code only: added to the pre-image the read inside the lock gave (an object), under
+   * `with`: a folder's cascade delete keeps every feature it removes in the folder's own journal entry (as a lane's
+   * delete keeps its events), the same lesson as D1's.
+   */
+  readonly journalPreImageWith?: unknown;
+  /**
    * v2 C2b (ADR 0034), set by bridge code only: this step writes to a page the same job created from a template, and
    * its params name the TEMPLATE's sidebar ids (properties, rows, items). Just before it runs they are replaced by the
    * copy's ids, from the `ids` map of the `bridge.expect` step it names (a `copy` check, made inside the job). Only

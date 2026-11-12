@@ -46,6 +46,7 @@ import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
+import { mapCheckers } from './maps/index.js';
 import { FactsVersions } from './facts/version.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
@@ -393,6 +394,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachChronology = chronology.attach();
+  // v2 D2 (ADR 0040): the map-feature checks inside the lock (the compare-and-swap for writes LegendKeeper does not
+  // version, and the verify after them). Pure functions; nothing to configure.
+  const detachMaps = Object.entries(mapCheckers()).map(([name, fn]) => engine.registerMapChecker(name, fn));
 
   const characterType = (projectId: string) =>
     registry
@@ -530,6 +534,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       unregisterGuard();
       detachLifecycle();
       detachChronology();
+      for (const off of detachMaps) off();
       await tree.stop();
       detachRegistry();
       await assets.stop();

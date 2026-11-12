@@ -412,7 +412,10 @@ features and board shapes on an Authoritative page are **ordinary edits**: they 
 `write_page` content is not, and need only the caller's scope (`write`, or a proposal at `propose`). Only deleting a
 whole map, timeline or board **document** of an Authoritative page is canonical (C2c's `delete-document-authoritative`
 rule, switchable). The chronology's timeline tools (ADR 0038) follow this: an event added to the Authoritative
-Universal Chronology is written at scope `write`.
+Universal Chronology is written at scope `write`. **The map-feature tools (v2 D2, [ADR 0040](adr/0040-map-feature-tools.md))
+follow it too:** `create_map_feature`, `update_map_feature` and `delete_map_feature` (a folder with `cascade`, every feature
+it removes) on an Authoritative page are written at scope `write` with no canonical approval (tested), while `delete_document`
+on the page's map is a canonical proposal. Setting a map's image (`update_document`) is an ordinary edit as well.
 
 **Chronology proposals.** A chronology change under `propose` is one proposal. Its table and Main writes are judged at
 execution by the job's own check inside the lock (the row still as planned, no identical row, the age's row still

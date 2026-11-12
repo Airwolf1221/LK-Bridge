@@ -25,6 +25,7 @@ export default defineConfig({
       'test/lifecycle/**/*.test.ts', // v2 C2c: the page lifecycle
       'test/calendar/**/*.test.ts', // v2 D1: the calendar engine
       'test/chronology/**/*.test.ts', // v2 D1: chronology sync and the timeline tools
+      'test/maps/**/*.test.ts', // v2 D2: the map-feature tools
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

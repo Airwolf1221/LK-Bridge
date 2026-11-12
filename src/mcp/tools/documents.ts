@@ -19,6 +19,8 @@ import { defineTool } from './define.js';
 import { liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
 import { CHANGE_ANNOTATIONS, CREATE_ANNOTATIONS, operationIdArg } from './resources.js';
 import { pageRef } from './set-facts.js';
+import { resolveMapAsset } from './map-support.js';
+import { featurePoints, frameState } from '../../maps/index.js';
 import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
 import { runWriteJob } from './write-job.js';
 
@@ -240,9 +242,16 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
     access: 'write',
     description:
       'Changes the settings of a map, timeline or board on a page inside the AI REPOSITORY: `name`, `hidden`, `fullWidth`, ' +
-      '`calendar` (timelines) and `mapImage` (maps). Never its content. Page documents and blank documents are refused: ' +
-      'change them with write_page. An unchanged setting sends nothing. Cost: 1 read (the document’s settings), 1 write (1 ' +
-      'read more for a calendar), the journal’s read of the document, 1 read to verify.',
+      '`calendar` (timelines) and `mapImage` (maps). Never its content. `mapImage` is an image asset of the project’s library, ' +
+      'by id or by name as list_assets shows it (a name that matches several assets is refused with each candidate): it sets ' +
+      'or replaces the map’s image, as “Add map” and “Replace map” do, and a BLANK document given one becomes a map. ' +
+      'Features keep their `pos` when the image changes, so a replacement with an image of a different size puts them over ' +
+      'different pixels: the answer carries a warning with how many, and NOTHING is moved (you or the owner decide; ' +
+      'update_map_feature moves them). The map’s frame (width, height, bounds) is then in read_document. Page documents ' +
+      '(and blank documents without a map image) are refused: change pages with write_page. An unchanged setting sends ' +
+      'nothing. Uploading a new image is upload_image. Cost: 1 read (the document’s settings), 1 write (1 read more for a ' +
+      'calendar; for a map image 1 read for the asset, and 1 more for the warning), the journal’s read of the document, 1 ' +
+      'read to verify (2 for a map image).',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: z.string().min(1).max(500).describe('The document (name or id).'),
@@ -251,9 +260,11 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
       fullWidth: z.boolean().optional(),
       calendar: z.string().min(1).max(200).optional().describe('Timelines only.'),
       mapImage: z
-        .record(z.string(), z.unknown())
+        .union([z.string().min(1).max(500), z.object({ assetId: z.string().min(1).max(256) }).strict()])
         .optional()
-        .describe('Maps only: LegendKeeper’s MapImageParams.'),
+        .describe(
+          'Maps (and blank documents, which become maps): the image asset, by id or by name (see list_assets); { assetId } also works.',
+        ),
       dryRun: z.boolean().optional(),
       project: projectArg,
     }),
@@ -269,11 +280,17 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
         const d = documentOf(pd, node, args.document);
         if (!d.ok) return d.result;
         const doc = d.doc;
-        if (doc.type === 'page' || doc.type === 'blank' || doc.type === null) {
+        if (
+          doc.type === 'page' ||
+          ((doc.type === 'blank' || doc.type === null) && args.mapImage === undefined)
+        ) {
           return errorResult(
             {
               code: 'DOCUMENT_IS_PAGE',
-              message: `“${doc.name}” is a ${doc.type ?? 'blank'} document: its text and settings are changed with write_page, not update_document.`,
+              message:
+                doc.type === 'page'
+                  ? `“${doc.name}” is a page document: its text and settings are changed with write_page, not update_document.`
+                  : `“${doc.name}” is a blank document: it becomes a map when given an image (mapImage), or a page with write_page.`,
             },
             pd,
           );
@@ -281,7 +298,7 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
         if (args.calendar !== undefined && doc.type !== 'time') {
           return errorResult({ code: 'INVALID_PARAMS', message: 'Only a timeline takes a calendar.' }, pd);
         }
-        if (args.mapImage !== undefined && doc.type !== 'map') {
+        if (args.mapImage !== undefined && doc.type !== 'map' && doc.type !== 'blank' && doc.type !== null) {
           return errorResult({ code: 'INVALID_PARAMS', message: 'Only a map takes a map image.' }, pd);
         }
         // Its settings now (one read; also what the journal keeps): only what changes is sent.
@@ -290,7 +307,73 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
         });
         if (!read.ok) return read.result;
         const cur = (read.value ?? {}) as Obj;
+        // The live type decides (the tree may lag): a blank document, or a map, may take an image.
+        if (args.mapImage !== undefined && cur.type !== 'map' && cur.type !== 'blank') {
+          return errorResult(
+            {
+              code: 'INVALID_PARAMS',
+              message: `“${doc.name}” is a ${typeName(typeof cur.type === 'string' ? cur.type : null)} document: only a map, or a blank document, takes a map image.`,
+            },
+            pd,
+          );
+        }
         const body: Obj = {};
+        const warnings: Obj[] = [];
+        let imageAsset: {
+          id: string;
+          name: string;
+          url: string | null;
+          width: number | null;
+          height: number | null;
+        } | null = null;
+        let imageChange: Obj | undefined;
+        if (args.mapImage !== undefined) {
+          const query = typeof args.mapImage === 'string' ? args.mapImage : args.mapImage.assetId;
+          const a = await resolveMapAsset(pd, mctx, 'update_document', query);
+          if (!a.ok) return a.result;
+          imageAsset = a;
+          const now = frameState(cur.mapImage);
+          const currentAsset = (cur.mapImage as { assetId?: unknown } | null | undefined)?.assetId;
+          const same = now.kind === 'image' && currentAsset === a.id;
+          if (!same || cur.type === 'blank') {
+            body.mapImage = { assetId: a.id };
+            imageChange = {
+              asset: {
+                id: a.id,
+                name: a.name,
+                ...(a.width && a.height ? { width: a.width, height: a.height } : {}),
+              },
+              ...(cur.type === 'blank' ? { becomes: 'a map' } : {}),
+            };
+          }
+          // A replacement with another pixel size: features keep their `pos`, so they sit over different pixels.
+          if (!same && now.kind === 'image' && a.width !== null && a.height !== null) {
+            if (a.width !== now.frame.width || a.height !== now.frame.height) {
+              const f = await liveRead(pd, mctx, 'update_document', 'listFeatures', {
+                path: { resourceId: node.id, documentId: doc.id },
+              });
+              if (!f.ok) return f.result;
+              const list = (((f.value ?? {}) as { data?: unknown }).data ?? []) as Obj[];
+              const n = list.filter((x) => featurePoints(x).length > 0).length;
+              warnings.push({
+                code: 'FEATURES_OVER_DIFFERENT_PIXELS',
+                message:
+                  `The new image is ${a.width}×${a.height}; the old one was ${now.frame.width}×${now.frame.height}. Features keep ` +
+                  `their positions (lat/lng), so ${n} feature(s) will now sit over different pixels of the new image. ` +
+                  'Nothing is moved automatically: read the map (read_document) and move them with update_map_feature, or ask the owner.',
+                features: n,
+                old: { width: now.frame.width, height: now.frame.height },
+                new: { width: a.width, height: a.height },
+              });
+            }
+          } else if (!same && now.kind === 'legacy') {
+            warnings.push({
+              code: 'LEGACY_MAP_REPLACED',
+              message:
+                'The map was a legacy tiled map with no single image, so its features’ pixel positions cannot be compared: they keep their lat/lng and may sit anywhere on the new image. Read the map and check them.',
+            });
+          }
+        }
         if (args.name !== undefined && args.name.trim() !== doc.name) {
           const n = args.name.trim();
           const twin = node.documents.find(
@@ -309,7 +392,6 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
         if (args.hidden !== undefined && args.hidden !== (cur.isHidden ?? false)) body.isHidden = args.hidden;
         if (args.fullWidth !== undefined && args.fullWidth !== (cur.isFullWidth ?? false))
           body.isFullWidth = args.fullWidth;
-        if (args.mapImage !== undefined) body.mapImage = args.mapImage;
         if (args.calendar !== undefined) {
           const c = await calendarOf(pd, mctx, 'update_document', args.calendar);
           if (!c.ok) return c.result;
@@ -323,8 +405,16 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
             pd,
           );
         }
-        const { mapImage: _m, ...fields } = body;
-        const head = { page, document, changes: body };
+        const { mapImage: _m, ...fieldsBase } = body;
+        // A blank document given an image is a map afterwards (the settings listing shows the type).
+        const fields = cur.type === 'blank' && imageAsset ? { ...fieldsBase, type: 'map' } : fieldsBase;
+        const head = {
+          page,
+          document,
+          changes: body,
+          ...(imageChange ? { mapImage: imageChange } : {}),
+          ...(warnings.length > 0 ? { warnings } : {}),
+        };
         if (args.dryRun === true)
           return render({ ...head, status: 'dry_run', message: 'Dry run: nothing was written.' }, pd);
         const steps: StepSpec[] = [
@@ -345,6 +435,19 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
                     documentId: doc.id,
                     fields,
                   },
+                  ...(body.mapImage && imageAsset
+                    ? [
+                        {
+                          kind: 'mapChecked',
+                          label: `${node.rawName} / ${doc.name} image`,
+                          resourceId: node.id,
+                          documentId: doc.id,
+                          checker: 'maps.image',
+                          input: { assetId: imageAsset.id, url: imageAsset.url },
+                          withDocument: true,
+                        },
+                      ]
+                    : []),
                 ],
               },
             },

@@ -1,0 +1,229 @@
+/**
+ * Map features as the bridge models them (v2 D2, ADR 0040): the five types, the style fields checked against the
+ * schema's enums and formats (and the types each applies to), the geometry shapes each type takes, how a stored feature
+ * is compared (numbers with a tolerance, a region's `polygon` and `polygons` as one list of polygons), and the hash the
+ * bridge's own compare-and-swap uses. Pure.
+ */
+import { createHash } from 'node:crypto';
+import * as z from 'zod';
+import type { Geometry, LatLng } from './geometry.js';
+
+export type Obj = Record<string, unknown>;
+
+export const FEATURE_TYPES = ['pin', 'label', 'region', 'path', 'folder'] as const;
+export type FeatureType = (typeof FEATURE_TYPES)[number];
+
+export const isFeatureType = (v: unknown): v is FeatureType =>
+  typeof v === 'string' && (FEATURE_TYPES as readonly string[]).includes(v);
+
+// ------------------------------------------------------------------------------------------------ styles
+
+const hex = z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'a colour as #RRGGBB');
+const num = z.number().finite();
+
+/** The style fields, with LegendKeeper's names, enums and formats (FeatureCreateParams / FeatureUpdateParams). */
+export const styleSchema = z
+  .object({
+    // pins
+    iconGlyph: z.string().min(1).max(128).describe('A pin’s FontAwesome icon name.'),
+    iconColor: hex.describe('A pin’s fill colour, #RRGGBB.'),
+    iconShape: z.enum(['pin', 'diamond', 'flag', 'marker', 'shield', 'circle', 'banner', 'arch', 'none']),
+    iconSize: z.enum(['medium', 'small']),
+    pinImage: z
+      .object({ url: z.string().min(1).max(2048), width: num, height: num })
+      .strict()
+      .describe('A pin’s image: the url of an image asset of this project, with its size.'),
+    // regions
+    fillOpacity: num,
+    fillStyle: z.enum(['solid', 'striped', 'dotted', 'none']),
+    borderStyle: z.enum(['solid', 'dashed', 'dotted', 'none']),
+    // regions and paths
+    color: hex.describe('A region’s fill and border colour, or a path’s line colour, #RRGGBB.'),
+    // paths
+    strokeWidth: num,
+    strokeStyle: z.enum(['solid', 'dashed', 'dotted', 'none']),
+    strokeOpacity: num,
+    // labels, regions and paths: the name text
+    textColor: hex,
+    textEffect: z.enum(['outline', 'background']),
+    textEffectColor: hex,
+    labelSize: z.enum(['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl']),
+    // any
+    labelVisibility: z.enum(['always', 'hover', 'never']),
+    visibilityRange: z.tuple([num, num]).describe('The zoom range [min, max], each 0 to 1.'),
+  })
+  .partial()
+  .strict();
+
+export type StyleInput = z.infer<typeof styleSchema>;
+
+/** The types each style field applies to (a field sent on another type is refused here, as LegendKeeper would). */
+const APPLIES: Readonly<Record<string, readonly FeatureType[]>> = {
+  iconGlyph: ['pin'],
+  iconColor: ['pin'],
+  iconShape: ['pin'],
+  iconSize: ['pin'],
+  pinImage: ['pin'],
+  fillOpacity: ['region'],
+  fillStyle: ['region'],
+  borderStyle: ['region'],
+  color: ['region', 'path'],
+  strokeWidth: ['path'],
+  strokeStyle: ['path'],
+  strokeOpacity: ['path'],
+  textColor: ['label', 'region', 'path'],
+  textEffect: ['label', 'region', 'path'],
+  textEffectColor: ['label', 'region', 'path'],
+  labelSize: ['label', 'region', 'path'],
+  labelVisibility: ['pin', 'label', 'region', 'path'],
+  visibilityRange: ['pin', 'label', 'region', 'path'],
+};
+
+/** The style fields that do not apply to `type`, each with the types it applies to. */
+export function misplacedStyles(
+  type: FeatureType,
+  style: Readonly<Record<string, unknown>>,
+): { field: string; appliesTo: readonly FeatureType[] }[] {
+  return Object.keys(style)
+    .filter((k) => style[k] !== undefined && !(APPLIES[k] ?? []).includes(type))
+    .map((field) => ({ field, appliesTo: APPLIES[field] ?? [] }));
+}
+
+export function styleFields(style: Readonly<Record<string, unknown>> | undefined): Obj {
+  return Object.fromEntries(Object.entries(style ?? {}).filter(([, v]) => v !== undefined));
+}
+
+// ------------------------------------------------------------------------------------------------ geometry shapes
+
+/** The geometry shape each type takes (null: none). Regions take `points` (one polygon) or `polygons` (several). */
+export function shapesFor(type: FeatureType): readonly Geometry['shape'][] {
+  switch (type) {
+    case 'pin':
+    case 'label':
+      return ['point'];
+    case 'region':
+      return ['points', 'polygons'];
+    case 'path':
+      return ['points'];
+    case 'folder':
+      return [];
+  }
+}
+
+export const MIN_POINTS: Readonly<Record<string, number>> = { region: 3, path: 2 };
+export const MAX_POINTS = 10_000;
+export const MAX_POLYGONS = 100;
+
+/** A problem with a geometry's shape or size for its type, or null. */
+export function shapeProblem(type: FeatureType, g: Geometry | null): string | null {
+  const shapes = shapesFor(type);
+  if (g === null) return null;
+  if (shapes.length === 0) return `A ${type} takes no coordinates.`;
+  if (!shapes.includes(g.shape)) {
+    return type === 'region'
+      ? 'A region takes `points` (one polygon) or `polygons` (several).'
+      : type === 'path'
+        ? 'A path takes `points`, in order.'
+        : `A ${type} takes one position (\`latlng\` or \`pixel\`).`;
+  }
+  const min = MIN_POINTS[type] ?? 1;
+  if (g.shape === 'points') {
+    if (g.points.length < min) return `A ${type} needs at least ${min} points; ${g.points.length} given.`;
+    if (g.points.length > MAX_POINTS) return `At most ${MAX_POINTS} points; ${g.points.length} given.`;
+  }
+  if (g.shape === 'polygons') {
+    if (g.polygons.length < 1 || g.polygons.length > MAX_POLYGONS)
+      return `A region takes 1 to ${MAX_POLYGONS} polygons; ${g.polygons.length} given.`;
+    for (const [i, poly] of g.polygons.entries()) {
+      if (poly.length < min) return `Polygon ${i + 1} needs at least ${min} points; ${poly.length} given.`;
+      if (poly.length > MAX_POINTS) return `Polygon ${i + 1} has more than ${MAX_POINTS} points.`;
+    }
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------------------------------------ stored features
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const isPair = (v: unknown): v is [number, number] =>
+  Array.isArray(v) && v.length === 2 && isNum(v[0]) && isNum(v[1]);
+
+/** A stored feature's geometry in one shape: its position, its polygons (from `polygons`, else `polygon`) and its line. */
+export function storedGeometry(f: Obj): {
+  pos: LatLng | null;
+  polygons: LatLng[][] | null;
+  polyline: LatLng[] | null;
+} {
+  const list = (v: unknown): LatLng[] | null => (Array.isArray(v) && v.every(isPair) ? v : null);
+  let polygons: LatLng[][] | null = null;
+  if (Array.isArray(f.polygons) && f.polygons.length > 0 && f.polygons.every((p) => list(p) !== null))
+    polygons = f.polygons as LatLng[][];
+  else if (Array.isArray(f.polygon) && f.polygon.length > 0 && list(f.polygon) !== null)
+    polygons = [f.polygon as LatLng[]];
+  return { pos: isPair(f.pos) ? f.pos : null, polygons, polyline: list(f.polyline) };
+}
+
+const close = (a: number, b: number): boolean =>
+  Math.abs(a - b) <= 1e-7 * Math.max(1, Math.abs(a), Math.abs(b));
+
+/** Deep equality of two JSON values, numbers within a small tolerance (a stored coordinate may be rounded). */
+export function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (isNum(a) && isNum(b)) return close(a, b);
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((x, i) => sameValue(x, b[i]));
+  if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+    const ka = Object.keys(a as Obj).filter((k) => (a as Obj)[k] !== undefined);
+    const kb = Object.keys(b as Obj).filter((k) => (b as Obj)[k] !== undefined);
+    return ka.length === kb.length && ka.every((k) => sameValue((a as Obj)[k], (b as Obj)[k]));
+  }
+  return false;
+}
+
+/**
+ * Whether a stored feature holds `fields` (the values a write intended). A region's `polygon` and `polygons` are one
+ * list of polygons; `parentId: null` is "no parent"; `uri: ''` is "no link"; numbers compare with a tolerance.
+ */
+export function holds(stored: Obj, fields: Obj): { field: string; expected: unknown; actual: unknown }[] {
+  const out: { field: string; expected: unknown; actual: unknown }[] = [];
+  const g = storedGeometry(stored);
+  for (const [k, want] of Object.entries(fields)) {
+    if (want === undefined) continue;
+    if (k === 'polygon' || k === 'polygons') {
+      const wantList = k === 'polygon' ? [want as LatLng[]] : (want as LatLng[][]);
+      if (!sameValue(g.polygons ?? [], wantList))
+        out.push({ field: k, expected: want, actual: stored[k] ?? null });
+      continue;
+    }
+    if (k === 'parentId') {
+      const actual = typeof stored.parentId === 'string' && stored.parentId !== '' ? stored.parentId : null;
+      if ((want ?? null) !== actual) out.push({ field: k, expected: want ?? null, actual });
+      continue;
+    }
+    if (k === 'uri') {
+      const actual = typeof stored.uri === 'string' ? stored.uri : '';
+      if ((want ?? '') !== actual) out.push({ field: k, expected: want ?? '', actual: stored.uri ?? null });
+      continue;
+    }
+    if (!sameValue(want, stored[k])) out.push({ field: k, expected: want, actual: stored[k] ?? null });
+  }
+  return out;
+}
+
+/** A stable hash of a stored feature (its `updatedAt` left out): the plan's expectation, confirmed inside the lock. */
+export function featureHash(f: Obj): string {
+  const clean = Object.fromEntries(
+    Object.entries(f)
+      .filter(([k, v]) => k !== 'updatedAt' && v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
+  return createHash('sha256').update(JSON.stringify(clean)).digest('hex').slice(0, 32);
+}
+
+export const parentOf = (f: Obj): string | null =>
+  typeof f.parentId === 'string' && f.parentId !== '' ? f.parentId : null;
+export const idOf = (f: Obj): string => (typeof f.id === 'string' ? f.id : '');
+export const rankOf = (f: Obj): string | null =>
+  typeof f.rank === 'string' && f.rank !== '' ? f.rank : null;
+export const nameOf = (f: Obj): string => (typeof f.name === 'string' ? f.name : '');
+export const typeOf = (f: Obj): string => (typeof f.type === 'string' ? f.type : '');

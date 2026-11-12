@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased: v2 D2, the map tools, map images and pixel coordinates (12 November 2026)
+
+[ADR 0040](adr/0040-map-feature-tools.md). No migration. Nothing was run against a live system (the owner's LegendKeeper
+bridge connector was not called, not even for reads): every test runs against the mock, and the sandbox test is written and
+dry-run against the mock, not run against LegendKeeper.
+
+- **`create_map_feature`, `update_map_feature`, `delete_map_feature` (W).** A pin, label, region, path or folder on a map
+  document of a page inside the AI REPOSITORY, identified by `page` plus `document` (optional when the page has one map; a
+  blank document, a page, a timeline or a board is refused with the tool to use). One job (one proposal at `propose`), with
+  `dryRun`, `operation_id`, verify and the journal. 53 → 56 bridge tools.
+  - **Coordinates:** `latlng` or `pixel`, never both; `points` / `polygons` for regions and paths. Pixels count from the
+    image's top-left corner and are converted with the map's **live image, read inside the job**, by the schema's own formula
+    (checked against the SDK's `pixelToPos` / `posToPixel`, the schema's text and the app's frame `[-y/2^z, x/2^z]` as a
+    property test at 10,000 runs over random sizes, and again over random bounds); refused if the image changed since the
+    pixels were chosen. Pixels are refused on a legacy tiled map and on a map with no image (naming `latlng`); outside the
+    image or the bounds is refused unless `allowOutside: true`.
+  - **The compare-and-swap inside the lock.** LegendKeeper does not version features, so `bridge.expect` gains a `map` check
+    (a map checker, registered by name, run on the map read again inside the lock) that judges the plan's resolved request
+    (the feature's hash, the folder, the sibling, the frame) and works out the body to send from the map as it is then;
+    `bridge.verify` gains `mapChecked`. A feature edited, a folder or sibling gone, an image replaced, or a feature added
+    under a folder being deleted since the plan is a conflict with nothing sent (a proposal ends `conflicted`).
+  - **Order, folders, links, styles.** At the end of the parent by default, or `after` / `before` a named sibling; the rank is
+    fractional indexing between the real neighbours (reference vectors and a property test); never alphabetical. Folders by name
+    or id (several of one name refused with their paths); `folder: null` moves to the top level (assumed from the spec's
+    "null = root"; the registry's validation lets `parentId` be null for `updateFeature`; to verify). `link` is a page by name
+    or id, optionally a document (an ambiguous name refused with each candidate and its role, checked live, `link: null` clears);
+    `style` checked against the schema's enums and formats, and refused on a type it does not apply to.
+  - **Delete.** `confirm: true`. LegendKeeper leaves a folder's features when it deletes the folder, so a folder that holds
+    features needs `cascade: true`: the features are deleted deepest first, then the folder, as one job; the answer lists
+    everything removed, and the journal keeps every removed feature in full (each delete's own entry, and the folder's entry
+    holds all that went with it, `StepOptions.journalPreImageWith`, the lane-delete lesson). A stopped cascade is resumed by
+    asking again, never replayed. No record table (one document, atomic writes), so no migration.
+  - **Canon:** feature edits are ordinary edits, on an Authoritative page too (ADR 0036 decision 6, option (a); tested);
+    deleting the whole map document stays canonical.
+- **`update_document` sets a map's image.** `mapImage` is a library asset by id or name (a name matching several is refused
+  with each candidate and its folder); a **blank document becomes a map** when given one (still refused without); a
+  replacement with a different pixel size answers with a **warning** (`FEATURES_OVER_DIFFERENT_PIXELS`, how many features will
+  sit over different pixels) and moves nothing; a legacy map replaced warns too. Verified (`maps.image`).
+- **`read_document` on a map** now costs 2 reads (the document's settings carry the image) and adds the map's `width`,
+  `height` and `bounds` to the header and each position in pixels beside its lat/lng (a region's or path's points too; long
+  lists summarised unless `detail: "full"`); a legacy tiled map and a map with no image say so. The JSON form is unchanged.
+- **Measured against the mock:** `create_map_feature` and `update_map_feature` 5 reads and 1 write; `delete_map_feature` of one
+  feature 6 and 1, a cascade of 6 features 11 and 6; setting an image 7 and 1; a map read 2 reads.
+- **Tests:** 127 map tests (unit, create, update, delete, propose and conflicts, canon, image, read, and the sandbox script's dry
+  run) on a mock map world (a 2048×1024 map, a legacy tiled map, a blank document, folders, every type, linked and unlinked
+  features, names that occur twice). The existing `read_document` map test moved from 1 read to 2.
+- **Sandbox (written, dry-run, not run).** `deploy/sandbox-test.sh --project test -- maps`: a throwaway page and map, two
+  generated PNGs, a feature of every type by pixel position, links, a folder with a nested pin, a move, a cascade delete, an
+  image replacement; PASS / FAIL / INCONCLUSIVE per check; cleans up everything (a 404 counts as cleaned). See
+  test/sandbox/README.md.
+- **Docs:** ADR 0040, docs/tools.md, the bridge guide (maps: pixels against lat/lng, links, folders, legacy maps), the
+  Markdown guide (how maps read), docs/policy.md, test/sandbox/README.md, PLAN-v2's D2 row and notes.
+
 ## Unreleased: v2 D1.1, two date styles, timeline repair from the table, and versions from the ETag (11 November 2026)
 
 [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md). No migration. Nothing was run against a live

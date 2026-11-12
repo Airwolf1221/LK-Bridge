@@ -62,7 +62,7 @@ budget (arkona): writes 0/120·min …
 | `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                                                                   |
 | `list_calendars`            | read   | true / false / true / false                                     | 1 read                                                                                              |
 | `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                                                                               |
-| `read_document`             | read   | true / false / true / false                                     | 1 read (a timeline: 2 + 1 per 100 events)                                                           |
+| `read_document`             | read   | true / false / true / false                                     | 1 read (a map: 2; a timeline: 2 + 1 per 100 events)                                                 |
 | `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read                                                                   |
 | `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)                                                             |
 | `create_index`              | write  | false / false / false / false                                   | see [C2b](#resources-documents-and-characters-v2-c2b)                                               |
@@ -75,8 +75,11 @@ budget (arkona): writes 0/120·min …
 | `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + 1 write + 1 read                                                             |
 | `restore_resource`          | write  | false / false / false / false                                   | 1 write + 1 read + the tree’s re-read                                                               |
 | `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                                                                    |
-| `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read                                                                          |
+| `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read (a map image: 7 reads in all)                                            |
 | `delete_document`           | write  | false / **true** / false / false                                | 1 write + 1 read                                                                                    |
+| `create_map_feature`        | write  | false / false / false / false                                   | see [D2](#maps-v2-d2): 5 reads + 1 write                                                            |
+| `update_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 reads + 1 write                                                                           |
+| `delete_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 + 1 read and 1 write per feature                                                          |
 | `archive_page`              | write  | false / **true** / false / false                                | see [C2c](#the-page-lifecycle-v2-c2c) and [C2d](#whole-sets-guarded-tags-and-approval-scope-v2-c2d) |
 | `unarchive_page`            | write  | false / **true** / false / false                                | see C2c and C2d                                                                                     |
 | `move_to_working`           | write  | false / **true** / false / false                                | see C2c and C2d                                                                                     |
@@ -146,7 +149,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (142 tools in all, 144 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (145 tools in all, 147 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -261,8 +264,11 @@ write tools, and every keep region (`id`, `kind`, why). `outline: true` returns 
 `section: "Biography > Early Life"` returns just that section (with its regions); a heading that occurs more than once
 is `SECTION_AMBIGUOUS` with `options` (choose with `Notes [2]`), and none is `SECTION_NOT_FOUND` with the page's
 headings. `format: "json"` returns the raw blocks. Maps, timelines and boards are rendered read-only by B1's renderers
-(`document.type` says which). Cost: 1 read for a page, map or board; a timeline reads its lanes and then 100 events per
-read (at most 1,000 events). A long result is a handle.
+(`document.type` says which). A **map** also carries `map` (`{ image: "single", width, height, bounds, assetId }`, or why it
+has none) and, with an image, each feature's position in **pixels** beside its lat/lng (see [Maps](#maps-v2-d2)); `detail:
+"full"` lists every point of a long region or path (default: a pixel box). Cost: 1 read for a page or board, 2 for a map
+(its settings, then its features); a timeline reads its lanes and then 100 events per read (at most 1,000 events). A long
+result is a handle.
 
 ```json
 { "resource": "Asagiri Miyabi", "section": "Biography" }
@@ -685,8 +691,10 @@ operation_id?, project }`: a map, timeline (optionally in a calendar, by name or
 `DOCUMENT_EXISTS` for a document of the same name on the page. Page text is `write_page`'s.
 
 **`update_document`** `{ page, document, name?, hidden?, fullWidth?, calendar?, mapImage?, dryRun?, project }`: a
-document's settings only, never its content. Page and blank documents are refused (`DOCUMENT_IS_PAGE`: use
-`write_page`). Only what changes is sent.
+document's settings only, never its content. Page documents are refused (`DOCUMENT_IS_PAGE`: use `write_page`), and so is
+a blank document unless it is given a `mapImage` (it then becomes a map, v2 D2). Only what changes is sent. `mapImage` is an
+image asset by **id or name** (`{ assetId }` also works; a name matching several assets is `ASSET_AMBIGUOUS` with each
+candidate and its folder): see [Maps](#maps-v2-d2).
 
 **`delete_document`** `{ page, document, confirm: true, dryRun?, project }`: refused for the page's last document
 (`DOCUMENT_LAST`) and for its only page-type document (`DOCUMENT_ONLY_PAGE`): that is the page's content (use
@@ -1089,6 +1097,79 @@ option (a)); only deleting a whole timeline document of an Authoritative page is
 event (and, for a new event, the lane) and 1 to verify; a proposal made from the dashboard costs the 3 planning reads
 only. Add one read per 100 events of the age's timeline when an event is found by its row (update and delete). A dry run
 costs the planning reads only (3 to 5).
+
+## Maps (v2 D2)
+
+`create_map_feature`, `update_map_feature` and `delete_map_feature` change the pins, labels, regions, paths and folders of a
+**map** document of a page inside the AI REPOSITORY; `update_document` gives a map its image; `read_document` reads a map.
+Design: [ADR 0040](adr/0040-map-feature-tools.md). Features are ordinary edits: **not canon-gated, even on an Authoritative
+page** (ADR 0036 decision 6, option (a)); only deleting the whole map document of an Authoritative page is canonical.
+
+| Tool                 | Access | What it does                                                                                                                                                                                                                                                                                                                   |
+| -------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `create_map_feature` | W      | `page`, `document` (optional when the page has one map), `type`, `name`, coordinates (below), `link`, `folder`, `after` / `before`, `hidden`, `style`, `allowOutside`, `dryRun`, `operation_id`. One job: the check inside the lock, the write, the verify.                                                                    |
+| `update_map_feature` | W      | `feature` (an id, or a name with `featureFolder`, the folder it is in now or `null` for the top level), then any of `name`, coordinates, `link` (`null` clears it), `folder` (a folder, or `null` for the top level), `after` / `before`, `hidden`, `style`. Only what differs is sent; nothing to change answers `no_change`. |
+| `delete_map_feature` | W      | `feature` (as above), `confirm: true`, `cascade`. A folder that holds features is refused (`HAS_FEATURES`) unless `cascade: true`; the answer lists everything removed and the journal keeps every removed feature in full.                                                                                                    |
+
+**Coordinates.** A pin or label takes `latlng` `[lat, lng]` **or** `pixel` `{ x, y }`; a region takes `points` (one polygon, 3
+or more) or `polygons` (several); a path takes `points` (2 or more); a folder none. Each point of `points` is `[lat, lng]` or
+`{ x, y }`, all one kind. **Never both kinds in one request** (`COORDINATES_BOTH`).
+
+- **Pixels** count from the image's **top-left corner** (x to the right, y downwards). They are converted with the map's live
+  image, read inside the job: `pos = [north - y·(north - south)/height, west + x·(east - west)/width]` (LegendKeeper's own
+  formula; the app's frame is `[-y / 2^z, x / 2^z]` with `z = ceil(log2(max(width, height) / 256))`). If the image was replaced
+  between the plan and the write the job is refused (`FRAME_CHANGED`) and nothing is sent.
+- **Pixels are refused on a legacy tiled map** (no single image: pixels mean nothing) **and on a map with no image**
+  (`PIXEL_NEEDS_IMAGE`), with a message saying to use `latlng`.
+- **Outside the image** (pixels) or the map's bounds (lat/lng) is refused (`OUT_OF_BOUNDS`, listing the points) unless
+  `allowOutside: true`.
+
+**Link.** `link` is a page by name or id, or `{ page, document }`, and becomes `lk://resources/<id>` or
+`lk://resources/<id>/docs/<documentId>`. Names resolve as write targets do (C2b): an ambiguous name is an error listing each
+candidate with its role, never a guess; the page (and document) is checked to exist and not be deleted (one read). A page just
+created in the app can take a few seconds to become linkable. `link: null` clears the link explicitly.
+
+**Folder.** `folder` is the parent, by name or id; a name that matches more than one folder is refused with each one's path.
+Moving into another folder (or out, `folder: null`) is `update_map_feature`'s `folder`. A folder cannot be moved into itself or
+beneath itself.
+
+**Place.** A feature goes at the **end** of its parent unless `after` or `before` names a sibling (under the same parent). The
+bridge never sorts a map alphabetically: the owner orders it by hand. The rank is worked out inside the lock between the real
+neighbours.
+
+**Styles** go in `style` with LegendKeeper's names (`iconGlyph`, `iconColor`, `iconShape`, `iconSize`, `pinImage`, `color`,
+`fillOpacity`, `fillStyle`, `borderStyle`, `strokeWidth`, `strokeStyle`, `strokeOpacity`, `textColor`, `textEffect`,
+`textEffectColor`, `labelSize`, `labelVisibility`, `visibilityRange`), checked against its enums and `#RRGGBB` formats; one that
+does not apply to the type is refused (`STYLE_NOT_FOR_TYPE`).
+
+**The compare-and-swap.** LegendKeeper does not version features, so the bridge's own check inside the document's lock reads the
+map again and judges the plan's resolved request against it; a feature edited, a folder gone, a sibling gone, a replaced image
+or (for a cascade) a feature added since the plan is a conflict and nothing is sent (`VERSION_CONFLICT` with the differences;
+under `propose` the proposal ends `conflicted`). **A stopped cascade is resumed, never replayed:** ask again and only what is
+left is deleted.
+
+**Map images (`update_document`).** `mapImage` is an asset of the library by id or name (`list_assets`): it sets or replaces the
+image, and a **blank** document given one becomes a map. Features keep their `pos`, so a replacement with an image of a
+different pixel size answers with a warning (`FEATURES_OVER_DIFFERENT_PIXELS`: how many features will now sit over different
+pixels); **nothing is moved automatically**. A legacy map replaced warns that its pixels cannot be compared
+(`LEGACY_MAP_REPLACED`).
+
+**Reading** (`read_document`): the header gives `width`, `height` and `bounds`, and each feature its pixel position beside its
+`pos`; a legacy tiled map and a map with no image say so and show lat/lng only.
+
+### Costs (reads and writes, measured against the mock)
+
+| Call                                             | Reads | Writes |
+| ------------------------------------------------ | ----- | ------ |
+| `create_map_feature`                             | 5     | 1      |
+| `update_map_feature`                             | 5     | 1      |
+| `delete_map_feature`, one feature                | 6     | 1      |
+| `delete_map_feature`, cascade of 6               | 11    | 6      |
+| `update_document` with `mapImage` (no image yet) | 7     | 1      |
+| `read_document` on a map                         | 2     | 0      |
+
+Plan 2 (the map's settings, its features) and check 2, then 1 read to verify; a delete also reads each feature for its journal
+pre-image. A `link` adds one read (the page, live). A dry run costs the plan's reads only.
 
 ## Image upload
 

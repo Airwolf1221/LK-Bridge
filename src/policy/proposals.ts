@@ -1648,6 +1648,8 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.expectCurrent ? { expectCurrent: o.expectCurrent } : {}),
     ...(o.deferTreeReread === true ? { deferTreeReread: true } : {}),
     ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
+    // v2 D2: a folder's cascade delete keeps what it removes in its own journal entry.
+    ...(o.journalPreImageWith !== undefined ? { journalPreImageWith: o.journalPreImageWith } : {}),
     // v2 C2b: a write to a page the same job creates from a template: its ids are bound in the job.
     ...(o.bindIds ? { bindIds: o.bindIds } : {}),
     // v2 D1: a chronology write whose place or new count the job's own check works out inside the lock.

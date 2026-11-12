@@ -373,6 +373,53 @@ only what is left; other changes of that age wait for it (`CHRONOLOGY_INCOMPLETE
 chronology, the tools refuse (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on
 an Authoritative page.
 
+## Maps
+
+A map is a document of a page. Read it with `read_document` (the page, and the document by name or id); change it with
+`create_map_feature`, `update_map_feature` and `delete_map_feature`; give it an image with `update_document` (`mapImage`).
+
+**Reading a map.** The header gives the image's `width`, `height` and `bounds` (`[[south, west], [north, east]]`), and every
+feature its type, name, position and link, with a folder's features nested under it. When the map has an image each
+position is given twice: as `(lat, lng)`, which is what LegendKeeper stores, and as `pixel (x, y)`, counted from the image's
+**top-left corner** (x to the right, y downwards). A region's or path's points are listed in pixels when there are six or
+fewer, and summarised as a pixel box when there are more (`detail: "full"` lists every point).
+
+**Pixels or lat/lng.** Give a feature's coordinates in ONE system per request: `pixel` (`{ x, y }`) or `latlng`
+(`[lat, lng]`); never both. A pin or label takes one position; a region takes `points` (a polygon of 3 or more) or
+`polygons` (several); a path takes `points` (2 or more); each point is `[lat, lng]` or `{ x, y }`, all one kind. **Use pixels
+when you are working from the image** (the numbers you read off `read_document` are the numbers you write back): the bridge
+converts them with the map's live image, so a pin you place at pixel (1024, 512) is at pixel (1024, 512) in LegendKeeper.
+Anything outside the image is refused unless `allowOutside: true`. A **legacy tiled map** has no single image and a map with
+no image has none yet: pixels are refused on both (use `latlng`; set an image with `update_document` for pixels).
+
+**Adding and changing features.** `create_map_feature` takes `type` (`pin`, `label`, `region`, `path` or `folder`), `name`
+and the coordinates; `folder` names the parent folder; `after` or `before` names a sibling to put it beside; `style` takes
+LegendKeeper's style fields (`iconShape`, `iconColor`, `color`, `fillStyle`…). A feature goes at the **end** of its parent
+unless you place it: the bridge never sorts a map alphabetically, because the owner orders it by hand. `update_map_feature`
+finds a feature by its id, or by its name (with `featureFolder`, the folder it is in now, when the name occurs more than
+once: an ambiguous name is refused with each candidate); only what you give changes, and a change that changes nothing is
+`no_change`.
+
+**Links.** `link` is a page by name or id (or `{ page, document }` for one document of it). A name that matches several pages
+is refused with every candidate and its role; nothing is guessed. The page must exist and not be deleted. A page the owner
+made in the app a few seconds ago may not be linkable yet: wait and try again. `link: null` on `update_map_feature` clears the
+link; leaving `link` out leaves it alone.
+
+**Folders.** Name the folder with `folder`; a name that matches more than one folder is refused with their paths (pass the id).
+`update_map_feature` with `folder` moves a feature, or a whole folder with its features, into another folder, and
+`folder: null` moves it out to the top level. LegendKeeper does **not** delete a folder's features when it deletes the folder,
+so `delete_map_feature` refuses a folder that holds features unless you pass `cascade: true`; the answer then lists everything
+removed, and the journal (`bridge_journal_lookup`) keeps every removed feature in full, so each can be added again. If a
+cascade stops part-way, ask again: it deletes only what is left.
+
+**Images.** `update_document` with `mapImage` (an image asset of the library, by name or id: see `list_assets`) sets or
+replaces a map's image, and a blank document given one becomes a map. Features keep their positions when the image changes, so
+a replacement with an image of a different size puts them over different pixels: the answer carries a warning with how many.
+**Nothing is moved automatically**; tell the person, and move them with `update_map_feature` if asked.
+
+These are ordinary edits, not canon, even on an Authoritative page (only deleting the whole map document of an Authoritative
+page is canonical).
+
 ## Budget rules
 
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.

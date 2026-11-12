@@ -46,6 +46,7 @@ import {
   internalStepIssues,
   isInternalStep,
   type DocumentChecker,
+  type MapChecker,
 } from './internal-steps.js';
 import type { WriteGuard } from './write-guard.js';
 import {
@@ -221,6 +222,8 @@ export class JobEngine {
   private readonly recordHandlers = new Map<string, RecordHandler>();
   /** v2 D1: the document checkers of `bridge.expect` (`kind: 'document'`), by name. */
   private readonly checkers = new Map<string, DocumentChecker>();
+  /** v2 D2: the map checkers of `bridge.expect` (`kind: 'map'`) and `bridge.verify` (`kind: 'mapChecked'`), by name. */
+  private readonly mapCheckers = new Map<string, MapChecker>();
   private readonly etagVersions: ((projectId: string) => boolean) | undefined;
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
@@ -267,6 +270,7 @@ export class JobEngine {
       writeGuard: () => this.writeGuard,
       recordHandler: (store) => this.recordHandlers.get(store),
       checker: (name) => this.checkers.get(name),
+      mapChecker: (name) => this.mapCheckers.get(name),
       ...(o.etagVersions ? { etagVersions: o.etagVersions } : {}),
     });
     this.etagVersions = o.etagVersions;
@@ -479,6 +483,18 @@ export class JobEngine {
     this.checkers.set(name, checker);
     return () => {
       if (this.checkers.get(name) === checker) this.checkers.delete(name);
+    };
+  }
+
+  /**
+   * v2 D2 (ADR 0040): registers a map checker for `bridge.expect` checks of kind `map` and `bridge.verify` targets of
+   * kind `mapChecked` (src/jobs/internal-steps.ts). A job whose check names a missing checker fails at that check,
+   * before its writes. Returns an unregister.
+   */
+  registerMapChecker(name: string, checker: MapChecker): () => void {
+    this.mapCheckers.set(name, checker);
+    return () => {
+      if (this.mapCheckers.get(name) === checker) this.mapCheckers.delete(name);
     };
   }
 
@@ -2422,6 +2438,8 @@ function stepOptions(o: StepOptions): StepOptions {
       : {}),
     ...(o.deferTreeReread === true ? { deferTreeReread: true } : {}),
     ...(o.journalPreImage !== undefined ? { journalPreImage: o.journalPreImage } : {}),
+    // v2 D2: a folder's cascade delete keeps what it removes in its own journal entry.
+    ...(o.journalPreImageWith !== undefined ? { journalPreImageWith: o.journalPreImageWith } : {}),
     // v2 C2b: set by bridge code only.
     ...(o.bindIds && Number.isInteger(o.bindIds.step) ? { bindIds: { step: o.bindIds.step } } : {}),
     // v2 D1: set by bridge code only.

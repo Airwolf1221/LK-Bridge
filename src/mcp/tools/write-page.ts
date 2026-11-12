@@ -59,7 +59,7 @@ const MODES = ['append', 'prepend', 'replace', 'replace_section', 'append_to_sec
 
 /** Where to go for documents write_page does not write. */
 const OTHER_TOOLS: Record<string, string> = {
-  map: 'a map: change its features with the map tools when they are in your tool list, or lk_api_write (createFeature, updateFeature, deleteFeature)',
+  map: 'a map: change its features with create_map_feature, update_map_feature and delete_map_feature, and its image with update_document',
   time: 'a timeline: change its events with the timeline tools when they are in your tool list, or lk_api_write (createEvent, updateEvent, deleteEvent)',
   board:
     'a board: change its shapes with lk_api_write (createBoardShapes, updateBoardShapes, deleteBoardShapes)',

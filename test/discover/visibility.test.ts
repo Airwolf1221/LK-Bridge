@@ -79,6 +79,10 @@ describe('showLowLevelTools, per profile', () => {
         'delete_timeline_event',
         'sync_timeline_event',
         'create_timeline_lane',
+        // v2 D2: the map-feature tools
+        'create_map_feature',
+        'update_map_feature',
+        'delete_map_feature',
       ].sort(),
     );
   });
@@ -103,11 +107,11 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 52 tools off and 52 + 3 + 89 on', async () => {
+  it('shows 55 tools off and 55 + 3 + 89 on', async () => {
     const t = w.stack.newToken('counting', 'write');
-    expect(await list(t.token)).toHaveLength(52);
+    expect(await list(t.token)).toHaveLength(55);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(52 + 3 + operations.length);
+    expect(await list(t.token)).toHaveLength(55 + 3 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {
