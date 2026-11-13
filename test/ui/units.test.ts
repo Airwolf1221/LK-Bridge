@@ -79,6 +79,8 @@ describe('formatting', () => {
     expect(fmtBytes(512)).toBe('512 B');
     expect(fmtBytes(2048)).toBe('2.0 KB');
     expect(fmtBytes(3 * 1024 ** 2)).toBe('3.0 MB');
+    expect(fmtBytes(10 * 1024 ** 3)).toBe('10.0 GB'); // v2 E1a: the snapshot store and the disk
+    expect(fmtBytes(2.5 * 1024 ** 4)).toBe('2.5 TB');
     expect(pct(30, 120)).toBe(25);
     expect(pct(500, 120)).toBe(100);
     expect(pct(5, null)).toBe(0);

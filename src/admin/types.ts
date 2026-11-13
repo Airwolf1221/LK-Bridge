@@ -12,6 +12,9 @@ import type { AssetService } from '../assets/index.js';
 import type { TreeService } from '../tree/index.js';
 import type { SecretStore } from '../secrets/store.js';
 import type { Registry } from '../registry/index.js';
+import type { SnapshotService } from '../snapshots/service.js';
+import type { Restores } from '../snapshots/restores.js';
+import type { Rehearsals } from '../snapshots/rehearsal.js';
 
 /**
  * What the admin API needs from the running bridge. `Runtime` (src/runtime.ts) satisfies it; tests may build their own.
@@ -39,6 +42,10 @@ export interface AdminRuntime {
   readonly chronology?: Chronology;
   /** v2 D3: the image pipeline (the Staging page); optional for tests' runtimes. */
   readonly images?: ImageService;
+  /** v2 E1a: snapshots, restores and the rehearsal (the Snapshots page); optional for tests' runtimes. */
+  readonly snapshots?: SnapshotService;
+  readonly restores?: Restores;
+  readonly rehearsals?: Rehearsals;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

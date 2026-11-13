@@ -6,7 +6,7 @@
 import type { Db } from '../db/open.js';
 
 export type UploadState = 'uploading' | 'uploaded' | 'failed' | 'discarded';
-export type UploadSource = 'data_base64' | 'url' | 'upload_id' | 'dashboard';
+export type UploadSource = 'data_base64' | 'url' | 'upload_id' | 'dashboard' | 'restore';
 
 export interface ImageUploadRow {
   readonly projectId: string;

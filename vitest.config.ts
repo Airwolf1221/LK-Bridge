@@ -27,6 +27,7 @@ export default defineConfig({
       'test/chronology/**/*.test.ts', // v2 D1: chronology sync and the timeline tools
       'test/maps/**/*.test.ts', // v2 D2: the map-feature tools
       'test/images/**/*.test.ts', // v2 D3: the image pipeline
+      'test/snapshots/**/*.test.ts', // v2 E1a: snapshots, restore and the rehearsal
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

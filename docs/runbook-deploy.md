@@ -50,6 +50,7 @@ Afterwards: [updating](#updating), [updating the env file](#updating-the-env-fil
 | `/opt/lk-bridge/runtime/node`            | symlink to the private Node 24 (`node-v24.x.y-linux-x64` beside it)                    | `root`, 0755          |
 | `/var/lib/lk-bridge`                     | `bridge.db` and its WAL files; the only place the service may write                    | `lkbridge`, **0700**  |
 | `/var/lib/lk-bridge/backups`             | `nightly-*.db.gz` (newest 14) and `pre-deploy-*.db.gz` (newest 5)                      | `lkbridge`, 0700      |
+| `/var/lib/lk-bridge/snapshots`           | v2 E1a: the snapshot store (`objects/`, `manifests/`, `STORE.json`; ADR 0042)          | `lkbridge`, 0700      |
 | `/etc/lk-bridge/lk-bridge.env`           | every setting and secret (and `lk-bridge.env.bak.<time>`, env-sync's backups)          | `root:lkbridge`, 0640 |
 | `/etc/systemd/system/lk-bridge.service`  | the service                                                                            | `root`, 0644          |
 | `/etc/systemd/system/lk-bridge-backup.*` | the nightly backup service and timer                                                   | `root`, 0644          |
@@ -889,7 +890,8 @@ lowers a conversion's peak in proportion.
   or kept file: `upload-tmp/` (the binary endpoint's temporary files: emptied at every start, swept every minute, a file lives
   at most 15 minutes) appears with the first upload, `kept-bytes/` (the bytes of deleted assets, 90 days) with the first
   deleted image. `IMAGE_DATA_DIR` moves it (it must stay inside
-  `ReadWritePaths`). It is not in the nightly SQLite backup; E1's backups will take `kept-bytes/`.
+  `ReadWritePaths`). It is not in the nightly SQLite backup. v2 E1a: `kept-bytes/` moved into the snapshot store (one store;
+the bridge adopts an old `kept-bytes/` at its first start and removes the empty directory).
 - **The memory limits** of the unit are raised (above, "Memory"); the deploy installs them.
 - **New settings**, all optional with sensible defaults (env.template, "Images"): `IMAGE_MAX_PIXELS`, `IMAGE_MAX_FRAMES`,
   `IMAGE_CONVERT_TIMEOUT_MS`, `IMAGE_CONVERT_CONCURRENCY`, `IMAGE_DATA_DIR`, `IMAGE_UPLOAD_RATE_PER_PRINCIPAL`,
@@ -907,6 +909,71 @@ lowers a conversion's peak in proportion.
 
 After the deploy, refresh ChatGPT's tools (Plugins → the bridge → Refresh) and disconnect and reconnect the connector on
 claude.ai: two new tools, `upload_image` and `prepare_image_upload`.
+
+## Snapshots (v2 E1a)
+
+[ADR 0042](adr/0042-snapshots-restore-rehearsal.md); tools in [tools.md](tools.md#snapshots-and-restores-v2-e1a); the
+Snapshots page in [dashboard.md](dashboard.md#snapshots-v2-e1a); the jobs in [maintenance.md](maintenance.md#snapshots-v2-e1a).
+
+**What the server needs: nothing beyond a normal deploy.** The store is `snapshots/` next to the database
+(`/var/lib/lk-bridge/snapshots`, 0700, files 0600, owned by `lkbridge`), inside the unit's only writable path, created at
+the first start. Migration `2000_snapshots` adds the index tables. At its first start the bridge moves D3's
+`/var/lib/lk-bridge/images/kept-bytes/` into the store (each file hashed and checked; a notice on the Snapshots page says
+how many). The weekly full snapshot is on by default (Sunday 00:30), the daily pass is off.
+
+**Settings** (env.template, "Snapshots"; all optional): `SNAPSHOT_DIR` (must stay inside `ReadWritePaths`),
+`SNAPSHOT_MIN_FREE_GB` (**10**: a full snapshot is refused rather than leave less free space), `SNAPSHOT_KEEP_WEEKLY` (8),
+`SNAPSHOT_KEEP_DAYS` (30), `SNAPSHOT_SOFT_DELETE_DAYS` (30: how long a deleted page is taken to be undeletable). Per project
+(Projects or Snapshots page): `snapshotDailyPass`, `snapshotDailyPassDocuments`. Schedules: Maintenance Jobs page.
+
+**Disk.** `/` has 144 GB with 63 GB free (12 November 2026); with the 10 GB minimum, **53 GB of headroom**. The store is
+expected to take a small fraction of it (estimates; the Snapshots page shows the real figures after the first run):
+
+| What                                   | Test world (about 150 pages)      | Arkona (about 1,500 pages)                      |
+| -------------------------------------- | --------------------------------- | ----------------------------------------------- |
+| Text, first full snapshot              | about 0.5 MB stored (2 MB of JSON) | about 5 MB stored (about 22 MB of JSON)         |
+| Text, 8 weekly + 30 days of changes    | a few MB                          | 30 to 50 MB (only changed pieces are new)       |
+| Manifests                              | under 1 MB                        | about 3 MB (about 200 bytes a page each full)   |
+| Images (the library, each stored once) | 10 to 30 MB                       | 250 to 750 MB (1,000 to 3,000 images of ~250 KB) |
+| The database's index                   | under 1 MB                        | about 10 to 20 MB (a row a piece a snapshot)    |
+| **Total**                              | **well under 100 MB**             | **under 1 GB, under 2% of the headroom**        |
+
+Assumptions: a page's pieces about 15 KB of canonical JSON, compressed about 4× (gzip); WebP images do not compress further
+and are stored once whatever the number of snapshots; about a tenth of the pages change in a week. The disk check before a
+full snapshot uses a deliberately larger estimate (12 KiB a page, 512 KiB an image not yet stored: about 0.5 GB for
+Arkona's first run), so it refuses long before the minimum is at risk. Check the real usage with:
+
+```bash
+sudo du -sh /var/lib/lk-bridge/snapshots /var/lib/lk-bridge/backups
+```
+
+**The nightly database copies** (above, "Backups and restore") hold the snapshot index, runs, findings, restores and
+rehearsals; the manifests and pieces are in the store. E1b copies both off the server. Until then the store is plain
+files: copy `objects/` before `manifests/` (`sudo rsync -a`), and a copy is complete for every manifest it holds.
+
+**The sandbox check** (writes in the test project, then cleans up; about 300 reads and 70 writes, a few minutes):
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- snapshots
+```
+
+Its `U.a` to `U.e` lines decide the **daily pass**: all PASS, switch on `snapshotDailyPass` for the project (Snapshots page);
+some INCONCLUSIVE (only a document's `updatedAt` moved), switch on `snapshotDailyPassDocuments` too (one more request a
+page a day: about 1,500 a day on Arkona, so weigh it against the budget); a FAIL means that kind of app edit is caught only
+by the weekly full snapshot. Its `D2` line says whether LegendKeeper takes a recreated page's original id.
+
+**Live checks after the deploy** (the test world):
+
+1. Snapshots page → **Take a full snapshot now**; when the run ends, check its pages, requests, size and duration, and
+   the store's size and free space.
+2. Edit a test page in the LegendKeeper app, and another (or the same) through the bridge; the bridge's edit shows a
+   change snapshot at once (Snapshots list, kind "after a bridge write"); the app edit is in the next full (or daily)
+   snapshot. Open the page's history and **Diff with now**.
+3. **Propose a restore** of that page to the earlier snapshot: preview, propose, approve on the Proposals page, then read
+   the page.
+4. **Restore rehearsal**: a rehearsal never goes into the project its snapshot came from, so take a full snapshot of
+   another served project (Baisheng now; Arkona after E5) from its Snapshots page, then rehearse it, sampled, into the
+   test world; read the results, and check the throwaway root `lk-bridge rehearsal <time>` is gone.
 
 ## Moving to several projects (v2 A1)
 

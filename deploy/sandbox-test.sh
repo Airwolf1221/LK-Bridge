@@ -5,7 +5,8 @@
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
 #
 # Anything after `--` is passed to vitest as a filter: `... --project test -- chronology` runs only the read-only
-# chronology check (v2 D1), `... -- assumptions` only the write layer's assumptions.
+# chronology check (v2 D1), `... -- assumptions` only the write layer's assumptions, `... -- snapshots` only the
+# snapshots, restores and rehearsal check (v2 E1a; it writes, then cleans up).
 #
 # Why a wrapper: vitest does not read /etc/lk-bridge/lk-bridge.env (the bridge gets it from systemd), and the file is not
 # safe to `source`. This exports only DB_PATH and the env file's path (sandbox_project_env in lib.sh) and reads no key:

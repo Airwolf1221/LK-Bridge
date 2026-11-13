@@ -31,6 +31,14 @@ export interface LinkMaintenance {
   sweep(projectId: string): Promise<MaintenanceResult>;
 }
 
+/** v2 E1a (ADR 0042): the snapshot jobs (src/snapshots). */
+export interface SnapshotMaintenance {
+  full(projectId: string, trigger: string): Promise<MaintenanceResult>;
+  daily(projectId: string, trigger: string): Promise<MaintenanceResult>;
+  prune(): Promise<{ removed: number; gc: { removed: number; freed: number; kept: number } }>;
+  verify(): Promise<{ summary: string; missing: number; corrupt: number; badManifests: number }>;
+}
+
 export interface BuiltinJobDeps {
   readonly engine: JobEngine;
   /** Every project with a governor (the budget sampler samples each, v2 A1). */
@@ -53,7 +61,11 @@ export interface BuiltinJobDeps {
   readonly links?: LinkMaintenance;
   /** v2 D1: the chronology check. Without it the check skips, saying why. */
   readonly chronology?: ChronologyMaintenance;
+  /** v2 E1a: snapshots (full, daily pass, retention and collector, verify). Without them the jobs skip, saying why. */
+  readonly snapshots?: SnapshotMaintenance;
 }
+
+const NO_SNAPSHOTS: MaintenanceResult = { skipped: true, summary: 'Skipped: snapshots are not running.' };
 
 const NOT_IMPLEMENTED = 'Not implemented yet';
 
@@ -310,6 +322,92 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
         d.chronology && ctx.project
           ? d.chronology.check(ctx.project.id, ctx.trigger)
           : { skipped: true, summary: 'Skipped: chronology sync is not running.' },
+    },
+    // v2 E1a (ADR 0042): snapshots.
+    {
+      id: 'snapshot-full',
+      name: 'Full snapshot',
+      description:
+        'Takes a full snapshot of each project: every page under the AI REPOSITORY (its settings, sidebar and every ' +
+        'document: page blocks, map features, timeline lanes and events, board content) and the whole asset library with ' +
+        'every image’s bytes, into the bridge’s snapshot store. Each piece is stored once, so unchanged pages and images take ' +
+        'no extra space. About two requests per page at the lowest priority (images download from the asset host, which ' +
+        'uses no request budget); it waits while agents’ work is queued, and a run that stops is continued, never restarted. ' +
+        'Refused, with a message on the Snapshots page, when it would leave less free disk space than the minimum. Skips ' +
+        'projects whose tree is not built.',
+      defaultSchedule: { kind: 'weekly', day: 'sun', time: '00:30' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: true,
+      record: 'always',
+      scope: 'project',
+      background: true,
+      run: (ctx) =>
+        d.snapshots && ctx.project ? d.snapshots.full(ctx.project.id, ctx.trigger) : NO_SNAPSHOTS,
+    },
+    {
+      id: 'snapshot-daily',
+      name: 'Daily changed-pages snapshot',
+      description:
+        'Lists each project’s resources (one request per 100) and snapshots the pages whose updatedAt moved since a ' +
+        'snapshot last saw them: edits made in the LegendKeeper app between the weekly full snapshots. Switched off per ' +
+        'project (Snapshots page) until the owner’s sandbox run confirms that LegendKeeper’s updatedAt really moves when ' +
+        'content changes; the weekly full snapshot catches app edits either way.',
+      defaultSchedule: { kind: 'daily', time: '00:45' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: true,
+      record: 'on-change',
+      scope: 'project',
+      background: true,
+      run: (ctx) =>
+        d.snapshots && ctx.project ? d.snapshots.daily(ctx.project.id, ctx.trigger) : NO_SNAPSHOTS,
+    },
+    {
+      id: 'snapshot-prune',
+      name: 'Snapshot retention',
+      description:
+        'Removes the snapshots past their retention (8 weekly full snapshots and 30 days of change and daily snapshots ' +
+        'by default: SNAPSHOT_KEEP_WEEKLY, SNAPSHOT_KEEP_DAYS), then the stored pieces no snapshot refers to any more, ' +
+        'keeping the bytes kept before an asset delete for their own retention.',
+      defaultSchedule: { kind: 'daily', time: '04:40' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: false,
+      record: 'always',
+      scope: 'bridge',
+      run: async () => {
+        if (!d.snapshots) return NO_SNAPSHOTS;
+        const r = await d.snapshots.prune();
+        return {
+          summary: `Removed ${r.removed} ${r.removed === 1 ? 'snapshot' : 'snapshots'} past their retention and ${r.gc.removed} unreferenced pieces (${r.gc.freed} bytes); ${r.gc.kept} pieces kept.`,
+          changed: r.removed + r.gc.removed > 0,
+        };
+      },
+    },
+    {
+      id: 'snapshot-verify',
+      name: 'Snapshot verify',
+      description:
+        'Re-hashes every stored piece the snapshots (and the kept bytes) refer to, and reads every manifest. A missing or ' +
+        'damaged piece is a finding on the Snapshots page, and every snapshot that uses it becomes partial. Reads the disk ' +
+        'only; no request to LegendKeeper.',
+      defaultSchedule: { kind: 'weekly', day: 'sun', time: '05:10' },
+      defaultEnabled: true,
+      implemented: true,
+      writes: false,
+      usesLk: false,
+      record: 'always',
+      scope: 'bridge',
+      background: true,
+      run: async () => {
+        if (!d.snapshots) return NO_SNAPSHOTS;
+        const r = await d.snapshots.verify();
+        return { summary: r.summary, changed: r.missing + r.corrupt + r.badManifests > 0 };
+      },
     },
   ];
 }

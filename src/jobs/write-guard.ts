@@ -24,6 +24,7 @@ import type {
   StepView,
 } from './types.js';
 import type { ProposalExtras } from './policy.js';
+import { SYSTEM_PRINCIPAL } from './types.js';
 
 export interface WriteGuardEntry {
   readonly project: string;
@@ -97,4 +98,22 @@ export function combineGuards(...guards: readonly WriteGuard[]): WriteGuard {
       for (const g of guards) await g.inLock?.(input);
     },
   };
+}
+
+/**
+ * v2 E1a (ADR 0042): a proposal bridge code forces from the dashboard (the owner's own request, such as "Propose a
+ * restore"): the system principal, a dashboard origin, and the gate's `propose` (which, for the system principal, only a
+ * forced proposal gives). Nothing is written until the owner approves it.
+ */
+export function ownerForcedProposal(input: {
+  readonly principal: { readonly principalId: string };
+  readonly origin: { readonly kind: string; readonly approval?: unknown };
+  readonly gate: 'allow' | 'propose';
+}): boolean {
+  return (
+    input.principal.principalId === SYSTEM_PRINCIPAL.principalId &&
+    input.origin.kind === 'ui' &&
+    input.origin.approval === undefined &&
+    input.gate === 'propose'
+  );
 }

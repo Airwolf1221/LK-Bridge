@@ -90,6 +90,10 @@ describe('the MCP surface with the official client', () => {
         // v2 D3: the image pipeline
         'prepare_image_upload',
         'upload_image',
+        // v2 E1a: snapshots and restores
+        'list_snapshots',
+        'snapshot_diff',
+        'restore_snapshot',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));

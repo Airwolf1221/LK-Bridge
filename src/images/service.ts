@@ -43,7 +43,7 @@ import {
   type DestinationInput,
   type DestinationResult,
 } from './destination.js';
-import { ByteStore, createAssetDeleteKeeper } from './kept.js';
+import { ByteStore, createAssetDeleteKeeper, type KeptByteStore } from './kept.js';
 import { UploadSlots } from './slots.js';
 import { ImageStore, type ImageUploadRow, type UploadSource } from './store.js';
 
@@ -76,6 +76,13 @@ export interface ImageServiceOptions {
   };
   /** Start the timers (default true; tests drive `sweep` themselves). */
   readonly timers?: boolean;
+  /** v2 E1a (ADR 0042): where kept bytes go (the snapshot store); default D3's own `kept-bytes/` directory. */
+  readonly keptBytes?: KeptByteStore;
+  /**
+   * v2 E1a: the bytes of every upload, handed to the snapshot store as the upload starts, so a change snapshot names the
+   * new image with its hash without downloading it (best effort: a failure never stops the upload).
+   */
+  readonly uploadedBytes?: (bytes: Buffer) => Promise<unknown>;
 }
 
 /**
@@ -119,7 +126,7 @@ const newId = () => `img_${randomBytes(12).toString('base64url')}`;
 export class ImageService {
   readonly store: ImageStore;
   readonly slots: UploadSlots;
-  readonly bytes: ByteStore;
+  readonly bytes: KeptByteStore;
   readonly queue: ConversionQueue;
   readonly dir: string;
   /**
@@ -141,7 +148,8 @@ export class ImageService {
     this.store.onChange((after, before) => this.announce(after, before));
     this.dir = imageDataDir(o.images, o.dbPath);
     this.slots = new UploadSlots(this.store, join(this.dir, 'upload-tmp'));
-    this.bytes = new ByteStore(join(this.dir, 'kept-bytes'));
+    // v2 E1a (ADR 0042): the snapshot store's objects when the runtime has one (one store, not two).
+    this.bytes = o.keptBytes ?? new ByteStore(join(this.dir, 'kept-bytes'));
     this.queue = new ConversionQueue(() => this.limits(), o.images.convertConcurrency);
     const hour = 3_600_000;
     this.rate = {
@@ -310,6 +318,7 @@ export class ImageService {
         ? (plan.wouldCreate[0]!.parentFolderId ?? null)
         : (plan.destination.folderId ?? null);
     const out = p.image.output;
+    if (this.o.uploadedBytes) await this.o.uploadedBytes(out.data).catch(() => undefined);
     const submitted = await this.o.engine.submit({
       kind: 'upload_image',
       project: p.projectId,

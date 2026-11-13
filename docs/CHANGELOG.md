@@ -1,5 +1,41 @@
 # Changelog
 
+## Unreleased: v2 E1a: snapshots, restores as proposals, the rehearsal
+
+[ADR 0042](adr/0042-snapshots-restore-rehearsal.md); migration `2000_snapshots`. E1 is split: E1a (this) is the bridge's own
+snapshots, restore and the rehearsal; E1b, next, copies the store and the database copies, encrypted, to Google Drive.
+Nothing was run against a live system (the owner's LegendKeeper bridge connector was not called, not even for reads): every
+test runs against the mock; the sandbox check is written and dry-run against the mock, not run against LegendKeeper.
+
+- **The snapshot store** (`/var/lib/lk-bridge/snapshots`, `SNAPSHOT_DIR`; 0700 / 0600): every piece (a page's settings,
+  its sidebar in C2a.1's form, each document by type, each image's bytes) stored once, gzip, named by the SHA-256 of its
+  canonical form; `manifests/<project>/<id>.json.gz` on disk, indexed in the database; write-once files, objects before
+  manifests: **the layout is E1b's contract**. D3's kept bytes are merged into it (adopted at start-up).
+- **Full snapshots** weekly (Sunday 00:30, `snapshot-full`): every page under the AI REPOSITORY and the whole asset
+  library, P3, giving way to agents, resumable, refused below `SNAPSHOT_MIN_FREE_GB` (**10 GB**). **Change snapshots** at
+  the end of every bridge write's job, from its verify reads (they never download an image: the bridge's own uploads hand their bytes to the store, and any other image the store lacks is named by URL and taken by the next full snapshot). A **daily changed-pages pass** (`snapshot-daily`), off per
+  project until the sandbox check confirms `updatedAt`. **Retention** (8 weekly, 30 days) and a collector
+  (`snapshot-prune`); **verify** with findings and partial snapshots (`snapshot-verify`). Weekly schedules on the
+  Maintenance Jobs page.
+- **Three tools:** `list_snapshots` (free), `snapshot_diff`, `restore_snapshot` (**always a proposal**, at every scope:
+  a page's documents, its sidebar, one document, a deleted page undeleted or recreated with its original or new ids, a
+  deleted image back as a new asset with its references updated when the owner ticks it). The canon, lifecycle and
+  decision-5 guards apply; what cannot be restored (`unsupported` blocks and inline icons no longer on the page) is listed.
+  A sidebar restore covers the facts property, the link collections and every other key-value property, row by row.
+- **The rehearsal:** a full snapshot of one project restored into a throwaway root of a sandbox project, with new ids,
+  compared exactly (Markdown and blocks ignoring ids, sidebars, map features, timeline events, board shapes, image bytes),
+  then deleted; sampled (about 50 pages covering every kind) or full with its estimate first; never into its source.
+- **The Snapshots page:** the store against the disk (size, deduplication, free space, the next full snapshot's
+  estimate), findings, runs, each page's history with diffs, Propose a restore, a deleted image, the rehearsal and its
+  results, the snapshots, and the nightly database copies with their age. The Proposals page shows a restore's diff and
+  what it cannot restore. The dashboard shows sizes in GB and TB.
+- **The opt-in sandbox check** (`deploy/sandbox-test.sh --project test -- snapshots`): every piece type restored and read
+  back exactly, undelete, recreate (does LegendKeeper take the original id?), `updatedAt` on (a) a block, (b) a sidebar
+  row, (c) a map feature, (d) a timeline event, (e) the board, a sampled rehearsal; about 300 reads and 70 writes.
+- **Fixed on the way:** the dashboard's page search in the snapshots matched documents' names, not pages'.
+- **Costs** (mock): a full snapshot 2.24 reads a page; change snapshots 0 to 4 reads a write (`write_page` 1, `set_facts` 0);
+  a full rehearsal about 4.3 writes and 2.2 reads a page.
+
 ## Unreleased: the owner's live checks of 12 November 2026: root moves on maps, the sandbox image folder, outsiders on archive and move to Working
 
 Notes in [ADR 0040](adr/0040-map-feature-tools.md) (root moves), [ADR 0041](adr/0041-image-pipeline.md) (the image directory) and

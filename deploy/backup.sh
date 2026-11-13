@@ -7,6 +7,10 @@
 # SQLite's integrity_check. Only then are old copies removed: the newest 14 `nightly` ones are kept, and the newest 5
 # `pre-deploy` ones (deploy.sh takes one before every migration), so a deploy never pushes out a nightly copy.
 # `.backup` is safe while the bridge is running (it takes a consistent snapshot of the WAL database).
+# v2 E1a (ADR 0042): the copy is the whole database, so it holds the snapshot index, runs, findings, restores and
+# rehearsals. The snapshots' manifests and pieces are files in the snapshot store (/var/lib/lk-bridge/snapshots), not
+# in the database; E1b copies the store and these copies off the server. The Snapshots page lists these copies and
+# their age (BACKUP_DIR, default backups/ next to the database, as here).
 set -euo pipefail
 
 label="${1:-nightly}"

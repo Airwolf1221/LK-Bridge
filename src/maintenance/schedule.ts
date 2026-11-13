@@ -1,5 +1,6 @@
 /**
- * Maintenance schedules: a fixed interval, or a daily time on the Europe/London clock (docs/maintenance.md).
+ * Maintenance schedules: a fixed interval, a daily time, or (v2 E1a) a weekly day and time, on the Europe/London clock
+ * (docs/maintenance.md).
  *
  * Daily times follow the British clocks change: "03:30" is 03:30 GMT in winter and 03:30 BST in summer, so the
  * gap between two runs is 23 or 25 hours across the change. A time that does not exist on the spring day (01:00 to
@@ -12,9 +13,25 @@ export const LONDON = 'Europe/London';
 export const MIN_INTERVAL_SECONDS = 10;
 export const MAX_INTERVAL_SECONDS = 31 * 86_400;
 
+/** v2 E1a: the days of a weekly schedule, Monday first (ISO), as stored. */
+export const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const;
+export type Weekday = (typeof WEEKDAYS)[number];
+const WEEKDAY_NAMES: Record<Weekday, string> = {
+  mon: 'Monday',
+  tue: 'Tuesday',
+  wed: 'Wednesday',
+  thu: 'Thursday',
+  fri: 'Friday',
+  sat: 'Saturday',
+  sun: 'Sunday',
+};
+
 export type Schedule =
   | { readonly kind: 'interval'; readonly everySeconds: number }
-  | { readonly kind: 'daily'; readonly time: string };
+  | { readonly kind: 'daily'; readonly time: string }
+  | { readonly kind: 'weekly'; readonly day: Weekday; readonly time: string };
+
+const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use a 24-hour time such as 03:30');
 
 export const scheduleSchema: z.ZodType<Schedule> = z.discriminatedUnion('kind', [
   z.object({
@@ -23,7 +40,12 @@ export const scheduleSchema: z.ZodType<Schedule> = z.discriminatedUnion('kind', 
   }),
   z.object({
     kind: z.literal('daily'),
-    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use a 24-hour time such as 03:30'),
+    time: timeSchema,
+  }),
+  z.object({
+    kind: z.literal('weekly'),
+    day: z.enum(WEEKDAYS),
+    time: timeSchema,
   }),
 ]);
 
@@ -89,17 +111,32 @@ export function nextDailyRun(afterMs: number, time: string): number {
   throw new Error('nextDailyRun: no run found'); // unreachable
 }
 
+/** v2 E1a: the first run strictly after `afterMs` of a weekly London day and time. */
+export function nextWeeklyRun(afterMs: number, day: Weekday, time: string): number {
+  const want = WEEKDAYS.indexOf(day); // 0 = Monday
+  let at = afterMs;
+  for (let i = 0; i < 9; i++) {
+    const next = nextDailyRun(at, time);
+    const p = londonParts(next);
+    const dow = (new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay() + 6) % 7;
+    if (dow === want) return next;
+    at = next;
+  }
+  throw new Error('nextWeeklyRun: no run found'); // unreachable
+}
+
 /**
  * When a job is next due, counting from `fromMs`: an interval from the moment a run starts or the job is enabled
- * (so a restart never queues a backlog), a daily time from the next occurrence.
+ * (so a restart never queues a backlog), a daily or weekly time from the next occurrence.
  */
 export function nextRun(schedule: Schedule, fromMs: number): number {
-  return schedule.kind === 'interval'
-    ? fromMs + schedule.everySeconds * 1000
-    : nextDailyRun(fromMs, schedule.time);
+  if (schedule.kind === 'interval') return fromMs + schedule.everySeconds * 1000;
+  if (schedule.kind === 'weekly') return nextWeeklyRun(fromMs, schedule.day, schedule.time);
+  return nextDailyRun(fromMs, schedule.time);
 }
 
 export function describeSchedule(s: Schedule): string {
+  if (s.kind === 'weekly') return `Weekly on ${WEEKDAY_NAMES[s.day]} at ${s.time} (London time)`;
   if (s.kind === 'daily') return `Daily at ${s.time} (London time)`;
   const n = s.everySeconds;
   if (n % 604_800 === 0) return n === 604_800 ? 'Weekly' : `Every ${n / 604_800} weeks`;

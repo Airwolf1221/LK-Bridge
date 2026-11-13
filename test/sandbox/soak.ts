@@ -17,9 +17,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_TOOLS_SETTINGS, loadConfig, projectKeyVariable } from '../../src/config/index.js';
+import { DEFAULT_SNAPSHOT_SETTINGS } from '../../src/config/tools.js';
 import { defaultMaintenanceSettings } from '../../src/config/maintenance.js';
 import { runMigrations } from '../../src/db/migrate.js';
-import { openDatabase } from '../../src/db/open.js';
+import { openDatabase, type Db } from '../../src/db/open.js';
 import {
   TERMINAL_JOB_STATUSES,
   mintClientId,
@@ -85,6 +86,8 @@ export interface SoakRuntime {
   readonly projectId: string;
   /** The project's governed client. */
   readonly lk: LkClient;
+  /** v2 E1a: the runtime's own temporary database (never the bridge's). */
+  readonly db: Db;
   close(): Promise<void>;
 }
 
@@ -133,6 +136,8 @@ export async function createSoakRuntime(o: {
     toolsSettings: {
       ...DEFAULT_TOOLS_SETTINGS,
       images: { ...DEFAULT_TOOLS_SETTINGS.images, dataDir: join(dir, 'images') },
+      // v2 E1a: the snapshot store too (snapshots of the sandbox's own writes, the snapshot sandbox test's store).
+      snapshots: { ...DEFAULT_SNAPSHOT_SETTINGS, dataDir: join(dir, 'snapshots') },
     },
     db,
     version: 'soak',
@@ -158,7 +163,7 @@ export async function createSoakRuntime(o: {
       `Refusing to run: the key of project "${name}" could not be verified (${view?.reason ?? 'unknown'}).`,
     );
   }
-  return { runtime, counters, projectId: view.id, lk, close };
+  return { runtime, counters, projectId: view.id, lk, db, close };
 }
 
 export interface SoakTarget {

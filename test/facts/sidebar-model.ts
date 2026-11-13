@@ -298,14 +298,27 @@ export class SidebarModel {
           rank: rankAt((sb.props.length + 1) * 100),
           ...(body.kind === 'keyValue'
             ? {
+                // v2 E1a: a row's own id and rank when the request gives them (the spec's create takes both).
                 rows: ((body.rows as Obj[] | undefined) ?? []).map((r, i) => ({
-                  id: mint('w'),
-                  rank: rankAt((i + 1) * 100),
+                  id: typeof r.id === 'string' ? r.id : mint('w'),
+                  rank: typeof r.rank === 'string' ? r.rank : rankAt((i + 1) * 100),
                   key: str(r.key),
                   content: this.trim(
                     Array.isArray(r.content) ? (r.content as Obj[]) : r.text ? [{ text: r.text }] : [],
                   ),
                 })),
+              }
+            : {}),
+          // v2 E1a: a link collection created with its items (and filter), as the spec's create takes them.
+          ...(body.kind === 'resourceCollection' || body.kind === 'resourceLink'
+            ? {
+                items: ((body.items as Obj[] | undefined) ?? []).map((it, i) => ({
+                  id: typeof it.id === 'string' ? it.id : mint('j'),
+                  rank: typeof it.rank === 'string' ? it.rank : rankAt((i + 1) * 100),
+                  resourceId: str(it.resourceId),
+                  ...(typeof it.documentId === 'string' ? { documentId: it.documentId } : {}),
+                })),
+                ...(body.filter !== undefined ? { filter: body.filter } : {}),
               }
             : {}),
         };

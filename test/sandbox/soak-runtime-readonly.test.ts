@@ -61,6 +61,11 @@ describe.skipIf(!restricted)(
       expect(images.dir.startsWith(join(tmpdir(), 'lkb-soak-'))).toBe(true);
       expect(images.dir).not.toContain(process.cwd());
       expect(existsSync(images.dir)).toBe(false); // a runtime that handles no upload touches no folder
+      // v2 E1a: the snapshot store is inside the same temporary directory (it is created at start-up).
+      const snaps = soak.runtime.snapshots;
+      await snaps.settled();
+      expect(snaps.store.dir.startsWith(join(tmpdir(), 'lkb-soak-'))).toBe(true);
+      expect(snaps.store.dir).not.toContain(process.cwd());
     });
 
     it('the real boot path with the default tool settings derives its directory from the database it was given', async () => {
@@ -70,6 +75,9 @@ describe.skipIf(!restricted)(
       expect(images.dir.startsWith(tmpdir())).toBe(true);
       expect(images.dir).not.toContain(process.cwd());
       expect(existsSync(images.dir)).toBe(false);
+      await stack.runtime.snapshots.settled();
+      expect(stack.runtime.snapshots.store.dir.startsWith(tmpdir())).toBe(true);
+      expect(stack.runtime.snapshots.store.dir).not.toContain(process.cwd());
     });
   },
 );

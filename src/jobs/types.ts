@@ -155,7 +155,19 @@ export interface StepOptions {
    * the same job created (a folder `createAssetFolder` made, an asset `createImageAsset` made) into `body.folderId` or
    * `path.assetId`. Done once, before anything is sent, and stored; a step being recovered keeps what it was sent with.
    */
-  readonly bindFrom?: { readonly step: number; readonly to: 'body.folderId' | 'path.assetId' };
+  readonly bindFrom?: {
+    readonly step: number;
+    /**
+     * v2 E1a (ADR 0042): `path.documentId`, for a page the same job recreates (restore_snapshot): its documents get new
+     * ids, so their content writes take the id the create returned.
+     */
+    readonly to: 'body.folderId' | 'path.assetId' | 'path.documentId';
+    /**
+     * v2 E1a: where in the earlier step's result the id is: `id` (the default: a created folder, asset or document), or
+     * `documents.<n>.id` (the n-th document of a page `createResource` made, 0 to 4: it creates up to five).
+     */
+    readonly from?: 'id' | `documents.${number}.id`;
+  };
 }
 
 export interface StepSpec extends StepOptions {
@@ -553,6 +565,12 @@ export interface WriteObserver {
   beforeWrite?(info: WriteStepInfo): void;
   afterWrite?(result: WriteStepResult): Promise<void> | void;
   /**
+   * v2 E1a (ADR 0042): a read the job made for its own checks (a verify step, the in-step verify of a page write, a check
+   * inside the lock, an observer's re-read named with the job), with what LegendKeeper answered. Synchronous and cheap:
+   * the snapshot service keeps the reads made after the job's last write, so a change snapshot does not read twice.
+   */
+  afterRead?(info: ReadInfo): void;
+  /**
    * v2 C2a: the job has finished (or stopped for good): re-read now what its `deferTreeReread` steps changed. Awaited
    * inside the job, before it is marked finished.
    */
@@ -562,6 +580,28 @@ export interface WriteObserver {
     readonly priority: PriorityClass;
     readonly signal: AbortSignal;
   }): Promise<void> | void;
+  /**
+   * v2 E1a (ADR 0042): the job is ending (finished, stopped or cancelled), after `flushDeferred`, before it is marked so:
+   * the snapshot service takes the change snapshot of what the job wrote here, so it is part of the job (and of what the
+   * caller waits for). Awaited; called for every job that reaches an end.
+   */
+  jobEnding?(info: {
+    readonly projectId: string;
+    readonly jobId: string;
+    readonly priority: PriorityClass;
+    readonly signal: AbortSignal;
+  }): Promise<void> | void;
+}
+
+/** v2 E1a: a read a job made (see `WriteObserver.afterRead`). `value` is undefined for a 404. */
+export interface ReadInfo {
+  readonly projectId: string;
+  readonly jobId: string;
+  readonly opId: string;
+  readonly params: OpParams;
+  readonly value: unknown;
+  /** The step whose own write this read shows (made inside that step, after its write: the in-step verify). */
+  readonly afterOwnWriteOf?: number;
 }
 
 /** Options of `engine.internalRead`. */

@@ -1,6 +1,11 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- parsed JSON */
 import { describe, expect, it } from 'vitest';
-import { ConfigError, DEFAULT_IMAGE_SETTINGS, loadToolsConfig } from '../../src/config/index.js';
+import {
+  ConfigError,
+  DEFAULT_IMAGE_SETTINGS,
+  DEFAULT_SNAPSHOT_SETTINGS,
+  loadToolsConfig,
+} from '../../src/config/index.js';
 import { mcpOrigin, project, summarise } from '../../src/mcp/tools/shape.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
 import { sniffImageType, checkTargetUrl, UploadHttpError } from '../../src/mcp/tools/upload-http.js';
@@ -20,6 +25,21 @@ describe('tools configuration', () => {
       resultMaxChars: 40_000,
       outboundExtraPorts: new Set(),
       images: DEFAULT_IMAGE_SETTINGS,
+      snapshots: DEFAULT_SNAPSHOT_SETTINGS,
+    });
+    // v2 E1a (ADR 0042): the snapshot store's defaults (10 GiB minimum free space, 8 weekly, 30 days), spelled out.
+    expect(DEFAULT_SNAPSHOT_SETTINGS).toEqual({
+      dataDir: null,
+      minFreeBytes: 10 * 1024 ** 3,
+      keepWeekly: 8,
+      keepDays: 30,
+      softDeleteDays: 30,
+    });
+    expect(
+      loadToolsConfig({ SNAPSHOT_MIN_FREE_GB: '2.5', SNAPSHOT_DIR: '/srv/snap' }).snapshots,
+    ).toMatchObject({
+      dataDir: '/srv/snap',
+      minFreeBytes: Math.round(2.5 * 1024 ** 3),
     });
     // v2 D3 (ADR 0041): the image settings' defaults, spelled out.
     expect(DEFAULT_IMAGE_SETTINGS).toEqual({

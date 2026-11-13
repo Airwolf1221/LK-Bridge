@@ -66,6 +66,10 @@ describe('the registry', () => {
       'asset-check',
       'link-sweep', // v2 C2c
       'chronology-check', // v2 D1
+      'snapshot-full', // v2 E1a
+      'snapshot-daily',
+      'snapshot-prune',
+      'snapshot-verify',
     ]);
     const now = m.rig.h.clock.now();
     expect(view('budget-sampler')).toMatchObject({
@@ -521,7 +525,7 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(15);
+    expect(m.maintenance.scheduler.list()).toHaveLength(19);
   });
 });
 

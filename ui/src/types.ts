@@ -1363,3 +1363,265 @@ export interface StagingActionResponse {
   verified?: boolean | null;
   image?: StagedImageView;
 }
+
+// ------------------------------------------------------------------------------------------ v2 E1a: snapshots
+
+export type SnapshotKind = 'full' | 'change' | 'daily';
+
+export interface SnapshotRowView {
+  id: string;
+  projectId: string;
+  kind: SnapshotKind;
+  state: 'complete' | 'partial';
+  takenAt: number;
+  startedAt: number;
+  pages: number;
+  pieces: number;
+  logicalBytes: number;
+  newObjects: number;
+  newBytes: number;
+  reads: number;
+  downloads: number;
+  missing: number;
+  trigger: Record<string, unknown>;
+  summary: string;
+  damaged: string | null;
+}
+
+export interface SnapshotRunView {
+  id: string;
+  projectId: string;
+  kind: 'full' | 'daily';
+  state: 'running' | 'succeeded' | 'failed' | 'refused' | 'stopped';
+  trigger: string;
+  startedAt: number;
+  updatedAt: number;
+  finishedAt: number | null;
+  total: number;
+  done: number;
+  reads: number;
+  downloads: number;
+  newObjects: number;
+  newBytes: number;
+  estimate: Record<string, unknown> | null;
+  error: string | null;
+  snapshotId: string | null;
+}
+
+export interface SnapshotFindingView {
+  id: number;
+  sha256: string;
+  problem: 'missing' | 'corrupt' | 'manifest';
+  detail: string | null;
+  snapshots: string[];
+  foundAt: number;
+}
+
+export interface SnapshotNoticeView {
+  id: number;
+  projectId: string | null;
+  level: 'info' | 'warning' | 'error';
+  code: string;
+  message: string;
+  at: number;
+}
+
+export interface SnapshotOverview {
+  dir: string;
+  exists: boolean;
+  store: { objects: number; objectBytes: number; manifests: number; manifestBytes: number; bytes: number };
+  disk: { total: number; free: number } | null;
+  minFreeBytes: number;
+  headroom: number | null;
+  logical: { referenced: number; unique: number; uniqueCount: number };
+  dedupRatio: number | null;
+  compressionRatio: number | null;
+  retention: { keepWeekly: number; keepDays: number; softDeleteDays: number };
+  counts?: Record<string, { count: number; last: number | null }>;
+  nextFullEstimate?: number | null;
+  runs?: SnapshotRunView[];
+  owed?: number;
+  dailyPass?: { enabled: boolean; documents: boolean };
+  findings: SnapshotFindingView[];
+  notices: SnapshotNoticeView[];
+}
+
+export interface PlanNoteView {
+  what: string;
+  where?: string;
+  why: string;
+}
+
+export interface RestoreRecordView {
+  id: string;
+  projectId: string;
+  pageId: string;
+  pageName: string;
+  snapshotId: string;
+  scope: string;
+  mode: string | null;
+  documentId: string | null;
+  proposalId: string | null;
+  state: 'proposed' | 'executed' | 'failed' | 'closed';
+  followUp: string | null;
+  followUpProposalId: string | null;
+  requestedBy: string;
+  summary: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RehearsalView {
+  id: string;
+  projectId: string;
+  sourceProjectId: string;
+  snapshotId: string;
+  mode: 'sampled' | 'full';
+  state: 'running' | 'succeeded' | 'failed' | 'stopped';
+  keep: boolean;
+  rootId: string | null;
+  rootName: string | null;
+  rootState: 'none' | 'kept' | 'deleted' | 'delete_failed';
+  startedBy: string;
+  startedAt: number;
+  finishedAt: number | null;
+  estimate: { reads?: number; writes?: number; uploads?: number; wallClockMs?: number | null } | null;
+  plan: { pages?: string[]; coverage?: Record<string, string[]>; images?: number } | null;
+  progress: Record<string, unknown>;
+  result: {
+    pagesCompared?: number;
+    exact?: number;
+    differences?: { page: string; piece: string; reason: string; detail?: unknown }[];
+    cannotRestore?: { page?: string; what?: string; reason: string }[];
+    images?: { uploaded: number; of: number };
+    changedForRehearsal?: Record<string, number>;
+    cost?: Record<string, number>;
+    ms?: number;
+  } | null;
+  error: string | null;
+}
+
+export interface BackupFileView {
+  name: string;
+  label: string;
+  size: number;
+  at: number;
+}
+
+export interface SnapshotsResponse {
+  project: string;
+  overview: SnapshotOverview;
+  snapshots: SnapshotRowView[];
+  restores: RestoreRecordView[];
+  rehearsals: RehearsalView[];
+  sandboxes: { name: string; id: string; active: boolean }[];
+  jobs: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    scheduleText: string;
+    nextRunAt: number | null;
+    lastRun: { at: number; outcome: string; durationMs: number; detail: string | null } | null;
+  }[];
+  backups: { dir: string; files: BackupFileView[]; error?: string };
+  now: number;
+}
+
+export interface SnapshotPagesResponse {
+  project: string;
+  pages: { pageId: string; name: string | null; lastAt: number; deleted: boolean }[];
+}
+
+export interface SnapshotHistoryEntry {
+  snapshot: string;
+  takenAt: string;
+  kind: SnapshotKind;
+  partial?: true;
+  damaged?: unknown;
+  madeBy?: string;
+  pieces: { piece: string; documentId?: string; change: string }[];
+}
+
+export interface SnapshotPageResponse {
+  project: string;
+  page: { id: string; name: string; live: boolean };
+  documents: { id: string; name: string | null }[];
+  history: { count: number; snapshots: SnapshotHistoryEntry[]; more?: number };
+  restores: RestoreRecordView[];
+}
+
+export interface SnapshotDiffResponse {
+  page: string;
+  piece: string;
+  ref: string | null;
+  from: string;
+  to: string;
+  identical: boolean;
+  added: number;
+  removed: number;
+  diff: MarkdownDiff;
+  text: string;
+  reads: number;
+}
+
+export interface RestorePlanView {
+  page: { id: string; name: string };
+  scope: string;
+  mode: string | null;
+  snapshot: { id: string; takenAt: number; kind: string };
+  summary: string;
+  pieces: { label: string; diff: string }[];
+  writes: number;
+  lost: PlanNoteView[];
+  kept: PlanNoteView[];
+  notRestored: PlanNoteView[];
+  warnings: string[];
+  idMap: Record<string, string> | null;
+  followUp: string | null;
+  reads: number;
+}
+
+export interface RestoreResponse {
+  status: 'nothing_to_do' | 'dry_run' | 'proposal_captured';
+  proposalId?: string;
+  restoreId?: string;
+  canonical?: { reason: string };
+  plan: RestorePlanView;
+}
+
+export interface ImageReferenceView {
+  pageId: string;
+  page: string;
+  documents: { id: string; name: string; what: string }[];
+  byHand: string[];
+}
+
+export interface ImageRestoreResponse {
+  status: 'dry_run' | 'staging' | 'proposal_captured';
+  proposalId?: string;
+  stagedId?: string;
+  old: Record<string, unknown>;
+  newAsset?: { id: string; url: string | null };
+  references: ImageReferenceView[];
+  updated?: boolean;
+  notes?: PlanNoteView[];
+  summary?: string;
+}
+
+export interface RehearsalPlanResponse {
+  plan: {
+    source: { projectId: string; snapshotId: string; takenAt: string; kind: string };
+    target: { projectId: string; name: string };
+    mode: 'sampled' | 'full';
+    pages: string[];
+    coverage: Record<string, string[]>;
+    images: number;
+    estimate: {
+      reads: number;
+      writes: number;
+      uploads: number;
+      wallClockMs: number | null;
+      fitsToday: boolean | null;
+    };
+  };
+}

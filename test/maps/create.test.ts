@@ -583,7 +583,8 @@ describe('links', () => {
 
 describe('measured costs', () => {
   it('a pin by pixel costs the plan’s reads, the check’s, one write and the verify', () => {
-    // plan: getDocument + listFeatures; check: the same two; write: 1; verify: listFeatures
-    expect(costs.create_pin).toEqual({ reads: 5, writes: 1 });
+    // plan: getDocument + listFeatures; check: the same two; write: 1; verify: listFeatures; v2 E1a: the change snapshot
+    // reuses the verify's listFeatures and reads the page (its document's entry) and the map's settings: 2 more
+    expect(costs.create_pin).toEqual({ reads: 7, writes: 1 });
   });
 });

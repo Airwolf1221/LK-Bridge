@@ -240,9 +240,10 @@ describe('a cascade that stops part-way', () => {
 
 describe('measured costs', () => {
   it('a delete costs the plan’s two reads, the check’s two, a pre-image read and a write per feature, and the verify', () => {
-    expect(costs.delete_pin).toEqual({ reads: 6, writes: 1 });
-    // 6 features: plan 2 + check 2 + 6 pre-image reads + verify 1
-    expect(costs.delete_cascade_6).toEqual({ reads: 11, writes: 6 });
+    // v2 E1a: each adds the change snapshot's 2 reads (the page and the map's settings; the verify's listFeatures is reused)
+    expect(costs.delete_pin).toEqual({ reads: 8, writes: 1 });
+    // 6 features: plan 2 + check 2 + 6 pre-image reads + verify 1 + the change snapshot 2
+    expect(costs.delete_cascade_6).toEqual({ reads: 13, writes: 6 });
   });
 });
 

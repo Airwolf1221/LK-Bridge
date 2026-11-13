@@ -50,63 +50,66 @@ budget (arkona): writes 0/120·min …
 
 `access` (`read` or `write`) is what the policy layer filters on: a connection whose profile has scope `read` sees only `read` tools, and a direct call to a hidden `write` tool is refused with the read-only message; the engine's policy gate refuses the write in any case ([policy.md](policy.md)). Annotations are what Claude and ChatGPT use to decide what to auto-approve: read tools are `readOnlyHint: true`; write tools are `readOnlyHint: false`.
 
-| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                                                                                                |
-| --------------------------- | ------ | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `list_projects`             | read   | true / false / true / false                                     | none                                                                                                |
-| `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                                                                                     |
-| `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                                                                               |
-| `search`                    | read   | true / false / true / false                                     | none; 1 read with `content: true`                                                                   |
-| `get_resource`              | read   | true / false / true / false                                     | 1 read (none with `live: false`)                                                                    |
-| `get_resources`             | read   | true / false / true / false                                     | 1 read per page, one job                                                                            |
-| `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                                                                                     |
-| `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                                                                   |
-| `list_calendars`            | read   | true / false / true / false                                     | 1 read                                                                                              |
-| `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                                                                               |
-| `read_document`             | read   | true / false / true / false                                     | 1 read (a map: 2; a timeline: 2 + 1 per 100 events)                                                 |
-| `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read                                                                   |
-| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)                                                             |
-| `create_index`              | write  | false / false / false / false                                   | see [C2b](#resources-documents-and-characters-v2-c2b)                                               |
-| `create_resource`           | write  | false / false / false / false                                   | see C2b                                                                                             |
-| `create_bare_resource`      | write  | false / false / false / false                                   | 1 write + 1 listing + the tree’s re-read                                                            |
-| `create_many_resources`     | write  | false / false / false / false                                   | see C2b                                                                                             |
-| `create_character`          | write  | false / false / false / false                                   | see C2b                                                                                             |
-| `update_resource`           | write  | false / **true** / false / false                                | 1 read + 1 write (+1 to re-place) + verify                                                          |
-| `move_resource`             | write  | false / **true** / false / false                                | 1 write + 1 listing + the tree’s re-read                                                            |
-| `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + 1 write + 1 read                                                             |
-| `restore_resource`          | write  | false / false / false / false                                   | 1 write + 1 read + the tree’s re-read                                                               |
-| `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                                                                    |
-| `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read (a map image: 7 reads in all)                                            |
-| `delete_document`           | write  | false / **true** / false / false                                | 1 write + 1 read                                                                                    |
-| `create_map_feature`        | write  | false / false / false / false                                   | see [D2](#maps-v2-d2): 5 reads + 1 write                                                            |
-| `update_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 reads + 1 write                                                                           |
-| `delete_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 + 1 read and 1 write per feature                                                          |
-| `archive_page`              | write  | false / **true** / false / false                                | see [C2c](#the-page-lifecycle-v2-c2c) and [C2d](#whole-sets-guarded-tags-and-approval-scope-v2-c2d) |
-| `unarchive_page`            | write  | false / **true** / false / false                                | see C2c and C2d                                                                                     |
-| `move_to_working`           | write  | false / **true** / false / false                                | see C2c and C2d                                                                                     |
-| `promote_page`              | write  | false / **true** / false / false                                | see C2c and C2d                                                                                     |
-| `get_markdown_guide`        | read   | true / false / true / false                                     | none                                                                                                |
-| `get_bridge_guide`          | read   | true / false / true / false                                     | none                                                                                                |
-| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                                                                                |
-| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                                                                                                |
-| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                                                                                              |
-| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)                                                                    |
-| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority                                                                   |
-| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                                                                              |
-| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)                                                                    |
-| `upload_image`              | write  | false / false / false / **true**                                | 2 writes, 1 read, 1 download; +1 write and read per new folder; see [Images](#images-v2-d3)         |
-| `prepare_image_upload`      | write  | false / false / false / false                                   | none                                                                                                |
-| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                                                                       |
-| `bridge_budget`             | read   | true / false / true / false                                     | none                                                                                                |
-| `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                |
-| `bridge_job_status`         | read   | true / false / true / false                                     | none                                                                                                |
-| `bridge_job_wait`           | read   | true / false / true / false                                     | none (waits at most 25 s)                                                                           |
-| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                                                                                |
-| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                                                                                |
-| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                                                                |
-| `bridge_result_page`        | read   | true / false / true / false                                     | none                                                                                                |
-| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                                                                                                |
-| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                                                                                                |
-| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                                                                               |
+| Tool                        | Access | Annotations (read-only / destructive / idempotent / open-world) | Cost                                                                                                       |
+| --------------------------- | ------ | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `list_projects`             | read   | true / false / true / false                                     | none                                                                                                       |
+| `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                                                                                            |
+| `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                                                                                      |
+| `search`                    | read   | true / false / true / false                                     | none; 1 read with `content: true`                                                                          |
+| `get_resource`              | read   | true / false / true / false                                     | 1 read (none with `live: false`)                                                                           |
+| `get_resources`             | read   | true / false / true / false                                     | 1 read per page, one job                                                                                   |
+| `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                                                                                            |
+| `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                                                                          |
+| `list_calendars`            | read   | true / false / true / false                                     | 1 read                                                                                                     |
+| `list_assets`               | read   | true / false / true / false                                     | none (the asset tree)                                                                                      |
+| `read_document`             | read   | true / false / true / false                                     | 1 read (a map: 2; a timeline: 2 + 1 per 100 events)                                                        |
+| `write_page`                | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 verify read                                                                          |
+| `set_facts`                 | write  | false / **true** / false / false                                | see below (typically 4 reads + 1 write)                                                                    |
+| `create_index`              | write  | false / false / false / false                                   | see [C2b](#resources-documents-and-characters-v2-c2b)                                                      |
+| `create_resource`           | write  | false / false / false / false                                   | see C2b                                                                                                    |
+| `create_bare_resource`      | write  | false / false / false / false                                   | 1 write + 1 listing + the tree’s re-read                                                                   |
+| `create_many_resources`     | write  | false / false / false / false                                   | see C2b                                                                                                    |
+| `create_character`          | write  | false / false / false / false                                   | see C2b                                                                                                    |
+| `update_resource`           | write  | false / **true** / false / false                                | 1 read + 1 write (+1 to re-place) + verify                                                                 |
+| `move_resource`             | write  | false / **true** / false / false                                | 1 write + 1 listing + the tree’s re-read                                                                   |
+| `delete_resource`           | write  | false / **true** / false / false                                | 1 read + canon reads + 1 write + 1 read                                                                    |
+| `restore_resource`          | write  | false / false / false / false                                   | 1 write + 1 read + the tree’s re-read                                                                      |
+| `create_document`           | write  | false / false / false / false                                   | 1 write + 1 read                                                                                           |
+| `update_document`           | write  | false / **true** / false / false                                | 2 reads + 1 write + 1 read (a map image: 7 reads in all)                                                   |
+| `delete_document`           | write  | false / **true** / false / false                                | 1 write + 1 read                                                                                           |
+| `create_map_feature`        | write  | false / false / false / false                                   | see [D2](#maps-v2-d2): 5 reads + 1 write                                                                   |
+| `update_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 reads + 1 write                                                                                  |
+| `delete_map_feature`        | write  | false / **true** / false / false                                | see D2: 5 + 1 read and 1 write per feature                                                                 |
+| `archive_page`              | write  | false / **true** / false / false                                | see [C2c](#the-page-lifecycle-v2-c2c) and [C2d](#whole-sets-guarded-tags-and-approval-scope-v2-c2d)        |
+| `unarchive_page`            | write  | false / **true** / false / false                                | see C2c and C2d                                                                                            |
+| `move_to_working`           | write  | false / **true** / false / false                                | see C2c and C2d                                                                                            |
+| `promote_page`              | write  | false / **true** / false / false                                | see C2c and C2d                                                                                            |
+| `get_markdown_guide`        | read   | true / false / true / false                                     | none                                                                                                       |
+| `get_bridge_guide`          | read   | true / false / true / false                                     | none                                                                                                       |
+| `lk_api_list_operations`    | read   | true / false / true / false                                     | none                                                                                                       |
+| `lk_api_describe_operation` | read   | true / false / true / false                                     | none                                                                                                       |
+| `lk_api_read`               | read   | true / false / true / false                                     | 1 read                                                                                                     |
+| `lk_api_write`              | write  | false / **true** / false / false                                | 1 write (+ items for createMany)                                                                           |
+| `lk_api_batch`              | write  | false / **true** / false / false                                | sum of its steps, at job priority                                                                          |
+| `lk_api_paginate_all`       | read   | true / false / true / false                                     | 1 read per page of 100                                                                                     |
+| `lk_upload_image`           | write  | false / false / false / **true**                                | 2 writes (+ upload-tier backoff)                                                                           |
+| `upload_image`              | write  | false / false / false / **true**                                | 2 writes, 1 read, 1 download; +1 write and read per new folder; see [Images](#images-v2-d3)                |
+| `prepare_image_upload`      | write  | false / false / false / false                                   | none                                                                                                       |
+| `list_snapshots`            | read   | true / false / true / false                                     | none (the bridge's snapshot index)                                                                         |
+| `snapshot_diff`             | read   | true / false / true / false                                     | none between two snapshots; against now 1 read + the document's own (page 1, map 2, timeline 3+)           |
+| `restore_snapshot`          | write  | false / **true** / false / false                                | always a proposal; to plan 1–2 reads + the documents' own; see [Snapshots](#snapshots-and-restores-v2-e1a) |
+| `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                                                                              |
+| `bridge_budget`             | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_job_status`         | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_job_wait`           | read   | true / false / true / false                                     | none (waits at most 25 s)                                                                                  |
+| `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                                                                                       |
+| `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_result_page`        | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                                                                                                       |
+| `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                                                                                      |
 
 `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*` are **low-level tools**: since v2 B2 they are left out of the tool list of a profile whose **show low-level tools** setting is off (the default; [below](#visibility-of-the-low-level-tools)).
 
@@ -151,7 +154,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (147 tools in all, 149 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (150 tools in all, 152 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -1203,7 +1206,8 @@ features, needs none. Under `propose` scope the proposal shows the count and siz
 | `read_document` on a map                         | 2     | 0      |
 
 Plan 2 (the map's settings, its features) and check 2, then 1 read to verify; a delete also reads each feature for its journal
-pre-image. A `link` adds one read (the page, live). A dry run costs the plan's reads only.
+pre-image. v2 E1a: each map write's change snapshot adds 2 reads (the page and the map's settings; the verify's feature list is
+reused), so `create_map_feature` and `update_map_feature` cost 7 reads, a single delete 8. A `link` adds one read (the page, live). A dry run costs the plan's reads only.
 
 ## Images (v2 D3)
 
@@ -1296,6 +1300,61 @@ read (the asset tree's re-read) and 1 download (the verification), plus the PUT 
 1 write and 1 read more; staging 1 write and 1 read more (the hide); placing a staged image 1 write and 2 reads; a
 deduplicated call nothing; an image delete 1 write, 2 reads and 1 download. Conversion is local: about 3 s for a 12 MP
 photo, one at a time.
+
+## Snapshots and restores (v2 E1a)
+
+[ADR 0042](adr/0042-snapshots-restore-rehearsal.md) has the decisions. The bridge keeps its own copies of every page under
+the AI REPOSITORY: a **full** snapshot each week (every page and the asset library), a **change** snapshot after every
+bridge write (the pieces it changed), and, when the owner switches it on, a **daily** one for edits made in the app. Each
+piece (a page's settings, its sidebar, each document, each image's bytes) is stored once, by the SHA-256 of its canonical
+form.
+
+**`list_snapshots`** `{ page, piece?, limit?, project }` (read, free): the snapshots of a page (a name or id; a deleted page
+by its id), of its sidebar (`piece: "sidebar"`), its settings (`"settings"`) or one document (by name or id), newest first:
+when, the kind (`full`, `change` and the tool that made it, `daily`), whether it is partial, and for each piece whether it
+was first seen, changed, unchanged, deleted or back. No request to LegendKeeper.
+
+**`snapshot_diff`** `{ page, piece, from, to?, project }` (read): the Markdown diff of a document, the sidebar or the
+settings from snapshot `from` to snapshot `to` (free), or to the page now (`to` left out: 1 read, plus the document's own
+reads). Keep regions show as one placeholder line each; `-` lines are the older state, `+` the newer.
+
+**`restore_snapshot`** `{ page?, snapshot, scope, document?, mode?, ids?, parent?, asset?, updateReferences?, dryRun?,
+project }` (write). **Always a proposal, whatever the scope (`write` included):** nothing is written until the owner
+approves it on the dashboard; follow it with `bridge_proposal_status`. `dryRun: true` shows the plan and its diff and
+proposes nothing. Scopes:
+
+- `page`: the page's documents back to the snapshot (documents added since are left alone, and said so);
+- `sidebar`: the facts property (through `set_facts`' own plan and guards), the link collections and every other
+  key-value property, row by row;
+- `document` (with `document`: its name or id): one document;
+- `deleted`: a deleted page with its content. `mode: "undelete"` (or `auto` while LegendKeeper still keeps it, taken as
+  `SNAPSHOT_SOFT_DELETE_DAYS`) restores it, and a second proposal then brings its content back to the snapshot;
+  `mode: "recreate"` makes it again under its snapshot parent (`parent` when that is gone), with its **original ids**
+  (`ids: "original"`, the default) where LegendKeeper takes them, else new ones (`ids: "new"`); the result maps old ids
+  to new;
+- `image` (with `asset`: the deleted image's old asset id; no `page`): the image comes back as a **new asset with a new
+  URL**. It is staged (uploaded, verified, hidden) at once, and the proposal puts it back in its folder under its name;
+  `updateReferences: true` also updates, in the same proposal, the page documents and map images that showed the old URL
+  (the result lists them; anything else is listed for a hand change). Call again with the same arguments once a
+  `staging` answer's job has ended; it is not uploaded twice.
+
+What a restore cannot bring back is in its result and on the proposal, never hidden:
+
+- **`unsupported` blocks and inline icons** cannot be written by the API: those the live page still holds are echoed by
+  id, the rest are listed under `cannotRestore` (lost); a page whose live blocks hold an inline icon is refused
+  (`RESTORE_NOT_WRITABLE`) rather than drop it.
+- **Map features and timeline events** have no versions: their restore is checked inside the lock against the planned
+  state, and a change in between stops the job instead of overwriting it.
+- **Refusals:** `RESTORE_LIFECYCLE` (the restore would change a page's lifecycle state, prefix, Status or status tag: use
+  the lifecycle tools first); `SNAPSHOT_NOT_FOUND`; `SNAPSHOT_PIECE_DAMAGED` (the stored piece failed its check: a finding
+  on the Snapshots page); `PAGE_DELETED` (restore it with scope `deleted`); `RESTORE_PARENT_GONE`; `IMAGE_NOT_DELETED`.
+  A restore that makes something canon (a Status to Authoritative, a protected Continuity change) needs the owner's
+  canonical approval.
+
+**Costs** (measured against the mock): a full snapshot about 2.2 reads a page; the change snapshot after a write adds
+0 to 4 reads (`write_page` 1, `set_facts` 0, `create_document` 2, `update_document` 2, `create_map_feature` 2, a timeline
+event through `lk_api_write` 4, the lifecycle tools 0): it reuses the verify step's read. Planning a restore costs 1–2
+reads plus the documents' own; the restore itself is the writes it lists, with their verify reads.
 
 ## Image upload (v1: `lk_upload_image`)
 

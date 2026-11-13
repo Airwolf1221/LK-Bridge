@@ -26,6 +26,7 @@ import type {
   WriteGuardVerdict,
 } from '../jobs/write-guard.js';
 import { SYSTEM_PRINCIPAL, type OpParams } from '../jobs/types.js';
+import { ownerForcedProposal } from '../jobs/write-guard.js';
 import { classifyName } from '../tree/classify.js';
 import { canonConfigFrom, factKey, factValueKey, type CanonicalRule } from './rules.js';
 import {
@@ -579,7 +580,9 @@ export class CanonicalGuard implements WriteGuard {
         reason: `refused at execution: ${reason}, and this proposal was not approved as canon; nothing was written`,
       };
     }
-    if (input.principal.principalId === SYSTEM_PRINCIPAL.principalId) {
+    // v2 E1a (ADR 0042): a proposal the owner asked for on the dashboard becomes a canonical proposal (see
+    // `ownerForcedProposal`); anything else the bridge would make on its own is refused.
+    if (input.principal.principalId === SYSTEM_PRINCIPAL.principalId && !ownerForcedProposal(input)) {
       return { decision: 'deny', opId, reason: `${reason}; the bridge never makes it on its own` };
     }
     const all: unknown[] = [...changes, ...unchecked.map((u) => ({ unchecked: u.why, stepIndex: u.i }))];

@@ -57,6 +57,20 @@ const toolsEnvSchema = z.object({
   ASSET_BYTES_RETENTION_DAYS: intFrom(90, 1, 3650),
   /** The hosts LegendKeeper serves asset files from; the bridge downloads (GET, no credentials) only from these. */
   LK_ASSET_HOSTS: z.string().default(DEFAULT_LK_ASSET_HOST),
+  // ---- v2 E1a (ADR 0042): the snapshot store
+  /** The snapshot store's directory (objects, manifests). Default: `snapshots/` next to the database. */
+  SNAPSHOT_DIR: z.string().min(1).optional(),
+  /** A full snapshot is refused rather than leave less than this much free space (GiB, as `df -h` shows it). */
+  SNAPSHOT_MIN_FREE_GB: z.coerce.number().min(0).max(100_000).default(10),
+  /** Full snapshots kept (one a week). */
+  SNAPSHOT_KEEP_WEEKLY: intFrom(8, 1, 520),
+  /** Days change and daily snapshots are kept. */
+  SNAPSHOT_KEEP_DAYS: intFrom(30, 1, 3650),
+  /**
+   * How long LegendKeeper is taken to keep a deleted page restorable (its soft delete): a restore of a page deleted more
+   * recently than this undeletes it; an older one is recreated from the snapshot. LegendKeeper does not publish it.
+   */
+  SNAPSHOT_SOFT_DELETE_DAYS: intFrom(30, 1, 3650),
 });
 
 export interface ToolsSettings {
@@ -76,7 +90,30 @@ export interface ToolsSettings {
   readonly resultMaxChars: number;
   /** v2 D3 (ADR 0041): the image pipeline. */
   readonly images: ImageSettings;
+  /** v2 E1a (ADR 0042): the snapshot store. Optional for callers built before E1a (the defaults apply). */
+  readonly snapshots?: SnapshotStoreSettings;
 }
+
+/** v2 E1a (ADR 0042): the snapshot store's settings (env; the daily pass is a per-project setting on the dashboard). */
+export interface SnapshotStoreSettings {
+  /** SNAPSHOT_DIR, or null for `snapshots/` next to the database. */
+  readonly dataDir: string | null;
+  /** SNAPSHOT_MIN_FREE_GB in bytes (GiB). */
+  readonly minFreeBytes: number;
+  readonly keepWeekly: number;
+  readonly keepDays: number;
+  readonly softDeleteDays: number;
+}
+
+export const GIB = 1024 ** 3;
+
+export const DEFAULT_SNAPSHOT_SETTINGS: SnapshotStoreSettings = {
+  dataDir: null,
+  minFreeBytes: 10 * GIB,
+  keepWeekly: 8,
+  keepDays: 30,
+  softDeleteDays: 30,
+};
 
 export interface ImageSettings {
   readonly maxPixels: number;
@@ -115,6 +152,7 @@ export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {
   resultMaxChars: 40_000,
   outboundExtraPorts: new Set<string>(),
   images: DEFAULT_IMAGE_SETTINGS,
+  snapshots: DEFAULT_SNAPSHOT_SETTINGS,
 };
 
 /** Parses and validates the tool-layer environment variables. Never echoes values, only names. */
@@ -152,6 +190,13 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       stagingReportDays: e.IMAGE_STAGING_REPORT_DAYS,
       keptBytesRetentionDays: e.ASSET_BYTES_RETENTION_DAYS,
       assetHosts: parseHosts(e.LK_ASSET_HOSTS),
+    },
+    snapshots: {
+      dataDir: e.SNAPSHOT_DIR ?? null,
+      minFreeBytes: Math.round(e.SNAPSHOT_MIN_FREE_GB * GIB),
+      keepWeekly: e.SNAPSHOT_KEEP_WEEKLY,
+      keepDays: e.SNAPSHOT_KEEP_DAYS,
+      softDeleteDays: e.SNAPSHOT_SOFT_DELETE_DAYS,
     },
   };
 }

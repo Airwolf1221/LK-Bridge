@@ -65,18 +65,21 @@ it('reads and writes per typical call', async () => {
   // v2 C2c: the creates are Working (the default): the index gets no Status (fewer reads and writes); a page from a
   // template gets its status tag in one more write; the only Working page needs no re-placing after its rename; a
   // document delete reads the page's facts and the document for the delete-document canon rule.
+  // v2 E1a (ADR 0042): every write is followed, inside its job, by the change snapshot of what it changed; it reuses the
+  // reads the job made after its writes (the verify step, the tree's re-read) and reads the rest. Its extra reads are in
+  // the second comment column (set_facts, rename, move and delete need none).
   expect(got).toEqual({
-    'core, new index, 1 fact': [11, 9],
-    'compact, no facts': [8, 7],
+    'core, new index, 1 fact': [14, 9], // +3: both new pages' documents, and one page's resource
+    'compact, no facts': [9, 7], // +1: the new page's document
     existing: [1, 0],
-    'create_resource, 2 facts, 1 link': [10, 6],
-    bare: [2, 1],
+    'create_resource, 2 facts, 1 link': [11, 6], // +1: the new page's document
+    bare: [3, 1], // +1: the new page's document
     'rename, re-placed': [4, 1],
     move: [3, 1],
     delete: [4, 1],
-    restore: [3, 1],
-    create_document: [2, 1],
-    update_document: [4, 1],
+    restore: [4, 1], // +1: the restored page's document
+    create_document: [4, 1], // +2: the new map (its settings and features)
+    update_document: [6, 1], // +2: the map read whole (its settings and features)
     delete_document: [4, 1],
     'set_facts, 2 facts': [4, 2],
   });
