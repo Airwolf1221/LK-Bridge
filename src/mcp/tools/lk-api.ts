@@ -118,11 +118,6 @@ export async function executeOne(
 
 // ------------------------------------------------------------------------------------------------ tools
 
-const DESTRUCTIVE_LIST = operations
-  .filter((o) => o.risk !== 'safe')
-  .map((o) => o.operationId)
-  .join(', ');
-
 export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
   const listOperations = defineTool({
     name: 'lk_api_list_operations',

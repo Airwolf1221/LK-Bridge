@@ -558,9 +558,11 @@ describe('the guides', () => {
   it('get_bridge_guide and get_markdown_guide return the guides, whole or by section', async () => {
     const bridge = await call('get_bridge_guide');
     expect(bridge.body.markdown).toMatch(/^# The LK-Bridge guide for agents/);
-    const sec = await call('get_bridge_guide', { section: 'Budget rules' });
-    expect(sec.body.markdown).toMatch(/^## Budget rules/);
-    expect(sec.body.markdown).not.toMatch(/Proposals and the owner/);
+    const sec = await call('get_bridge_guide', { section: 'Budgets, jobs and proposals' });
+    expect(sec.body.markdown).toMatch(/^## Budgets, jobs and proposals/);
+    expect(sec.body.markdown).not.toMatch(/Canon and approval/);
+    const decide = await call('get_bridge_guide', { section: 'How to decide' });
+    expect(decide.body.markdown).toMatch(/^## How to decide/);
     const md = await call('get_markdown_guide');
     expect(md.body.markdown).toMatch(/^# Writing LegendKeeper pages in Markdown/);
     const keep = await call('get_markdown_guide', { section: 'Keep regions' });

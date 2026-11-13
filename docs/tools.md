@@ -8,9 +8,17 @@ Source: `src/mcp/tools/`. Design notes: [ADR 0011](adr/0011-tool-layer.md). Auth
 
 ## Agent guidance (the MCP server `instructions`)
 
-> LK-Bridge gives governed access to LegendKeeper projects (list_projects); every tool takes an optional project, and a write must name its project when the bridge serves several. Call get_bridge_guide first: it explains projects, the repository tree, finding and reading pages, writing, budgets and proposals. Find pages with search and browse_repository_tree, read them with get_resource and read_document (Markdown; see get_markdown_guide). Every result names its project and ends with that project's budget line; budgets are finite, so never loop on budget errors, and check bridge_estimate before hundreds of calls. Never retry a write that returned waiting_budget, queued or proposal_captured: follow a job with bridge_job_status and a proposal with bridge_proposal_status. Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page. The lk_api_* tools are the low-level fallback.
+> LK-Bridge gives governed access to LegendKeeper projects (list_projects). Every tool takes an optional project; a write must name its project when the bridge serves several.
+> FIRST call get_bridge_guide with section "How to decide", then read its section for your task before you do it; read get_markdown_guide before writing Markdown. Every result names its project and ends with that project’s budget line.
+> The four rules that matter most:
+>
+> 1. Use the high-level tools (search, get_resource, read_document, write_page, set_facts, create__); the lk_api__ tools are only the fallback for a job none of them does.
+> 2. Read before you write, and pass the version you read (baseVersion, baseFactsVersion). Never retry a write that returned proposal_captured, queued or waiting_budget: follow it with bridge_proposal_status or bridge_job_status.
+> 3. New pages are Working. Canon and lifecycle changes (promote_page, archive_page, deleting Authoritative pages) are always proposals only the owner can accept: tell the person, never route around it.
+> 4. Budgets are finite: never loop on an error, and check bridge_estimate before bulk work.
+>    Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page.
 
-The text is `BRIDGE_INSTRUCTIONS` in `src/mcp/tools/index.ts`; a test checks it covers each point. Since v2 B2 it is short and points to the bridge guide ([bridge-guide.md](bridge-guide.md), served by `get_bridge_guide`); the detail that used to be here lives in the guide.
+The text is `BRIDGE_INSTRUCTIONS` in `src/mcp/tools/index.ts`; a test checks it covers each point. Since v2 B2 it is short and points to the bridge guide ([bridge-guide.md](bridge-guide.md), served by `get_bridge_guide`); the detail that used to be here lives in the guide. Since v2 E3 ([ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md)) it is the ten-line version of the guide: the guide first (its section "How to decide"), then the four rules that matter most. A test keeps it under 1,500 characters.
 
 ## How results look
 
@@ -27,6 +35,25 @@ A refused `project` argument (below) carries the default project's footer, since
 - **Handles for big results.** A result over `MCP_RESULT_MAX_CHARS` (default 40,000 characters, far below Claude Code's 25,000-token cut-off) is stored as a job artefact (a succeeded one-step job) and comes back as `{ "status": "stored", "handle": "art_…", "preview": … }`. Page it with `bridge_result_page`.
 - **Typed errors.** A failure is `{ "error": { "code", "message", … } }` with `isError: true`. Codes include `WRONG_TOOL_FOR_OPERATION`, `UNKNOWN_OPERATION`, `INVALID_PARAMS`, `VERSION_CONFLICT` (with `currentVersion`), `UNSUPPORTED_BLOCK_LOSS` (with `blockIds`), `CASCADE_CONFIRM_REQUIRED`, `READ_ONLY`, `MEMBER_ADMIN_DISABLED`, `POLICY_DENIED`, `BUDGET_EXHAUSTED` (with `retryAt`), `LK_ERROR` (with `lkCode`, `status`, `requestId`), the project codes `UNKNOWN_PROJECT`, `PROJECT_REQUIRED` and `PROJECT_UNAVAILABLE` (each with `registered`, the project names), and the upload codes below.
 - **Not errors:** `queued`, `waiting_budget` and `proposal_captured` mean the write is accepted or waiting. Never retry it; follow it with `bridge_job_status`.
+
+## How the tools are described (v2 E3)
+
+Every description follows one shape, so an agent can pick a tool from its first sentence: **what it does**; **when to use it, and
+what to use instead**; **its scope behaviour** (at `propose` a write becomes a proposal: nothing is written, never resubmit
+it); **the mistake to avoid**; **the cost line** (`Cost:` in reads and writes, measured against the mock). Examples are kept
+only where the arguments are nested. Shared argument texts (`project`, `operation_id`, `status`, `subtree`, map points) are
+short because they repeat in every schema. The whole list as a client receives it is measured by
+`npx tsx scripts/tool-surface.ts` (`--inventory` for the per-tool table): in a `propose` or `write` profile, 61 tools, about
+31,000 tokens (characters ÷ 4); in a `read` profile, 28 tools, about 9,100; the per-operation tools would add about 171,000
+and stay off. The review, with the proposed merges and hiding (none applied) and what the wording changes did:
+[reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
+[reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
+page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
+
+**Refusals name the next step.** A typed error with no hint of its own gets one from a single table (`NEXT_STEP`,
+`src/mcp/tools/shape.ts`): read-only (tell the person), draining (wait, send once more), member admin (switched off), a
+cascade delete (ask first), canonical approval (only the owner; never retry), an unknown job or project. `POLICY_DENIED` says
+to use the tool the message names, once, and not to try another route. Codes and which calls are refused are unchanged.
 
 ## Projects
 

@@ -33,7 +33,7 @@ Three rules matter more than the rest:
 | `![alt text](https://…asset url…)`                                                         | An image                                                    |
 | `**bold**`, `*italic*`, `~~strike~~`, `` `code` ``                                         | Text marks                                                  |
 | `<u>underline</u>`, `<sub>sub</sub>`, `<sup>sup</sup>`                                     | Text marks                                                  |
-| `[text](https://example.com)`                                                              | A link                                                      |
+| `[text](https://example.com)`, `<https://example.com>`                                     | A link (a bare URL in a line of text stays plain text)      |
 | `[[Page name]]`, `[[Page name\|label]]`                                                    | A mention of a page, found by name                          |
 | `[label](lk://resources/<id>)`                                                             | A mention of a page, by id                                  |
 | `[label](lk://resources/<id>/docs/<documentId>)`                                           | A mention of one document of a page                         |
@@ -53,8 +53,9 @@ When you read a page, you get exactly this Markdown, so copying what you read is
 She was born on _Kumikas 1st, 4A 881_.<br>Her sister is [[Asagiri Kaede]].
 ```
 
-Each paragraph is one line. A line break you type inside a paragraph becomes a space; write `<br>` for a real line
-break. Leave a blank line between blocks. (A paragraph whose text itself holds a line break or a control character,
+Each paragraph is one line. A single line break you type inside a paragraph becomes a space; write `<br>` for a real line
+break (two spaces or a backslash at the end of a line also make one, but reading a page always gives `<br>`). Leave a
+blank line between blocks. (A paragraph whose text itself holds a line break or a control character,
 which pages edited elsewhere sometimes do, is shown as a keep region: `<br>` would read back as a different block.)
 
 ### Lists and tasks
@@ -93,7 +94,9 @@ line of text: it cannot hold a nested list.
 ```
 
 The marker (`[!warning]`, `[!expand] Title`…) must be the first thing in the quote. `[!tip]` is the same as
-`[!success]`, and `[!caution]` the same as `[!error]`. An expand block's title is plain text.
+`[!success]`, and `[!caution]` the same as `[!error]`. An expand block's title is plain text. For the other callouts any
+text after the marker on the same line joins the first paragraph (`> [!info] Heads up` then `> more` is one paragraph,
+"Heads up more"). A marker LegendKeeper does not have (`[!purple]`) stays a plain quote, with a `CALLOUT_TYPE_UNKNOWN` warning.
 
 ### Tables
 
@@ -134,6 +137,9 @@ other sites' URLs are refused.
   its documents. This is how pages are shown when you read them.
 
 Formatting around a mention (`**[label](lk://…)**`) is allowed but a mention itself carries no formatting.
+
+**Footnotes are not supported.** `text[^1]` with a `[^1]: note` line is not a footnote on a LegendKeeper page: it is read
+as a link whose text is `^1`, so do not write them.
 
 ### Escaping
 
@@ -189,8 +195,9 @@ The text between the markers is there for you to read. On a write, the block is 
 - **Edits inside a region are ignored**, with a `KEEP_REGION_EDITED` warning. To change such a block, replace the whole
   region with an `lk-block` holding its new JSON (same `id`).
 - **Removing a region is refused** in a whole-page replace (`KEEP_REGIONS_MISSING`, listing the ids), unless you pass
-  `dropRegions` with those ids. Removing an `unsupported` block also needs `allowUnsupportedLoss`: that content cannot
-  be recreated through the API. `write_page` never allows that: an `unsupported` block is always kept.
+  `dropRegions` with those ids. An `unsupported` block (content the API cannot show) can never be removed with
+  `write_page`, which has no option for it: leave its region in place. A deliberate deletion is the owner's, through the
+  low-level tools with `allowUnsupportedLoss`; ask the person before anyone does that.
 - **A region cannot appear twice**, nor in an append (the block is already on the page).
 
 ## Sections
@@ -264,29 +271,29 @@ checked.
 
 Every refusal has a code. Fix what the message says and try again.
 
-| Code                       | Meaning and what to do                                                                                                                                                                                  |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `KEEP_REGIONS_MISSING`     | Keep regions are missing from a replace. Put them back, or pass `dropRegions`.                                                                                                                          |
-| `KEEP_REGION_UNKNOWN`      | A region names a block the page does not hold (the page changed?). Read the page again.                                                                                                                 |
-| `KEEP_REGION_DUPLICATE`    | A region appears twice, or in an append, or belongs to another section.                                                                                                                                 |
-| `KEEP_REGION_MALFORMED`    | A region's markers are broken (no closing marker at the same level, a stray one, nesting).                                                                                                              |
-| `UNSUPPORTED_BLOCK_LOSS`   | The write would delete content the API cannot show. Keep it, or pass `allowUnsupportedLoss`.                                                                                                            |
-| `MENTION_NOT_FOUND`        | `[[Name]]` matched no page. Check the name, or link by id.                                                                                                                                              |
-| `MENTION_AMBIGUOUS`        | `[[Name]]` matched several pages (listed). Use a more exact name, or link by id.                                                                                                                        |
-| `MENTION_RESOLVER_MISSING` | `[[Name]]` cannot be looked up here. Link by id.                                                                                                                                                        |
-| `INVALID_LK_BLOCK`         | An `lk-block` is not JSON, or not a block LegendKeeper accepts (the problems are listed).                                                                                                               |
-| `UNSUPPORTED_KIND`         | An `lk-block` tries to create an `unsupported` block.                                                                                                                                                   |
-| `DUPLICATE_BLOCK_ID`       | Two blocks would share an id.                                                                                                                                                                           |
-| `EDITOR_LIMIT`             | The content breaks an editor limit (the rule is named).                                                                                                                                                 |
-| `FIELD_LIMIT`              | Text, a list or the nesting is past a limit.                                                                                                                                                            |
-| `SCHEMA_VIOLATION`         | Something LegendKeeper's schema refuses, such as a text colour.                                                                                                                                         |
-| `IMAGE_URL_REFUSED`        | The image URL is not an image asset of this project. Upload the image first.                                                                                                                            |
-| `INLINE_IMAGE`             | An image inside a line of text. Put it on its own line.                                                                                                                                                 |
-| `UNSUPPORTED_HTML`         | HTML the bridge does not understand. Write Markdown, or escape the `<` as `\<`.                                                                                                                         |
-| `UNSUPPORTED_MARKDOWN`     | Markdown with no LegendKeeper equivalent or that would vanish: an `lk://` link that is not a mention, a table row with more cells than its header, a link reference definition (`[x]: …`) no link uses. |
-| `SECTION_NOT_FOUND`        | No heading matches the path. The page's headings are listed.                                                                                                                                            |
-| `SECTION_AMBIGUOUS`        | Several headings match. Use a longer path or `[n]`.                                                                                                                                                     |
-| `INVALID_EDIT`             | The edit is malformed: an unknown mode, or a section missing or not allowed.                                                                                                                            |
+| Code                       | Meaning and what to do                                                                                                                                                                                   |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KEEP_REGIONS_MISSING`     | Keep regions are missing from a replace. Put them back, or pass `dropRegions`.                                                                                                                           |
+| `KEEP_REGION_UNKNOWN`      | A region names a block the page does not hold (the page changed?). Read the page again.                                                                                                                  |
+| `KEEP_REGION_DUPLICATE`    | A region appears twice, or in an append, or belongs to another section.                                                                                                                                  |
+| `KEEP_REGION_MALFORMED`    | A region's markers are broken (no closing marker at the same level, a stray one, nesting).                                                                                                               |
+| `UNSUPPORTED_BLOCK_LOSS`   | The write would delete content the API cannot show. Keep its region in the Markdown: `write_page` cannot delete it (`allowUnsupportedLoss` belongs to the low-level tools, and only if the person asks). |
+| `MENTION_NOT_FOUND`        | `[[Name]]` matched no page. Check the name, or link by id.                                                                                                                                               |
+| `MENTION_AMBIGUOUS`        | `[[Name]]` matched several pages (listed). Use a more exact name, or link by id.                                                                                                                         |
+| `MENTION_RESOLVER_MISSING` | `[[Name]]` cannot be looked up here. Link by id.                                                                                                                                                         |
+| `INVALID_LK_BLOCK`         | An `lk-block` is not JSON, or not a block LegendKeeper accepts (the problems are listed).                                                                                                                |
+| `UNSUPPORTED_KIND`         | An `lk-block` tries to create an `unsupported` block.                                                                                                                                                    |
+| `DUPLICATE_BLOCK_ID`       | Two blocks would share an id.                                                                                                                                                                            |
+| `EDITOR_LIMIT`             | The content breaks an editor limit (the rule is named).                                                                                                                                                  |
+| `FIELD_LIMIT`              | Text, a list or the nesting is past a limit.                                                                                                                                                             |
+| `SCHEMA_VIOLATION`         | Something LegendKeeper's schema refuses, such as a text colour.                                                                                                                                          |
+| `IMAGE_URL_REFUSED`        | The image URL is not an image asset of this project. Upload the image first.                                                                                                                             |
+| `INLINE_IMAGE`             | An image inside a line of text. Put it on its own line.                                                                                                                                                  |
+| `UNSUPPORTED_HTML`         | HTML the bridge does not understand. Write Markdown, or escape the `<` as `\<`.                                                                                                                          |
+| `UNSUPPORTED_MARKDOWN`     | Markdown with no LegendKeeper equivalent or that would vanish: an `lk://` link that is not a mention, a table row with more cells than its header, a link reference definition (`[x]: …`) no link uses.  |
+| `SECTION_NOT_FOUND`        | No heading matches the path. The page's headings are listed.                                                                                                                                             |
+| `SECTION_AMBIGUOUS`        | Several headings match. Use a longer path or `[n]`.                                                                                                                                                      |
+| `INVALID_EDIT`             | The edit is malformed: an unknown mode, or a section missing or not allowed.                                                                                                                             |
 
 Warnings do not stop the write: `KEEP_REGION_EDITED`, `KEEP_REGION_KIND`, `HTML_COMMENT_IGNORED`,
 `HTML_TAG_UNBALANCED`, `TITLE_IGNORED` (link and image titles), `ALIGNMENT_IGNORED`, `CALLOUT_TYPE_UNKNOWN` (kept as a
@@ -305,13 +312,13 @@ quotes, tables, images and blank lines are refused (`FACT_VALUE_NOT_INLINE`); th
 These are read-only as Markdown:
 
 - **Maps:** each feature with its type, name, position and link, folders as nested lists. When the map has an image, a header
-  line gives its size and bounds (`Image: 2048×1024 pixels; bounds [[-128, 0], [0, 256]] as [[south, west], [north, east]]`)
+  line gives its size and bounds (`Image: 2048×1024 pixels; bounds [[-128, 0], [0, 256]] as [[south, west], [north, east]]. Positions are (lat, lng); a pixel is counted from the image’s top-left corner (x right, y down).`)
   and each position is shown in pixels too: `- **Torii Gate** (pin) at (-32, 64), pixel (512, 256) → [link](lk://resources/…)`
   (pixels count from the image's top-left corner, x right, y down; they are what `create_map_feature` takes as `pixel`). A
   region's or path's points follow in pixels when there are six or fewer (`around (-43.75, 50), 4 points: pixels (200, 200)
 (600, 200) (600, 500) (200, 500)`), and as a pixel box when there are more (`detail: "full"` lists every point; several
   polygons are bracketed). A legacy tiled map ("Legacy tiled map: no single image, so no pixel positions") and a map with no
-  image ("The map has no image yet") show lat/lng only.
+  image ("The map has no image yet, so no pixel positions.") show lat/lng only.
 - **Timelines:** each lane, then its events in date order with LegendKeeper's own formatted dates (in the calendar's
   formats, so `Azah 18th, 4A 1`, `Zahras 4A 367`, `4A 623`; a range as start – end) and their links. A chronology age
   timeline links every event to its age's table document (`lk://resources/<id>/docs/<tableId>`), which is the authority:

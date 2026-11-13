@@ -91,11 +91,6 @@ const dryRunArg = z
 const tagsArg = z.array(z.string().trim().min(1).max(100)).max(50).optional();
 const aliasesArg = z.array(z.string().trim().min(1).max(256)).max(128).optional();
 
-const COSTS_CREATE =
-  'Cost: 1 read of the template’s sidebar (once per template), 1 write to create, 1 read to check the copy and 1 write per ' +
-  'fact (Status included) when it has facts, then the verify step: 1 read per page, 1 listing of the parent’s children (per ' +
-  '100) and the tree’s re-read. A dry run: the template read only.';
-
 // ============================================================================================ shared
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

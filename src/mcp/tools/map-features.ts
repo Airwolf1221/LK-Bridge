@@ -92,14 +92,6 @@ function placementInfo(state: MapState, verify: VerifyInput) {
     : undefined;
 }
 
-const COORDS_HELP =
-  'Coordinates: a pin or label takes `latlng` [lat, lng] OR `pixel` { x, y }; a region takes `points` (one polygon, 3 or ' +
-  'more) or `polygons` (several); a path takes `points` (2 or more); a folder takes none. Each point of `points` is ' +
-  '[lat, lng] or { x, y }, all one kind. Pixels count from the image’s TOP-LEFT corner and are converted with the map’s ' +
-  'live image (read_document shows each position both ways and the map’s width, height and bounds); they are refused on a ' +
-  'legacy tiled map (use latlng) and on a map with no image. Never both kinds in one request. Anything outside the image ' +
-  '(or the bounds) is refused unless allowOutside is true.';
-
 // ============================================================================================ create
 
 function createMapFeatureTool(deps: ToolDeps): McpToolProvider {

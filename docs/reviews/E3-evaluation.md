@@ -34,9 +34,10 @@ back to the next session (**E3b**).
 > project. Use the connector's own tools and say plainly if something cannot be done. After each action, tell me what the
 > connector answered.
 
-### The setup (once, in Claude, before scenario 1)
+### The setup
 
-Create the pages the later scenarios use. This is also scenario 6, so do it with the Tool calls page open.
+Scenarios 5, 9 to 16 and 21 to 22 use the character **E3 Eval Ren**, so run **scenarios 6 and 7 first, in Claude** (which
+creates it and two specialist pages), with the Tool calls page open. Scenario 20 needs a test map: see its note.
 
 ## What a good run looks like (the rules the scenarios check)
 

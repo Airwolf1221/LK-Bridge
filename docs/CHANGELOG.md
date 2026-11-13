@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased: v2 E3: the tool review, shorter and steering descriptions, and the tool-call log
+
+[ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md); migration `2400_tool_calls`; PLAN-v2 phase E, the E3 row (and a new E3b
+row). The review: [reviews/E3-tools.md](reviews/E3-tools.md). The owner's evaluation script:
+[reviews/E3-evaluation.md](reviews/E3-evaluation.md). Nothing was run against a live system: no call to the owner's
+LegendKeeper bridge connector, not even a read. Every measurement and test uses the mock.
+
+- **Wording only on the tools** (no tool, argument, schema type or behaviour changed): every description rewritten (what it
+  does; when to use it and what to use instead; the scope behaviour; the cost line; the mistake to avoid); the repeated
+  argument texts shortened (`project` is in all 61 tools); the guide tools' generated description fixed ("Returns the lk-bridge
+  guide guide:"); `archive_page`, `unarchive_page`, `move_to_working` and `promote_page` now describe `subtree: true`;
+  `lk_api_read` and `lk_api_write` say they are the fallback. A `propose` or `write` profile's tool list went from about 146,000
+  to about 124,000 characters (about 36,500 to 31,000 tokens, an estimate); a `read` profile from about 10,400 to 9,100.
+- **The bridge guide is organised around tasks.** "How to decide" first (five rules, a which-tool table with a "not this"
+  column, what a scope means), then find and read, edit text, change facts, create a page or a character (Working first),
+  rename and delete, the lifecycle, chronology, maps, images, snapshots, audits, budgets and proposals, canon, when the
+  low-level tools are right, then the reference. Read it by `section`. The generated Operations section is unchanged.
+- **The server instructions** are the ten-line version of the guide: read `get_bridge_guide` ("How to decide") first, then four
+  rules.
+- **The Markdown guide, checked against the converter.** Corrected: `UNSUPPORTED_BLOCK_LOSS` pointed at an
+  `allowUnsupportedLoss` that `write_page` does not have; a trailing backslash or two spaces also make a line break; text after
+  a callout marker joins the first paragraph; a bare URL stays text; the map header's wording. Footnotes are not supported (the
+  converter reads `[^1]` with a definition as a link: **not changed**, for E4 or E3b).
+- **Refusals name the next step**: the engine's typed errors without a hint (`READ_ONLY`, `DRAINING`, `MEMBER_ADMIN_DISABLED`,
+  `CASCADE_CONFIRM_REQUIRED`, `CANONICAL_APPROVAL_REQUIRED`, `JOB_NOT_FOUND`, `UNKNOWN_PROJECT`) get one from a table; the hints
+  of `POLICY_DENIED`, `VERSION_CONFLICT`, `BUDGET_EXHAUSTED`, `UNSUPPORTED_BLOCK_LOSS` and `waiting_budget` are sharper;
+  `PAGE_NOT_WRITABLE`, the lifecycle refusals (`LIFECYCLE_INDEX`, `INDEX_PAGE`, `ALREADY_ARCHIVED`, `NOT_ARCHIVED`,
+  `NOT_AUTHORITATIVE`, `NOT_WORKING`, `LIFECYCLE_NOT_CONFIGURED` and its kin), the batch `WORKING_PARENT`, `PAGE_EXISTS`,
+  `PARENT_NOT_INDEX` and `ROOT_PAGE` say what to do instead.
+- **New: the Tool calls page** (dashboard, after Journal) and `GET /api/admin/tool-calls`. Which tools each connection really
+  called: time, connection, profile and scope, tool, a summary of the arguments (names and sizes; values only for booleans,
+  numbers and a short list of reference arguments; never page content or secrets), outcome (success, error code, proposal
+  captured, waiting, queued), duration and the request budget used. Recorded at the MCP SDK's own `tools/call` handler, so
+  invented arguments, unknown tools and read-only refusals are in it. Kept 7 days by default (a setting, 0 to 90; 0 switches
+  recording off); filters by connection, tool, outcome, error code and time. Owner only; no agent tool. `scripts/tool-surface.ts`
+  measures the tool list as each client receives it.
+- **For the owner after deploying:** refresh both assistants' tool lists (ChatGPT: Plugins, the bridge, **Refresh**; claude.ai:
+  disconnect and reconnect), run [the evaluation](reviews/E3-evaluation.md), fill in its results template and send it back
+  (E3b applies it). The proposals in the review's section 3.2 (merging `get_resources`, `bridge_proposals_mine` and
+  `bridge_job_wait`; hiding `lk_upload_image` and `create_bare_resource`) await your answer.
+
 ## Unreleased: v2 E2: audits (findings only, read from the snapshots)
 
 [ADR 0044](adr/0044-audits.md); migration `2300_audits`; PLAN-v2 4.12 and the E2 row. Nothing was run against a live
