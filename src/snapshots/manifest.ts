@@ -28,10 +28,16 @@ export interface DocumentEntry extends PieceRef {
 
 export interface ImageEntry {
   readonly url: string;
-  /** The image's bytes (null: they could not be fetched; the page's entry lists it as missing). */
+  /**
+   * The image's bytes. Null: they could not be fetched (the page's entry lists it as missing), or (`deferred`) a change
+   * snapshot did not take them: change snapshots never download, they name an image the store does not hold yet by its
+   * URL, and the next full snapshot (which takes the whole library) stores its bytes.
+   */
   readonly sha256: string | null;
   readonly size: number;
   readonly assetId: string | null;
+  /** A change snapshot named the image without taking its bytes (not a missing piece). */
+  readonly deferred?: true;
 }
 
 export interface MissingPiece {
@@ -68,6 +74,8 @@ export interface LibraryEntry {
     readonly url: string;
     readonly sha256: string | null;
     readonly size: number;
+    /** A change snapshot named the asset without taking its bytes (see ImageEntry). */
+    readonly deferred?: true;
   }[];
   readonly missing?: readonly MissingPiece[];
 }

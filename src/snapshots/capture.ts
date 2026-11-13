@@ -73,8 +73,11 @@ export interface CaptureDeps {
   readonly store: SnapshotStore;
   /** The hosts asset files are served from (an image is any string field on one). */
   readonly assetHosts: readonly string[];
-  /** The bytes of an asset URL, stored (downloaded only when the store does not already hold them). */
-  image(url: string): Promise<ImageResult>;
+  /**
+   * The bytes of an asset URL, stored (downloaded only when the store does not already hold them). `null`: not taken by
+   * this snapshot (a change snapshot never downloads; the image is recorded by URL and left to the full snapshot).
+   */
+  image(url: string): Promise<ImageResult | null>;
   /** Reads the verify step (or another read of the same job) already made, by `op` and path: used before reading. */
   readonly cached?: (op: string, params: OpParams) => unknown;
   /** Whether a stored object is known to be damaged (an open verify finding): it is then written again. */
@@ -286,6 +289,10 @@ export async function capturePage(
   for (const url of [...urls].sort()) {
     try {
       const got = await deps.image(url);
+      if (got === null) {
+        images.push({ url, sha256: null, size: 0, assetId: null, deferred: true });
+        continue;
+      }
       if (got.downloaded) c.downloads++;
       if (got.created) {
         c.newObjects++;
@@ -363,6 +370,12 @@ export async function captureLibrary(deps: CaptureDeps, readRaw: Reader, c: Coun
     if (a.url) {
       try {
         const got = await deps.image(a.url);
+        if (got === null) {
+          // A change snapshot names a new asset without its bytes: the next full snapshot takes them.
+          images.push({ assetId: a.id, url: a.url, sha256: null, size: 0, deferred: true });
+          withHashes.push({ ...a, sha256: null });
+          continue;
+        }
         if (got.downloaded) c.downloads++;
         if (got.created) {
           c.newObjects++;

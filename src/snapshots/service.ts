@@ -425,11 +425,29 @@ export class SnapshotService {
     }
   }
 
-  captureDeps(projectId: string, priority: PriorityClass, cached?: CaptureDeps['cached']): CaptureDeps {
+  /**
+   * What a capture uses. `download: false` (change snapshots): an image the store already holds is named with its hash;
+   * any other is named by URL only (deferred to the full snapshot), so a bridge write never waits for the asset host.
+   */
+  captureDeps(
+    projectId: string,
+    priority: PriorityClass,
+    cached?: CaptureDeps['cached'],
+    o: { readonly download?: boolean } = {},
+  ): CaptureDeps {
+    const fetch = this.imageFetcher(projectId, priority);
     return {
       store: this.store,
       assetHosts: this.o.assetHosts,
-      image: this.imageFetcher(projectId, priority),
+      image:
+        o.download === false
+          ? async (url) => {
+              const known = this.knownImage(projectId, url);
+              return known && (await this.store.has(known.sha256))
+                ? { ...known, downloaded: false, created: false, stored: 0 }
+                : null;
+            }
+          : fetch,
       ...(cached ? { cached } : {}),
       damaged: (sha) => this.isDamaged(sha),
     };
@@ -991,7 +1009,7 @@ export class SnapshotService {
         }
       : undefined;
     const priority = o.priority ?? 'P2';
-    const deps = this.captureDeps(projectId, priority, cached);
+    const deps = this.captureDeps(projectId, priority, cached, { download: false });
     const read = this.reader(projectId, priority, {
       ...(o.wait === false ? { wait: false } : {}),
       ...(o.signal ? { signal: o.signal } : {}),
@@ -1131,6 +1149,12 @@ export class SnapshotService {
       if (a.url) {
         try {
           const got = await deps.image(a.url);
+          if (got === null) {
+            // A change snapshot names a new asset without its bytes: the next full snapshot takes them.
+            images.push({ assetId: a.id, url: a.url, sha256: null, size: 0, deferred: true });
+            withHashes.push({ ...a, sha256: null });
+            continue;
+          }
           if (got.downloaded) c.downloads++;
           if (got.created) {
             c.newObjects++;

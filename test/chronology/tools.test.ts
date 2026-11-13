@@ -19,7 +19,13 @@ const FOURTH = 'Fourth Arkonan Age';
 const costs: Record<string, { reads: number; writes: number }> = {};
 
 beforeAll(async () => {
-  w = await chronologyWorld();
+  // v2 E1a: every timeline write's change snapshot reads the timeline again (the page, the document, its lanes and its
+  // events), so the file's calls and the world's setup exceed the mock's published 300 reads a minute; as in
+  // sync.test.ts, this world's per-minute limits are raised (the costs measured below include those reads).
+  w = await chronologyWorld({
+    env: { LK_TIER_LIMITS: JSON.stringify({ 'key-min': 5000, 'write-min': 2000 }) },
+    limits: { 'key-min': 5000, 'write-min': 2000 },
+  });
   client = await w.stack.connect();
 });
 afterAll(async () => {

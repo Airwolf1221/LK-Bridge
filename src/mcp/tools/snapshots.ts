@@ -74,8 +74,9 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
     description:
       'Lists the snapshots the bridge holds of a page (or its sidebar, its settings, or one document), newest first: when, ' +
       'the kind (full: the weekly snapshot of everything; change: after a bridge write; daily: an edit made in the app), ' +
-      'and for each piece whether it changed from the snapshot before. A deleted page is found by its id. Free: no request ' +
-      'to LegendKeeper. Use snapshot_diff to see a change, restore_snapshot to propose bringing one back.',
+      'and for each piece whether it changed from the snapshot before. A deleted page is found by its id. Cost: none (the ' +
+      'bridge’s own index, no request to LegendKeeper). Use snapshot_diff to see a change, restore_snapshot to propose ' +
+      'bringing one back.',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('The page: a name or id (a deleted page: its id).'),
       piece: pieceArg,
@@ -128,9 +129,10 @@ function snapshotDiffTool(deps: ToolDeps): McpToolProvider {
     title: 'Diff a snapshot',
     access: 'read',
     description:
-      'The Markdown diff of a page’s document, sidebar or settings between a snapshot and the page now (`to` left out: 1 ' +
-      'read, plus the document’s own reads: a page 1, a map 2, a timeline 3 or more, a board 1), or between two snapshots ' +
-      '(free). Keep regions show as one placeholder line each. Lines starting “-” are the older state (`from`), “+” the newer.',
+      'The Markdown diff of a page’s document, sidebar or settings between a snapshot and the page now (`to` left out), ' +
+      'or between two snapshots. Cost: against now 1 read, plus the document’s own reads (a page 1, a map 2, a timeline 3 ' +
+      'or more, a board 1); between two snapshots none. Keep regions show as one placeholder line each. Lines starting ' +
+      '“-” are the older state (`from`), “+” the newer.',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('The page: a name or id (a deleted page: its id).'),
       piece: z.string().min(1).max(500).describe('"sidebar", "settings", or a document by name or id.'),

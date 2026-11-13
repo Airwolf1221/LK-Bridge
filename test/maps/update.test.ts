@@ -417,6 +417,7 @@ describe('dry runs, operation_id and the journal', () => {
 
 describe('measured costs', () => {
   it('an update costs the plan’s two reads, the check’s two, one write and the verify’s read', () => {
-    expect(costs.update_pin).toEqual({ reads: 5, writes: 1 });
+    // v2 E1a: plus the change snapshot's 2 reads (the page and the map's settings; the verify's listFeatures is reused)
+    expect(costs.update_pin).toEqual({ reads: 7, writes: 1 });
   });
 });

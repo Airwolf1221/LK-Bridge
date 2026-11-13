@@ -213,9 +213,10 @@ describe('the maps sandbox script, dry run', () => {
     ).toEqual([]);
   };
 
+  // A run cut short by Vitest's default 5 s would go on into the next test and park its writes there.
   it('runs every check to an answer, writes through the tools’ own jobs, and cleans up everything it made', async () => {
     expectClean(await runScript(false));
-  });
+  }, 60_000);
 
   it('waits for writes parked for budget (a map job, a document write, the clean-up) and sends none twice', async () => {
     const writesBefore = w.sent.length;
