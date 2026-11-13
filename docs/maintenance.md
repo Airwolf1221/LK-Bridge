@@ -9,7 +9,9 @@ A registry of scheduled housekeeping jobs, a scheduler that keeps its state in S
 
 Each job has an id, name, description, a default schedule, an enabled flag, an _implemented_ flag, and (kept in SQLite)
 its last run (time, outcome, duration, engine job id) and next run. The schedule is either **a fixed interval**
-(10 seconds to 31 days) or **a daily time on the Europe/London clock**.
+(10 seconds to 31 days), **a daily time on the Europe/London clock**, or (v2 E1a) **a weekly day and time** on the same
+clock (`{ "kind": "weekly", "day": "sun", "time": "00:30" }`; days `mon` to `sun`; shown as "Weekly on Sunday at 00:30
+(London time)", edited on the Maintenance Jobs page like the others).
 
 | Job                      | Default schedule        | What it does                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -25,6 +27,10 @@ its last run (time, outcome, duration, engine job id) and next run. The schedule
 | `asset-check`            | daily at 02:50 (London) | v2 A4, per project: the asset tree's nightly check, the same walk plus an audit of the cached folder paths ([assets.md](assets.md)). Runs even when the refresh is switched off.                                                                                                                                                                                                                                                     |
 | `link-sweep`             | daily at 01:15 (London) | v2 C2c, per project: the link index's paced refresh, for the related pages `archive_page` and `move_to_working` report ([below](#link-sweep-v2-c2c)). Skips a project whose tree is not built.                                                                                                                                                                                                                                       |
 | `chronology-check`       | weekly                  | v2 D1, per project: the chronology check, findings only ([below](#chronology-check-v2-d1)). Skips a project whose chronology is not confirmed.                                                                                                                                                                                                                                                                                       |
+| `snapshot-full`          | weekly, Sunday 00:30    | v2 E1a, per project, background: a full snapshot of every page under the AI REPOSITORY and the asset library ([ADR 0042](adr/0042-snapshots-restore-rehearsal.md), [below](#snapshots-v2-e1a)). Refused (recorded, a notice on the Snapshots page) when it would leave less free disk than `SNAPSHOT_MIN_FREE_GB`. Skips a project whose tree is not built.                                                                          |
+| `snapshot-daily`         | daily at 00:45 (London) | v2 E1a, per project, background: the daily changed-pages pass. Skipped, saying why, unless the project's `snapshotDailyPass` is on (off until the sandbox check confirms `updatedAt`).                                                                                                                                                                                                                                               |
+| `snapshot-prune`         | daily at 04:40 (London) | v2 E1a, bridge-wide: the retention (`SNAPSHOT_KEEP_WEEKLY` full snapshots, `SNAPSHOT_KEEP_DAYS` days of change and daily ones), then the collector (pieces nothing refers to, keeping the kept-bytes window).                                                                                                                                                                                                                        |
+| `snapshot-verify`        | weekly, Sunday 05:10    | v2 E1a, bridge-wide, background: re-hashes every stored piece and reads every manifest; a missing or damaged piece is a finding on the Snapshots page and makes the snapshots that use it partial.                                                                                                                                                                                                                                   |
 | `assign-block-ids-sweep` | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `orphan-and-link-audit`  | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `tag-audit`              | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -153,6 +159,26 @@ and P3 floor (P3 may use half of each tier: 150 of the 300 reads a minute, 3,000
 idle test world takes about 20 minutes; on Arkona the hourly half is the limit, so a pass takes about 2¼ to 2½ hours
 and shares the P3 half with the tree's nightly check at 02:30 (both continue where they are; agents' work always goes
 first). The daily tier (60,000) is not a concern.
+
+## Snapshots (v2 E1a)
+
+The four snapshot jobs ([ADR 0042](adr/0042-snapshots-restore-rehearsal.md); the Snapshots page shows their schedules and
+runs):
+
+- **`snapshot-full`** reads at **P3**, through the project's governor, about 2.2 requests a page (the resource, then each
+  document's own reads), plus one listing per 100 assets; image bytes come from the asset host (no request budget), each
+  only when its URL is not stored yet. It also waits **between pages** while agents' P1 or P2 work is queued (up to a minute
+  a page), as the tree and link sweeps give way. A run records every page as it goes: a run that stops (restart, stop,
+  budget) is **continued** by the next run, never restarted, and its manifest is written only once it is complete. The
+  owner can abandon a run on the Snapshots page. Before a new run, the disk is checked: free space less the run's estimate
+  must stay above `SNAPSHOT_MIN_FREE_GB`.
+- **`snapshot-daily`** lists each project's resources (one request per 100) and takes the pages whose `updatedAt` moved;
+  with `snapshotDailyPassDocuments`, it also lists each page's documents (one request a page). Off per project by default.
+- **`snapshot-prune`** and **`snapshot-verify`** touch only the bridge's own store and database (no LegendKeeper request),
+  so they run under read-only mode too. The collector takes the store's exclusive lock (snapshots wait for it), and keeps
+  pieces written in the last hour.
+
+Change snapshots (after each bridge write) are not a maintenance job: they are taken at the end of the write's own job.
 
 ## Owner commands
 

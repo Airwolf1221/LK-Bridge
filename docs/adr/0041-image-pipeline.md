@@ -96,7 +96,9 @@ contentType }`. A folder's delete lists its children at every depth (`listAssets
     image's bytes; the pre-image has the list. If a file cannot be fetched (or the folder holds more than 500 assets),
     the delete is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner has allowed that one asset on the Staging page
     (re-authenticated, one use, an hour). Kept bytes are removed after `ASSET_BYTES_RETENTION_DAYS` (90); E1's backups
-    will reuse this store.
+    will reuse this store. **v2 E1a ([ADR 0042](0042-snapshots-restore-rehearsal.md) decision 1): merged into the snapshot
+    store** (one store, the same content addressing); `kept-bytes/` is adopted at start-up, and the collector keeps every
+    kept object until its window ends.
 11. **The dashboard's Staging page** lists staged images (a thumbnail from the asset's own URL, name, size, who, when,
     the intended destination), uploads files (choose or drag; the raw body, owner session and CSRF; the same pipeline
     and limits; each answer shows its `staged_id`), places and discards, and allows a delete without bytes. The

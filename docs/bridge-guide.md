@@ -488,6 +488,25 @@ also go in an image block (an `lk-block`), as a map pin's image, or as a map's i
 `list_assets` and `browse_asset_tree` show what the bridge knows of images it uploaded (`bridgeUpload`). Deleting an
 asset keeps its bytes in the bridge first; if they cannot be kept the delete is refused until the owner allows it.
 
+## Snapshots and restores
+
+The bridge keeps its own snapshots of every page: weekly in full, and after every bridge write (yours included), so a
+page's earlier states are there to compare and bring back.
+
+- **`list_snapshots`** (free): a page's snapshots, newest first, and which pieces changed in each (its settings, its
+  sidebar, each document). A deleted page is found by its id.
+- **`snapshot_diff`**: what changed in a document, the sidebar or the settings between a snapshot and now (a few reads), or
+  between two snapshots (free).
+- **`restore_snapshot`**: brings back a page's documents, its sidebar, one document, a deleted page, or a deleted image.
+  **It is always a proposal, whatever your scope:** nothing is written until the owner approves it; never retry it, follow
+  it with `bridge_proposal_status`. Check with `dryRun: true` first: the plan shows the diff and everything it cannot
+  restore. Say so to the person: blocks the API cannot show (`unsupported`) and inline icons that are no longer on the
+  page are **lost**, a restored image is a **new asset with a new URL** (ask whether the pages that showed the old one
+  should be updated: `updateReferences`), and a restore never changes a page's lifecycle state (use the lifecycle tools
+  first).
+
+Use a restore to undo a mistake, not to edit: to change a page, write it.
+
 ## Budget rules
 
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.

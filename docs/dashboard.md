@@ -359,6 +359,56 @@ API: `GET /api/admin/staging`, `POST /api/admin/staging/upload?name=…` (`appli
 `{ confirm: true }`, `POST /api/admin/staging/allow-delete` `{ assetId, confirm: true }` (re-authenticated); all with
 `?project=`. Audited as `staging.upload`, `staging.place`, `staging.discard` and `asset.delete_without_bytes`.
 
+## Snapshots (v2 E1a)
+
+The **Snapshots** page (navigation: Snapshots, after Staging; [ADR 0042](adr/0042-snapshots-restore-rehearsal.md)) shows
+the bridge's own copies of the selected project's pages.
+
+- **The store**: its size on disk (pieces and manifests), the **deduplication** ratio (what the snapshots hold over what
+  the store keeps once) and the compression, the disk's **free space** against the minimum (`SNAPSHOT_MIN_FREE_GB`, 10 GB),
+  the **next full snapshot's estimate** against the headroom (marked "fits" or "does not fit"), the retention, and the
+  directory. Below the minimum, full snapshots are refused, and the refusal is a notice here.
+- **Findings**: stored pieces the weekly verify found missing or damaged, and the snapshots they make **partial**; and the
+  notices (a refused run, an adopted kept-bytes directory).
+- **Runs and schedules**: the four snapshot jobs with their schedule, next and last run (schedules are changed on the
+  Maintenance Jobs page); the **daily changed-pages pass** switches for this project (`snapshotDailyPass`, and
+  `snapshotDailyPassDocuments` for documents' `updatedAt`: one request a page), off until the sandbox check confirms it;
+  the runs (pages done of the total, requests, new pieces, time), with **Abandon** for a run that should not be
+  continued. **Take a full snapshot now** starts one in the background.
+- **Page history**: find a page by name (a deleted one too); its snapshots, newest first, piece by piece (first seen,
+  changed, unchanged, deleted, back); **Diff with now** for any piece (a few reads); **Propose a restore** from any
+  snapshot: the page's documents, its sidebar, one document, or a deleted page (undelete, or recreate with its original
+  or new ids). **Preview** shows the plan (each piece's diff, what cannot be restored exactly, what is left alone, new ids)
+  without proposing; **Propose this restore** makes the proposal, linked to the Proposals page. A restore is always a
+  proposal, the owner's own included.
+- **Restore a deleted image**: a snapshot and the image's old asset id; the preview lists the pages that showed the old
+  URL; tick **Also update the pages that referred to the old URL** to include them; **Stage it and propose** uploads it
+  hidden (it comes back as a new asset with a new URL) and makes the proposal.
+- **Restore rehearsal**: a full snapshot of this project, a sandbox project to rehearse into (never this one), sampled
+  (about 50 pages) or every page, and whether to keep the copy. **Estimate** first (pages, images, reads, writes and the
+  time at background priority), then **Start the rehearsal** after a confirmation. The list shows each rehearsal's state
+  and stage, and its results: pages restored exactly, the differences with their reasons, what a restore cannot bring
+  back, the cost and the time; **Delete its root** for a kept copy.
+- **Snapshots**: every snapshot (taken, kind and the tool that made a change snapshot, pages, new pieces and bytes,
+  requests), complete or **partial** with why.
+- **Database copies**: the nightly and pre-deploy copies of the database (`deploy/backup.sh`, in `BACKUP_DIR`, default
+  `backups/` next to the database) with their time, age and size; a warning when the newest nightly copy is more than 36
+  hours old.
+
+The **Proposals** page shows a restore proposal with its snapshot, the diff (now, then as at the snapshot), and what it
+cannot restore, keeps or leaves alone; an image restore with its new asset and the pages it updates.
+
+API: `GET /api/admin/snapshots?project=&kind=&limit=` (the overview, snapshots, restores, rehearsals, sandboxes, jobs and
+database copies), `GET /api/admin/snapshots/pages?project=&q=`, `GET /api/admin/snapshots/pages/<page id>?project=&piece=&ref=`,
+`GET /api/admin/snapshots/diff?project=&page=&piece=&ref=&from=&to=`, `POST /api/admin/snapshots/full?project=` (202),
+`POST /api/admin/snapshots/runs/<run id>/abandon` `{ confirm: true }`, `POST /api/admin/snapshots/restore?project=`
+`{ page, snapshot, scope, document?, mode?, ids?, parent?, dryRun? }`, `POST /api/admin/snapshots/restore-image?project=`
+`{ snapshot, asset, updateReferences?, dryRun? }`, `POST /api/admin/snapshots/rehearsals/plan` `{ target, snapshot, mode,
+max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?, max?, confirm: true }` (202), `GET
+/api/admin/snapshots/rehearsals/<id>`, `POST /api/admin/snapshots/rehearsals/<id>/delete-root` `{ confirm: true }`. A
+refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`, `snapshots.restore`,
+`snapshots.rehearsal` and `snapshots.rehearsal_delete_root`.
+
 ## Canon (Projects page, v2 C2a)
 
 The **Canon** section of the Projects page lists each project's protected facts as plain sentences ("Status =
