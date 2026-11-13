@@ -5,6 +5,9 @@ import { settle } from '../jobs/helpers.js';
 import { ALL_PROJECTS } from '../../src/projects/index.js';
 import { PROJECT, maintenanceRig, sampleCount, type MaintenanceRig } from './helpers.js';
 
+/** v2 E1a: the snapshot jobs are on by default; a test that moves the clock by days switches them off with the rest. */
+const SNAPSHOT_JOBS = ['snapshot-full', 'snapshot-daily', 'snapshot-prune', 'snapshot-verify'];
+
 let m: MaintenanceRig | undefined;
 afterEach(async () => {
   await m?.close();
@@ -63,7 +66,13 @@ describe('journal-prune', () => {
     const journal = () => r.e.engine.queries.journalLookup(PROJECT, { limit: 100 }).length;
     expect(journal()).toBeGreaterThan(0);
     // Disabled, so that the explicit runs below are the ones that do the work (Run now works on a disabled job).
-    for (const id of ['budget-sampler', 'proposal-expiry', 'sqlite-optimise', 'journal-prune']) {
+    for (const id of [
+      'budget-sampler',
+      'proposal-expiry',
+      'sqlite-optimise',
+      'journal-prune',
+      ...SNAPSHOT_JOBS,
+    ]) {
       m.maintenance.commands.disable('owner', id);
     }
 
@@ -111,7 +120,7 @@ describe('proposal-expiry', () => {
     );
     const { proposalId } = out.value as { proposalId: string };
     expect(r.policy.proposals.state(proposalId)).toBe('pending');
-    for (const id of ['budget-sampler', 'journal-prune', 'sqlite-optimise'])
+    for (const id of ['budget-sampler', 'journal-prune', 'sqlite-optimise', ...SNAPSHOT_JOBS])
       m.maintenance.commands.disable('owner', id);
 
     // Not yet expired: the scheduled run (every 5 minutes) changes nothing and leaves no job record.
@@ -178,7 +187,7 @@ describe('sqlite-optimise', () => {
   it('is weekly, and records each run in its history (bridge-wide, v2 A1)', async () => {
     m = await maintenanceRig();
     expect(m.maintenance.scheduler.get('sqlite-optimise').scheduleText).toBe('Weekly');
-    for (const id of ['budget-sampler', 'proposal-expiry', 'journal-prune'])
+    for (const id of ['budget-sampler', 'proposal-expiry', 'journal-prune', ...SNAPSHOT_JOBS])
       m.maintenance.commands.disable('owner', id);
     await m.rig.h.clock.advance(7 * D);
     const [last] = m.maintenance.scheduler.history('sqlite-optimise');
@@ -249,6 +258,7 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
         'proposal-prune',
         'asset-refresh', // v2 A4: not under test here
         'asset-check',
+        ...SNAPSHOT_JOBS,
       ])
         m.maintenance.commands.disable('owner', id);
 
@@ -343,6 +353,7 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       'sqlite-optimise',
       'journal-prune',
       'proposal-prune',
+      ...SNAPSHOT_JOBS,
     ])
       m.maintenance.commands.disable('owner', job);
     const id = await capture(r, 'rfaaaaaa', 'Conflicted');
@@ -356,7 +367,8 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
     await r.h.clock.advance(8 * D);
     expect(r.policy.proposals.pruneFinished(7 * D).removed).toBe(1);
     expect(exists(id)).toBe(false);
-  });
+    // 38 simulated days stepped through the scheduler take 3 to 4 s alone, so more than the 5 s default under load.
+  }, 20_000);
 
   it('follows the configured retention (POLICY_PROPOSAL_RETENTION_DAYS)', async () => {
     m = await maintenanceRig({ proposalRetentionMs: 7 * D });
@@ -367,6 +379,7 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       'sqlite-optimise',
       'journal-prune',
       'proposal-prune',
+      ...SNAPSHOT_JOBS,
     ])
       m.maintenance.commands.disable('owner', job);
     const id = await capture(r, 'rdaaaaaa', 'Rejected');
