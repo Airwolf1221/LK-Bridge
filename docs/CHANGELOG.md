@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased: v2 E1b: the encrypted Google Drive copy
+
+[ADR 0043](adr/0043-google-drive-offsite-copy.md); migration `2200_offsite_copy`; the one-off Google set-up in
+[drive-setup.md](drive-setup.md). Nothing was run against a live system: no call to Google, Drive or the owner's
+LegendKeeper bridge connector. Every test runs against a mock Google OAuth and Drive server and a fake `rclone` that
+records its arguments and acts on a local directory; the owner does the live checks.
+
+- **The connection, on the dashboard** (new **Off-site copy** page): the owner's own Google app (`drive.file` only,
+  published so its refresh token does not expire after 7 days); the client ID and secret, the refresh token and the
+  encryption keys kept in the encrypted secret store (scope `offsite`), never in the env file. Sign-in with PKCE (S256)
+  and a `state` bound to the dashboard session (10 minutes, once), `access_type=offline`, `prompt=consent`; the callback
+  `/admin/drive/callback` refuses a mismatched, expired or session-less answer, checks the scope, and names the account
+  (`about.get`). Disconnect revokes at Google and deletes. Saving the client, connecting, disconnecting and setting keys
+  need re-authentication within 5 minutes. Tokens, the client secret and the keys are never logged or shown.
+- **Encryption keys:** rclone crypt with a password and a salt, names encrypted too. Generated (shown once, saved only
+  after the last 6 characters of each are typed back) or the owner's own. A change after a copy exists starts a fresh full
+  upload into a new folder (`copy-<n+1>`), after the owner confirms; the old folder is kept until deleted on the page.
+- **The runner:** `lk-bridge-offsite.service` (separate from the bridge, `lkbridge`, idle I/O, `Nice=15`,
+  `MemoryMax=768M`), started by `lk-bridge-offsite.timer` (every quarter hour; the daily copy's time, 04:45 by default,
+  and the monthly verify are dashboard settings in the database) and `lk-bridge-offsite.path` (Copy now, Verify now, and
+  after each nightly full snapshot). `deploy/offsite.sh` runs `dist/offsite/cli.js`. A temporary 0600 rclone config in the
+  unit's private `/tmp`, removed after success, failure, a crash or a stop. Copies `objects/`, then `manifests/` (only
+  those older than the run), then removed objects, `STORE.json`, then the nightly database copies; `--backup-dir` keeps
+  what a sync replaces or removes in `deleted/<date>` for 30 days, then the runner purges it. Bandwidth limit and
+  transfers are settings. A refresh token rclone renews during a run is saved back. Refuses an empty store, a folder this
+  database never copied into (until adopted), and rclone missing or older than 1.60.
+- **rclone:** the runbook installs rclone's current release from rclone.org (one line); Ubuntu 24.04's 1.60.1 works but is
+  not recommended.
+- **Proof:** a **verify** job (monthly, and Verify now): every manifest and 1% of the objects (at least 50) downloaded,
+  decrypted and re-hashed against their names, every manifest's pieces checked present, the newest database copy through
+  SQLite's `integrity_check`; findings in red. **`deploy/offsite-restore.sh`** pulls the store and the newest database
+  copy for a disaster recovery, checks every object and the database, and prints the commands that put them in place.
+  `offsite.sh set-client`, `connect` and `set-keys` enter the Google client, the sign-in and the keys when the dashboard
+  is not up.
+- **Health:** the Overview turns red when the Google sign-in is refused (Reconnect), the last good copy is older than 2
+  days (a setting), or the last verify found problems.
+- **Deploy:** `deploy.sh --update-self` now also installs the backup and off-site units when they differ or are missing
+  (an installed copy backed up first), reloads systemd and enables the timers and the path unit, without restarting the
+  bridge when nothing else changed.
+- Docs: [drive-setup.md](drive-setup.md), the runbook ("Off-site copy to Google Drive", "Disaster recovery from Google
+  Drive"), [dashboard.md](dashboard.md#off-site-copy-v2-e1b), [maintenance.md](maintenance.md#the-off-site-copy-v2-e1b),
+  PLAN-v2 (4.11, the E1b row, settled item 4).
+
 ## Unreleased: v2 E1a follow-up: the owner's sandbox run (13 November 2026)
 
 [ADR 0042](adr/0042-snapshots-restore-rehearsal.md) (amended: decisions 4, 7 and 9); migration `2100_snapshots_nightly`.

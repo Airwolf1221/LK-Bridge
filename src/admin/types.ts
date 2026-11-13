@@ -15,6 +15,7 @@ import type { Registry } from '../registry/index.js';
 import type { SnapshotService } from '../snapshots/service.js';
 import type { Restores } from '../snapshots/restores.js';
 import type { Rehearsals } from '../snapshots/rehearsal.js';
+import type { OffsiteService } from '../offsite/service.js';
 
 /**
  * What the admin API needs from the running bridge. `Runtime` (src/runtime.ts) satisfies it; tests may build their own.
@@ -46,6 +47,8 @@ export interface AdminRuntime {
   readonly snapshots?: SnapshotService;
   readonly restores?: Restores;
   readonly rehearsals?: Rehearsals;
+  /** v2 E1b: the off-site copy to Google Drive (the Off-site copy page, the Overview's warning); optional for tests. */
+  readonly offsite?: OffsiteService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

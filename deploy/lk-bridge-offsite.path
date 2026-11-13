@@ -1,0 +1,12 @@
+# Starts the off-site runner when the bridge leaves it a request: "Copy now", "Verify now", deleting an old Drive folder
+# (dashboard), or a copy after a nightly full snapshot. The runner takes (deletes) every request as it starts; a request
+# left while it runs starts it again afterwards. No shared process and no sudo rule: the bridge only writes a file.
+[Unit]
+Description=Start the LK-Bridge off-site copy when the dashboard or a nightly full snapshot asks
+
+[Path]
+PathExistsGlob=/var/lib/lk-bridge/offsite/requests/*.json
+Unit=lk-bridge-offsite.service
+
+[Install]
+WantedBy=paths.target

@@ -122,6 +122,11 @@ export interface SnapshotServiceOptions {
   readonly background?: boolean;
   /** Called after each page of a run is recorded (tests interrupt a run here). */
   readonly afterPage?: (runId: string, pageId: string) => void | Promise<void>;
+  /**
+   * v2 E1b (ADR 0043): called when a full snapshot's manifest is written (the run succeeded). The off-site copy asks its
+   * runner for a copy here, so the nightly full snapshot reaches Drive within the hour. Never throws into the run.
+   */
+  readonly afterFull?: (projectId: string, snapshotId: string) => void | Promise<void>;
 }
 
 /** A run's or a change's outcome, for the maintenance job and the dashboard. */
@@ -716,6 +721,13 @@ export class SnapshotService {
       });
       await this.writeSnapshot(manifest);
       this.index.finishRun(run.id, 'succeeded', { snapshotId: manifest.id });
+      if (run.kind === 'full' && this.o.afterFull) {
+        try {
+          await this.o.afterFull(projectId, manifest.id);
+        } catch (e) {
+          this.o.log?.warn({ err: e }, 'the off-site copy could not be requested after the full snapshot');
+        }
+      }
       return {
         changed: true,
         runId: run.id,

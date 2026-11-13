@@ -225,6 +225,8 @@ export interface Overview {
   /** Null when the project has no governor now (its key is not in use). */
   budget: { queues: Record<PriorityClass, number>; gauges: TierSnapshot[] } | null;
   /** OPS2: the owner's sign-in and the secret store. */
+  /** v2 E1b: the off-site copy's health (absent from a bridge without it). */
+  offsite?: { state: 'not_set_up' | 'ok' | 'warning' | 'bad'; messages: string[] } | null;
   security?: {
     totpEnabled: boolean;
     canManageKeys: boolean;

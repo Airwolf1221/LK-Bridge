@@ -4,6 +4,7 @@
  * local port with chunk 1's mock LK behind it, a real clock (write spacing 0), and helpers for the owner's session,
  * CSRF token, a streaming SSE reader, and a bearer token from a real OAuth flow.
  */
+import type { GoogleOAuthOptions } from '../../src/offsite/google.js';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { Writable } from 'node:stream';
@@ -46,6 +47,8 @@ export interface AdminStackOptions {
   readonly captureLogs?: boolean;
   /** v2 A1: point the bridge at another LegendKeeper (for example several mock projects behind one URL). */
   readonly lkBaseUrl?: string;
+  /** v2 E1b: Google's endpoints for the off-site copy (a mock). */
+  readonly googleOAuth?: GoogleOAuthOptions;
   /** v2 A1: how soon a project whose key could not be checked is checked again. */
   readonly projectRetryMs?: { readonly first: number; readonly max: number };
 }
@@ -178,6 +181,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     adminSettings,
     maintenanceSettings: defaultMaintenanceSettings({ enabled: false, ...o.maintenance }),
     uiDir,
+    ...(o.googleOAuth ? { googleOAuth: o.googleOAuth } : {}),
     lkTransport: async (input, init) => {
       const method = (init?.method ?? 'GET').toUpperCase();
       const url = input instanceof Request ? input.url : input.toString();

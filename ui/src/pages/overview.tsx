@@ -73,6 +73,40 @@ function SecurityAdvice({ security }: { security: Overview['security'] }) {
   );
 }
 
+/**
+ * v2 E1b: a broken backup must not go unnoticed. The off-site copy's card turns red when Google refused the saved sign-in
+ * ("Reconnect"), when the last good copy on Drive is older than the setting (2 days), or when the last verify found
+ * problems; amber for a failed copy or an unfinished set-up.
+ */
+function OffsiteAdvice({ offsite }: { offsite: Overview['offsite'] }) {
+  if (!offsite || offsite.state === 'ok') return null;
+  if (offsite.state === 'not_set_up') {
+    return (
+      <section className="card" aria-labelledby="offsite-advice-h" data-testid="offsite-advice">
+        <h2 id="offsite-advice-h">Off-site copy</h2>
+        <p className="small-text">
+          {offsite.messages[0]} <Link to="/offsite">Set it up</Link>.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section className="card card-alert" aria-labelledby="offsite-advice-h" data-testid="offsite-advice">
+      <h2 id="offsite-advice-h">
+        {offsite.state === 'bad' ? 'The off-site backup needs attention' : 'The off-site backup: a warning'}
+      </h2>
+      <ul className="plain">
+        {offsite.messages.map((m) => (
+          <li key={m}>{m}</li>
+        ))}
+      </ul>
+      <p className="small-text">
+        <Link to="/offsite">Open the Off-site copy page</Link>
+      </p>
+    </section>
+  );
+}
+
 export function OverviewPage() {
   const { selected } = useProject();
   const o = useScopedApi<Overview>('/overview');
@@ -99,6 +133,7 @@ export function OverviewPage() {
       </PageHeader>
 
       <SecurityAdvice security={d.security} />
+      <OffsiteAdvice offsite={d.offsite} />
       <ProjectsAttention projects={d.projects ?? []} />
 
       <div className="grid">

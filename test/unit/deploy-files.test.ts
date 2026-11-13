@@ -40,6 +40,8 @@ describe('deploy scripts', () => {
       'restore.sh', // chunk 8
       'migrate-to-build-user.sh', // v1.0.1
       'env-sync.sh', // OPS1
+      'offsite.sh', // v2 E1b
+      'offsite-restore.sh', // v2 E1b
     ]) {
       expect(scripts, s).toContain(s);
     }
@@ -239,7 +241,7 @@ describe('deploy.sh, env-sync and the self-check: order and separation (OPS1)', 
       'install -o root -g root -m 0644 -- "${work_dir}/${unit_name}" "${unit_installed}.new"',
     );
     const rename = code.indexOf('mv -f -- "${unit_installed}.new" "$unit_installed"');
-    const reload = code.indexOf('"$systemctl_bin" daemon-reload');
+    const reload = code.lastIndexOf('"$systemctl_bin" daemon-reload'); // (the other units' install has one too, earlier)
     const start = code.indexOf('step="starting the service"');
     expect(backup).toBeGreaterThan(0);
     expect(install).toBeGreaterThan(backup);
@@ -540,6 +542,14 @@ describe('sudoers.lk-bridge', () => {
 });
 
 describe('systemd units', () => {
+  const UNITS = [
+    'lk-bridge.service',
+    'lk-bridge-backup.service',
+    'lk-bridge-backup.timer',
+    'lk-bridge-offsite.service',
+    'lk-bridge-offsite.timer',
+    'lk-bridge-offsite.path',
+  ];
   const service = read('lk-bridge.service');
 
   it('runs the private Node 24 as lkbridge from the app directory with the env file', () => {
@@ -578,32 +588,55 @@ describe('systemd units', () => {
     );
   });
 
+  it('the off-site copy (v2 E1b): a separate oneshot service as lkbridge, idle priority, a memory ceiling, private /tmp', () => {
+    const offsite = read('lk-bridge-offsite.service');
+    expect(offsite).toMatch(/^Type=oneshot$/m);
+    expect(offsite).toMatch(/^User=lkbridge$/m);
+    expect(offsite).toMatch(/^ExecStart=\/opt\/lk-bridge\/app\/deploy\/offsite\.sh run$/m);
+    // No EnvironmentFile: the runner reads what it needs itself, so rclone inherits no secret.
+    expect(offsite).not.toMatch(/^EnvironmentFile=/m);
+    for (const line of [
+      'Nice=15',
+      'IOSchedulingClass=idle',
+      'PrivateTmp=yes',
+      'ProtectSystem=strict',
+      'NoNewPrivileges=yes',
+      'ReadWritePaths=/var/lib/lk-bridge',
+    ]) {
+      expect(offsite).toContain(`\n${line}\n`);
+    }
+    const max = /^MemoryMax=(\d+)M$/m.exec(offsite);
+    const bridgeMax = /^MemoryMax=(\d+)M$/m.exec(service);
+    expect(Number(max?.[1])).toBeLessThan(Number(bridgeMax?.[1]));
+    const timer = read('lk-bridge-offsite.timer');
+    expect(timer).toMatch(/^OnCalendar=\*-\*-\* \*:00\/15:00$/m);
+    expect(timer).toMatch(/^Unit=lk-bridge-offsite\.service$/m);
+    const path = read('lk-bridge-offsite.path');
+    expect(path).toMatch(/^PathExistsGlob=\/var\/lib\/lk-bridge\/offsite\/requests\/\*\.json$/m);
+    expect(path).toMatch(/^Unit=lk-bridge-offsite\.service$/m);
+    for (const f of ['offsite.sh', 'offsite-restore.sh'])
+      expect(statSync(join(deployDir, f)).mode & 0o111).not.toBe(0);
+  });
+
   it.skipIf(!haveSystemdAnalyze)(
     'passes systemd-analyze verify (paths that only exist on the server stubbed)',
     () => {
       const dir = mkdtempSync(join(tmpdir(), 'lkb-units-'));
       try {
-        for (const f of ['lk-bridge.service', 'lk-bridge-backup.service', 'lk-bridge-backup.timer']) {
+        for (const f of UNITS) {
           copyFileSync(join(deployDir, f), join(dir, f));
         }
-        // The Node binary and the checkout exist only on the server; point those two at /bin/true.
+        // The Node binary and the checkout exist only on the server; point those at /bin/true.
         for (const [f, from] of [
           ['lk-bridge.service', '/opt/lk-bridge/runtime/node/bin/node'],
           ['lk-bridge-backup.service', '/opt/lk-bridge/app/deploy/backup.sh'],
+          ['lk-bridge-offsite.service', '/opt/lk-bridge/app/deploy/offsite.sh'],
         ] as const) {
           writeFileSync(join(dir, f), readFileSync(join(dir, f), 'utf8').replace(from, '/bin/true'));
         }
-        const r = spawnSync(
-          'systemd-analyze',
-          [
-            'verify',
-            '--man=no',
-            ...['lk-bridge.service', 'lk-bridge-backup.service', 'lk-bridge-backup.timer'].map((f) =>
-              join(dir, f),
-            ),
-          ],
-          { encoding: 'utf8' },
-        );
+        const r = spawnSync('systemd-analyze', ['verify', '--man=no', ...UNITS.map((f) => join(dir, f))], {
+          encoding: 'utf8',
+        });
         // Other units on the machine (CI runners have some) may warn about themselves; only our own matter.
         const ours = (r.stdout + r.stderr).split('\n').filter((l) => l.includes('lk-bridge'));
         expect(ours).toEqual([]);

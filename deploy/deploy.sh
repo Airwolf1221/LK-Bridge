@@ -23,6 +23,10 @@
 #                   is installed (root:root, 0644) and `systemctl daemon-reload` is run, just before the service is
 #                   started again, so the deploy's own restart starts it from the new unit (and a deploy with nothing
 #                   else to do still restarts). Without --update-self a difference is only warned about, at the end.
+#                   v2 E1b: --update-self also installs the other units (lk-bridge-backup.service and .timer, and the
+#                   off-site copy's lk-bridge-offsite.service, .timer and .path) when they differ from the release's or
+#                   are not installed yet (an installed copy is backed up first), reloads systemd and enables the timers
+#                   and the path unit. None of them needs the bridge restarted.
 #   --yes           answer yes to the questions --sync-env and --update-self ask.
 #
 # Who does what. Root only orchestrates: it never runs git, npm, node or a script from the checkout itself. Every phase
@@ -310,8 +314,72 @@ if ((update_self)) && [[ -f "$unit_installed" ]] \
   fi
 fi
 
+# ---------------------------------------------------------------- 1b3. the other units (--update-self only; v2 E1b)
+# The nightly backup's and the off-site copy's units. Compared here (nothing changes); installed by install_aux_units,
+# which runs just before the bridge starts again (or at once when there is nothing else to deploy). Unlike the bridge's
+# own unit, one that is not installed yet IS installed: the off-site units are new in v2 E1b, and the runner does nothing
+# until the owner sets the copy up on the dashboard.
+aux_units=(lk-bridge-backup.service lk-bridge-backup.timer lk-bridge-offsite.service lk-bridge-offsite.timer lk-bridge-offsite.path)
+aux_update=()
+if ((update_self)); then
+  step="checking the other systemd units"
+  for u in "${aux_units[@]}"; do
+    as_build git cat-file -e "${new_sha}:deploy/${u}" 2>/dev/null || continue
+    as_build git show "${new_sha}:deploy/${u}" >"${work_dir}/${u}"
+    if [[ -f "${LKB_UNIT_DIR}/${u}" ]]; then
+      cmp -s "${work_dir}/${u}" "${LKB_UNIT_DIR}/${u}" && continue
+      log "The installed ${LKB_UNIT_DIR}/${u} differs from the one in ${new_sha:0:9}:"
+      diff -u --label "installed ${LKB_UNIT_DIR}/${u}" --label "release ${new_sha:0:9} deploy/${u}" "${LKB_UNIT_DIR}/${u}" "${work_dir}/${u}" || true
+    else
+      log "${u} is not installed yet: the release's copy will be installed."
+    fi
+    aux_update+=("$u")
+  done
+  if ((${#aux_update[@]} > 0)); then
+    confirm "Install ${aux_update[*]} (backing up any installed copy), reload systemd and enable the timers and the path unit?" \
+      || die "Nothing was installed or changed."
+  fi
+fi
+
+# install_aux_units: installs the units chosen above (root:root 0644, any installed copy backed up first), reloads
+# systemd, and enables (and starts) the timers and path units among them. The services are started by those.
+install_aux_units() {
+  ((${#aux_update[@]} > 0)) || return 0
+  step="installing the other systemd units"
+  local u stamp
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  for u in "${aux_update[@]}"; do
+    if [[ -f "${LKB_UNIT_DIR}/${u}" ]]; then
+      cp --preserve=mode,ownership,timestamps -- "${LKB_UNIT_DIR}/${u}" "${LKB_UNIT_DIR}/${u}.bak.${stamp}"
+      log "Backed up ${LKB_UNIT_DIR}/${u} to ${LKB_UNIT_DIR}/${u}.bak.${stamp}."
+    fi
+    if [[ -z "${LKB_RUNAS:-}" ]]; then
+      install -o root -g root -m 0644 -- "${work_dir}/${u}" "${LKB_UNIT_DIR}/${u}.new"
+    else
+      install -m 0644 -- "${work_dir}/${u}" "${LKB_UNIT_DIR}/${u}.new"
+    fi
+    mv -f -- "${LKB_UNIT_DIR}/${u}.new" "${LKB_UNIT_DIR}/${u}"
+    log "Installed ${LKB_UNIT_DIR}/${u}."
+  done
+  "$systemctl_bin" daemon-reload
+  log "Reloaded systemd (daemon-reload)."
+  for u in "${aux_update[@]}"; do
+    case "$u" in
+      *.timer | *.path)
+        "$systemctl_bin" enable --now "$u"
+        log "Enabled and started ${u}."
+        ;;
+    esac
+  done
+}
+
 if [[ "$mode" == "fetch" && "$prev_sha" == "$new_sha" && $force -eq 0 && $unit_update -eq 0 && -f "${app_dir}/dist/server.js" ]]; then
-  log "Already at origin/${branch} (${prev_sha:0:9}). Nothing to deploy. Use --force to rebuild and restart anyway."
+  if ((${#aux_update[@]} > 0)); then
+    install_aux_units
+    log "Already at origin/${branch} (${prev_sha:0:9}): only the units above were installed; the bridge was not restarted."
+  else
+    log "Already at origin/${branch} (${prev_sha:0:9}). Nothing to deploy. Use --force to rebuild and restart anyway."
+  fi
   rm -rf -- "$work_dir"
   trap - EXIT
   exit 0
@@ -441,6 +509,8 @@ if ((unit_update)); then
   log "Reloaded systemd (daemon-reload); the start below uses the new unit."
 fi
 
+install_aux_units
+
 step="starting the service"
 log "Starting ${LKB_SERVICE} ..."
 svc start
@@ -462,11 +532,14 @@ done
 step="health checks"
 as_service "${app_dir}/deploy/healthcheck.sh" "${health_args[@]}"
 
-# The unit files and the sudoers file are installed by hand, not by this script. Say so if this release changed one
-# (compare only; nothing from the checkout is run or installed). The deploy scripts themselves were compared in step 1b.
-for unit in lk-bridge.service lk-bridge-backup.service lk-bridge-backup.timer; do
+# Without --update-self the unit files are not installed by this script (and the sudoers file never is). Say so if this
+# release changed one or added one (compare only; nothing from the checkout is run or installed). The deploy scripts
+# themselves were compared in step 1b.
+for unit in lk-bridge.service "${aux_units[@]}"; do
   if [[ -f "${LKB_UNIT_DIR}/${unit}" ]] && ! cmp -s "${app_dir}/deploy/${unit}" "${LKB_UNIT_DIR}/${unit}"; then
     warn "${LKB_UNIT_DIR}/${unit} differs from deploy/${unit}. An administrator should reinstall it (runbook, 'Updating')."
+  elif [[ ! -f "${LKB_UNIT_DIR}/${unit}" && -f "${app_dir}/deploy/${unit}" && "$unit" != lk-bridge.service ]]; then
+    warn "${unit} is not installed. Run the deploy again with --update-self to install it (runbook, 'Off-site copy to Google Drive')."
   fi
 done
 
