@@ -1206,7 +1206,8 @@ features, needs none. Under `propose` scope the proposal shows the count and siz
 | `read_document` on a map                         | 2     | 0      |
 
 Plan 2 (the map's settings, its features) and check 2, then 1 read to verify; a delete also reads each feature for its journal
-pre-image. A `link` adds one read (the page, live). A dry run costs the plan's reads only.
+pre-image. v2 E1a: each map write's change snapshot adds 2 reads (the page and the map's settings; the verify's feature list is
+reused), so `create_map_feature` and `update_map_feature` cost 7 reads, a single delete 8. A `link` adds one read (the page, live). A dry run costs the plan's reads only.
 
 ## Images (v2 D3)
 
