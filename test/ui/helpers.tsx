@@ -276,6 +276,7 @@ export const controls = (over: Record<string, unknown> = {}) => ({
   draining: false,
   readOnly: false,
   readOnlyOverride: null,
+  contactEmail: { stored: null, appliesAt: 'immediately' },
   writersMax: 2,
   allowMemberAdmin: false,
   ...over,

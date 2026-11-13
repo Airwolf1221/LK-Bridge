@@ -725,6 +725,7 @@ describe('Settings', () => {
       tiers: ['write-min'],
       appliesAt: 'restart',
     },
+    contactEmail: { stored: null, appliesAt: 'immediately' },
     writersMax: 2,
   });
   it('shows every setting, the pending-restart ones, and recent audited changes', async () => {

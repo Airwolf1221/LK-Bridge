@@ -675,6 +675,7 @@ export interface SettingsView {
     tiers: string[];
     appliesAt: 'restart';
   };
+  contactEmail: { stored: string | null; appliesAt: 'immediately' };
   writersMax: number;
 }
 

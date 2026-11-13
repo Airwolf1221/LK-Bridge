@@ -230,6 +230,7 @@ describe('settings ask for confirmation', () => {
       tiers: ['write-min'],
       appliesAt: 'restart',
     },
+    contactEmail: { stored: null, appliesAt: 'immediately' },
     writersMax: 2,
   });
   const routes = () => ({

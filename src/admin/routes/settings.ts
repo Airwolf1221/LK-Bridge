@@ -3,6 +3,7 @@ import { AdminHttpError } from '../http.js';
 import { redactDeep } from '../redact.js';
 import {
   LIMITED_TIERS,
+  contactEmailSchema,
   journalSchema,
   readStoredSettings,
   tierLimitsSchema,
@@ -61,6 +62,7 @@ export const registerSettings: Register = (api, ctx) => {
         tiers: LIMITED_TIERS,
         appliesAt: 'restart',
       },
+      contactEmail: { stored: stored.contactEmail, appliesAt: 'immediately' },
       reserveFloors: { appliesAt: 'immediately' },
       writersMax: controls.writersMax,
     };
@@ -79,6 +81,11 @@ export const registerSettings: Register = (api, ctx) => {
   });
   api.put('/settings/member-admin', (req) => {
     actions.setAllowMemberAdmin(parseInput(nullableBool, req.body).value);
+    return { settings: view() };
+  });
+  api.put('/settings/contact-email', (req) => {
+    const b = parseInput(z.object({ value: contactEmailSchema.nullable(), confirm }), req.body);
+    actions.setContactEmail(b.value);
     return { settings: view() };
   });
   api.put('/settings/journal-retention', (req) => {

@@ -1034,7 +1034,11 @@ encrypted secret store, never in the env file.
 
 3. **The one-off Google Cloud set-up**: [drive-setup.md](drive-setup.md) (a project, the Drive API, Branding, Audience
    External and **published**, the `drive.file` scope, a Web application client with the redirect URI
-   `https://lk.ottomoons.co.uk/admin/drive/callback`).
+   `https://lk.ottomoons.co.uk/admin/drive/callback`). **Branding must hold the home page
+   `https://lk.ottomoons.co.uk/about`, the privacy policy `https://lk.ottomoons.co.uk/privacy` and the authorised domain
+   `ottomoons.co.uk`, or Google will not let you publish.** The bridge serves both pages with no sign-in (optionally
+   set **Contact email** under Settings to show a contact line on `/privacy`); the Caddy block already proxies every
+   path, so nothing changes there. Open both pages in a private window before saving them at Google.
 4. Dashboard → **Off-site copy** → **Google Drive**: paste the **Client ID** and **Client secret**, **Save the client**
    (it asks for your password, and authenticator code, if not confirmed in the last five minutes).
 5. **Connect Google Drive**: sign in at Google and allow access; back on the page, the card says **Connected** with the

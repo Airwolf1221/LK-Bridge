@@ -23,7 +23,16 @@ export const SETTING_KEYS = {
   allowMemberAdmin: 'dash.allow_member_admin',
   journal: 'dash.journal_retention',
   tierLimits: 'dash.tier_limits',
+  contactEmail: 'dash.contact_email',
 } as const;
+
+/** The contact address on the public /privacy page (no default; unset means the page leaves the line out). */
+export const contactEmailSchema = z.string().trim().max(254).email();
+
+/** The stored contact email, or null when unset (or no longer valid). Read on each request, so a change applies at once. */
+export function readContactEmail(db: Db): string | null {
+  return readValid(db, SETTING_KEYS.contactEmail, contactEmailSchema);
+}
 
 export const reserveFloorsSchema = z
   .object({
@@ -59,6 +68,7 @@ export interface StoredSettings {
   readonly allowMemberAdmin: boolean | null;
   readonly journal: JournalRetention | null;
   readonly tierLimits: TierLimitOverrides | null;
+  readonly contactEmail: string | null;
 }
 
 function readRaw(db: Db, key: string): unknown {
@@ -86,6 +96,7 @@ export function readStoredSettings(db: Db): StoredSettings {
     allowMemberAdmin: readValid(db, SETTING_KEYS.allowMemberAdmin, z.boolean()),
     journal: readValid(db, SETTING_KEYS.journal, journalSchema),
     tierLimits: readValid(db, SETTING_KEYS.tierLimits, tierLimitsSchema),
+    contactEmail: readContactEmail(db),
   };
 }
 

@@ -28,6 +28,7 @@ import { registerOffsite } from './routes/offsite.js';
 import { CALLBACK_PATH, OffsiteError } from '../offsite/service.js';
 import type { RouteContext } from './routes/util.js';
 import { StreamHub } from './stream.js';
+import { registerPublicPages } from '../public/pages.js';
 import { registerUi } from './ui.js';
 import type { AdminDeps } from './types.js';
 
@@ -188,4 +189,5 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
   });
 
   registerUi(app, deps.services, deps.uiDir);
+  registerPublicPages(app, deps.runtime.policy.store.db);
 }

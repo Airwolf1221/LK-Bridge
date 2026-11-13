@@ -57,8 +57,22 @@ created; a different project cannot see them (see "If the project is lost" at th
      recognise.
    - **User support email:** your own address (pick it from the list).
    - **Developer contact information → Email addresses:** your own address again.
-   - Leave the logo, the app home page, the privacy policy and the authorised domains empty. They are only needed for
-     Google's verification, which this app does not need (step 4).
+   - **Application home page:** `https://<bridge address>/about` (for the owner, `https://lk.ottomoons.co.uk/about`).
+   - **Application privacy policy link:** `https://<bridge address>/privacy` (for the owner,
+     `https://lk.ottomoons.co.uk/privacy`).
+   - **Authorised domains:** click **Add domain** and enter the bridge's registrable domain, the part you bought, without
+     `lk.` (for the owner, `ottomoons.co.uk`). That also covers the redirect address on `lk.` in step 6.
+   - Leave the logo empty.
+
+   Both pages are served by the bridge itself, with no sign-in, so Google can reach them. Open them in a private window
+   first to check.
+
+   **These are required to publish.** Google will not switch an external app to **In production** until it has a valid
+   app name, support email, home page, privacy policy link and authorised domains that cover every link and the
+   redirect address. Without them, **Publish app** in step 4 stays greyed out, and the reason appears **only in the
+   tooltip** you see when you hover over that button on the **Audience** page ("To publish your app, you must complete
+   your configuration on the Branding page").
+
 3. Click **Save** (or **Next** and then **Create**, if you came through **Get started**).
 
 ## 4. Audience: External, then publish
@@ -74,6 +88,13 @@ created; a different project cannot see them (see "If the project is lost" at th
 only: the refresh token the bridge keeps expires a week after you connect. The copy would then stop without anyone
 touching it. The bridge would notice (the Off-site copy card and the Overview turn red with **Reconnect**), but you
 would have to reconnect every week. In production the token does not expire on its own.
+
+**Google does not review these pages** unless you ask it to verify the app, and `drive.file` does not need that. They
+only have to be real, reachable pages on a domain you listed.
+
+**Already published with a temporary link?** If you got past this with another address (for example the dashboard's
+sign-in page as the home page and privacy policy), nothing breaks. Change the two links to `/about` and `/privacy` in
+**Branding** when convenient and save; changing them later does not change the published status.
 
 **No verification is needed.** The app asks for one permission only, `drive.file`, which Google classes as
 **non-sensitive**. Publishing an app that uses only non-sensitive permissions needs no review by Google; the Audience page
