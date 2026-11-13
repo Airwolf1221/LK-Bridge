@@ -28,8 +28,9 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test
 sandbox runtimes keep their image directory in their own temporary directory (`createSoakRuntime` sets `images.dataDir`), and
 the runtime derives the default one from the database it was given, never from the config's `./data/bridge.db`, which is under
 the app folder owned by the build user: all five files once failed in their first second with `EACCES: mkdir
-'/opt/lk-bridge/app/data/images/upload-tmp'`. `upload-tmp/` and `kept-bytes/` are created only by the first upload or kept
-file. `test/tools/sandbox-runtime-readonly.test.ts` (with `soak-runtime-readonly.test.ts`, its inner half, which does nothing
+'/opt/lk-bridge/app/data/images/upload-tmp'`. `upload-tmp/` is created only by the first upload. v2 E1a: the snapshot
+store (which also holds the bytes kept before a delete, formerly `kept-bytes/`) is in the same temporary directory
+(`snapshots.dataDir`). `test/tools/sandbox-runtime-readonly.test.ts` (with `soak-runtime-readonly.test.ts`, its inner half, which does nothing
 unless that test starts it) builds the sandbox runtime under Node's permission model with the app folder read-only. A
 verdict **NOTED** in a report is a fact about LegendKeeper the run records (a refusal the bridge works around), never a failure.
 
@@ -228,3 +229,56 @@ clean-up does.
   (19 PASS), once plainly and once with three writes really held for budget (a map job, a document write and the clean-up's
   delete, each parked for 31 s), which it waits for without sending any twice, the upload step is stood in for (the mock cannot take a signed PUT), the generated PNG is decoded and its CRCs
   checked, and the clean-up is verified. A FAIL on the real API is where LegendKeeper differs from what ADR 0040 relies on.
+
+## Snapshots, restores and the rehearsal (v2 E1a)
+
+`npm run test:sandbox` (on the server `deploy/sandbox-test.sh --project test`) also runs `snapshots.test.ts`;
+`npm run test:sandbox -- snapshots` runs it alone:
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- snapshots
+```
+
+It **writes**, then cleans up. It prints PASS, FAIL or INCONCLUSIVE per check ([ADR 0042](../../docs/adr/0042-snapshots-restore-rehearsal.md),
+"To verify"); the run fails if a check other than the `updatedAt` ones FAILs or the clean-up does.
+
+- **Its runtime:** the sandbox runtime (`createSoakRuntime`), whose database **and snapshot store** are in its own
+  temporary directory (`snapshots.dataDir`), removed at the end. Its AI REPOSITORY is set, **in that temporary database
+  only**, to the throwaway root the test creates, so the full snapshot, the restores and the rehearsal see that subtree and
+  nothing else of the test world. The full snapshot also takes the test world's whole asset library (as on the server):
+  one listing per 100 assets, and each image's bytes downloaded once from the asset host (no API budget).
+- **What it creates:** `lk-bridge snapshots <time>` at the top level (a plain name, no prefix and no Status, so the canon
+  and lifecycle guards never stand in the way) with a link target and a page holding a page document (a heading, a mention
+  of the target, the image, a **meter block: a keep region**, a paragraph), a map (the image as its `MapImage`, a folder, a
+  pin, a region), a timeline (a lane and an event, on the project's first calendar; none, no timeline), a board (one
+  shape), and a sidebar (a key-value property and a collection linking the target); **one generated PNG** (64×48).
+- **What it checks:**
+  - **S:** a full snapshot of the subtree and the library; its reads per page.
+  - **R.page, R.map, R.time, R.board, R.sidebar:** each piece edited, then restored from the snapshot (a proposal, approved
+    here as the owner approves one) and read back: the stored piece must **hash exactly as the snapshot's**.
+  - **D1:** the link target deleted, then undeleted within LegendKeeper's soft delete (`restoreResource`; its content
+    follows as a second proposal, or is reported as already matching).
+  - **D2:** a page made, deleted, and **recreated from the snapshot alone**: whether LegendKeeper took its **original id**
+    (said either way; refused, it is recreated with a new id), and its text read back as in the snapshot.
+  - **U.a to U.e:** whether `updatedAt` moves on the resource (`listResources`, what the daily pass reads) or only on the
+    document (`listDocuments`, the pass's `snapshotDailyPassDocuments` option) when (a) a block, (b) a sidebar row, (c) a
+    map feature, (d) a timeline event or (e) the board content changes. **PASS:** the resource's moved, so the cheap daily
+    pass sees that edit. **INCONCLUSIVE:** only the document's moved, so the pass needs the documents option (one request
+    a page). **FAIL:** neither moved, so only the weekly full snapshot sees that kind of edit. These decide whether
+    `snapshotDailyPass` can be switched on (docs/runbook-deploy.md › Snapshots); they report, they do not fail the run.
+  - **H:** a sampled rehearsal of the subtree's snapshot into its own throwaway root (`lk-bridge rehearsal <time>`),
+    compared and deleted. A rehearsal never goes into the project its snapshot came from, so the snapshot is copied, in the
+    temporary database only, as one of a stand-in project, and the test project is marked a sandbox there.
+- **Held writes:** every write goes through `test/sandbox/wait.ts`: single operations through `runSettled`, the upload,
+  each approved restore's job and the clean-up through `waitForJob`. A write parked for budget (`waiting_budget`) or
+  queued is waited for, never sent again. The rehearsal waits for each of its own jobs the same way.
+- **What it cleans up:** the root (a cascade: every page the run made, the recreated one included) and the image, even
+  after a failure; the rehearsal deletes its own root and folder. **Already gone (404, "already deleted") counts as cleaned.**
+- **Cost:** measured against the mock, **267 reads and 68 writes** (setup 14 reads and 19 writes; the full snapshot 16
+  reads for 3 pages and a 4-image library; each restore 15 to 24 reads and 2 to 4 writes; the five `updatedAt` checks about
+  7 reads and 1 write each; the rehearsal 52 reads and 22 writes; the clean-up 19 reads and 2 writes). On the real API add
+  the test world's library listing (one read per 100 assets) and the tree build of the subtree (a few reads); expect
+  **about 300 reads and 70 writes**, well inside the test project's budgets, and a few minutes at the write pacing.
+- **Dry run:** `test/snapshots/sandbox-dryrun.test.ts` runs the same script against the mock snapshot world: every check
+  but the `updatedAt` ones PASSes (the mock keeps no `updatedAt`, so those are INCONCLUSIVE there), nothing is left
+  behind, and the cost above is counted from the mock's own call log.

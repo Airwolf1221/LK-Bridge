@@ -567,6 +567,20 @@ export async function snapshotsWorld(
       };
       boards.set(did, b);
       const view = () => ({ ...structuredClone(b.content), version: `b${b.version}` });
+      // createBoardShapes (v2 E1a's sandbox dry run): shapes added, each with a minted id when it has none.
+      if (req.method === 'POST' && sub === 'shapes') {
+        const added = ((body.shapes as Obj[] | undefined) ?? []).map((sh, i) => ({
+          id: typeof sh.id === 'string' ? sh.id : `shape:n${b.version}x${i}`,
+          parentId: 'page:page',
+          index: `a${(b.content.shapes as Obj[]).length + i + 2}`,
+          ...sh,
+        }));
+        b.content = { ...b.content, shapes: [...(b.content.shapes as Obj[]), ...added] };
+        b.version++;
+        if (doc.type === 'blank') doc.type = 'board';
+        return { status: 201, body: view() };
+      }
+      if (sub) return undefined;
       if (req.method === 'GET') return { status: 200, body: view(), headers: { etag: `"b${b.version}"` } };
       if (req.method === 'PUT') {
         if (req.headers['if-match'] !== `b${b.version}`) return err(412, 'VERSION_MISMATCH');

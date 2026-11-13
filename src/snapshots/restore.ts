@@ -1120,13 +1120,79 @@ async function planSidebar(
       what: `property ${String(p.title ?? p.id)} (${String(p.kind)})`,
       why: 'only the facts property and the link collections are restored',
     });
+  // ---- the other key-value properties (not the facts property): their rows, by property id and row id. Each row is
+  // one write (updatePropertyRow, createPropertyRow, deletePropertyRow): the engine reads its version inside the lock,
+  // journals what it replaces, and the guards see it like any other sidebar write.
+  const rowSteps: StepSpec[] = [];
+  const rowParts = new Set<string>();
   for (const p of o.target.properties.filter(
     (x) => x.kind === 'keyValue' && !same_(str(x.title) ?? '', title),
-  ))
-    o.notRestored.push({
-      what: `key-value property ${String(p.title ?? p.id)}`,
-      why: `only the ${title} property is restored`,
+  )) {
+    const label = String(p.title ?? p.id);
+    const live = current.properties.find((x) => x.id === p.id);
+    if (!live || live.kind !== 'keyValue') {
+      o.notRestored.push({
+        what: `key-value property ${label}`,
+        why: live
+          ? 'a property of that id is no longer a key-value property'
+          : 'the page has no such property now; restore it by hand',
+      });
+      continue;
+    }
+    const want = ((p.rows as Obj[] | undefined) ?? []).filter((r) => typeof r.id === 'string');
+    const have = ((live.rows as Obj[] | undefined) ?? []).filter((r) => typeof r.id === 'string');
+    const path = { resourceId: o.page.id, propertyId: String(p.id) };
+    const journal = (write: string) => ({
+      tool: 'restore_snapshot',
+      snapshotRestore: true,
+      page: { id: o.page.id, name: o.page.name },
+      write,
     });
+    let prev: string | null = null;
+    for (const r of want) {
+      const key = str(r.key) ?? '';
+      const content = Array.isArray(r.content) ? (r.content as Obj[]) : [];
+      if (content.some((run) => isUnwritableRun(run))) {
+        o.lost.push({
+          what: `${label}: ${key}`,
+          where: 'sidebar',
+          why: 'its value holds an inline icon or another run the API cannot write back',
+        });
+        prev = have.some((h) => h.id === r.id) ? String(r.id) : prev;
+        continue;
+      }
+      const cur = have.find((h) => h.id === r.id);
+      if (cur) {
+        if (str(cur.key) !== key || !same(cur.content ?? [], content)) {
+          rowSteps.push({
+            op: 'updatePropertyRow',
+            params: { path: { ...path, rowId: String(r.id) }, body: { key, content } },
+            journalOperation: journal(`${label}: ${key}`),
+          });
+          rowParts.add(`${label}: ${key}`);
+        }
+        prev = String(r.id);
+      } else {
+        rowSteps.push({
+          op: 'createPropertyRow',
+          params: { path, body: { key, content, ...(prev ? { after: prev } : {}) } },
+          journalOperation: journal(`${label}: ${key} (back)`),
+        });
+        rowParts.add(`${label}: ${key}`);
+      }
+    }
+    for (const h of have)
+      if (!want.some((r) => r.id === h.id)) {
+        rowSteps.push({
+          op: 'deletePropertyRow',
+          params: { path: { ...path, rowId: String(h.id) } },
+          journalOperation: journal(`${label}: ${String(h.key)} (removed)`),
+        });
+        rowParts.add(`${label}: ${String(h.key)}`);
+      }
+    if (want.some((r) => !have.some((h) => h.id === r.id)))
+      o.warnings.push(`${label}: rows the page lost come back with new ids, after the row before them`);
+  }
   let plan;
   try {
     plan = planFacts({
@@ -1142,7 +1208,7 @@ async function planSidebar(
     throw e;
   }
   const piece = { label: 'sidebar', before, after, diff: diffText(before, after).text };
-  if (plan.empty) return { steps: [], parts: [], piece };
+  if (plan.empty) return { steps: rowSteps, parts: rowSteps.length ? ['sidebar', ...rowParts] : [], piece };
   const job = expandFacts(plan, { id: o.page.id, name: o.page.name }, sidebar, {
     facts: 'restore',
     links: 'restore',
@@ -1156,7 +1222,11 @@ async function planSidebar(
       ? { ...s, journalOperation: { ...s.journalOperation, tool: 'restore_snapshot', snapshotRestore: true } }
       : s,
   );
-  return { steps, parts: job.pageParts.map((p) => (p === 'sidebar' ? 'sidebar' : p)), piece };
+  return {
+    steps: [...steps, ...rowSteps],
+    parts: [...job.pageParts.map((p) => (p === 'sidebar' ? 'sidebar' : p)), ...rowParts],
+    piece,
+  };
 }
 
 // ============================================================================================ a deleted page
