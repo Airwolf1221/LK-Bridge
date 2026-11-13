@@ -7,6 +7,13 @@
 LegendKeeper bridge connector. Every test runs against a mock Google OAuth and Drive server and a fake `rclone` that
 records its arguments and acts on a local directory; the owner does the live checks.
 
+- **Public `/about` and `/privacy` pages** (ADR 0043 addendum): Google needs a home page, a privacy policy link and
+  authorised domains before it lets an external app be published; `drive-setup.md` wrongly said to leave them empty
+  (corrected: step 3 now sets them, and explains the greyed-out **Publish app** button's tooltip). The bridge serves both
+  pages itself: static, no sign-in, no cookie, no script, the dashboard's CSP, stylesheet at `/public.css`. New dashboard
+  setting **Contact email** (no default; applies at once; the `/privacy` contact line is omitted when unset). `GET /` and
+  the dashboard are unchanged; Caddy needs no change. Owners who published with a temporary link: switch the Branding
+  links to the new pages; the published status is unaffected.
 - **The connection, on the dashboard** (new **Off-site copy** page): the owner's own Google app (`drive.file` only,
   published so its refresh token does not expire after 7 days); the client ID and secret, the refresh token and the
   encryption keys kept in the encrypted secret store (scope `offsite`), never in the env file. Sign-in with PKCE (S256)

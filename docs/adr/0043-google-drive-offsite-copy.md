@@ -224,3 +224,21 @@ Together they are the backup proof.
   the foreign-folder and empty-store guards; the schedule and the requests); verify (complete, missing, corrupt, bad
   database, no store); `offsite-restore.sh` end to end; the units' content and `systemd-analyze verify`; `deploy.sh`
   installing them.
+
+## Addendum (13 November 2026): the app's home page and privacy policy
+
+Google will not publish an external app (Audience, **Publish app**) until Branding holds a valid app name, support
+email, **application home page**, **privacy policy link** and **authorised domains** covering every link and the
+redirect URI. The first version of `docs/drive-setup.md` said to leave them empty, which was wrong; the reason shows only
+in the tooltip over the greyed-out button. The owner published with the dashboard's sign-in page as a temporary link.
+
+Decision: the bridge serves two small public pages, `GET /about` and `GET /privacy` (`src/public/pages.ts`). Static
+HTML with no sign-in, no cookie, no script, and the dashboard's strict CSP. That policy allows no inline style, so the
+styling is a same-origin stylesheet (`/public.css`). `/privacy` states what this build does with Google data
+(`drive.file` only; its own encrypted files only; nothing shared; the refresh token sealed on the server and revocable
+by Disconnect or in Google's third-party access settings; backups encrypted before upload with keys only the owner
+holds). A contact line comes from a new dashboard setting, **Contact email** (`dash.contact_email`, no default, applied
+at once, audited); unset, the line is omitted. The page text must change if what the build does with Google data
+changes. `GET /` is unchanged. Caddy needs no change: its site block proxies every path and has no `redir`, `rewrite` or
+`header` directive. Google does not review these pages unless verification is requested, which `drive.file` does not
+need. Switching an already published app's links later does not change its status.

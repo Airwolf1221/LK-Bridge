@@ -25,6 +25,7 @@ import {
 import { AdminHttpError } from './http.js';
 import {
   SETTING_KEYS,
+  contactEmailSchema,
   journalSchema,
   readStoredSettings,
   reserveFloorsSchema,
@@ -690,6 +691,17 @@ export function createAdminActions(d: AdminDeps) {
         null,
         { stored: before ?? null },
         { stored: value, appliesAt: 'restart' },
+      );
+    },
+    /** The contact email on the public /privacy page. Applies at once; null removes the line. */
+    setContactEmail(value: string | null): void {
+      const v = value === null ? null : contactEmailSchema.parse(value);
+      const before = writeStoredSetting(store.db, SETTING_KEYS.contactEmail, v, OWNER, store.now());
+      audit(
+        'settings.contact_email',
+        null,
+        { stored: before ?? null },
+        { stored: v, appliesAt: 'immediately' },
       );
     },
     setJournalRetention(value: JournalRetention | null): void {

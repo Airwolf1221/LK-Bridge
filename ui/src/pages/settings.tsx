@@ -69,6 +69,7 @@ export function SettingsPage() {
         }
       />
       <JournalCard v={v} onSaved={saved} />
+      <ContactCard v={v} onSaved={saved} />
       <TierCard v={v} onSaved={saved} />
       <section className="card" aria-labelledby="audit-h">
         <h2 id="audit-h">Recent changes</h2>
@@ -454,6 +455,67 @@ function TierCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
           }}
         >
           Save
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/** The contact line on the public /privacy page. Applies at once; empty means the page omits the line. */
+function ContactCard({ v, onSaved }: { v: SettingsView; onSaved: () => void }) {
+  const stored = v.contactEmail.stored;
+  const [email, setEmail] = useState(stored ?? '');
+  const synced = useRef(stored);
+  useEffect(() => {
+    if (synced.current === stored) return;
+    synced.current = stored;
+    setEmail(stored ?? '');
+  }, [stored]);
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const save = (value: string | null) =>
+    void confirm({
+      title: 'Change the contact email?',
+      message: (
+        <p>
+          {value === null
+            ? 'Remove the contact line from the public privacy page?'
+            : `Show ${value} on the public privacy page?`}
+        </p>
+      ),
+      confirmLabel: 'Save',
+    }).then((ok) => {
+      if (ok)
+        void run(
+          () => api.put('/settings/contact-email', { value, confirm: true }),
+          'Contact email saved.',
+        ).then(onSaved);
+    });
+  const trimmed = email.trim();
+  return (
+    <section className="card" aria-labelledby="contact-h">
+      <div className="row row-between">
+        <h2 id="contact-h">Contact email</h2>
+        <Badge tone={stored ? 'ok' : 'neutral'}>{stored ? 'shown' : 'not shown'}</Badge>
+      </div>
+      <p className="muted small-text">
+        Shown on the public privacy page (<code>/privacy</code>) as a contact line. There is no default: left
+        empty, the page has no contact line. Applies at once.
+      </p>
+      <label htmlFor="contact-email">Email address</label>
+      <input
+        id="contact-email"
+        type="email"
+        autoComplete="off"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <div className="row">
+        <Button disabled={busy || trimmed === '' || trimmed === stored} onClick={() => save(trimmed)}>
+          Save
+        </Button>
+        <Button disabled={busy || stored === null} onClick={() => save(null)}>
+          Remove
         </Button>
       </div>
     </section>
