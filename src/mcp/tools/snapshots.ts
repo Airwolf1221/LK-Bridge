@@ -72,11 +72,7 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
     title: 'List the snapshots of a page',
     access: 'read',
     description:
-      'Lists the snapshots the bridge holds of a page (or its sidebar, its settings, or one document), newest first: when, ' +
-      'the kind (full: the nightly snapshot of everything, which also catches edits made in the app; change: after a bridge write), ' +
-      'and for each piece whether it changed from the snapshot before. A deleted page is found by its id. Cost: none (the ' +
-      'bridge’s own index, no request to LegendKeeper). Use snapshot_diff to see a change, restore_snapshot to propose ' +
-      'bringing one back.',
+      'Lists the bridge’s own snapshots of a page (or its sidebar, settings or one document), newest first: when, the kind (full: nightly, which also catches edits made in the app; change: after a bridge write) and which pieces changed. A deleted page is found by its id. Next: snapshot_diff to see a change, restore_snapshot to propose bringing one back. Cost: none.',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('The page: a name or id (a deleted page: its id).'),
       piece: pieceArg,
@@ -129,10 +125,7 @@ function snapshotDiffTool(deps: ToolDeps): McpToolProvider {
     title: 'Diff a snapshot',
     access: 'read',
     description:
-      'The Markdown diff of a page’s document, sidebar or settings between a snapshot and the page now (`to` left out), ' +
-      'or between two snapshots. Cost: against now 1 read, plus the document’s own reads (a page 1, a map 2, a timeline 3 ' +
-      'or more, a board 1); between two snapshots none. Keep regions show as one placeholder line each. Lines starting ' +
-      '“-” are the older state (`from`), “+” the newer.',
+      'The Markdown diff of a page’s document, sidebar or settings between a snapshot and now (leave `to` out), or between two snapshots. Keep regions show as one line each; "-" is the older state, "+" the newer. Cost: against now 1 read plus the document’s own (page 1, map 2, timeline 3 or more); between two snapshots none.',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('The page: a name or id (a deleted page: its id).'),
       piece: z.string().min(1).max(500).describe('"sidebar", "settings", or a document by name or id.'),
@@ -199,17 +192,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
     title: 'Propose a restore from a snapshot',
     access: 'write',
     description:
-      'Proposes bringing back a page’s documents (`scope: "page"`), its sidebar (`"sidebar"`), one document (`"document"`, ' +
-      'with `document`), or a deleted page with its content (`"deleted"`) as they were at a snapshot (list_snapshots). ALWAYS ' +
-      'a proposal, whatever your scope: nothing is written until the owner approves it on the dashboard; follow it with ' +
-      'bridge_proposal_status. The plan says what cannot be restored exactly (unsupported blocks no longer on the page, ' +
-      'inline icons, board pages) and what is left alone (documents added since). A restore never changes a page’s ' +
-      'lifecycle state (refused: use the lifecycle tools); one that makes something canon needs the owner’s canonical ' +
-      'approval. A deleted page is undeleted while LegendKeeper keeps it (its content then follows as a second proposal), ' +
-      'or recreated under its snapshot parent (`mode: "recreate"`; `ids: "new"` when its old id is refused). A deleted ' +
-      'image (`scope: "image"`, `asset`: its old id) comes back as a NEW asset with a new URL: it is staged (hidden) at ' +
-      'once and the proposal places it; `updateReferences: true` also updates the pages that showed the old URL. `dryRun: ' +
-      'true` shows the plan and its diff and proposes nothing. Cost to plan: 1–2 reads plus the documents’ own reads.',
+      'Proposes bringing back a page’s documents (scope "page"), its sidebar ("sidebar"), one document ("document", with `document`), a deleted page with its content ("deleted") or a deleted image ("image") as they were at a snapshot (list_snapshots). Use it to undo a mistake, not to edit: to change a page, write it. ALWAYS a proposal, whatever your scope: nothing is written until the owner approves; never retry it, follow it with bridge_proposal_status. dryRun shows the plan, the diff and what cannot be restored exactly (unsupported blocks, inline icons, board pages): tell the person. A restored image is a NEW asset with a new URL (updateReferences: true also updates the pages that showed the old one). A restore never changes a page’s lifecycle state. Cost to plan: 1 to 2 reads plus the documents’ own.',
     inputSchema: z.object({
       page: z
         .string()

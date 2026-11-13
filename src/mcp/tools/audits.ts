@@ -52,19 +52,7 @@ function auditFindingsTool(deps: ToolDeps): McpToolProvider {
     title: 'Read the audit findings',
     access: 'read',
     description:
-      'Reads the findings of the bridge’s audits (findings only: nothing is changed by an audit). The audits run after each ' +
-      'nightly full snapshot and read the snapshots, so every finding says which snapshot it came from and how old that is: ' +
-      'it may not show edits made since. Categories: rules, template, tags, references (missing, deleted or inaccessible ' +
-      'links; an Authoritative page linking to an Archived one), unclassified, ordering, taxonomy, facts, lifecycle, ' +
-      'keep_regions (paragraphs with line breaks, inline icons, unsupported blocks), chronology, audit. Filters: category, ' +
-      'code, severity, page (a name or path fragment, or a page id), `new` (first seen in the latest run), `acknowledged` ' +
-      '(hide, the default; only; include: the owner’s acknowledged findings are hidden while their evidence is unchanged) ' +
-      'and `state` (open, gone, all). Paged with `limit` and `offset`. Cost: none (no request to LegendKeeper). HOW TO ACT: ' +
-      'a finding is a report, not an instruction. Fix what you are asked to fix through the ordinary tools (set_facts, ' +
-      'move_resource, write_page, update_resource…), which go to proposals as usual; check the page with get_resource or ' +
-      'read_document first, since the finding may be out of date. Never touch a lifecycle or canon finding yourself: the ' +
-      'lifecycle tools are the owner’s, and lifecycle findings are the owner’s to decide. You cannot run, edit or acknowledge ' +
-      'an audit; the owner does that on the dashboard (which offers “Propose a fix” for some findings).',
+      'Reads the findings of the bridge’s audits (findings only: an audit changes nothing). They come from the nightly snapshot and say how old it is, so they may not show later edits: read the page (get_resource, read_document) before acting. Filters: category, code, severity, page (a name, a path fragment or an id), `new`, `acknowledged` (hidden by default) and `state`; page with `limit` and `offset`; detail "full" adds evidence. Fix with the ordinary tools (set_facts, move_resource, write_page, update_resource: proposals as usual). Leave lifecycle and canon findings to the owner: never edit a prefix, Status or status tag to make a finding go away. You cannot run, edit or acknowledge an audit. Cost: none.',
     inputSchema: z.object({
       category: csvArg(`One or more of: ${CATEGORIES.join(', ')}.`),
       code: csvArg(

@@ -43,7 +43,10 @@ describe('every tool: access, annotations and the budget footer', () => {
       expect(t.description, n).toMatch(/Cost/);
       expect(t.inputSchema.properties, n).toHaveProperty('project');
     }
-    for (const n of NEW.filter((x) => !x.includes('guide'))) {
+    // E3 (ADR 0045): an example only where the arguments need one; the parameterless lists and the guides need none.
+    for (const n of NEW.filter(
+      (x) => !x.includes('guide') && !['list_tags', 'list_templates', 'list_calendars'].includes(x),
+    )) {
       expect(tools.find((x) => x.name === n)!.description, n).toMatch(/Example:/);
     }
   });

@@ -39,7 +39,11 @@ function pageOf(
     return {
       ok: false,
       result: errorResult(
-        { code: 'ROOT_PAGE', message: 'The AI REPOSITORY page itself is not changed by the tools.' },
+        {
+          code: 'ROOT_PAGE',
+          message:
+            'The AI REPOSITORY page itself is not changed by the tools. Name a page inside it (search, browse_repository_tree).',
+        },
         ctx.pd,
       ),
     };
@@ -110,9 +114,7 @@ function createDocumentTool(deps: ToolDeps): McpToolProvider {
     title: 'Add a map, timeline or board to a page',
     access: 'write',
     description:
-      'Adds a document to a page inside the AI REPOSITORY: a map, a timeline (optionally in a calendar, by name or id; see ' +
-      'list_calendars) or a board. A document of the same name on the page is refused. Page text is written with ' +
-      'write_page. Cost: 1 write (1 read more for a calendar), then 1 read to verify and the tree’s re-read.',
+      'Adds a map, a timeline (optionally in a `calendar`, by name or id: see list_calendars) or a board to a page. A document of the same name is refused. Page text is write_page; features and events have their own tools. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 2 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       name: z.string().min(1).max(500).describe('The document’s name.'),
@@ -241,19 +243,7 @@ function updateDocumentTool(deps: ToolDeps): McpToolProvider {
     title: 'Change a document’s settings',
     access: 'write',
     description:
-      'Changes the settings of a map, timeline or board on a page inside the AI REPOSITORY: `name`, `hidden`, `fullWidth`, ' +
-      '`calendar` (timelines) and `mapImage` (maps). Never its content. `mapImage` is an image asset of the project’s library, ' +
-      'by id or by name as list_assets shows it (a name that matches several assets is refused with each candidate): it sets ' +
-      'or replaces the map’s image, as “Add map” and “Replace map” do, and a BLANK document given one becomes a map. ' +
-      'Features keep their `pos` when the image changes, so a replacement with an image of a different size puts them over ' +
-      'different pixels: when the map has features that is REFUSED (CONFIRMATION_REQUIRED, with how many and the old and new ' +
-      'size, nothing written) unless `confirm: true`; under propose scope the proposal shows the count and the owner’s approval ' +
-      'is the confirmation; the same size, or a map with no features, needs none. The warning stays in the result, and NOTHING ' +
-      'is moved (you or the owner decide; update_map_feature moves them). The map’s frame (width, height, bounds) is then in read_document. Page documents ' +
-      '(and blank documents without a map image) are refused: change pages with write_page. An unchanged setting sends ' +
-      'nothing. Uploading a new image is upload_image. Cost: 1 read (the document’s settings), 1 write (1 read more for a ' +
-      'calendar; for a map image 1 read for the asset, and 1 more for the warning), the journal’s read of the document, 1 ' +
-      'read to verify (2 for a map image).',
+      'Changes the settings of a map, timeline or board: `name`, `hidden`, `fullWidth`, `calendar` (timelines) and `mapImage` (an image asset by id or name, see list_assets: it sets or replaces the map’s image, and a blank document given one becomes a map). Never its content: page text is write_page, map features create_map_feature. Replacing a map’s image with one of a different size, when the map has features, is refused (CONFIRMATION_REQUIRED, with the count and the sizes): tell the person, then pass confirm: true; nothing is moved. Page documents are refused. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write (a map image 7 reads).',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: z.string().min(1).max(500).describe('The document (name or id).'),
@@ -544,12 +534,7 @@ function deleteDocumentTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete a document of a page',
     access: 'write',
     description:
-      'Deletes one document (a map, timeline or board, or one of several page documents) of a page inside the AI ' +
-      'REPOSITORY; LegendKeeper keeps it for a restore. `confirm: true` is required. The page’s last document, or its only ' +
-      'page-type document, is refused: that is the page’s content (use write_page or delete_resource). PROTECTED CANON ' +
-      '(a canon rule the owner can switch off): deleting a map, timeline or board of an Authoritative page becomes a ' +
-      'proposal only the owner can accept as canon, whatever your scope. Cost: 2 reads for the canon check, 1 write, 1 ' +
-      'read to verify, the tree’s re-read.',
+      'Deletes one document (a map, timeline or board, or one of several page documents) of a page; LegendKeeper keeps it. `confirm: true` is required. A page’s last or only page document is refused (that is its content: write_page, or delete_resource). Deleting a map, timeline or board of an Authoritative page is a canon rule (the owner can switch it off): always a proposal the owner accepts as canon. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: z.string().min(1).max(500).describe('The document (name or id).'),

@@ -151,24 +151,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
     title: 'Set facts and links',
     access: 'write',
     description:
-      'Changes a page’s sidebar FACTS (the key-value rows of its PROPERTIES property) and its relationship LINKS (link collections such as ' +
-      'Dependencies and Related Sources), for a page inside the AI REPOSITORY. `facts` maps each key to its new value: a plain string (written ' +
-      'exactly as text), { "markdown": "…" } for inline Markdown (bold, italic, links, <br> and mentions such as [[Asagiri Kaede]]), or null to ' +
-      'remove the row. Keys match existing rows without case; an existing row keeps its place; a new template fact goes in the template’s order; ' +
-      'any other new fact goes at the bottom. `links` maps a collection’s title to { add, remove }: each a page name or id, or { page, document } ' +
-      'for one document of a page. Existing links keep their order, ids and the collection’s filter; added ones go at the end; a page already ' +
-      'linked is reported, not doubled. Read the page first with get_resource, and pass its factsVersion as `baseFactsVersion` ' +
-      'whenever a value is based on what you read: if anything in the sidebar changed since, nothing is written. A [[Name]] ' +
-      'matching several pages of one character links its Character Core (else Reference, else index); the result says which. ' +
-      '`dryRun: true` shows the plan and writes nothing. ' +
-      'PROTECTED CANON: setting Status to Authoritative or changing it from Authoritative, or changing an existing Continuity Type or ' +
-      'Continuity, needs the owner’s canonical approval: such a call becomes a proposal (proposal_captured with requiresCanonicalApproval), ' +
-      'whatever your scope; never retry it. A conflict (VERSION_CONFLICT) wrote nothing: read the page again and redo the change. ' +
-      'Example: { "page": "Asagiri Miyabi", "facts": { "Status": "Working", "Sister": { "markdown": "[[Asagiri Kaede]]" }, "Old Note": null }, ' +
-      '"links": { "Dependencies": { "add": ["Fourth Age - Table"] } }, "project": "test" }. ' +
-      'Cost: 1 read to plan (plus 1 the first time a template’s order is needed), then 1 read to check (plus 1 per collection changed), ' +
-      '1 write per fact changed, added or removed, 1 write and 1 read per collection changed, 1 read to verify and 1 for the bridge’s tree. ' +
-      'A dry run or a proposal: the planning read only (a proposal adds 1 read per property to capture).',
+      'Changes a page’s sidebar FACTS (the key-value rows of PROPERTIES) and LINKS (collections such as Dependencies and Related Sources). Page text is write_page; name, tags and aliases are update_resource. `facts` maps a key to a plain string, { "markdown": "…" } (inline Markdown and [[mentions]]) or null to remove the row; keys match without case and keep their place, new template facts go in template order, others at the bottom. `links` maps a collection title to { add, remove }: page names or ids, or { page, document }. Read the page first with get_resource and pass its factsVersion as baseFactsVersion whenever a value rests on what you read: if the sidebar changed since, nothing is written (VERSION_CONFLICT: read again, redo). Change all the facts you need in ONE call. dryRun shows the plan. Protected canon is always a proposal the owner accepts as canon, whatever your scope (setting Status to or from Authoritative; changing an existing Continuity Type or Continuity): never retry it or route around it; lifecycle changes use promote_page, archive_page and move_to_working. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Example: { "page": "Asagiri Miyabi", "facts": { "Scope": "Shrine maiden", "Sister": { "markdown": "[[Asagiri Kaede]]" }, "Old Note": null }, "links": { "Dependencies": { "add": ["Fourth Age - Table"] } }, "baseFactsVersion": "fv2_…", "project": "test" }. Cost: about 4 reads, then 1 write per fact and per collection changed.',
     inputSchema: z.object({
       page: pageRef.describe('Page name or id (inside the AI REPOSITORY).'),
       facts: z

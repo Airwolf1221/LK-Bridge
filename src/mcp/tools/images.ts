@@ -246,20 +246,10 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
       title: 'Upload or place an image',
       access: 'write',
       description:
-        'Uploads an image as a LegendKeeper image asset, converted to WebP at quality 90 (dimensions, orientation, ' +
-        'transparency and animation kept; a WebP is stored byte for byte; metadata dropped), then checks the stored file ' +
-        '(storedBytesVerified). Give exactly ONE source: data_base64 (small images: a 2 MB image is about 2.7 million ' +
-        'characters), url (a public https image' +
-        (deps.settings.upload.allowUrlSource ? ')' : '; switched off here)') +
-        ', upload_id (from prepare_image_upload: best for agents with a shell), or staged_id (place a staged image). ' +
-        `PNG, JPEG, GIF or WebP up to ${max} bytes, decided by the file's own bytes. ` +
-        'destination: folder (id or path), for_page, or for_character { name, race } (the character’s folder, else ' +
-        'Characters / Group / Race / Name, missing folders created), plus subfolders (a list, or one path such as "Wardrobe / Qipao"). stage: true stages it instead. ' +
-        'The same original sent again returns the existing asset (deduplicated: true). At scope propose the image is ' +
-        'staged and its placement is a proposal for the owner. Example: { "upload_id": "upl_…", "destination": ' +
-        '{ "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "project": "test" }. Cost: one write per ' +
-        'new folder, 2 writes for the upload (plus 1 to hide a staged image), 1 download to verify. Never repeat a call ' +
-        'that returned a jobId or proposalId. Then put the image on a page with write_page: ![alt](asset url).',
+        'Uploads an image as a LegendKeeper asset: converted to WebP (quality 90; orientation, transparency and animation kept), checked after storing, and filed in the right folder. Give exactly ONE source: `data_base64` (small images only: 2 MB is about 2.7 million characters), ' +
+        (deps.settings.upload.allowUrlSource ? '`url` (a public https image)' : '`url` (switched off here)') +
+        ', `upload_id` (from prepare_image_upload: for agents with a shell) or `staged_id` (an image already staged). `destination`: `for_character` { name, race } (the character’s folder), `for_page` (a character page gives its character’s folder) or `folder` (an id, or a path such as "Characters / Beastkin / Qishen / Mehrana al-Khalid"), plus `subfolders` (a list, or one path such as "Wardrobe / Qipao"); missing folders are created. dryRun lists the folders it would create. `stage: true` keeps the image hidden for later placement. The same original sent again returns the existing asset: never upload a copy to move an image. At scope propose the image is staged and its placement is the proposal. Never repeat a call that returned a jobId or proposalId. Then put the image on a page with write_page: ![alt](asset url). Example: { "data_base64": "…", "destination": { "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "subfolders": "Wardrobe / Qipao", "project": "test" }. Cost: 2 writes (1 more per new folder), 1 read and 1 download to verify. PNG, JPEG, GIF or WebP up to ' +
+        `${max} bytes.`,
       inputSchema: uploadSchema,
       annotations: {
         readOnlyHint: false,
@@ -710,12 +700,7 @@ function prepareTool(deps: ToolDeps): McpToolProvider {
     title: 'Prepare a binary image upload',
     access: 'write',
     description:
-      'For agents with a shell or sandbox (Claude Code, scripts), which should not paste megabytes of base64 into a ' +
-      'tool call. Give the file’s sha256 (lowercase hex), byte_length, content_type and name; you get an upload_id, a ' +
-      'single-use capability (it works ONCE, for 5 minutes, only for exactly that file) and ready-made Python ' +
-      '(standard library) and curl scripts that check the file’s SHA-256 and send it to the bridge. Run one with the ' +
-      'file’s path, then call upload_image with the upload_id (within 15 minutes). Never put the capability in a URL. ' +
-      `Up to ${max} bytes; PNG, JPEG, GIF or WebP. Cost: nothing in LegendKeeper until upload_image.`,
+      'For agents with a shell or sandbox (Claude Code, scripts), so they need not paste megabytes of base64: give the file’s sha256 (lowercase hex), byte_length, content_type and name; you get an upload_id (a single-use capability: it works ONCE, for 5 minutes, for that file only) and ready-made Python and curl scripts. Run one with the file’s path, then call upload_image with the upload_id within 15 minutes. Never put the capability in a URL. A chat assistant with no shell cannot use it. Cost: nothing in LegendKeeper until upload_image.',
     inputSchema: z.object({
       sha256: z
         .string()

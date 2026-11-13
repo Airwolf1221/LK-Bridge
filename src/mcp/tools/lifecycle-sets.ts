@@ -81,9 +81,7 @@ export const subtreeArg = z
   .boolean()
   .optional()
   .describe(
-    'true: the whole set, the page and every page beneath it (a character: its [INDEX] {name}, Core and specialist pages), ' +
-      'as ONE canonical proposal; the set stays together (its root moves as a group, the structure beneath it unchanged). ' +
-      'At most 100 pages. Default false: this page alone.',
+    'true: the page and every page beneath it (a character: its [INDEX], Core and specialist pages) as ONE canonical proposal, kept together; at most 100 pages. Default: this page alone.',
   );
 
 export interface SetArgs {
@@ -172,9 +170,14 @@ async function planSet(
   const c = lc.config(pid);
   const idx = lifecycleIndexes(c, (id) => ctx.tree.node(pid, id).data);
   if (!idx.ok) return refuse(pd, idx.code, idx.message);
-  if (root.kind === 'root') return refuse(pd, 'ROOT_PAGE', 'The AI REPOSITORY page itself has no lifecycle.');
+  if (root.kind === 'root')
+    return refuse(pd, 'ROOT_PAGE', 'The AI REPOSITORY page itself has no lifecycle. Name a page inside it.');
   if (root.id === idx.working.id || root.id === idx.archived.id)
-    return refuse(pd, 'LIFECYCLE_INDEX', `“${root.rawName}” is a lifecycle index itself.`);
+    return refuse(
+      pd,
+      'LIFECYCLE_INDEX',
+      `“${root.rawName}” is a lifecycle index itself: it has no lifecycle of its own and the tools never change it (the owner edits [INDEX] Working and [INDEX] Archived by hand). Name the page, or a character’s own [INDEX], instead.`,
+    );
 
   // A set change of this root that stopped part-way: the same tool resumes it; another waits for it.
   const open = lc.store.setsForRoot(pid, root.id, 5).find((s) => s.state === 'incomplete') ?? null;

@@ -61,7 +61,7 @@ export function resolveParent(
     errorResult(
       {
         code: 'PARENT_NOT_INDEX',
-        message: `“${r.node.displayName}” is a ${r.node.kind === 'bsrc' ? '[BSRC] page' : `${r.node.kind} page`}, not an index; new pages go under an [INDEX] page.`,
+        message: `“${r.node.displayName}” is a ${r.node.kind === 'bsrc' ? '[BSRC] page' : `${r.node.kind} page`}, not an index; new pages go under an [INDEX] page. browse_repository_tree or search (kind:index) finds the right one.`,
         parent: { id: r.node.id, name: r.node.displayName, path: r.node.path.names.join(' / ') },
       },
       ctx.pd,
@@ -233,11 +233,7 @@ export function createCtx(pd: ProjectDeps, mctx: McpToolContext, ctx: RepoCtx, t
 export type CreateStatus = 'working' | 'authoritative';
 
 export const STATUS_DESCRIPTION =
-  'The new page’s lifecycle status. "working" (the default): a [BWRK] page under [INDEX] Working (or, with `parent`, ' +
-  'under an [INDEX] inside a Working set, such as a Working character’s own index), alphabetically, with Status Working ' +
-  'and the Working tag. "authoritative": a [BSRC] page in its normal place, with ' +
-  'Status Authoritative and the CANON tag: this is canon, so it always becomes a proposal only the owner can accept as ' +
-  'canon (proposal_captured with requiresCanonicalApproval), whatever your scope.';
+  '"working" (default): a [BWRK] page under [INDEX] Working, or with `parent` under an [INDEX] inside a Working set. "authoritative": a [BSRC] page in its normal place; canon, so always a proposal the owner accepts as canon.';
 
 /** The Status value of a create status. */
 export function statusValue(c: LifecycleConfig, status: CreateStatus): string {
@@ -681,9 +677,7 @@ export type CreateOutcome =
   | ({ readonly kind: 'job'; readonly head: Obj; readonly labels: readonly string[] } & WriteJobOutcome);
 
 export const OPERATION_ID_DESCRIPTION =
-  'Optional: your own id for this request (1 to 128 letters, digits, - _ . :). Sending the same id with the same request ' +
-  'again returns the earlier result (its job, its outcome, or its proposal) and never creates anything twice; the same id ' +
-  'with a different request is refused (OPERATION_ID_REUSED). Use one when you might repeat a call after a time-out.';
+  'Your own id for this request (1 to 128 letters, digits, - _ . :). Repeat a timed-out call with the SAME request and id: you get the first result and nothing is created twice. The same id with a different request is refused.';
 
 /**
  * Runs a create tool's planning and job under its `operation_id` (if any) and its claim (if any): a repeat returns the

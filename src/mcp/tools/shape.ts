@@ -121,10 +121,7 @@ export const projectArg = z
   .min(1)
   .max(64)
   .optional()
-  .describe(
-    'The LegendKeeper project (its name, or its id): see list_projects. Reads default to the default project; ' +
-      'writes must name one when the bridge serves several.',
-  );
+  .describe('Project name or id (list_projects). Required for a write when several projects are served.');
 
 /**
  * Resolves the call's `project` and runs `fn` with deps bound to it. An unknown project, a write with no project while
@@ -205,7 +202,27 @@ export function errorResult(
 }
 
 const BUDGET_HINT =
-  'Do not retry in a loop. Wait until retryAt (or check bridge_budget), or hand the work to lk_api_batch.';
+  'Nothing was lost and nothing is repeated for you. Do not retry in a loop: wait until retryAt (bridge_budget shows every tier), tell the person if the wait is long, and check bridge_estimate before any bulk work.';
+
+/**
+ * What an agent should do next, for the typed errors that carry no hint of their own (E3, ADR 0045). A refusal always
+ * names a next step, and never invites a retry of the same call.
+ */
+const NEXT_STEP: Readonly<Record<string, string>> = {
+  READ_ONLY:
+    'Nothing was written. This project (or the whole bridge) is read-only; only the owner lifts that, on the dashboard. Tell the person; do not retry or look for another route.',
+  DRAINING:
+    'The bridge is about to restart and takes no new work. Nothing was written. Wait a few minutes, then send the call once more; do not loop.',
+  MEMBER_ADMIN_DISABLED:
+    'Changing members or invites is switched off by the owner. Nothing was done. Tell the person; do not look for another route.',
+  CASCADE_CONFIRM_REQUIRED:
+    'Nothing was deleted. Deleting a page with everything under it needs the person’s say-so: ask them, and only then pass confirm: "cascade". For a high-level delete use delete_resource with confirm: true and cascade: true.',
+  CANONICAL_APPROVAL_REQUIRED:
+    'Nothing was written. This change is protected canon: only the owner can accept it, with “Approve and accept as canon”. Tell the person it is waiting for them; never retry it or look for another route.',
+  JOB_NOT_FOUND:
+    'Only your own jobs in this project are visible. Call bridge_job_status without a jobId to list them, and pass the project the work ran in.',
+  UNKNOWN_PROJECT: 'Pass one of the registered project names (list_projects).',
+};
 
 function jsonOf(e: JobsError): ToolErrorBody {
   return e.toJSON() as unknown as ToolErrorBody;
@@ -248,7 +265,7 @@ export function errorFromThrown(e: unknown, deps: Pick<ProjectDeps, 'projects' |
     return errorResult(
       {
         ...jsonOf(e),
-        hint: 'The entity changed since you read it. Read it again, re-apply your change to the current content, and pass the new version.',
+        hint: 'Nothing was written: the entity changed since you read it. Never send the same call again. Read it again, redo your change on what it holds now, and pass the new version.',
       },
       deps,
     );
@@ -257,13 +274,19 @@ export function errorFromThrown(e: unknown, deps: Pick<ProjectDeps, 'projects' |
     return errorResult(
       {
         ...jsonOf(e),
-        hint: 'Include these unsupported blocks (by id) in the new content, or pass allowUnsupportedLoss: true only if losing them is intended.',
+        hint: 'Nothing was written. Keep these unsupported blocks in the new content (by id). Pass allowUnsupportedLoss: true only if the person has asked for them to be deleted: ask first. write_page never deletes them.',
       },
       deps,
     );
   }
   if (e instanceof PolicyDeniedError) {
-    return errorResult({ ...jsonOf(e), hint: 'This connection is not allowed to do that.' }, deps);
+    return errorResult(
+      {
+        ...jsonOf(e),
+        hint: 'This route is closed to this connection. If the message names a tool to use instead, use that one, once. If it names none, tell the person: only the owner can change what a connection may do. Do not try other routes to the same change.',
+      },
+      deps,
+    );
   }
   if (e instanceof UnknownOperationError) {
     // Raised deeper than a tool (a proposal's capture, a batch step): same suggestions, and the hint that never names a
@@ -271,7 +294,8 @@ export function errorFromThrown(e: unknown, deps: Pick<ProjectDeps, 'projects' |
     return errorResult(unknownOperationBody(e.opId, false), deps);
   }
   if (e instanceof JobsError) {
-    return errorResult(jsonOf(e), deps);
+    const next = NEXT_STEP[e.code];
+    return errorResult(next ? { ...jsonOf(e), hint: next } : jsonOf(e), deps);
   }
   if (e instanceof z.ZodError) {
     return errorResult({ code: 'INVALID_PARAMS', message: e.message }, deps);
@@ -318,7 +342,7 @@ export function runResultBody(
         operationId: opId,
         jobId: r.jobId,
         resumeAt: r.eta === null ? null : new Date(r.eta).toISOString(),
-        hint: `The rate budget is exhausted; the write resumes by itself and has NOT failed. Never retry it. ${WAIT_HINT}`,
+        hint: `The rate budget is exhausted; the write resumes by itself and has NOT failed. Tell the person it is waiting for budget. Never retry it. ${WAIT_HINT}`,
       };
     case 'proposal_captured':
       return {

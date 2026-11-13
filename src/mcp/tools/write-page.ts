@@ -175,17 +175,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Write a page (Markdown)',
     access: 'write',
     description:
-      'Changes one page document of the AI REPOSITORY with Markdown (see get_markdown_guide). ALWAYS read it first with read_document and pass ' +
-      'the version it returned as baseVersion: a write made from an older version is refused (a section edit goes ahead only if that section ' +
-      'is unchanged). Modes: "append" / "prepend" add your Markdown at the end / start; "replace" replaces the whole page (every keep region ' +
-      'must be in it, or named in dropRegions); "replace_section" replaces one section (start your Markdown with the heading to replace it too); ' +
-      '"append_to_section" adds to the end of a section. `section` is a heading path such as "Biography > Early Life" (section modes only). ' +
-      'Prefer the section modes: they touch nothing else and survive edits elsewhere on the page. Text you leave alone keeps its ids and styling; ' +
-      'an unchanged page writes nothing. `dryRun: true` returns the plan and the Markdown diff and writes nothing. A conflict (VERSION_CONFLICT) ' +
-      'wrote nothing: read again and redo the edit; never retry it blindly. At scope "propose" the write becomes a proposal for the owner. ' +
-      'Maps, timelines and boards are refused (other tools). ' +
-      'Example: { "page": "Asagiri Miyabi", "mode": "append_to_section", "section": "Biography", "markdown": "She became head maiden in 4A 900.", "baseVersion": "v12", "project": "test" }. ' +
-      'Cost: 2 reads and 1 write, plus 1 read to verify (a dry run or a proposal: 1 read).',
+      'Changes the text of one page document with Markdown (rules: get_markdown_guide). Facts and links are set_facts; maps, timelines and boards have their own tools (refused here). Read the page first with read_document and pass its version as baseVersion: a stale version is refused, though a section edit still goes ahead if its section is unchanged. Modes: append, prepend, replace (the whole page: every keep region must be in it or named in dropRegions), replace_section (start with the heading to replace it too) and append_to_section; `section` is a heading path such as "Biography > Early Life". Prefer the section modes: they touch nothing else. Unchanged text keeps its ids and styling; an unchanged page writes nothing. dryRun returns the plan and the diff and writes nothing. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Avoid: writing a page you have not read; replace when a section edit will do; retrying VERSION_CONFLICT unchanged (read again, redo the edit on what it holds now). Cost: 2 reads, 1 write and 1 verify read (a dry run or a proposal: 1 read).',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('Page name or id (inside the AI REPOSITORY).'),
       document: z.string().min(1).max(500).optional().describe('Document name or id. Default "Main".'),
@@ -327,7 +317,8 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
                     ', ',
                   )}) have content its write format has no form for, for example text with an inline icon. ` +
                 'write_page sends the whole document, so it cannot write this page without changing those blocks. Nothing was written. ' +
-                'Change the page in the LegendKeeper app, or tell the owner.',
+                'Tell the person: the text has to be changed in the LegendKeeper app, or the owner can split the blocks on the dashboard (Audits). ' +
+                'Do not try replaceDocumentBlocks or another low-level route: it would drop what the page holds. read_document, get_resource and set_facts still work on this page.',
               blocks: unwritable.slice(0, 50),
             },
             pd,

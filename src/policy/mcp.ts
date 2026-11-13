@@ -108,11 +108,7 @@ export function proposalTools(proposals: ProposalService, o: ProposalToolsOption
     name: 'bridge_proposal_status',
     title: 'Proposal status',
     description:
-      'Shows the state of one of YOUR proposals (writes held for the bridge owner to approve): pending, approved, ' +
-      'executing, executed, rejected (with the owner’s reason), conflicted, expired or failed, and the job id once ' +
-      'it runs. Proposals belong to a project: pass the project the write was for (default: the default project). ' +
-      'Only the owner can approve or reject, in the LK-Bridge dashboard. ' +
-      'Costs no LegendKeeper rate budget. Risk: none (read-only).',
+      'Shows the state of one of YOUR proposals (writes held for the owner): pending, approved, executing, executed, rejected (with the reason), conflicted, expired or failed, and the job id once it runs. Pass the project the write was for. Use it after proposal_captured instead of repeating the write; only the owner can approve or reject, on the dashboard. A conflicted proposal means the page changed: read it again and propose afresh. Cost: none.',
     inputSchema: z.object({ proposalId: z.string().min(1).max(64), project: projectArg }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     access: 'read',
@@ -143,8 +139,7 @@ export function proposalTools(proposals: ProposalService, o: ProposalToolsOption
     name: 'bridge_proposals_mine',
     title: 'My proposals',
     description:
-      'Lists YOUR proposals in one project (default: the default project), newest first (optionally only one state). ' +
-      'Other connections’ proposals are never shown. Costs no LegendKeeper rate budget. Risk: none (read-only).',
+      'Lists YOUR proposals in one project, newest first (optionally only one state). Use it when you do not have a proposal’s id; bridge_proposal_status shows one. Cost: none.',
     inputSchema: z.object({
       state: z.enum(PROPOSAL_STATES).optional(),
       limit: z.number().int().min(1).max(50).optional(),

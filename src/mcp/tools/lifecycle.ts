@@ -843,9 +843,17 @@ async function runLifecycle(
         const idx = lifecycleIndexes(c, (id) => ctx.tree.node(ctx.projectId, id).data);
         if (!idx.ok) return refuse(pd, idx.code, idx.message);
         if (node.kind === 'root')
-          return refuse(pd, 'ROOT_PAGE', 'The AI REPOSITORY page itself has no lifecycle.');
+          return refuse(
+            pd,
+            'ROOT_PAGE',
+            'The AI REPOSITORY page itself has no lifecycle. Name a page inside it.',
+          );
         if (node.id === idx.working.id || node.id === idx.archived.id) {
-          return refuse(pd, 'LIFECYCLE_INDEX', `“${node.rawName}” is a lifecycle index itself.`);
+          return refuse(
+            pd,
+            'LIFECYCLE_INDEX',
+            `“${node.rawName}” is a lifecycle index itself: it has no lifecycle of its own and the tools never change it (the owner edits [INDEX] Working and [INDEX] Archived by hand). Name the page, or a character’s own [INDEX], instead.`,
+          );
         }
         // A change of this page that stopped part-way: the same tool resumes it; another waits for it.
         const incomplete = lc.store.incomplete(ctx.projectId, node.id);
@@ -1068,15 +1076,7 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Archive a page',
     access: 'write',
     description:
-      'Retires an Authoritative [BSRC] page or a Working [BWRK] page to [INDEX] Archived as [BARC], in one job: moves it ' +
-      'there (alphabetical), renames it, prepends a dated note to its main page document (a new first block), sets Status ' +
-      'Archived, Continuity Type NON-CURRENT, Scope “Archived record of the retired …” plus the original, Temporal Scope and ' +
-      'Last Major Revision (today), and swaps CANON or Working for the Archived tag (other tags untouched). Refused for an ' +
-      'index, a [BARC] page, or a page with pages under it (listed). Lists the pages that link to or mention it (never ' +
-      'edited). ' +
-      CANON_NOTE +
-      ' Cost: about 6 reads to plan (1 of them a content search); the job about 19 reads (checks, in-lock reads, verify) ' +
-      'and up to 8 writes: 1 to rename and tag, 1 per fact changed, 1 for the note, 1 to move.',
+      'Retires an Authoritative [BSRC] or Working [BWRK] page to [INDEX] Archived as [BARC]: moves, renames and re-tags it, adds a dated note at the top of its page document, and sets Status Archived, Continuity Type NON-CURRENT and Scope. Use it to retire a design, not delete_resource. A page with pages under it is refused unless `subtree: true`, which archives the whole set (a character’s index, Core and specialist pages) as ONE proposal. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. Lists the pages that link to it (never edited): tell the person. dryRun shows the whole plan. A change that stopped part-way resumes when you call the same tool again. Cost: about 6 reads to propose; the job about 15 reads and 8 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The page to archive (name or id); with subtree, the root of the set.'),
       subtree: subtreeArg,
@@ -1092,14 +1092,22 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
             const rec = o.incomplete;
             if (!rec) {
               if (page.kind === 'index')
-                return refuse(pd, 'INDEX_PAGE', `“${page.name}” is an index: only pages are archived.`);
+                return refuse(
+                  pd,
+                  'INDEX_PAGE',
+                  `“${page.name}” is an index: archive_page takes a page. To archive a whole character (its index and all its pages) pass subtree: true on its [INDEX].`,
+                );
               if (page.kind === 'barc')
-                return refuse(pd, 'ALREADY_ARCHIVED', `“${page.name}” is already archived.`);
+                return refuse(
+                  pd,
+                  'ALREADY_ARCHIVED',
+                  `“${page.name}” is already archived. unarchive_page puts it back; nothing else to do.`,
+                );
               if (page.kind !== 'bsrc' && page.kind !== 'bwrk') {
                 return refuse(
                   pd,
                   'NOT_LIFECYCLE_PAGE',
-                  `“${page.name}” is neither an Authoritative [BSRC] page nor a Working [BWRK] page.`,
+                  `“${page.name}” is neither an Authoritative [BSRC] page nor a Working [BWRK] page, so archive_page does not take it (an unclassified page is the owner’s to sort out: tell the person).`,
                 );
               }
               const st = stateOf(c, page, facts);
@@ -1171,18 +1179,7 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Unarchive a page',
     access: 'write',
     description:
-      'Reverses an archiving from its lifecycle record: a formerly Authoritative page goes back under its previous parent ' +
-      '(alphabetical) as [BSRC] with its Status, Continuity Type, Scope and Temporal Scope restored and the CANON tag; a ' +
-      'formerly Working page back under [INDEX] Working (or the [INDEX] inside a Working set it came from) as [BWRK] with ' +
-      'Status Working and the Working tag, its other values restored. Moves made within the archive since (move_resource) ' +
-      'do not matter: it goes back to where the record says. Last Major Revision becomes today. The archive note is removed only if it is still exactly as inserted ' +
-      '(otherwise kept, and flagged); a Scope edited since archiving is flagged (the recorded original is restored). When ' +
-      'the previous parent is gone or outside the repository, give `destination`. A page archived by hand (no record) ' +
-      'needs `destination` (for an Authoritative page), `previousState` and `restore` (continuityType, scope, ' +
-      'temporalScope); without them it is refused, saying what is missing. ' +
-      CANON_NOTE +
-      ' Cost: about 4 reads to plan; the job about 19 reads (checks, in-lock reads, verify) and up to 8 writes: 1 to ' +
-      'move, 1 per fact changed, 1 to remove the note, 1 to rename and tag.',
+      'Reverses an archiving from the bridge’s lifecycle record: the page goes back to its previous place and state (formerly Authoritative: [BSRC] with its old Status, Continuity Type and Scope; formerly Working: [BWRK]); the archive note is removed if it was not edited. If the old place is gone give `destination`; a page archived by hand needs `destination`, `previousState` and `restore`. `subtree: true` unarchives a whole archived set as ONE proposal. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 4 reads to propose; the job about 15 reads and 7 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The [BARC] page (name or id); with subtree, the root of the archived set.'),
       subtree: subtreeArg,
@@ -1241,7 +1238,7 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
               return refuse(
                 pd,
                 'NOT_ARCHIVED',
-                `“${page.name}” is not an Archived [BARC] page; unarchive_page reverses an archiving.`,
+                `“${page.name}” is not an Archived [BARC] page, so there is nothing to unarchive. To rework a canon page use move_to_working; to retire a page use archive_page.`,
               );
             }
             const sub = subpageRefusal(pd, ctx, page.node, 'unarchive_page');
@@ -1423,14 +1420,7 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
     title: 'Move a page back to Working',
     access: 'write',
     description:
-      'Takes an Authoritative [BSRC] page back to Working: moves it under [INDEX] Working (alphabetical) as [BWRK], sets ' +
-      'Status Working and swaps the CANON tag for Working. Nothing else changes. The record keeps where it was, which ' +
-      'promote_page offers as its destination. Refused for anything but a [BSRC] page, and for a page with pages under ' +
-      'it; a Character Core under its own character index moves alone (the index and its other pages stay). Lists the ' +
-      'pages that link to or mention it (never edited). ' +
-      CANON_NOTE +
-      ' Cost: about 3 reads to plan (1 of them a content search); the job about 15 reads (checks, in-lock reads, verify) ' +
-      'and 3 writes: rename and tag, Status, move.',
+      'Takes an Authoritative [BSRC] page back to Working for rework: moves it under [INDEX] Working as [BWRK], Status Working, tag CANON swapped for Working. The record keeps where it was (promote_page offers it as the destination). `subtree: true` moves a whole Authoritative set as ONE proposal; a Character Core under its own index moves alone. Lists the pages that link to it (never edited). ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 3 reads to propose; the job about 11 reads and 3 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The [BSRC] page (name or id); with subtree, the root of the set.'),
       subtree: subtreeArg,
@@ -1449,7 +1439,7 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
                 return refuse(
                   pd,
                   'NOT_AUTHORITATIVE',
-                  `“${page.name}” is not an Authoritative [BSRC] page; move_to_working takes only those.`,
+                  `“${page.name}” is not an Authoritative [BSRC] page; move_to_working takes only those. A Working page is already Working (promote_page makes it canon); an Archived one comes back with unarchive_page.`,
                 );
               }
               const st = stateOf(c, page, facts);
@@ -1523,14 +1513,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Promote a Working page',
     access: 'write',
     description:
-      'Makes a Working [BWRK] page Authoritative: moves it to `destination` (required; alphabetical) and renames it [BSRC], ' +
-      'Status Authoritative, Last Major Revision today, Continuity Type kept if CANON or AU and otherwise CANON, and the ' +
-      'Working tag swapped for CANON. Without `destination` (and in a dry run) it suggests the location remembered from ' +
-      'move_to_working, if any. A Working character’s Core (or compact page) takes its [INDEX] {name} with it to the ' +
-      'destination (normally its race index); other pages under that index keep their state and are listed. ' +
-      CANON_NOTE +
-      ' Cost: about 2 reads to plan; the job about 15 reads (checks, in-lock reads, verify) and up to 5 writes: 1 to ' +
-      'move, 1 per fact changed (up to 3), 1 to rename and tag; a character index that moves with it adds 1 move.',
+      'Makes a Working [BWRK] page Authoritative (canon): moves it to `destination` (required, an [INDEX]; a dry run suggests where it was before move_to_working), renames it [BSRC], sets Status Authoritative and Last Major Revision, swaps the Working tag for CANON. A Working character’s Core takes its [INDEX] with it. `subtree: true` promotes a whole Working set (a character’s index and all its pages) as ONE proposal; any page of that character left flat under [INDEX] Working is listed as an outsider: move_resource it into the set first. This is the only way to make a page canon: never set Status to Authoritative with set_facts. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 2 reads to propose; the job about 11 reads and 5 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The [BWRK] page (name or id); with subtree, the root of the Working set.'),
       subtree: subtreeArg,
@@ -1570,7 +1553,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
               return refuse(
                 pd,
                 'NOT_WORKING',
-                `“${page.name}” is not a Working [BWRK] page; promote_page takes only those.`,
+                `“${page.name}” is not a Working [BWRK] page; promote_page takes only those. An Authoritative page is already canon; an Archived one comes back with unarchive_page (then move_to_working if it needs rework).`,
               );
             }
             const st = stateOf(c, page, facts);

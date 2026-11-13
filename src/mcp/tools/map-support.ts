@@ -25,43 +25,35 @@ import { errorResult, type ProjectDeps } from './shape.js';
 // ------------------------------------------------------------------------------------------------ arguments
 
 const finite = z.number().finite();
-export const latlngArg = z
-  .tuple([finite, finite])
-  .describe('[lat, lng], in the map’s own frame (the frame LegendKeeper stores).');
+export const latlngArg = z.tuple([finite, finite]).describe('[lat, lng] in the map’s own frame.');
 export const pixelArg = z
   .object({ x: finite, y: finite })
   .strict()
-  .describe('{ x, y } in pixels from the image’s TOP-LEFT corner (x to the right, y downwards).');
+  .describe('{ x, y } pixels from the image’s TOP-LEFT corner (y grows downwards).');
 const pointArg = z.union([latlngArg, pixelArg]);
 
 /** The four ways to give coordinates; at most one per request. */
 export const coordinateArgs = {
-  latlng: latlngArg
-    .optional()
-    .describe('A pin’s or label’s position as [lat, lng]. Never together with pixel.'),
-  pixel: pixelArg
-    .optional()
-    .describe('A pin’s or label’s position in image pixels. Never together with latlng.'),
+  latlng: latlngArg.optional().describe('A pin’s or label’s [lat, lng]. Not with pixel.'),
+  pixel: pixelArg.optional().describe('A pin’s or label’s position in image pixels. Not with latlng.'),
   points: z
     .array(pointArg)
     .min(1)
     .max(10_000)
     .optional()
     .describe(
-      'A region’s polygon (3 points or more) or a path’s line (2 or more), in order: each point [lat, lng] or { x, y } in pixels. All points one kind.',
+      'A region’s polygon (3 or more points) or a path’s line (2 or more): each [lat, lng] or { x, y }, all one kind.',
     ),
   polygons: z
     .array(z.array(pointArg).min(1).max(10_000))
     .min(1)
     .max(100)
     .optional()
-    .describe('A region of several polygons: a list of point lists (each as for points).'),
+    .describe('A region of several polygons: a list of point lists.'),
   allowOutside: z
     .boolean()
     .optional()
-    .describe(
-      'Pixels outside the image, and lat/lng outside the map’s bounds, are refused unless this is true.',
-    ),
+    .describe('Allow points outside the image (pixels) or the map’s bounds (lat/lng).'),
 };
 
 export const linkArg = z
@@ -69,9 +61,7 @@ export const linkArg = z
     z.string().min(1).max(500),
     z.object({ page: z.string().min(1).max(500), document: z.string().min(1).max(500).optional() }).strict(),
   ])
-  .describe(
-    'A page by name or id, or { page, document } for one document of it. It becomes the feature’s link. Names resolve as write targets do: an ambiguous name is refused with each candidate.',
-  );
+  .describe('A page by name or id, or { page, document }. An ambiguous name is refused with the candidates.');
 
 export const refArg = z.string().min(1).max(500);
 
@@ -135,7 +125,11 @@ export async function loadMap(
   if (!r.ok) return r;
   const node = r.node;
   if (node.kind === 'root') {
-    return refuse(pd, 'ROOT_PAGE', 'The AI REPOSITORY page itself is not changed by the tools.');
+    return refuse(
+      pd,
+      'ROOT_PAGE',
+      'The AI REPOSITORY page itself is not changed by the tools. Name a page inside it (search, browse_repository_tree).',
+    );
   }
   const list = node.documents.map((d) => ({ id: d.id, name: d.name, type: typeName(d.type) }));
   let doc: TreeDocument | undefined;

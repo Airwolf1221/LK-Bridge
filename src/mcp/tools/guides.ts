@@ -19,6 +19,8 @@ export interface Guide {
   readonly uri: string;
   readonly title: string;
   readonly summary: string;
+  /** What the tool's description says (E3, ADR 0045): when to read it, how to read part of it, and its cost. */
+  readonly blurb: string;
 }
 
 export const GUIDES: readonly Guide[] = [
@@ -29,7 +31,9 @@ export const GUIDES: readonly Guide[] = [
     uri: 'lk-bridge://guides/bridge',
     title: 'LK-Bridge guide',
     summary:
-      'What the bridge is, projects, the repository tree, how to find things, how reading and writing work, budget rules and proposals',
+      'How to decide which tool to use, then the task-by-task reference: finding and reading pages, editing text and facts, creating pages and characters, the page lifecycle, chronology, maps, images, snapshots, audits, budgets and proposals',
+    blurb:
+      'Returns the LK-Bridge guide for agents. It starts with HOW TO DECIDE (which tool for which job, and the rules that matter most); the rest is reference, one section per task. Read the section "How to decide" first, then the section for the task in hand before you do it: pass `section` (a heading, or a path "A > B") to get just that part; without it you get the whole guide (long). The last section lists every LegendKeeper operation id, for the low-level tools. Also the MCP resource lk-bridge://guides/bridge. Cost: none.',
   },
   {
     id: 'markdown',
@@ -38,7 +42,9 @@ export const GUIDES: readonly Guide[] = [
     uri: 'lk-bridge://guides/markdown',
     title: 'Writing LegendKeeper pages in Markdown',
     summary:
-      'The Markdown the bridge reads and writes: syntax, keep regions, sections, limits and error codes',
+      'The Markdown the bridge reads and writes: syntax, mentions, keep regions, sections, limits and error codes',
+    blurb:
+      'Returns the guide to writing LegendKeeper pages in Markdown: the syntax, mentions, keep regions, sections, limits and error codes. Read it before you send Markdown to write_page or a fact. Pass `section` (a heading such as "Keep regions", or a path "A > B") for one part; without it you get the whole guide. Also the MCP resource lk-bridge://guides/markdown. Cost: none.',
   },
 ];
 
@@ -73,13 +79,7 @@ export function guideTools(deps: ToolDeps): McpToolProvider[] {
       name: g.tool,
       title: g.title,
       access: 'read',
-      description:
-        `Returns the ${g.title.toLowerCase()} guide: ${g.summary}. ` +
-        (g.id === 'bridge'
-          ? 'Read it first if you have not used this bridge before. '
-          : 'Read it before writing Markdown to a page. ') +
-        'With `section` (a heading such as "Keep regions", or a path "A > B") it returns just that part; without it, the whole guide. ' +
-        `Also published as the MCP resource ${g.uri}. Cost: none (no LegendKeeper request).`,
+      description: g.blurb,
       inputSchema: z.object({
         section: z
           .string()

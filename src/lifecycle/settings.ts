@@ -240,20 +240,20 @@ export function lifecycleIndexes(
     if (!stored) {
       return {
         code: 'LIFECYCLE_NOT_CONFIGURED',
-        message: `The project's ${which} index ([INDEX] ${name}) is not confirmed yet. The owner finds and confirms it on the dashboard (Projects page, Lifecycle); until then the lifecycle tools refuse.`,
+        message: `The project's ${which} index ([INDEX] ${name}) is not confirmed yet. The owner finds and confirms it on the dashboard (Projects page, Lifecycle); until then the lifecycle tools and Working creates refuse. Tell the person; there is no other route.`,
       };
     }
     const n = node(stored);
     if (!n) {
       return {
         code: 'LIFECYCLE_INDEX_MISSING',
-        message: `The confirmed ${which} index (${stored}) is no longer in the repository tree. The owner confirms it again on the dashboard (Projects page, Lifecycle).`,
+        message: `The confirmed ${which} index (${stored}) is no longer in the repository tree. The owner confirms it again on the dashboard (Projects page, Lifecycle). Tell the person; the lifecycle tools refuse until then.`,
       };
     }
     if (n.kind !== 'index' || nameKey(n.displayName.trim()) !== nameKey(name.trim())) {
       return {
         code: 'LIFECYCLE_INDEX_CHANGED',
-        message: `The confirmed ${which} index (${stored}) is now “${n.rawName}”, not “[INDEX] ${name}”. The owner confirms it again on the dashboard (Projects page, Lifecycle).`,
+        message: `The confirmed ${which} index (${stored}) is now “${n.rawName}”, not “[INDEX] ${name}”. The owner confirms it again on the dashboard (Projects page, Lifecycle). Tell the person; the lifecycle tools refuse until then.`,
       };
     }
     return n;

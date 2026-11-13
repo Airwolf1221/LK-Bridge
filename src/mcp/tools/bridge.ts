@@ -109,10 +109,7 @@ function infoTool(deps: ToolDeps) {
     title: 'Bridge information',
     access: 'read',
     description:
-      'Shows the LK-Bridge version, the LegendKeeper project asked for (default: the default project; its name, id and the key’s role), ' +
-      'the read-only flags (the bridge’s and the project’s own), the writer pool, whether writes are paused or the bridge is draining, ' +
-      'the other projects this bridge serves, and which connection is calling with its profile and scope (read, propose or write). ' +
-      'Cost: up to 2 cached reads (10 minutes), usually none. Risk: none. Call it first to learn whether writes are possible.',
+      'Shows the bridge version, the project’s name and your key’s role, the read-only and paused flags, the writer pool, and who YOU are: your profile, your live scope (read, propose or write) and whether your writes are direct or proposals. Use it to learn what you may do; for the budget use bridge_budget. Cost: usually none (cached for 10 minutes).',
     inputSchema: z.object({ project: projectArg }),
     annotations: READ_ANNOTATIONS,
     handler: ({ project: asked }, ctx) =>
@@ -188,9 +185,7 @@ function listProjectsTool(deps: ToolDeps) {
     title: 'List projects',
     access: 'read',
     description:
-      'Lists the LegendKeeper projects this bridge serves: name (pass it as `project` to any tool), LegendKeeper id, display ' +
-      'name, which is the default (reads without `project` use it) and whether the project is read-only. Writes must name ' +
-      'their project when there are several. Cost: none. Risk: none.',
+      'Lists the projects this bridge serves: name (pass it as `project`), id, which is the default (reads without `project` use it) and whether it is read-only. Use it when unsure which project to use; a write must name its project when there are several. Cost: none.',
     inputSchema: z.object({}),
     annotations: READ_ANNOTATIONS,
     handler: () => {
@@ -354,8 +349,7 @@ function jobTools(deps: ToolDeps) {
       title: 'Job status',
       access: 'read',
       description:
-        'Shows one job (from lk_api_batch, lk_api_paginate_all, lk_upload_image or a queued write): status, progress, the current step, ' +
-        'the last error and its result. Without jobId, lists your recent jobs. Only your own jobs are visible. Cost: none. Risk: none.',
+        'Shows one job (status, progress, current step, last error, result) or, without jobId, your recent jobs. Use it for work that returned queued or waiting_budget: that work is not lost and is never resubmitted. bridge_job_wait waits for it. Only your own jobs are visible. Cost: none.',
       inputSchema: z.object({
         jobId: jobId.optional(),
         steps: z
@@ -416,8 +410,7 @@ function jobTools(deps: ToolDeps) {
       title: 'Wait for a job',
       access: 'read',
       description:
-        'Waits for a job to finish, at most 25 seconds, then returns its status as it then stands (done: true when finished). ' +
-        'Call it again if done is false. Cost: none. Risk: none.',
+        'Waits up to 25 seconds for a job to finish and returns its status (done: true when finished); call again if done is false. Use it after queued or waiting_budget instead of polling bridge_job_status in a loop. Cost: none.',
       inputSchema: z.object({
         jobId,
         seconds: z.number().min(1).max(25).optional().describe('How long to wait, 1-25. Default 20.'),
@@ -442,8 +435,7 @@ function jobTools(deps: ToolDeps) {
       title: 'Cancel a job',
       access: 'write',
       description:
-        'Cancels a job: the step in flight finishes, nothing further is sent, and the remaining steps are cancelled. ' +
-        'Steps already done are not undone. Cost: none. Risk: low (stops pending work).',
+        'Cancels one of your own jobs: the step in flight finishes, nothing further is sent, finished steps are not undone. A job the owner approved can only be stopped by the owner. Use it only when asked to stop work. Cost: none.',
       inputSchema: z.object({ jobId, project: projectArg }),
       annotations: {
         readOnlyHint: false,
@@ -486,9 +478,7 @@ function otherTools(deps: ToolDeps) {
       title: 'Rate budget',
       access: 'read',
       description:
-        'Shows every rate tier of one project (used, limit, remaining, time to reset, any block after a 429), the queue depth per ' +
-        'priority class and the write pacing. Each project has its own key and so its own budget; allProjects: true shows every ' +
-        'project side by side. The same numbers, in one line, end every tool result. Cost: none. Risk: none.',
+        'Shows one project’s request budget: every rate tier (used, limit, time to reset), the queue and the write pacing; allProjects: true lists every project. The same one-line summary ends every result. Use it when a result says the budget is low, and before bulk work (then bridge_estimate). Cost: none.',
       inputSchema: z.object({
         project: projectArg,
         allProjects: z.boolean().optional().describe('Every project’s budget, side by side.'),
@@ -531,9 +521,7 @@ function otherTools(deps: ToolDeps) {
       title: 'Estimate a workload',
       access: 'read',
       description:
-        'Projects how long a planned workload takes under the current budget and whether it fits today: ' +
-        'give counts of reads, writes and createMany items. Call it BEFORE any large workload (hundreds of calls). ' +
-        'Cost: none. Risk: none.',
+        'Projects how long a planned workload takes under the current budget (counts of reads, writes and createMany items) and whether it fits today. Call it BEFORE hundreds of calls, and instead of reading pages to test the budget. Cost: none.',
       inputSchema: z.object({
         reads: z.number().int().min(0).max(1_000_000).optional(),
         writes: z.number().int().min(0).max(1_000_000).optional(),
@@ -591,8 +579,7 @@ function otherTools(deps: ToolDeps) {
       title: 'Recent errors',
       access: 'read',
       description:
-        'Lists recent failures of YOUR calls: grouped by operation, code and path with counts (default), or one row each. ' +
-        'Each carries the LegendKeeper requestId. Cost: none. Risk: none.',
+        'Lists your recent failed calls, grouped by operation, code and path (or one row each), with LegendKeeper request ids. Use it to report a failure to the owner, not to retry. Cost: none.',
       inputSchema: z.object({
         grouped: z.boolean().optional().describe('Default true: one row per fingerprint with a count.'),
         limit: z.number().int().min(1).max(100).optional().describe('Default 20.'),
@@ -666,12 +653,7 @@ function otherTools(deps: ToolDeps) {
       title: 'Write journal',
       access: 'read',
       description:
-        'Looks up the write journal: EVERY write the bridge has sent (creates, inserts, updates and deletes), newest first, with ' +
-        'its operation, target, time, outcome, principal (the connection’s name, with “removed <date>” once the owner has removed it), profile and approver. Destructive writes also keep a pre-image ' +
-        '(previous blocks, board, metadata, or ids). Use it to see what changed and who changed it: it shows every connection’s ' +
-        'writes, so agents can cross-check each other; job ids appear on your own entries only. Filter by resource, document, ' +
-        'target id, operation, principal, profile or outcome; page older entries with before (the nextBefore of the previous page). ' +
-        'Pre-images can be large (they are paged like other big results). Cost: none. Risk: none.',
+        'Looks up the write journal: every write the bridge has sent (creates, updates, deletes), newest first, with operation, target, time, outcome, who made it and who approved it. Destructive writes keep a pre-image. Use it to see who changed a page, what a delete removed (and the id to restore it with), or whether an OUTCOME_UNKNOWN write was made. Filter by resource, document, target, operation, principal, profile or outcome; page back with `before`. Cost: none.',
       inputSchema: z.object({
         resourceId: z.string().max(256).optional(),
         documentId: z.string().max(256).optional(),
@@ -820,9 +802,7 @@ function otherTools(deps: ToolDeps) {
       title: 'Page a stored result',
       access: 'read',
       description:
-        'Pages a stored result by handle: the items of a lk_api_paginate_all job (offset and limit count items), or an oversized result ' +
-        'another tool stored (offset counts characters). Each page stays well under the output limit; use nextOffset for the next one. ' +
-        'Items are summarised unless detail is "full". Cost: none. Risk: none.',
+        'Pages a stored result by handle: the items of a lk_api_paginate_all job (offset and limit count items) or an oversized result another tool stored (offset counts characters; join the slices in order). Use it whenever a result says stored with a handle; never run the tool again. Cost: none.',
       inputSchema: z.object({
         handle: z.string().min(1).max(100),
         offset: z.number().int().min(0).optional().describe('Default 0.'),
