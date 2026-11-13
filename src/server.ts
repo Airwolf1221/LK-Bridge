@@ -41,6 +41,7 @@ import { type Db, openDatabase } from './db/open.js';
 import {
   type BridgeInfo,
   type McpResourceProvider,
+  type McpToolCallObserver,
   type McpToolProvider,
   bridgeInfoStub,
 } from './mcp/server.js';
@@ -77,6 +78,8 @@ export interface BuildServerOptions {
   /** Test seams for the auth services (clock, CIMD fetcher, rate limits). */
   readonly authOverrides?: Omit<Partial<CreateAuthServicesOptions>, 'config' | 'db' | 'log'>;
   readonly pruneIntervalMs?: number;
+  /** v2 E3 (ADR 0045): the tool-call log; the transport records each tool call in it. */
+  readonly toolCalls?: McpToolCallObserver;
   /** The policy layer (profiles, scopes, proposals). Defaults to one on `db`, without a job engine attached. */
   readonly policy?: Policy;
   /** OPS2: the encrypted secret store (the owner's credentials live there). Without it, the env file's values only. */
@@ -209,6 +212,7 @@ export async function buildServer(
     // The policy layer's proposal tools, unless the caller's list has them already (the runtime's does).
     tools: withPolicyTools(o.tools ?? [bridgeInfoStub(bridgeInfo)], policy.tools),
     access: policy.access,
+    ...(o.toolCalls ? { observer: o.toolCalls } : {}),
     ...(o.resources ? { resources: o.resources } : {}),
     ...(o.mcpMaxBodyBytes !== undefined ? { maxBodyBytes: o.mcpMaxBodyBytes } : {}),
   });
@@ -304,6 +308,7 @@ export async function createBridge(
     instructions: runtime.instructions,
     mcpMaxBodyBytes: mcpMaxBodyBytes(o.toolsSettings.upload.maxBytes),
     policy: runtime.policy,
+    toolCalls: runtime.toolCalls,
     secrets: runtime.secrets,
     images: runtime.images,
     admin: {

@@ -9,6 +9,7 @@ import {
   type McpAccessControl,
   type McpServerInfo,
   type McpResourceProvider,
+  type McpToolCallObserver,
   type McpToolProvider,
   createMcpServerFactory,
 } from './server.js';
@@ -50,6 +51,8 @@ export interface McpTransportOptions {
   readonly resources?: readonly McpResourceProvider[];
   /** Per-principal tool lists and the principal in each tool's context (src/policy). */
   readonly access?: McpAccessControl;
+  /** v2 E3 (ADR 0045): the tool-call log, which records each call (names and sizes only). */
+  readonly observer?: McpToolCallObserver;
   /** Largest request body accepted (default: the SDK's 4 MiB). See {@link mcpMaxBodyBytes}. */
   readonly maxBodyBytes?: number;
 }
@@ -71,6 +74,7 @@ export function mcpTransportPlugin(app: FastifyInstance, opts: McpTransportOptio
     app.log,
     opts.access,
     opts.resources ?? [],
+    opts.observer,
   );
   const onerror = (err: Error) => app.log.warn({ err }, 'MCP transport error');
   const maxRequestBodySize = opts.maxBodyBytes ?? MCP_DEFAULT_MAX_BODY_BYTES;

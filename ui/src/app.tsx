@@ -13,6 +13,7 @@ import { ClientsPage } from './pages/clients';
 import { ErrorsPage } from './pages/errors';
 import { JobsPage } from './pages/jobs';
 import { JournalPage } from './pages/journal';
+import { ToolCallsPage } from './pages/toolcalls';
 import { MaintenancePage } from './pages/maintenance';
 import { MappingsPage } from './pages/mappings';
 import { OverviewPage } from './pages/overview';
@@ -57,6 +58,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/proposals', label: 'Proposals' },
   { to: '/clients', label: 'Clients & Access' },
   { to: '/journal', label: 'Journal' },
+  { to: '/tool-calls', label: 'Tool calls' },
   { to: '/projects', label: 'Projects' },
   { to: '/tree', label: 'Repository Tree' },
   { to: '/lifecycle', label: 'Archive and lifecycle' },
@@ -107,6 +109,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/proposals') return <ProposalsPage />;
   if (path === '/clients') return <ClientsPage session={session} />;
   if (path === '/journal') return <JournalPage />;
+  if (path === '/tool-calls') return <ToolCallsPage />;
   if (path === '/projects') return <ProjectsPage />;
   if (path === '/tree') return <TreePage />;
   if (path === '/lifecycle') return <LifecyclePage />;

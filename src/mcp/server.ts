@@ -118,6 +118,26 @@ export interface McpResourceProvider {
 /** The part of an MCP server that tool registration needs. `McpServer` satisfies it. */
 export type McpServerLike = Pick<McpServer, 'registerTool'>;
 
+/**
+ * v2 E3 (ADR 0045): the tool-call log's seam. `begin` is called when a call arrives and returns the function that records
+ * it once it has an outcome. It never throws into a call (the log swallows its own failures).
+ */
+export interface McpToolCallObserver {
+  begin(
+    tool: string,
+    args: unknown,
+    caller: {
+      readonly principalId: string | null;
+      readonly profile: string | null;
+      readonly scope: string | null;
+    },
+  ): (end: {
+    readonly result?: McpToolResult;
+    readonly thrown?: unknown;
+    readonly refusedCode?: string;
+  }) => void;
+}
+
 export interface RegisterToolsDeps {
   readonly tools: readonly McpToolProvider[];
   readonly log: FastifyBaseLogger;
@@ -231,10 +251,19 @@ export function createMcpServerFactory(
   log: FastifyBaseLogger,
   access?: McpAccessControl,
   resources: readonly McpResourceProvider[] = [],
+  observer?: McpToolCallObserver,
 ): McpServerFactory {
   // Validate names once at start-up rather than on the first request.
   registerTools({ registerTool: () => undefined as never }, { tools, log });
   let fallbackWarned = false;
+  let observeWarned = false;
+  /** v2 E3: records the calls of `server` (see observeToolCalls); says once if the SDK's internals moved. */
+  const observe = (target: McpServer, who: ReturnType<typeof callerOf>): void => {
+    if (!observer || observeToolCalls(target, observer, who)) return;
+    if (observeWarned) return;
+    observeWarned = true;
+    log.warn({ component: 'mcp' }, 'MCP SDK internals changed: the tool-call log cannot record calls');
+  };
   return (ctx) => {
     const server = new McpServer(
       { name: info.name, version: info.version },
@@ -256,6 +285,7 @@ export function createMcpServerFactory(
     addResources(server);
     if (!access) {
       registerTools(server, { tools, log });
+      observe(server, callerOf(null));
       return server;
     }
     // Per request, so a scope change shows in the very next tools/list. Unknown callers see read tools only.
@@ -269,7 +299,12 @@ export function createMcpServerFactory(
     );
     // Every tool is registered, so a direct call to a hidden write tool gets the clear read-only refusal (from
     // registerTools) rather than "not found"; tools/list then shows only the visible ones.
-    if (hideFromList(server, visible, () => registerTools(server, { tools, log, policy }))) return server;
+    if (hideFromList(server, visible, () => registerTools(server, { tools, log, policy }))) {
+      // The tool-call log records at the SDK's own tools/call handler, so a call the SDK refuses (an unknown tool,
+      // arguments that do not validate: an assistant inventing arguments) is in the log too.
+      observe(server, callerOf(policy));
+      return server;
+    }
     // Fallback (the SDK internals moved): register only the visible tools, as strict as before. Said once in the log
     // (chunk 8, F-11), because hidden tools then answer "not found" instead of the read-only explanation.
     if (!fallbackWarned) {
@@ -288,6 +323,7 @@ export function createMcpServerFactory(
     );
     registerTools(strict, { tools: tools.filter((t) => visible.has(t.name)), log, policy });
     addResources(strict);
+    observe(strict, callerOf(policy));
     return strict;
   };
 }
@@ -308,6 +344,54 @@ export function hideFromList(server: McpServer, visible: ReadonlySet<string>, re
   handlers.set('tools/list', async (request: unknown, ctx: unknown) => {
     const result = (await inner(request, ctx)) as { tools?: { name: string }[] };
     return { ...result, tools: (result.tools ?? []).filter((t) => visible.has(t.name)) };
+  });
+  return true;
+}
+
+function callerOf(policy: { readonly principal: Principal; readonly scope: string } | null): {
+  principalId: string | null;
+  profile: string | null;
+  scope: string | null;
+} {
+  return policy
+    ? { principalId: policy.principal.principalId, profile: policy.principal.profile, scope: policy.scope }
+    : { principalId: null, profile: null, scope: null };
+}
+
+/**
+ * v2 E3 (ADR 0045): wraps the SDK's `tools/call` handler so every call is timed and recorded by `observer`, including
+ * the ones the SDK refuses before a tool runs. Same internals as {@link hideFromList}; returns false when they are not
+ * where they are expected (nothing is wrapped then).
+ */
+export function observeToolCalls(
+  server: McpServer,
+  observer: McpToolCallObserver,
+  who: {
+    readonly principalId: string | null;
+    readonly profile: string | null;
+    readonly scope: string | null;
+  },
+): boolean {
+  const handlers = (server.server as unknown as { _requestHandlers?: unknown })._requestHandlers;
+  if (!(handlers instanceof Map)) return false;
+  const inner = handlers.get('tools/call') as RequestHandler | undefined;
+  if (typeof inner !== 'function') return false;
+  handlers.set('tools/call', async (request: unknown, ctx: unknown) => {
+    const params = (request as { params?: { name?: unknown; arguments?: unknown } } | undefined)?.params;
+    const record = observer.begin(
+      typeof params?.name === 'string' ? params.name : '(unnamed)',
+      params?.arguments,
+      who,
+    );
+    try {
+      const result = await inner(request, ctx);
+      record({ result: result as McpToolResult });
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      record({ thrown: err, refusedCode: /not found/i.test(message) ? 'TOOL_NOT_FOUND' : 'PROTOCOL_ERROR' });
+      throw err;
+    }
   });
   return true;
 }

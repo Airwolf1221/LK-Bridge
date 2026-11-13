@@ -63,6 +63,7 @@ import { OffsiteService } from './offsite/service.js';
 import type { GoogleOAuthOptions } from './offsite/google.js';
 import { requestDir as offsiteRequestDir } from './offsite/requests.js';
 import { FactsVersions } from './facts/version.js';
+import { ToolCallLog } from './toolcalls/index.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
 import {
@@ -96,6 +97,8 @@ export interface Runtime {
   readonly engine: JobEngine;
   /** Profiles, the live policy gate, proposals and owner commands; pass it to `buildServer({ policy })`. */
   readonly policy: Policy;
+  /** v2 E3 (ADR 0045): the log of tool calls (names and sizes only) behind the dashboard's Tool calls page. */
+  readonly toolCalls: ToolCallLog;
   /** The maintenance registry, scheduler and owner commands (chunk 6). */
   readonly maintenance: Maintenance;
   /** Repository mappings: data model and owner commands (chunk 6). */
@@ -658,6 +661,26 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.
   const tools = [...bridgeTools, ...policy.tools];
+  // v2 E3 (ADR 0045): the tool-call log. Its budget probe sums every project's hourly request and write counters, so a
+  // call's budget use is how far they moved while it ran (approximate: another call in the same moment counts too).
+  const toolCalls = new ToolCallLog({
+    db: o.db,
+    settings: policy.store,
+    budget: () => {
+      let requests = 0;
+      let writes = 0;
+      for (const p of projects.list()) {
+        if (p.id === null) continue;
+        const tiers = projects.anyClient(p.id)?.governor.snapshot().tiers;
+        if (!tiers) continue;
+        requests += tiers['key-hour'].used;
+        writes += tiers['write-hour'].used;
+      }
+      return { requests, writes };
+    },
+    ...(o.clock ? { now: () => o.clock!.now() } : {}),
+    warn: (message, err) => log.warn({ err }, message),
+  });
   // Each project's key is checked now; a project is served from the moment its check passes.
   const ready = projects.verifyAll().catch((err: unknown) => log.error({ err }, 'project checks failed'));
   // v2 E1a: a full snapshot a restart interrupted continues once the projects are served.
@@ -670,6 +693,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     ready,
     engine,
     policy,
+    toolCalls,
     maintenance,
     mappings,
     tree,
