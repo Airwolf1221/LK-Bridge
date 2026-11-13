@@ -390,7 +390,46 @@ export class SnapshotService {
     );
   }
 
-  /** An image URL's hash, when a snapshot or the asset tree already knows it. */
+  /**
+   * The image a job uploaded, by its new URL: the upload's record (the bytes handed to the store as it started) and the
+   * job's `createImageAsset` answer. Empty for any other job, or when the stored file was found to differ.
+   */
+  private uploadedBy(projectId: string, jobId: string): Map<string, { sha256: string; size: number }> {
+    const out = new Map<string, { sha256: string; size: number }>();
+    try {
+      const rows = this.o.db
+        .prepare(
+          `SELECT webp_sha256 AS sha256, webp_bytes AS size FROM image_uploads
+           WHERE project_id = ? AND job_id = ? AND (stored_verified IS NULL OR stored_verified = 1)`,
+        )
+        .all(projectId, jobId) as { sha256: string; size: number }[];
+      if (rows.length !== 1) return out;
+      const job = this.o.engine.queries.getJob(projectId, jobId);
+      const asset = (job?.result as { asset?: { url?: unknown } } | null | undefined)?.asset;
+      const urls = new Set<string>();
+      if (typeof asset?.url === 'string') urls.add(asset.url);
+      for (const r of this.o.engine.stepResults(projectId, jobId) ?? []) {
+        const v = r.value as { url?: unknown } | null | undefined;
+        if (typeof v?.url === 'string' && /^https:\/\//.test(v.url)) urls.add(v.url);
+      }
+      if (urls.size === 1) out.set([...urls][0]!, rows[0]!);
+    } catch {
+      /* no image pipeline tables */
+    }
+    return out;
+  }
+
+  /**
+   * Stores bytes the bridge itself has in hand (an upload's converted image), so a change snapshot can name that image
+   * with its hash without downloading it. Unreferenced, they go with the collector after its grace period.
+   */
+  async rememberBytes(bytes: Buffer): Promise<string> {
+    await this.start();
+    const put = await this.store.lock.shared(() => this.store.putBytes(bytes, { compress: 'binary' }));
+    return put.sha256;
+  }
+
+  /** An image URL's hash, when a snapshot, the asset tree or the bridge's own upload already knows it. */
   knownImage(projectId: string, url: string): { sha256: string; size: number } | null {
     const r = this.o.db
       .prepare(
@@ -409,6 +448,21 @@ export class SnapshotService {
       if (a) return { sha256: a.sha256, size: a.size ?? 0 };
     } catch {
       /* no asset tree */
+    }
+    try {
+      // An image the bridge uploaded (its bytes were handed to the store as the upload started), unless the stored
+      // file was found to differ.
+      const u = this.o.db
+        .prepare(
+          `SELECT u.webp_sha256 AS sha256, u.webp_bytes AS size FROM image_uploads u
+             JOIN asset_items a ON a.project_id = u.project_id AND a.id = u.asset_id
+           WHERE u.project_id = ? AND a.url = ? AND (u.stored_verified IS NULL OR u.stored_verified = 1)
+           ORDER BY u.created_at DESC LIMIT 1`,
+        )
+        .get(projectId, url) as { sha256: string; size: number } | undefined;
+      if (u) return u;
+    } catch {
+      /* no image pipeline tables */
     }
     return null;
   }
@@ -433,7 +487,11 @@ export class SnapshotService {
     projectId: string,
     priority: PriorityClass,
     cached?: CaptureDeps['cached'],
-    o: { readonly download?: boolean } = {},
+    o: {
+      readonly download?: boolean;
+      /** Images this capture already knows by URL (the job's own upload). */
+      readonly known?: ReadonlyMap<string, { sha256: string; size: number }>;
+    } = {},
   ): CaptureDeps {
     const fetch = this.imageFetcher(projectId, priority);
     return {
@@ -442,7 +500,7 @@ export class SnapshotService {
       image:
         o.download === false
           ? async (url) => {
-              const known = this.knownImage(projectId, url);
+              const known = o.known?.get(url) ?? this.knownImage(projectId, url);
               return known && (await this.store.has(known.sha256))
                 ? { ...known, downloaded: false, created: false, stored: 0 }
                 : null;
@@ -1009,7 +1067,10 @@ export class SnapshotService {
         }
       : undefined;
     const priority = o.priority ?? 'P2';
-    const deps = this.captureDeps(projectId, priority, cached, { download: false });
+    const deps = this.captureDeps(projectId, priority, cached, {
+      download: false,
+      known: this.uploadedBy(projectId, jobId),
+    });
     const read = this.reader(projectId, priority, {
       ...(o.wait === false ? { wait: false } : {}),
       ...(o.signal ? { signal: o.signal } : {}),

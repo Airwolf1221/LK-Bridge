@@ -531,6 +531,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     // owner's sandbox run of 12 November 2026 resolved `images/` from `./data/bridge.db` in the read-only app folder.
     dbPath: runtimeDbPath,
     keptBytes: snapshots.keptBytes,
+    uploadedBytes: (bytes) => snapshots.rememberBytes(bytes),
     proposals: { get: (id) => policy.proposals.get(id) },
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },

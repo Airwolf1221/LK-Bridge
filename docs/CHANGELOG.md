@@ -13,8 +13,7 @@ test runs against the mock; the sandbox check is written and dry-run against the
   manifests: **the layout is E1b's contract**. D3's kept bytes are merged into it (adopted at start-up).
 - **Full snapshots** weekly (Sunday 00:30, `snapshot-full`): every page under the AI REPOSITORY and the whole asset
   library, P3, giving way to agents, resumable, refused below `SNAPSHOT_MIN_FREE_GB` (**10 GB**). **Change snapshots** at
-  the end of every bridge write's job, from its verify reads (they never download an image: one the store lacks is
-  named by URL and taken by the next full snapshot). A **daily changed-pages pass** (`snapshot-daily`), off per
+  the end of every bridge write's job, from its verify reads (they never download an image: the bridge's own uploads hand their bytes to the store, and any other image the store lacks is named by URL and taken by the next full snapshot). A **daily changed-pages pass** (`snapshot-daily`), off per
   project until the sandbox check confirms `updatedAt`. **Retention** (8 weekly, 30 days) and a collector
   (`snapshot-prune`); **verify** with findings and partial snapshots (`snapshot-verify`). Weekly schedules on the
   Maintenance Jobs page.

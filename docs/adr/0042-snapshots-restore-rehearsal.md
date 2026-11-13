@@ -113,9 +113,11 @@ why, and makes the snapshot **partial**: never silently "fine".
    the job**, before it is reported finished, from the reads the job already made after its last write (the verify step's
    read) when they hold the piece; only what is not already read is read again. The pieces owed are recorded first, so a
    restart takes them later. Priority follows the job's (P0/P1 kept, otherwise P2). **A change snapshot never
-   downloads an image:** an image the store already holds is named with its hash; any other is named by its URL only
-   (`deferred`, not missing), and the next full snapshot stores its bytes with the whole library. A bridge write never
-   waits for the asset host, and an image deleted through the bridge in between is covered by D3's kept bytes.
+   downloads an image:** an image the store already holds is named with its hash (the bridge's own uploads included: the
+   pipeline hands an upload's bytes to the store as it starts, and the upload's change snapshot matches them to the new
+   asset's URL); any other is named by its URL only (`deferred`, not missing), and the next full snapshot stores its bytes
+   with the whole library. A bridge write never waits for the asset host, and an image deleted through the bridge in
+   between is covered by D3's kept bytes.
 3. **The daily changed-pages pass** (`snapshot-daily`, 00:45; **off per project until the sandbox check confirms it**,
    `snapshotDailyPass` on the Projects or Snapshots page): lists the resources (one request per 100) and snapshots the pages
    whose `updatedAt` moved since a snapshot last saw them; `snapshotDailyPassDocuments` also lists each page's documents (one

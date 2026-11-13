@@ -78,6 +78,11 @@ export interface ImageServiceOptions {
   readonly timers?: boolean;
   /** v2 E1a (ADR 0042): where kept bytes go (the snapshot store); default D3's own `kept-bytes/` directory. */
   readonly keptBytes?: KeptByteStore;
+  /**
+   * v2 E1a: the bytes of every upload, handed to the snapshot store as the upload starts, so a change snapshot names the
+   * new image with its hash without downloading it (best effort: a failure never stops the upload).
+   */
+  readonly uploadedBytes?: (bytes: Buffer) => Promise<unknown>;
 }
 
 /**
@@ -313,6 +318,7 @@ export class ImageService {
         ? (plan.wouldCreate[0]!.parentFolderId ?? null)
         : (plan.destination.folderId ?? null);
     const out = p.image.output;
+    if (this.o.uploadedBytes) await this.o.uploadedBytes(out.data).catch(() => undefined);
     const submitted = await this.o.engine.submit({
       kind: 'upload_image',
       project: p.projectId,
