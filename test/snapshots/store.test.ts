@@ -18,6 +18,7 @@ import {
   timelineDocumentPiece,
 } from '../../src/snapshots/index.js';
 import { PROJECT } from '../tools/helpers.js';
+import { isoWeekKey } from '../../src/snapshots/service.js';
 import { S, snapshotsWorld, type SnapshotsWorld } from './world.js';
 
 vi.setConfig({ testTimeout: 60_000 });
@@ -247,11 +248,12 @@ describe('the snapshot service’s store', () => {
     });
   });
 
-  it('retention keeps 8 complete full snapshots and 30 days of change snapshots; the collector removes what nothing refers to', async () => {
-    w = await snapshotsWorld({ snapshots: { keepWeekly: 2, keepDays: 30 } });
+  it('retention: every full snapshot for 30 days, then one a week (the latest of its ISO week) for 8 weeks, and 30 days of change snapshots; the collector removes what nothing refers to', async () => {
+    w = await snapshotsWorld();
     const snaps = w.stack.runtime.snapshots;
+    const DAY = 86_400_000;
     const ids: string[] = [];
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
       // A different Main each time: each snapshot stores one new piece.
       w.repo.blocks
         .get(w.d.main)!
@@ -262,23 +264,43 @@ describe('the snapshot service’s store', () => {
       (await snaps.manifest(id))!.pages
         .find((p) => p.id === S.atlas)!
         .documents!.find((d) => d.type === 'page')!.sha256;
-    const oldest = await shaOf(ids[0]!);
-    const newest = await shaOf(ids[2]!);
+    const shas = await Promise.all(ids.map(shaOf));
+    expect(new Set(shas).size).toBe(4);
+    // Their ages: 0 is 100 days old (beyond the weeks); 1 and 2 fall in the same ISO week 41 to 51 days back (only the
+    // later, 2, is kept); 3 is new.
+    const now = Date.now();
+    const monday = new Date(now - 47 * DAY);
+    monday.setUTCHours(12, 0, 0, 0);
+    while (monday.getUTCDay() !== 1) monday.setUTCDate(monday.getUTCDate() - 1);
+    const at = [now - 100 * DAY, monday.getTime(), monday.getTime() + 2 * DAY, now];
+    expect(isoWeekKey(at[1]!)).toBe(isoWeekKey(at[2]!));
+    expect(now - at[2]!).toBeGreaterThan(30 * DAY);
+    expect(now - at[1]!).toBeLessThan(86 * DAY);
+    const set = w.stack.db.prepare('UPDATE snapshots SET taken_at = ? WHERE id = ?');
+    ids.forEach((id, i) => set.run(at[i]!, id));
     // An old change snapshot, past 30 days.
     const c = w.stack.db.prepare(`SELECT id FROM snapshots WHERE kind = 'change' LIMIT 1`).get() as
       { id: string } | undefined;
-    if (c)
-      w.stack.db
-        .prepare('UPDATE snapshots SET taken_at = ? WHERE id = ?')
-        .run(Date.now() - 31 * 86_400_000, c.id);
+    if (c) set.run(now - 31 * DAY, c.id);
     const r = await snaps.prune();
-    expect(snaps.index.snapshots(PROJECT, { kind: 'full' }).map((s) => s.id)).toEqual([ids[2], ids[1]]);
-    expect(r.removed).toBeGreaterThanOrEqual(1);
-    // The oldest Main is still within the grace hour: kept; without the grace it goes; the newest stays.
-    expect(await snaps.store.check(oldest)).toBe('ok');
+    expect(snaps.index.snapshots(PROJECT, { kind: 'full' }).map((s) => s.id)).toEqual([ids[3], ids[2]]);
+    expect(r.removed).toBeGreaterThanOrEqual(2);
+    if (c) expect(snaps.index.snapshot(c.id)).toBeNull();
+    // The dropped Mains are still within the grace hour: kept; without the grace they go; the kept ones stay.
+    expect(await snaps.store.check(shas[0]!)).toBe('ok');
     await snaps.gc({ graceMs: 0 });
-    expect(await snaps.store.check(oldest)).toBe('missing');
-    expect(await snaps.store.check(newest)).toBe('ok');
+    expect(await snaps.store.check(shas[0]!)).toBe('missing');
+    expect(await snaps.store.check(shas[1]!)).toBe('missing');
+    expect(await snaps.store.check(shas[2]!)).toBe('ok');
+    expect(await snaps.store.check(shas[3]!)).toBe('ok');
+    // The collector kept every image and piece the kept snapshots name: verify finds nothing missing.
+    expect(await snaps.verify()).toMatchObject({ missing: 0, corrupt: 0, badManifests: 0 });
+    // Shared pieces survive (the images, the unchanged pages): the kept snapshot restores from the store alone.
+    const m = (await snaps.manifest(ids[2]!))!;
+    for (const pg of m.pages)
+      for (const d of pg.documents ?? [])
+        expect(await snaps.store.check(d.sha256), `${pg.name} ${d.id}`).toBe('ok');
+    for (const i of m.library!.images) expect(await snaps.store.check(i.sha256!)).toBe('ok');
   });
 
   it('kept bytes and snapshot images are one store: the same image is stored once, and kept while either refers to it', async () => {

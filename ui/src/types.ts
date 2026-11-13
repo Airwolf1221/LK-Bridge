@@ -1366,7 +1366,7 @@ export interface StagingActionResponse {
 
 // ------------------------------------------------------------------------------------------ v2 E1a: snapshots
 
-export type SnapshotKind = 'full' | 'change' | 'daily';
+export type SnapshotKind = 'full' | 'change';
 
 export interface SnapshotRowView {
   id: string;
@@ -1391,7 +1391,7 @@ export interface SnapshotRowView {
 export interface SnapshotRunView {
   id: string;
   projectId: string;
-  kind: 'full' | 'daily';
+  kind: 'full';
   state: 'running' | 'succeeded' | 'failed' | 'refused' | 'stopped';
   trigger: string;
   startedAt: number;
@@ -1436,12 +1436,11 @@ export interface SnapshotOverview {
   logical: { referenced: number; unique: number; uniqueCount: number };
   dedupRatio: number | null;
   compressionRatio: number | null;
-  retention: { keepWeekly: number; keepDays: number; softDeleteDays: number };
+  retention: { keepFullDays: number; keepWeekly: number; keepDays: number; softDeleteDays: number };
   counts?: Record<string, { count: number; last: number | null }>;
   nextFullEstimate?: number | null;
   runs?: SnapshotRunView[];
   owed?: number;
-  dailyPass?: { enabled: boolean; documents: boolean };
   findings: SnapshotFindingView[];
   notices: SnapshotNoticeView[];
 }
@@ -1467,6 +1466,8 @@ export interface RestoreRecordView {
   followUpProposalId: string | null;
   requestedBy: string;
   summary: string;
+  /** Fields LegendKeeper refused and the run left out (an icon name it does not know). */
+  couldntRestoreExactly?: { what: string; why: string }[];
   createdAt: number;
   updatedAt: number;
 }

@@ -2,7 +2,7 @@
 /**
  * v2 E1a (ADR 0042) on the dashboard: the Snapshots page (the store against the disk, findings, runs, the snapshots, a
  * page's history with its diff, "Propose a restore" with a dry run first, a deleted image, the rehearsal, the database
- * copies), the weekly schedule on the Maintenance Jobs page, and a restore proposal on the Proposals page.
+ * copies), the schedule on the Maintenance Jobs page, and a restore proposal on the Proposals page.
  */
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -55,7 +55,7 @@ const response = (over: Record<string, unknown> = {}) => ({
     logical: { referenced: 12 * GIB, unique: 1 * GIB, uniqueCount: 9000 },
     dedupRatio: 12,
     compressionRatio: 1.2,
-    retention: { keepWeekly: 8, keepDays: 30, softDeleteDays: 30 },
+    retention: { keepFullDays: 30, keepWeekly: 8, keepDays: 30, softDeleteDays: 30 },
     counts: { full: { count: 1, last: NOW - 4 * 86_400_000 } },
     nextFullEstimate: 2 * GIB,
     runs: [
@@ -80,7 +80,6 @@ const response = (over: Record<string, unknown> = {}) => ({
       },
     ],
     owed: 0,
-    dailyPass: { enabled: false, documents: false },
     findings: [
       {
         id: 1,
@@ -140,7 +139,7 @@ const response = (over: Record<string, unknown> = {}) => ({
       id: 'snapshot-full',
       name: 'Full snapshot',
       enabled: true,
-      scheduleText: 'Weekly on Sunday at 00:30 (London time)',
+      scheduleText: 'Daily at 00:30 (London time)',
       nextRunAt: NOW + 86_400_000,
       lastRun: null,
     },
@@ -223,7 +222,12 @@ describe('the Snapshots page', () => {
     // The run in progress, with its schedule.
     const runs = screen.getByRole('table', { name: 'Runs' });
     expect(within(runs).getByText('300 of 1,500')).toBeInTheDocument();
-    expect(screen.getByText(/Weekly on Sunday at 00:30/)).toBeInTheDocument();
+    expect(screen.getByText(/Daily at 00:30/)).toBeInTheDocument();
+    // The retention: every full snapshot for 30 days, then one a week for 8 weeks.
+    expect(
+      screen.getByText(/every full snapshot for 30 days, then one a week \(the latest of each ISO week\)/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/for 8 weeks; change snapshots for 30 days/)).toBeInTheDocument();
     // The nightly database copy, with its age.
     const copies = screen.getByRole('table', { name: 'Database copies' });
     expect(within(copies).getByText('nightly-20261111T023000Z.db.gz')).toBeInTheDocument();
@@ -454,16 +458,13 @@ describe('the Snapshots page', () => {
     );
   });
 
-  it('switches the daily pass on in the project’s settings', async () => {
-    const api = installApi(routes({ 'PUT /projects/baisheng/settings': { project: {} } }));
-    const user = userEvent.setup();
+  it('has no daily changed-pages switch (LegendKeeper’s updatedAt does not track content)', async () => {
+    installApi(routes({}));
     renderApp('/ui/snapshots');
-    await user.click(await screen.findByRole('checkbox', { name: /Daily changed-pages pass for baisheng/ }));
-    await waitFor(() => expect(api.find('PUT', '/projects/baisheng/settings')).toHaveLength(1));
-    expect(api.find('PUT', '/projects/baisheng/settings')[0]!.body).toEqual({
-      key: 'snapshotDailyPass',
-      value: true,
-    });
+    await screen.findByRole('table', { name: 'Runs' });
+    expect(screen.queryByRole('checkbox', { name: /changed-pages/i })).toBeNull();
+    expect(screen.queryByText(/updatedAt/)).toBeNull();
+    expect(screen.queryByText(/daily \(app edits\)/)).toBeNull();
   });
 });
 

@@ -4,6 +4,7 @@
  * is compared (numbers with a tolerance, a region's `polygon` and `polygons` as one list of polygons), and the hash the
  * bridge's own compare-and-swap uses. Pure.
  */
+import { withWriteIcon } from '../lk/icons.js';
 import { createHash } from 'node:crypto';
 import * as z from 'zod';
 import type { Geometry, LatLng } from './geometry.js';
@@ -90,7 +91,8 @@ export function misplacedStyles(
 }
 
 export function styleFields(style: Readonly<Record<string, unknown>> | undefined): Obj {
-  return Object.fromEntries(Object.entries(style ?? {}).filter(([, v]) => v !== undefined));
+  // A pin's icon goes to LegendKeeper in the write form (`fas fa-book` as a read gives it → `book`; ADR 0042 decision 9).
+  return withWriteIcon(Object.fromEntries(Object.entries(style ?? {}).filter(([, v]) => v !== undefined)));
 }
 
 // ------------------------------------------------------------------------------------------------ geometry shapes

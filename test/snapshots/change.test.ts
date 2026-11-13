@@ -5,6 +5,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Client } from '@modelcontextprotocol/client';
+import { PROJECT_SETTING_KEYS } from '../../src/projects/settings.js';
 import type { Manifest } from '../../src/snapshots/index.js';
 import { asCanon } from '../resources/world.js';
 import { PROJECT, type ToolCall } from '../tools/helpers.js';
@@ -252,61 +253,17 @@ describe('change snapshots after each kind of bridge write', () => {
   });
 });
 
-describe('the daily changed-pages pass', () => {
-  it('is off by default (until the sandbox run confirms updatedAt), and says why', async () => {
-    const r = await w.stack.runtime.snapshots.daily(PROJECT, 'schedule');
-    expect(r).toMatchObject({ skipped: true });
-    expect(r.summary).toMatch(/switched off/);
-  });
-
-  it('when on: snapshots exactly the pages whose updatedAt moved since a snapshot saw them', async () => {
-    const snaps = w.stack.runtime.snapshots;
-    w.stack.runtime.projects.setSetting(PROJECT, 'snapshotDailyPass', true);
-    // The world's listing carries updatedAt; a full snapshot records what it saw.
-    const stamps = new Map<string, string>();
-    // Ahead of the world's own routes (overrides are tried in the order they were added).
-    const rest = [...w.overrides];
-    w.overrides.clear();
-    w.overrides.set(/\/resources$/, (req) => {
-      if (req.method !== 'GET') return undefined;
-      const r = w.repo.respond(req);
-      if (!r || r.status !== 200) return r;
-      const b = r.body as { data: { id: string }[] };
-      return {
-        status: 200,
-        body: {
-          ...b,
-          data: b.data.map((x) => ({ ...x, updatedAt: stamps.get(x.id) ?? '2026-11-01T00:00:00Z' })),
-        },
-      };
-    });
-    w.overrides.set(/\/resources\/[^/]+$/, (req) => {
-      if (req.method !== 'GET') return undefined;
-      const id = req.path.replace(/\/$/, '').split('/').pop()!;
-      const r =
-        w.sidebars.respond(req, (x) => {
-          const res = w.repo.live(x);
-          return res ? w.repo.resourceView(res) : undefined;
-        }) ?? w.repo.respond(req);
-      if (!r || r.status !== 200) return r;
-      return {
-        status: 200,
-        body: { ...(r.body as object), updatedAt: stamps.get(id) ?? '2026-11-01T00:00:00Z' },
-      };
-    });
-    for (const [k, v] of rest) w.overrides.set(k, v);
-    await snaps.full(PROJECT, 'manual');
-    let r = await snaps.daily(PROJECT, 'schedule');
-    expect(r.summary).toMatch(/No page’s updatedAt moved/);
-    stamps.set(S.atlas, '2026-11-12T10:00:00Z');
-    r = await snaps.daily(PROJECT, 'schedule');
-    expect(r.changed).toBe(true);
-    const m = (await snaps.manifest(r.snapshotId!))!;
-    expect(m.kind).toBe('daily');
-    expect(m.pages.map((p) => p.id)).toEqual([S.atlas]);
-    // Seen now: the next pass finds nothing.
-    const again = await snaps.daily(PROJECT, 'schedule');
-    expect(again.summary).toMatch(/No page’s updatedAt moved/);
-    w.stack.runtime.projects.setSetting(PROJECT, 'snapshotDailyPass', false);
+describe('the daily changed-pages pass is gone (updatedAt does not track content: ADR 0042)', () => {
+  it('there is no service method, no setting, no maintenance job and no run kind for it', () => {
+    const snaps = w.stack.runtime.snapshots as unknown as Record<string, unknown>;
+    expect(snaps.daily).toBeUndefined();
+    expect(typeof snaps.full).toBe('function');
+    const keys = PROJECT_SETTING_KEYS.map((d) => d.key);
+    expect(keys).not.toContain('snapshotDailyPass');
+    expect(keys).not.toContain('snapshotDailyPassDocuments');
+    expect(keys).toContain('imageStagingFolder'); // the neighbours are still there
+    const jobs = w.stack.runtime.maintenance.scheduler.list().map((j) => j.id);
+    expect(jobs).not.toContain('snapshot-daily');
+    expect(jobs).toEqual(expect.arrayContaining(['snapshot-full', 'snapshot-prune', 'snapshot-verify']));
   });
 });

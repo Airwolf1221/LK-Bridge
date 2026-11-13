@@ -10,6 +10,7 @@
  * a template gets Status `Working` (the project's default) when it has a Status row, and its template is recorded in the
  * tree at once.
  */
+import { toWriteIcon } from '../../lk/icons.js';
 import * as z from 'zod';
 import {
   assessDelete,
@@ -1226,8 +1227,10 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
             ['size', 'iconSize'],
           ];
           for (const [a, b] of map) {
-            const v = args.icon[a];
-            if (v !== undefined && v !== cur[b]) {
+            // An icon name read back as LegendKeeper gives it (`fas fa-book`) is written as it takes it (`book`).
+            const v = b === 'iconGlyph' ? toWriteIcon(args.icon[a]) : args.icon[a];
+            const now = b === 'iconGlyph' ? toWriteIcon(cur[b]) : cur[b];
+            if (v !== undefined && v !== now) {
               body[b] = v;
               changes[b] = { before: cur[b] ?? null, after: v };
             }

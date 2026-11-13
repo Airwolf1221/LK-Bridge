@@ -366,21 +366,24 @@ the bridge's own copies of the selected project's pages.
 
 - **The store**: its size on disk (pieces and manifests), the **deduplication** ratio (what the snapshots hold over what
   the store keeps once) and the compression, the disk's **free space** against the minimum (`SNAPSHOT_MIN_FREE_GB`, 10 GB),
-  the **next full snapshot's estimate** against the headroom (marked "fits" or "does not fit"), the retention, and the
+  the **next full snapshot's estimate** against the headroom (marked "fits" or "does not fit"), the **retention** ("every full
+  snapshot for 30 days, then one a week (the latest of each ISO week) for 8 weeks; change snapshots for 30 days"), and the
   directory. Below the minimum, full snapshots are refused, and the refusal is a notice here.
 - **Findings**: stored pieces the weekly verify found missing or damaged, and the snapshots they make **partial**; and the
   notices (a refused run, an adopted kept-bytes directory).
-- **Runs and schedules**: the four snapshot jobs with their schedule, next and last run (schedules are changed on the
-  Maintenance Jobs page); the **daily changed-pages pass** switches for this project (`snapshotDailyPass`, and
-  `snapshotDailyPassDocuments` for documents' `updatedAt`: one request a page), off until the sandbox check confirms it;
-  the runs (pages done of the total, requests, new pieces, time), with **Abandon** for a run that should not be
+- **Runs and schedules**: the three snapshot jobs (the full snapshot is **nightly, 00:30 London time**) with their
+  schedule, next and last run (schedules are changed on the Maintenance Jobs page). There is **no switch for a daily
+  changed-pages pass**: LegendKeeper's `updatedAt` does not track content, so the nightly full snapshot is what catches
+  edits made in the app (an unchanged image is not downloaded again, so a night adds only what changed). The runs (pages done of the total, requests, new pieces, time), with **Abandon** for a run that should not be
   continued. **Take a full snapshot now** starts one in the background.
 - **Page history**: find a page by name (a deleted one too); its snapshots, newest first, piece by piece (first seen,
   changed, unchanged, deleted, back); **Diff with now** for any piece (a few reads); **Propose a restore** from any
   snapshot: the page's documents, its sidebar, one document, or a deleted page (undelete, or recreate with its original
   or new ids). **Preview** shows the plan (each piece's diff, what cannot be restored exactly, what is left alone, new ids)
   without proposing; **Propose this restore** makes the proposal, linked to the Proposals page. A restore is always a
-  proposal, the owner's own included.
+  proposal, the owner's own included. A restore that finishes with a field LegendKeeper refused (an icon name it does not
+  know: the write is sent again without it) shows **couldn't be restored exactly** beside its state, with each field
+  listed.
 - **Restore a deleted image**: a snapshot and the image's old asset id; the preview lists the pages that showed the old
   URL; tick **Also update the pages that referred to the old URL** to include them; **Stage it and propose** uploads it
   hidden (it comes back as a new asset with a new URL) and makes the proposal.

@@ -6,7 +6,7 @@ import { ALL_PROJECTS } from '../../src/projects/index.js';
 import { PROJECT, maintenanceRig, sampleCount, type MaintenanceRig } from './helpers.js';
 
 /** v2 E1a: the snapshot jobs are on by default; a test that moves the clock by days switches them off with the rest. */
-const SNAPSHOT_JOBS = ['snapshot-full', 'snapshot-daily', 'snapshot-prune', 'snapshot-verify'];
+const SNAPSHOT_JOBS = ['snapshot-full', 'snapshot-prune', 'snapshot-verify'];
 
 let m: MaintenanceRig | undefined;
 afterEach(async () => {

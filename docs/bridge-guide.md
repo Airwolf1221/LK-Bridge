@@ -490,7 +490,7 @@ asset keeps its bytes in the bridge first; if they cannot be kept the delete is 
 
 ## Snapshots and restores
 
-The bridge keeps its own snapshots of every page: weekly in full, and after every bridge write (yours included), so a
+The bridge keeps its own snapshots of every page: nightly in full, and after every bridge write (yours included), so a
 page's earlier states are there to compare and bring back.
 
 - **`list_snapshots`** (free): a page's snapshots, newest first, and which pieces changed in each (its settings, its

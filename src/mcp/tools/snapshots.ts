@@ -73,7 +73,7 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
     access: 'read',
     description:
       'Lists the snapshots the bridge holds of a page (or its sidebar, its settings, or one document), newest first: when, ' +
-      'the kind (full: the weekly snapshot of everything; change: after a bridge write; daily: an edit made in the app), ' +
+      'the kind (full: the nightly snapshot of everything, which also catches edits made in the app; change: after a bridge write), ' +
       'and for each piece whether it changed from the snapshot before. A deleted page is found by its id. Cost: none (the ' +
       'bridge’s own index, no request to LegendKeeper). Use snapshot_diff to see a change, restore_snapshot to propose ' +
       'bringing one back.',
@@ -114,7 +114,7 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
             ...(h.more ? { more: h.more } : {}),
             hint:
               h.count === 0
-                ? 'The bridge holds no snapshot of this page yet (the weekly full snapshot takes every page; every bridge write takes a change snapshot).'
+                ? 'The bridge holds no snapshot of this page yet (the nightly full snapshot takes every page; every bridge write takes a change snapshot).'
                 : 'snapshot_diff shows what changed; restore_snapshot proposes bringing a snapshot back (the owner approves it).',
           },
           pd,

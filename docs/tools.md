@@ -1340,6 +1340,10 @@ proposes nothing. Scopes:
 
 What a restore cannot bring back is in its result and on the proposal, never hidden:
 
+- **Icon names:** LegendKeeper reads an icon as `fas fa-book` but writes it as `book`; a restore or recreate writes the
+  bare name (and `update_resource` and the map-feature tools take either form). A name LegendKeeper still refuses does not
+  fail the restore: the write is sent again without the icon (its default applies), and the restore record lists it under
+  "couldn't be restored exactly" on the Snapshots page.
 - **`unsupported` blocks and inline icons** cannot be written by the API: those the live page still holds are echoed by
   id, the rest are listed under `cannotRestore` (lost); a page whose live blocks hold an inline icon is refused
   (`RESTORE_NOT_WRITABLE`) rather than drop it.
