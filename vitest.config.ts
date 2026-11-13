@@ -29,6 +29,7 @@ export default defineConfig({
       'test/images/**/*.test.ts', // v2 D3: the image pipeline
       'test/snapshots/**/*.test.ts', // v2 E1a: snapshots, restore and the rehearsal
       'test/offsite/**/*.test.ts', // v2 E1b: the encrypted Google Drive copy
+      'test/audits/**/*.test.ts', // v2 E2: the audits (findings only, read from the snapshots)
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

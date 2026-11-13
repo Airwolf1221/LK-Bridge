@@ -47,7 +47,7 @@ function probe(over: Partial<MaintenanceJobDef> = {}) {
 }
 
 describe('the registry', () => {
-  it('lists the nine implemented jobs and the three placeholders, with schedule, last run and next run', async () => {
+  it('lists the implemented jobs and the one placeholder, with schedule, last run and next run', async () => {
     m = await maintenanceRig();
     const jobs = m.maintenance.scheduler.list();
     expect(jobs.map((j) => j.id)).toEqual([
@@ -60,12 +60,11 @@ describe('the registry', () => {
       'tree-sweep',
       'tree-check',
       'assign-block-ids-sweep',
-      'orphan-and-link-audit',
-      'tag-audit',
       'asset-refresh',
       'asset-check',
       'link-sweep', // v2 C2c
       'chronology-check', // v2 D1
+      'audit-run', // v2 E2 (it replaced the two audit placeholders)
       'snapshot-full', // v2 E1a
       'snapshot-prune',
       'snapshot-verify',
@@ -116,7 +115,7 @@ describe('the registry', () => {
       scope: 'project',
       scheduleText: 'Daily at 02:50 (London time)',
     });
-    for (const id of ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit']) {
+    for (const id of ['assign-block-ids-sweep']) {
       expect(view(id)).toMatchObject({
         implemented: false,
         enabled: false,
@@ -124,6 +123,14 @@ describe('the registry', () => {
         note: 'Not implemented yet',
       });
     }
+    // v2 E2: the audits (they read the snapshots only; off here because one runs after each full snapshot).
+    expect(view('audit-run')).toMatchObject({
+      implemented: true,
+      enabled: false,
+      writes: false,
+      scope: 'project',
+      scheduleText: 'Daily at 06:00 (London time)',
+    });
   });
 });
 
@@ -470,7 +477,7 @@ describe('run now', () => {
 });
 
 describe('placeholders', () => {
-  const placeholders = ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit'];
+  const placeholders = ['assign-block-ids-sweep'];
 
   it('cannot be enabled, run or rescheduled, and say so', async () => {
     m = await maintenanceRig();
@@ -492,10 +499,12 @@ describe('placeholders', () => {
 
   it('disabling a placeholder is harmless, and an enabled flag found in the database is cleared at start', async () => {
     m = await maintenanceRig();
-    m.rig.db.prepare("UPDATE maintenance_jobs SET enabled = 1, next_run_at = 1 WHERE id = 'tag-audit'").run();
+    m.rig.db
+      .prepare("UPDATE maintenance_jobs SET enabled = 1, next_run_at = 1 WHERE id = 'assign-block-ids-sweep'")
+      .run();
     await m.maintenance.stop();
     m.mount();
-    expect(view('tag-audit')).toMatchObject({ enabled: false, nextRunAt: null });
+    expect(view('assign-block-ids-sweep')).toMatchObject({ enabled: false, nextRunAt: null });
   });
 
   it('unknown ids are not found', async () => {
@@ -524,7 +533,7 @@ describe('enable and disable', () => {
     m = await maintenanceRig({ settings: { enabled: false } });
     await m.rig.h.clock.advance(60_000);
     expect(history('budget-sampler')).toHaveLength(0);
-    expect(m.maintenance.scheduler.list()).toHaveLength(18);
+    expect(m.maintenance.scheduler.list()).toHaveLength(17);
   });
 });
 

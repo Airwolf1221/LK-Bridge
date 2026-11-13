@@ -208,7 +208,8 @@ describe('placeholders', () => {
       expect(v).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
     }
     // v2 A2: `tree-snapshot` became the real `tree-sweep` and `tree-check` jobs.
-    expect(PLACEHOLDER_IDS).toEqual(['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit']);
+    // v2 E2: the two audit placeholders became the real `audit-run` job.
+    expect(PLACEHOLDER_IDS).toEqual(['assign-block-ids-sweep']);
   });
 });
 

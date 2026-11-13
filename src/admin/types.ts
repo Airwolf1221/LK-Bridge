@@ -1,5 +1,6 @@
 import type { ImageService } from '../images/service.js';
 import type { Lifecycle } from '../lifecycle/index.js';
+import type { Audits } from '../audits/index.js';
 import type { Chronology } from '../chronology/index.js';
 import type { AuthServices } from '../auth/services.js';
 import type { AdminSettings, Config } from '../config/index.js';
@@ -47,6 +48,8 @@ export interface AdminRuntime {
   readonly snapshots?: SnapshotService;
   readonly restores?: Restores;
   readonly rehearsals?: Rehearsals;
+  /** v2 E2: the audits (the Audits page); optional for tests' runtimes. */
+  readonly audits?: Audits;
   /** v2 E1b: the off-site copy to Google Drive (the Off-site copy page, the Overview's warning); optional for tests. */
   readonly offsite?: OffsiteService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */

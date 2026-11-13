@@ -22,6 +22,7 @@ import { documentTools } from './documents.js';
 import { timelineTools } from './timelines.js';
 import { mapFeatureTools } from './map-features.js';
 import { snapshotTools } from './snapshots.js';
+import { auditTools } from './audits.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -57,6 +58,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     ...mapFeatureTools(deps),
     // v2 E1a (ADR 0042): snapshots and restores (always proposals).
     ...snapshotTools(deps),
+    // v2 E2 (ADR 0044): the audits' findings (read-only).
+    ...auditTools(deps),
     ...guideTools(deps),
     ...lkApiTools(deps),
     ...uploadTools(deps),

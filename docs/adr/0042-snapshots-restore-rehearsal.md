@@ -289,3 +289,12 @@ and a sampled rehearsal that completes (H).
 - App edits are caught by the nightly full snapshot; there is no daily pass to switch on.
 - The snapshot store takes very little of the server's disk (see the runbook's estimate); the minimum free space keeps
   the database and the logs safe if a library ever grows.
+
+## Amendment (v2 E2, 13 November 2026): the templates
+
+A full snapshot now also takes the project's **templates** (they sit outside the AI REPOSITORY): `listTemplates`, then each as
+a page (settings, sidebar, documents), into an optional manifest field `templates` (page entries of kind `template`, parent
+`templates`). `manifestPieces` lists them, so the index, retention, the collector, the verify job and the off-site copy treat them
+as any piece, and the store's layout (E1b's contract) is unchanged: a manifest without the field is as valid as before. About 2.3
+reads a template a night. A failed template read leaves the manifest without them and does not fail the snapshot. This is what
+lets the audits compare a page with its template without reading LegendKeeper ([ADR 0044](0044-audits.md) decision 5).

@@ -92,6 +92,13 @@ export interface Manifest {
   /** What made it: a change snapshot's job, tool and principal; a full or daily run's id and trigger. */
   readonly trigger: Readonly<Record<string, unknown>>;
   readonly pages: readonly PageEntry[];
+  /**
+   * v2 E2 (ADR 0044): the project's templates (they sit outside the AI REPOSITORY), taken by a full snapshot so the
+   * audits can compare a page with its template without reading LegendKeeper. Additive: older manifests have none, and
+   * a full snapshot whose template read failed has none (the audits then say so). Each entry is a page entry of kind
+   * `template` with parent `templates`.
+   */
+  readonly templates?: readonly PageEntry[];
   /** The asset library (folders and every asset with its bytes): full snapshots, and change snapshots after asset writes. */
   readonly library: LibraryEntry | null;
   readonly counts: {
@@ -124,7 +131,7 @@ export function manifestPieces(m: Manifest): {
   size: number;
 }[] {
   const out: ReturnType<typeof manifestPieces> = [];
-  for (const p of m.pages) {
+  for (const p of [...m.pages, ...(m.templates ?? [])]) {
     if (p.deleted) {
       out.push({
         pageId: p.id,

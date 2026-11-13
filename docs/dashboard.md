@@ -136,6 +136,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1), `PUT /projects/:name/settings` (`{ key, value }`, v2 A2), `GET\|PUT /projects/:name/canon` (`{ rules, agentDefaultStatus?, confirm: true }`, v2 C2a), `GET\|PUT /projects/:name/lifecycle` (`{ …values, workingIndexId?, archiveIndexId?, reset?, confirm: true }`, v2 C2c); OPS2: `POST /projects/check` (`{ name, apiKey }`) ‡, `POST /projects/:name/key/check` (`{ apiKey }`) ‡, `POST /projects/confirm` (`{ checkId, confirm: true }`) ‡, `PUT /projects/:name/draining` (`{ value }`), `POST /projects/:name/remove` (`{ confirm: true }`) ‡ |
 | Account     | OPS2: `GET /security`, `POST /security/reauth` (`{ password, totp? }`), `POST /security/password` (`{ currentPassword, newPassword }`) ‡, `POST /security/totp/enrol` ‡, `POST /security/totp/confirm` (`{ code }`) ‡, `POST /security/totp/remove` (`{ confirm: true }`) ‡, `POST /security/recovery-codes` (`{ confirm: true }`) ‡                                                                                                                                                                                                                                                                                                                                      |
 | Lifecycle † | `GET /lifecycle/records` (`limit`, `offset`; the lifecycle record, newest first, and the link index's freshness; v2 C2c). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                              |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409
@@ -411,6 +412,47 @@ max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?
 /api/admin/snapshots/rehearsals/<id>`, `POST /api/admin/snapshots/rehearsals/<id>/delete-root` `{ confirm: true }`. A
 refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`, `snapshots.restore`,
 `snapshots.rehearsal` and `snapshots.rehearsal_delete_root`.
+
+## Audits (v2 E2)
+
+The **Audits** page (navigation: Audits, after Snapshots; [ADR 0044](adr/0044-audits.md)) shows what the audits found in
+the newest full snapshot and the change snapshots since. **Findings only: nothing on this page changes your world.** An audit
+reads the snapshot store and the bridge's own database, never LegendKeeper, so it costs no request; one runs by itself after
+each nightly full snapshot completes, and **Run an audit now** runs one at once.
+
+- **Latest audit**: when it ran, how long it took, the snapshot it read and how old that snapshot was (and how many change
+  snapshots were laid over it), the page count, the result. A snapshot older than the limit (36 hours by default) is flagged
+  **stale**, with a note that edits made in the LegendKeeper app since are not seen until the next full snapshot.
+- **Summary**: open findings by category and severity, with the counts of new, acknowledged and resolved findings. A
+  category's name filters the list below.
+- **Findings**: filters for category, code, severity, page path (part of a path or name), **new in the latest audit**,
+  **acknowledged** (hidden by default, shown, or only) and **resolved** (open, resolved, or both); **Group by page**; paged
+  by 100. Each finding shows its severity, what it is and says, its page with a **history** link to that page's snapshot history
+  (the Snapshots page), and when it was first seen (or when it was resolved). **Evidence** opens the evidence (what was
+  expected and what was found), the source (the snapshot, or the chronology check, and how old it was when audited), the
+  document and block, and the fix on offer.
+  - **Acknowledge…** asks for a reason (required). The finding is hidden while the same evidence persists, and comes back,
+    marked "evidence changed", if the evidence changes. **Un-acknowledge** shows it again. Nothing is acknowledged for you.
+  - **Propose a fix**, where one exists: re-reads the page live, then makes ONE ordinary proposal, which you approve on the
+    [Proposals](#proposals-page-writes-v2-c1) page (every guard runs as for any write; nothing is applied by the audit). The
+    fixes are a paragraph split (one paragraph with line breaks into separate paragraphs, block by block, beside inline icons
+    too), `set_facts` for a Reference Type or Subject only where the right value is unambiguous, `move_resource` to re-place a
+    page alphabetically under the same parent, adding a missing required tag (never removing one), and the chronology's
+    `sync_timeline_event`. If the page has changed since the audit, it says so and proposes nothing.
+  - **Re-check now**: reads the finding's page live (a few requests) and runs its check again; the finding is still there (its
+    source becomes "read live") or gone. Findings about more than one page cannot be re-checked.
+  - Lifecycle findings are **never fixed by an audit**: the lifecycle tools refuse an inconsistent page and you decide.
+- **Runs**: each audit with its trigger (`snapshot`, `manual`, `schedule`), state, duration, snapshot and result.
+- **Rules and settings**: the rules editor, the tag-definition source and the audit settings. A rule selects pages (a
+  Reference Type, a registry type and role, a name prefix, an ancestor's name, a kind; all the given selectors must match) and
+  names a template (a registry role, a name or an id). Until you save a list the rules are the **seeded defaults from the
+  registry** (Character Core, Compact Character Reference, the Index template). The tag-definition source is a page (found by
+  name) and one of its documents. Settings: report pages no rule matches, the stale limit, how strictly Reference Types are
+  judged, the Reference Types that are fine, and indexes in a manual order. **Saving asks you to sign in again** (within five
+  minutes, as the canon rules do) and is audited (`audits.set_config`).
+
+Audited: `audits.set_config`, `audits.acknowledge`, `audits.unacknowledge`, `audits.propose_fix`, `audits.recheck`. The audits'
+maintenance job `audit-run` (off by default) is on the Maintenance Jobs page.
 
 ## Off-site copy (v2 E1b)
 

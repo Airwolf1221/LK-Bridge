@@ -18,6 +18,7 @@ import { createMaintenanceCommands, type MaintenanceCommands } from './commands.
 import type { AssetMaintenance } from './asset-jobs.js';
 import {
   builtinJobs,
+  type AuditMaintenance,
   type ChronologyMaintenance,
   type SnapshotMaintenance,
   type TreeMaintenance,
@@ -56,6 +57,8 @@ export interface CreateMaintenanceOptions {
   readonly chronology?: ChronologyMaintenance;
   /** v2 E1a: snapshots, for the `snapshot-*` jobs. */
   readonly snapshots?: SnapshotMaintenance;
+  /** v2 E2: the audits, for the `audit-run` job. */
+  readonly audits?: AuditMaintenance;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -81,6 +84,7 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         ...(o.links ? { links: o.links } : {}),
         ...(o.chronology ? { chronology: o.chronology } : {}),
         ...(o.snapshots ? { snapshots: o.snapshots } : {}),
+        ...(o.audits ? { audits: o.audits } : {}),
       }),
       ...(o.extraJobs ?? []),
     ],

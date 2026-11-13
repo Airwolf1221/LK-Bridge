@@ -429,12 +429,20 @@ export class SnapshotDb {
       .all() as {
       library: string;
     }[]) {
-      const lib = json<{ piece?: { sha256?: string }; images?: { sha256?: string | null }[] } | null>(
-        r.library,
-        null,
-      );
+      const lib = json<{
+        piece?: { sha256?: string };
+        images?: { sha256?: string | null }[];
+        templates?: PageEntry[];
+      } | null>(r.library, null);
       if (lib?.piece?.sha256) s.add(lib.piece.sha256);
       for (const i of lib?.images ?? []) if (i.sha256) s.add(i.sha256);
+      // v2 E2: the templates a running full snapshot has taken (stored beside the library until the manifest).
+      for (const e of lib?.templates ?? []) {
+        if (e.resource) s.add(e.resource.sha256);
+        if (e.sidebar) s.add(e.sidebar.sha256);
+        for (const d of e.documents ?? []) s.add(d.sha256);
+        for (const i of e.images ?? []) if (i.sha256) s.add(i.sha256);
+      }
     }
     return s;
   }

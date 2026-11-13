@@ -586,6 +586,17 @@ export class TreeModel {
           body: { ...structuredClone(b.blocks[at] as object), version: `v${b.version}` },
         };
       }
+      // v2 E2: replaceBlock (a top-level block, replaced whole, its id kept).
+      if (M === 'PUT') {
+        const ifMatch = req.headers['if-match'];
+        if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
+        const block = structuredClone<Record<string, unknown>>(body);
+        block.id = p[5];
+        b.blocks.splice(at, 1, block);
+        b.version++;
+        this.mutations.push({ op: 'replaceBlock', id: p[5]! });
+        return { status: 200, body: { ...structuredClone(block), version: `v${b.version}` } };
+      }
       if (M === 'DELETE') {
         const ifMatch = req.headers['if-match'];
         if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');

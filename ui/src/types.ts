@@ -1629,3 +1629,164 @@ export interface RehearsalPlanResponse {
     };
   };
 }
+
+// ---------------------------------------------------------------------------------------------- audits (v2 E2, ADR 0044)
+
+export type AuditSeverity = 'error' | 'warning' | 'info';
+
+export interface AuditFixView {
+  kind: string;
+  summary: string;
+  args: Record<string, unknown>;
+}
+
+export interface AuditSourceView {
+  kind: 'snapshot' | 'chronology-check' | 'bridge' | 'live';
+  snapshotId?: string;
+  baseSnapshotId?: string;
+  checkId?: number;
+  takenAt: number;
+  ageMs: number;
+}
+
+export interface AuditFindingView {
+  id: number;
+  code: string;
+  category: string;
+  severity: AuditSeverity;
+  pageId: string | null;
+  pageName: string | null;
+  pagePath: string | null;
+  documentId: string | null;
+  blockId: string | null;
+  message: string;
+  evidence: Record<string, unknown>;
+  source: AuditSourceView;
+  fix: AuditFixView | null;
+  state: 'open' | 'gone';
+  firstSeenRun: string;
+  firstSeenAt: number;
+  lastSeenRun: string;
+  lastSeenAt: number;
+  resolvedRun: string | null;
+  resolvedAt: number | null;
+  acknowledgement: { reason: string; by: string; at: number } | null;
+  acknowledgementLapsed: boolean;
+}
+
+export interface AuditRunCounts {
+  byCategory: Record<string, Record<AuditSeverity, number>>;
+  open: number;
+  acknowledged: number;
+  new: number;
+  still: number;
+  gone: number;
+}
+
+export interface AuditRunView {
+  id: string;
+  trigger: string;
+  state: 'running' | 'succeeded' | 'failed' | 'skipped';
+  startedAt: number;
+  finishedAt: number | null;
+  durationMs: number | null;
+  snapshotId: string | null;
+  snapshotTakenAt: number | null;
+  snapshotAgeMs: number | null;
+  changeSnapshots: number;
+  newestSnapshotId: string | null;
+  stale: boolean;
+  pages: number;
+  counts: AuditRunCounts | null;
+  summary: string | null;
+  error: string | null;
+}
+
+export interface AuditCodeInfo {
+  code: string;
+  category: string;
+  severity: AuditSeverity;
+  title: string;
+  fix?: string;
+}
+
+export interface AuditOverviewResponse {
+  project: { id: string; name: string };
+  summary: {
+    byCategory: Record<string, Record<AuditSeverity, number>>;
+    open: number;
+    acknowledged: number;
+    gone: number;
+    new: number;
+  };
+  latestRun: AuditRunView | null;
+  running: AuditRunView | null;
+  runs: AuditRunView[];
+  codes: { code: string; n: number }[];
+  catalogue: { categories: string[]; severities: AuditSeverity[]; codes: AuditCodeInfo[] };
+  newestFullSnapshot: { id: string; takenAt: number; ageMs: number } | null;
+  maxSnapshotAgeHours: number;
+  now: number;
+}
+
+export interface AuditFindingsResponse {
+  project: { id: string; name: string };
+  findings: AuditFindingView[];
+  total: number;
+  latestRun: string | null;
+  groups?: { pageId: string | null; pageName: string | null; pagePath: string | null; findings: number[] }[];
+  now: number;
+}
+
+export interface AuditRuleSelectors {
+  referenceType?: string;
+  registryType?: string;
+  role?: string;
+  namePrefix?: string;
+  ancestorName?: string;
+  kind?: 'index' | 'bsrc' | 'bwrk' | 'barc';
+}
+
+export interface AuditRuleView {
+  id: string;
+  name: string;
+  enabled: boolean;
+  selectors: AuditRuleSelectors;
+  template: { registry?: { type: string; role: string }; templateId?: string; templateName?: string };
+}
+
+export interface AuditSettingsView {
+  reportUnmatched: boolean;
+  maxSnapshotAgeHours: number;
+  manualOrderIndexes: string[];
+  knownReferenceTypes: string[];
+  strictReferenceTypes: boolean;
+}
+
+export interface AuditConfigResponse {
+  project: { id: string; name: string };
+  rules: AuditRuleView[] | null;
+  effectiveRules: AuditRuleView[];
+  seeded: boolean;
+  tagSource: { pageId: string; documentId: string } | null;
+  tagSourcePage: {
+    id: string;
+    name: string;
+    path: string;
+    documents: { id: string; name: string | null; type: string | null }[];
+  } | null;
+  settings: AuditSettingsView;
+  registryTypes: { id: string; singular: string; plural: string; roles: string[]; placementKind: string }[];
+  updatedAt: number | null;
+  updatedBy: string | null;
+}
+
+export type AuditProposeFixResponse =
+  | { status: 'proposal_captured'; proposalId: string; summary: string | null; fix: string }
+  | { status: 'nothing_to_do'; message: string };
+
+export interface AuditRecheckResponse {
+  status: 'still_present' | 'gone';
+  finding: AuditFindingView | null;
+  reads: number;
+}

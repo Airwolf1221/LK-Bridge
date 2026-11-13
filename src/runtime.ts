@@ -37,6 +37,7 @@ import { createPolicy, type Policy } from './policy/index.js';
 import { systemClock } from './lk/index.js';
 import { createAssets, type AssetService } from './assets/index.js';
 import { createImages, imageDataDir, type ImageService } from './images/service.js';
+import { Audits, SPLIT_CHECK, SPLIT_VERIFY, splitChecker, splitVerifier } from './audits/index.js';
 import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
 import { snapshotMapCheckers } from './snapshots/restore.js';
@@ -113,6 +114,8 @@ export interface Runtime {
   readonly images: ImageService;
   /** v2 E1a (ADR 0042): snapshots (the store, full and change snapshots, retention, verify, restore, rehearsal). */
   readonly snapshots: SnapshotService;
+  /** v2 E2 (ADR 0044): the audits: findings only, read from the snapshots. */
+  readonly audits: Audits;
   /** v2 E1a: restore proposals (always proposals) and their follow-ups. */
   readonly restores: Restores;
   /** v2 E1a: restore rehearsals into a throwaway root of a sandbox project. */
@@ -491,9 +494,32 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
-    afterFull: () => offsite.afterFullSnapshot(),
+    afterFull: async (projectId) => {
+      await offsite.afterFullSnapshot();
+      // v2 E2: an audit of the snapshot just completed (in the background; it reads no LegendKeeper).
+      audits?.afterFullSnapshot(projectId);
+    },
   });
   void snapshots.start();
+  // v2 E2 (ADR 0044): the audits, over the snapshots, the registry, the lifecycle records and the chronology check. Its
+  // "Propose a fix" for a paragraph with line breaks checks the block inside the lock (the two checkers below).
+  const audits: Audits = new Audits({
+    db: o.db,
+    snapshots,
+    registry,
+    chronology,
+    tree,
+    engine,
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  audits.start();
+  const detachAuditCheckers = [
+    engine.registerChecker(SPLIT_CHECK, splitChecker),
+    engine.registerChecker(SPLIT_VERIFY, splitVerifier),
+  ];
   // v2 E1a: restores are always proposals; the plan reads the page live at P1 and the tree for names and places.
   const restores = new Restores({
     db: o.db,
@@ -580,6 +606,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     links: lifecycle,
     chronology,
     snapshots,
+    audits: { run: (projectId, trigger) => audits.run(projectId, trigger) },
   });
   maintenance.start();
   const mappings = createMappings({
@@ -622,6 +649,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         images,
         snapshots,
         restores,
+        // v2 E2: the audits (audit_findings).
+        audits,
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
@@ -650,6 +679,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     chronology,
     images,
     snapshots,
+    audits,
     restores,
     rehearsals,
     offsite,
@@ -684,6 +714,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachChronology();
       for (const off of detachMaps) off();
       for (const off of detachSnapshotCheckers) off();
+      for (const off of detachAuditCheckers) off();
       detachRestores();
       await tree.stop();
       detachRegistry();

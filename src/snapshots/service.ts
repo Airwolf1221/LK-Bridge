@@ -687,13 +687,20 @@ export class SnapshotService {
         await this.o.afterPage?.(run.id, pageId);
       }
       let library: LibraryEntry | null = null;
+      let templates: PageEntry[] | undefined;
       if (run.kind === 'full') {
-        const stored = this.index.run(run.id)?.library as LibraryEntry | null | undefined;
-        if (stored) library = stored;
-        else {
+        const stored = this.index.run(run.id)?.library as
+          (LibraryEntry & { templates?: PageEntry[] }) | null | undefined;
+        if (stored) {
+          const { templates: t, ...lib } = stored;
+          library = lib;
+          if (t) templates = t;
+        } else {
           const c = newCounters();
           library = await captureLibrary(deps, read, c);
-          this.index.setRunLibrary(run.id, library);
+          // v2 E2 (ADR 0044): the project's templates, for the audits' template checks (a failure is not the run's).
+          templates = await this.captureTemplates(projectId, deps, read, c);
+          this.index.setRunLibrary(run.id, templates ? { ...library, templates } : library);
           this.index.addRunCounts(run.id, {
             reads: c.reads,
             downloads: c.downloads,
@@ -712,6 +719,7 @@ export class SnapshotService {
         trigger: { run: run.id, trigger: run.trigger, ...(resumed ? { resumed: true } : {}) },
         pages,
         library,
+        ...(templates ? { templates } : {}),
         counts: {
           reads: done.reads,
           downloads: done.downloads,
@@ -741,6 +749,53 @@ export class SnapshotService {
       }
       this.index.noteRunError(run.id, e instanceof Error ? e.message : String(e));
       throw e;
+    }
+  }
+
+  /**
+   * v2 E2 (ADR 0044): every template of the project (`listTemplates`, then each template as a page: its settings, sidebar
+   * and documents), so a full snapshot lets the audits compare a page's sidebar and tabs with its template's. Templates
+   * sit outside the AI REPOSITORY, so they are no page of the tree. About 2 to 3 reads a template at P3. A failure
+   * (other than a stop) is logged and leaves the manifest without templates; it never fails the snapshot.
+   */
+  private async captureTemplates(
+    projectId: string,
+    deps: ReturnType<SnapshotService['captureDeps']>,
+    read: Reader,
+    c: Counters,
+  ): Promise<PageEntry[] | undefined> {
+    try {
+      const list: { id: string; name: string }[] = [];
+      let cursor: string | undefined;
+      for (let page = 0; page < 50; page++) {
+        c.reads++;
+        const r = (await read('listTemplates', {
+          query: { limit: 100, ...(cursor ? { cursor } : {}) },
+        })) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown } | undefined;
+        for (const t of Array.isArray(r?.data) ? (r.data as unknown[]) : []) {
+          const o = (t ?? {}) as Record<string, unknown>;
+          if (typeof o.id === 'string' && typeof o.name === 'string') list.push({ id: o.id, name: o.name });
+        }
+        if (r?.hasMore !== true || typeof r.nextCursor !== 'string') break;
+        cursor = r.nextCursor;
+      }
+      const out: PageEntry[] = [];
+      for (const t of list.sort((a, b) => (a.id < b.id ? -1 : 1))) {
+        if (this.stopper.signal.aborted) throw new StopError();
+        const entry = await capturePage(
+          deps,
+          read,
+          { id: t.id, parentId: 'templates', rank: null, name: t.name, kind: 'template' },
+          EVERYTHING,
+          c,
+        );
+        if (!entry.deleted) out.push({ ...entry, parentId: 'templates', kind: 'template' });
+      }
+      return out;
+    } catch (e) {
+      if (e instanceof StopError || isStop(e)) throw e;
+      this.o.log?.warn({ err: e, projectId }, 'the templates could not be taken with the full snapshot');
+      return undefined;
     }
   }
 
@@ -774,6 +829,7 @@ export class SnapshotService {
     trigger: Record<string, unknown>;
     pages: readonly PageEntry[];
     library: LibraryEntry | null;
+    templates?: readonly PageEntry[];
     counts: { reads: number; downloads: number; newObjects: number; newBytes: number };
   }): Manifest {
     const now = this.o.now();
@@ -816,6 +872,7 @@ export class SnapshotService {
       complete: missing === 0,
       trigger: o.trigger,
       pages: o.pages,
+      ...(o.templates ? { templates: o.templates } : {}),
       library: o.library,
       counts: { pages: o.pages.length, pieces, logicalBytes: logical, missing, ...o.counts },
     };

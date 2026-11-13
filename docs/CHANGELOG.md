@@ -1,5 +1,73 @@
 # Changelog
 
+## Unreleased: v2 E2: audits (findings only, read from the snapshots)
+
+[ADR 0044](adr/0044-audits.md); migration `2300_audits`; PLAN-v2 4.12 and the E2 row. Nothing was run against a live
+system: no call to the owner's LegendKeeper bridge connector, not even a read. Every test runs against the mock; the
+sandbox test is written and dry-run against the mock, not run; the owner does the live checks (below).
+
+- **Audits read the snapshots, never LegendKeeper.** The newest complete full snapshot plus every later change snapshot,
+  from the snapshot store (E1a) and the bridge's own database (registry, lifecycle records, the chronology check's last
+  run). A run makes **0 requests** (tested against the mock's request log). Each finding records its source snapshot and
+  that snapshot's age; a full snapshot older than 36 hours (a setting) is flagged `stale_snapshot`; with no complete full
+  snapshot the run is skipped and commits nothing.
+- **When they run:** after each nightly full snapshot completes (in the background), from the dashboard's **Run an audit
+  now**, and from the new maintenance job `audit-run` (off by default). The placeholders `orphan-and-link-audit` and
+  `tag-audit` are gone (migration 2300 removes their rows).
+- **Findings**, per run: code, category, severity (error, warning, info), page, document and block, evidence (expected and
+  found), source, fix. **Tracked across runs:** new, still present (with "first seen"), gone (with when); a gone finding that
+  returns is new. **Acknowledge** with a reason: hidden while the same evidence persists, back (marked "evidence changed") if
+  it changes; kept if the finding goes and returns unchanged. Nothing is pre-acknowledged.
+- **Rules** (a per-project list, edited on the dashboard, audited, needing re-authentication like the canon rules; seeded
+  from the registry: Character Core, Compact Character Reference, the Index template): selectors Reference Type, name
+  prefix, ancestor name, and, new, registry type with a role, and kind; a template by registry role, name or id. The old
+  bridge's codes keep their meanings (`no_matching_rule`, `ambiguous_owner_rule`, `incomplete_owner_ancestry`,
+  `property_kind_mismatch`, `property_order_mismatch`, `property_presentation_mismatch`, `property_row_order_mismatch`,
+  `document_type_mismatch`, `document_order_mismatch`, `missing_required_tags`, `tags_outside_definition`, `duplicate_tags`,
+  `missing_target`, `inaccessible_target`, `deleted_target`); new: `ambiguous_ancestor`, `ambiguous_template`,
+  `template_not_found`, `rule_selector_unknown`, `property_missing`, `property_row_missing`, `document_missing`,
+  `tag_definition_invalid`, `tag_rule_unknown`. Templates are compared for structure, **never values**. The tag-definition
+  source (a page and one document with exactly one `json` code block) is chosen on the dashboard.
+- **The checks:** template and tag rules; internal references (missing, deleted and inaccessible kept distinct from the
+  bridge's own knowledge, since a 404 does not prove deletion; **`canon_refers_to_archived`**: an Authoritative page linking
+  to a `[BARC]` page); unclassified pages; ordering (reported, never moved); taxonomy drift on the snapshot (the registry's
+  own drift walk, plus races not in the taxonomy, entries with no pages, entries waiting for review); fact consistency
+  (Reference Type values the registry does not know, Subject and Canonical Display Name against the name); lifecycle
+  consistency exactly as the E2 row states, C2d's set exception included, and incomplete lifecycle and set records with
+  their pages (**never fixed**); keep-region health (paragraphs with line breaks, inline-icon pages, `unsupported` blocks
+  per page, collection blocks); and D1's chronology findings folded in as their own category.
+- **"Propose a fix"** (the dashboard; never applied by an audit): re-reads its target live, refuses a finding that is out of
+  date, then creates ONE ordinary proposal through the machinery of an existing tool, with every guard (the owner approves it
+  on the Proposals page): a paragraph with line breaks split into paragraphs **block by block** (`insertBlock` for the new
+  parts, then `replaceBlock` cutting the original to its first part, so a refused write loses nothing; the compare-and-swap inside the lock, a verify step; never the whole page, so it works
+  beside inline icons); `set_facts` **only when the right value is unambiguous** (Kamigawa Miyuki's Reference Type is
+  `Compact Character Reference`; Mehrana al-Khalid, Founder's Subject is reported with no fix); `move_resource` under the same
+  parent; an additive tag fix (never a removal; a status tag is refused by the lifecycle guard); and D1.1's
+  `sync_timeline_event` through the chronology module. An optional **Re-check now** reads the finding's page live.
+- **The full snapshot now also takes the templates** (they sit outside the AI REPOSITORY; an additive manifest field,
+  `templates`; about 2.3 reads each, 35 a night for 14 templates) so templates can be compared without a live read
+  (ADR 0042 amendment). The snapshot cost test counts them.
+- **Dashboard:** the **Audits** page (after Snapshots): the latest audit (snapshot, age, stale), the summary by category and
+  severity, filters (category, code, severity, page path, new, acknowledged, resolved), per-page grouping, each finding's
+  evidence with a link to the page's snapshot history (`/snapshots?page=<id>`, new), acknowledge, Propose a fix, Re-check now,
+  the runs with their duration and snapshot, the rules editor, the tag-definition source and the settings. Admin routes under
+  `/api/admin/audits`.
+- **MCP:** `audit_findings` (read, free): filters, paging, `detail: full` for the evidence. There is no agent tool to run, edit
+  or acknowledge an audit. The tool counts become 62 (151 with the per-operation tools); the no-agent-escalation test's name
+  pattern exempts `audit_findings` (the policy audit log stays unreachable).
+- **Tests** (3,437 pass in all; `test/audits/`, `test/ui/audits.test.tsx`, `test/chronology/audits.test.ts`): every check with hand-made worlds;
+  the reader over base and change snapshots; the store (new, still, gone, back; acknowledge, hide, reappear); the real stack
+  on the mock world (zero requests, snapshot age, a stale snapshot, the owner's first findings, all four fixes against the real
+  engine including the paragraph split beside an inline icon and the in-lock conflict, the dashboard API, `audit_findings`,
+  the maintenance job); the chronology fold-in with D1.1's fix; the dashboard. The mock gained `replaceBlock`.
+- **Docs:** ADR 0044, [tools.md](tools.md#audits-v2-e2), [bridge-guide.md](bridge-guide.md#audit-findings),
+  [dashboard.md](dashboard.md#audits-v2-e2), [maintenance.md](maintenance.md#audits-v2-e2), PLAN-v2 (the E2 row, 4.12, the
+  tool table).
+
+**Live checks for the owner (after deploying):** run an audit from the dashboard right after a nightly or manual full snapshot;
+acknowledge one finding; "Propose a fix" for one line-break paragraph and approve it; run an audit again after the next
+snapshot and check that it is gone. The sandbox test (`deploy/sandbox-test.sh --project test -- audits`) is written, not run.
+
 ## Unreleased: v2 E1b: the encrypted Google Drive copy
 
 [ADR 0043](adr/0043-google-drive-offsite-copy.md); migration `2200_offsite_copy`; the one-off Google set-up in

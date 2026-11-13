@@ -285,3 +285,16 @@ It **writes**, then cleans up. It prints PASS, FAIL or INCONCLUSIVE per check ([
 - **Dry run:** `test/snapshots/sandbox-dryrun.test.ts` runs the same script against the mock snapshot world: every check
   PASSes (the mock refuses the read form of an icon and takes the bare name, as the real API does), `U` is NOTED, nothing
   is left behind, and the cost above is counted from the mock's own call log.
+
+## Audits (v2 E2)
+
+`npm run test:sandbox -- audits` (on the server `deploy/sandbox-test.sh --project test -- audits`) runs `audits.test.ts`
+([ADR 0044](../../docs/adr/0044-audits.md)). **Written, not run**: dry-run against the mock in
+`test/audits/sandbox-dryrun.test.ts`. It WRITES one throwaway subtree (deleted at the end, cascade) and checks, on the real
+API, what the audits assume: that LegendKeeper keeps a newline inside one text run; that a full snapshot holds the project's
+templates and what they cost; that an audit makes **zero** requests and records its snapshot and age; that "Propose a fix" for a
+top-level paragraph writes nothing until approved and then reads back as planned (the block keeps its id, the new paragraphs
+follow it, the bold mark stays with its words); the same fix for a paragraph **inside a table cell** (NOTED either way: whether
+`insertBlock` takes `after` a block inside a container, which decides whether the fix should be offered only at the top
+level); and that the finding is gone after the next full snapshot. Like the snapshot sandbox it uses the bridge's own runtime
+(a temporary database and snapshot store) with the throwaway root as its AI REPOSITORY.

@@ -507,6 +507,29 @@ page's earlier states are there to compare and bring back.
 
 Use a restore to undo a mistake, not to edit: to change a page, write it.
 
+## Audit findings
+
+The bridge audits each project after every nightly full snapshot (pages against their templates, links that point
+nowhere, unclassified pages, ordering, the taxonomy, facts, the page lifecycle, paragraphs with line breaks, inline
+icons, the chronology) and keeps the findings. **`audit_findings`** (free: no request to LegendKeeper) reads them:
+filter by `category`, `code`, `severity`, `page` (an id, or part of a name or path), `new` (first seen in the latest
+audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's evidence.
+
+- **A finding is a report, not an instruction, and it may be out of date.** It says which snapshot it came from and how
+  old that is; edits made since are not in it. Read the page (`get_resource`, `read_document`) before you change anything.
+- **Fix through the ordinary tools** (`set_facts`, `move_resource`, `write_page`, `update_resource`…); they go to
+  proposals as usual. You cannot run, edit or acknowledge an audit: the owner does, on the dashboard, which also offers
+  "Propose a fix" for some findings.
+- **Leave lifecycle and canon findings to the owner** (`lifecycle_*`, a Status or tag that disagrees with a prefix or a
+  place). The lifecycle tools refuse an inconsistent page; the owner decides which signal is right. Never edit a page's
+  prefix, Status or status tag to make a finding go away.
+- **Deleted or missing link targets** (`deleted_target`, `missing_target`, `inaccessible_target`) are decisions about a
+  page: ask. An Authoritative page that links to an Archived one (`canon_refers_to_archived`) is a warning for the owner.
+- A paragraph with a line break inside a text run (`line_break_paragraph`) shows as a keep region in `read_document`, so
+  `write_page` cannot change it as text: tell the owner (the dashboard splits it, block by block). A page with inline
+  icons (`inline_icon_page`) is refused by `write_page`: do not try to rewrite it.
+- Acknowledged findings are hidden by default (the owner decided they are fine as they are); do not "fix" them.
+
 ## Budget rules
 
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.
