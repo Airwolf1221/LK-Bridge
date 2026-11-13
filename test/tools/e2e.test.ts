@@ -94,6 +94,8 @@ describe('the MCP surface with the official client', () => {
         'list_snapshots',
         'snapshot_diff',
         'restore_snapshot',
+        // v2 E2: the audits' findings
+        'audit_findings',
       ].sort(),
     );
     const by = Object.fromEntries(tools.map((t) => [t.name, t]));

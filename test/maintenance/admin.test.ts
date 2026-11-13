@@ -84,12 +84,11 @@ describe('the registry', () => {
       'tree-sweep',
       'tree-check',
       'assign-block-ids-sweep',
-      'orphan-and-link-audit',
-      'tag-audit',
       'asset-refresh',
       'asset-check',
       'link-sweep', // v2 C2c
       'chronology-check', // v2 D1
+      'audit-run', // v2 E2 (it replaced the two audit placeholders)
       'snapshot-full', // v2 E1a
       'snapshot-prune',
       'snapshot-verify',
@@ -160,7 +159,7 @@ describe('changes', () => {
 
   it('refuses to enable, schedule or run a placeholder, and changes nothing', async () => {
     const before = stack.audit().length;
-    for (const id of ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit']) {
+    for (const id of ['assign-block-ids-sweep']) {
       for (const r of [
         await stack.post(`/api/admin/maintenance/${id}/enable`),
         await stack.post(`/api/admin/maintenance/${id}/run`),
@@ -176,7 +175,7 @@ describe('changes', () => {
     }
     // Only the (harmless) disables were audited: no enable, schedule change or run left a trace.
     const added = stack.audit().slice(0, stack.audit().length - before);
-    expect(added.length).toBe(3);
+    expect(added.length).toBe(1);
     for (const row of added) expect(row.action).toBe('maintenance.disable');
   });
 

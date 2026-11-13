@@ -127,7 +127,8 @@ async function attack(t: Target): Promise<string[]> {
       } else {
         // No bridge tool even claims to administer policy.
         expect(tool.name).not.toMatch(
-          /approve|reject|revoke|scope|profile|token|grant|policy|consent|audit/i,
+          // v2 E2: `audit_findings` reads the audits' findings (read-only); the policy audit log stays unreachable.
+          /approve|reject|revoke|scope|profile|token|grant|policy|consent|audit(?!_findings$)/i,
         );
       }
       for (const args of argumentSets(tool.inputSchema as never, ids)) {

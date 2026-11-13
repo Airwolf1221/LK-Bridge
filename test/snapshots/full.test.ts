@@ -126,13 +126,28 @@ describe('the full snapshot', () => {
     const byType = m.pages
       .flatMap((p) => p.documents ?? [])
       .reduce<Record<string, number>>((acc, d) => ((acc[d.type] = (acc[d.type] ?? 0) + 1), acc), {});
+    // v2 E2 (ADR 0044): the project's templates are taken too: one listing, then each template as a page.
+    const tdocs = (m.templates ?? []).flatMap((t) => t.documents ?? []);
+    const tByType = tdocs.reduce<Record<string, number>>(
+      (a, d) => ((a[d.type] = (a[d.type] ?? 0) + 1), a),
+      {},
+    );
+    const templateReads =
+      1 +
+      (m.templates ?? []).length +
+      (tByType.page ?? 0) +
+      2 * (tByType.map ?? 0) +
+      3 * (tByType.time ?? 0) +
+      (tByType.board ?? 0);
+    expect(m.templates!.length).toBeGreaterThan(0);
     const expected =
       m.pages.length +
       (byType.page ?? 0) +
       2 * (byType.map ?? 0) +
       3 * (byType.time ?? 0) +
       (byType.board ?? 0) +
-      3;
+      3 +
+      templateReads;
     expect(m.counts.reads).toBe(expected);
     expect(m.counts.downloads).toBe(3);
     process.stdout.write(

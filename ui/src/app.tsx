@@ -20,6 +20,7 @@ import { ProjectsPage } from './pages/projects';
 import { ProposalsPage } from './pages/proposals';
 import { SettingsPage } from './pages/settings';
 import { StagingPage } from './pages/staging';
+import { AuditsPage } from './pages/audits';
 import { SnapshotsPage } from './pages/snapshots';
 import { OffsitePage } from './pages/offsite';
 import { AssetsPage } from './pages/assets';
@@ -63,6 +64,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/assets', label: 'Asset Tree' },
   { to: '/staging', label: 'Staging' },
   { to: '/snapshots', label: 'Snapshots' },
+  { to: '/audits', label: 'Audits' },
   { to: '/offsite', label: 'Off-site copy' },
   { to: '/settings', label: 'Settings' },
   { to: '/account', label: 'Account' },
@@ -112,6 +114,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/assets') return <AssetsPage />;
   if (path === '/staging') return <StagingPage />;
   if (path === '/snapshots') return <SnapshotsPage />;
+  if (path === '/audits') return <AuditsPage />;
   if (path === '/offsite') return <OffsitePage />;
   if (path === '/settings') return <SettingsPage />;
   if (path === '/account') return <AccountPage />;

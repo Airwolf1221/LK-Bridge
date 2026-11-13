@@ -14,7 +14,7 @@ import {
 import { fmtAgo, fmtBytes, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectApi, useProjectReloadOn, useScopedApi } from '../project';
-import { Link } from '../router';
+import { Link, useRoute } from '../router';
 import type {
   ImageRestoreResponse,
   PlanNoteView,
@@ -408,7 +408,9 @@ function PageHistory({ pageId, onClose }: { pageId: string; onClose: () => void 
 function PageFinder() {
   const [q, setQ] = useState('');
   const [term, setTerm] = useState('');
-  const [open, setOpen] = useState<string | null>(null);
+  // v2 E2: the Audits page links a finding to its page's history as `/snapshots?page=<id>`.
+  const { query } = useRoute();
+  const [open, setOpen] = useState<string | null>(query.get('page'));
   const r = useScopedApi<SnapshotPagesResponse>(`/snapshots/pages${qs({ q: term, limit: 50 })}`);
   return (
     <section className="card" aria-labelledby="snap-pages-h">

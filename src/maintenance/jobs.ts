@@ -1,5 +1,5 @@
 /**
- * The maintenance job registry: eight implemented jobs and three placeholders (PLAN §8 page 6, docs/maintenance.md;
+ * The maintenance job registry: the implemented jobs and one placeholder (PLAN §8 page 6, docs/maintenance.md;
  * v2 A2 added the repository tree's sweep and check, replacing the `tree-snapshot` placeholder).
  * A placeholder has no `run`, cannot be enabled and cannot be run. Its real logic is a later chunk's work.
  */
@@ -24,6 +24,14 @@ export interface ChronologyMaintenance {
   check(
     projectId: string,
     trigger: string,
+  ): Promise<{ readonly summary: string; readonly changed: boolean; readonly skipped?: boolean }>;
+}
+
+/** v2 E2 (ADR 0044): the audits (findings only, read from the snapshots). */
+export interface AuditMaintenance {
+  run(
+    projectId: string,
+    trigger: 'manual' | 'schedule',
   ): Promise<{ readonly summary: string; readonly changed: boolean; readonly skipped?: boolean }>;
 }
 
@@ -62,6 +70,8 @@ export interface BuiltinJobDeps {
   readonly chronology?: ChronologyMaintenance;
   /** v2 E1a: snapshots (full, retention and collector, verify). Without them the jobs skip, saying why. */
   readonly snapshots?: SnapshotMaintenance;
+  /** v2 E2: the audits. Without them the job skips, saying why. */
+  readonly audits?: AuditMaintenance;
 }
 
 const NO_SNAPSHOTS: MaintenanceResult = { skipped: true, summary: 'Skipped: snapshots are not running.' };
@@ -89,7 +99,7 @@ const placeholder = (
 });
 
 /** Ids of the placeholders, for tests and docs. (v2 A2: `tree-snapshot` became `tree-sweep` and `tree-check`.) */
-export const PLACEHOLDER_IDS = ['assign-block-ids-sweep', 'orphan-and-link-audit', 'tag-audit'] as const;
+export const PLACEHOLDER_IDS = ['assign-block-ids-sweep'] as const;
 
 const NO_TREE: MaintenanceResult = { skipped: true, summary: 'Skipped: the repository tree is not running.' };
 
@@ -267,13 +277,6 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       'Will give legacy documents addressable block ids (assignBlockIds), a page at a time within the P3 budget.',
       true,
     ),
-    placeholder(
-      'orphan-and-link-audit',
-      'Orphan and link audit',
-      'Will report resources with no parent links and links that point nowhere.',
-      false,
-    ),
-    placeholder('tag-audit', 'Tag audit', 'Will report unused, duplicate and near-duplicate tags.', false),
     // v2 A4: the asset tree's refresh and check (kept after the placeholders so earlier positions do not move).
     ...assetJobs(d.assets),
     // v2 C2c (ADR 0035): the link index's sweep, for the related-pages report of archive_page and move_to_working.
@@ -321,6 +324,29 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
         d.chronology && ctx.project
           ? d.chronology.check(ctx.project.id, ctx.trigger)
           : { skipped: true, summary: 'Skipped: chronology sync is not running.' },
+    },
+    // v2 E2 (ADR 0044): the audits. They read the snapshots only, so a run costs no request to LegendKeeper.
+    {
+      id: 'audit-run',
+      name: 'Audit',
+      description:
+        'Audits each project from its newest complete full snapshot (plus any later change snapshots), the type registry, ' +
+        'the lifecycle records and the chronology check’s last run: the template and tag rules, internal references, ' +
+        'unclassified pages, ordering, taxonomy drift, fact consistency, lifecycle consistency, keep-region health and the ' +
+        'chronology’s findings. Findings only: nothing is changed and LegendKeeper is not read. An audit already runs by ' +
+        'itself after each nightly full snapshot completes, so this schedule is a fallback and is off by default; the ' +
+        'Run now button here, and on the Audits page, run one at once. The findings are on the Audits page.',
+      defaultSchedule: { kind: 'daily', time: '06:00' },
+      defaultEnabled: false,
+      implemented: true,
+      writes: false,
+      usesLk: false,
+      record: 'always',
+      scope: 'project',
+      run: (ctx) =>
+        d.audits && ctx.project
+          ? d.audits.run(ctx.project.id, ctx.trigger === 'manual' ? 'manual' : 'schedule')
+          : { skipped: true, summary: 'Skipped: the audits are not running.' },
     },
     // v2 E1a (ADR 0042): snapshots.
     {

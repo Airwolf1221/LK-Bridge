@@ -98,6 +98,7 @@ budget (arkona): writes 0/120·min …
 | `list_snapshots`            | read   | true / false / true / false                                     | none (the bridge's snapshot index)                                                                         |
 | `snapshot_diff`             | read   | true / false / true / false                                     | none between two snapshots; against now 1 read + the document's own (page 1, map 2, timeline 3+)           |
 | `restore_snapshot`          | write  | false / **true** / false / false                                | always a proposal; to plan 1–2 reads + the documents' own; see [Snapshots](#snapshots-and-restores-v2-e1a) |
+| `audit_findings`            | read   | true / false / true / false                                     | none (the bridge's own findings); see [Audits](#audits-v2-e2)                                              |
 | `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                                                                              |
 | `bridge_budget`             | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                       |
@@ -154,7 +155,7 @@ budget (arkona): writes 0/120·min …
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (150 tools in all, 152 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (151 tools in all, 153 with the policy layer’s two proposal tools). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -1359,6 +1360,45 @@ What a restore cannot bring back is in its result and on the proposal, never hid
 0 to 4 reads (`write_page` 1, `set_facts` 0, `create_document` 2, `update_document` 2, `create_map_feature` 2, a timeline
 event through `lk_api_write` 4, the lifecycle tools 0): it reuses the verify step's read. Planning a restore costs 1–2
 reads plus the documents' own; the restore itself is the writes it lists, with their verify reads.
+
+## Audits (v2 E2)
+
+[ADR 0044](adr/0044-audits.md) has the decisions. The bridge audits each project after every nightly full snapshot: it reads
+the newest complete full snapshot (and the change snapshots after it), the type registry, the lifecycle records and the
+chronology check's last run, and **never LegendKeeper**, so an audit costs no request. An audit **never changes
+anything**; it reports. The owner sees the findings on the dashboard's Audits page.
+
+**`audit_findings`** `{ category?, code?, severity?, page?, new?, acknowledged?, state?, limit?, offset?, detail?,
+project }` (read, free): the findings, errors first, with the latest run (its snapshot, how old that snapshot is,
+whether it is stale) and the counts by category. Filters: `category` and `code` (one or several), `severity`, `page` (a page
+id, or a fragment of its name or path), `new` (first seen in the latest run), `acknowledged` (`hide`, the default, `only` or
+`include`: the owner's acknowledged findings stay hidden while their evidence is unchanged), `state` (`open`, `gone` or
+`all`). Paged: `limit` (default 25, at most 100) and `offset`; the answer gives `nextOffset`. `detail: "full"` adds each
+finding's **evidence** (what was expected and what was found). Each finding says which snapshot it came from and its age in
+minutes: **it may not show edits made since**. A finding that has a fix says so (`fixAvailable`); only the owner applies it,
+with the dashboard's "Propose a fix".
+
+Categories: `rules` (no rule matches a page, several do), `template` (a page's sidebar and tabs against its template's),
+`tags`, `references` (missing, deleted or inaccessible links; an Authoritative page linking to an Archived one),
+`unclassified`, `ordering`, `taxonomy`, `facts`, `lifecycle`, `keep_regions` (paragraphs with line breaks, inline icons,
+`unsupported` blocks, collections), `chronology` and `audit` (about the audit itself: a stale snapshot).
+
+**How an agent acts on a finding.** A finding is a report, not an instruction, and it may be out of date.
+
+- Read the page (`get_resource`, `read_document`) before changing anything.
+- Fix it with the ordinary tools, which go to proposals as usual: `set_facts` for a wrong fact or Reference Type, `move_resource`
+  for ordering, `write_page` for text, `update_resource` for tags, `set_facts` with `links` for a link. A deleted or missing
+  link target is a decision about the page, so ask.
+- **Never** work around a **lifecycle** finding (`lifecycle_*`) or anything about canon: the lifecycle tools are the owner's,
+  and the owner decides which of the prefix, Status, tag and place is right.
+- A paragraph with a line break (`line_break_paragraph`) is kept as a keep region by `read_document`; `write_page` cannot change
+  it as text. Tell the owner: the dashboard offers to split it, block by block.
+- A page holding inline icons (`inline_icon_page`) is refused by `write_page` (`PAGE_NOT_WRITABLE`): do not try to rewrite it.
+- There is no tool to run, edit or acknowledge an audit: the owner does that on the dashboard.
+
+**Costs.** `audit_findings`: none (no request to LegendKeeper). The dashboard's "Propose a fix" re-reads its page first (a
+paragraph split 2 reads, a Reference Type fix 3, a re-placement 2 plus 1 per 100 siblings, a tag fix 1) and writes
+nothing until the owner approves; "Re-check now" reads the page live (1 read plus one per page document).
 
 ## Image upload (v1: `lk_upload_image`)
 

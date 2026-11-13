@@ -10,6 +10,7 @@
  */
 import * as z from 'zod';
 import type { ImageService } from '../../images/service.js';
+import type { Audits } from '../../audits/service.js';
 import type { SnapshotService } from '../../snapshots/service.js';
 import type { Restores } from '../../snapshots/restores.js';
 import type { AssetQueries } from '../../assets/index.js';
@@ -80,6 +81,8 @@ export interface DiscoverServices {
   /** v2 E1a (ADR 0042): snapshots (list_snapshots, snapshot_diff) and restore proposals (restore_snapshot). */
   readonly snapshots?: SnapshotService;
   readonly restores?: Restores;
+  /** v2 E2 (ADR 0044): the audits (audit_findings). */
+  readonly audits?: Audits;
 }
 
 /** What every tool handler needs. */

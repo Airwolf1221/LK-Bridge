@@ -254,6 +254,13 @@ describe('the Snapshots page', () => {
     expect(screen.getByText(/The newest nightly copy is .* old/)).toBeInTheDocument();
   });
 
+  it('opens a page’s history from a link on the Audits page (/snapshots?page=<id>)', async () => {
+    const api = installApi(routes());
+    renderApp('/ui/snapshots?page=atlas5np');
+    await waitFor(() => expect(api.find('GET', '/snapshots/pages/atlas5np').length).toBeGreaterThan(0));
+    expect(projectOf(api.find('GET', '/snapshots/pages/atlas5np')[0]!)).toBe('baisheng');
+  });
+
   it('takes a full snapshot now, in the selected project', async () => {
     const api = installApi(
       routes({ 'POST /snapshots/full': { status: 202, body: { project: 'baisheng', run: null } } }),
