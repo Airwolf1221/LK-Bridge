@@ -1532,11 +1532,36 @@ export class StepExecutor {
       });
 
       try {
-        const value = await callOp(this.lk(job), op, params, {
-          ...this.callOptions(job, step, stats),
-          ifMatch,
-          verify: (ctx) => this.verifyHook(job, step, op, meta, params, ctx.error),
-        });
+        const send = (p: OpParams) =>
+          callOp(this.lk(job), op, p, {
+            ...this.callOptions(job, step, stats),
+            ifMatch,
+            verify: (ctx) => this.verifyHook(job, step, op, meta, p, ctx.error),
+          });
+        let value: unknown;
+        try {
+          value = await send(params);
+        } catch (first) {
+          // v2 E1a (ADR 0042 decision 9): a field LegendKeeper refuses although the rest is sound (an icon name) is dropped
+          // and the write sent once more; the result says what was dropped. Any other refusal fails the step as before.
+          const refused = refusedFields(step.options.dropIfRefused, params, first);
+          if (!refused) throw first;
+          const body = { ...(params.body as Record<string, unknown>) };
+          const droppedFields: Record<string, unknown> = {};
+          const write = step.options.journalOperation?.write;
+          const droppedWhere = typeof write === 'string' ? write : op.operationId;
+          for (const k of refused) {
+            droppedFields[k] = body[k];
+            delete body[k];
+          }
+          params = { ...params, body };
+          this.d.repo.setStepParams(job.id, step.stepNo, params);
+          const retried = await send(params);
+          value =
+            retried !== null && typeof retried === 'object' && !Array.isArray(retried)
+              ? { ...(retried as Record<string, unknown>), droppedFields, droppedWhere }
+              : { droppedFields, droppedWhere };
+        }
         if (journalId !== undefined) {
           this.d.journal.setOutcome(journalId, 'applied');
           // An insert or create without a client-chosen id: note the id LegendKeeper gave it.
@@ -2287,4 +2312,28 @@ function runMapChecker(checker: MapChecker, ctx: Parameters<MapChecker>[0]): Ret
       ],
     };
   }
+}
+
+/**
+ * v2 E1a (ADR 0042 decision 9): the body fields of a write LegendKeeper refused, when the step allows dropping them
+ * (`dropIfRefused`): a 400 VALIDATION_ERROR that names the field (its path, or its message: "Invalid icon name" for an
+ * `icon…` field). Nothing otherwise.
+ */
+export function refusedFields(
+  allowed: readonly string[] | undefined,
+  params: OpParams,
+  e: unknown,
+): string[] | undefined {
+  if (!allowed || allowed.length === 0) return undefined;
+  if (!(e instanceof BridgeLkError) || e.status !== 400 || (e.code && e.code !== 'VALIDATION_ERROR'))
+    return undefined;
+  const body = params.body;
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return undefined;
+  const text = [e.message, ...e.errors.map((i) => `${i.path} ${i.message}`)].join(' ');
+  const hit = allowed.filter((k) => {
+    if (!(k in (body as Record<string, unknown>))) return false;
+    if (e.errors.some((i) => i.path.split(/[.[\]]+/).includes(k))) return true;
+    return text.includes(k) || (/^icon/i.test(k) && /\bicon\b/i.test(text));
+  });
+  return hit.length > 0 ? hit : undefined;
 }

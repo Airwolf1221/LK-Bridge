@@ -60,11 +60,11 @@ OAuth client whose only redirect URI is `<BRIDGE_PUBLIC_URL>/admin/drive/callbac
 | Client ID, client secret             | secret store, scope `offsite` (secret's last 4 shown)         |
 | Refresh token                        | secret store, scope `offsite`                                 |
 | Crypt password and salt (password2)  | secret store, scope `offsite`; never shown after confirmation |
-| Account name and email, dates, state | `offsite_state` (migration 2100)                              |
+| Account name and email, dates, state | `offsite_state` (migration 2200)                              |
 | Settings (schedule, folder, limits)  | `offsite_state.settings_json`, edited on the dashboard        |
 | Runs, findings, folders              | `offsite_runs`, `offsite_findings`, `offsite_folders`         |
 
-The `secrets` table is rebuilt by migration 2100 to accept the five new purposes (SQLite cannot change a CHECK in place);
+The `secrets` table is rebuilt by migration 2200 to accept the five new purposes (SQLite cannot change a CHECK in place);
 every existing row is copied as it is and still opens (its associated data is scope and purpose). Access tokens are never
 stored. Saving the client, connecting, disconnecting, setting keys, deleting an old folder and adopting a folder all need
 the dashboard's re-authentication (ADR 0028 decision 7).
@@ -103,7 +103,7 @@ project ids, snapshot ids) is visible.
   default, after the 04:15 database copy; monthly verify on day 1 at 05:30): a run starts when nothing of its kind has
   started since its latest scheduled time, so a missed time is caught up and changing the schedule needs no unit change;
 - **`lk-bridge-offsite.path`**, which watches `/var/lib/lk-bridge/offsite/requests/*.json`. The bridge writes a request
-  file for "Copy now", "Verify now", deleting an old folder, and **after each weekly full snapshot completes**
+  file for "Copy now", "Verify now", deleting an old folder, and **after each nightly full snapshot completes**
   (`SnapshotService.afterFull`). The runner takes (reads and deletes) every request first; a request left while it runs
   starts it again afterwards. There is no shared process and no sudo rule.
 

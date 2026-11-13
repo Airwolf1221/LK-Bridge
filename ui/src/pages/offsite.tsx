@@ -598,7 +598,7 @@ function CopyCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void })
           {d.configured.ready
             ? d.nextCopyAt <= now
               ? 'Due now (within a quarter of an hour)'
-              : `${fmtTime(d.nextCopyAt)} (daily at ${d.settings.copyTime}, London time; also after each weekly full snapshot)`
+              : `${fmtTime(d.nextCopyAt)} (daily at ${d.settings.copyTime}, London time; also after each nightly full snapshot)`
             : `Not until ${d.configured.missing.join(' and ')} ${d.configured.missing.length === 1 ? 'is' : 'are'} set up.`}
         </dd>
         {d.lastCopy?.rcloneVersion && (

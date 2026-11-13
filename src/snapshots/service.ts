@@ -1,5 +1,5 @@
 /**
- * Snapshots (v2 E1a, ADR 0042; PLAN-v2 4.11): the store, the full, change and daily snapshots, retention and the
+ * Snapshots (v2 E1a, ADR 0042; PLAN-v2 4.11): the store, the full and change snapshots, retention and the
  * garbage collector, the verify routine and the dashboard's view. Restores (restore.ts) and the rehearsal
  * (rehearsal.ts) build on it.
  *
@@ -11,8 +11,8 @@
  * - **Change**: after every write step a bridge job makes to a page (any tool, `lk_api_*` included), the page's changed
  *   pieces are owed (a row written while the job runs); when the job ends they are taken, using the reads the job's own
  *   verify step (or the tree's re-read) made after its last write instead of reading again.
- * - **Daily** (`daily`): pages whose `updatedAt` moved since they were last snapshotted (edits made in the app). OFF
- *   until the owner's sandbox run confirms that `updatedAt` really moves (a per-project setting).
+ * - There is no pass for edits made in the app: LegendKeeper's `updatedAt` does not move when content changes (the
+ *   owner's sandbox run, 13 November 2026), so the full snapshot is nightly and catches them within a day (ADR 0042).
  */
 import { randomBytes } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
@@ -124,7 +124,7 @@ export interface SnapshotServiceOptions {
   readonly afterPage?: (runId: string, pageId: string) => void | Promise<void>;
   /**
    * v2 E1b (ADR 0043): called when a full snapshot's manifest is written (the run succeeded). The off-site copy asks its
-   * runner for a copy here, so the weekly full snapshot reaches Drive the same night. Never throws into the run.
+   * runner for a copy here, so the nightly full snapshot reaches Drive within the hour. Never throws into the run.
    */
   readonly afterFull?: (projectId: string, snapshotId: string) => void | Promise<void>;
 }
@@ -265,13 +265,11 @@ export class SnapshotService {
   /** Runs interrupted by a restart, continued in the background (call once the projects are served). */
   resumeInterrupted(): void {
     for (const pid of this.o.projects.activeIds()) {
-      for (const kind of ['full', 'daily'] as const) {
-        const r = this.index.runningRun(pid, kind);
-        if (r)
-          void this.runPages(pid, r, 'resume').catch((e: unknown) =>
-            this.o.log?.warn({ err: e, runId: r.id }, 'a snapshot run could not continue'),
-          );
-      }
+      const r = this.index.runningRun(pid, 'full');
+      if (r)
+        void this.runPages(pid, r, 'resume').catch((e: unknown) =>
+          this.o.log?.warn({ err: e, runId: r.id }, 'a snapshot run could not continue'),
+        );
     }
   }
 
@@ -357,7 +355,9 @@ export class SnapshotService {
       const hit = memo.get(url);
       if (hit) return { ...hit, downloaded: false, created: false, stored: 0 };
       const known = this.knownImage(projectId, url);
-      if (known && (await this.store.has(known.sha256))) {
+      // Bytes the store holds are reused, unless an open verify finding says they are damaged: they are then fetched again
+      // and written again (the repair).
+      if (known && !this.isDamaged(known.sha256) && (await this.store.has(known.sha256))) {
         memo.set(url, known);
         return { ...known, downloaded: false, created: false, stored: 0 };
       }
@@ -513,7 +513,20 @@ export class SnapshotService {
           : fetch,
       ...(cached ? { cached } : {}),
       damaged: (sha) => this.isDamaged(sha),
+      priorAsset: (assetId, url) => this.priorAsset(projectId, assetId, url),
     };
+  }
+
+  /** A library image as the latest snapshot that stored it recorded it: this asset id, this URL (ADR 0042 decision 4). */
+  priorAsset(projectId: string, assetId: string, url: string): { sha256: string; size: number } | null {
+    const r = this.o.db
+      .prepare(
+        `SELECT sha256, size FROM snapshot_pieces
+          WHERE project_id = ? AND piece = 'asset' AND ref = ? AND name = ? AND sha256 IS NOT NULL
+          ORDER BY taken_at DESC LIMIT 1`,
+      )
+      .get(projectId, assetId, url) as { sha256: string; size: number } | undefined;
+    return r ?? null;
   }
 
   // ============================================================================================ disk
@@ -652,97 +665,6 @@ export class SnapshotService {
     }
   }
 
-  /**
-   * The daily changed-pages pass: lists the resources (one request per 100), and snapshots the pages whose `updatedAt`
-   * moved since a snapshot last saw it (and, with `snapshotDailyPassDocuments`, whose documents' did: one request per
-   * page). Off unless the project's `snapshotDailyPass` is on.
-   */
-  async daily(projectId: string, trigger: string, o: { readonly force?: boolean } = {}): Promise<RunOutcome> {
-    const settings = this.o.projectSettings(projectId);
-    if (settings.snapshotDailyPass !== true && o.force !== true) {
-      return {
-        skipped: true,
-        changed: false,
-        summary:
-          'Skipped: the daily changed-pages pass is switched off for this project (it waits for the sandbox run to confirm that LegendKeeper’s updatedAt moves when content changes).',
-      };
-    }
-    const key = `${projectId}:daily`;
-    if (this.running.has(key))
-      return {
-        skipped: true,
-        changed: false,
-        summary: 'Skipped: a daily pass of this project is already running.',
-      };
-    this.running.add(key);
-    try {
-      await this.start();
-      let run = this.index.runningRun(projectId, 'daily');
-      if (!run) {
-        const found = this.pagesOf(projectId);
-        if ('skip' in found) return { skipped: true, changed: false, summary: `Skipped: ${found.skip}.` };
-        const inTree = new Map(found.nodes.map((n) => [n.id, n]));
-        const read = this.reader(projectId, 'P3');
-        const c = newCounters();
-        const listed = new Map<string, string | null>();
-        let cursor: string | undefined;
-        for (let page = 0; page < 10_000; page++) {
-          c.reads++;
-          const body = (await read('listResources', {
-            query: { limit: 100, ...(cursor ? { cursor } : {}) },
-          })) as { data?: Obj[]; hasMore?: boolean; nextCursor?: string } | undefined;
-          for (const r of body?.data ?? [])
-            if (typeof r.id === 'string' && inTree.has(r.id))
-              listed.set(r.id, typeof r.updatedAt === 'string' ? r.updatedAt : null);
-          if (body?.hasMore !== true || typeof body.nextCursor !== 'string') break;
-          cursor = body.nextCursor;
-        }
-        const seen = this.index.seen(projectId);
-        const moved = new Set<string>();
-        for (const [id, at] of listed) {
-          if (!seen.has(id) || seen.get(id) !== at) moved.add(id);
-        }
-        if (settings.snapshotDailyPassDocuments === true) {
-          for (const id of listed.keys()) {
-            if (moved.has(id)) continue;
-            c.reads++;
-            const docs = (await read('listDocuments', { path: { resourceId: id } })) as
-              { data?: Obj[] } | undefined;
-            for (const d of docs?.data ?? []) {
-              const k = `${id}#${String(d.id)}`;
-              const at = typeof d.updatedAt === 'string' ? d.updatedAt : null;
-              if (!seen.has(k) || seen.get(k) !== at) moved.add(id);
-            }
-          }
-        }
-        // Pages that were snapshotted before and are no longer listed have gone: noted by the next full snapshot.
-        const id = `run_${randomBytes(8).toString('hex')}`;
-        this.index.createRun({
-          id,
-          projectId,
-          kind: 'daily',
-          trigger,
-          rootId: found.rootId,
-          pages: [...moved].sort(),
-          estimate: { listed: listed.size, moved: moved.size, listReads: c.reads },
-        });
-        this.index.addRunCounts(id, { reads: c.reads, downloads: 0, newObjects: 0, newBytes: 0 });
-        run = this.index.run(id)!;
-        if (moved.size === 0) {
-          this.index.finishRun(id, 'succeeded');
-          return {
-            changed: false,
-            runId: id,
-            summary: `No page’s updatedAt moved since the last snapshot (${listed.size} pages listed, ${c.reads} requests).`,
-          };
-        }
-      }
-      return await this.runPages(projectId, run, trigger);
-    } finally {
-      this.running.delete(key);
-    }
-  }
-
   /** Takes a run's pending pages one at a time (each recorded when done), then its library, then writes the manifest. */
   private async runPages(projectId: string, run: RunRow, _trigger: string): Promise<RunOutcome> {
     const resumed = run.done > 0;
@@ -798,10 +720,6 @@ export class SnapshotService {
         },
       });
       await this.writeSnapshot(manifest);
-      this.index.setSeen(
-        projectId,
-        pages.map((p) => ({ pageId: p.id, updatedAt: p.updatedAt ?? null })),
-      );
       this.index.finishRun(run.id, 'succeeded', { snapshotId: manifest.id });
       if (run.kind === 'full' && this.o.afterFull) {
         try {
@@ -1263,8 +1181,12 @@ export class SnapshotService {
   // ============================================================================================ retention and the collector
 
   /**
-   * Retention: per project, the newest `keepWeekly` complete full snapshots (and any partial full snapshot newer than the
-   * oldest of them), and change and daily snapshots of the last `keepDays` days. Then the collector.
+   * Retention (ADR 0042 decision 4), per project:
+   * - **full snapshots:** every one for `keepFullDays` (30) days; then, for `keepWeekly` (8) more weeks, one per ISO week:
+   *   the latest complete full snapshot of that week (the week of London time, as the schedule is). Older ones go. A
+   *   partial full snapshot is kept for the first window only. The newest complete full snapshot is never removed.
+   * - **change snapshots:** `keepDays` (30) days.
+   * Then the collector removes what no manifest refers to any more.
    */
   async prune(): Promise<{ removed: number; gc: Awaited<ReturnType<SnapshotService['gc']>> }> {
     const now = this.o.now();
@@ -1274,14 +1196,9 @@ export class SnapshotService {
     ).map((r) => r.project_id);
     for (const pid of projects) {
       const fulls = this.index.snapshots(pid, { kind: 'full', limit: 100_000 });
-      // The newest `keepWeekly` COMPLETE full snapshots are kept; until there are that many, every full snapshot is. A
-      // partial one never counts towards them, but one newer than the oldest kept stays as an extra.
-      const kept = fulls.filter((s) => s.state === 'complete').slice(0, this.o.settings.keepWeekly);
-      const drop: SnapshotRow[] =
-        kept.length < this.o.settings.keepWeekly ? [] : fulls.filter((s) => s.takenAt < kept.at(-1)!.takenAt);
+      const drop = fullsToDrop(fulls, now, this.o.settings);
       const cutoff = now - this.o.settings.keepDays * DAY;
-      for (const kind of ['change', 'daily'] as const)
-        drop.push(...this.index.snapshots(pid, { kind, before: cutoff, limit: 100_000 }));
+      drop.push(...this.index.snapshots(pid, { kind: 'change', before: cutoff, limit: 100_000 }));
       for (const s of drop) {
         await this.store.removeManifest(s.path);
         this.index.removeSnapshot(s.id);
@@ -1398,7 +1315,6 @@ export class SnapshotService {
     const pages = projectId ? this.pagesOf(projectId) : null;
     const estimate =
       projectId && pages && !('skip' in pages) ? this.estimateFull(projectId, pages.nodes.length) : null;
-    const ps = projectId ? this.o.projectSettings(projectId) : {};
     return {
       dir: this.store.dir,
       exists,
@@ -1410,17 +1326,18 @@ export class SnapshotService {
       // What all the snapshots would take without deduplication (their pieces, uncompressed), over what the unique pieces do.
       dedupRatio: totals.unique > 0 ? totals.referenced / totals.unique : null,
       compressionRatio: usage.objectBytes > 0 ? totals.unique / usage.objectBytes : null,
-      retention: { keepWeekly: s.keepWeekly, keepDays: s.keepDays, softDeleteDays: s.softDeleteDays },
+      retention: {
+        keepFullDays: s.keepFullDays,
+        keepWeekly: s.keepWeekly,
+        keepDays: s.keepDays,
+        softDeleteDays: s.softDeleteDays,
+      },
       ...(projectId
         ? {
             counts: this.index.countsByKind(projectId),
             nextFullEstimate: estimate,
             runs: this.index.runs(projectId, 20),
             owed: this.index.owedCount(projectId),
-            dailyPass: {
-              enabled: ps.snapshotDailyPass === true,
-              documents: ps.snapshotDailyPassDocuments === true,
-            },
           }
         : {}),
       findings: this.index.openFindings(100),
@@ -1498,4 +1415,58 @@ export function fmtBytes(n: number): string {
     i++;
   }
   return `${i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
+}
+
+/** The ISO week (`2026-W46`) of an instant, by the calendar of London time (the schedule's). */
+export function isoWeekKey(ms: number): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms));
+  const n = (t: string) => Number(parts.find((p) => p.type === t)!.value);
+  const d = new Date(Date.UTC(n('year'), n('month') - 1, n('day')));
+  const monday0 = (d.getUTCDay() + 6) % 7; // Monday is 0
+  d.setUTCDate(d.getUTCDate() - monday0 + 3); // the Thursday of this week decides the ISO year
+  const year = d.getUTCFullYear();
+  // The Thursday of week 1 (the week holding 4 January); this week's Thursday is `weeks` whole weeks after it.
+  const week1 = new Date(Date.UTC(year, 0, 4));
+  week1.setUTCDate(4 - ((week1.getUTCDay() + 6) % 7) + 3);
+  const week = 1 + Math.round((d.getTime() - week1.getTime()) / (7 * DAY));
+  return `${year}-W${String(week).padStart(2, '0')}`;
+}
+
+/**
+ * The full snapshots retention removes: all are kept for `keepFullDays`; older ones, within `keepWeekly` further weeks,
+ * only the latest complete one of each ISO week; the rest go. The newest complete one always stays.
+ */
+export function fullsToDrop(
+  fulls: readonly SnapshotRow[],
+  now: number,
+  s: { readonly keepFullDays: number; readonly keepWeekly: number },
+): SnapshotRow[] {
+  const allCut = now - s.keepFullDays * DAY;
+  const weeklyCut = allCut - s.keepWeekly * 7 * DAY;
+  const newestComplete = fulls.filter((x) => x.state === 'complete').sort((a, b) => b.takenAt - a.takenAt)[0];
+  // The latest complete full snapshot of each ISO week (of all of them: a week that straddles the 30 days is kept by its
+  // latest, which is then inside the first window).
+  const latestOfWeek = new Map<string, SnapshotRow>();
+  for (const f of fulls) {
+    if (f.state !== 'complete') continue;
+    const k = isoWeekKey(f.takenAt);
+    const cur = latestOfWeek.get(k);
+    if (!cur || f.takenAt > cur.takenAt) latestOfWeek.set(k, f);
+  }
+  return fulls.filter((f) => {
+    if (f.takenAt >= allCut) return false;
+    if (f === newestComplete || f.id === newestComplete?.id) return false;
+    if (
+      f.takenAt >= weeklyCut &&
+      f.state === 'complete' &&
+      latestOfWeek.get(isoWeekKey(f.takenAt))?.id === f.id
+    )
+      return false;
+    return true;
+  });
 }

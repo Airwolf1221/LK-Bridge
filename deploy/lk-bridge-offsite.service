@@ -1,6 +1,6 @@
 # The off-site copy to Google Drive (v2 E1b, ADR 0043): a separate process from the bridge, started by
 # lk-bridge-offsite.timer (every quarter hour; the schedule itself is on the dashboard, in the database) and by
-# lk-bridge-offsite.path (the dashboard's "Copy now" and "Verify now", and the end of each weekly full snapshot).
+# lk-bridge-offsite.path (the dashboard's "Copy now" and "Verify now", and the end of each nightly full snapshot).
 # Installed by deploy.sh --update-self with the other units (runbook, "Off-site copy to Google Drive").
 [Unit]
 Description=LK-Bridge off-site copy to Google Drive (encrypted, rclone)

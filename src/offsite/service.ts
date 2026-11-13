@@ -10,7 +10,7 @@
  * - generates the encryption keys (shown once; saved only once the owner types back their last characters) or takes the
  *   owner's own; a change after a copy exists starts a new Drive folder (a fresh full upload), keeping the old one until
  *   the owner deletes it;
- * - writes the runner's requests ("Copy now", "Verify now", deleting an old folder, the copy after a weekly full snapshot);
+ * - writes the runner's requests ("Copy now", "Verify now", deleting an old folder, the copy after a nightly full snapshot);
  * - shows what the runner recorded (runs, findings) and warns on the Overview when the connection is broken, the last good
  *   copy is too old, or the last verify found problems.
  *
@@ -525,7 +525,7 @@ export class OffsiteService {
     });
   }
 
-  /** After a weekly full snapshot: a copy, if the off-site copy is set up (quietly nothing otherwise). */
+  /** After a nightly full snapshot: a copy, if the off-site copy is set up (quietly nothing otherwise). */
   async afterFullSnapshot(): Promise<void> {
     if (!this.configured().ready) return;
     await this.request('copy', { trigger: 'after_full' });

@@ -22,6 +22,7 @@
  *   field; image bytes by SHA-256 (the upload's own verify downloads what LegendKeeper stored). What cannot be written
  *   (unsupported blocks, inline icons, board pages, unsupported properties) is listed, not counted as a difference.
  */
+import { ICON_FIELDS, withWriteIcon } from '../lk/icons.js';
 import { randomBytes } from 'node:crypto';
 import type { JobEngine, JobOrigin, JobView, StepSpec } from '../jobs/index.js';
 import { mintClientId } from '../jobs/ids.js';
@@ -703,38 +704,8 @@ export class Rehearsals {
       });
 
     /** Every write the rehearsal makes stays in its root (or its own asset folder): checked before each job. */
-    const inside = (steps: readonly StepSpec[], assetFolder: string | null) => {
-      for (const s of steps) {
-        const p = s.params ?? {};
-        const rid = p.path?.resourceId;
-        if (s.op === 'createResource') {
-          const parent = (p.body as Obj | undefined)?.parentId;
-          const ok =
-            (typeof parent === 'string' && (created.has(parent) || parent === rootId)) ||
-            (parent === undefined && (p.body as Obj).id === rootId);
-          if (!ok)
-            throw new RestoreError(
-              'REHEARSAL_OUTSIDE_ROOT',
-              `refused: ${s.op} would create a page outside the rehearsal's root`,
-            );
-          continue;
-        }
-        if (['createAssetFolder', 'createImageUpload', 'createImageAsset'].includes(s.op)) continue;
-        if (s.op === 'updateAsset' || s.op === 'deleteAsset') {
-          if (p.path?.assetId !== assetFolder)
-            throw new RestoreError(
-              'REHEARSAL_OUTSIDE_ROOT',
-              `refused: ${s.op} on an asset that is not the rehearsal's`,
-            );
-          continue;
-        }
-        if (typeof rid !== 'string' || (!created.has(rid) && rid !== rootId))
-          throw new RestoreError(
-            'REHEARSAL_OUTSIDE_ROOT',
-            `refused: ${s.op} on ${String(rid)}, which is not in the rehearsal's root`,
-          );
-      }
-    };
+    const inside = (steps: readonly StepSpec[], folder: string | null) =>
+      assertInsideRoot(steps, { created, rootId, assetFolder: folder });
 
     // ---- 1. the root and its asset folder
     const rootSteps: StepSpec[] = [
@@ -839,12 +810,31 @@ export class Rehearsals {
     }
     progress({ stage: 'structure', images: images.length });
 
+    // A field LegendKeeper refused (an icon name it does not know) goes without it: listed, and not compared.
+    const iconDropped = new Set<string>();
+    const noteDropped = (page: string, results: readonly { value: unknown }[]) => {
+      for (const x of results) {
+        const v = x.value as { droppedFields?: Record<string, unknown>; droppedWhere?: unknown } | null;
+        if (!v || typeof v !== 'object' || !v.droppedFields) continue;
+        iconDropped.add(page);
+        for (const [field, value] of Object.entries(v.droppedFields))
+          cannot.push({
+            page,
+            piece: `${field} ${JSON.stringify(value)}${typeof v.droppedWhere === 'string' ? ` (${v.droppedWhere})` : ''}`,
+            reason: 'LegendKeeper refused it; written without it (its default applies)',
+          });
+      }
+    };
+
     // ---- 3. the structure: every page (parents first) with its documents (typed, up to five with the page)
     const order = [...pick].sort((a, b) => depthOf(a.entry, manifest) - depthOf(b.entry, manifest));
     for (const l of pick) map.pages.set(l.entry.id, mintClientId(8));
+    // Pages that were not made (LegendKeeper refused them, or an ancestor they hang from): never written under.
+    const notMade = new Map<string, string>();
     for (const l of order) {
       const e = l.entry;
       let parent = rootId;
+      let parentEntry: string | null = null;
       for (
         let c = e.parentId, i = 0;
         c && i < 100;
@@ -852,23 +842,38 @@ export class Rehearsals {
       ) {
         if (map.pages.has(c)) {
           parent = map.pages.get(c)!;
+          parentEntry = c;
           break;
         }
+      }
+      if (parentEntry !== null && notMade.has(parentEntry)) {
+        // Its copy's parent does not exist: say so, and go on with the pages that do not hang from it.
+        const pname = notMade.get(parentEntry)!;
+        notMade.set(e.id, pname);
+        differences.push({
+          page: e.name,
+          piece: 'page',
+          reason: `not attempted: its parent in the copy (${pname}) could not be created`,
+        });
+        continue;
       }
       const res = l.resource ?? { name: e.name };
       const body: Obj = {
         id: map.pages.get(e.id),
         parentId: parent,
         name: map.name(str(res.name) ?? e.name),
-        ...pickFields(res, bodyFields('createResource'), [
-          'name',
-          'tags',
-          'documents',
-          'id',
-          'parentId',
-          'after',
-          'before',
-        ]),
+        // What was read goes back in the write form (`fas fa-book` → `book`, ADR 0042 decision 9).
+        ...withWriteIcon(
+          pickFields(res, bodyFields('createResource'), [
+            'name',
+            'tags',
+            'documents',
+            'id',
+            'parentId',
+            'after',
+            'before',
+          ]),
+        ),
         tags: map.tags(Array.isArray(res.tags) ? (res.tags as unknown[]) : []),
       };
       const first = l.documents.slice(0, 5);
@@ -877,7 +882,7 @@ export class Rehearsals {
           type: str(d.piece.settings.type) ?? 'blank',
           name: str(d.piece.settings.name) ?? 'Main',
         }));
-      const steps: StepSpec[] = [{ op: 'createResource', params: { body } }];
+      const steps: StepSpec[] = [{ op: 'createResource', params: { body }, ...ICON_DROP }];
       for (const d of l.documents.slice(5))
         steps.push({
           op: 'createDocument',
@@ -900,9 +905,11 @@ export class Rehearsals {
           piece: 'page',
           reason: `could not be created: ${JSON.stringify(r[0]?.error ?? j.lastError).slice(0, 300)}`,
         });
+        notMade.set(e.id, e.name);
         continue;
       }
       created.add(String(body.id));
+      noteDropped(l.entry.name, r);
       const docsMade = (
         isObj(r[0].value) && Array.isArray(r[0].value.documents) ? (r[0].value.documents as Obj[]) : []
       ).map((x) => String(x.id));
@@ -950,7 +957,8 @@ export class Rehearsals {
           const feats = [...byId.values()]
             .sort((a, b) => depth(a) - depth(b))
             .map((f) => map.feature(pickFields(f, create), ids));
-          for (const f of feats) steps.push({ op: 'createFeature', params: { path, body: f } });
+          for (const f of feats)
+            steps.push({ op: 'createFeature', params: { path, body: withWriteIcon(f) }, ...ICON_DROP });
           const img = isObj(d.piece.settings.mapImage) ? d.piece.settings.mapImage : null;
           if (img && typeof img.url === 'string' && map.urls.has(img.url)) {
             // The uploaded copy's asset id: the URL's last part is not the id, so the asset is looked up by its upload.
@@ -978,7 +986,8 @@ export class Rehearsals {
             map.event(pickFields(x, evFields), evIds, laneIds),
           );
           for (const x of lanes) steps.push({ op: 'createLane', params: { path, body: x } });
-          for (const x of events) steps.push({ op: 'createEvent', params: { path, body: x } });
+          for (const x of events)
+            steps.push({ op: 'createEvent', params: { path, body: withWriteIcon(x) }, ...ICON_DROP });
           exp.docs.set(docId, { type: 'time', lanes, events });
         } else if (t === 'board') {
           const c = map.boardContent(d.piece.content ?? {});
@@ -1017,6 +1026,7 @@ export class Rehearsals {
       j = await this.job(target, steps, `rehearsal ${id}: content of ${l.entry.name}`);
       counts.jobs++;
       counts.writes += steps.length;
+      noteDropped(l.entry.name, this.results(target, j));
       for (const s of this.results(target, j))
         if (s.status !== 'succeeded')
           differences.push({
@@ -1114,8 +1124,10 @@ export class Rehearsals {
               detail: firstDiff(a, b),
             });
         } else if (want.type === 'map') {
+          const skip = iconDropped.has(l.entry.name) ? ['rank', ...ICON_FIELDS] : ['rank'];
+          // The write form has no style (`far`, `fab`): an icon is compared by its name.
           const norm = (fs: readonly Obj[]) =>
-            fs.map((f) => stableJson(pickFields(f, bodyFields('createFeature'), ['rank']))).sort();
+            fs.map((f) => stableJson(withWriteIcon(pickFields(f, bodyFields('createFeature'), skip)))).sort();
           if (stableJson(norm(want.features as Obj[])) !== stableJson(norm(got.features ?? [])))
             differences.push({
               page: l.entry.name,
@@ -1127,7 +1139,18 @@ export class Rehearsals {
           const evF = bodyFields('createEvent');
           const n = (xs: readonly Obj[], fields: Set<string>) =>
             xs
-              .map((x) => stableJson(pickFields(x, fields, ['rank', 'formattedStart', 'formattedEnd'])))
+              .map((x) =>
+                stableJson(
+                  withWriteIcon(
+                    pickFields(x, fields, [
+                      'rank',
+                      'formattedStart',
+                      'formattedEnd',
+                      ...(iconDropped.has(l.entry.name) ? ICON_FIELDS : []),
+                    ]),
+                  ),
+                ),
+              )
               .sort();
           if (
             stableJson(n(want.events as Obj[], evF)) !== stableJson(n(got.events ?? [], evF)) ||
@@ -1254,6 +1277,58 @@ export class Rehearsals {
     return this.d.svc.index.rehearsal(id)!;
   }
 }
+
+/**
+ * The rehearsal's guard (ADR 0042 decision 7): every write a job holds stays in the rehearsal's root or its own asset
+ * folder, judged before the job is submitted. A page a step creates counts as inside for the steps AFTER it in the same
+ * job (a root, a child and a grandchild made in one job are all inside), and for later jobs once `created` holds them
+ * (the caller adds a page when its job succeeded). A parent the rehearsal did not make is refused.
+ */
+export function assertInsideRoot(
+  steps: readonly StepSpec[],
+  ctx: {
+    readonly created: ReadonlySet<string>;
+    readonly rootId: string;
+    readonly assetFolder: string | null;
+  },
+): void {
+  const here = new Set<string>();
+  const isInside = (id: unknown): boolean =>
+    typeof id === 'string' && (id === ctx.rootId || ctx.created.has(id) || here.has(id));
+  for (const s of steps) {
+    const p = s.params ?? {};
+    const rid = p.path?.resourceId;
+    if (s.op === 'createResource') {
+      const body = (p.body ?? {}) as Obj;
+      const parent = body.parentId;
+      // The root is the one page with no parent, and only when it is the root's own id.
+      const ok = parent === undefined ? body.id === ctx.rootId : isInside(parent);
+      if (!ok)
+        throw new RestoreError(
+          'REHEARSAL_OUTSIDE_ROOT',
+          `refused: ${s.op} would create a page outside the rehearsal's root`,
+        );
+      if (typeof body.id === 'string') here.add(body.id);
+      continue;
+    }
+    if (['createAssetFolder', 'createImageUpload', 'createImageAsset'].includes(s.op)) continue;
+    if (s.op === 'updateAsset' || s.op === 'deleteAsset') {
+      if (p.path?.assetId !== ctx.assetFolder)
+        throw new RestoreError(
+          'REHEARSAL_OUTSIDE_ROOT',
+          `refused: ${s.op} on an asset that is not the rehearsal's`,
+        );
+      continue;
+    }
+    if (!isInside(rid))
+      throw new RestoreError(
+        'REHEARSAL_OUTSIDE_ROOT',
+        `refused: ${s.op} on ${String(rid)}, which is not in the rehearsal's root`,
+      );
+  }
+}
+
+const ICON_DROP = { dropIfRefused: [...ICON_FIELDS] } as const;
 
 function depthOf(e: PageEntry, m: Manifest): number {
   let n = 0;

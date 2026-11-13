@@ -77,7 +77,7 @@ export function bridgeDbCopy(path: string): void {
   const raw = `${path}.raw`;
   const d = new Database(raw);
   d.exec(
-    "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY); INSERT INTO schema_migrations VALUES ('2100');",
+    "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY); INSERT INTO schema_migrations VALUES ('2200');",
   );
   d.close();
   writeFileSync(path, gzipSync(readFileSync(raw)), { mode: 0o600 });

@@ -17,13 +17,13 @@
  * 3. R: each piece is edited, then restored from the snapshot (a proposal, approved here as the owner would) and read
  *    back: the stored piece must hash exactly as the snapshot's.
  * 4. D1: a page deleted, then undeleted within LegendKeeper's soft delete (restoreResource, then its content).
- *    D2: a page made, deleted, and recreated from the snapshot alone: whether LegendKeeper took its ORIGINAL id
- *    (noted either way; refused, it is recreated with a new id).
- * 5. U.a–U.e: whether `updatedAt` moves on the resource (listResources: what the daily pass reads) or only on the
- *    document (listDocuments: the pass's `snapshotDailyPassDocuments` option) when a block, a sidebar row, a map
- *    feature, a timeline event or the board content changes. PASS: the resource's moved (the cheap pass sees it).
- *    INCONCLUSIVE: only the document's moved (the pass needs the documents option). FAIL: neither moved (only the
- *    weekly full snapshot sees this kind of edit). This decides whether the daily pass can be switched on.
+ *    D2: first, which icon form LegendKeeper accepts for a page ("fas fa-book" as a read gives it, or "book" as the write
+ *    schema says), reported for each; then a page with an icon made, deleted, and recreated from the snapshot alone:
+ *    whether LegendKeeper took its ORIGINAL id (noted either way; refused, it is recreated with a new id), and whether
+ *    the icon came back (or was dropped and listed, which is not a failure).
+ * 5. U (a NOTED fact, not a check): the owner's run of 13 November showed LegendKeeper's `updatedAt` does not move when
+ *    a block, a sidebar row, a map feature, a timeline event or the board changes, so the daily changed-pages pass was
+ *    removed and the full snapshot is nightly (ADR 0042 decision 4).
  * 6. H: a sampled rehearsal of the subtree's snapshot into its own throwaway root, compared, then deleted.
  * 7. Clean-up: the root (cascade), the image; a 404 or "already deleted" counts as cleaned once a read says so.
  *
@@ -57,8 +57,6 @@ export interface SnapshotsTarget {
 export interface SnapshotsOptions {
   readonly wait?: WaitOptions;
   readonly sleep?: (ms: number) => Promise<void>;
-  /** The pause between the read before an edit and the edit, so a timestamp can move (default 1.5 s). */
-  readonly updatedAtGapMs?: number;
 }
 
 export interface SnapshotsReport {
@@ -512,8 +510,36 @@ export async function runSnapshotsSandbox(
       'D2',
       'a page recreated from the snapshot alone (its original id, if LegendKeeper takes it)',
       async () => {
-        const c = await run('createResource', { body: { name: `${base} recreated`, parentId: rootId } });
+        // Which icon form does LegendKeeper accept? The owner's run of 13 November: reads give "fas fa-book", the write
+        // schema says a bare name ("book") and an unknown name answers 400. Both forms are tried on a probe page each.
+        const probeRead = await attempt('createResource', {
+          body: { name: `${base} icon probe (read form)`, parentId: rootId, iconGlyph: 'fas fa-book' },
+        });
+        const probeWrite = await attempt('createResource', {
+          body: { name: `${base} icon probe (write form)`, parentId: rootId, iconGlyph: 'book' },
+        });
+        const iconRead = probeWrite.ok
+          ? ((
+              (await read('getResource', { path: { resourceId: String(probeWrite.body.id) } })) as
+                Obj | undefined
+            )?.iconGlyph as string | undefined)
+          : undefined;
+        const form = (x: { ok: boolean; error?: string } | { ok: true; body: unknown }) =>
+          x.ok ? 'ACCEPTED' : `REFUSED (${((x as { error?: string }).error ?? '').slice(0, 120)})`;
+        const iconNote =
+          `icon forms: "fas fa-book" ${form(probeRead)}; "book" ${form(probeWrite)}` +
+          (iconRead !== undefined ? `, which reads back as ${JSON.stringify(iconRead)}` : '');
+        const c = await run('createResource', {
+          body: {
+            name: `${base} recreated`,
+            parentId: rootId,
+            // The page the recreate restores has an icon, in the form that was accepted (the write form if both were).
+            ...(probeWrite.ok ? { iconGlyph: 'book' } : probeRead.ok ? { iconGlyph: 'fas fa-book' } : {}),
+          },
+        });
         const cid = String(c.id);
+        const iconBefore = (((await read('getResource', { path: { resourceId: cid } })) as Obj | undefined)
+          ?.iconGlyph ?? null) as string | null;
         const textDoc = (await run('createDocument', {
           path: { resourceId: cid },
           body: { name: 'Text', type: 'page' },
@@ -562,111 +588,33 @@ export async function runSnapshotsSandbox(
         const d = (res.documents as Obj[]).find((x) => x.name === 'Text');
         const textAfter = d ? renderDocument((await documentPieceOf(read, got.newId, d)) as never) : '';
         if (textAfter !== textBefore) throw new Fails(`its text differs:\n${textBefore}\n---\n${textAfter}`);
-        return `${idNote}; its text reads back as in the snapshot`;
+        // The icon: restored (the same as before), restored as something else, or dropped (the bridge's fallback, which is
+        // listed in the restore's "couldn't be restored exactly" section, not a failure).
+        const iconAfter = (res.iconGlyph ?? null) as string | null;
+        const rec = rt.restores.list(pid, { pageId: cid })[0];
+        const dropped = rec?.couldntRestoreExactly.length ?? 0;
+        const iconText =
+          iconBefore === iconAfter
+            ? `its icon came back as it was (${JSON.stringify(iconAfter)})`
+            : `its icon was ${JSON.stringify(iconBefore)} and is now ${JSON.stringify(iconAfter)}` +
+              (dropped > 0 ? ` (dropped: LegendKeeper refused it, and the restore listed it)` : '');
+        if (iconBefore !== null && iconAfter === null && dropped === 0)
+          throw new Fails(`its icon ${JSON.stringify(iconBefore)} is gone and the restore did not say so`);
+        return `${iconNote}; ${idNote}; its text reads back as in the snapshot; ${iconText}`;
       },
     );
 
-    // ================================================================================================ 5. updatedAt
-    const stamps = async (docId?: string) => {
-      const list = await run('listResources', { query: { parentId: rootId, limit: 100 } });
-      const r = (list.data as Obj[]).find((x) => x.id === pageId);
-      let d: string | null = null;
-      if (docId) {
-        const ds = await run('listDocuments', { path: { resourceId: pageId } });
-        d = ((ds.data as Obj[]).find((x) => x.id === docId)?.updatedAt as string | undefined) ?? null;
-      }
-      return { resource: (r?.updatedAt as string | undefined) ?? null, document: d };
-    };
-    const updatedAtCheck = async (
-      id: string,
-      what: string,
-      docId: string | undefined,
-      edit: () => Promise<void>,
-    ) => {
-      const before = mark();
-      try {
-        const a = await stamps(docId);
-        await sleep(o.updatedAtGapMs ?? 1500);
-        await edit();
-        const b = await stamps(docId);
-        const res = a.resource !== null && b.resource !== null && a.resource !== b.resource;
-        const doc =
-          docId !== undefined && a.document !== null && b.document !== null && a.document !== b.document;
-        const detail = `resource updatedAt ${a.resource} → ${b.resource}${docId ? `; document updatedAt ${a.document} → ${b.document}` : ''}`;
-        if (a.resource === null)
-          record(id, what, 'inconclusive', `listResources gave no updatedAt; ${detail}; ${costText(before)}`);
-        else if (res)
-          record(
-            id,
-            what,
-            'pass',
-            `the resource's updatedAt moved: the daily pass sees this edit; ${detail}; ${costText(before)}`,
-          );
-        else if (doc)
-          record(
-            id,
-            what,
-            'inconclusive',
-            `only the document's updatedAt moved: the daily pass sees it only with snapshotDailyPassDocuments on (one request a page); ${detail}; ${costText(before)}`,
-          );
-        else
-          record(
-            id,
-            what,
-            'fail',
-            `neither moved: only the weekly full snapshot sees this kind of edit; ${detail}; ${costText(before)}`,
-          );
-      } catch (e) {
-        record(id, what, 'inconclusive', `could not complete: ${(e as Error).message}; ${costText(before)}`);
-      }
-      costs[id] = spent(before);
-    };
-    const skip = (id: string, what: string, why: string) => record(id, what, 'skipped', why);
-    if (set.page)
-      await updatedAtCheck('U.a', 'updatedAt after a block changes', docs.page, async () => {
-        const cur = await run('getDocumentBlocks', { path: { resourceId: pageId, documentId: docs.page } });
-        const blocks = [
-          ...(cur.blocks as Obj[]),
-          { kind: 'paragraph', content: [{ text: 'A later line.' }] },
-        ];
-        await run('replaceDocumentBlocks', {
-          path: { resourceId: pageId, documentId: docs.page },
-          body: { blocks },
-        });
-      });
-    else skip('U.a', 'updatedAt after a block changes', 'no page document was set up');
-    if (set.sidebar)
-      await updatedAtCheck('U.b', 'updatedAt after a sidebar row changes', undefined, async () => {
-        await run('updatePropertyRow', {
-          path: { resourceId: pageId, propertyId: ids2.kv, rowId: ids2.row },
-          body: { text: 'East' },
-        });
-      });
-    else skip('U.b', 'updatedAt after a sidebar row changes', 'no sidebar was set up');
-    if (set.map)
-      await updatedAtCheck('U.c', 'updatedAt after a map feature changes', docs.map, async () => {
-        await run('updateFeature', {
-          path: { resourceId: pageId, documentId: docs.map, featureId: ids2.pin },
-          body: { name: 'Ashgate (again)' },
-        });
-      });
-    else skip('U.c', 'updatedAt after a map feature changes', 'no map was set up');
-    if (set.time)
-      await updatedAtCheck('U.d', 'updatedAt after a timeline event changes', docs.time, async () => {
-        await run('updateEvent', {
-          path: { resourceId: pageId, documentId: docs.time, eventId: ids2.event },
-          body: { name: 'Founding (again)' },
-        });
-      });
-    else skip('U.d', 'updatedAt after a timeline event changes', 'no timeline was set up');
-    if (set.board)
-      await updatedAtCheck('U.e', 'updatedAt after the board content changes', docs.board, async () => {
-        await run('createBoardShapes', {
-          path: { resourceId: pageId, documentId: docs.board },
-          body: { shapes: [{ type: 'geo', x: 400, y: 0, props: { geo: 'rectangle', w: 40, h: 40 } }] },
-        });
-      });
-    else skip('U.e', 'updatedAt after the board content changes', 'no board was set up');
+    // ================================================================================================ 5. updatedAt (a fact)
+    // The owner's sandbox run of 13 November (U.a to U.e, all FAIL): LegendKeeper's `updatedAt`, on resources and on
+    // documents, does NOT move when blocks, sidebar rows, map features, timeline events or board content change. A pass
+    // that lists `updatedAt` to find changed pages can therefore never work, and the bridge has none (ADR 0042 decision 4).
+    // Edits made in the app are caught by the nightly full snapshot instead. Recorded, not re-run.
+    record(
+      'U',
+      'updatedAt does not track content',
+      'noted',
+      'NOTED (13 November 2026, five checks, all FAIL): updatedAt on resources and documents does not move when blocks, sidebar rows, map features, timeline events or board content change, so no daily changed-pages pass is possible; the nightly full snapshot catches edits made in the app. Not re-run.',
+    );
 
     // ================================================================================================ 6. rehearsal
     await check('H', 'a sampled rehearsal of the subtree into its own throwaway root', async () => {
@@ -769,10 +717,9 @@ export function formatSnapshotsReport(r: SnapshotsReport, total: { reads: number
     '========================================================================================================',
     ...r.findings.map((f) => `[${mark[f.verdict]}] (${f.id}) ${f.title}\n        ${f.detail}`),
     '',
-    `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE, ${count('skipped')} SKIPPED`,
+    `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE, ${count('skipped')} SKIPPED, ${count('noted')} NOTED`,
     `Total: ${total.reads} reads, ${total.writes} writes to LegendKeeper.`,
-    'The daily pass (snapshotDailyPass) can be switched on when U.a–U.e all PASS; with INCONCLUSIVE ones, only with',
-    'snapshotDailyPassDocuments too; a FAIL means that kind of app edit waits for the weekly full snapshot.',
+    'Edits made in the app are caught by the nightly full snapshot (updatedAt does not track content: ADR 0042).',
     '',
   ].join('\n');
 }

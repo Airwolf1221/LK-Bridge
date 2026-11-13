@@ -111,7 +111,7 @@ export interface Runtime {
   readonly chronology: Chronology;
   /** v2 D3 (ADR 0041): the image pipeline (conversion, the binary endpoint's slots, staging, kept bytes). */
   readonly images: ImageService;
-  /** v2 E1a (ADR 0042): snapshots (the store, full, change and daily snapshots, retention, verify, restore, rehearsal). */
+  /** v2 E1a (ADR 0042): snapshots (the store, full and change snapshots, retention, verify, restore, rehearsal). */
   readonly snapshots: SnapshotService;
   /** v2 E1a: restore proposals (always proposals) and their follow-ups. */
   readonly restores: Restores;
@@ -631,7 +631,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const tools = [...bridgeTools, ...policy.tools];
   // Each project's key is checked now; a project is served from the moment its check passes.
   const ready = projects.verifyAll().catch((err: unknown) => log.error({ err }, 'project checks failed'));
-  // v2 E1a: a full snapshot or daily pass a restart interrupted continues once the projects are served.
+  // v2 E1a: a full snapshot a restart interrupted continues once the projects are served.
   void ready.then(() => snapshots.resumeInterrupted());
 
   return {

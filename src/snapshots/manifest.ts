@@ -3,8 +3,7 @@
  * the store as `manifests/<project>/<id>.json.gz` once the snapshot is complete, and part of E1b's contract.
  *
  * - `kind`: `full` (everything under the AI REPOSITORY, with the asset library), `change` (the pieces one bridge job
- *   changed) or `daily` (the pages whose `updatedAt` moved). A `full` manifest lists every page with every piece; the
- *   other two list only the pages and pieces they took (a missing `resource`, `sidebar` or document means "not taken
+ *   changed). A `full` manifest lists every page with every piece; a `change` manifest lists only the pages and pieces they took (a missing `resource`, `sidebar` or document means "not taken
  *   by this snapshot", never "empty").
  * - `pages[].missing`: a piece that could not be read or stored. A snapshot with any is `complete: false` (partial).
  * - Hashes name objects in the store: `sha256` of the canonical JSON of a piece, or of an image's bytes.
@@ -12,7 +11,7 @@
 export const MANIFEST_FORMAT = 'lk-bridge-snapshot';
 export const MANIFEST_VERSION = 1;
 
-export type SnapshotKind = 'full' | 'change' | 'daily';
+export type SnapshotKind = 'full' | 'change';
 
 /** One stored piece: its hash and uncompressed size. */
 export interface PieceRef {
@@ -61,8 +60,6 @@ export interface PageEntry {
   /** Documents deleted by the change this snapshot followed. */
   readonly deletedDocuments?: readonly string[];
   readonly images?: readonly ImageEntry[];
-  /** `getResource`'s `updatedAt` when it was read (the daily pass compares it). */
-  readonly updatedAt?: string | null;
   readonly missing?: readonly MissingPiece[];
 }
 

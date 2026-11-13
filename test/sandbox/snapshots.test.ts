@@ -14,7 +14,7 @@ const projectName = process.env.LKB_SANDBOX_PROJECT;
 describe.skipIf(!projectName)(
   'LegendKeeper sandbox: snapshots, restores and the rehearsal (writes, then cleans up)',
   () => {
-    it('snapshots a throwaway subtree, restores every piece, checks updatedAt, rehearses, and cleans up', async () => {
+    it('snapshots a throwaway subtree, restores every piece, probes the icon forms, rehearses, and cleans up', async () => {
       const target = resolveSandboxTarget(projectName);
       const sandbox = await createSoakRuntime({
         apiKey: target.apiKey,
@@ -29,8 +29,7 @@ describe.skipIf(!projectName)(
           counters: sandbox.counters,
         });
         process.stdout.write(formatSnapshotsReport(report, sandbox.counters));
-        // The updatedAt checks report what LegendKeeper does (they decide the daily pass); the rest must hold.
-        const failed = report.findings.filter((f) => f.verdict === 'fail' && !f.id.startsWith('U.'));
+        const failed = report.findings.filter((f) => f.verdict === 'fail');
         expect(failed.map((f) => `${f.id}: ${f.detail}`)).toEqual([]);
       } finally {
         await sandbox.close();

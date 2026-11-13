@@ -27,9 +27,8 @@ clock (`{ "kind": "weekly", "day": "sun", "time": "00:30" }`; days `mon` to `sun
 | `asset-check`            | daily at 02:50 (London) | v2 A4, per project: the asset tree's nightly check, the same walk plus an audit of the cached folder paths ([assets.md](assets.md)). Runs even when the refresh is switched off.                                                                                                                                                                                                                                                     |
 | `link-sweep`             | daily at 01:15 (London) | v2 C2c, per project: the link index's paced refresh, for the related pages `archive_page` and `move_to_working` report ([below](#link-sweep-v2-c2c)). Skips a project whose tree is not built.                                                                                                                                                                                                                                       |
 | `chronology-check`       | weekly                  | v2 D1, per project: the chronology check, findings only ([below](#chronology-check-v2-d1)). Skips a project whose chronology is not confirmed.                                                                                                                                                                                                                                                                                       |
-| `snapshot-full`          | weekly, Sunday 00:30    | v2 E1a, per project, background: a full snapshot of every page under the AI REPOSITORY and the asset library ([ADR 0042](adr/0042-snapshots-restore-rehearsal.md), [below](#snapshots-v2-e1a)). Refused (recorded, a notice on the Snapshots page) when it would leave less free disk than `SNAPSHOT_MIN_FREE_GB`. Skips a project whose tree is not built.                                                                          |
-| `snapshot-daily`         | daily at 00:45 (London) | v2 E1a, per project, background: the daily changed-pages pass. Skipped, saying why, unless the project's `snapshotDailyPass` is on (off until the sandbox check confirms `updatedAt`).                                                                                                                                                                                                                                               |
-| `snapshot-prune`         | daily at 04:40 (London) | v2 E1a, bridge-wide: the retention (`SNAPSHOT_KEEP_WEEKLY` full snapshots, `SNAPSHOT_KEEP_DAYS` days of change and daily ones), then the collector (pieces nothing refers to, keeping the kept-bytes window).                                                                                                                                                                                                                        |
+| `snapshot-full`          | daily at 00:30 (London) | v2 E1a, per project, background: a full snapshot of every page under the AI REPOSITORY and the asset library ([ADR 0042](adr/0042-snapshots-restore-rehearsal.md), [below](#snapshots-v2-e1a)). Refused (recorded, a notice on the Snapshots page) when it would leave less free disk than `SNAPSHOT_MIN_FREE_GB`. Skips a project whose tree is not built.                                                                          |
+| `snapshot-prune`         | daily at 04:40 (London) | v2 E1a, bridge-wide: the retention (every full snapshot for `SNAPSHOT_KEEP_FULL_DAYS` days, then one a week for `SNAPSHOT_KEEP_WEEKLY` weeks; `SNAPSHOT_KEEP_DAYS` days of change snapshots), then the collector (pieces nothing refers to, keeping the kept-bytes window).                                                                                                                                                          |
 | `snapshot-verify`        | weekly, Sunday 05:10    | v2 E1a, bridge-wide, background: re-hashes every stored piece and reads every manifest; a missing or damaged piece is a finding on the Snapshots page and makes the snapshots that use it partial.                                                                                                                                                                                                                                   |
 | `assign-block-ids-sweep` | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `orphan-and-link-audit`  | not implemented         | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -162,18 +161,20 @@ first). The daily tier (60,000) is not a concern.
 
 ## Snapshots (v2 E1a)
 
-The four snapshot jobs ([ADR 0042](adr/0042-snapshots-restore-rehearsal.md); the Snapshots page shows their schedules and
+The three snapshot jobs ([ADR 0042](adr/0042-snapshots-restore-rehearsal.md); the Snapshots page shows their schedules and
 runs):
 
 - **`snapshot-full`** reads at **P3**, through the project's governor, about 2.2 requests a page (the resource, then each
-  document's own reads), plus one listing per 100 assets; image bytes come from the asset host (no request budget), each
-  only when its URL is not stored yet. It also waits **between pages** while agents' P1 or P2 work is queued (up to a minute
+  document's own reads), plus one listing per 100 assets (**nightly, so about 3,400 requests a day on Arkona and 340 on
+  the test world**); image bytes come from the asset host (no request budget), and **only for a new or replaced image**:
+  a library asset whose id and URL are as an earlier snapshot recorded them is recorded from that hash, with no download
+  (the weekly verify re-checks stored bytes). It also waits **between pages** while agents' P1 or P2 work is queued (up to a minute
   a page), as the tree and link sweeps give way. A run records every page as it goes: a run that stops (restart, stop,
   budget) is **continued** by the next run, never restarted, and its manifest is written only once it is complete. The
   owner can abandon a run on the Snapshots page. Before a new run, the disk is checked: free space less the run's estimate
   must stay above `SNAPSHOT_MIN_FREE_GB`.
-- **`snapshot-daily`** lists each project's resources (one request per 100) and takes the pages whose `updatedAt` moved;
-  with `snapshotDailyPassDocuments`, it also lists each page's documents (one request a page). Off per project by default.
+- There is **no daily changed-pages job** (it was removed on 13 November 2026): LegendKeeper's `updatedAt` does not move
+  when content changes, so edits made in the app are caught by the nightly full snapshot instead.
 - **`snapshot-prune`** and **`snapshot-verify`** touch only the bridge's own store and database (no LegendKeeper request),
   so they run under read-only mode too. The collector takes the store's exclusive lock (snapshots wait for it), and keeps
   pieces written in the last hour.
@@ -187,15 +188,15 @@ The copy to Google Drive is **not** a maintenance job of the bridge: it runs in 
 ([ADR 0043](adr/0043-google-drive-offsite-copy.md)). Its timer wakes it every quarter hour; what is due comes from the
 schedule on the **Off-site copy** page (stored in the database):
 
-| What   | Default                                                                      | Setting                                    |
-| ------ | ---------------------------------------------------------------------------- | ------------------------------------------ |
-| Copy   | daily at 04:45 London, and after each weekly full snapshot (`snapshot-full`) | `copyTime`                                 |
-| Verify | monthly, on day 1 at 05:30 London                                            | `verifyEnabled`, `verifyDay`, `verifyTime` |
-| Purge  | every copy: `deleted/<date>` older than 30 days                              | `deletedRetentionDays`                     |
+| What   | Default                                                                       | Setting                                    |
+| ------ | ----------------------------------------------------------------------------- | ------------------------------------------ |
+| Copy   | daily at 04:45 London, and after each nightly full snapshot (`snapshot-full`) | `copyTime`                                 |
+| Verify | monthly, on day 1 at 05:30 London                                             | `verifyEnabled`, `verifyDay`, `verifyTime` |
+| Purge  | every copy: `deleted/<date>` older than 30 days                               | `deletedRetentionDays`                     |
 
 A run is due when nothing of its kind has started since its latest scheduled time, so a time missed while the server was
 off runs at the next wake. "Copy now" and "Verify now" leave a request file that `lk-bridge-offsite.path` turns into a run
-within seconds. The weekly full snapshot (`snapshot-full`, above) asks for a copy when it completes. Runs are listed on
+within seconds. The nightly full snapshot (`snapshot-full`, above) asks for a copy when it completes. Runs are listed on
 the Off-site copy page, not on this one.
 
 ## Owner commands

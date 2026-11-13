@@ -34,7 +34,6 @@ export interface LinkMaintenance {
 /** v2 E1a (ADR 0042): the snapshot jobs (src/snapshots). */
 export interface SnapshotMaintenance {
   full(projectId: string, trigger: string): Promise<MaintenanceResult>;
-  daily(projectId: string, trigger: string): Promise<MaintenanceResult>;
   prune(): Promise<{ removed: number; gc: { removed: number; freed: number; kept: number } }>;
   verify(): Promise<{ summary: string; missing: number; corrupt: number; badManifests: number }>;
 }
@@ -61,7 +60,7 @@ export interface BuiltinJobDeps {
   readonly links?: LinkMaintenance;
   /** v2 D1: the chronology check. Without it the check skips, saying why. */
   readonly chronology?: ChronologyMaintenance;
-  /** v2 E1a: snapshots (full, daily pass, retention and collector, verify). Without them the jobs skip, saying why. */
+  /** v2 E1a: snapshots (full, retention and collector, verify). Without them the jobs skip, saying why. */
   readonly snapshots?: SnapshotMaintenance;
 }
 
@@ -328,14 +327,16 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       id: 'snapshot-full',
       name: 'Full snapshot',
       description:
-        'Takes a full snapshot of each project: every page under the AI REPOSITORY (its settings, sidebar and every ' +
+        'Every night, takes a full snapshot of each project (so edits made in the LegendKeeper app are caught within a day: ' +
+        'LegendKeeper’s updatedAt does not track content, so there is no cheaper way to find them): every page under the AI REPOSITORY (its settings, sidebar and every ' +
         'document: page blocks, map features, timeline lanes and events, board content) and the whole asset library with ' +
         'every image’s bytes, into the bridge’s snapshot store. Each piece is stored once, so unchanged pages and images take ' +
-        'no extra space. About two requests per page at the lowest priority (images download from the asset host, which ' +
-        'uses no request budget); it waits while agents’ work is queued, and a run that stops is continued, never restarted. ' +
+        'no extra space, and an image whose id and URL have not changed is recorded from the earlier snapshot without ' +
+        'being downloaded again (only new or replaced images download). About 2.2 requests per page at the lowest priority ' +
+        '(downloads come from the asset host, which uses no request budget); it waits while agents’ work is queued, and a run that stops is continued, never restarted. ' +
         'Refused, with a message on the Snapshots page, when it would leave less free disk space than the minimum. Skips ' +
         'projects whose tree is not built.',
-      defaultSchedule: { kind: 'weekly', day: 'sun', time: '00:30' },
+      defaultSchedule: { kind: 'daily', time: '00:30' },
       defaultEnabled: true,
       implemented: true,
       writes: false,
@@ -347,30 +348,12 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
         d.snapshots && ctx.project ? d.snapshots.full(ctx.project.id, ctx.trigger) : NO_SNAPSHOTS,
     },
     {
-      id: 'snapshot-daily',
-      name: 'Daily changed-pages snapshot',
-      description:
-        'Lists each project’s resources (one request per 100) and snapshots the pages whose updatedAt moved since a ' +
-        'snapshot last saw them: edits made in the LegendKeeper app between the weekly full snapshots. Switched off per ' +
-        'project (Snapshots page) until the owner’s sandbox run confirms that LegendKeeper’s updatedAt really moves when ' +
-        'content changes; the weekly full snapshot catches app edits either way.',
-      defaultSchedule: { kind: 'daily', time: '00:45' },
-      defaultEnabled: true,
-      implemented: true,
-      writes: false,
-      usesLk: true,
-      record: 'on-change',
-      scope: 'project',
-      background: true,
-      run: (ctx) =>
-        d.snapshots && ctx.project ? d.snapshots.daily(ctx.project.id, ctx.trigger) : NO_SNAPSHOTS,
-    },
-    {
       id: 'snapshot-prune',
       name: 'Snapshot retention',
       description:
-        'Removes the snapshots past their retention (8 weekly full snapshots and 30 days of change and daily snapshots ' +
-        'by default: SNAPSHOT_KEEP_WEEKLY, SNAPSHOT_KEEP_DAYS), then the stored pieces no snapshot refers to any more, ' +
+        'Removes the snapshots past their retention (every full snapshot for 30 days, then one a week, the latest of ' +
+        'each ISO week, for 8 weeks; change snapshots for 30 days: SNAPSHOT_KEEP_FULL_DAYS, SNAPSHOT_KEEP_WEEKLY, ' +
+        'SNAPSHOT_KEEP_DAYS), then the stored pieces no snapshot refers to any more, ' +
         'keeping the bytes kept before an asset delete for their own retention.',
       defaultSchedule: { kind: 'daily', time: '04:40' },
       defaultEnabled: true,

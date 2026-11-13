@@ -1,7 +1,7 @@
 /**
  * The off-site runner (v2 E1b, ADR 0043): `lk-bridge-offsite.service`, a separate process from the bridge, started by
  * its timer (every quarter hour; the schedule itself is in the database) and by its path unit (a request file from the
- * dashboard or after a weekly full snapshot). It:
+ * dashboard or after a nightly full snapshot). It:
  *
  * 1. reads the Drive client, the refresh token and the crypt keys from the encrypted secret store (SECRETS_MASTER_KEY
  *    from the env file, as the bridge reads it);

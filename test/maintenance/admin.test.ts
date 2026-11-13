@@ -91,7 +91,6 @@ describe('the registry', () => {
       'link-sweep', // v2 C2c
       'chronology-check', // v2 D1
       'snapshot-full', // v2 E1a
-      'snapshot-daily',
       'snapshot-prune',
       'snapshot-verify',
     ]);

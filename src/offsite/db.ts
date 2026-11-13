@@ -1,5 +1,5 @@
 /**
- * The off-site copy's rows (v2 E1b, ADR 0043; migration 2100). Used by the bridge (the dashboard reads them, the owner's
+ * The off-site copy's rows (v2 E1b, ADR 0043; migration 2200). Used by the bridge (the dashboard reads them, the owner's
  * actions write the connection, keys and settings) and by the separate runner (runs, findings, folder progress). Both
  * open the same SQLite database in WAL mode, so each write is one short statement or transaction.
  *

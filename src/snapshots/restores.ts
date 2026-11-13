@@ -31,6 +31,8 @@ export interface RestoreRecord {
   readonly followUpProposalId: string | null;
   readonly requestedBy: string;
   readonly summary: string;
+  /** What the run could not restore exactly: a field LegendKeeper refused and the write went without (v2 E1a, ADR 0042). */
+  readonly couldntRestoreExactly: readonly { readonly what: string; readonly why: string }[];
   readonly plan: Record<string, unknown>;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -186,6 +188,7 @@ export class Restores {
       if (!rec || rec.state !== 'proposed') return;
       if (e.state === 'executed') {
         this.setState(rec.id, 'executed');
+        this.noteDropped(rec, e.jobId);
         if (rec.followUp === 'content')
           void this.followUp(rec).catch((err: unknown) =>
             this.o.log?.warn({ err, restore: rec.id }, 'the restore’s second proposal failed'),
@@ -233,6 +236,32 @@ export class Restores {
           rec.id,
         );
       throw e;
+    }
+  }
+
+  /**
+   * ADR 0042 decision 9: a write LegendKeeper refused a field of (an icon name it does not know) went without it; the
+   * restore still finished, and the record lists each such field as "could not be restored exactly".
+   */
+  private noteDropped(rec: RestoreRecord, jobId: string | null): void {
+    if (!jobId) return;
+    try {
+      const dropped: { what: string; why: string }[] = [];
+      for (const s of this.o.engine.stepResults(rec.projectId, jobId) ?? []) {
+        const v = s.value as { droppedFields?: Record<string, unknown>; droppedWhere?: unknown } | null;
+        if (!v || typeof v !== 'object' || !v.droppedFields) continue;
+        for (const [field, value] of Object.entries(v.droppedFields))
+          dropped.push({
+            what: `${field} ${JSON.stringify(value)} (${typeof v.droppedWhere === 'string' ? v.droppedWhere : `step ${s.stepNo}`})`,
+            why: 'LegendKeeper refused it, so it was left out and LegendKeeper’s default applies; set it by hand',
+          });
+      }
+      if (dropped.length === 0) return;
+      this.o.db
+        .prepare('UPDATE snapshot_restores SET plan = ?, updated_at = ? WHERE id = ?')
+        .run(JSON.stringify({ ...rec.plan, couldntRestoreExactly: dropped }), this.o.now(), rec.id);
+    } catch (err) {
+      this.o.log?.warn({ err, restore: rec.id }, 'could not note what a restore left out');
     }
   }
 
@@ -287,6 +316,9 @@ function recordOf(r: Raw): RestoreRecord {
     followUpProposalId: typeof r.follow_up_proposal_id === 'string' ? r.follow_up_proposal_id : null,
     requestedBy: String(r.requested_by),
     summary: String(r.summary),
+    couldntRestoreExactly: Array.isArray(json(r.plan).couldntRestoreExactly)
+      ? (json(r.plan).couldntRestoreExactly as { what: string; why: string }[])
+      : [],
     plan: json(r.plan),
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),

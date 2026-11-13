@@ -5,7 +5,7 @@
  * deletes) every request first thing. A request made while a run is going is picked up when that run ends (the path unit
  * starts the service again while a file exists).
  *
- * Kinds: `copy` ("Copy now", or after a weekly full snapshot), `verify` ("Verify now"), `delete_folder` (an old Drive
+ * Kinds: `copy` ("Copy now", or after a nightly full snapshot), `verify` ("Verify now"), `delete_folder` (an old Drive
  * folder the owner chose to delete). No request ever carries a secret.
  */
 import { randomBytes } from 'node:crypto';

@@ -33,8 +33,8 @@ import type {
 import { MarkdownDiffView } from './proposals';
 
 /**
- * Snapshots (v2 E1a, ADR 0042; docs/dashboard.md › Snapshots): the bridge's own copies of each page, taken weekly in
- * full, after every bridge write, and (when switched on) daily for edits made in the app. The store's size, how much
+ * Snapshots (v2 E1a, ADR 0042; docs/dashboard.md › Snapshots): the bridge's own copies of each page, taken every night
+ * in full (which catches edits made in the app) and after every bridge write. The store's size, how much
  * deduplication saves and the disk's free space against the minimum; the runs; any missing or damaged piece; each page's
  * history with its diffs and "Propose a restore" (always a proposal, approved on the Proposals page); a deleted image
  * back as a new asset; the restore rehearsal into the test world; and the nightly database copies.
@@ -43,7 +43,6 @@ import { MarkdownDiffView } from './proposals';
 const KIND_LABEL: Record<string, string> = {
   full: 'full',
   change: 'after a bridge write',
-  daily: 'daily (app edits)',
 };
 
 const ratio = (r: number | null | undefined) => (r === null || r === undefined ? '—' : `${r.toFixed(1)}×`);
@@ -806,7 +805,22 @@ function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: stri
                 {r.scope}
                 {r.mode ? ` (${r.mode})` : ''} to <span className="mono small-text">{r.snapshotId}</span>
               </td>
-              <td>{r.state}</td>
+              <td>
+                {r.state}
+                {(r.couldntRestoreExactly?.length ?? 0) > 0 && (
+                  <>
+                    {' '}
+                    <Badge tone="warn">couldn’t be restored exactly</Badge>
+                    <ul className="plain small-text">
+                      {r.couldntRestoreExactly!.map((c, i) => (
+                        <li key={i}>
+                          {c.what}: {c.why}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </td>
               <td>
                 {r.proposalId && <Link to={`/proposals${qs({ id: r.proposalId })}`}>{r.proposalId}</Link>}
                 {r.followUpProposalId && (
@@ -873,8 +887,8 @@ function StoreCard({ d }: { d: SnapshotsResponse }) {
         </dd>
         <dt>Kept</dt>
         <dd>
-          {o.retention.keepWeekly} weekly full snapshots; {o.retention.keepDays} days of change and daily
-          snapshots
+          every full snapshot for {o.retention.keepFullDays} days, then one a week (the latest of each ISO
+          week) for {o.retention.keepWeekly} weeks; change snapshots for {o.retention.keepDays} days
         </dd>
         <dt>Directory</dt>
         <dd className="mono small-text">{o.dir}</dd>
@@ -929,13 +943,6 @@ function Runs({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void })
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const runs = d.overview.runs ?? [];
-  const project = d.project;
-  const settings = d.overview.dailyPass;
-  const setPass = (key: string, value: boolean) =>
-    void run(
-      () => api.put(`/projects/${encodeURIComponent(project)}/settings`, { key, value }),
-      'Saved.',
-    ).then(onChanged);
   return (
     <section className="card" aria-labelledby="snap-runs-h">
       <h2 id="snap-runs-h">Runs and schedules</h2>
@@ -955,32 +962,6 @@ function Runs({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void })
       <p className="muted small-text">
         Schedules are changed on the <Link to="/maintenance">Maintenance Jobs</Link> page.
       </p>
-      {settings && (
-        <div className="stack">
-          <label className="row">
-            <input
-              type="checkbox"
-              checked={settings.enabled}
-              disabled={busy}
-              onChange={(e) => setPass('snapshotDailyPass', e.target.checked)}
-            />{' '}
-            Daily changed-pages pass for {project} (edits made in the LegendKeeper app)
-          </label>
-          <label className="row">
-            <input
-              type="checkbox"
-              checked={settings.documents}
-              disabled={busy || !settings.enabled}
-              onChange={(e) => setPass('snapshotDailyPassDocuments', e.target.checked)}
-            />{' '}
-            Also look at each page’s documents (one request per page)
-          </label>
-          <p className="muted small-text">
-            Off until the sandbox check confirms which edits move a page’s updatedAt (see the runbook). The
-            weekly full snapshot catches app edits either way.
-          </p>
-        </div>
-      )}
       {runs.length === 0 ? (
         <Empty>No run yet.</Empty>
       ) : (
@@ -1193,9 +1174,10 @@ export function SnapshotsPage() {
         </Button>
       </PageHeader>
       <p className="muted">
-        The bridge keeps its own copies of every page under the AI REPOSITORY: a full snapshot each week, one
-        after every bridge write, and (when switched on) a daily one for edits made in the app. Each piece is
-        stored once. A restore is always a proposal you approve on the Proposals page.
+        The bridge keeps its own copies of every page under the AI REPOSITORY: a full snapshot every night
+        (which catches edits made in the LegendKeeper app within a day) and one after every bridge write. Each
+        piece is stored once, and an image that has not changed is not downloaded again. A restore is always a
+        proposal you approve on the Proposals page.
       </p>
       <StoreCard d={d} />
       <Problems d={d} />

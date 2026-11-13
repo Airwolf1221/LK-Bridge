@@ -82,6 +82,12 @@ export interface CaptureDeps {
   readonly cached?: (op: string, params: OpParams) => unknown;
   /** Whether a stored object is known to be damaged (an open verify finding): it is then written again. */
   readonly damaged?: (sha256: string) => boolean;
+  /**
+   * A library image as an earlier snapshot recorded it: the same asset id with the same URL (LegendKeeper gives a
+   * replaced image a new URL, so an unchanged pair is unchanged content). Its hash is reused without a download while
+   * the store still holds the bytes undamaged; the weekly `snapshot-verify` is where stored bytes are re-checked.
+   */
+  readonly priorAsset?: (assetId: string, url: string) => { sha256: string; size: number } | null;
 }
 
 export interface PageNode {
@@ -310,7 +316,6 @@ export async function capturePage(
     ...tree,
     ...entry,
     ...(images.length > 0 ? { images } : {}),
-    updatedAt: str(res.updatedAt),
     ...(missing.length > 0 ? { missing } : {}),
   };
 }
@@ -369,6 +374,13 @@ export async function captureLibrary(deps: CaptureDeps, readRaw: Reader, c: Coun
     let sha: string | null = null;
     if (a.url) {
       try {
+        const prior = deps.priorAsset?.(a.id, a.url);
+        if (prior && !deps.damaged?.(prior.sha256) && (await deps.store.has(prior.sha256))) {
+          // Unchanged since a snapshot stored it: recorded from that snapshot's hash, nothing downloaded.
+          images.push({ assetId: a.id, url: a.url, sha256: prior.sha256, size: prior.size });
+          withHashes.push({ ...a, sha256: prior.sha256 });
+          continue;
+        }
         const got = await deps.image(a.url);
         if (got === null) {
           // A change snapshot names a new asset without its bytes: the next full snapshot takes them.

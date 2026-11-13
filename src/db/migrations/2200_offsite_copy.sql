@@ -1,4 +1,4 @@
--- v2 E1b (ADR 0043): the encrypted off-site copy to Google Drive.
+-- v2 E1b (ADR 0043; numbered 2200 after E1a's follow-up took 2100): the encrypted off-site copy to Google Drive.
 --
 -- 1. `secrets` gains five purposes, all under the scope 'offsite': the Google OAuth client (id and secret), the refresh
 --    token, and rclone crypt's password and salt (password2). SQLite cannot change a CHECK constraint in place, so the

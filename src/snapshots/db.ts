@@ -1,7 +1,7 @@
 /**
  * The snapshot store's index and bookkeeping in SQLite (v2 E1a, ADR 0042; migration 2000). The manifest files are the
  * truth; `snapshots` and `snapshot_pieces` index them (and are rebuilt from them when a row is missing), and the rest is
- * the state of runs, owed change snapshots, verify findings, the daily pass's memory, notices and rehearsals.
+ * the state of runs, owed change snapshots, verify findings, notices and rehearsals.
  */
 import type { Db } from '../db/open.js';
 import { manifestPieces, type Manifest, type PageEntry, type SnapshotKind } from './manifest.js';
@@ -47,7 +47,7 @@ export type RunState = 'running' | 'succeeded' | 'failed' | 'refused' | 'stopped
 export interface RunRow {
   readonly id: string;
   readonly projectId: string;
-  readonly kind: 'full' | 'daily';
+  readonly kind: 'full';
   readonly state: RunState;
   readonly trigger: string;
   readonly startedAt: number;
@@ -174,7 +174,7 @@ function runRow(r: Raw): RunRow {
   return {
     id: String(r.id),
     projectId: String(r.project_id),
-    kind: r.kind as 'full' | 'daily',
+    kind: r.kind as 'full',
     state: r.state as RunState,
     trigger: String(r.trigger),
     startedAt: num(r.started_at),
@@ -498,7 +498,7 @@ export class SnapshotDb {
   createRun(r: {
     id: string;
     projectId: string;
-    kind: 'full' | 'daily';
+    kind: 'full';
     trigger: string;
     rootId: string | null;
     pages: readonly string[];
@@ -533,7 +533,7 @@ export class SnapshotDb {
   refusedRun(r: {
     id: string;
     projectId: string;
-    kind: 'full' | 'daily';
+    kind: 'full';
     trigger: string;
     error: string;
     estimate?: Record<string, unknown>;
@@ -562,7 +562,7 @@ export class SnapshotDb {
     return r ? runRow(r) : null;
   }
 
-  runningRun(projectId: string, kind: 'full' | 'daily'): RunRow | null {
+  runningRun(projectId: string, kind: 'full'): RunRow | null {
     const r = this.db
       .prepare(
         `SELECT * FROM snapshot_runs WHERE project_id = ? AND kind = ? AND state = 'running' ORDER BY started_at DESC LIMIT 1`,
@@ -757,29 +757,6 @@ export class SnapshotDb {
     return this.db
       .prepare('UPDATE snapshot_findings SET resolved_at = ? WHERE sha256 = ? AND resolved_at IS NULL')
       .run(this.now(), sha256).changes;
-  }
-
-  // ============================================================================================ the daily pass
-
-  seen(projectId: string): Map<string, string | null> {
-    const m = new Map<string, string | null>();
-    for (const r of this.db
-      .prepare('SELECT page_id, updated_at FROM snapshot_seen WHERE project_id = ?')
-      .all(projectId) as Raw[])
-      m.set(String(r.page_id), strOrNull(r.updated_at));
-    return m;
-  }
-
-  setSeen(projectId: string, rows: readonly { pageId: string; updatedAt: string | null }[]): void {
-    if (rows.length === 0) return;
-    const now = this.now();
-    const up = this.db.prepare(
-      `INSERT INTO snapshot_seen (project_id, page_id, updated_at, seen_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT (project_id, page_id) DO UPDATE SET updated_at = excluded.updated_at, seen_at = excluded.seen_at`,
-    );
-    this.db.transaction(() => {
-      for (const r of rows) up.run(projectId, r.pageId, r.updatedAt, now);
-    })();
   }
 
   // ============================================================================================ notices

@@ -27,14 +27,19 @@ describe('tools configuration', () => {
       images: DEFAULT_IMAGE_SETTINGS,
       snapshots: DEFAULT_SNAPSHOT_SETTINGS,
     });
-    // v2 E1a (ADR 0042): the snapshot store's defaults (10 GiB minimum free space, 8 weekly, 30 days), spelled out.
+    // v2 E1a (ADR 0042): the snapshot store's defaults (10 GiB minimum free space; every full snapshot for 30 days, then 8 weekly; 30 days of change snapshots), spelled out.
     expect(DEFAULT_SNAPSHOT_SETTINGS).toEqual({
       dataDir: null,
       minFreeBytes: 10 * 1024 ** 3,
+      keepFullDays: 30,
       keepWeekly: 8,
       keepDays: 30,
       softDeleteDays: 30,
     });
+    expect(
+      loadToolsConfig({ SNAPSHOT_KEEP_FULL_DAYS: '14', SNAPSHOT_KEEP_WEEKLY: '4', SNAPSHOT_KEEP_DAYS: '7' })
+        .snapshots,
+    ).toMatchObject({ keepFullDays: 14, keepWeekly: 4, keepDays: 7 });
     expect(
       loadToolsConfig({ SNAPSHOT_MIN_FREE_GB: '2.5', SNAPSHOT_DIR: '/srv/snap' }).snapshots,
     ).toMatchObject({

@@ -1,7 +1,7 @@
 # ADR 0042: Snapshots, restore and the rehearsal (v2 E1a)
 
 - Status: Accepted
-- Date: 12 November 2026
+- Date: 12 November 2026; amended 13 November 2026 after the owner's sandbox run (decisions 4 and 9, below)
 - Session: v2 E1a (PLAN-v2 4.11 and phase E; E1 split into E1a, this, and E1b, the encrypted off-server copy)
 - Builds on: ADR 0027 (asset tree), 0031 (`write_page`, keep regions), 0032 and 0036 (canon), 0035 and 0037 (lifecycle),
   0038 (chronology), 0040 (maps), 0041 (images; its kept-bytes store, "E1's backups will reuse this store")
@@ -9,9 +9,12 @@
 ## Context
 
 PLAN-v2 section 1 (Backups) and 4.11 ask for the bridge's own copies of everything it manages: content-addressed,
-deduplicated snapshots of each page's pieces, taken weekly in full, after every bridge write, and (if LegendKeeper's
-`updatedAt` can be trusted) daily for app edits; restores that are always proposals; and a rehearsal that proves a
-snapshot can actually be restored. 4.2 budgets about 500 reads a day for snapshots on Arkona (about 1,500 pages).
+deduplicated snapshots of each page's pieces, taken in full, after every bridge write, and (if LegendKeeper's
+`updatedAt` could be trusted) daily for app edits. **It could not (13 November 2026): the full snapshot is nightly
+instead.** (This ADR first said weekly, with a daily pass; both are changed in place below, so it reads as the design
+now.) It also asks for restores that are always proposals, and a rehearsal that proves a snapshot can actually be
+restored. 4.2 budgeted about 500 reads a day for snapshots on Arkona (about 1,500 pages); nightly fulls take about 3,400
+(decision 4), still a small part of the key's 60,000 a day, at P3.
 
 E1 is split in two. **E1a** (this ADR) builds the store, the snapshots, the restore tools and the rehearsal. **E1b** copies
 the store and the nightly database copies, encrypted, to Google Drive, with a download-and-verify drill. E1b must be able
@@ -66,8 +69,8 @@ and E1b copies one directory. The collector keeps every object a kept reference 
 
 ## Decision 2: what a snapshot holds
 
-A manifest names its project, its kind (`full`, `change` or `daily`), its time, its trigger, and for every page it took:
-the tree (id, parent, rank, name, kind), the page's `updatedAt` when read, and the hash and size of each piece. A piece is:
+A manifest names its project, its kind (`full` or `change`), its time, its trigger, and for every page it took:
+the tree (id, parent, rank, name, kind) and the hash and size of each piece. A piece is:
 
 - **the resource:** name, tags, aliases, icon and its other settings (the writable fields; versions and timestamps
   stripped);
@@ -83,7 +86,7 @@ the tree (id, parent, rank, name, kind), the page's `updatedAt` when read, and t
 an unchanged piece therefore hash the same whatever order LegendKeeper answered in, and an unchanged page or image takes no
 extra space between snapshots.
 
-A `full` manifest lists every page with every piece. `change` and `daily` manifests list only what they took: a missing
+A `full` manifest lists every page with every piece. A `change` manifest lists only what it took: a missing
 piece there means "not taken", never "empty". A piece that could not be read or stored is listed under `missing` with
 why, and makes the snapshot **partial**: never silently "fine".
 
@@ -102,12 +105,24 @@ why, and makes the snapshot **partial**: never silently "fine".
 
 ## Decision 4: taking snapshots
 
-1. **Full, weekly** (`snapshot-full`, Sunday 00:30 London time; a setting on the Maintenance Jobs page): every page under
-   the AI REPOSITORY, the lifecycle indexes included, then the asset library. P3, through the governor; it waits while
-   agents' P1 or P2 work is queued (as the tree and link sweeps do). Images download from the asset host (no API budget),
-   each only when its URL is not already stored. **Resumable:** the run records each page as it is taken; an interrupted
-   run (restart, stop, budget) continues where it stopped; the manifest is written only when the run is complete. The
-   owner can abandon a run from the dashboard.
+1. **Full, nightly** (`snapshot-full`, **every night at 00:30 London time**; a setting on the Maintenance Jobs page): every
+   page under the AI REPOSITORY, the lifecycle indexes included, then the asset library. P3, through the governor; it
+   waits while agents' P1 or P2 work is queued (as the tree and link sweeps do). **Resumable:** the run records each page
+   as it is taken; an interrupted run (restart, stop, budget) continues where it stopped; the manifest is written only
+   when the run is complete. The owner can abandon a run from the dashboard.
+   - **Why nightly.** Edits made in the LegendKeeper app must be caught within a day, and the API has no change feed
+     (PLAN section 1.3). The cheap way, the daily pass below, cannot work. A full snapshot costs about 2.24 reads a page:
+     **roughly 3,400 reads a day on Arkona (about 1,500 pages) against the key's 60,000, and about 340 on the test world**,
+     at P3 (it stops at the maintenance floor and gives way to agents).
+   - **Images are not downloaded again.** A library asset whose **id and URL** are as an earlier snapshot recorded them is
+     recorded from that snapshot's hash, with no download, while the store still holds those bytes and no open verify
+     finding calls them damaged (then they are fetched and written again: the repair). LegendKeeper's asset URLs are
+     content-specific: a replaced image has a new URL, so a replaced or new asset is downloaded, and nothing else. The
+     first full snapshot downloads the whole library (549 images for a 558-image library, on the owner's first run);
+     the second, with nothing changed, **downloads nothing and stores nothing new** (measured against the mock: 132
+     reads, 0 downloads, 0 new objects). The weekly `snapshot-verify` is where stored image bytes are re-checked, not the
+     nightly run.
+   - Other images (a page's, from a change snapshot) are reused by URL the same way.
 2. **Change snapshots:** after every successful bridge write that changes a page (`write_page`, `set_facts`, the C2b, C2c
    and C2d tools, lifecycle, chronology, maps, images, `lk_api_*`), the pieces that write changed are taken **at the end of
    the job**, before it is reported finished, from the reads the job already made after its last write (the verify step's
@@ -118,15 +133,25 @@ why, and makes the snapshot **partial**: never silently "fine".
    asset's URL); any other is named by its URL only (`deferred`, not missing), and the next full snapshot stores its bytes
    with the whole library. A bridge write never waits for the asset host, and an image deleted through the bridge in
    between is covered by D3's kept bytes.
-3. **The daily changed-pages pass** (`snapshot-daily`, 00:45; **off per project until the sandbox check confirms it**,
-   `snapshotDailyPass` on the Projects or Snapshots page): lists the resources (one request per 100) and snapshots the pages
-   whose `updatedAt` moved since a snapshot last saw them; `snapshotDailyPassDocuments` also lists each page's documents (one
-   request a page) for edits that move only a document's `updatedAt`. Edits made in the app are caught by the weekly full
-   snapshot either way.
-4. **Retention** (`snapshot-prune`, daily): the newest `SNAPSHOT_KEEP_WEEKLY` (8) complete full snapshots, and
-   `SNAPSHOT_KEEP_DAYS` (30) days of change and daily snapshots. Then the **collector** removes objects nothing refers to (no
-   manifest, no running run, no kept reference inside its window), under the store's exclusive lock, with a grace period for
-   objects written in the last hour.
+3. **There is no daily changed-pages pass.** The design had one (`snapshot-daily`, listing the resources and snapshotting
+   the pages whose `updatedAt` moved, with `snapshotDailyPass` and `snapshotDailyPassDocuments` as per-project settings,
+   off until the sandbox run confirmed it). **The owner's sandbox run of 13 November 2026 (checks U.a to U.e) failed all
+   five: LegendKeeper's `updatedAt`, on resources and on documents, does not move when blocks, sidebar rows, map features,
+   timeline events or board content change.** A pass built on it could never see an app edit, so it was removed, not left
+   as a switch that does nothing: its two settings, its maintenance job, its service method, its run kind, its dashboard
+   switch and its memory table (migration `2100` drops the table and the stored settings and the job's row, and has an
+   unchanged full-snapshot schedule worked out again from the new default). The sandbox script keeps one NOTED line (`U`)
+   for the record. A manifest no longer records a page's `updatedAt`.
+4. **Retention** (`snapshot-prune`, daily), all settings:
+   - **full snapshots:** every one for `SNAPSHOT_KEEP_FULL_DAYS` (**30**) days; then, for `SNAPSHOT_KEEP_WEEKLY` (**8**)
+     more weeks, **one per ISO week: the latest complete full snapshot of that week** (the week of London time, as the
+     schedule is); then none. A partial full snapshot is kept for the first window only. The newest complete full
+     snapshot is never removed, however old.
+   - **change snapshots:** `SNAPSHOT_KEEP_DAYS` (**30**) days, as before.
+   - Then the **collector** removes objects nothing refers to (no manifest, no running run, no kept reference inside its
+     window), under the store's exclusive lock, with a grace period for objects written in the last hour. Deduplication
+     is why nightly fulls cost little disk: a night adds only what changed, and the retention removes only what no kept
+     snapshot shares.
 
 ## Decision 5: restores are always proposals
 
@@ -189,6 +214,14 @@ keeps it to inspect ("Delete its root" on the dashboard later).
   links, images) are mapped to the copies.
 - **Never outside its root:** every job's steps are checked before submission (each write's resource is the root or a page
   the rehearsal made; asset writes only in its own folder); a step that is not is refused (`REHEARSAL_OUTSIDE_ROOT`).
+  A page a step creates counts as inside for the steps after it **in the same job** (a root, a child and a grandchild in one
+  job are all inside); a parent the rehearsal did not make is still refused (`assertInsideRoot`, tested both ways).
+  **The owner's first sandbox run (13 November) refused itself with this error after 5 writes. The cause was not the
+  same-job nesting the first reading suggested** (the rehearsal makes one page a job), **but a page whose creation
+  LegendKeeper refused (the icon, decision 9): its children then named a parent that did not exist, and the guard read that
+  as "outside the root" and stopped the whole run.** Now a page that could not be made is a difference ("could not be
+  created"), its descendants are listed as "not attempted: its parent in the copy could not be created", and the rest of
+  the rehearsal goes on. (A test with a refused parent fails on the old code with exactly the owner's message.)
 - It runs through the bridge as the owner's job: an ordinary bulk create in the test project, at P3, with the canon and
   lifecycle guards applying. A rehearsal turned into a proposal by a guard stops (`REHEARSAL_PROPOSED`) and writes nothing.
 - Results (pages compared, exact, differences with reasons, what a restore cannot bring back, cost, time) are kept
@@ -201,28 +234,58 @@ the snapshot index, runs, findings, restores and rehearsals. The manifests thems
 beside these database copies. The Snapshots page lists the copies (nightly and pre-deploy) with their size and age, and
 warns when the newest nightly copy is older than 36 hours.
 
+## Decision 9: icon names, read form and write form (13 November 2026)
+
+The owner's sandbox run (D2) showed LegendKeeper **reads** an icon as a FontAwesome class string (`"fas fa-book"`) but its
+write schema (`createResource`, `updateResource`; a pin's and an event's `iconGlyph` likewise) takes the **bare name**
+(`"book"`) and answers 400 VALIDATION_ERROR ("Invalid icon name. Must be a valid FontAwesome icon.") to anything else. A
+recreate that wrote back what it read therefore failed, and the original-id question was never reached.
+
+- **Conversion** (`src/lk/icons.ts`, `toWriteIcon`): the style prefix (`fas`, `far`, `fab`, `fal`, `fat`, `fad`, `fa-solid`,
+  `fa-regular`, `fa-brands`, `fa-light`, `fa-thin`, `fa-duotone`, `fa-sharp`) and the `fa-` prefix are removed:
+  `"fas fa-book"` becomes `"book"`. A bare name is left alone, and so is anything that leaves nothing. Applied wherever the
+  bridge writes back what it read: a restore and a recreate (the page, map features, timeline events), the rehearsal, and
+  the tools that take an icon from the caller (`update_resource`'s `icon.glyph`, the map-feature tools' `style.iconGlyph`:
+  an agent that read `fas fa-book` can pass it back). `update_resource` compares in the write form, so passing back what
+  the page already shows changes nothing.
+- **A name LegendKeeper still refuses does not fail the restore.** The bridge cannot know FontAwesome's names, so the write
+  is sent, and a refusal that names the icon (a 400 VALIDATION_ERROR) makes the step go again **once without the icon**
+  (LegendKeeper's default applies): the step option `dropIfRefused`, set only by bridge code, kept with an approved
+  proposal. The step's result says what was dropped (`droppedFields`, `droppedWhere`); the **restore record lists each one
+  under "couldn't be restored exactly"** (and the Snapshots page shows it), and the rehearsal lists it under what a restore
+  cannot bring back and does not count it as a difference. Any other refusal still fails the step.
+- **What this does not do.** The write form has no style, so an icon read as `far fa-star` (regular) may read back as
+  `fas fa-star` (solid): the rehearsal compares icons by name; a restore's read-back check leaves the icon out. The sandbox
+  run reports it.
+- **Sandbox D2** now first tries both forms on a page each (`"fas fa-book"` and `"book"`), reports which LegendKeeper
+  accepts and how the accepted one reads back, then goes on to the original-id check with a page that has an icon, and
+  reports whether the icon came back (or was dropped and listed).
+
 ## Costs (measured against the mock)
 
 - **Full snapshot:** 132 reads for 59 pages and 65 documents, **2.24 reads a page** (the resource, then each document's
   own reads: a page 1, a map 2, a timeline 3 or more, a board 1), plus one listing per 100 assets for the library.
+  **Nightly: about 3,400 reads a day on Arkona, about 340 on the test world.** A second full snapshot with nothing
+  changed: 132 reads, 0 downloads, 0 new objects, 0 new bytes.
 - **Change snapshots, extra reads per tool:** `write_page` 1, `set_facts` 0, `create_bare_resource` 1, `delete_resource` 0,
   `restore_resource` 1, `update_resource` 0, `create_document` 2, `update_document` 2, `delete_document` 0,
   `create_map_feature` 2, `lk_api_write` `createEvent` 4, `insertBlock` 2, `replaceBoardContent` 2, `createAssetFolder` 0,
   `archive_page` 0.
 - **Rehearsal (full, 59 pages):** 253 writes and 129 compare reads (about 4.3 writes and 2.2 reads a page).
 
-## To verify (the owner's sandbox run)
+## The owner's sandbox run (13 November 2026) and what it left to verify
 
-`deploy/sandbox-test.sh --project test -- snapshots` (test/sandbox/README.md): every piece type restored and read back
-exactly; undelete within the soft delete; **whether LegendKeeper takes a recreated page's original id**; **whether
-`updatedAt` moves on the resource or the document** when a block, a sidebar row, a map feature, a timeline event or the
-board changes (this decides whether the daily pass is switched on, and with or without its documents option); a sampled
-rehearsal.
+`deploy/sandbox-test.sh --project test -- snapshots` (test/sandbox/README.md). **Passed:** every restore type (a page
+document with its keep region and image, a map, a timeline, a board, a sidebar), undelete within the soft delete, the full
+snapshot, the clean-up. **Failed:** U.a to U.e (`updatedAt` does not track content: decision 4.3), D2 (the icon form:
+decision 9) and H (the rehearsal refused itself: decision 7). Still to see, on the rerun: **which icon form LegendKeeper
+accepts and how it reads back** (D2), **whether LegendKeeper takes a recreated page's original id** (D2, never reached),
+and a sampled rehearsal that completes (H).
 
 ## Consequences
 
 - E1b copies `objects/` then `manifests/` (and the database copies), and its drill verifies each downloaded object against
   its name. Nothing in the store is ever rewritten in place.
-- The daily pass stays off until the sandbox run's `updatedAt` checks pass.
+- App edits are caught by the nightly full snapshot; there is no daily pass to switch on.
 - The snapshot store takes very little of the server's disk (see the runbook's estimate); the minimum free space keeps
   the database and the logs safe if a library ever grows.

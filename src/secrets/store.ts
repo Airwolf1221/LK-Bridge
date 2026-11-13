@@ -26,7 +26,7 @@ export type SecretPurpose =
   | 'lk_api_key'
   | 'owner_password_hash'
   | 'owner_totp_secret'
-  // v2 E1b (ADR 0043, migration 2100): the off-site copy's Google client, refresh token and rclone crypt keys.
+  // v2 E1b (ADR 0043, migration 2200): the off-site copy's Google client, refresh token and rclone crypt keys.
   | 'drive_client_id'
   | 'drive_client_secret'
   | 'drive_refresh_token'

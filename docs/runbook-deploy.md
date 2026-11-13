@@ -924,12 +924,14 @@ Snapshots page in [dashboard.md](dashboard.md#snapshots-v2-e1a); the jobs in [ma
 (`/var/lib/lk-bridge/snapshots`, 0700, files 0600, owned by `lkbridge`), inside the unit's only writable path, created at
 the first start. Migration `2000_snapshots` adds the index tables. At its first start the bridge moves D3's
 `/var/lib/lk-bridge/images/kept-bytes/` into the store (each file hashed and checked; a notice on the Snapshots page says
-how many). The weekly full snapshot is on by default (Sunday 00:30), the daily pass is off.
+how many). The **nightly** full snapshot is on by default (every night at 00:30 London time; there is no daily changed-pages pass: LegendKeeper's `updatedAt` does not track content, the owner's sandbox run of 13 November 2026). Migration `2100_snapshots_nightly` drops the old pass's table, settings and job, and has an unchanged schedule worked out again from the new default, so **the first nightly run follows the deploy**.
 
 **Settings** (env.template, "Snapshots"; all optional): `SNAPSHOT_DIR` (must stay inside `ReadWritePaths`),
-`SNAPSHOT_MIN_FREE_GB` (**10**: a full snapshot is refused rather than leave less free space), `SNAPSHOT_KEEP_WEEKLY` (8),
-`SNAPSHOT_KEEP_DAYS` (30), `SNAPSHOT_SOFT_DELETE_DAYS` (30: how long a deleted page is taken to be undeletable). Per project
-(Projects or Snapshots page): `snapshotDailyPass`, `snapshotDailyPassDocuments`. Schedules: Maintenance Jobs page.
+`SNAPSHOT_MIN_FREE_GB` (**10**: a full snapshot is refused rather than leave less free space), the retention
+`SNAPSHOT_KEEP_FULL_DAYS` (**30**: every full snapshot is kept this long), `SNAPSHOT_KEEP_WEEKLY` (**8**: then one a week,
+the latest of each ISO week, for this many weeks), `SNAPSHOT_KEEP_DAYS` (30: change snapshots), and
+`SNAPSHOT_SOFT_DELETE_DAYS` (30: how long a deleted page is taken to be undeletable). Schedules: Maintenance Jobs page.
+There are no per-project snapshot settings any more.
 
 **Disk.** `/` has 144 GB with 63 GB free (12 November 2026); with the 10 GB minimum, **53 GB of headroom**. The store is
 expected to take a small fraction of it (estimates; the Snapshots page shows the real figures after the first run):
@@ -937,11 +939,17 @@ expected to take a small fraction of it (estimates; the Snapshots page shows the
 | What                                   | Test world (about 150 pages)      | Arkona (about 1,500 pages)                      |
 | -------------------------------------- | --------------------------------- | ----------------------------------------------- |
 | Text, first full snapshot              | about 0.5 MB stored (2 MB of JSON) | about 5 MB stored (about 22 MB of JSON)         |
-| Text, 8 weekly + 30 days of changes    | a few MB                          | 30 to 50 MB (only changed pieces are new)       |
+| Text, 30 nightly + 8 weekly fulls, and 30 days of changes | a few MB             | 30 to 50 MB (only changed pieces are new)       |
 | Manifests                              | under 1 MB                        | about 3 MB (about 200 bytes a page each full)   |
 | Images (the library, each stored once) | 10 to 30 MB                       | 250 to 750 MB (1,000 to 3,000 images of ~250 KB) |
 | The database's index                   | under 1 MB                        | about 10 to 20 MB (a row a piece a snapshot)    |
 | **Total**                              | **well under 100 MB**             | **under 1 GB, under 2% of the headroom**        |
+
+**The estimate is unchanged by nightly fulls.** Deduplication means a snapshot adds only what changed: a night with nothing
+changed adds a manifest (about 200 bytes a page) and nothing else, and a second full snapshot downloads no image that is
+already stored (only a new or replaced image is fetched; the weekly verify re-checks stored bytes). The retention keeps
+about 38 full manifests a project (30 nights and 8 weeks), so the manifests are the one item that grows with the number of
+snapshots, by well under 1 MB a project.
 
 Assumptions: a page's pieces about 15 KB of canonical JSON, compressed about 4× (gzip); WebP images do not compress further
 and are stored once whatever the number of snapshots; about a tenth of the pages change in a week. The disk check before a
@@ -963,18 +971,24 @@ for every manifest it holds.
 sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- snapshots
 ```
 
-Its `U.a` to `U.e` lines decide the **daily pass**: all PASS, switch on `snapshotDailyPass` for the project (Snapshots page);
-some INCONCLUSIVE (only a document's `updatedAt` moved), switch on `snapshotDailyPassDocuments` too (one more request a
-page a day: about 1,500 a day on Arkona, so weigh it against the budget); a FAIL means that kind of app edit is caught only
-by the weekly full snapshot. Its `D2` line says whether LegendKeeper takes a recreated page's original id.
+Its `U` line is a NOTED fact, not a check: `updatedAt` does not track content (13 November 2026), so edits made in the app
+are caught by the nightly full snapshot. Its `D2` line says **which icon form LegendKeeper accepts** (`fas fa-book` as a
+read gives it, or `book`) and how it reads back, then whether it takes a recreated page's original id and whether the
+page's icon came back.
+
+**The deploy, and the checks after the 13 November fixes** (the owner's, in this order):
+
+1. Deploy (`sudo -u lkbridge /opt/lk-bridge/deploy/deploy.sh`; migration `2100` runs with it).
+2. Rerun the sandbox check above (`… sandbox-test.sh --project test -- snapshots`): D2 and H should now PASS.
+3. Snapshots page → **Take a full snapshot now**, twice in a row. The second shows (almost) **no downloads** and little new
+   data (its row: "Requests" about 2.2 a page, "New" near zero), and the store's size hardly moves.
 
 **Live checks after the deploy** (the test world):
 
 1. Snapshots page → **Take a full snapshot now**; when the run ends, check its pages, requests, size and duration, and
    the store's size and free space.
 2. Edit a test page in the LegendKeeper app, and another (or the same) through the bridge; the bridge's edit shows a
-   change snapshot at once (Snapshots list, kind "after a bridge write"); the app edit is in the next full (or daily)
-   snapshot. Open the page's history and **Diff with now**.
+   change snapshot at once (Snapshots list, kind "after a bridge write"); the app edit is in the next full snapshot (that night's, or **Take a full snapshot now**). Open the page's history and **Diff with now**.
 3. **Propose a restore** of that page to the earlier snapshot: preview, propose, approve on the Proposals page, then read
    the page.
 4. **Restore rehearsal**: a rehearsal never goes into the project its snapshot came from, so take a full snapshot of
@@ -1010,7 +1024,7 @@ encrypted secret store, never in the env file.
    sudo /opt/lk-bridge/bin/deploy.sh --update-self
    ```
 
-   It shows each unit and asks first. Migration `2100_offsite_copy` adds the tables. Then check the runner can see rclone:
+   It shows each unit and asks first. Migration `2200_offsite_copy` adds the tables. Then check the runner can see rclone:
 
    ```bash
    sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh check-rclone
@@ -1032,7 +1046,7 @@ encrypted secret store, never in the env file.
    `sudo journalctl -u lk-bridge-offsite -f`. The first copy uploads everything; later ones only what changed.
 8. When it has succeeded: **Verify now**. It should say "All good".
 
-From then on: a copy every day at 04:45 London time (after the 04:15 database copy) and after each weekly full snapshot,
+From then on: a copy every day at 04:45 London time (after the 04:15 database copy) and after each nightly full snapshot,
 and a verify on the 1st of each month at 05:30; both times are settings on the page. The Overview turns red if the
 connection breaks or no good copy is younger than 2 days.
 

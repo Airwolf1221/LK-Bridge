@@ -2,7 +2,7 @@
 
 ## Unreleased: v2 E1b: the encrypted Google Drive copy
 
-[ADR 0043](adr/0043-google-drive-offsite-copy.md); migration `2100_offsite_copy`; the one-off Google set-up in
+[ADR 0043](adr/0043-google-drive-offsite-copy.md); migration `2200_offsite_copy`; the one-off Google set-up in
 [drive-setup.md](drive-setup.md). Nothing was run against a live system: no call to Google, Drive or the owner's
 LegendKeeper bridge connector. Every test runs against a mock Google OAuth and Drive server and a fake `rclone` that
 records its arguments and acts on a local directory; the owner does the live checks.
@@ -20,7 +20,7 @@ records its arguments and acts on a local directory; the owner does the live che
 - **The runner:** `lk-bridge-offsite.service` (separate from the bridge, `lkbridge`, idle I/O, `Nice=15`,
   `MemoryMax=768M`), started by `lk-bridge-offsite.timer` (every quarter hour; the daily copy's time, 04:45 by default,
   and the monthly verify are dashboard settings in the database) and `lk-bridge-offsite.path` (Copy now, Verify now, and
-  after each weekly full snapshot). `deploy/offsite.sh` runs `dist/offsite/cli.js`. A temporary 0600 rclone config in the
+  after each nightly full snapshot). `deploy/offsite.sh` runs `dist/offsite/cli.js`. A temporary 0600 rclone config in the
   unit's private `/tmp`, removed after success, failure, a crash or a stop. Copies `objects/`, then `manifests/` (only
   those older than the run), then removed objects, `STORE.json`, then the nightly database copies; `--backup-dir` keeps
   what a sync replaces or removes in `deleted/<date>` for 30 days, then the runner purges it. Bandwidth limit and
@@ -42,6 +42,50 @@ records its arguments and acts on a local directory; the owner does the live che
 - Docs: [drive-setup.md](drive-setup.md), the runbook ("Off-site copy to Google Drive", "Disaster recovery from Google
   Drive"), [dashboard.md](dashboard.md#off-site-copy-v2-e1b), [maintenance.md](maintenance.md#the-off-site-copy-v2-e1b),
   PLAN-v2 (4.11, the E1b row, settled item 4).
+
+## Unreleased: v2 E1a follow-up: the owner's sandbox run (13 November 2026)
+
+[ADR 0042](adr/0042-snapshots-restore-rehearsal.md) (amended: decisions 4, 7 and 9); migration `2100_snapshots_nightly`.
+What the owner's sandbox run showed: every restore type, undelete, the full snapshot and the clean-up passed; U.a to U.e
+(`updatedAt`), D2 (the icon name) and H (the rehearsal) failed. Nothing was run against a live system (the owner's
+LegendKeeper bridge connector was not called, not even for reads); every test is against the mock, and the sandbox script
+is written and dry-run against the mock, not run against LegendKeeper.
+
+- **Full snapshots are nightly** (`snapshot-full`, every night at 00:30 London time, was Sunday), because app edits must be
+  caught within a day and **LegendKeeper's `updatedAt` does not move when content changes** (U.a to U.e all failed:
+  resources and documents, for blocks, sidebar rows, map features, timeline events and board content). About 2.24 reads a
+  page: roughly **3,400 reads a day on Arkona against the 60,000 cap, about 340 on the test world**, at P3. A deployment
+  that had not changed the schedule works out its next run again from the new default (the migration).
+- **The daily changed-pages pass is removed**, not left as a dead switch: the `snapshotDailyPass` and
+  `snapshotDailyPassDocuments` project settings (dashboard and settings), the `snapshot-daily` maintenance job, its service
+  method, its run kind, its memory table and a manifest's per-page `updatedAt`. Migration 2100 drops the table and the stored
+  settings and the job's row. The sandbox script keeps one NOTED line (`U`) with the fact.
+- **Retention by age** (all settings): every full snapshot for `SNAPSHOT_KEEP_FULL_DAYS` (**30**) days, then one per ISO week
+  (the latest of that week, London time) for `SNAPSHOT_KEEP_WEEKLY` (**8**) weeks, then none; the newest complete one is
+  never removed; change snapshots `SNAPSHOT_KEEP_DAYS` (**30**). The Snapshots page says so. `SNAPSHOT_KEEP_WEEKLY` now means
+  weeks of one-a-week, not a count of fulls. The collector and GC are unchanged and tested after a prune.
+- **Images are not downloaded every night:** a library asset whose id and URL are as an earlier snapshot recorded them is
+  recorded from that hash, without a download (LegendKeeper's asset URLs are content-specific, so a replaced image has a new
+  URL and is downloaded, like a new one). A second full snapshot of the mock world with nothing changed: 132 reads,
+  **0 downloads, 0 new objects, 0 new bytes**. An image whose stored bytes an open verify finding calls damaged is fetched
+  and written again (the repair). The weekly `snapshot-verify` is where stored bytes are re-checked.
+- **Icon names on writes (D2).** LegendKeeper reads an icon as `fas fa-book` and writes it as `book` (400 otherwise). Every
+  place the bridge writes back what it read now converts (`fas`, `far`, `fab`, `fal`, `fat`, `fad`, `fa-solid`,
+  `fa-regular`, `fa-brands`… and `fa-` removed; a bare name unchanged): a restore and a recreate (the page, map pins,
+  timeline events), the rehearsal, `update_resource`'s icon and the map-feature tools' `style.iconGlyph`. **A name
+  LegendKeeper still refuses no longer fails the restore:** the write is sent again once without the icon, the restore
+  finishes, and the Snapshots page and the restore record list it under "couldn't be restored exactly" (new step option
+  `dropIfRefused`, bridge code only). The sandbox's D2 now reports which form LegendKeeper accepts, how it reads back, and
+  whether the icon came back, before the original-id check.
+- **The rehearsal's refusal of itself (H).** Not the nesting first suspected (it makes one page a job): a page whose
+  creation was refused (the icon) left its children naming a parent that did not exist, which the guard read as "outside the
+  root" and aborted the whole run. A refused page is now a difference, its descendants are "not attempted", the rest goes
+  on; and the guard (`assertInsideRoot`) also counts ids created by earlier steps of the same job as inside, while still
+  refusing a foreign parent. A test with a refused parent fails on the old code with the owner's exact message.
+- Tests (mock): the retention table over 120 nights and a prune with the collector and verify; the image reuse (zero
+  downloads, a replaced asset, a new asset, a damaged object); every icon prefix form, a bare name, a refused icon dropped
+  and listed, a recreate that succeeds; the guard over three levels in one job and a foreign parent; the removed pass in the
+  settings, the jobs, the admin API and the dashboard; migration 2100.
 
 ## Unreleased: v2 E1a: snapshots, restores as proposals, the rehearsal
 
