@@ -240,7 +240,7 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- sna
 ```
 
 It **writes**, then cleans up. It prints PASS, FAIL or INCONCLUSIVE per check ([ADR 0042](../../docs/adr/0042-snapshots-restore-rehearsal.md),
-"To verify"); the run fails if a check other than the `updatedAt` ones FAILs or the clean-up does.
+"To verify"); the run fails if a check FAILs or the clean-up does.
 
 - **Its runtime:** the sandbox runtime (`createSoakRuntime`), whose database **and snapshot store** are in its own
   temporary directory (`snapshots.dataDir`), removed at the end. Its AI REPOSITORY is set, **in that temporary database
@@ -258,14 +258,17 @@ It **writes**, then cleans up. It prints PASS, FAIL or INCONCLUSIVE per check ([
     here as the owner approves one) and read back: the stored piece must **hash exactly as the snapshot's**.
   - **D1:** the link target deleted, then undeleted within LegendKeeper's soft delete (`restoreResource`; its content
     follows as a second proposal, or is reported as already matching).
-  - **D2:** a page made, deleted, and **recreated from the snapshot alone**: whether LegendKeeper took its **original id**
-    (said either way; refused, it is recreated with a new id), and its text read back as in the snapshot.
-  - **U.a to U.e:** whether `updatedAt` moves on the resource (`listResources`, what the daily pass reads) or only on the
-    document (`listDocuments`, the pass's `snapshotDailyPassDocuments` option) when (a) a block, (b) a sidebar row, (c) a
-    map feature, (d) a timeline event or (e) the board content changes. **PASS:** the resource's moved, so the cheap daily
-    pass sees that edit. **INCONCLUSIVE:** only the document's moved, so the pass needs the documents option (one request
-    a page). **FAIL:** neither moved, so only the weekly full snapshot sees that kind of edit. These decide whether
-    `snapshotDailyPass` can be switched on (docs/runbook-deploy.md › Snapshots); they report, they do not fail the run.
+  - **D2:** first **which icon form LegendKeeper accepts**: a probe page is made with `"fas fa-book"` (as a read gives it)
+    and another with `"book"` (as the write schema says), each reported ACCEPTED or REFUSED, with how the accepted one reads
+    back. Then a page with an icon is made, deleted, and **recreated from the snapshot alone**: whether LegendKeeper took its
+    **original id** (said either way; refused, it is recreated with a new id), its text read back as in the snapshot, and
+    whether its **icon came back** (or was dropped by the bridge's fallback and listed, which is not a failure; an icon that
+    is gone without being listed is a FAIL). The owner's run of 13 November failed here on the icon and never reached the
+    id question.
+  - **U (NOTED, not run):** the old checks U.a to U.e asked whether `updatedAt` moves when a block, a sidebar row, a map
+    feature, a timeline event or the board content changes. The owner's run of 13 November: **all FAIL, it does not**, on
+    resources and on documents. So the daily changed-pages pass was removed and the full snapshot is nightly
+    (ADR 0042 decision 4). The script records the fact on one line and no longer tests it.
   - **H:** a sampled rehearsal of the subtree's snapshot into its own throwaway root (`lk-bridge rehearsal <time>`),
     compared and deleted. A rehearsal never goes into the project its snapshot came from, so the snapshot is copied, in the
     temporary database only, as one of a stand-in project, and the test project is marked a sandbox there.
@@ -274,11 +277,11 @@ It **writes**, then cleans up. It prints PASS, FAIL or INCONCLUSIVE per check ([
   queued is waited for, never sent again. The rehearsal waits for each of its own jobs the same way.
 - **What it cleans up:** the root (a cascade: every page the run made, the recreated one included) and the image, even
   after a failure; the rehearsal deletes its own root and folder. **Already gone (404, "already deleted") counts as cleaned.**
-- **Cost:** measured against the mock, **267 reads and 68 writes** (setup 14 reads and 19 writes; the full snapshot 16
-  reads for 3 pages and a 4-image library; each restore 15 to 24 reads and 2 to 4 writes; the five `updatedAt` checks about
-  7 reads and 1 write each; the rehearsal 52 reads and 22 writes; the clean-up 19 reads and 2 writes). On the real API add
+- **Cost:** measured against the mock, **239 reads and 65 writes** (setup 14 reads and 19 writes; the full snapshot 16
+  reads for 3 pages and a 4-image library; each restore 15 to 24 reads and 2 to 4 writes; D2 24 reads and 8 writes, its icon
+  probe included; the rehearsal 52 reads and 22 writes; the clean-up 23 reads and 2 writes). On the real API add
   the test world's library listing (one read per 100 assets) and the tree build of the subtree (a few reads); expect
-  **about 300 reads and 70 writes**, well inside the test project's budgets, and a few minutes at the write pacing.
+  **about 270 reads and 65 writes**, well inside the test project's budgets, and a few minutes at the write pacing.
 - **Dry run:** `test/snapshots/sandbox-dryrun.test.ts` runs the same script against the mock snapshot world: every check
-  but the `updatedAt` ones PASSes (the mock keeps no `updatedAt`, so those are INCONCLUSIVE there), nothing is left
-  behind, and the cost above is counted from the mock's own call log.
+  PASSes (the mock refuses the read form of an icon and takes the bare name, as the real API does), `U` is NOTED, nothing
+  is left behind, and the cost above is counted from the mock's own call log.

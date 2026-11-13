@@ -36,6 +36,8 @@ export interface Res {
   deletedAt: string | null;
   docs: string[];
   props: Prop[];
+  /** Read form, as LegendKeeper answers it (for example `fas fa-book`); a write takes the bare name (`book`). */
+  iconGlyph?: string | null;
   /** Bumped by any row write (the version the rows' If-Match checks). */
   propsVersion: number;
 }
@@ -269,6 +271,7 @@ export class TreeModel {
       rank: r.rank,
       isHidden: r.isHidden,
       isLocked: r.isLocked,
+      ...(r.iconGlyph ? { iconGlyph: r.iconGlyph } : {}),
       permissions: {},
       documents: this.liveDocs(r).map((d) => this.docView(d)),
       properties: r.props.map((p) => this.propView(p)),
@@ -304,6 +307,34 @@ export class TreeModel {
     return null;
   }
 
+  // ============================================================================================ icons
+
+  /** Bare names LegendKeeper refuses although they look right (a name FontAwesome does not have). */
+  readonly refusedIcons = new Set<string>();
+  /** Icon names the writes carried, in order (what LegendKeeper was sent). */
+  readonly iconWrites: string[] = [];
+
+  /**
+   * As LegendKeeper's write schema: a bare FontAwesome name (`book`, `circle-user`); the read form (`fas fa-book`) and
+   * a `fa-` prefix are refused: 400 VALIDATION_ERROR, "Invalid icon name. Must be a valid FontAwesome icon."
+   */
+  iconError(body: Record<string, unknown>): MockResponse | null {
+    if (body.iconGlyph === undefined || body.iconGlyph === null) return null;
+    const v = body.iconGlyph;
+    if (typeof v === 'string') this.iconWrites.push(v);
+    const ok = typeof v === 'string' && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(v) && !/^fa-/.test(v);
+    if (ok && !this.refusedIcons.has(v)) return null;
+    return {
+      status: 400,
+      body: {
+        message: 'Invalid icon name. Must be a valid FontAwesome icon.',
+        code: 'VALIDATION_ERROR',
+        requestId: 'model-VALIDATION_ERROR',
+        errors: [{ path: 'iconGlyph', message: 'Invalid icon name. Must be a valid FontAwesome icon.' }],
+      },
+    };
+  }
+
   // ============================================================================================ routing
 
   readonly respond = (req: MockRequest): MockResponse | undefined => {
@@ -322,6 +353,8 @@ export class TreeModel {
     if (this.res.has(id)) return err(409, 'DUPLICATE_ID');
     const parentId = typeof body.parentId === 'string' ? body.parentId : null;
     if (parentId !== null && !this.live(parentId)) return err(404, 'NOT_FOUND');
+    const iconError = this.iconError(body);
+    if (iconError) return iconError;
     const r = this.seed({
       id,
       name: typeof body.name === 'string' ? this.nameFilter(body.name) : 'Untitled',
@@ -330,6 +363,7 @@ export class TreeModel {
       aliases: Array.isArray(body.aliases) ? (body.aliases as string[]) : [],
       props: false,
     });
+    if (typeof body.iconGlyph === 'string') r.iconGlyph = `fas fa-${body.iconGlyph}`;
     const placed = this.place(r, parentId, body.after, body.before);
     if (placed) {
       this.res.delete(id);
@@ -428,6 +462,9 @@ export class TreeModel {
     if (p.length === 2) {
       if (M === 'GET') return { status: 200, body: this.resourceView(res) };
       if (M === 'PATCH') {
+        const iconError = this.iconError(body);
+        if (iconError) return iconError;
+        if (typeof body.iconGlyph === 'string') res.iconGlyph = `fas fa-${body.iconGlyph}`;
         if (typeof body.name === 'string') res.name = this.nameFilter(body.name);
         if (Array.isArray(body.tags)) res.tags = body.tags as string[];
         if (Array.isArray(body.aliases)) res.aliases = body.aliases as string[];

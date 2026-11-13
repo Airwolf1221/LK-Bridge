@@ -62,9 +62,11 @@ const toolsEnvSchema = z.object({
   SNAPSHOT_DIR: z.string().min(1).optional(),
   /** A full snapshot is refused rather than leave less than this much free space (GiB, as `df -h` shows it). */
   SNAPSHOT_MIN_FREE_GB: z.coerce.number().min(0).max(100_000).default(10),
-  /** Full snapshots kept (one a week). */
-  SNAPSHOT_KEEP_WEEKLY: intFrom(8, 1, 520),
-  /** Days change and daily snapshots are kept. */
+  /** Days every full snapshot is kept (they are nightly). */
+  SNAPSHOT_KEEP_FULL_DAYS: intFrom(30, 1, 3650),
+  /** After those days, weeks one full snapshot a week is kept (the latest of each ISO week). */
+  SNAPSHOT_KEEP_WEEKLY: intFrom(8, 0, 520),
+  /** Days change snapshots are kept. */
   SNAPSHOT_KEEP_DAYS: intFrom(30, 1, 3650),
   /**
    * How long LegendKeeper is taken to keep a deleted page restorable (its soft delete): a restore of a page deleted more
@@ -94,13 +96,17 @@ export interface ToolsSettings {
   readonly snapshots?: SnapshotStoreSettings;
 }
 
-/** v2 E1a (ADR 0042): the snapshot store's settings (env; the daily pass is a per-project setting on the dashboard). */
+/** v2 E1a (ADR 0042): the snapshot store's settings (env). */
 export interface SnapshotStoreSettings {
   /** SNAPSHOT_DIR, or null for `snapshots/` next to the database. */
   readonly dataDir: string | null;
   /** SNAPSHOT_MIN_FREE_GB in bytes (GiB). */
   readonly minFreeBytes: number;
+  /** SNAPSHOT_KEEP_FULL_DAYS: every full snapshot is kept this many days. */
+  readonly keepFullDays: number;
+  /** SNAPSHOT_KEEP_WEEKLY: then one per ISO week (the latest of that week) for this many weeks. */
   readonly keepWeekly: number;
+  /** SNAPSHOT_KEEP_DAYS: change snapshots are kept this many days. */
   readonly keepDays: number;
   readonly softDeleteDays: number;
 }
@@ -110,6 +116,7 @@ export const GIB = 1024 ** 3;
 export const DEFAULT_SNAPSHOT_SETTINGS: SnapshotStoreSettings = {
   dataDir: null,
   minFreeBytes: 10 * GIB,
+  keepFullDays: 30,
   keepWeekly: 8,
   keepDays: 30,
   softDeleteDays: 30,
@@ -194,6 +201,7 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
     snapshots: {
       dataDir: e.SNAPSHOT_DIR ?? null,
       minFreeBytes: Math.round(e.SNAPSHOT_MIN_FREE_GB * GIB),
+      keepFullDays: e.SNAPSHOT_KEEP_FULL_DAYS,
       keepWeekly: e.SNAPSHOT_KEEP_WEEKLY,
       keepDays: e.SNAPSHOT_KEEP_DAYS,
       softDeleteDays: e.SNAPSHOT_SOFT_DELETE_DAYS,

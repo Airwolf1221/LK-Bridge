@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ProjectStore } from '../../src/projects/index.js';
 import type { Manifest } from '../../src/snapshots/index.js';
-import { choosePages } from '../../src/snapshots/rehearsal.js';
+import { assertInsideRoot, choosePages } from '../../src/snapshots/rehearsal.js';
 import { PROJECT } from '../tools/helpers.js';
 import { S, snapshotsWorld, type SnapshotsWorld } from './world.js';
 
@@ -262,5 +262,101 @@ describe('choosing the sample', () => {
     const r1 = choosePages(pages, 3);
     expect(r1.ids.slice(0, 3).sort()).toEqual(['b', 'c', 'e']);
     expect(choosePages(pages, 5).ids).toEqual(choosePages(pages, 5).ids);
+  });
+});
+
+describe('the rehearsal: nesting and refusals', () => {
+  it('a page LegendKeeper refuses does not stop the run: its descendants are listed as not attempted, the rest are compared', async () => {
+    const { snapshotId, manifest } = await setup();
+    // LegendKeeper refuses to create the copy of [INDEX] Locations (a parent of the Atlas and the Old Harbour).
+    const rest = [...w!.overrides];
+    w!.overrides.clear();
+    w!.overrides.set(/\/resources$/, (req) => {
+      const name = (req.body as { name?: string } | undefined)?.name ?? '';
+      if (req.method === 'POST' && /\[INDEX\] Locations$/.test(name))
+        return {
+          status: 400,
+          body: { message: 'model refusal', code: 'VALIDATION_ERROR', requestId: 'refused-parent' },
+        };
+      return undefined;
+    });
+    for (const [k, v] of rest) w!.overrides.set(k, v);
+    const rh = w!.stack.runtime.rehearsals;
+    const row = await rh.start({ targetProject: 'test', snapshotId, mode: 'full', keep: false, by: 'owner' });
+    const done = (await rh.settled(row.id))!;
+    expect(done.error ?? '', 'the run must not refuse itself').not.toMatch(/outside the rehearsal/);
+    expect(done.state, done.error ?? '').toBe('succeeded');
+    const res = done.result as {
+      pagesCompared: number;
+      exact: number;
+      differences: { page: string; reason: string }[];
+    };
+    const locations = manifest.pages.find((p) => p.name === '[INDEX] Locations')!;
+    const below = manifest.pages.filter((p) => {
+      for (
+        let c = p.parentId, i = 0;
+        c && i < 50;
+        c = manifest.pages.find((q) => q.id === c)?.parentId ?? null, i++
+      )
+        if (c === locations.id) return true;
+      return false;
+    });
+    expect(below.length).toBeGreaterThan(1);
+    for (const p of below)
+      expect(res.differences.find((d) => d.page === p.name)?.reason, p.name).toMatch(/not attempted/);
+    expect(res.differences.find((d) => d.page === locations.name)?.reason).toMatch(/could not be created/);
+    expect(res.exact).toBe(manifest.pages.length - below.length - 1);
+  });
+});
+
+describe("the rehearsal's guard (never outside its root)", () => {
+  const create = (id: string, parentId?: string) => ({
+    op: 'createResource',
+    params: { body: { id, ...(parentId ? { parentId } : {}), name: id } },
+  });
+  const ctx = { created: new Set<string>(), rootId: 'rootroot', assetFolder: null };
+
+  it('a root, a child and a grandchild made in ONE job are all inside (ids made by earlier steps count)', () => {
+    expect(() =>
+      assertInsideRoot(
+        [
+          create('lvl1aaaa', 'rootroot'),
+          create('lvl2bbbb', 'lvl1aaaa'),
+          create('lvl3cccc', 'lvl2bbbb'),
+          {
+            op: 'createDocument',
+            params: { path: { resourceId: 'lvl3cccc' }, body: { type: 'page', name: 'M' } },
+          },
+        ],
+        ctx,
+      ),
+    ).not.toThrow();
+    // The root itself, then a page under it, in one job.
+    expect(() =>
+      assertInsideRoot([create('rootroot'), create('lvl1aaaa', 'rootroot')], { ...ctx }),
+    ).not.toThrow();
+  });
+
+  it('a page made by an earlier job counts too', () => {
+    expect(() =>
+      assertInsideRoot([create('lvl2bbbb', 'lvl1aaaa')], { ...ctx, created: new Set(['lvl1aaaa']) }),
+    ).not.toThrow();
+  });
+
+  it('still refuses a step with a foreign parent, a parent made LATER in the job, a foreign target and a foreign root', () => {
+    const refused = (steps: Parameters<typeof assertInsideRoot>[0]) =>
+      expect(() => assertInsideRoot(steps, ctx)).toThrowError(
+        expect.objectContaining({ code: 'REHEARSAL_OUTSIDE_ROOT' }) as Error,
+      );
+    refused([create('lvl1aaaa', 'foreign01')]);
+    refused([
+      create('lvl1aaaa', 'rootroot'),
+      create('lvl2bbbb', 'foreign01'),
+      create('lvl3cccc', 'lvl2bbbb'),
+    ]);
+    refused([create('lvl2bbbb', 'lvl1aaaa'), create('lvl1aaaa', 'rootroot')]); // the parent comes after the child
+    refused([create('lvl1aaaa')]); // a page with no parent that is not the root's own id
+    refused([{ op: 'updateResource', params: { path: { resourceId: 'foreign01' }, body: { name: 'x' } } }]);
+    refused([{ op: 'deleteAsset', params: { path: { assetId: 'someasset' } } }]);
   });
 });

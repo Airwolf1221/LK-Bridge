@@ -1,7 +1,7 @@
 /**
  * v2 E1a: the snapshot sandbox script (test/sandbox/snapshots.ts) run against the mock (no real LegendKeeper): it sets up
- * its subtree, snapshots it, restores every piece it set up, undeletes and recreates a page, runs the updatedAt checks
- * (whatever the mock answers), rehearses into its own root, and cleans everything up.
+ * its subtree, snapshots it, restores every piece it set up, undeletes and recreates a page, probes the icon forms, notes the
+ * updatedAt fact, rehearses into its own root, and cleans everything up.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { newCounters } from '../sandbox/soak.js';
@@ -28,7 +28,7 @@ describe('the snapshot sandbox script (dry run against the mock)', () => {
     });
     const report = await runSnapshotsSandbox(
       { runtime: w.stack.runtime, db: w.stack.db, projectId: PROJECT, counters },
-      { wait: { waitMs: 5_000, maxWaits: 30 }, updatedAtGapMs: 10 },
+      { wait: { waitMs: 5_000, maxWaits: 30 } },
     );
     process.stdout.write(formatSnapshotsReport(report, counters));
     const byId = Object.fromEntries(report.findings.map((f) => [f.id, f]));
@@ -46,7 +46,13 @@ describe('the snapshot sandbox script (dry run against the mock)', () => {
       'cleanup',
     ])
       expect(byId[id]?.verdict, `${id}: ${byId[id]?.detail}`).toBe('pass');
-    for (const id of ['U.a', 'U.b', 'U.c', 'U.d', 'U.e']) expect(byId[id], id).toBeDefined();
+    // The updatedAt checks are gone: one NOTED fact stays for the record.
+    expect(byId.U?.verdict).toBe('noted');
+    for (const id of ['U.a', 'U.b', 'U.c', 'U.d', 'U.e']) expect(byId[id], id).toBeUndefined();
+    // D2 reports which icon form LegendKeeper accepts (the mock takes the bare name and refuses the read form).
+    expect(byId.D2?.detail).toMatch(/"fas fa-book" REFUSED/);
+    expect(byId.D2?.detail).toMatch(/"book" ACCEPTED, which reads back as "fas fa-book"/);
+    expect(byId.D2?.detail).toMatch(/its icon came back as it was/);
     // Nothing of the run is left: its root (and the rehearsal's) deleted, its image deleted.
     const live = [...w.repo.res.values()].filter(
       (r) => r.deletedAt === null && /^lk-bridge (snapshots|rehearsal) /.test(r.name),

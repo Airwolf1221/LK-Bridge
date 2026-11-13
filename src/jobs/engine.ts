@@ -2634,6 +2634,10 @@ function stepOptions(o: StepOptions): StepOptions {
       ? { bindBody: { step: o.bindBody.step, key: o.bindBody.key } }
       : {}),
     ...(o.judgedInLock === true ? { judgedInLock: true } : {}),
+    // v2 E1a: set by bridge code only.
+    ...(Array.isArray(o.dropIfRefused) && o.dropIfRefused.every((k) => typeof k === 'string')
+      ? { dropIfRefused: [...o.dropIfRefused] }
+      : {}),
     // v2 D3: set by bridge code only.
     ...(o.bindFrom &&
     Number.isInteger(o.bindFrom.step) &&

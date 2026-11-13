@@ -151,6 +151,13 @@ export interface StepOptions {
    */
   readonly judgedInLock?: boolean;
   /**
+   * v2 E1a (ADR 0042 decision 9), set by bridge code only: body fields LegendKeeper may refuse although the rest of the
+   * write is sound (an icon name it does not know: 400 VALIDATION_ERROR naming the field). When it does, the step is sent
+   * once more without them (LegendKeeper's default applies), and the step's result says what was dropped
+   * (`droppedFields`). Any other refusal fails the step as before.
+   */
+  readonly dropIfRefused?: readonly string[];
+  /**
    * v2 D3 (ADR 0041), set by bridge code only: just before it runs, this step takes the `id` of what an earlier step of
    * the same job created (a folder `createAssetFolder` made, an asset `createImageAsset` made) into `body.folderId` or
    * `path.assetId`. Done once, before anything is sent, and stored; a step being recovered keeps what it was sent with.

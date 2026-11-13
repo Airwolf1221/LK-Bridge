@@ -19,6 +19,7 @@
  * be written whole at all: refused, as write_page refuses it); board pages; properties other than the facts property and
  * the link collections.
  */
+import { ICON_FIELDS, withWriteIcon } from '../lk/icons.js';
 import { randomBytes } from 'node:crypto';
 import { expectStep, verifyStep, type ExpectCheck, type VerifyTarget } from '../jobs/internal-steps.js';
 import { stableJson } from '../jobs/sidebar-state.js';
@@ -258,6 +259,17 @@ interface DocPlan {
   readonly changed: boolean;
 }
 
+/**
+ * v2 E1a (ADR 0042 decision 9): a body written back from what was read has its icon in the write form (`fas fa-book` →
+ * `book`), and a write whose icon LegendKeeper still refuses is sent again without it (its default applies; the result
+ * lists it). The icon is not part of the read-back check, for the same reason.
+ */
+const ICON_DROP = { dropIfRefused: [...ICON_FIELDS] } as const;
+const noIcon = (o: Obj): Obj => {
+  const { iconGlyph: _omit, ...rest } = o;
+  return rest;
+};
+
 const featureCreate = () => bodyFields('createFeature');
 const featureUpdate = () => bodyFields('updateFeature');
 
@@ -427,7 +439,8 @@ async function planDocument(
     for (const f of creates)
       writes.push({
         op: 'createFeature',
-        params: { path, body: pick(f, create) },
+        params: { path, body: withWriteIcon(pick(f, create)) },
+        ...ICON_DROP,
         journalOperation: { ...journalOperation, write: `create feature ${String(f.name ?? f.id)}` },
       });
     for (const f of updates) {
@@ -438,7 +451,8 @@ async function planDocument(
       if (l.parentId && !f.parentId) body.parentId = '';
       writes.push({
         op: 'updateFeature',
-        params: { path: { ...path, featureId: String(f.id) }, body },
+        params: { path: { ...path, featureId: String(f.id) }, body: withWriteIcon(body) },
+        ...ICON_DROP,
         journalOperation: { ...journalOperation, write: `update feature ${String(f.name ?? f.id)}` },
       });
     }
@@ -485,7 +499,12 @@ async function planDocument(
     const liveE = new Map(liveEvents.map((e) => [String(e.id), e]));
     const wantE = new Map(wantEvents.map((e) => [String(e.id), e]));
     const w = (op: string, params: OpParams, what: string) =>
-      writes.push({ op, params, journalOperation: { ...journalOperation, write: what } });
+      writes.push({
+        op,
+        params,
+        ...(op === 'createEvent' || op === 'updateEvent' ? ICON_DROP : {}),
+        journalOperation: { ...journalOperation, write: what },
+      });
     for (const l of wantLanes.filter((l) => !liveL.has(String(l.id))))
       w(
         'createLane',
@@ -528,7 +547,11 @@ async function planDocument(
           eventId: String(e.id),
           present: false,
         });
-        w('createEvent', { path, body: pick(e, evCreate) }, `create event ${String(e.name ?? e.id)}`);
+        w(
+          'createEvent',
+          { path, body: withWriteIcon(pick(e, evCreate)) },
+          `create event ${String(e.name ?? e.id)}`,
+        );
       } else if (!same(pick(now, evUpdate), pick(e, evUpdate))) {
         checks.push({
           label: `event ${String(now.name ?? now.id)}`,
@@ -541,7 +564,7 @@ async function planDocument(
         });
         w(
           'updateEvent',
-          { path: { ...path, eventId: String(e.id) }, body: pick(e, evUpdate) },
+          { path: { ...path, eventId: String(e.id) }, body: withWriteIcon(pick(e, evUpdate)) },
           `update event ${String(e.name ?? e.id)}`,
         );
       } else continue;
@@ -552,7 +575,7 @@ async function planDocument(
         documentId,
         eventId: String(e.id),
         present: true,
-        fields: pick(e, evUpdate),
+        fields: noIcon(pick(e, evUpdate)),
       });
     }
     for (const e of liveEvents.filter((x) => !wantE.has(String(x.id)))) {
@@ -1346,7 +1369,7 @@ async function planDeleted(
   const placement = prev ? { after: prev.id } : siblings[0] ? { before: siblings[0].id } : {};
   const createFields = bodyFields('createResource');
   const body: Obj = {
-    ...pick(resource, createFields, ['documents', 'after', 'before', 'id', 'parentId']),
+    ...withWriteIcon(pick(resource, createFields, ['documents', 'after', 'before', 'id', 'parentId'])),
     id: newId,
     parentId,
     ...placement,
@@ -1390,6 +1413,7 @@ async function planDeleted(
   steps.push({
     op: 'createResource',
     params: { body },
+    ...ICON_DROP,
     journalOperation: { ...journal, write: 'the page and its first documents' },
   });
   const createStep = 1;
@@ -1439,7 +1463,8 @@ async function planDeleted(
       for (const f of [...byId.values()].sort((a, b) => depth(a) - depth(b)))
         steps.push({
           op: 'createFeature',
-          params: { path: p, body: pick(f, create) },
+          params: { path: p, body: withWriteIcon(pick(f, create)) },
+          ...ICON_DROP,
           bindFrom: bound(ref),
           journalOperation: { ...journal, write: `feature ${String(f.name ?? f.id)}` },
         });
@@ -1466,7 +1491,8 @@ async function planDeleted(
       for (const e of (t.piece.events ?? []) as Obj[])
         steps.push({
           op: 'createEvent',
-          params: { path: p, body: pick(e, evCreate) },
+          params: { path: p, body: withWriteIcon(pick(e, evCreate)) },
+          ...ICON_DROP,
           bindFrom: bound(ref),
           journalOperation: { ...journal, write: `event ${String(e.name ?? e.id)}` },
         });

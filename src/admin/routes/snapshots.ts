@@ -9,7 +9,7 @@
  *   page's history, newest first, piece by piece. Free: the bridge's own index.
  * - `GET /snapshots/diff`: one piece's Markdown diff between a snapshot and the page now (a few reads at P1) or between
  *   two snapshots (free).
- * - `POST /snapshots/full`: a full snapshot of the project now (the weekly one runs at night on its own);
+ * - `POST /snapshots/full`: a full snapshot of the project now (the nightly one runs on its own);
  *   `POST /snapshots/runs/:id/abandon`: stops an interrupted run for good.
  * - `POST /snapshots/restore` and `POST /snapshots/restore-image`: "Propose a restore". ALWAYS a proposal, approved as
  *   normal on the Proposals page; `dryRun` shows the plan without proposing.
@@ -39,7 +39,7 @@ const pieceQuery = z.object({
   piece: z.enum(['resource', 'sidebar', 'document']).optional(),
   ref: z.string().min(1).max(64).optional(),
 });
-const SNAPSHOT_JOBS = ['snapshot-full', 'snapshot-daily', 'snapshot-prune', 'snapshot-verify'];
+const SNAPSHOT_JOBS = ['snapshot-full', 'snapshot-prune', 'snapshot-verify'];
 
 const ORIGIN = (tool: string): JobOrigin => ({ kind: 'ui', tool, principal: SYSTEM_PRINCIPAL });
 
@@ -97,7 +97,7 @@ export const registerSnapshots: Register = (api, ctx) => {
     const q = parseInput(
       z.object({
         project: projectParam,
-        kind: z.enum(['full', 'change', 'daily']).optional(),
+        kind: z.enum(['full', 'change']).optional(),
         limit: limitSchema(100, 1000),
       }),
       req.query,

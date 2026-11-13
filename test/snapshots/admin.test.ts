@@ -67,11 +67,10 @@ describe('the Snapshots page API', () => {
     expect(before.json.snapshots).toEqual([]);
     expect(before.json.jobs.map((j: Json) => j.id)).toEqual([
       'snapshot-full',
-      'snapshot-daily',
       'snapshot-prune',
       'snapshot-verify',
     ]);
-    expect(before.json.jobs[0].scheduleText).toMatch(/^Weekly on Sunday/);
+    expect(before.json.jobs[0].scheduleText).toBe('Daily at 00:30 (London time)');
 
     const started = await o.post('/snapshots/full?project=test');
     expect(started.status).toBe(202);
@@ -189,15 +188,14 @@ describe('the Snapshots page API', () => {
     );
   });
 
-  it('switches the daily pass on and off (the project setting), and lists the nightly database copies', async () => {
+  it('has no daily-pass setting any more (the two keys are refused), and lists the nightly database copies', async () => {
     w = await snapshotsWorld();
     const o = owner(w);
-    const put = await o.put('/projects/test/settings', { key: 'snapshotDailyPass', value: true });
-    expect(put.status).toBe(200);
-    expect((await o.get('/snapshots?project=test')).json.overview.dailyPass).toEqual({
-      enabled: true,
-      documents: false,
-    });
+    for (const key of ['snapshotDailyPass', 'snapshotDailyPassDocuments'])
+      expect((await o.put('/projects/test/settings', { key, value: true })).status).toBe(400);
+    const ov = (await o.get('/snapshots?project=test')).json.overview;
+    expect(ov.dailyPass).toBeUndefined();
+    expect(ov.retention).toEqual({ keepFullDays: 30, keepWeekly: 8, keepDays: 30, softDeleteDays: 30 });
 
     const dir = join(dirname(w.stack.dbPath), 'backups');
     mkdirSync(dir, { recursive: true });

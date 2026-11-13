@@ -105,6 +105,13 @@ function certificate(): { key: Buffer; cert: string } {
   return certCache;
 }
 
+/** An icon LegendKeeper was sent as a bare name (`book`) reads back as a class string (`fas fa-book`). */
+function readIcon<T extends Obj>(o: T): T {
+  if (typeof o.iconGlyph === 'string' && !/^fa/.test(o.iconGlyph))
+    (o as Obj).iconGlyph = `fas fa-${o.iconGlyph}`;
+  return o;
+}
+
 const err = (status: number, code: string): MockResponse => ({
   status,
   body: { message: `model ${code}`, code, requestId: `snap-${code}` },
@@ -463,7 +470,9 @@ export async function snapshotsWorld(
       if (!sub && req.method === 'POST') {
         const id = typeof body.id === 'string' ? body.id : newId('f');
         if (list.some((f) => f.id === id)) return err(409, 'DUPLICATE_ID');
-        const f = { ...structuredClone(body), id, rank: body.rank ?? `z${list.length}` };
+        const iconRefused = w.repo.iconError(body);
+        if (iconRefused) return iconRefused;
+        const f = readIcon({ ...structuredClone(body), id, rank: body.rank ?? `z${list.length}` });
         list.push(f);
         if (doc.type === 'blank') doc.type = 'map';
         return { status: 201, body: structuredClone(f) };
@@ -472,9 +481,12 @@ export async function snapshotsWorld(
       if (!f) return err(404, 'NOT_FOUND');
       if (req.method === 'GET') return { status: 200, body: structuredClone(f) };
       if (req.method === 'PATCH') {
+        const iconRefused = w.repo.iconError(body);
+        if (iconRefused) return iconRefused;
         for (const [k, v] of Object.entries(body))
           if (v === null) delete f[k];
           else f[k] = structuredClone(v);
+        readIcon(f);
         return { status: 200, body: structuredClone(f) };
       }
       if (req.method === 'DELETE') {
@@ -535,7 +547,9 @@ export async function snapshotsWorld(
         const id = typeof body.id === 'string' ? body.id : newId('e');
         if (list.some((f) => f.id === id)) return err(409, 'DUPLICATE_ID');
         if (!(lanes.get(did) ?? []).some((l) => l.id === body.laneId)) return err(400, 'VALIDATION_ERROR');
-        const e = { ...structuredClone(body), id, rank: body.rank ?? `z${list.length}` };
+        const iconRefused = w.repo.iconError(body);
+        if (iconRefused) return iconRefused;
+        const e = readIcon({ ...structuredClone(body), id, rank: body.rank ?? `z${list.length}` });
         list.push(e);
         return { status: 201, body: structuredClone(e) };
       }
@@ -543,7 +557,10 @@ export async function snapshotsWorld(
       if (!e) return err(404, 'NOT_FOUND');
       if (req.method === 'GET') return { status: 200, body: structuredClone(e) };
       if (req.method === 'PATCH') {
+        const iconRefused = w.repo.iconError(body);
+        if (iconRefused) return iconRefused;
         Object.assign(e, structuredClone(body));
+        readIcon(e);
         return { status: 200, body: structuredClone(e) };
       }
       if (req.method === 'DELETE') {
