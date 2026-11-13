@@ -5,7 +5,6 @@
  */
 import { createHash } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
 import { fixture, imagesWorld, type ImagesWorld } from './world.js';
