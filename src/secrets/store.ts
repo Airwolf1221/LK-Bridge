@@ -22,9 +22,20 @@ import {
   seal,
 } from './crypto.js';
 
-export type SecretPurpose = 'lk_api_key' | 'owner_password_hash' | 'owner_totp_secret';
+export type SecretPurpose =
+  | 'lk_api_key'
+  | 'owner_password_hash'
+  | 'owner_totp_secret'
+  // v2 E1b (ADR 0043, migration 2100): the off-site copy's Google client, refresh token and rclone crypt keys.
+  | 'drive_client_id'
+  | 'drive_client_secret'
+  | 'drive_refresh_token'
+  | 'drive_crypt_password'
+  | 'drive_crypt_salt';
 /** The scope of the owner's own secrets (an API key's scope is its project's LegendKeeper id). */
 export const OWNER_SCOPE = '*';
+/** v2 E1b: the scope of the off-site copy's secrets. */
+export const OFFSITE_SCOPE = 'offsite';
 
 export type SecretSource = 'env_import' | 'dashboard';
 

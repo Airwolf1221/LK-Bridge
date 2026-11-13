@@ -92,6 +92,9 @@ export const registerOverview: Register = (api, ctx) => {
             gauges: headline.map((t) => budget.snapshot.tiers[t]),
           }
         : null,
+      // v2 E1b (ADR 0043): the off-site copy's health, so a broken backup cannot go unnoticed: a broken Google
+      // connection, a last good copy older than the setting (2 days), a failed copy, or a verify that found problems.
+      offsite: deps.runtime.offsite ? deps.runtime.offsite.health() : null,
       // OPS2: keys can now be changed from here, so the owner's own sign-in matters more: the page recommends the
       // authenticator strongly while it is off, and shows any secret-store problem and env/store key differences.
       security: (() => {

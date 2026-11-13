@@ -28,6 +28,7 @@ export default defineConfig({
       'test/maps/**/*.test.ts', // v2 D2: the map-feature tools
       'test/images/**/*.test.ts', // v2 D3: the image pipeline
       'test/snapshots/**/*.test.ts', // v2 E1a: snapshots, restore and the rehearsal
+      'test/offsite/**/*.test.ts', // v2 E1b: the encrypted Google Drive copy
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

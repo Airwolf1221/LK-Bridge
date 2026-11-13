@@ -46,3 +46,4 @@ One short record per major decision. To change a decision in `docs/PLAN.md`, add
 | [0040](0040-map-feature-tools.md)                                                 | The map-feature tools, map images and pixel coordinates                                         | Accepted                   |
 | [0041](0041-image-pipeline.md)                                                    | The image pipeline: four ways in, sharp, the binary endpoint, staging, deletes keep their bytes | Accepted                   |
 | [0042](0042-snapshots-restore-rehearsal.md)                                       | Snapshots (the store as E1b's contract), restores as proposals, the rehearsal                   | Accepted                   |
+| [0043](0043-google-drive-offsite-copy.md)                                         | The encrypted Google Drive copy: the owner's app (`drive.file`), PKCE sign-in, rclone runner    | Accepted                   |

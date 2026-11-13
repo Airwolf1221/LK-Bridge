@@ -976,3 +976,21 @@ img.thumb {
   object-fit: contain;
   border-radius: 4px;
 }
+
+/* v2 E1b: the Off-site copy page's facts (label and value side by side) and keys shown once. */
+dl.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.35rem 1rem;
+  margin: 0.5rem 0;
+}
+dl.facts dt {
+  font-weight: 600;
+}
+dl.facts dd {
+  margin: 0;
+}
+.secret-value {
+  word-break: break-all;
+  user-select: all;
+}

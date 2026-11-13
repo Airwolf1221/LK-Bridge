@@ -35,7 +35,9 @@ in that order.
 Afterwards: [updating](#updating), [updating the env file](#updating-the-env-file), [backups and restore](#backups-and-restore), [rollback](#rollback),
 [logs](#logs-and-useful-commands), [the soak test](#soak-test-), [the v2 phase 0 spike](#v2-phase-0-spike-),
 [the browser smoke test](#browser-smoke-test),
-[memory](#memory), [moving to several projects (v2 A1)](#moving-to-several-projects-v2-a1),
+[memory](#memory), [the off-site copy to Google Drive (v2 E1b)](#off-site-copy-to-google-drive-v2-e1b) and
+[disaster recovery from Google Drive](#disaster-recovery-from-google-drive),
+[moving to several projects (v2 A1)](#moving-to-several-projects-v2-a1),
 [managing projects from the dashboard (OPS2)](#managing-projects-from-the-dashboard-ops2) (and
 [rotating the master key](#rotating-the-master-key)),
 [migrating an existing install to v1.0.1](#migrating-an-existing-install-to-v101).
@@ -286,8 +288,10 @@ you change it (and set up the authenticator app) on the dashboard's **Account** 
 
 ```bash
 cd /opt/lk-bridge/app/deploy
-sudo install -m 0644 lk-bridge.service lk-bridge-backup.service lk-bridge-backup.timer /etc/systemd/system/
-sudo systemd-analyze verify /etc/systemd/system/lk-bridge.service /etc/systemd/system/lk-bridge-backup.service /etc/systemd/system/lk-bridge-backup.timer
+sudo install -m 0644 lk-bridge.service lk-bridge-backup.service lk-bridge-backup.timer \
+  lk-bridge-offsite.service lk-bridge-offsite.timer lk-bridge-offsite.path /etc/systemd/system/
+sudo systemd-analyze verify /etc/systemd/system/lk-bridge.service /etc/systemd/system/lk-bridge-backup.service /etc/systemd/system/lk-bridge-backup.timer \
+  /etc/systemd/system/lk-bridge-offsite.service /etc/systemd/system/lk-bridge-offsite.timer /etc/systemd/system/lk-bridge-offsite.path
 sudo systemctl daemon-reload
 ```
 
@@ -335,6 +339,7 @@ sudo journalctl -u lk-bridge -n 40 --no-pager
 curl -s http://127.0.0.1:8787/healthz           # {"ok":true,"version":"1.0.1"}
 sudo systemctl enable --now lk-bridge-backup.timer
 systemctl list-timers lk-bridge-backup.timer --no-pager
+sudo systemctl enable --now lk-bridge-offsite.timer lk-bridge-offsite.path   # v2 E1b: idle until set up on the dashboard
 ```
 
 What you should see in the journal: `LK-Bridge listening` with the MCP URL `https://lk.ottomoons.co.uk/mcp`. If it
@@ -658,10 +663,10 @@ sudo ls -l /etc/lk-bridge/
 
 ````
 
-- **Off the server:** the backups sit on the same disk as the database. Copy them somewhere else now and then, from your
-  own computer: `scp` or `rsync` of `/var/lib/lk-bridge/backups/` (they are readable only by `lkbridge` and root, so copy
-  with `sudo`, or add a pull job under your own account). They hold token hashes and the proposals and journal data:
-  treat them as sensitive.
+- **Off the server:** v2 E1b copies these backups and the snapshot store, encrypted, to Google Drive every night
+  ([Off-site copy to Google Drive](#off-site-copy-to-google-drive-v2-e1b)). Without it, copy them somewhere else now and
+  then from your own computer (`scp` or `rsync` of `/var/lib/lk-bridge/backups/`, with `sudo`). They hold token hashes,
+  the encrypted secret store and the proposals and journal data: treat them as sensitive.
 - **Test a backup without touching production** (as `lkbridge`):
 
   ```bash
@@ -948,8 +953,9 @@ sudo du -sh /var/lib/lk-bridge/snapshots /var/lib/lk-bridge/backups
 ```
 
 **The nightly database copies** (above, "Backups and restore") hold the snapshot index, runs, findings, restores and
-rehearsals; the manifests and pieces are in the store. E1b copies both off the server. Until then the store is plain
-files: copy `objects/` before `manifests/` (`sudo rsync -a`), and a copy is complete for every manifest it holds.
+rehearsals; the manifests and pieces are in the store. E1b copies both off the server, encrypted, to Google Drive (next
+section). By hand, the store is plain files: copy `objects/` before `manifests/` (`sudo rsync -a`), and a copy is complete
+for every manifest it holds.
 
 **The sandbox check** (writes in the test project, then cleans up; about 300 reads and 70 writes, a few minutes):
 
@@ -974,6 +980,163 @@ by the weekly full snapshot. Its `D2` line says whether LegendKeeper takes a rec
 4. **Restore rehearsal**: a rehearsal never goes into the project its snapshot came from, so take a full snapshot of
    another served project (Baisheng now; Arkona after E5) from its Snapshots page, then rehearse it, sampled, into the
    test world; read the results, and check the throwaway root `lk-bridge rehearsal <time>` is gone.
+
+## Off-site copy to Google Drive (v2 E1b)
+
+[ADR 0043](adr/0043-google-drive-offsite-copy.md); the Google set-up in [drive-setup.md](drive-setup.md); the page in
+[dashboard.md](dashboard.md#off-site-copy-v2-e1b).
+
+An encrypted copy of the snapshot store (`objects/` first, then `manifests/`, ADR 0042's order) and of the nightly
+database copies goes to the owner's Google Drive every night, made by **rclone** in a **separate service**,
+`lk-bridge-offsite.service`, never by the bridge. Files and their names are encrypted (rclone crypt); Google sees neither
+content nor names. The Google client, the sign-in and the encryption keys are entered on the dashboard and kept in the
+encrypted secret store, never in the env file.
+
+### The owner's steps, in order ✋
+
+1. **Install rclone** (rclone's own current release; Ubuntu's `apt install rclone` gives 1.60.1 from 2022, which works
+   but misses years of fixes; the runner refuses anything older than 1.60):
+
+   ```bash
+   curl -fsSL -o /tmp/rclone.deb "https://downloads.rclone.org/rclone-current-linux-$(dpkg --print-architecture).deb" && sudo apt install -y /tmp/rclone.deb
+   ```
+
+   Check: `rclone version` (first line `rclone v1.…`). To update it later, run the same line again.
+
+2. **Deploy** this release with `--update-self`, which also installs the three new units (`lk-bridge-offsite.service`,
+   `.timer`, `.path`) into `/etc/systemd/system`, reloads systemd and enables the timer and the path unit:
+
+   ```bash
+   sudo /opt/lk-bridge/bin/deploy.sh --update-self
+   ```
+
+   It shows each unit and asks first. Migration `2100_offsite_copy` adds the tables. Then check the runner can see rclone:
+
+   ```bash
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh check-rclone
+   systemctl list-timers lk-bridge-offsite.timer --no-pager
+   systemctl status lk-bridge-offsite.path --no-pager
+   ```
+
+3. **The one-off Google Cloud set-up**: [drive-setup.md](drive-setup.md) (a project, the Drive API, Branding, Audience
+   External and **published**, the `drive.file` scope, a Web application client with the redirect URI
+   `https://lk.ottomoons.co.uk/admin/drive/callback`).
+4. Dashboard → **Off-site copy** → **Google Drive**: paste the **Client ID** and **Client secret**, **Save the client**
+   (it asks for your password, and authenticator code, if not confirmed in the last five minutes).
+5. **Connect Google Drive**: sign in at Google and allow access; back on the page, the card says **Connected** with the
+   account's name and email.
+6. **Encryption keys** → **Generate keys**. Save both (the password and the salt) in your password manager, beside
+   `SECRETS_MASTER_KEY` and the authenticator's recovery codes, then type their last 6 characters to confirm. They are
+   never shown again; **without them the Drive copy cannot be restored.**
+7. **Copy now.** The path unit starts the runner within seconds; refresh the page to follow it, or
+   `sudo journalctl -u lk-bridge-offsite -f`. The first copy uploads everything; later ones only what changed.
+8. When it has succeeded: **Verify now**. It should say "All good".
+
+From then on: a copy every day at 04:45 London time (after the 04:15 database copy) and after each weekly full snapshot,
+and a verify on the 1st of each month at 05:30; both times are settings on the page. The Overview turns red if the
+connection breaks or no good copy is younger than 2 days.
+
+### How big, how long
+
+The first upload is about the size of what is copied, plus a fraction of a per cent for the encryption:
+
+```bash
+sudo du -ch /var/lib/lk-bridge/snapshots/objects /var/lib/lk-bridge/snapshots/manifests /var/lib/lk-bridge/backups | tail -n 1
+```
+
+For the **test world** (estimates from the Snapshots section): the store's images 10 to 30 MB, its text and manifests
+1 to 2 MB, and the database copies (up to 14 nightly and 5 pre-deploy, a few MB each compressed): **about 20 to 80 MB in
+all**, a few minutes at most. Arkona's first upload will be under about 1 GB. Later copies upload only new pieces and the
+newest database copies. Removed pieces are kept in the folder's `deleted/<date>` area for 30 days, then purged.
+
+### Where things are
+
+| What                     | Where                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| The units                | `/etc/systemd/system/lk-bridge-offsite.{service,timer,path}` (from `deploy/`)                |
+| The runner               | `/opt/lk-bridge/app/deploy/offsite.sh` → `dist/offsite/cli.js` (as `lkbridge`)              |
+| Requests from the bridge | `/var/lib/lk-bridge/offsite/requests/*.json` (taken by the runner as it starts)             |
+| Runs and findings        | the database (`offsite_runs`, `offsite_findings`); the Off-site copy page                   |
+| On Drive                 | `LK-Bridge backups/<server>/copy-<n>/` (inside: encrypted `store/`, `database/`, `deleted/`) |
+| Its log                  | `sudo journalctl -u lk-bridge-offsite -n 100 --no-pager`                                    |
+
+The temporary rclone config lives only during a run, 0600, in the unit's private `/tmp`, and is removed afterwards.
+
+### From the server's shell
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh status          # connection, keys, folder, last runs (no secret)
+sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh copy            # a copy now, in the foreground
+sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh verify          # a verify now, with its findings
+sudo systemctl start lk-bridge-offsite.service                        # or let systemd run it (what the timer does)
+```
+
+### When something is wrong
+
+- **The card is red: "Reconnect".** Google refused the saved sign-in (the app still in Testing after 7 days, access
+  removed in the Google account, the client secret reset). Check [drive-setup.md](drive-setup.md) step 4, then press
+  **Reconnect**.
+- **"rclone is not installed" / "too old"** on the last run: step 1 above.
+- **"already holds a copy this database did not make"**: the database is new (a recovery) but the Drive folder is not.
+  Restore from it first (below); or, if you mean to keep copying into it, **Use this folder** on the page.
+- **A verify found problems**: run **Copy now** (it uploads what is missing again), then **Verify now**. A piece that is
+  damaged on Drive but fine locally is replaced by the next copy only if its size or time differs; delete it on Drive
+  (the verify names it) or start a new folder by changing the folder setting.
+- **Changing the keys**: the page warns first. A copy exists with the old keys, so the next copy is a fresh full upload
+  into `copy-<n+1>`; the old folder stays until you **Delete** it in the page's Drive folder card (keep the old keys
+  until then).
+
+## Disaster recovery from Google Drive
+
+The server is gone; the Drive copy, your password manager (`SECRETS_MASTER_KEY`, the env file's other values if you
+kept them, the Drive keys, the Google client) and the GitHub repository are what is left.
+
+1. **A new server**, then this runbook's sections 1 to 8 (prerequisites, users, the clone, the private Node, the first
+   build, the units). Keep the old host name if you can (the Google client's redirect URI names it; otherwise add the new
+   one in Google Cloud → Clients).
+2. **The env file**: create it (section 6) and put back **`SECRETS_MASTER_KEY`** from your password manager (without it
+   the restored database's API keys, owner sign-in and Drive secrets cannot be opened). Put back the other values you
+   kept; env-sync generates any missing secret (that signs everyone out, which is fine here).
+3. **Install rclone** (step 1 of the previous section).
+4. **Start the bridge** once (section 9) so it creates and migrates a fresh database, and sign in (section 7's owner
+   password, or `npm run setup:owner`). Then, either on the dashboard's **Off-site copy** page: save the client, Connect
+   Google Drive, and **Enter my own** keys (the ones from your password manager, not new ones); or, if the dashboard is
+   not reachable yet, from the shell (each asks on standard input; nothing goes on the command line):
+
+   ```bash
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh set-client      # Client ID, then Client secret
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh connect         # bridge stopped: open the printed address, allow, paste back the address the browser lands on
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh set-keys        # the password, then the salt
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite.sh generations     # the copy-<n> folders on Drive
+   ```
+
+   Do **not** press Copy now on the fresh database: the runner would refuse anyway (the folder holds a copy this
+   database did not make), but there is nothing to copy yet.
+
+5. **Pull and check** (into a new directory; nothing live is touched):
+
+   ```bash
+   sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite-restore.sh --folder "LK-Bridge backups/lk.ottomoons.co.uk/copy-1"
+   ```
+
+   (`--folder` is the newest `copy-<n>` from `generations`; without it, the folder the fresh database names, which is
+   `copy-1`.) It pulls `objects/`, then `manifests/`, then `STORE.json`, then the newest database copy; re-hashes **every**
+   object against its name, checks every manifest's pieces are there, runs `integrity_check` on the database copy, and
+   ends with `RESTORE CHECK PASSED` and the exact commands that move the database and the store into place.
+
+6. **Put them in place** with the printed commands (the bridge stopped; the fresh database is moved aside, not
+   deleted), start the bridge and run the health check. The restored database still knows its Drive folder and has its
+   own (older) Drive sign-in and keys, sealed with the same `SECRETS_MASTER_KEY`; if the Off-site copy page shows the
+   connection broken, press **Reconnect**. Then **Copy now** and **Verify now**.
+7. **Check LegendKeeper against the snapshots**: the Snapshots page lists them; nothing in LegendKeeper itself was lost
+   with the server. The restore rehearsal (Snapshots page) proves a snapshot restores.
+
+**If the Google Cloud project itself is lost**, a new project cannot see the old files (`drive.file` is per app). On any
+computer with rclone: `rclone config` → a `drive` remote with rclone's own client and **full** access (`scope = drive`),
+then a `crypt` remote over `LK-Bridge backups/<server>/copy-<n>` with your password and salt (standard file name
+encryption, directory names encrypted), and `rclone copy` the `store` and `database` folders down; then put them on the
+server and check them as in step 5 (`offsite-restore.sh` needs the bridge's own client, so check with the Snapshots
+page's verify after the restore instead).
 
 ## Moving to several projects (v2 A1)
 

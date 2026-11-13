@@ -107,7 +107,12 @@ export async function runSecretsCli(
       );
       if (s.problem) out(`Problem: ${s.problem}`);
       for (const m of store.list()) {
-        const who = m.scope === '*' ? 'owner' : `project ${names.get(m.scope) ?? m.scope}`;
+        const who =
+          m.scope === '*'
+            ? 'owner'
+            : m.scope === 'offsite'
+              ? 'off-site copy'
+              : `project ${names.get(m.scope) ?? m.scope}`;
         out(
           `  ${who}: ${m.purpose}${m.hint ? ` (ends ${m.hint})` : ''}, ${m.source === 'env_import' ? 'imported from the env file' : 'set on the dashboard'}, sealed with the ${m.sealedWith === 'current' ? 'current' : m.sealedWith === 'previous' ? 'PREVIOUS' : 'an UNKNOWN'} master key`,
         );

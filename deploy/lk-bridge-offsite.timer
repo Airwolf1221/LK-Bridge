@@ -1,0 +1,13 @@
+# Wakes the off-site runner every quarter hour. It does nothing unless something is due: the daily copy's time (default
+# 04:45 London, after the nightly database copy at 04:15) and the monthly verify are settings on the dashboard, kept in
+# the database, so changing them never needs this file. A missed time (the server was off) is caught up at the next wake.
+[Unit]
+Description=Wake the LK-Bridge off-site copy every quarter hour (the schedule itself is on the dashboard)
+
+[Timer]
+OnCalendar=*-*-* *:00/15:00
+AccuracySec=1min
+Unit=lk-bridge-offsite.service
+
+[Install]
+WantedBy=timers.target

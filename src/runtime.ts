@@ -1,5 +1,8 @@
 import { pino } from 'pino';
 import type { Writable } from 'node:stream';
+import { randomBytes } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { applyStoredSettings } from './admin/index.js';
 import {
   DEFAULT_IMAGE_SETTINGS,
@@ -55,6 +58,9 @@ import { LifecycleGuard } from './lifecycle/guard.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
 import { mapCheckers } from './maps/index.js';
+import { OffsiteService } from './offsite/service.js';
+import type { GoogleOAuthOptions } from './offsite/google.js';
+import { requestDir as offsiteRequestDir } from './offsite/requests.js';
 import { FactsVersions } from './facts/version.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
@@ -111,6 +117,8 @@ export interface Runtime {
   readonly restores: Restores;
   /** v2 E1a: restore rehearsals into a throwaway root of a sandbox project. */
   readonly rehearsals: Rehearsals;
+  /** v2 E1b (ADR 0043): the off-site copy to Google Drive (its settings, the Google connection, the runner's requests). */
+  readonly offsite: OffsiteService;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -156,6 +164,8 @@ export interface RuntimeOptions {
   /** The runtime's log level and destination (default: LOG_LEVEL, to stdout). `createBridge` passes the server's. */
   readonly logLevel?: string;
   readonly logStream?: Writable;
+  /** v2 E1b test seam: Google's OAuth and Drive endpoints and the fetch that reaches them (default: Google's). */
+  readonly googleOAuth?: GoogleOAuthOptions;
 }
 
 export function createRuntime(o: RuntimeOptions): Runtime {
@@ -451,6 +461,20 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   // v2 E1a (ADR 0042): the snapshot store, beside the database the runtime was GIVEN (as the images' directory is). It
   // follows every write (change snapshots) and holds D3's kept bytes too (one store, not two).
   const runtimeDbPath = databaseFile(o.db) ?? ':memory:';
+  // v2 E1b (ADR 0043): the off-site copy. Its runner is a separate service; the bridge keeps the connection and keys,
+  // and leaves it requests in <data dir>/offsite/requests (a private temporary directory for an in-memory database).
+  const offsite = new OffsiteService({
+    db: o.db,
+    secrets,
+    publicUrl: config.server.publicUrl,
+    requestDir:
+      runtimeDbPath === ':memory:'
+        ? join(tmpdir(), `lkb-offsite-${process.pid}-${randomBytes(4).toString('hex')}`, 'requests')
+        : offsiteRequestDir(runtimeDbPath),
+    ...(o.googleOAuth ? { google: o.googleOAuth } : {}),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
   const snapshots = new SnapshotService({
     db: o.db,
     engine,
@@ -467,6 +491,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
+    afterFull: () => offsite.afterFullSnapshot(),
   });
   void snapshots.start();
   // v2 E1a: restores are always proposals; the plan reads the page live at P1 and the tree for names and places.
@@ -627,6 +652,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     snapshots,
     restores,
     rehearsals,
+    offsite,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,

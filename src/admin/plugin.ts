@@ -24,6 +24,8 @@ import { registerRegistry } from './routes/registry.js';
 import { registerLifecycle } from './routes/lifecycle.js';
 import { registerChronology } from './routes/chronology.js';
 import { registerSnapshots } from './routes/snapshots.js';
+import { registerOffsite } from './routes/offsite.js';
+import { CALLBACK_PATH, OffsiteError } from '../offsite/service.js';
 import type { RouteContext } from './routes/util.js';
 import { StreamHub } from './stream.js';
 import { registerUi } from './ui.js';
@@ -103,6 +105,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerAssets(api, ctx); // v2 A4
       registerStaging(api, ctx); // v2 D3
       registerSnapshots(api, ctx); // v2 E1a
+      registerOffsite(api, ctx); // v2 E1b
 
       /** The one live stream (docs/dashboard.md › Stream). */
       api.get('/stream', (req, reply) => {
@@ -143,6 +146,46 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
   app.get('/favicon.ico', (_req, reply) =>
     reply.code(204).header('cache-control', 'public, max-age=86400').send(),
   );
+
+  /**
+   * v2 E1b (ADR 0043): Google's answer to "Connect Google Drive". A top-level navigation from Google, so it carries the
+   * session cookie (SameSite=Lax) but is cross-site: it lives outside /api/admin. The service refuses an answer without
+   * an owner session, or whose `state` is not a pending sign-in of this session (or has expired). Nothing here echoes the
+   * code; the browser is sent straight on to the Off-site copy page, with no referrer.
+   */
+  app.get(CALLBACK_PATH, async (req, reply) => {
+    reply
+      .header('cache-control', 'no-store')
+      .header('pragma', 'no-cache')
+      .header('referrer-policy', 'no-referrer')
+      .header('x-content-type-options', 'nosniff');
+    const q = (req.query ?? {}) as Record<string, unknown>;
+    const str = (v: unknown) => (typeof v === 'string' && v.length <= 2048 ? v : undefined);
+    const token = req.cookies[deps.services.owner.sessionCookie];
+    const session = token ? deps.services.owner.getSession(token) : undefined;
+    const offsite = deps.runtime.offsite;
+    let target = '/ui/offsite?drive=connected';
+    if (!offsite) target = '/ui/offsite?drive_error=OFFSITE_UNAVAILABLE';
+    else {
+      try {
+        const account = await offsite.completeConnect({
+          sessionHash: session && token ? deps.services.sessionHash(token) : null,
+          state: str(q.state),
+          code: str(q.code),
+          error: str(q.error),
+        });
+        deps.runtime.policy.store.audit('owner', 'offsite.connected', 'google', undefined, {
+          account: account.email,
+        });
+      } catch (e) {
+        const code = e instanceof OffsiteError ? e.code : 'OFFSITE_GOOGLE_REFUSED';
+        if (!(e instanceof OffsiteError)) app.log.error({ err: e }, 'the Google Drive callback failed');
+        deps.runtime.policy.store.audit('owner', 'offsite.connect_refused', 'google', undefined, { code });
+        target = `/ui/offsite?drive_error=${encodeURIComponent(code)}`;
+      }
+    }
+    return reply.code(303).header('location', target).send();
+  });
 
   registerUi(app, deps.services, deps.uiDir);
 }

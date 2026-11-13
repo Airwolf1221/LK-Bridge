@@ -256,6 +256,8 @@ export interface CreateBridgeOptions {
   /** Test seams, passed to `createRuntime`. */
   readonly clock?: RuntimeOptions['clock'];
   readonly lkTransport?: RuntimeOptions['lkTransport'];
+  /** v2 E1b test seam: Google's endpoints and fetch for the off-site copy's sign-in. */
+  readonly googleOAuth?: RuntimeOptions['googleOAuth'];
   readonly uploadGuard?: RuntimeOptions['uploadGuard'];
   readonly projectRetryMs?: RuntimeOptions['projectRetryMs'];
   /**
@@ -283,6 +285,7 @@ export async function createBridge(
     ...(o.maintenanceSettings ? { maintenanceSettings: o.maintenanceSettings } : {}),
     ...(o.clock ? { clock: o.clock } : {}),
     ...(o.lkTransport ? { lkTransport: o.lkTransport } : {}),
+    ...(o.googleOAuth ? { googleOAuth: o.googleOAuth } : {}),
     ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
     ...(o.projectRetryMs ? { projectRetryMs: o.projectRetryMs } : {}),
     // The runtime logs (project checks, start-up warnings) go where the server's do.

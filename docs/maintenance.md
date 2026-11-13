@@ -180,6 +180,24 @@ runs):
 
 Change snapshots (after each bridge write) are not a maintenance job: they are taken at the end of the write's own job.
 
+## The off-site copy (v2 E1b)
+
+The copy to Google Drive is **not** a maintenance job of the bridge: it runs in a separate service,
+`lk-bridge-offsite.service`, so a long upload never shares the bridge's process, memory or event loop
+([ADR 0043](adr/0043-google-drive-offsite-copy.md)). Its timer wakes it every quarter hour; what is due comes from the
+schedule on the **Off-site copy** page (stored in the database):
+
+| What   | Default                                                                      | Setting                                    |
+| ------ | ---------------------------------------------------------------------------- | ------------------------------------------ |
+| Copy   | daily at 04:45 London, and after each weekly full snapshot (`snapshot-full`) | `copyTime`                                 |
+| Verify | monthly, on day 1 at 05:30 London                                            | `verifyEnabled`, `verifyDay`, `verifyTime` |
+| Purge  | every copy: `deleted/<date>` older than 30 days                              | `deletedRetentionDays`                     |
+
+A run is due when nothing of its kind has started since its latest scheduled time, so a time missed while the server was
+off runs at the next wake. "Copy now" and "Verify now" leave a request file that `lk-bridge-offsite.path` turns into a run
+within seconds. The weekly full snapshot (`snapshot-full`, above) asks for a copy when it completes. Runs are listed on
+the Off-site copy page, not on this one.
+
 ## Owner commands
 
 `src/maintenance/commands.ts`, on the owner command layer pattern of chunk 2b (`actor: 'owner'` first, audited, a

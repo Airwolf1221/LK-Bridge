@@ -409,6 +409,51 @@ max? }`, `POST /api/admin/snapshots/rehearsals` `{ target, snapshot, mode, keep?
 refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`, `snapshots.restore`,
 `snapshots.rehearsal` and `snapshots.rehearsal_delete_root`.
 
+## Off-site copy (v2 E1b)
+
+The **Off-site copy** page (navigation: after Snapshots; [ADR 0043](adr/0043-google-drive-offsite-copy.md), the one-off
+Google set-up in [drive-setup.md](drive-setup.md)) sets up and watches the encrypted copy of the snapshot store and the
+nightly database copies on Google Drive. The copy is made by a separate service on the server
+(`lk-bridge-offsite.service`, with rclone); the page writes its requests and shows what it recorded, refreshing itself
+every few seconds while a run is going.
+
+- **Google Drive**: the connection's state (**Connected**, **Needs reconnecting** in red with the reason, or **Not
+  connected**), the Google account's name and email (from Drive's `about.get`), the **redirect URI** to register at Google
+  (with a copy button), and the saved client (its ID, and the secret's last four characters only). **Save the client**
+  (Client ID and Client secret, kept in the encrypted secret store, never in the env file), **Connect Google Drive** /
+  **Reconnect** (Google's sign-in, then back to this page), **Check the connection** (one token refresh now) and
+  **Disconnect** (revokes the access at Google and deletes the saved sign-in; the files on Drive stay).
+- **Encryption keys**: whether they are set, when, and how (generated or entered); never the keys. **Generate keys** shows
+  a password and a salt **once**, with the warning that without them the Drive copy cannot be restored; they are saved
+  only after you type their last 6 characters. **Enter my own** takes your own (at least 16 characters each, typed
+  twice). When a copy already exists, changing them warns first: the next copy is a fresh full upload into a new folder.
+- **Copies**: the last copy (when, trigger, size, files, duration, result, rclone's exit code and version, and why it
+  failed), the last good copy, the **next scheduled copy**, and **Copy now**.
+- **Verify**: the last verify's result and its **findings** (missing or corrupt pieces, an unreadable manifest, a bad or
+  missing database copy, in red), the history, the next monthly verify, and **Verify now** (after a first copy).
+- **Drive folder**: where the copy is (`LK-Bridge backups/<server>/copy-<n>`), old folders kept after a key or folder
+  change with **Delete** (to Drive's bin), and **Use this folder** when a copy was refused because the folder holds a copy
+  this database did not make.
+- **Settings**: the folder, the daily copy's time (London), how long removed pieces stay in `deleted/` (30 days), the
+  bandwidth limit, parallel transfers, the monthly verify (on or off, day, time, sample percentage and minimum), and the
+  Overview's staleness warning (2 days).
+- **Runs**: every copy, verify and folder deletion.
+- Links to [drive-setup.md](drive-setup.md) and the runbook's [disaster recovery](runbook-deploy.md#disaster-recovery-from-google-drive).
+
+Saving the client, connecting, disconnecting, setting keys, deleting an old folder and using an existing folder ask for
+your password (and authenticator code) if you have not confirmed it in the last five minutes. Every action is audited
+(`offsite.*`), never with a value.
+
+The **Overview** shows a red card when the connection is broken, when no good copy is younger than the staleness
+setting, or when the last verify found problems; amber for a failed copy or an unfinished set-up; and a short note while
+the copy is not set up at all.
+
+**Admin API** (owner session, Origin and CSRF as everywhere): `GET /api/admin/offsite`; `PUT /offsite/client`,
+`POST /offsite/connect`, `POST /offsite/disconnect`, `POST /offsite/check`; `POST /offsite/keys/generate`,
+`POST /offsite/keys/confirm`, `PUT /offsite/keys`; `PUT /offsite/settings`; `POST /offsite/copy`, `POST /offsite/verify`;
+`POST /offsite/folders/:generation/delete`, `POST /offsite/adopt`. Google's answer arrives at `GET /admin/drive/callback`
+(outside `/api/admin`, because it is a navigation from Google), which redirects to `/ui/offsite`.
+
 ## Canon (Projects page, v2 C2a)
 
 The **Canon** section of the Projects page lists each project's protected facts as plain sentences ("Status =

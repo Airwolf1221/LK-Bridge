@@ -450,3 +450,72 @@ describe('deploy.sh --update-self and the systemd unit', () => {
     expect(r.out.match(/differs from the one in/g)).toHaveLength(1);
   });
 });
+
+describe('deploy.sh --update-self and the other units (v2 E1b: the off-site copy)', () => {
+  const OFFSITE = ['lk-bridge-offsite.service', 'lk-bridge-offsite.timer', 'lk-bridge-offsite.path'];
+  const repoUnit = (u: string) => readFileSync(join(repoDeployDir, u), 'utf8');
+  const releaseUnits = () => Object.fromEntries(OFFSITE.map((u) => [`deploy/${u}`, repoUnit(u)]));
+  const calls = (s: Server) => s.systemctlLog().trim().split('\n').filter(Boolean);
+
+  it('installs the off-site units the release adds (0644), reloads systemd, enables the timer and the path unit, then starts', () => {
+    const s = (server = makeServer());
+    s.release(releaseUnits());
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.err).not.toMatch(/ERROR|WARNING/);
+    expect(r.status).toBe(0);
+    for (const u of OFFSITE) {
+      expect(r.out).toMatch(new RegExp(`${u.replace('.', '\\.')} is not installed yet`));
+      expect(readFileSync(join(s.unitDir, u), 'utf8')).toBe(repoUnit(u));
+      expect(statSync(join(s.unitDir, u)).mode & 0o7777).toBe(0o644);
+    }
+    expect(calls(s)).toEqual([
+      'stop lk-bridge',
+      'daemon-reload',
+      'enable --now lk-bridge-offsite.timer',
+      'enable --now lk-bridge-offsite.path',
+      'start lk-bridge',
+    ]);
+    expect(readdirSync(s.unitDir).filter((f) => f.endsWith('.new'))).toEqual([]);
+  });
+
+  it('without --update-self, only warns that they are not installed', () => {
+    const s = (server = makeServer());
+    s.release(releaseUnits());
+    const r = deploy(s, '--local-health');
+    expect(r.status).toBe(0);
+    for (const u of OFFSITE)
+      expect(r.err).toMatch(
+        new RegExp(`${u.replace('.', '\\.')} is not installed\\. Run the deploy again with --update-self`),
+      );
+    expect(existsSync(join(s.unitDir, OFFSITE[0]!))).toBe(false);
+    expect(calls(s)).toEqual(['stop lk-bridge', 'start lk-bridge']);
+  });
+
+  it('with nothing else to deploy, installs a changed unit (backing up the old one) without restarting the bridge', () => {
+    const s = (server = makeServer());
+    s.release(releaseUnits());
+    expect(deploy(s, '--update-self', '--yes', '--local-health').status).toBe(0);
+    const timer = join(s.unitDir, 'lk-bridge-offsite.timer');
+    writeFileSync(timer, `${repoUnit('lk-bridge-offsite.timer')}# an old local edit\n`);
+    writeFileSync(join(s.dir, 'systemctl.log'), '');
+    const r = deploy(s, '--update-self', '--yes', '--local-health');
+    expect(r.status).toBe(0);
+    expect(r.out).toMatch(/^-# an old local edit$/m);
+    expect(r.out).toMatch(/only the units above were installed; the bridge was not restarted/);
+    expect(readFileSync(timer, 'utf8')).toBe(repoUnit('lk-bridge-offsite.timer'));
+    expect(readdirSync(s.unitDir).filter((f) => f.startsWith('lk-bridge-offsite.timer.bak.'))).toHaveLength(
+      1,
+    );
+    expect(calls(s)).toEqual(['daemon-reload', 'enable --now lk-bridge-offsite.timer']);
+  });
+
+  it('asks first; "no" installs nothing and touches nothing', () => {
+    const s = (server = makeServer());
+    s.release(releaseUnits());
+    const r = run(s, 'deploy.sh', ['--update-self'], 'n\n');
+    expect(r.status).toBe(1);
+    expect(r.err).toMatch(/Nothing was installed or changed/);
+    expect(existsSync(join(s.unitDir, OFFSITE[0]!))).toBe(false);
+    expect(calls(s)).toEqual([]);
+  });
+});
