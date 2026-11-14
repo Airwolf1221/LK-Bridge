@@ -80,14 +80,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Browse the repository tree',
     access: 'read',
     description:
-      'Shows part of the project’s AI REPOSITORY as a tree: for each page its kind (index / bsrc / bwrk / barc / unclassified: ' +
-      '[BSRC] Authoritative, [BWRK] Working, [BARC] Archived), display name, ' +
-      'Reference Type, Scope (shortened), tags and number of child pages. Start here to see how the repository is laid out. ' +
-      '`path` is a page name, an id or a path of display names such as "Characters / Beastkin / Foxians" (default: the root); ' +
-      '`depth` is how many levels below it to show (default 2, at most 6); `kinds` keeps only those kinds of page. ' +
-      'Large listings are cut at `limit` pages, level by level: browse a deeper `path`, or use `offset` to page the first level. ' +
-      'Example: { "path": "Characters", "depth": 1 }. Cost: none (answered from the bridge’s tree, no LegendKeeper request). ' +
-      'The answer states the tree’s status and when it was last confirmed.',
+      'Shows part of the AI REPOSITORY as a tree: each page’s kind (index, bsrc Authoritative, bwrk Working, barc Archived, unclassified), name, Reference Type, Scope, tags and number of child pages. Start here to learn how the repository is laid out; to find a page by name use search. `path` is a name, an id or a path such as "Characters / Beastkin / Foxians" (default: the root); `depth` is how many levels (default 2, at most 6); `kinds` filters. Large listings are cut level by level: browse a deeper `path`. Example: { "path": "Characters", "depth": 1 }. Cost: none (answered from the bridge’s tree, which says how fresh it is).',
     inputSchema: z.object({
       path: z
         .string()
@@ -189,16 +182,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Search the repository',
     access: 'read',
     description:
-      'Finds pages in the AI REPOSITORY by name. Words must all match; "quoted phrases" match as written; OR, NOT (or a leading -) ' +
-      'and ( ) combine terms (capitals for OR, AND and NOT; NOT binds tightest, then AND, then OR). Filters: name: tag: type: ' +
-      '(Reference Type, whole words) kind: (index, bsrc, bwrk, barc, unclassified) under: (a page name or id; pages below it) scope:. ' +
-      'A word with no filter matches the display name, aliases, Canonical Display Name and Scope. ' +
-      'Results are ranked: exact name, name prefix, a word of the name, text inside a name, alias, then Scope; each says why it matched. ' +
-      'Example: { "query": "foxian tag:elder -kind:index under:Characters" }. ' +
-      'Cost: none by default (the bridge’s tree). With content: true it also asks LegendKeeper’s own search for page text (1 read; ' +
-      'ranked and INCOMPLETE by nature: it can miss pages, has no operators, and is no proof that a word is absent). ' +
-      'The bridge applies your operators to the combined results, removes duplicates, and marks pages found through their text. ' +
-      'A malformed query is refused with an explanation. Pages outside the AI REPOSITORY are never searched.',
+      'Finds pages in the AI REPOSITORY by name, alias, Canonical Display Name or Scope. Use it when you do not know a page’s exact name (the tools that take a page accept a name or an id). All words must match; "quoted phrases"; OR, NOT (or -term) and ( ) combine (capitals for OR, AND, NOT). Filters: tag: type: (Reference Type) kind: (index, bsrc, bwrk, barc, unclassified) under: (a page) scope:. Ranked: exact name, prefix, word, text in a name, alias, Scope. Example: { "query": "foxian tag:elder -kind:index under:Characters" }. Cost: none. content: true also asks LegendKeeper to search page text (1 read; ranked, INCOMPLETE and with no operators: never conclude a word appears nowhere). Pages outside the AI REPOSITORY are never searched.',
     inputSchema: z.object({
       query: z.string().min(1).max(500).describe('Words, "phrases", OR, NOT/-, ( ), and filters.'),
       content: z
@@ -336,13 +320,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Get a page and its sidebar',
     access: 'read',
     description:
-      'Shows one page of the AI REPOSITORY: from the tree its path, kind, documents (id, name, type), tags, aliases, Reference Type, ' +
-      'Scope and Canonical Display Name; and from a live read its whole sidebar: the facts (key-value rows) in template order, ' +
-      'each link collection with its items (an item can point at one document of a page), and any other sidebar properties ' +
-      '(named, marked read-only). Pass the page by name or id. Example: { "resource": "Asagiri Miyabi" }. ' +
-      'With a live read it gives the page’s factsVersion: pass it to set_facts as baseFactsVersion. Cost: 1 read (a live getResource); pass live: false for the tree’s data alone at no cost. A name that matches several pages ' +
-      'is refused with the candidates and their paths. Sidebar properties carry their `version` where LegendKeeper gives one, ' +
-      'for the write tools to use.',
+      'Shows one page: from the tree its path, kind, documents, tags, aliases, Reference Type and Scope; from one live read its whole sidebar: the facts in template order, each link collection with its items, other properties (read-only) and `factsVersion`. Use it before set_facts (pass factsVersion as baseFactsVersion). For page text use read_document; for several pages get_resources. A name matching several pages is refused with the candidates: pass the id. live: false gives the tree’s data alone, for free. Example: { "resource": "Asagiri Miyabi" }. Cost: 1 read.',
     inputSchema: z.object({
       resource: z.string().min(1).max(500).describe('Page name or id.'),
       live: z
@@ -377,11 +355,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Get several pages and their sidebars',
     access: 'read',
     description:
-      'Like get_resource for up to 25 pages at once, as ONE job (one live read per page, at interactive priority). ' +
-      'Results are summaries (long values clipped, long link lists counted); pass detail: "full" for everything. ' +
-      'A page that cannot be resolved (not found, ambiguous) is reported in its own entry and the others still run. ' +
-      `More than ${LARGE_BATCH} pages first returns an estimate (reads and time) and runs only when you repeat the call with confirm: true. ` +
-      'Example: { "resources": ["Asagiri Miyabi", "Asagiri Kaede"] }. Cost: 1 read per page (live: false makes none).',
+      'get_resource for up to 25 pages at once, as ONE job. Use it instead of calling get_resource in a loop. A page that cannot be resolved is reported in its own entry. More than 10 pages first returns an estimate: repeat with confirm: true to run it. Results are summaries; detail "full" gives everything. Example: { "resources": ["Asagiri Miyabi", "Asagiri Kaede"] }. Cost: 1 read per page (live: false: none).',
     inputSchema: z.object({
       resources: z
         .array(z.string().min(1).max(500))
@@ -538,8 +512,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'List tags in use',
     access: 'read',
     description:
-      'Lists the tags in use on pages of the AI REPOSITORY, with how many pages carry each (most used first). ' +
-      '`query` keeps tags containing that text. Example: { "query": "elder" }. Cost: none (answered from the tree).',
+      'Lists the tags in use in the AI REPOSITORY with how many pages carry each, most used first; `query` filters. To find the pages with a tag use search with tag:<name>. Cost: none.',
     inputSchema: z.object({
       query: z.string().max(100).optional().describe('Keep tags containing this text.'),
       limit: z.number().int().min(1).max(500).optional().describe('Default 200.'),
@@ -582,10 +555,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'List templates',
     access: 'read',
     description:
-      'Lists the project’s templates (name, id) and, for each, which registry type and role uses it (for example Character / core). ' +
-      'Templates live outside the AI REPOSITORY; this list is the only high-level way to see them. Example: { }. ' +
-      'Cost: none when the bridge already holds the list (it says when it was read); 1 read per 100 templates when it does not, ' +
-      'or with refresh: true.',
+      'Lists the project’s templates (name, id, and which registry type and role uses each, for example Character / core). Use it to choose `template` for create_resource. Templates live outside the AI REPOSITORY. Cost: none when the bridge holds the list (it says when it was read), otherwise 1 read per 100.',
     inputSchema: z.object({
       refresh: z
         .boolean()
@@ -657,9 +627,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'List calendars',
     access: 'read',
     description:
-      'Lists the project’s calendars with name, id, months (count and names), days in a regular year, hours and minutes, eras ' +
-      '(name, abbreviation, starting minute) and date formats, summarised. A timeline document names its calendar by this id. ' +
-      'Example: { }. Cost: 1 read (a live listCalendars).',
+      'Lists the project’s calendars: months, days in a year, eras and date formats, summarised. A timeline document names its calendar by id. To check or convert a date use calendar_date. Cost: 1 read.',
     inputSchema: z.object({ project: projectArg }),
     annotations: READ_ANNOTATIONS,
     handler: ({ project }, mctx) =>
@@ -677,11 +645,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Browse the asset folders',
     access: 'read',
     description:
-      'Shows the project’s asset library as folders: for each its subfolders (to `depth`, default 2, at most 6) and number of assets, ' +
-      'and with includeAssets: true the assets in each folder (name, type, size where known, dimensions). `folder` is a folder id, ' +
-      'a name, or a path such as "Characters / Beastkin / Qishen" (default: the library’s top). ' +
-      'Example: { "folder": "Characters", "depth": 1 }. Cost: none (answered from the bridge’s asset tree). ' +
-      'The asset library is not part of the AI REPOSITORY; all of it can be browsed.',
+      'Shows the asset library as folders (to `depth`, default 2) with their asset counts; includeAssets: true lists the assets in each folder. `folder` is an id, a name or a path such as "Characters / Beastkin / Qishen". To list one folder’s assets with their urls use list_assets. The library is not limited to the AI REPOSITORY. Example: { "folder": "Characters", "depth": 1 }. Cost: none.',
     inputSchema: z.object({
       folder: z
         .string()
@@ -769,10 +733,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'List assets in a folder',
     access: 'read',
     description:
-      'Lists the assets directly in one folder (name, id, type, dimensions, size where known, url), by name, paged. ' +
-      '`folder` is a folder id, a name, or a path such as "Characters / Beastkin / Qishen / Mehrana al-Khalid" (default: the library’s top). ' +
-      '`type` keeps IMAGE, MAP or AUDIO. Use an asset’s url in Markdown as ![alt](url). Example: { "folder": "Qishen", "limit": 20 }. ' +
-      'Cost: none (answered from the bridge’s asset tree).',
+      'Lists the assets directly in one folder (name, id, type, size, url), paged. `folder` is an id, a name or a path; `type` keeps IMAGE, MAP or AUDIO. Use an asset’s url on a page as ![alt](url). For the folder layout use browse_asset_tree. Example: { "folder": "Qishen", "limit": 20 }. Cost: none.',
     inputSchema: z.object({
       folder: z
         .string()

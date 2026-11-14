@@ -136,6 +136,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Projects    | `GET /projects`, `PUT /projects/:name/read-only` (`{ value, confirm: true }`), `POST /projects/:name/verify` (v2 A1), `PUT /projects/:name/settings` (`{ key, value }`, v2 A2), `GET\|PUT /projects/:name/canon` (`{ rules, agentDefaultStatus?, confirm: true }`, v2 C2a), `GET\|PUT /projects/:name/lifecycle` (`{ …values, workingIndexId?, archiveIndexId?, reset?, confirm: true }`, v2 C2c); OPS2: `POST /projects/check` (`{ name, apiKey }`) ‡, `POST /projects/:name/key/check` (`{ apiKey }`) ‡, `POST /projects/confirm` (`{ checkId, confirm: true }`) ‡, `PUT /projects/:name/draining` (`{ value }`), `POST /projects/:name/remove` (`{ confirm: true }`) ‡ |
 | Account     | OPS2: `GET /security`, `POST /security/reauth` (`{ password, totp? }`), `POST /security/password` (`{ currentPassword, newPassword }`) ‡, `POST /security/totp/enrol` ‡, `POST /security/totp/confirm` (`{ code }`) ‡, `POST /security/totp/remove` (`{ confirm: true }`) ‡, `POST /security/recovery-codes` (`{ confirm: true }`) ‡                                                                                                                                                                                                                                                                                                                                      |
 | Lifecycle † | `GET /lifecycle/records` (`limit`, `offset`; the lifecycle record, newest first, and the link index's freshness; v2 C2c). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Tool calls  | `GET /tool-calls` (filters `principalId`, `profile`, `tool`, `outcome=success\|error\|proposal\|waiting\|queued\|not_success`, `code`, `project`, `sinceMinutes`; paging `limit` (≤ 500) and `before`, answered with `nextBefore`; also the filter choices and the retention), `PUT /tool-calls/retention` (`{ days: 0-90, confirm: true }`; audited). Owner only; view only (v2 E3, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md))                                                                                                                                                                                                                           |
 | Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                              |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
@@ -147,6 +148,33 @@ CONFIRMATION_REQUIRED`, and every settings and reserve-floor change needs `confi
 `retry` on each step says whether it may be retried and whether it is _ambiguous_ (it may already have reached
 LegendKeeper). A normal retry re-checks first and cannot duplicate; `force: true` re-runs it as new work. The dashboard
 shows the warning and asks twice before forcing.
+
+## Tool calls (v2 E3)
+
+[ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md). **Tool calls** (after Journal in the menu) shows which tools each
+assistant actually called, so you can evaluate ChatGPT and Claude without copying transcripts. It is for you only: the
+admin API sits behind your session like every other route, and no tool lists or names it for agents.
+
+- **A row per call:** when; the **connection** (named as the Journal names it) and the **profile** with its scope at the time;
+  the **tool** and the project the answer named; a short summary of the **arguments**; the **outcome** (Success, Error with its
+  code, Proposal captured, Waiting for budget, Queued); how long it took; the **budget** it used.
+- **Names and sizes, never content.** An argument shows as `markdown (1204 chars)`, `facts (3 keys)`, `items (12 items)`.
+  Its value is shown only for booleans, numbers and a short list of reference arguments (`page`, `mode`, `section`,
+  `query`, `status`, `type`, `destination`…): `page=“Asagiri Miyabi”`, `mode=“append_to_section”`, `dryRun=false`. Page
+  text, fact values, images (`data_base64`), upload ids, versions and URLs never reach the log. Click a row for its job and
+  proposal ids and the size of the answer.
+- **What it records that other pages cannot:** calls the MCP layer refuses before any tool runs are in it, with these codes:
+  `INVALID_ARGUMENTS` (an assistant inventing arguments), `TOOL_NOT_FOUND` (a tool name that does not exist),
+  `READ_ONLY_CONNECTION` (a write from a `read` profile) and `MISSING_SCOPE`. Tool errors carry the tool's own code
+  (`VERSION_CONFLICT`, `AMBIGUOUS`, `WORKING_PARENT`, `POLICY_DENIED`…).
+- **Budget** is how far the projects' hourly request and write counters moved while the call ran, as `3 req (1 w)`. It is
+  approximate: another call in the same moment counts too.
+- **Filters:** connection, tool, outcome (including "anything but success", the quickest way to find stumbles), error code or
+  status, and time (last hour, 24 hours, 3 days, 7 days). **Newer** and **Older** page through 100 at a time.
+- **Retention:** 7 days by default, a setting on the page (0 to 90 days; **0 switches recording off** and removes what is kept).
+  It applies at once and is audited (`policy.set_toolcalls_retention`). Old rows are removed by the log itself, so there is no
+  maintenance job to switch on.
+- Recording never affects a call: if it fails, the bridge logs it once and the call carries on.
 
 ## Journal page (chunk 8)
 

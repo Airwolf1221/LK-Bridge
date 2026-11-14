@@ -1,3 +1,4 @@
+import type { PrincipalNames } from './format';
 /** Shapes of the admin API (docs/dashboard.md). Only the fields the pages use are described. */
 
 export type Scope = 'read' | 'propose' | 'write';
@@ -1789,4 +1790,45 @@ export interface AuditRecheckResponse {
   status: 'still_present' | 'gone';
   finding: AuditFindingView | null;
   reads: number;
+}
+
+// ------------------------------------------------------------------------------------------------ Tool calls (v2 E3)
+
+export interface ToolCallArg {
+  name: string;
+  type: 'string' | 'number' | 'boolean' | 'null' | 'array' | 'object';
+  /** Characters, items or keys. */
+  size?: number;
+  /** Only booleans, numbers and short reference strings; never page content or secrets. */
+  value?: string | number | boolean;
+}
+
+export type ToolCallOutcome = 'success' | 'error' | 'proposal' | 'waiting' | 'queued';
+
+export interface ToolCallRow {
+  id: number;
+  at: number;
+  principalId: string | null;
+  profile: string | null;
+  scope: string | null;
+  tool: string;
+  project: string | null;
+  args: ToolCallArg[];
+  outcome: ToolCallOutcome;
+  code: string | null;
+  jobId: string | null;
+  proposalId: string | null;
+  durationMs: number;
+  budgetRequests: number | null;
+  budgetWrites: number | null;
+  resultChars: number | null;
+}
+
+export interface ToolCallsResponse {
+  calls: ToolCallRow[];
+  principals: PrincipalNames;
+  hasMore: boolean;
+  nextBefore: number | null;
+  facets: { tools: string[]; profiles: string[]; codes: string[]; total: number; oldest: number | null };
+  settings: { retentionDays: number; maxRetentionDays: number; recording: boolean };
 }

@@ -1,59 +1,60 @@
 # The LK-Bridge guide for agents
 
-This guide is for agents (Claude, ChatGPT) that use LK-Bridge to work with LegendKeeper worlds. Read it once, then keep
-to the short version below.
+This guide is for agents (Claude, ChatGPT) that use LK-Bridge to work with LegendKeeper worlds. **Read "How to decide" first**
+(it is short: `get_bridge_guide` with `section: "How to decide"`), then the section for your task before you do it. The
+tasks come first and the reference after. The last section, **Operations**, lists every LegendKeeper operation id.
 
-**The short version**
+## How to decide
 
-1. Find a page with `search` or `browse_repository_tree`. Look at it with `get_resource`. Read its text with
-   `read_document`.
-2. Almost everything costs nothing: it is answered from the bridge's own copy of the repository. Only live reads cost
-   LegendKeeper requests, and each tool says so.
-3. Pages are Markdown. Read `get_markdown_guide` before you write any; write with `write_page`, passing the version you
-   read as `baseVersion`.
-4. Budgets are finite. Never loop on an error; wait for the time it states.
-5. A write that was `queued`, `waiting_budget` or `proposal_captured` is not lost and is never retried.
-6. Make pages with the creation tools (`create_character`, `create_resource`, `create_index`, …), never by hand; pass an
-   `operation_id` when you might have to repeat a call.
+**Five rules**
 
-## What the bridge is
+1. **Use the high-level tool, not `lk_api_*`.** Every common job has a tool that knows the repository (ordering, templates,
+   canon, lifecycle, versions). The `lk_api_*` tools are the fallback for the rare job none of them does ([When the
+   low-level tools are right](#when-the-low-level-tools-are-right)).
+2. **Read, then write, and pass the version you read back.** `write_page` takes `baseVersion` (from `read_document`);
+   `set_facts` takes `baseFactsVersion` (from `get_resource`). A stale version writes nothing. Never write a page you have not read.
+3. **Never retry a write that came back `proposal_captured`, `queued` or `waiting_budget`.** It is not lost. Follow a job
+   with `bridge_job_status`, a proposal with `bridge_proposal_status`. After a refusal, do the one step the message names, once.
+4. **Canon and lifecycle belong to the owner.** Making a page canon, archiving it, bringing it back or deleting an
+   Authoritative page is always a proposal only the owner can accept as canon, whatever your scope. New pages are
+   **Working** until the owner promotes them.
+5. **Do not invent.** Names and ids come from `search`, `browse_repository_tree` and `get_resource`; dates from
+   `calendar_date`; operation ids from the Operations list. A name that matches several pages is never guessed: pass the id.
 
-LK-Bridge sits between you and LegendKeeper. It keeps a model of each world's **AI REPOSITORY** (the page tree your
-tools work in), checks every write against the page's current version, protects content Markdown cannot show, records
-every change in a journal, and shares each project's request budget fairly between everyone using it. You never hold a
-LegendKeeper key.
+**Which tool?**
 
-## Projects
+| You want to…                                        | Use                                                                     | Not                                                |
+| --------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------- |
+| Find a page when you know part of its name or a tag | `search`                                                                | `browse_repository_tree` of the whole root         |
+| See how a part of the repository is laid out        | `browse_repository_tree`                                                | many `get_resource` calls                          |
+| Look at one page's facts, links, tags               | `get_resource` (several: `get_resources`)                               | `read_document`, `lk_api_read`                     |
+| Read a page's text (or one section)                 | `read_document` (`outline`, `section`)                                  | `lk_api_read` `getDocumentBlocks`                  |
+| Change a page's text                                | `write_page`, section modes                                             | `replace` of the whole page, `lk_api_write`        |
+| Change facts or links                               | `set_facts` (all changes in one call)                                   | `lk_api_write` on properties                       |
+| Rename, tag, alias, hide, lock                      | `update_resource`                                                       | `lk_api_write`                                     |
+| Make a character                                    | `create_character` (Working), then `create_resource` for its pages      | `create_bare_resource`, `create_many_resources`    |
+| Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` unless there is no template |
+| Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                      |
+| Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                              | `delete_resource`, `move_resource` to the archive  |
+| Make Working work canon                             | `promote_page` (`subtree: true` for a set)                              | `set_facts` Status                                 |
+| Delete (and undo)                                   | `delete_resource`, `restore_resource`                                   | `lk_api_write`                                     |
+| Check or convert a date                             | `calendar_date`                                                         | working it out yourself                            |
+| Add, change, remove a chronology event              | `create_`, `update_`, `delete_timeline_event`                           | `write_page` on a table; `lk_api_*`                |
+| Add or move a map pin, region, path                 | `create_map_feature`, `update_map_feature` (pixels from the image)      | `lk_api_write` `createFeature`                     |
+| Put an image in the library                         | `upload_image` (staged first at `propose`)                              | `lk_upload_image`                                  |
+| See older states of a page and bring one back       | `list_snapshots`, `snapshot_diff`, `restore_snapshot` (always proposal) | rewriting the text with `write_page`               |
+| See what the audits found                           | `audit_findings`                                                        | scanning pages yourself                            |
+| Know how much budget is left, or if work fits       | `bridge_budget`, `bridge_estimate`                                      | reading pages to find out                          |
+| Know what happened to a proposal or job             | `bridge_proposal_status`, `bridge_job_status`                           | repeating the write                                |
+| Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations                        |                                                    |
 
-One bridge serves several LegendKeeper projects (for example `arkona`, the live world, and `test`).
+**What your scope means.** The tools you are shown depend on your connection's scope. `read` shows read tools only.
+`propose` shows every tool, but a write becomes a **proposal**: nothing is written, the owner sees exactly your change on the
+dashboard and approves or rejects it. `write` writes directly, except for the always-proposal changes in rule 4 and
+`restore_snapshot`. `bridge_info` tells you which you have. Every result names its project and ends with that project's
+budget line.
 
-- `list_projects` names them and says which is the default.
-- Every tool takes an optional `project`. Reads without it use the default project. **A write must name its project**
-  when the bridge serves more than one, so a forgotten argument can never land in the wrong world.
-- Every result names the project it used and ends with that project's budget line.
-- Each project has its own repository, its own assets and its own budget. Nothing carries over between projects.
-
-## The repository tree
-
-The bridge's **repository tree** is its copy of everything under the project's `AI REPOSITORY` page: every page's
-name, kind, place, tags, aliases, Reference Type, Scope and documents.
-
-- **Kinds.** `[INDEX]` pages (kind `index`) organise; `[BSRC]` pages (kind `bsrc`, Authoritative), `[BWRK]` pages
-  (kind `bwrk`, Working) and `[BARC]` pages (kind `barc`, Archived) hold the content (see
-  [The page lifecycle](#the-page-lifecycle)); anything else is `unclassified` and is reported. Display names have the
-  prefix removed: the page `[BSRC] Asagiri Miyabi` is "Asagiri Miyabi". When a name matches several pages of the same
-  subject, the current `[BSRC]` page (or an index) is preferred, then `[BWRK]`, then `[BARC]`.
-- **Status.** Every answer from the tree states its status and when it was last confirmed. `ready` means it was
-  checked within the last day. `stale` means something could not be confirmed; the answer is still the best the bridge
-  has, and it says so. `not_built` and `building` mean it cannot answer yet. The tools say so and spend nothing.
-- **Freshness.** The tree is updated after each of the bridge's own writes, by an hourly sweep, and by a nightly full
-  check. A change made in the LegendKeeper app can take up to an hour to appear in `search` and `browse_repository_tree`;
-  `get_resource` and `read_document` read the page itself, live.
-- **The root.** The high-level tools work **only inside the AI REPOSITORY**. A page outside it is refused with a message
-  saying so. The low-level tools (`lk_api_read`, `lk_api_write`, `lk_api_batch`) can still reach it, with the same
-  guards and budget.
-
-## Finding things
+## Find and read a page
 
 | You want                               | Use                                                                  |
 | -------------------------------------- | -------------------------------------------------------------------- |
@@ -82,32 +83,33 @@ not appear on any page from a content search.
 
 **Names and ids.** Wherever a tool takes a page, give a name or an id. A name must match exactly one page (display
 name, full name, alias or Canonical Display Name, ignoring case). If it matches several, you get the candidates with
-their paths: choose one and pass its id. The bridge never guesses.
+their paths: choose one and pass its id. The bridge never guesses. A character often has several pages with its name (its
+`[INDEX]`, its Core, perhaps a Reference): when you write to "the character", name the Core by id.
 
-## Reading
+**Reading.**
 
 - `get_resource` shows the tree's data for a page (path, kind, documents, tags, Reference Type, Scope) and, from one live
   read, its whole sidebar: the facts in template order, the link collections with their items (an item can point at one
-  document of a page), and the other properties (named, read-only).
+  document of a page), the other properties (named, read-only) and the `factsVersion`. `get_resources` does up to 25 pages
+  as one job.
 - `read_document` returns a page's document as Markdown, with the document version and the list of keep regions.
-  `outline: true` returns just the headings; `section: "Biography > Early Life"` just that section.
+  `outline: true` returns just the headings; `section: "Biography > Early Life"` just that section. Use them on long pages.
   Maps, timelines and boards come back as read-only Markdown.
-- Long results are stored and returned as a **handle**: read them with `bridge_result_page`.
-- Results are summaries unless you pass `detail: "full"` where a tool offers it.
+- Long results are stored and returned as a **handle**: read them with `bridge_result_page`. Results are summaries unless
+  you pass `detail: "full"` where a tool offers it.
 
-## Writing pages
+## Edit a page's text
 
 Pages are changed with `write_page`, in Markdown (read `get_markdown_guide` first). You send Markdown for one page
 document; the bridge turns it into LegendKeeper blocks, keeps everything you did not change exactly as it was (ids,
 styling, keep regions), and checks what it wrote.
 
-1. **Read first.** `read_document` gives the page's Markdown and its `version`. Change the Markdown you read; do not
-   write a page you have not read.
-2. **Pass `baseVersion`.** Give `write_page` the version you read. If the page changed since, a whole-page edit is
-   refused, and a section edit goes ahead only if that section is still exactly as you read it.
+1. **Read first.** `read_document` gives the page's Markdown and its `version`. Change the Markdown you read.
+2. **Pass `baseVersion`.** If the page changed since, a whole-page edit is refused, and a section edit goes ahead only if
+   that section is still exactly as you read it.
 3. **Prefer the section modes.** `append_to_section` and `replace_section` touch one section (`section: "Biography >
-Early Life"`) and nothing else, so they survive edits made elsewhere on the page at the same time. Use `replace`
-   (the whole page) only when you mean it: every keep region must be in it.
+Early Life"`) and nothing else, so they survive edits made elsewhere on the page. Use `replace` (the whole page) only
+   when you mean it: every keep region must be in it.
 4. **Try it first when unsure.** `dryRun: true` returns what would change and the Markdown diff, and writes nothing.
 
 | Mode                | What it does                                                                   |
@@ -145,15 +147,10 @@ Other refusals name what to fix: `KEEP_REGIONS_MISSING` (put the regions back, o
 `UNSUPPORTED_BLOCK_LOSS` (content the API cannot show is never deleted by `write_page`), `SECTION_NOT_FOUND` and
 `SECTION_AMBIGUOUS` (the headings or options are listed), `MENTION_NOT_FOUND` and `MENTION_AMBIGUOUS`,
 `WRONG_TOOL_FOR_DOCUMENT` (maps, timelines and boards have their own tools), `PAGE_NOT_WRITABLE` (the page holds
-something LegendKeeper's API would not take back; tell the owner).
+something LegendKeeper's API would not take back, such as text with an inline icon: tell the owner; `get_resource` and
+`set_facts` still work on it).
 
-**What a proposal is.** If your connection proposes rather than writes (scope `propose`), `write_page` returns
-`proposal_captured`: nothing was written. The owner sees exactly your change, as a Markdown diff of the page, and
-approves or rejects it. If the page changes before they approve, the proposal becomes **conflicted** instead of being
-applied, and you can propose again from the current page. Never submit a proposal twice; follow it with
-`bridge_proposal_status`.
-
-## Editing facts and links
+## Change facts and links
 
 A page's **facts** are the key-value rows of its sidebar property `PROPERTIES` (Reference Type, Scope, Status, …); its
 **links** are its link collections (Dependencies, Related Sources). Change both with `set_facts`.
@@ -162,9 +159,9 @@ A page's **facts** are the key-value rows of its sidebar property `PROPERTIES` (
    it back as `baseFactsVersion`** whenever a value is based on what you read, above all when you rewrite or replace an
    existing value: if anything in the sidebar changed since, nothing is written (`VERSION_CONFLICT`, listing what
    changed) and you redo the change on what is there now.
-2. **Facts:** `facts` maps a key to its new value. A plain string is written exactly as text. For formatting or a
-   mention of another page, send `{ "markdown": "…" }`: inline Markdown only (`**bold**`, `*italic*`, links, `<br>`,
-   `[[Page Name]]`). `null` removes the row. Keys match without case, and an existing fact keeps its place.
+2. **One call for all the changes.** `facts` maps a key to its new value. A plain string is written exactly as text. For
+   formatting or a mention of another page, send `{ "markdown": "…" }`: inline Markdown only (`**bold**`, `*italic*`,
+   links, `<br>`, `[[Page Name]]`). `null` removes the row. Keys match without case, and an existing fact keeps its place.
 3. **New facts** go where the page's template puts them (between the template's neighbours); a fact the template does
    not have goes at the bottom.
 4. **Links:** `links` maps a collection's title to `{ "add": [...], "remove": [...] }`. Each entry is a page name or id,
@@ -181,7 +178,8 @@ A page's **facts** are the key-value rows of its sidebar property `PROPERTIES` (
     "Sister": { "markdown": "[[Asagiri Kaede]]" },
     "Old Note": null
   },
-  "links": { "Dependencies": { "add": ["Fourth Age - Table"] } }
+  "links": { "Dependencies": { "add": ["Fourth Age - Table"] } },
+  "baseFactsVersion": "fv2_…"
 }
 ```
 
@@ -193,8 +191,7 @@ the change; never send the same call again. **"written but not as planned"** mea
 read back differs (usually someone edited it at the same moment): read the page and tell the person. `WRITTEN_IN_PART`
 lists the changes that were made before something stopped the rest: read the page before doing anything else.
 
-**Mentions of a character.** A character often has several pages with its name: its `[INDEX]`, its Character Core,
-perhaps a Compact Character Reference. `[[Name]]` matching several pages of ONE character links its **Core**, else its
+**Mentions of a character.** `[[Name]]` matching several pages of ONE character links its **Core**, else its
 **Reference**, else its **index**, and the result's `mentions` says which page was chosen and why. If the matches belong
 to different subjects, or one of them is not a character page, the mention stays ambiguous: name the page by id. This
 never applies to the page you write to: a `page` that matches several pages is refused with each candidate and its role.
@@ -204,78 +201,51 @@ Other refusals name what to fix: `MENTION_AMBIGUOUS` (the candidates are listed:
 rows with that key: tell the owner), `LINK_COLLECTION_NOT_FOUND` (the page's collections are listed),
 `DOCUMENT_NOT_FOUND`.
 
-## Canon and approval
+## Create a page or a character (Working first)
 
-Some facts are **protected canon**. By default:
-
-- setting a page's `Status` to `Authoritative`, or changing it from `Authoritative` to anything else;
-- changing an existing `Continuity Type` or `Continuity` (for example `CANON` to `AU`, or one AU to another). Setting
-  them where they are empty, as on a new page, is fine;
-- **deleting** a page whose `Status` is `Authoritative` (with `cascade`, any page under it that is). Restoring a deleted
-  page needs no approval;
-- **deleting** an Archived `[BARC]` page, and deleting a map, timeline or board of an Authoritative page (two rules the
-  owner can switch off per project);
-- **every lifecycle change**: creating an Authoritative page, and `archive_page`, `unarchive_page`, `move_to_working`
-  and `promote_page` (below).
-
-**No connection can make these changes on its own, whatever its scope.** A write that would make one (through
-`set_facts`, `lk_api_write`, `lk_api_batch` or any other tool) becomes a **proposal**: the result is
-`proposal_captured` with `requiresCanonicalApproval: true` and the `reason`, and nothing is written. Only the owner can
-accept it, with a separate "Approve and accept as canon". Never retry such a write or look for another way to make it:
-tell the person it is waiting for the owner, and follow it with `bridge_proposal_status`. Only the owner makes a page
-`Authoritative`; the page-creation tools make Working pages unless you pass `status: "authoritative"`.
-
-**An approval covers only what it listed.** The owner approves exactly the pages a proposal shows. If, by the time it
-runs, a page it would touch was added (for example a new page under a page being deleted with `cascade`, or under a set
-being archived), removed or moved, it does not run: the proposal becomes `conflicted` and nothing is written. Read the
-pages again and propose afresh.
-
-## Creating and changing pages
-
-All of these work inside the AI REPOSITORY only, put a new or moved page in its alphabetical place (indexes first) in
-the same write, never move or reclassify anything else, verify what they did, and take `dryRun: true` to show the plan
-(pages, names, parents, places, facts) without writing. Under scope `propose` each call is one proposal; the ids of its
+All the creation tools work inside the AI REPOSITORY only, put a new or moved page in its alphabetical place (indexes
+first) in the same write, never move or reclassify anything else, verify what they did, and take `dryRun: true` to show the
+plan (pages, names, parents, places, facts) without writing. Under scope `propose` each call is one proposal; the ids of its
 new pages are fixed in the proposal.
 
 **New pages are Working by default.** Every page create takes `status`: `"working"` (the default) makes a `[BWRK]`
 page under `[INDEX] Working` (leave `parent` out) or, with `parent`, under an `[INDEX]` page inside a Working set (a
-Working character's own index, below), with Status `Working` and the `Working` tag;
-`"authoritative"` makes a `[BSRC]` page in its normal place (give `parent`), with Status `Authoritative` and the
-`CANON` tag, and is always a proposal for the owner. Write new material as Working; the owner promotes it.
+Working character's own index, below), with Status `Working` and the `Working` tag; `"authoritative"` makes a `[BSRC]`
+page in its normal place (give `parent`), with Status `Authoritative` and the `CANON` tag, and is always a proposal for the
+owner. Write new material as Working; the owner promotes it.
 
-- **A character:** `create_character` `{ kind: "core" | "compact", name, race?, status?, facts?, links? }`. Working
-  (the default): a Core gets its own `[INDEX] {name}` under `[INDEX] Working` with `[BWRK] {name} - Character Core`
-  beneath it; a compact page goes directly under `[INDEX] Working`. Authoritative: the Core's `[INDEX] {name}` (an
-  existing one is reused) under the race, or `{name} - Character Reference` directly under the race. An existing Core
-  or Reference, Working or not, is **returned, not duplicated** (`status: "existing"`). The bridge writes Reference
-  Type, Subject, Canonical Display Name, Race / Species (exactly as you give it; `Unestablished` when the race is
-  unknown or omitted) and Status, then your facts. The race is always checked: an unknown or omitted race means
-  `Undetermined / Unknown`; a race given that does not resolve is refused, never guessed or created. If another
-  request for the same character is still under way (from you or another agent), you get `DUPLICATE_REQUEST` naming it:
-  follow that one.
+**A character, step by step** (the usual task):
+
+1. `create_character` `{ kind: "core", name, race?, facts? }` (Working by default). It makes `[INDEX] {name}` under
+   `[INDEX] Working` with `[BWRK] {name} - Character Core` beneath it. `kind: "compact"` makes one
+   `[BWRK] {name} - Character Reference` directly under `[INDEX] Working`, with no index.
+2. For each specialist page (Art, Relationship, …), call `create_resource` (Working) with its `template` and `parent` =
+   that character's `[INDEX]` (its name, or the id the result gave). One page at a time is fine. Each page lands
+   alphabetically among the index's children, so the character is one set from the start.
+3. To make the whole set canon, `promote_page` with `subtree: true` on the index and a `destination` (normally the race
+   index): one proposal, one approval. To retire it, `archive_page` with `subtree: true`.
+
+A Working page's `parent` is `[INDEX] Working` itself (the default) or an `[INDEX]` inside a Working set; any other parent
+is refused (`WORKING_PARENT`, naming the allowed ones), and nothing goes under a `[BWRK]` page. `create_bare_resource` and
+the items of `create_many_resources` follow the same rule. Do not leave a character's specialist pages flat under
+`[INDEX] Working`: a set promotion would not take them (its dry run lists them as `outsiders`; bring them in with
+`move_resource`, then promote).
+
+- **`create_character` details.** Authoritative: the Core's `[INDEX] {name}` (an existing one is reused) under the race, or
+  `{name} - Character Reference` directly under the race. An existing Core or Reference, Working or not, is **returned,
+  not duplicated** (`status: "existing"`). The bridge writes Reference Type, Subject, Canonical Display Name, Race / Species
+  (exactly as you give it; `Unestablished` when the race is unknown or omitted) and Status, then your facts. The race is
+  always checked: an unknown or omitted race means `Undetermined / Unknown`; a race given that does not resolve is refused,
+  never guessed or created: ask the person. If another request for the same character is still under way (from you or
+  another agent), you get `DUPLICATE_REQUEST` naming it: follow that one.
 - **A page from a template:** `create_resource` `{ name, template, parent?, status?, facts?, links? }` (see
   `list_templates`).
-- **Building a Working character one page at a time.** `create_character` (Working) makes `[INDEX] {name}` under
-  `[INDEX] Working` with the Core beneath it. Then call `create_resource` (Working) for each specialist page (Art,
-  Relationship, ...) with `parent` = that character's `[INDEX]` (its name or the id the result gave). Each page lands
-  alphabetically among the index's children, so the character is one set from the start and
-  `promote_page` with `subtree: true` on the index promotes the whole set in one approval. A Working page's `parent`
-  is `[INDEX] Working` itself (the default) or an `[INDEX]` inside a Working set; any other parent is refused
-  (`WORKING_PARENT`, naming the allowed ones), and nothing goes under a `[BWRK]` page. `create_bare_resource` and the
-  items of `create_many_resources` follow the same rule. Do not leave a character's specialist pages flat under
-  `[INDEX] Working`: a set promotion would not take them (its dry run lists them as `outsiders`; bring them in with
-  `move_resource`, then promote).
 - **An index:** `create_index` `{ name, parent }`, or `{ name, type, category }` (for example a category of a race). An
   index has no status, and none is made under `[INDEX] Working` or `[INDEX] Archived`.
 - **Many pages at once:** `create_many_resources` `{ items }` (up to 100; nest them with `key` and `parent_key`; each
   item has its own `status`; Working items are flat, so nothing goes under one).
 - **A page with no template:** `create_bare_resource` `{ name, parent?, status? }`, the name with its prefix:
   `[BWRK] …` (Working), `[BSRC] …` (Authoritative) or `[INDEX] …`.
-- **Rename, tags, aliases, icon, banner, hidden, locked:** `update_resource` (a rename keeps the prefix and re-places
-  the page). **Move:** `move_resource` `{ page, to }`; within a lifecycle area it is an ordinary move (below).
-- **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
-  lists every page removed). **Undo a delete:** `restore_resource` `{ page: "<id>" }`.
-- **Maps, timelines, boards:** `create_document`, `update_document` (settings only) and `delete_document`.
 
 **`operation_id`.** Every create tool takes an optional `operation_id` of your own. If a call times out or you are not
 sure it went through, send the SAME request with the SAME `operation_id`: you get the first call's result
@@ -285,6 +255,17 @@ sure it went through, send the SAME request with the SAME `operation_id`: you ge
 **A failed job is never replayed.** `WRITTEN_IN_PART` lists what was written, what was not, and the journal entries.
 Read the pages, then make a new, smaller request for what is missing. `OUTCOME_UNKNOWN` lists under `uncertain` a write
 whose answer was lost: it may have been made, so read the pages before anything else and never repeat it blindly.
+
+## Rename, move, delete and restore
+
+- **Rename, tags, aliases, icon, banner, hidden, locked:** `update_resource` (a rename keeps the prefix and re-places
+  the page; give the name without a prefix).
+- **Move:** `move_resource` `{ page, to }`. Within a lifecycle area it is an ordinary move ([below](#the-page-lifecycle)).
+- **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
+  lists every page removed). To retire a page, use `archive_page`, not a delete. Deleting an Authoritative page is protected
+  canon. **Undo a delete:** `restore_resource` `{ page: "<id>" }` (the id is in the delete's result and in the journal).
+- **Maps, timelines, boards (the documents themselves):** `create_document`, `update_document` (settings only) and
+  `delete_document`.
 
 ## The page lifecycle
 
@@ -357,8 +338,8 @@ Working and Archived pages (their text, other facts, links, other tags) work as 
 
 **Stopped part-way.** If a lifecycle job stops part-way, the result says which steps ran. Call the same tool on the
 same page again (for a set: on its root, with `subtree: true`): it plans what is left and proposes only that. Until then
-another lifecycle tool on that page, or on any page of the set, is refused (`LIFECYCLE_INCOMPLETE`). Before the owner has confirmed the project's two indexes, the tools and Working creates are
-refused (`LIFECYCLE_NOT_CONFIGURED`): tell the person.
+another lifecycle tool on that page, or on any page of the set, is refused (`LIFECYCLE_INCOMPLETE`). Before the owner has
+confirmed the project's two indexes, the tools and Working creates are refused (`LIFECYCLE_NOT_CONFIGURED`): tell the person.
 
 ## Dates and the chronology
 
@@ -373,9 +354,10 @@ keep all three in step in one job.
 (months), `4A 881 - 4A 900` (years). `Unknown` alone is refused. The Archon Age (`AA`) counts down: `AA 5` is five
 years before 1A. Each age begins mid-year (4A begins on Azah 18th, so `Kumikas 1st, 4A 1` does not exist). **Check a
 date with `calendar_date` first**: it answers the age, the KCY as the table writes it, LegendKeeper's text, or exactly
-why the date is refused. It costs nothing. `calendar_date` also turns minutes or a KCY into dates. **Two styles:** LegendKeeper writes a year with no thousands
-separator on events (`AA 1988119`), the tables with one (`AA 1,988,119`); `calendar_date` gives both (`formatted` and
-`tableFormatted`) and reads either, and the tools always write the table's style into a table cell.
+why the date is refused. It costs nothing, and it also turns minutes or a KCY into dates. **Two styles:** LegendKeeper
+writes a year with no thousands separator on events (`AA 1988119`), the tables with one (`AA 1,988,119`);
+`calendar_date` gives both (`formatted` and `tableFormatted`) and reads either, and the tools always write the table's
+style into a table cell.
 
 **The tools.**
 
@@ -396,10 +378,10 @@ separator on events (`AA 1988119`), the tables with one (`AA 1,988,119`); `calen
   refuse more.
 
 If a table row and its event no longer agree, the other tools refuse (`CHRONOLOGY_DRIFT`): repair it with
-`sync_timeline_event` (the weekly chronology check reports it, and the owner's dashboard offers "Propose a fix"). If a change stops part-way, send **the same request again**: it does
-only what is left; other changes of that age wait for it (`CHRONOLOGY_INCOMPLETE`). Before the owner has confirmed the
-chronology, the tools refuse (`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on
-an Authoritative page.
+`sync_timeline_event` (the weekly chronology check reports it, and the owner's dashboard offers "Propose a fix"). If a
+change stops part-way, send **the same request again**: it does only what is left; other changes of that age wait for it
+(`CHRONOLOGY_INCOMPLETE`). Before the owner has confirmed the chronology, the tools refuse
+(`CHRONOLOGY_NOT_CONFIGURED`): tell the person. These are ordinary edits, not canon, even on an Authoritative page.
 
 ## Maps
 
@@ -435,8 +417,7 @@ link; leaving `link` out leaves it alone.
 
 **Folders.** Name the folder with `folder`; a name that matches more than one folder is refused with their paths (pass the id).
 `update_map_feature` with `folder` moves a feature, or a whole folder with its features, into another folder, and
-`folder: null` moves it out to the top level (the bridge sends `parentId: ""`, as LegendKeeper requires; a feature made at the
-top level has no `parentId` and one moved there has `""`, and both are the top level). LegendKeeper does **not** delete a folder's features when it deletes the folder,
+`folder: null` moves it out to the top level. LegendKeeper does **not** delete a folder's features when it deletes the folder,
 so `delete_map_feature` refuses a folder that holds features unless you pass `cascade: true`; the answer then lists everything
 removed, and the journal (`bridge_journal_lookup`) keeps every removed feature in full, so each can be added again. If a
 cascade stops part-way, ask again: it deletes only what is left.
@@ -530,24 +511,109 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
   icons (`inline_icon_page`) is refused by `write_page`: do not try to rewrite it.
 - Acknowledged findings are hidden by default (the owner decided they are fine as they are); do not "fix" them.
 
-## Budget rules
+## Budgets, jobs and proposals
 
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.
 - Reads from the tree cost nothing. A live read costs one request. A tool says what it costs.
-- Before a workload of hundreds of calls, ask `bridge_estimate`, and run multi-step work as one `lk_api_batch` job
-  rather than a loop of single calls.
-- **Never loop on a budget error.** `BUDGET_EXHAUSTED` names the time to retry: wait until then.
-- Several pages at once: `get_resources` reads up to 25 as one job, and shows an estimate first when it is large.
+- Before a workload of hundreds of calls, ask `bridge_estimate`; do not read pages to find out. Run multi-step low-level
+  work as one `lk_api_batch` job rather than a loop of single calls. Several pages at once: `get_resources`.
+- **Never loop on a budget error.** `BUDGET_EXHAUSTED` names the time to retry (`retryAt`): wait until then, or tell the
+  person. A write that returns `waiting_budget` has not failed: it resumes by itself.
+- `queued` and `waiting_budget` mean the write is accepted and will run. Follow a job with `bridge_job_status` or
+  `bridge_job_wait`. Never submit it again.
+- A write that returns `proposal_captured` was not made. Tell the person it is waiting for approval; follow it with
+  `bridge_proposal_status` (or list yours with `bridge_proposals_mine`). If the page changes before the owner approves, the
+  proposal becomes **conflicted** instead of being applied: read the page again and propose afresh. Never submit a
+  proposal twice.
+- You cannot approve your own proposals, change your scope, or see other connections' jobs.
 
-## Tool lists and the Operations list
+## Canon and approval
+
+Some changes are **protected canon**. By default:
+
+- setting a page's `Status` to `Authoritative`, or changing it from `Authoritative` to anything else;
+- changing an existing `Continuity Type` or `Continuity` (for example `CANON` to `AU`, or one AU to another). Setting
+  them where they are empty, as on a new page, is fine;
+- **deleting** a page whose `Status` is `Authoritative` (with `cascade`, any page under it that is). Restoring a deleted
+  page needs no approval;
+- **deleting** an Archived `[BARC]` page, and deleting a map, timeline or board of an Authoritative page (two rules the
+  owner can switch off per project);
+- **every lifecycle change**: creating an Authoritative page, and `archive_page`, `unarchive_page`, `move_to_working`
+  and `promote_page`.
+
+**No connection can make these changes on its own, whatever its scope.** A write that would make one (through
+`set_facts`, `lk_api_write`, `lk_api_batch` or any other tool) becomes a **proposal**: the result is
+`proposal_captured` with `requiresCanonicalApproval: true` and the `reason`, and nothing is written. Only the owner can
+accept it, with a separate "Approve and accept as canon". Never retry such a write or look for another way to make it:
+tell the person it is waiting for the owner, and follow it with `bridge_proposal_status`.
+
+**An approval covers only what it listed.** The owner approves exactly the pages a proposal shows. If, by the time it
+runs, a page it would touch was added (for example a new page under a page being deleted with `cascade`, or under a set
+being archived), removed or moved, it does not run: the proposal becomes `conflicted` and nothing is written. Read the
+pages again and propose afresh.
+
+## When the low-level tools are right
+
+`lk_api_read`, `lk_api_write`, `lk_api_batch` (and, where shown, `lk_api_describe_operation`, `lk_api_list_operations`,
+`lk_api_paginate_all`) run any of LegendKeeper's 89 operations by id. Use them only when **no high-level tool does the
+job**: for example listing the project's members (`listMembers`), reading a page that is outside the AI REPOSITORY, or a
+raw block edit the owner has asked for. They keep the engine's guards (versions, `unsupported` blocks, canon, policy,
+budget) but not the repository's own rules (ordering, templates, lifecycle placement), which is why a page, fact, create,
+move, delete, document, event or map job belongs to its own tool.
+
+- Take the operation id **exactly as listed** under Operations at the end of this guide. An unknown id is refused with up to
+  five close suggestions. `lk_api_describe_operation` gives an operation's schema when you can see it; either way `getBlock`
+  and `getDocumentBlocks` show the current shape of real data.
+- Read first and pass the version you read as `params.ifMatch` on a versioned write. A write that would lose `unsupported`
+  blocks, or delete with `cascade`, needs the explicit flag the refusal names: ask the person before you pass it.
+- The high-level tools work only inside the AI REPOSITORY; the low-level tools can reach a page outside it, with the same
+  guards and budget.
+
+## Reference
+
+### What the bridge is
+
+LK-Bridge sits between you and LegendKeeper. It keeps a model of each world's **AI REPOSITORY** (the page tree your
+tools work in), checks every write against the page's current version, protects content Markdown cannot show, records
+every change in a journal, and shares each project's request budget fairly between everyone using it. You never hold a
+LegendKeeper key.
+
+### Projects
+
+One bridge serves several LegendKeeper projects (for example `arkona`, the live world, and `test`).
+
+- `list_projects` names them and says which is the default.
+- Every tool takes an optional `project`. Reads without it use the default project. **A write must name its project**
+  when the bridge serves more than one, so a forgotten argument can never land in the wrong world.
+- Every result names the project it used and ends with that project's budget line.
+- Each project has its own repository, its own assets and its own budget. Nothing carries over between projects.
+
+### The repository tree
+
+The bridge's **repository tree** is its copy of everything under the project's `AI REPOSITORY` page: every page's
+name, kind, place, tags, aliases, Reference Type, Scope and documents.
+
+- **Kinds.** `[INDEX]` pages (kind `index`) organise; `[BSRC]` pages (kind `bsrc`, Authoritative), `[BWRK]` pages
+  (kind `bwrk`, Working) and `[BARC]` pages (kind `barc`, Archived) hold the content (see
+  [The page lifecycle](#the-page-lifecycle)); anything else is `unclassified` and is reported. Display names have the
+  prefix removed: the page `[BSRC] Asagiri Miyabi` is "Asagiri Miyabi". When a name matches several pages of the same
+  subject, the current `[BSRC]` page (or an index) is preferred, then `[BWRK]`, then `[BARC]`.
+- **Status.** Every answer from the tree states its status and when it was last confirmed. `ready` means it was
+  checked within the last day. `stale` means something could not be confirmed; the answer is still the best the bridge
+  has, and it says so. `not_built` and `building` mean it cannot answer yet. The tools say so and spend nothing.
+- **Freshness.** The tree is updated after each of the bridge's own writes, by an hourly sweep, and by a nightly full
+  check. A change made in the LegendKeeper app can take up to an hour to appear in `search` and `browse_repository_tree`;
+  `get_resource` and `read_document` read the page itself, live.
+- **The root.** The high-level tools work **only inside the AI REPOSITORY**. A page outside it is refused with a message
+  saying so. The low-level tools can still reach it, with the same guards and budget.
+
+### The tools you are shown
 
 The tools you are shown depend on your profile. The owner can show or hide the low-level tools
 (`lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_op_*`), and a profile's scope decides
 whether the write tools are shown. Hiding is cosmetic: you can still run any operation through `lk_api_read`,
 `lk_api_write` and `lk_api_batch`, and policy decides what is allowed. If you do not have the low-level tools, the
-**Operations** section at the end of this guide lists every operation id, with its kind and risk. Use an id exactly as
-listed: an unknown id is refused with up to five close suggestions. `lk_api_describe_operation` gives an operation's
-schema when you can see it; either way `getBlock` and `getDocumentBlocks` show the current shape of real data.
+**Operations** section at the end of this guide lists every operation id, with its kind and risk.
 
 **Tool-list caching (for the person using the connector).** claude.ai keeps its own copy of a connector's tool list. On
 10 November 2026 a change to tool visibility (the "Show low-level tools" checkbox, or a scope change that hides or shows
@@ -555,37 +621,30 @@ the write tools) appeared in claude.ai only after the connector was disconnected
 settings; new chats alone were not enough. (Observed, not a guarantee.) In ChatGPT, use Plugins, then the bridge, then
 Refresh.
 
-## Proposals and the owner
+### When something goes wrong
 
-The bridge owner controls what each connection may do. A connection with scope `read` can only read. One with scope
-`propose` can ask for a write, which is held as a **proposal** for the owner to approve on the dashboard.
+Every refusal has a code and a plain message that names the next step. The common ones:
 
-- A write that returns `proposal_captured` was not made. Tell the person it is waiting for approval; follow it with
-  `bridge_proposal_status`. Never submit it again.
-- `queued` and `waiting_budget` mean the write is accepted and will run. Follow a job with `bridge_job_status` or
-  `bridge_job_wait`. Never submit it again.
-- You cannot approve your own proposals, change your scope, or see other connections' jobs.
-
-## When something goes wrong
-
-Every refusal has a code and a plain message. The common ones:
-
-| Code                                     | Meaning                                                                                |
-| ---------------------------------------- | -------------------------------------------------------------------------------------- |
-| `AMBIGUOUS`                              | A name matched several pages (listed with paths). Pass the id of the one you mean.     |
-| `NOT_FOUND`, `NOT_IN_REPOSITORY`         | No such page inside the AI REPOSITORY (it may be outside the root: use `lk_api_read`). |
-| `TREE_NOT_READY`, `TREE_NOT_CONFIGURED`  | The repository tree cannot answer yet. Nothing was spent. Tell the owner.              |
-| `SEARCH_SYNTAX`                          | The search query is malformed; the message says where.                                 |
-| `SECTION_AMBIGUOUS`, `SECTION_NOT_FOUND` | A section path matched several headings, or none. The options are listed.              |
-| `BUDGET_EXHAUSTED`                       | Wait until `retryAt`. Do not retry in a loop.                                          |
-| `PROJECT_REQUIRED`                       | A write did not name its project. Pass `project`.                                      |
-| `VERSION_CONFLICT`                       | The page changed since you read it. Nothing was written: read again and redo the edit. |
-| `requiresCanonicalApproval`              | The change touches protected canon: it waits for the owner. Never retry it.            |
-| `DUPLICATE_REQUEST`                      | Another request for the same character is under way. Follow it (its job or proposal).  |
-| `OPERATION_ID_REUSED`                    | That `operation_id` was used for a different request. Use a new id.                    |
-| `WRITTEN_IN_PART`                        | Some writes were made, then it stopped. Read the pages; make a new, smaller request.   |
-| `OUTCOME_UNKNOWN`                        | A write may or may not have been made (`uncertain`). Read the pages; do not repeat it. |
-| `OWNER_APPROVED_JOB`                     | The owner approved that job; only the owner can cancel it.                             |
-| `HAS_CHILDREN`                           | The page has pages under it: add `cascade: true` to delete them all.                   |
+| Code                                     | Meaning, and what to do                                                                                           |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `AMBIGUOUS`                              | A name matched several pages (listed with paths). Pass the id of the one you mean.                                |
+| `NOT_FOUND`, `NOT_IN_REPOSITORY`         | No such page inside the AI REPOSITORY (it may be outside the root: use `lk_api_read`).                            |
+| `TREE_NOT_READY`, `TREE_NOT_CONFIGURED`  | The repository tree cannot answer yet. Nothing was spent. Tell the owner.                                         |
+| `SEARCH_SYNTAX`                          | The search query is malformed; the message says where.                                                            |
+| `SECTION_AMBIGUOUS`, `SECTION_NOT_FOUND` | A section path matched several headings, or none. The options are listed.                                         |
+| `BUDGET_EXHAUSTED`                       | Wait until `retryAt`. Do not retry in a loop.                                                                     |
+| `PROJECT_REQUIRED`                       | A write did not name its project. Pass `project`.                                                                 |
+| `VERSION_CONFLICT`                       | The page changed since you read it. Nothing was written: read again and redo the edit.                            |
+| `requiresCanonicalApproval`              | The change touches protected canon: it waits for the owner. Never retry it.                                       |
+| `POLICY_DENIED`                          | This route is closed (a lifecycle change by another tool, a protected change). The message names the tool to use. |
+| `WORKING_PARENT`                         | A Working page needs `[INDEX] Working` or an index inside a Working set. The allowed parents are listed.          |
+| `PAGE_NOT_WRITABLE`                      | `write_page` cannot write this page back (for example an inline icon). Tell the owner.                            |
+| `DUPLICATE_REQUEST`                      | Another request for the same character is under way. Follow it (its job or proposal).                             |
+| `OPERATION_ID_REUSED`                    | That `operation_id` was used for a different request. Use a new id.                                               |
+| `WRITTEN_IN_PART`                        | Some writes were made, then it stopped. Read the pages; make a new, smaller request.                              |
+| `OUTCOME_UNKNOWN`                        | A write may or may not have been made (`uncertain`). Read the pages; do not repeat it.                            |
+| `OWNER_APPROVED_JOB`                     | The owner approved that job; only the owner can cancel it.                                                        |
+| `HAS_CHILDREN`                           | The page has pages under it: add `cascade: true` to delete them all.                                              |
+| `INVALID_ARGUMENTS` / `INVALID_PARAMS`   | An argument does not fit the tool's schema. Read the message; do not invent arguments.                            |
 
 `bridge_errors_recent` lists recent failures with LegendKeeper's request ids when you need to report one.

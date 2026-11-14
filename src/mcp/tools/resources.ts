@@ -91,11 +91,6 @@ const dryRunArg = z
 const tagsArg = z.array(z.string().trim().min(1).max(100)).max(50).optional();
 const aliasesArg = z.array(z.string().trim().min(1).max(256)).max(128).optional();
 
-const COSTS_CREATE =
-  'Cost: 1 read of the template’s sidebar (once per template), 1 write to create, 1 read to check the copy and 1 write per ' +
-  'fact (Status included) when it has facts, then the verify step: 1 read per page, 1 listing of the parent’s children (per ' +
-  '100) and the tree’s re-read. A dry run: the template read only.';
-
 // ============================================================================================ shared
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -308,14 +303,7 @@ function createIndexTool(deps: ToolDeps): McpToolProvider {
     title: 'Create an index',
     access: 'write',
     description:
-      'Creates an [INDEX] page from its type’s Index template, under a parent index inside the AI REPOSITORY, in its ' +
-      'alphabetical place. The type (for example Character) and category (for example a race such as Foxians) come from the ' +
-      'type registry and taxonomy: give `parent`, or `type` and `category` (the category’s index is then the parent), or ' +
-      'both. An unknown type or category is refused with the known ones; an index of the same name under the same parent is ' +
-      'refused. An index takes no status and gets no Status fact (v2 C2c: indexes have no lifecycle). Indexes are never ' +
-      'made under [INDEX] Working or [INDEX] Archived (flat). Characters’ own indexes are made by create_character. ' +
-      '`dryRun: true` shows the plan. ' +
-      COSTS_CREATE,
+      'Creates an [INDEX] page (a category such as a race) from its type’s Index template, in its alphabetical place. Give `parent`, or `type` and `category` (the category’s index is then the parent). Content pages are create_resource; a character’s own index is made by create_character. An index has no status and is never made under [INDEX] Working or [INDEX] Archived. An unknown type or category is refused with the known ones. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 5 reads and 1 write.',
     inputSchema: z.object({
       name: z.string().min(1).max(500).describe('The index’s name, without [INDEX] (added).'),
       parent: pageRef.optional().describe('The parent index (name or id).'),
@@ -533,18 +521,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a page from a template',
     access: 'write',
     description:
-      'Creates a page from a template (required: name or id; see list_templates) inside the AI REPOSITORY, in its ' +
-      'alphabetical place. `status` (default "working"): a [BWRK] page with Status Working and the Working tag, directly ' +
-      'under [INDEX] Working (leave `parent` out) or, to build up a Working character one page at a time, under that ' +
-      'character’s own [INDEX] (`parent` = the index create_character made: create_character (Working) first, then this ' +
-      'for each specialist page, so promote_page with subtree later takes the whole set); any other parent is refused, ' +
-      'naming the allowed ones; or "authoritative": a [BSRC] page under `parent` with Status ' +
-      'Authoritative and the CANON tag, which is canon and always becomes a proposal only the owner can accept as canon. ' +
-      'The page’s name follows the template role’s pattern. Optional `facts` and `links` as in set_facts are written in ' +
-      'the same job, in template order (Status comes from `status`). A page of the same name under the same parent is ' +
-      'refused. Character pages: use create_character. Example: { "name": "The Hollow Court", "template": "[BSRC] AI ' +
-      'General Source", "facts": { "Scope": "A court of the Foxians" }, "project": "test" }. ' +
-      COSTS_CREATE,
+      'Creates a page from a template (`template` is required: a name or id, see list_templates), in its alphabetical place. `status` "working" (default): a [BWRK] page under [INDEX] Working (leave `parent` out) or, to build a Working character one page at a time, under that character’s own [INDEX] (`parent` = the index create_character made); any other parent is refused (WORKING_PARENT). "authoritative": a [BSRC] page under `parent`: canon, so always a proposal the owner accepts as canon. Optional `facts` and `links` (as in set_facts) are written in the same job. Characters are create_character, indexes create_index, a page with no template create_bare_resource. A page of the same name under the same parent is refused. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 6 writes with a few facts.',
     inputSchema: z.object({
       name: z
         .string()
@@ -596,7 +573,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
             return refusal(
               pd,
               'PAGE_EXISTS',
-              `“${parent.value.displayName}” already has a page named “${twin.displayName}”.`,
+              `“${parent.value.displayName}” already has a page named “${twin.displayName}” (its details are in “existing”). Use that page (get_resource), or choose another name.`,
               {
                 existing: nodeView(twin),
               },
@@ -686,14 +663,7 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a page without a template',
     access: 'write',
     description:
-      'Creates a page with no template (no sidebar facts) inside the AI REPOSITORY, in its alphabetical place. The name ' +
-      'starts with exactly “[INDEX] ” (an index, under `parent`; no status), or for a page “[BSRC] ” or “[BWRK] ”: a ' +
-      'page’s prefix follows `status` (default "working": [BWRK] under [INDEX] Working or an [INDEX] inside a Working set, ' +
-      'such as a Working character’s own index, with the Working tag; ' +
-      '"authoritative": [BSRC] under `parent` with the CANON tag, a canonical proposal). Anything else is refused, and ' +
-      '[BARC] too (only archive_page archives). A page of the same kind and name under the same parent is refused. ' +
-      'Prefer create_resource (a template gives the page its sidebar). Cost: 1 write, then the verify step (1 read, 1 ' +
-      'listing of the parent’s children per 100) and the tree’s re-read.',
+      'Creates a page with no template (no sidebar), in its alphabetical place. The name carries its prefix: "[INDEX] …" (an index under `parent`), "[BWRK] …" (Working, the default: under [INDEX] Working or a Working set’s index) or "[BSRC] …" (Authoritative: canon, always a proposal). [BARC] is never created (use archive_page). Prefer create_resource, which gives the page its sidebar. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: 2 reads and 1 write.',
     inputSchema: z.object({
       name: z
         .string()
@@ -742,7 +712,7 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
             return refusal(
               pd,
               'PAGE_EXISTS',
-              `“${parent.value.displayName}” already has “${twin.rawName}”.`,
+              `“${parent.value.displayName}” already has “${twin.rawName}” (its details are in “existing”). Use that page (get_resource), or choose another name.`,
               {
                 existing: nodeView(twin),
               },
@@ -824,19 +794,7 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
     title: 'Create up to 100 pages',
     access: 'write',
     description:
-      'Creates up to 100 pages in ONE request, nested with `key` and `parent_key` (a parent made in the same request works), ' +
-      'each in its alphabetical place. Each item follows the single-create rules: with a `template`, as create_resource (name ' +
-      'pattern, facts, links); without, as create_bare_resource (name with its prefix). Each page item has a `status` ' +
-      '(default "working": a [BWRK] page under [INDEX] Working, or an [INDEX] inside a Working set (the same rule as ' +
-      'create_resource); never under another ' +
-      'item, as Working pages are flat; "authoritative": a [BSRC] page in its normal place, canon); mixed batches are fine, ' +
-      'and a batch with any Authoritative page is one canonical proposal. Indexes take no status and are never made under ' +
-      '[INDEX] Working or [INDEX] Archived. Pages without a ' +
-      'template go in createManyResources calls (one write for many); each page from a template is its own write. Under ' +
-      '`propose`, the whole batch is ONE proposal. A bad parent_key, a loop, or more than 100 items is refused before ' +
-      'anything is sent. Character pages: use create_character. Cost: 1 read per distinct template; 1 write per template ' +
-      'page (plus 1 read and 1 write per fact), 1 write per run of pages without one; the verify step reads each page once ' +
-      'and lists each parent’s children.',
+      'Creates up to 100 pages in ONE request, nested with `key` and `parent_key` (a parent made in the same request works), each in its alphabetical place. Each item follows create_resource (with `template`) or create_bare_resource (without) and has its own `status` (default "working": Working pages are flat, so never nest one under another item). A batch with any Authoritative page is one canonical proposal. For one page use create_resource; for characters create_character. A bad parent_key, a loop or more than 100 items is refused before anything is sent. Under propose the whole batch is ONE proposal. Cost: 1 write per run of untemplated pages, 1 write plus its facts per templated page, and 1 read per page to verify.',
     inputSchema: z.object({
       items: z.array(manyItem).min(1).max(100, 'At most 100 items in one request.'),
       dryRun: dryRunArg,
@@ -924,7 +882,7 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
               return refusal(
                 pd,
                 'WORKING_PARENT',
-                `Item “${it.key}”: a Working page goes under [INDEX] ${cc.lifecycle.indexNames.working} or an [INDEX] inside a Working set, never under another item of the request: Working pages are flat.`,
+                `Item “${it.key}”: a Working page goes under [INDEX] ${cc.lifecycle.indexNames.working} or an [INDEX] inside a Working set, never under another item of the request: Working pages are flat. Make a Working character's set with create_character, then create_resource for each of its pages with parent = the character's [INDEX]; or give the item an index parent that already exists.`,
                 { key: it.key },
               );
             }
@@ -986,7 +944,7 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
               return refusal(
                 pd,
                 'WORKING_PARENT',
-                `Item “${p.key}” is under item “${p.parent.item}”, a Working page: Working pages are flat, so nothing goes under one.`,
+                `Item “${p.key}” is under item “${p.parent.item}”, a Working page: Working pages are flat, so nothing goes under one. Put it under an [INDEX] page (a character's own index), not under a page.`,
                 { key: p.key },
               );
             }
@@ -1078,11 +1036,7 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Change a page’s name, tags and settings',
     access: 'write',
     description:
-      'Changes a page inside the AI REPOSITORY: `name` (the [INDEX] or [BSRC] prefix is kept; the page is re-placed in its ' +
-      'alphabetical place among its siblings in the same job; a name a sibling already has is refused), `tags` and ' +
-      '`aliases` ({ add, remove }), `icon` ({ glyph, color, shape, size }), `banner` ({ url, yPosition, enabled }), `hidden` ' +
-      'and `locked`. Facts and links: set_facts; page text: write_page. Cost: 1 read, 1 write (plus 1 to re-place after a ' +
-      'rename), then the verify step (1 read and 1 listing for a re-placed page) and the tree’s re-read.',
+      'Changes a page’s `name` (give it without a prefix: the [INDEX], [BSRC], [BWRK] or [BARC] prefix is kept and the page is re-placed alphabetically), `tags` and `aliases` ({ add, remove }), `icon`, `banner`, `hidden` or `locked`. Facts and links are set_facts, page text is write_page, moves are move_resource. The tags CANON, Working and Archived change only through the lifecycle tools. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write for a rename.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       name: z
@@ -1131,7 +1085,11 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
         const node = r.node;
         if (node.kind === 'root')
           return errorResult(
-            { code: 'ROOT_PAGE', message: 'The AI REPOSITORY page itself is not changed by the tools.' },
+            {
+              code: 'ROOT_PAGE',
+              message:
+                'The AI REPOSITORY page itself is not changed by the tools. Name a page inside it (search, browse_repository_tree).',
+            },
             pd,
           );
         const read = await liveRead(pd, mctx, 'update_resource', 'getResource', {
@@ -1377,15 +1335,7 @@ function moveResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Move a page',
     access: 'write',
     description:
-      'Moves a page (and everything under it) to a new parent index inside the AI REPOSITORY, in its alphabetical place ' +
-      'there (one write). A move under the page itself or one of its descendants, or out of the repository, is refused. ' +
-      'MOVES WITHIN A LIFECYCLE AREA are ordinary moves (no lifecycle change, no canonical approval; prefix, Status and ' +
-      'tags never change): a [BWRK] page between [INDEX] Working and an [INDEX] inside a Working set (to build a Working ' +
-      'character’s set before promote_page with subtree), a [BARC] page, or an archived set’s [INDEX] with its pages, ' +
-      'between [INDEX] Archived and an [INDEX] inside an archived set. unarchive_page still returns an archived page or ' +
-      'set to where its lifecycle record says it came from. A move into or out of [INDEX] Working or [INDEX] Archived, or ' +
-      'between the two, is refused (POLICY_DENIED, naming archive_page, unarchive_page, move_to_working or promote_page). ' +
-      'Cost: 1 write, then the verify step (1 read, 1 listing of the new parent’s children per 100) and the tree’s re-read.',
+      'Moves a page (and everything under it) under a new parent [INDEX], in its alphabetical place. Within a lifecycle area it is an ordinary move with no canonical approval: a [BWRK] page between [INDEX] Working and an index inside a Working set (to build a character’s set before promote_page), and likewise [BARC] pages in the Archived area. A move into, out of or between [INDEX] Working and [INDEX] Archived is refused (POLICY_DENIED, naming archive_page, unarchive_page, move_to_working or promote_page). A move under itself or out of the repository is refused. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page to move (name or id).'),
       to: pageRef.describe('The new parent index (name or id).'),
@@ -1423,7 +1373,7 @@ function moveResourceTool(deps: ToolDeps): McpToolProvider {
           return errorResult(
             {
               code: 'NAME_TAKEN',
-              message: `“${dest.displayName}” already has “${twin.rawName}”.`,
+              message: `“${dest.displayName}” already has “${twin.rawName}” (its details are in “existing”). Rename one of them first (update_resource), or choose another destination.`,
               existing: nodeView(twin),
             },
             pd,
@@ -1535,12 +1485,7 @@ function deleteResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete a page',
     access: 'write',
     description:
-      'Deletes a page inside the AI REPOSITORY (LegendKeeper keeps it; restore_resource brings it back). `confirm: true` is ' +
-      'required; a page with pages under it also needs `cascade: true`, and the result lists every page removed. PROTECTED ' +
-      'CANON: deleting a page whose Status is Authoritative (with cascade, any page in the subtree) needs the owner’s ' +
-      'canonical approval: it becomes a proposal (proposal_captured with requiresCanonicalApproval) whatever your scope, ' +
-      'listing which pages; never retry it. Cost: 1 read (the page, kept in the journal), 1 read per page of the subtree for ' +
-      'the canon check, 1 write, 1 read to verify, and the tree’s re-read.',
+      'Deletes a page (LegendKeeper keeps it: restore_resource brings it back). `confirm: true` is required; a page with pages under it also needs `cascade: true` (the result lists every page removed). To retire a page, archive_page is usually what is wanted. Deleting an Authoritative page (with cascade, any page of the subtree) is protected canon: always a proposal the owner accepts as canon, listing the pages; never retry it. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write, plus 1 read per page under it.',
     inputSchema: z.object({
       page: pageRef.describe('The page to delete (name or id).'),
       confirm: z.literal(true).describe('Required: true.'),
@@ -1672,10 +1617,7 @@ function restoreResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Restore a deleted page',
     access: 'write',
     description:
-      'Restores a page deleted from the AI REPOSITORY (with everything deleted with it in the same cascade) and adds it ' +
-      'back to the bridge’s tree. Give its id (delete_resource’s result and bridge_journal_lookup show it). No canonical ' +
-      'approval is needed: restoring brings back what was approved. A page whose parent is itself deleted is refused ' +
-      '(restore the parent). Cost: 1 write, 1 read to verify, and the tree’s re-read of what came back.',
+      'Restores a page deleted from the AI REPOSITORY (with everything deleted with it) and adds it back to the tree. Give its id (delete_resource’s result and bridge_journal_lookup show it). No canonical approval is needed. A page whose parent is deleted is refused: restore the parent first. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('The deleted page’s id (or lk://resources/<id>).'),
       dryRun: dryRunArg,

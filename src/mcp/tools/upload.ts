@@ -27,16 +27,7 @@ export function uploadTools(deps: ToolDeps) {
       name: 'lk_upload_image',
       title: 'Upload an image to LegendKeeper',
       access: 'write',
-      description:
-        'Uploads an image as a LegendKeeper image asset in one call: createImageUpload, a PUT of the file to the signed URL ' +
-        '(not a LegendKeeper API call, on another host), then createImageAsset. Give the image as base64' +
-        (deps.settings.upload.allowUrlSource
-          ? ' or as a public https URL.'
-          : ' (URL sources are switched off here).') +
-        ` PNG, JPEG, GIF or WebP, up to ${deps.settings.upload.maxBytes} bytes (${maxMb} MB). ` +
-        'Cost: 2 writes plus upload-tier backoff if LegendKeeper throttles uploads. Risk: additive (creates an asset; changes nothing else). ' +
-        'Returns the new asset when it finishes within waitSeconds, otherwise a jobId to follow with bridge_job_wait. ' +
-        'Never repeat a call that returned a jobId. Then use the asset’s url in an image block.',
+      description: `The older three-step upload (createImageUpload, a PUT, createImageAsset) of a base64 or https image, with no conversion, folder planning or staging: prefer upload_image. PNG, JPEG, GIF or WebP up to ${maxMb} MB. Returns the asset, or a jobId to follow with bridge_job_wait; never repeat a call that returned a jobId. Cost: 2 writes.`,
       inputSchema: z.object({
         name: z.string().min(1).max(200).describe('Asset name, 1-200 characters.'),
         base64: z.string().min(1).optional().describe('The image bytes, base64 (a data: URI is accepted).'),

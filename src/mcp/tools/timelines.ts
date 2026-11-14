@@ -84,10 +84,7 @@ const descriptionArg = z
   );
 
 const DATE_HELP =
-  'A date in one of the chronology’s forms, e.g. “Kumikas 1st, 1A 159” (a day), “4A 881” (a year), “Unknown, 4A 101” ' +
-  '(a year, stored year-only), “Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102” (a range), “Jehet 11th - 18th, 4A 424” (days ' +
-  'of one month), “Kumikas - Azaakh, 4A 180” or “Zahras 4A 367 - Attina 4A 367” (months), “4A 881 - 4A 900” (years). ' +
-  '“Unknown” alone is refused. Check a date first with calendar_date.';
+  'A chronology date such as “Kumikas 1st, 1A 159”, “4A 881”, “Unknown, 4A 101” or a range “Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102” (all forms: calendar_date, which also checks a date).';
 
 // ============================================================================================ the chronology now
 
@@ -595,15 +592,7 @@ function calendarDateTool(deps: ToolDeps): McpToolProvider {
     title: 'Read or check a date in the chronology’s calendar',
     access: 'read',
     description:
-      'Reads a date with the calendar engine, exactly as the timeline tools will: give `date` (any accepted form), or ' +
-      '`minutes` (LegendKeeper minutes, with `detail` 1 year, 2 month or 3 day, and `endMinutes` for a range), or `kcy` (a ' +
-      'continuous year). Answers the form, the shape and detail LegendKeeper stores, the minutes, the KCY as the tables ' +
-      'write it, the age (era), and the date’s text in BOTH styles (`formatted`: LegendKeeper’s own, with no thousands ' +
-      'separator in a year, as it shows on events; `tableFormatted`: the table’s, with the separators the owner’s tables ' +
-      'use), or exactly why the date is refused (an unknown month, an impossible day, a date outside its era, a reversed ' +
-      'range). Either style is accepted as input. Use it to check a date before create_timeline_event. ' +
-      DATE_HELP +
-      ' Cost: nothing when the chronology’s calendar is cached (otherwise, or with `calendar`, 1 read).',
+      'Reads or converts a date with the same calendar engine the timeline tools use: give `date` (any accepted form), or `minutes` (LegendKeeper minutes, with `detail` 1 year, 2 month or 3 day, and `endMinutes` for a range), or `kcy`. Answers the age, the minutes, the KCY as the tables write it and the text in both styles (`formatted`, as LegendKeeper writes it; `tableFormatted`, as the tables do), or exactly why a date is refused (unknown month, impossible day, outside its era, reversed range). Use it to check a date before create_timeline_event, never to work one out yourself. Forms: "Kumikas 1st, 1A 159" (a day), "4A 881" (a year), "Unknown, 4A 101" (a year, day unknown), "Zahras 4A 367" (a month), "Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102" (a range), "Jehet 11th - 18th, 4A 424", "Kumikas - Azaakh, 4A 180", "4A 881 - 4A 900". "Unknown" alone is refused. Cost: none (1 read when the calendar is not cached).',
     inputSchema: z.object({
       date: z.string().min(1).max(300).optional().describe('A date in any accepted form.'),
       minutes: z.number().int().optional().describe('LegendKeeper minutes (an event’s start).'),
@@ -753,14 +742,7 @@ function createTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Add an event to the chronology',
     access: 'write',
     description:
-      'Adds a chronology event as ONE job: a row in its age’s table (the authority) in calendar order, an event on its ' +
-      'age’s timeline (exact minutes and detail, linked to the table), and one more in its age’s count on the Main table. ' +
-      '`date` gives the age (pass `age` only to confirm it: a mismatch is refused). `name` is short (the timeline), ' +
-      '`description` is the full text (the table). An identical row (same date and description) is refused. A request ' +
-      'whose earlier job stopped part-way finishes it (only what is left). ' +
-      DATE_HELP +
-      ' Cost: about 3 reads to plan (the calendar, the table, the Main table), then 1 check read per document, 3 writes, ' +
-      'and about 3 reads to verify.',
+      'Adds a chronology event as ONE job: a row in its age’s table (the authority) in calendar order, an event on that age’s timeline (linked to the table) and one more in the age’s count on the Main table. `date` gives the age; `name` is short (for the timeline); `description` is the full text (for the table). Check the date first with calendar_date (its forms are listed there). Never edit the chronology’s tables or timelines with write_page or lk_api_*: this tool keeps all three in step. An identical row is refused (DUPLICATE_EVENT); a job that stopped part-way finishes when you send the same request again. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 3 writes.',
     inputSchema: z.object({
       date: z.string().min(1).max(300),
       name: z.string().min(1).max(500).describe('The short name, for the timeline.'),
@@ -1216,12 +1198,7 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Change an event of the chronology',
     access: 'write',
     description:
-      'Changes a chronology event’s `date`, `name` (timeline) or `description` (table) as ONE job, keeping its table row, ' +
-      'its timeline event and the Main counts in step. A new date in another age moves the row to that age’s table and the ' +
-      'event to that age’s timeline, and adjusts both counts. Name the event with `event` (its date with its description ' +
-      'or name, or its row_id or event_id). Refused when its row and its event have drifted apart (the chronology check ' +
-      'reports those). A request whose earlier job stopped part-way finishes it. Cost: about 4–8 reads to plan, then 1 ' +
-      'check read per document, 1–6 writes, and reads to verify.',
+      'Changes a chronology event’s `date`, `name` (timeline) or `description` (table) as ONE job, keeping its table row, timeline event and the Main counts in step; a date in another age moves it there. Name it with `event`: its date plus its description or name, or its row_id or event_id. Refused when its row and event have drifted apart (CHRONOLOGY_DRIFT): repair that with sync_timeline_event. A job that stopped part-way finishes on the same request. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 9 reads and 3 writes (into another age 18 and 6).',
     inputSchema: z.object({
       event: eventRefArg,
       date: z
@@ -1584,11 +1561,7 @@ function deleteTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete an event of the chronology',
     access: 'write',
     description:
-      'Deletes a chronology event as ONE job: its row from its age’s table, its event from its age’s timeline, and one ' +
-      'from its age’s count on the Main table. `confirm: true` is required. Name the event with `event` (its date with ' +
-      'its description or name, or its row_id or event_id). Refused when its row and its event have drifted apart. The ' +
-      'journal keeps the row and the event as they were. Cost: about 4–7 reads to plan, then 1 check read per document, ' +
-      '3 writes (with the journal’s reads of the row and the event), and reads to verify.',
+      'Deletes a chronology event as ONE job: its table row, its timeline event and one from the age’s count. `confirm: true` is required. Name it with `event` as update_timeline_event does. Refused when its row and event have drifted apart: sync_timeline_event first. The journal keeps the row and the event. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 12 reads and 3 writes.',
     inputSchema: z.object({
       event: eventRefArg,
       confirm: z.literal(true).describe('Required: true.'),
@@ -1849,19 +1822,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Repair the timeline event of a chronology table row',
     access: 'write',
     description:
-      'Repairs timeline drift for ONE age table row, with the TABLE as the authority: creates the row’s timeline event if ' +
-      'it is missing (exact minutes and detail, linked to the age’s table), or corrects the paired event’s minutes, ' +
-      '`detail`, shape (a range or a single date) and `uri` to match the row. It never touches the table or the Main ' +
-      'count (the row was already counted: that is the drift), and never renames an event. Name the row with `row` (its ' +
-      'date with its description, or its row_id). A row whose event already agrees answers “nothing to do”. The pairing ' +
-      'is the chronology check’s (links, then date and name, then date alone, then a same-event date mismatch); when it ' +
-      'cannot settle which event is the row’s, the call is refused with the candidates and nothing is done (pass ' +
-      '`event_id` to choose one). One job holding the table and the timeline, the row compared again inside the lock, ' +
-      'then verified; one proposal under `propose`. Use `dryRun` to see the plan. The chronology check’s findings ' +
-      '(`row_without_event`, `date_mismatch`) are what this repairs. A request whose earlier job stopped part-way ' +
-      'finishes it. ' +
-      'Cost: about 3 reads to plan (the calendar, the table, one per 100 events), then 3 check reads and 1 write (2 to ' +
-      'make an event again as a single date), and 1 read to verify.',
+      'Repairs drift for ONE chronology table row, with the TABLE as the authority: creates the row’s missing timeline event, or corrects the paired event’s minutes, detail, shape and link to match. It never touches the table or the Main count and never renames an event. Name the row with `row` (its date plus its description, or its row_id). Use it for what the chronology check reports (row_without_event, date_mismatch) or CHRONOLOGY_DRIFT. A row whose event already agrees answers "nothing to do"; if several events could be its pair it is refused with the candidates (pass `event_id`). dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 6 to 7 reads and 1 write.',
     inputSchema: z.object({
       row: syncRowArg,
       event_id: z
@@ -1964,10 +1925,7 @@ function createTimelineLaneTool(deps: ToolDeps): McpToolProvider {
     title: 'Add a lane to a timeline',
     access: 'write',
     description:
-      'Adds a lane to a timeline document of a page inside the AI REPOSITORY. It touches only that timeline. Refused on ' +
-      'the chronology’s age timelines, which each have exactly one lane by design (their events are written with ' +
-      'create_timeline_event). A lane of the same name on the timeline is refused. Cost: 1 read (the lanes), 1 write, 1 ' +
-      'read to verify.',
+      'Adds a lane to an ordinary timeline document; it touches only that timeline. The chronology’s age timelines have exactly one lane and refuse more (their events are create_timeline_event). A lane of the same name is refused. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: 2 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: z.string().min(1).max(500).describe('The timeline document (name or id).'),

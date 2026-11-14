@@ -217,18 +217,7 @@ export function readDocumentTool(deps: ToolDeps): McpToolProvider {
     title: 'Read a page’s document',
     access: 'read',
     description:
-      'Reads one document of a page of the AI REPOSITORY as Markdown, ready to edit and write back: the Markdown (with keep regions for ' +
-      'anything Markdown cannot show), the document version, and the list of keep regions. `resource` is a page name or id; `document` ' +
-      'is a document name or id (default "Main"). `outline: true` returns only the headings with their section paths; ' +
-      '`section: "Biography > Early Life"` returns just that section (a heading that occurs twice is refused, with the options); ' +
-      '`format: "json"` returns the raw blocks instead. Maps, timelines and boards come back as read-only Markdown (features, lanes and ' +
-      'events, shapes and connections). Read get_markdown_guide before you write Markdown back. ' +
-      'Example: { "resource": "Asagiri Miyabi", "section": "Biography" }. ' +
-      'Cost: 1 read for a page or board, 2 for a map; a timeline needs 2 plus 1 per 100 events. A long page is stored and returned as a ' +
-      'handle for bridge_result_page. A MAP shows each feature’s type, name, position and link, and when the map has an image its ' +
-      'width, height and bounds in the header and each position in pixels too (from the image’s top-left corner; a region’s or ' +
-      'path’s points in pixels, summarised when long unless detail: "full"); a legacy tiled map has no pixels. A map costs 2 ' +
-      'reads.',
+      'Reads one document of a page as Markdown, ready to edit and write back with write_page: the text (keep regions for what Markdown cannot show), the document `version` (pass it as baseVersion) and the keep regions. `resource` is a page name or id; `document` defaults to Main. outline: true returns only the headings with their section paths; section: "Biography > Early Life" just that section (use these for long pages); format: "json" the raw blocks. Read get_markdown_guide before writing Markdown back. Maps, timelines and boards come back as read-only Markdown (a map with its image size, bounds and each position in pixels; change them with their own tools). Example: { "resource": "Asagiri Miyabi", "section": "Biography" }. Cost: 1 read (a map 2; a timeline 2 plus 1 per 100 events). A long page comes as a handle for bridge_result_page.',
     inputSchema: z.object({
       resource: z.string().min(1).max(500).describe('Page name or id.'),
       document: z.string().min(1).max(500).optional().describe('Document name or id. Default "Main".'),

@@ -118,11 +118,6 @@ export async function executeOne(
 
 // ------------------------------------------------------------------------------------------------ tools
 
-const DESTRUCTIVE_LIST = operations
-  .filter((o) => o.risk !== 'safe')
-  .map((o) => o.operationId)
-  .join(', ');
-
 export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
   const listOperations = defineTool({
     name: 'lk_api_list_operations',
@@ -130,9 +125,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'List LegendKeeper operations',
     access: 'read',
     description:
-      `Lists the ${operations.length} LegendKeeper API operations the bridge can run, filterable by tag and kind, ` +
-      'with a one-line summary, kind (read / write / upload), risk (safe / destructive / admin) and cost class. ' +
-      'Run an operation with lk_api_read (kind read) or lk_api_write (anything else). Cost: none (no LegendKeeper call). Risk: none.',
+      'Lists the 89 LegendKeeper operations, filterable by tag and kind, with kind, risk and cost class. For work no high-level tool does. Run an operation with lk_api_read (kind read) or lk_api_write (anything else). Cost: none.',
     inputSchema: z.object({
       tag: z
         .string()
@@ -181,8 +174,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Describe a LegendKeeper operation',
     access: 'read',
     description:
-      'Shows one operation in full: its input JSON Schema, risk, whether it is versioned (and which read gives the version), ' +
-      'and its rate costs. Call it before an unfamiliar write. Cost: none (no LegendKeeper call). Risk: none.',
+      'Shows one operation in full: its input schema, risk, whether it is versioned (and which read gives the version) and its rate costs. Call it before an unfamiliar write. Cost: none.',
     inputSchema: z.object({
       operationId: z.string().describe('For example "replaceDocumentBlocks".'),
       project: projectArg,
@@ -241,11 +233,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Run a LegendKeeper read',
     access: 'read',
     description:
-      'Runs ONE read operation (kind "read") by operationId through the governor. Cost: 1 read. Risk: none. ' +
-      'Refuses operations that change data (use lk_api_write) without spending budget. ' +
-      'Results are summaries (ids, names, counts, versions); pass detail "full" for whole payloads such as block trees. ' +
-      'Results over about 40,000 characters come back as a handle: page it with bridge_result_page. ' +
-      'Read before you write, and pass the version you read as params.ifMatch on the write.',
+      'Runs ONE read operation by `operationId` (the ids are listed under Operations in get_bridge_guide). The low-level fallback, for what no high-level tool does (for example listMembers); a name that is not an operation id is refused with suggestions. A write operation is refused (use lk_api_write) without spending budget. Results are summaries (detail "full" for whole payloads); over about 40,000 characters they come as a handle for bridge_result_page. Cost: 1 read.',
     inputSchema: z.object({
       operationId: z.string().describe('For example "getDocumentBlocks".'),
       params: paramsSchema.optional(),
@@ -270,14 +258,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Run a LegendKeeper write',
     access: 'write',
     description:
-      'Runs ONE operation that changes data (kind "write" or "upload", including createImageUpload and createImageAsset) ' +
-      'through the job engine and governor. Cost: 1 write (createManyResources also costs 1 item per entry). ' +
-      `Risk: varies per operation; destructive or admin: ${DESTRUCTIVE_LIST}. ` +
-      'Refuses read operations (use lk_api_read) without spending budget. ' +
-      'Read first and pass the version you read as params.ifMatch; the bridge refuses a stale version. ' +
-      'It also refuses a replace or block delete that would remove "unsupported" blocks (allowUnsupportedLoss overrides), and deleteResource ' +
-      'with cascade unless confirm is "cascade". If the result is waiting_budget, queued or proposal_captured, ' +
-      'the write is NOT lost and must NOT be retried: follow it with bridge_job_status.',
+      'Runs ONE operation that changes data, by `operationId`. The low-level fallback, for what no high-level tool does: pages, facts, creates, moves, deletes, documents, timelines and maps all have their own tools, which keep the repository’s ordering, canon and lifecycle rules (this tool applies only the engine’s guards). Read first and pass the version as params.ifMatch; a stale one is refused. A read operation is refused (use lk_api_read). A replace or block delete that would lose "unsupported" blocks is refused (allowUnsupportedLoss overrides: ask the person first), and so is deleteResource with cascade unless confirm is "cascade". At scope propose, or when it touches protected canon, it becomes a proposal. If the result is queued, waiting_budget or proposal_captured the write is NOT lost: never retry it, follow it with bridge_job_status or bridge_proposal_status. Cost: 1 write.',
     inputSchema: z.object({
       operationId: z.string().describe('For example "updateResource".'),
       params: paramsSchema.optional(),
@@ -318,11 +299,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Run LegendKeeper operations as a batch job',
     access: 'write',
     description:
-      'Submits an ordered list of operations as ONE persisted job (batch_ops) and returns { jobId, status, eta } at once. ' +
-      'onError "stop" (stopOnError, default) halts at the first failure; "continue" runs the rest. Prefer this for any multi-step work. ' +
-      'Cost: the sum of its steps, paced by the governor at job priority (it leaves headroom for interactive calls). ' +
-      'Risk: that of its riskiest step; every guard applies to every step, and the whole batch is refused up front if any step is invalid or not allowed. ' +
-      'Follow it with bridge_job_wait or bridge_job_status; never re-submit it.',
+      'Submits an ordered list of low-level operations as ONE persisted job and returns { jobId, status, eta } at once; onError "stop" (default) or "continue". Use it, not a loop of lk_api_write calls, for multi-step low-level work. Every step is checked before anything is queued. Follow it with bridge_job_wait or bridge_job_status; never resubmit it. Cost: the sum of its steps, at job priority.',
     inputSchema: z.object({
       calls: z
         .array(
@@ -382,10 +359,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Read every page of a LegendKeeper list',
     access: 'read',
     description:
-      'Follows every cursor of a paged list operation (listResources, listTemplates, listEvents, listAssets, listProjects) as a ' +
-      'paginate_all job: each page is a separate governed read at job priority. Returns { jobId, handle, eta } at once. ' +
-      'Cost: 1 read per page (up to 100 items). Risk: none. Wait with bridge_job_wait, then page the stored items with ' +
-      'bridge_result_page({ handle }); partial results are readable while it runs.',
+      'Follows every cursor of a paged list operation (listResources, listTemplates, listEvents, listAssets, listProjects) as a job and returns { jobId, handle } at once. Wait with bridge_job_wait, then read the items with bridge_result_page. Inside the repository prefer search, browse_repository_tree or list_assets. Cost: 1 read per page of 100.',
     inputSchema: z.object({
       operationId: z.string().describe('A paged read, e.g. "listResources".'),
       params: paramsSchema.optional(),

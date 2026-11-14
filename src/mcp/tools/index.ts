@@ -34,11 +34,14 @@ export { createUploadTransport } from './upload-http.js';
  * served by `get_bridge_guide` and as the resource lk-bridge://guides/bridge).
  */
 export const BRIDGE_INSTRUCTIONS =
-  'LK-Bridge gives governed access to LegendKeeper projects (list_projects); every tool takes an optional project, and a write must name its project when the bridge serves several. Call get_bridge_guide first: it explains projects, the repository tree, finding and reading pages, writing, budgets and proposals. ' +
-  'Find pages with search and browse_repository_tree, read them with get_resource and read_document (Markdown; see get_markdown_guide). ' +
-  "Every result names its project and ends with that project's budget line; budgets are finite, so never loop on budget errors, and check bridge_estimate before hundreds of calls. " +
-  'Never retry a write that returned waiting_budget, queued or proposal_captured: follow a job with bridge_job_status and a proposal with bridge_proposal_status. ' +
-  'Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page. The lk_api_* tools are the low-level fallback.';
+  'LK-Bridge gives governed access to LegendKeeper projects (list_projects). Every tool takes an optional project; a write must name its project when the bridge serves several.\n' +
+  'FIRST call get_bridge_guide with section "How to decide", then read its section for your task before you do it; read get_markdown_guide before writing Markdown. Every result names its project and ends with that project’s budget line.\n' +
+  'The four rules that matter most:\n' +
+  '1. Use the high-level tools (search, get_resource, read_document, write_page, set_facts, create_*); the lk_api_* tools are only the fallback for a job none of them does.\n' +
+  '2. Read before you write, and pass the version you read (baseVersion, baseFactsVersion). Never retry a write that returned proposal_captured, queued or waiting_budget: follow it with bridge_proposal_status or bridge_job_status.\n' +
+  '3. New pages are Working. Canon and lifecycle changes (promote_page, archive_page, deleting Authoritative pages) are always proposals only the owner can accept: tell the person, never route around it.\n' +
+  '4. Budgets are finite: never loop on an error, and check bridge_estimate before bulk work.\n' +
+  'Results are summaries (detail "full" opts in); oversized results come as handles for bridge_result_page.';
 
 export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: boolean }): McpToolProvider[] {
   return [

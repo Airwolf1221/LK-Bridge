@@ -44,24 +44,7 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a character',
     access: 'write',
     description:
-      'Creates a character’s pages by the bridge’s fixed rules. `status` (default "working"): the whole set goes under ' +
-      '[INDEX] Working: kind "core" gets [INDEX] {name} there with “[BWRK] {name} - Character Core” beneath it; kind ' +
-      '"compact" gets “[BWRK] {name} - Character Reference” directly under [INDEX] Working; it goes under its race only ' +
-      'when promoted (promote_page). TO BUILD A WORKING CHARACTER: create_character (kind "core", Working) first, then ' +
-      'create_resource (Working) for each specialist page (Art, Relationship, …) with `parent` = the character’s [INDEX] ' +
-      'the result names, one page at a time if you like; promote_page with subtree: true on that index then promotes the ' +
-      'whole set in one approval. "authoritative": under its race inside the Characters index, as [BSRC] (core: the ' +
-      'character’s own [INDEX] {name}, an existing one reused, with the Core beneath it; compact: directly under the race), ' +
-      'with Status Authoritative and the CANON tag: canon, so always a proposal only the owner can accept as canon. An ' +
-      'existing Core or Reference (under the race or under [INDEX] Working) is returned, not duplicated. In the same job ' +
-      'the page gets Reference Type, Subject, Canonical Display Name, Race / Species (exactly as given; Unestablished when ' +
-      'the race is unknown or omitted) and its Status, then your `facts` and `links`. An unknown or omitted race goes to ' +
-      'Undetermined / Unknown; a race given that does not resolve fails, whatever the status (it is never created, and ' +
-      'nothing is guessed). Two requests for the same character at once are refused as duplicates ' +
-      '(DUPLICATE_REQUEST). Example: { "kind": "core", "name": "Asagiri Ren", "race": "Foxian", "facts": { "Scope": ' +
-      '"Shrine guard" }, "project": "test" }. Cost: 1 read per template’s sidebar (Index and Core), 1 write per page, 1 read ' +
-      'and 1 write per fact for the Core or Reference, then the verify step (1 read per page, 1 listing per parent) and the ' +
-      'tree’s re-read; a returned existing page: 1 read.',
+      'Creates a character’s pages by fixed rules: kind "core" (an [INDEX] {name} with a Character Core under it) or "compact" (one Character Reference page, no index). `status` "working" (default): under [INDEX] Working as [BWRK]; the character goes under its race only when promoted. "authoritative": under its race as [BSRC]: canon, so always a proposal the owner accepts as canon. TO BUILD A WORKING CHARACTER: create_character (core, Working) first, then create_resource (Working) for each specialist page (Art, Relationship, …) with `parent` = the character’s [INDEX]; promote_page with subtree: true later promotes the whole set in one approval. An existing Core or Reference is returned, not duplicated. The bridge sets Reference Type, Subject, Canonical Display Name, Race / Species (as you give it) and Status, then your `facts` and `links`. A `race` that is unknown or omitted goes to Undetermined / Unknown; a race that does not resolve is refused (never created or guessed): ask the person. Two requests for the same character at once are refused (DUPLICATE_REQUEST: follow the first). dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Example: { "kind": "core", "name": "Asagiri Ren", "race": "Foxian", "facts": { "Scope": "Shrine guard" }, "project": "test" }. Cost: about 11 reads and 9 writes (a compact page 8 and 7; an existing page 1 and 0).',
     inputSchema: z.object({
       kind: z
         .enum(['core', 'compact'])

@@ -92,14 +92,6 @@ function placementInfo(state: MapState, verify: VerifyInput) {
     : undefined;
 }
 
-const COORDS_HELP =
-  'Coordinates: a pin or label takes `latlng` [lat, lng] OR `pixel` { x, y }; a region takes `points` (one polygon, 3 or ' +
-  'more) or `polygons` (several); a path takes `points` (2 or more); a folder takes none. Each point of `points` is ' +
-  '[lat, lng] or { x, y }, all one kind. Pixels count from the image’s TOP-LEFT corner and are converted with the map’s ' +
-  'live image (read_document shows each position both ways and the map’s width, height and bounds); they are refused on a ' +
-  'legacy tiled map (use latlng) and on a map with no image. Never both kinds in one request. Anything outside the image ' +
-  '(or the bounds) is refused unless allowOutside is true.';
-
 // ============================================================================================ create
 
 function createMapFeatureTool(deps: ToolDeps): McpToolProvider {
@@ -109,19 +101,7 @@ function createMapFeatureTool(deps: ToolDeps): McpToolProvider {
     title: 'Add a pin, label, region, path or folder to a map',
     access: 'write',
     description:
-      'Adds one feature to a MAP document of a page inside the AI REPOSITORY: a pin, label, region, path or folder. ' +
-      `${COORDS_HELP} ` +
-      '`link` (a page by name or id, or { page, document }) becomes the feature’s link: names resolve as write targets do ' +
-      '(an ambiguous name is refused with each candidate and its role), ids must exist and not be deleted. `folder` names ' +
-      'the parent folder (several folders of one name are refused with their paths). It goes at the END of its parent unless ' +
-      '`after` or `before` names a sibling: the bridge never sorts a map alphabetically (the owner orders it by hand) and ' +
-      'computes the rank between the real neighbours. `style` takes LegendKeeper’s style fields, checked against its enums ' +
-      'and formats (iconGlyph, iconColor, iconShape, iconSize, pinImage, color, fillOpacity, fillStyle, borderStyle, ' +
-      'strokeWidth, strokeStyle, strokeOpacity, textColor, textEffect, textEffectColor, labelSize, labelVisibility, ' +
-      'visibilityRange); `hidden` hides it. A page just created in the app can take a few seconds to become linkable. ' +
-      'The map is identified by `page` plus `document` (name or id; optional when the page has one map). A blank document ' +
-      'is not a map yet: give it an image with update_document. Ordinary edit, not canon-gated. Cost: 4 reads to plan (the ' +
-      'map’s settings, its features, +1 per link), then 2 reads to check inside the lock, 1 write and 1 read to verify.',
+      'Adds one feature to a MAP document: a pin, label, region, path or folder. Give coordinates in ONE system per request: `pixel` { x, y }, counted from the image’s TOP-LEFT corner (use these when working from the image: read_document shows each position and the map’s size), or `latlng` [lat, lng]. A pin or label takes one position; a region `points` (3 or more) or `polygons`; a path `points` (2 or more); a folder none. Pixels need a map with an image (not a legacy tiled map); anything outside the image is refused unless allowOutside. `link` is a page by name or id (an ambiguous name is refused with the candidates), `folder` the parent folder, `style` LegendKeeper’s style fields. A feature goes at the END of its parent unless `after` or `before` names a sibling: maps are never sorted. `page` plus `document` identify the map (document is optional when the page has one). A blank document is not a map yet: give it an image with update_document. An ordinary edit, not canon-gated. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 7 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: refArg
@@ -257,16 +237,7 @@ function updateMapFeatureTool(deps: ToolDeps): McpToolProvider {
     title: 'Change a map feature',
     access: 'write',
     description:
-      'Changes one feature of a MAP document of a page inside the AI REPOSITORY: its name, coordinates, link, folder, ' +
-      'place, style or hidden flag. Only what you give changes; an unchanged setting sends nothing. Identify the feature by ' +
-      '`feature` (its id, or its name; add `featureFolder`, the folder it is in now, or null for the top level, when a name ' +
-      'occurs more than once: an ambiguous name is refused with each candidate). `folder` moves it into another folder (a ' +
-      'name or id) or to the top level (null; to verify on the live map); it goes to the end of its new parent unless ' +
-      '`after` or `before` names a sibling there. `link` sets the link (as in create_map_feature) and `link: null` clears ' +
-      'it. A feature’s type is not changed (delete and add instead). ' +
-      `${COORDS_HELP} ` +
-      'A region keeps the polygon field it already uses. Ordinary edit, not canon-gated. Cost: 4 reads to plan (+1 per ' +
-      'link), then 2 reads to check inside the lock, 1 write and 1 read to verify.',
+      'Changes one feature of a MAP document: its name, coordinates, link, folder, place, style or hidden flag; only what you give changes. Name it with `feature` (its id, or its name; add `featureFolder` when a name occurs more than once, or null for the top level). Coordinates, link and folder work as in create_map_feature (`pixel` or `latlng`, never both); `link: null` clears the link and `folder: null` moves it to the top level. A feature’s type cannot change (delete and add instead). An ordinary edit, not canon-gated. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 7 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: refArg
@@ -453,15 +424,7 @@ function deleteMapFeatureTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete a map feature',
     access: 'write',
     description:
-      'Deletes one feature of a MAP document of a page inside the AI REPOSITORY. `confirm: true` is required. Identify the ' +
-      'feature as update_map_feature does (`feature` by id or name, with `featureFolder` to narrow a name). A folder that ' +
-      'holds features is refused unless `cascade: true`: LegendKeeper does not delete a folder’s features with it (they ' +
-      'would be left pointing at a folder that is gone), so with cascade the bridge deletes them first, deepest first, then ' +
-      'the folder, as one job. The answer lists everything removed, and the journal keeps every removed feature in full ' +
-      '(bridge_journal_lookup), so each can be added again. A stopped cascade is resumed, never replayed: ask again and ' +
-      'only what is left is deleted. Ordinary edit, not canon-gated (deleting the whole map document of an Authoritative ' +
-      'page is, with delete_document). Cost: 4 reads to plan, then 2 to check inside the lock, 1 read and 1 write per ' +
-      'feature deleted, and 1 read to verify.',
+      'Deletes one feature of a MAP document; `confirm: true` is required. Name it as update_map_feature does. A folder that holds features is refused unless `cascade: true`, which deletes them deepest first as one job; the answer lists everything removed and the journal keeps each feature in full. A stopped cascade resumes when you ask again. Deleting the whole map document is delete_document. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 8 reads and 1 write per feature.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: refArg
