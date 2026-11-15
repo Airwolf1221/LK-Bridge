@@ -22,6 +22,7 @@ import {
 } from '../../facts/index.js';
 import { VERIFY_STEP, type VerifyTarget } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
+import { canonExemptionUnder } from '../../lifecycle/settings.js';
 import { cleanPrefixes, fillName, key } from '../../registry/names.js';
 import { SiblingSim, orderItems } from '../../resources/plan.js';
 import {
@@ -606,6 +607,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
             cc.lifecycle,
             [...(cc.templateTags.get(tpl.id) ?? []), ...(args.tags ?? [])],
             status,
+            parent.value,
           );
           return finishCreate(cc, [{ ...page, facts: facts.value, tags }], {
             batch: false,
@@ -721,7 +723,10 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
               },
             );
           }
-          const tags = n.status !== null ? withStatusTag(cc.lifecycle, args.tags ?? [], n.status) : args.tags;
+          const tags =
+            n.status !== null
+              ? withStatusTag(cc.lifecycle, args.tags ?? [], n.status, parent.value)
+              : args.tags;
           const page = newPage({
             key: 'page',
             rawName: n.rawName,
@@ -1010,6 +1015,28 @@ function createManyResourcesTool(deps: ToolDeps): McpToolProvider {
                 )
               : p.tags;
             withFacts.push({ ...p, facts: f.value, ...(tags ? { tags } : {}) });
+          }
+          // E5.3 (ADR 0046 decision 13): an Authoritative item beneath an index whose pages are Authoritative without
+          // CANON (through its chain of item parents to the existing page it is made beneath) gets no CANON tag.
+          const existingUnder = (q: NewPage): TreeNode | null => {
+            const hops = new Set<string>();
+            for (let cur: NewPage | undefined = q; cur && !hops.has(cur.key);) {
+              hops.add(cur.key);
+              if ('existing' in cur.parent)
+                return ctx.tree.node(ctx.projectId, cur.parent.existing).data ?? null;
+              cur = byKey.get(cur.parent.item);
+            }
+            return null;
+          };
+          for (let i = 0; i < withFacts.length; i++) {
+            const q = withFacts[i]!;
+            if (q.status === 'authoritative' && q.tags && canonExemptionUnder(cc.lifecycle, existingUnder(q)))
+              withFacts[i] = {
+                ...q,
+                tags: q.tags.filter(
+                  (t) => t.toLocaleLowerCase('en-GB') !== cc.lifecycle.tags.canon.toLocaleLowerCase('en-GB'),
+                ),
+              };
           }
           return finishCreate(cc, withFacts, {
             batch: true,

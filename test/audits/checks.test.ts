@@ -8,7 +8,14 @@
 import { describe, expect, it } from 'vitest';
 import { chronologyCheck, keepRegionsCheck, lifecycleCheck } from '../../src/audits/checks/lifecycle.js';
 import { orderingCheck, referencesCheck, unclassifiedCheck } from '../../src/audits/checks/references.js';
-import { factsCheck, taxonomyCheck } from '../../src/audits/checks/taxonomy.js';
+import {
+  distinctiveWords,
+  factsCheck,
+  GENERIC_REFERENCE_TYPE_WORDS,
+  raceAnchors,
+  resemblesRegistryValue,
+  taxonomyCheck,
+} from '../../src/audits/checks/taxonomy.js';
 import type { CheckRun } from '../../src/chronology/store.js';
 import { characterType, codes, context, entry, mention, model, page, ROOT, scan } from './helpers.js';
 
@@ -346,7 +353,9 @@ describe('fact consistency', () => {
       parent: 'chars',
       facts: { 'Reference Type': 'Character Dossier' },
     });
-    const out = factsCheck(ctxOf([p]));
+    // “Character Dossier” resembles no registry value ({character, dossier} is in neither), so only strict mode flags it.
+    expect(factsCheck(ctxOf([p]))).toEqual([]);
+    const out = factsCheck(ctxOf([p], { strictReferenceTypes: true }));
     expect(codes(out)).toEqual(['unknown_reference_type']);
     expect(out[0]!.fix).toBeUndefined();
     expect(out[0]!.evidence).toMatchObject({ expected: null });
@@ -737,5 +746,312 @@ describe('the chronology fold-in', () => {
     expect(codes(chronologyCheck(context(model([ROOT]), { chronologyConfigured: true })))).toEqual([
       'chronology_not_checked',
     ]);
+  });
+});
+
+// ============================================================================================ 15 Nov: Arkona's first audit
+
+describe('“resembles” means what the setting says (Arkona, 15 Nov)', () => {
+  const type = characterType();
+  const ctxOf = (pages: ReturnType<typeof page>[], settings = {}) =>
+    context(model([ROOT, page({ id: 'chars', name: '[INDEX] Characters', parent: 'root' }), ...pages]), {
+      types: [type],
+      settings,
+    });
+  const withRt = (id: string, name: string, rt: string) =>
+    page({ id, name: `[BSRC] ${name}`, parent: 'chars', facts: { 'Reference Type': rt } });
+
+  it('the generic words are a documented constant; distinctive words drop them', () => {
+    expect(GENERIC_REFERENCE_TYPE_WORDS).toEqual(['reference', 'references', 'the', 'and', 'of', 'a', 'an']);
+    expect([...distinctiveWords('The Annals of a Reference')]).toEqual(['annals']);
+  });
+
+  it('(a) the same words in other letters, (b) the page’s name pattern, (c) a subset of one value’s distinctive words', () => {
+    const reg = ['Character Core', 'Compact Character Reference'];
+    expect(resemblesRegistryValue('CharacterCore', reg, false)).toBe(true);
+    expect(resemblesRegistryValue('Historical Character Reference', reg, true)).toBe(true);
+    expect(resemblesRegistryValue('Historical Character Reference', reg, false)).toBe(false);
+    expect(resemblesRegistryValue('Character Reference', reg, false)).toBe(true);
+    expect(resemblesRegistryValue('Compact Reference', reg, false)).toBe(true);
+    for (const v of [
+      'Continent Reference',
+      'Character Biography',
+      'Relationship',
+      'Reference',
+      'The Reference',
+    ])
+      expect(resemblesRegistryValue(v, reg, false)).toBe(false);
+  });
+
+  it('“Character Reference” on a page with no name pattern is near, with no fix (it fits both registry values)', () => {
+    const out = factsCheck(ctxOf([withRt('cr', 'Somebody', 'Character Reference')]));
+    expect(codes(out)).toEqual(['unknown_reference_type']);
+    expect(out[0]!.evidence).toMatchObject({ expected: null });
+    expect(out[0]!.fix).toBeUndefined();
+  });
+
+  it('“Historical Character Reference” on “Mehrana I al-Khalid - Character Core”: near by its name, fixed to Character Core', () => {
+    const p = page({
+      id: 'mi',
+      name: '[BSRC] Mehrana I al-Khalid - Character Core',
+      parent: 'chars',
+      facts: { 'Reference Type': 'Historical Character Reference', Subject: 'Mehrana I al-Khalid' },
+    });
+    const out = factsCheck(ctxOf([p]));
+    expect(codes(out)).toEqual(['unknown_reference_type']);
+    expect(out[0]!.evidence).toMatchObject({
+      found: 'Historical Character Reference',
+      expected: 'Character Core',
+    });
+    expect(out[0]!.fix).toMatchObject({
+      kind: 'set_facts',
+      args: {
+        pageId: 'mi',
+        facts: { 'Reference Type': 'Character Core' },
+        expectedCurrent: { 'Reference Type': 'Historical Character Reference' },
+      },
+    });
+  });
+
+  it('the owner’s examples are not flagged with strict mode off; strict mode still flags every unknown value', () => {
+    const pages = [
+      withRt('c1', 'Velmar Expanse', 'Continent Reference'),
+      withRt('c2', 'Saltmarsh Folk', 'Culture Reference'),
+      withRt('c3', 'The Ninefold War', 'Historical Cross-National Conflict Reference'),
+      withRt('c4', 'Wardstone Casting', 'Magical Applications Reference'),
+      withRt('c5', 'Ash Strider', 'Creature Reference'),
+      withRt('c6', 'Orrin Tale', 'Character Biography'),
+      withRt('c7', 'Orrin and Pell', 'Relationship'),
+    ];
+    expect(factsCheck(ctxOf(pages))).toEqual([]);
+    const strict = factsCheck(ctxOf(pages, { strictReferenceTypes: true }));
+    expect(strict.map((d) => d.pageId)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']);
+    expect(strict.every((d) => d.code === 'unknown_reference_type' && d.fix === undefined)).toBe(true);
+    expect(find(strict, 'unknown_reference_type').evidence).toMatchObject({
+      found: 'Continent Reference',
+      expected: null,
+    });
+  });
+
+  it('regression: an Arkona-like repository of free-form “… Reference” types gives no unknown_reference_type', () => {
+    const kinds = [
+      'Continent',
+      'Culture',
+      'Historical Cross-National Conflict',
+      'Magical Applications',
+      'Creature',
+      'Nation',
+      'City',
+      'Religion',
+      'Deity',
+      'Language',
+      'Artefact',
+      'Organisation',
+      'Dynasty',
+      'Battle',
+      'Treaty',
+      'Calendar',
+      'Plant',
+      'Mineral',
+      'Trade Route',
+      'Mythic Event',
+      'Ancient Lineage',
+      'Regional Cuisine',
+    ];
+    const pages = kinds.flatMap((k, i) => [
+      withRt(`p${i}a`, `Synthetic ${k} ${i}`, `${k} Reference`),
+      withRt(`p${i}b`, `Another ${k} ${i}`, `${k} Reference`),
+    ]);
+    // Real character pages sit beside them and stay fine.
+    pages.push(
+      page({
+        id: 'ok',
+        name: '[BSRC] Ilsa Varn - Character Core',
+        parent: 'chars',
+        facts: { 'Reference Type': 'Character Core', Subject: 'Ilsa Varn' },
+      }),
+    );
+    expect(new Set(kinds).size).toBeGreaterThanOrEqual(20);
+    expect(factsCheck(ctxOf(pages)).filter((d) => d.code === 'unknown_reference_type')).toEqual([]);
+  });
+});
+
+describe('race values read by their anchor (Arkona, 15 Nov)', () => {
+  const type = characterType();
+  const chars = page({ id: 'chars', name: '[INDEX] Characters', parent: 'root' });
+  const idx = (id: string, name: string, parent = 'chars') => page({ id, name: `[INDEX] ${name}`, parent });
+  const indexes = [
+    idx('hum', 'Humans'),
+    idx('high', 'High Humans', 'hum'),
+    idx('ther', 'Therians'),
+    idx('fae', 'Faeries'),
+    idx('fox', 'Foxians'),
+    idx('elf', 'Elves'),
+    idx('sea', 'Sea Elves', 'elf'),
+    idx('dw', 'Dwarves'),
+    idx('half', 'Half-Elves'),
+    idx('beasts', 'Heavenly Beasts'),
+  ];
+  const entries = [
+    entry('e-hum', 'Humans', 'Human', 'hum'),
+    entry('e-high', 'High Humans', 'High Human', 'high', { parentId: 'e-hum', sourceParentNodeId: 'hum' }),
+    entry('e-ther', 'Therians', 'Therian', 'ther'),
+    entry('e-fae', 'Faeries', 'Faerie', 'fae'),
+    entry('e-fox', 'Foxians', 'Foxian', 'fox'),
+    entry('e-elf', 'Elves', 'Elf', 'elf'),
+    entry('e-sea', 'Sea Elves', 'Sea Elf', 'sea', { parentId: 'e-elf', sourceParentNodeId: 'elf' }),
+    entry('e-dw', 'Dwarves', 'Dwarf', 'dw'),
+    entry('e-half', 'Half-Elves', 'Half-Elf', 'half'),
+    entry('e-beasts', 'Heavenly Beasts', 'Heavenly Beast', 'beasts'),
+  ];
+  let n = 0;
+  const core = (race: string, parent: string) => {
+    const id = `r${n++}`;
+    return page({
+      id,
+      name: `[BSRC] Person ${id} - Character Core`,
+      parent,
+      facts: { 'Reference Type': 'Character Core', Subject: `Person ${id}`, 'Race / Species': race },
+    });
+  };
+  const run = (pages: ReturnType<typeof page>[], es = entries) =>
+    taxonomyCheck(context(model([ROOT, chars, ...indexes, ...pages]), { types: [type], entries: es })).filter(
+      (d) => d.code === 'race_not_in_taxonomy' || d.code === 'race_index_mismatch',
+    );
+
+  it('the anchor: before the first “(”, “;” or “-”, trimmed; a hyphenated name is tried whole as well', () => {
+    expect(raceAnchors('Therian (Aggeloi)')).toEqual(['Therian']);
+    expect(raceAnchors('Fire Genie (Elemental Genie; Genie race)')).toEqual(['Fire Genie']);
+    expect(raceAnchors('Sea Elf (contemporary classification; predates Sea Elves as a species)')).toEqual([
+      'Sea Elf',
+    ]);
+    expect(raceAnchors('Half-Elf (Northern)')).toEqual(['Half', 'Half-Elf']);
+    expect(raceAnchors('Human')).toEqual([]);
+    expect(raceAnchors('(Unknown)')).toEqual([]);
+  });
+
+  it('qualified values match by their anchor; placement is still checked', () => {
+    const ok = [
+      core('High Human (Human subrace)', 'high'),
+      core('Therian (Aggeloi)', 'ther'),
+      core('Therian (Aggeloi)', 'ther'),
+      core('Therian (Aggeloi)', 'ther'),
+      core('Faerie (Fairy)', 'fae'),
+      core('Foxian (nine-tailed Kitsune)', 'fox'),
+      core('Sea Elf (contemporary classification; predates Sea Elves as a species)', 'sea'),
+      core('Half-Elf (Northern)', 'half'),
+      core('Therian; Aggeloi', 'ther'),
+      core('Dwarf - hill clan', 'dw'),
+    ];
+    expect(run(ok)).toEqual([]);
+    // A match by anchor under another race’s index is a placement finding, as a full match is.
+    const misplaced = core('Therian (Aggeloi)', 'dw');
+    const out = run([misplaced]);
+    expect(codes(out)).toEqual(['race_index_mismatch']);
+    expect(out[0]).toMatchObject({
+      pageId: misplaced.id,
+      evidence: { entry: 'Therians', sitsUnder: 'Dwarves' },
+    });
+  });
+
+  it('no entry for the anchor: still a finding, naming the anchor tried; the last word is never guessed', () => {
+    const genies = [idx('gen', 'Genies')];
+    const withGenies = [...entries, entry('e-gen', 'Genies', 'Genie', 'gen')];
+    const pages = [
+      core('Fire Genie (Elemental Genie; Genie race)', 'chars'),
+      core('Wishmaker Genie (Genie)', 'chars'),
+      core(
+        'Unique draconic Heavenly Beast (Celestial Jade Dragon); no ordinary roster race, not a True Dragon',
+        'chars',
+      ),
+    ];
+    const out = taxonomyCheck(
+      context(model([ROOT, chars, ...indexes, ...genies, ...pages]), { types: [type], entries: withGenies }),
+    ).filter((d) => d.code === 'race_not_in_taxonomy');
+    expect(out.map((d) => (d.evidence as { anchor: string }).anchor)).toEqual([
+      'Fire Genie',
+      'Wishmaker Genie',
+      'Unique draconic Heavenly Beast',
+    ]);
+    expect(out[0]!.message).toContain('“Fire Genie”');
+    expect(out[0]!.message).toContain('Repository Mappings');
+    // An unqualified value names no anchor.
+    const plain = run([core('Foxan', 'fox')]);
+    expect(plain[0]!.evidence).toMatchObject({ race: 'Foxan', anchor: null });
+  });
+
+  it('an alias the owner adds in Repository Mappings makes the anchor match', () => {
+    const withAlias = [
+      ...entries.filter((e) => e.id !== 'e-hum'),
+      entry('e-hum', 'Humans', 'Human', 'hum', { aliases: ['Wishmaker Genie'] }),
+    ];
+    expect(run([core('Wishmaker Genie (Genie)', 'hum')], withAlias)).toEqual([]);
+  });
+});
+
+describe('Authoritative without CANON beneath a listed index (Design References, 15 Nov)', () => {
+  const lifecycle = {
+    workingIndexId: 'work',
+    archiveIndexId: 'arch',
+    canonExemptIndexes: ['b034ef351290dfba28e292b0'],
+  };
+  const design = page({ id: 'b034ef351290dfba28e292b0', name: '[INDEX] Design References', parent: 'root' });
+  const nested = page({ id: 'craft', name: '[INDEX] Craft', parent: design.id });
+  const base = [
+    ROOT,
+    page({ id: 'work', name: '[INDEX] Working', parent: 'root' }),
+    page({ id: 'arch', name: '[INDEX] Archived', parent: 'root' }),
+    page({ id: 'chars', name: '[INDEX] Characters', parent: 'root' }),
+    design,
+    nested,
+  ];
+  const run = (pages: ReturnType<typeof page>[], o: Parameters<typeof context>[1] = {}) =>
+    lifecycleCheck(context(model([...base, ...pages]), { lifecycle, ...o }));
+  const bsrc = (id: string, name: string, parent: string, tags: string[]) =>
+    page({ id, name: `[BSRC] ${name}`, parent, facts: { Status: 'Authoritative' }, tags });
+
+  it('the two pages’ shape (Authoritative, no CANON) gives no finding, at any depth', () => {
+    expect(
+      run([
+        bsrc('fic', 'Arkona – Fiction Writing Reference', design.id, ['reference']),
+        bsrc('nar', 'Arkona – Narrative Story Planning & Drafting Workflow', nested.id, []),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('CANON there is itself a lifecycle_inconsistent problem, naming the area', () => {
+    const out = run([bsrc('fic', 'Arkona – Fiction Writing Reference', design.id, ['CANON'])]);
+    expect(codes(out)).toEqual(['lifecycle_inconsistent']);
+    expect(out[0]!.message).toContain('no CANON (Design References area)');
+    expect(out[0]!.evidence).toMatchObject({
+      canonExemptArea: { id: design.id, name: 'Design References' },
+      problems: [{ signal: 'tag', expected: 'no CANON (Design References area)' }],
+    });
+  });
+
+  it('a page outside the area still needs CANON; Status and the other status tags are still checked inside it', () => {
+    const out = run([
+      bsrc('taraji', 'Taraji al-Mizan', 'chars', []),
+      page({
+        id: 'st',
+        name: '[BSRC] Wrong Status',
+        parent: design.id,
+        facts: { Status: 'Working' },
+        tags: [],
+      }),
+      bsrc('wt', 'Working Tag', design.id, ['Working']),
+    ]);
+    expect(out.map((d) => d.pageId).sort()).toEqual(['st', 'taraji', 'wt']);
+    expect(out.find((d) => d.pageId === 'taraji')!.evidence).toMatchObject({
+      problems: [{ signal: 'tag', expected: 'CANON' }],
+    });
+    expect(out.find((d) => d.pageId === 'taraji')!.evidence).not.toHaveProperty('canonExemptArea');
+  });
+
+  it('with the list empty (the default) the pages need CANON as before', () => {
+    const out = run([bsrc('fic', 'Fiction', design.id, [])], {
+      lifecycle: { ...lifecycle, canonExemptIndexes: [] },
+    });
+    expect(codes(out)).toEqual(['lifecycle_inconsistent']);
   });
 });

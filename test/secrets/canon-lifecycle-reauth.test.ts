@@ -66,3 +66,31 @@ describe('re-authentication for the canon rules and the lifecycle settings', () 
     expect((await rulesNow()).rules[0]!.enabled).toBe(false);
   });
 });
+
+describe('E5.3: the indexes whose pages are Authoritative without CANON (ADR 0046 decision 13)', () => {
+  it('saving the list needs re-authentication like the other lifecycle settings; an id that is no index is refused', async () => {
+    const s = (m = await startManaged({ lk: [{ name: 'alpha' }], envProjects: ['alpha'] }));
+    const body = { confirm: true, canonExemptIndexes: [] as string[] };
+    const refused = await s.admin.put('/projects/alpha/lifecycle', {
+      ...body,
+      canonExemptIndexes: ['desref01'],
+    });
+    expect(refused.status).toBe(403);
+    expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
+    expect(s.stack.audit('project.set_lifecycle')).toEqual([]);
+    expect((await s.admin.get('/projects/alpha/lifecycle')).json.config.canonExemptIndexes).toEqual([]);
+
+    expect((await s.reauth()).status).toBe(200);
+    // Not an index in this project's tree: refused with the reason, nothing saved.
+    const unknown = await s.admin.put('/projects/alpha/lifecycle', {
+      ...body,
+      canonExemptIndexes: ['nowhere1'],
+    });
+    expect(unknown.status).toBe(400);
+    expect(unknown.json.error.code).toBe('INDEX_NOT_FOUND');
+    const saved = await s.admin.put('/projects/alpha/lifecycle', body);
+    expect(saved.status, saved.text).toBe(200);
+    expect(saved.json.config.canonExemptIndexes).toEqual([]);
+    expect(s.stack.audit('project.set_lifecycle')).toHaveLength(1);
+  });
+});

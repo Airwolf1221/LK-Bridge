@@ -227,6 +227,20 @@ export function createLifecycle(d: LifecycleDeps): Lifecycle {
         );
       }
     }
+    // E5.3: an index whose pages are Authoritative without CANON must be an index in the tree, and not a lifecycle index.
+    for (const id of patch.canonExemptIndexes ?? []) {
+      const n = node(projectId, id);
+      if (!n || n.kind !== 'index')
+        throw new LifecycleError(
+          'INDEX_NOT_FOUND',
+          `${id} is not an [INDEX] in the repository tree, so its pages cannot be Authoritative without ${next.tags.canon}.`,
+        );
+      if (id === next.workingIndexId || id === next.archiveIndexId)
+        throw new LifecycleError(
+          'INVALID_SETTING',
+          `${n.rawName} is a lifecycle index; the Working and Archived areas keep their own rules.`,
+        );
+    }
     if (next.workingIndexId && next.archiveIndexId) {
       const check = lifecycleIndexes(next, (id) => node(projectId, id));
       if (!check.ok) throw new LifecycleError(check.code, check.message);

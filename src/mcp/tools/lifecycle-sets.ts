@@ -35,6 +35,7 @@ import type { LifecycleMarker, OpParams, StepSpec } from '../../jobs/index.js';
 import { mintClientId } from '../../jobs/ids.js';
 import {
   archivedScope,
+  canonExemptionUnder,
   fillText,
   isoDate,
   lifecycleIndexes,
@@ -510,6 +511,17 @@ async function planSet(
       );
     }
 
+    // E5.3 (ADR 0046 decision 13): a set made Authoritative beneath an index whose pages are Authoritative without
+    // CANON gets no CANON tag (its pages and its indexes alike).
+    const exemptUnder =
+      toState === 'authoritative'
+        ? canonExemptionUnder(c, ctx.tree.node(pid, rootParent).data ?? null)
+        : null;
+    if (exemptUnder)
+      flags.push(
+        `goes beneath ${ctx.tree.node(pid, exemptUnder).data?.rawName ?? exemptUnder}, whose pages are Authoritative without ${c.tags.canon}: no ${c.tags.canon} tag is added`,
+      );
+    const addTag = (t: string) => (exemptUnder && same(t, c.tags.canon) ? [] : [t]);
     // Each page's own target.
     const archRecs = setRecordOf
       ? new Map(lc.store.setRecords(pid, setRecordOf.id).map((x) => [x.pageId, x]))
@@ -572,7 +584,7 @@ async function planSet(
                     ...(keepCt ? {} : { continuityType: c.continuityTypes.canon }),
                   },
           tagsRemove: [stateTag(c, fromState)],
-          tagsAdd: [stateTag(c, to)],
+          tagsAdd: addTag(stateTag(c, to)),
         };
       } else {
         // unarchive: from each page's own record of the set's archiving.
@@ -619,7 +631,7 @@ async function planSet(
               lastMajorRevision: date,
             },
             tagsRemove: [c.tags.archived],
-            tagsAdd: [stateTag(c, back)],
+            tagsAdd: addTag(stateTag(c, back)),
             ...(note ? { note } : {}),
           };
         } else {
@@ -628,7 +640,9 @@ async function planSet(
             parentId,
             facts: {},
             tagsRemove: [c.tags.archived],
-            tagsAdd: rec.tagsRemoved.length > 0 ? [...rec.tagsRemoved] : [stateTag(c, back)],
+            tagsAdd: (rec.tagsRemoved.length > 0 ? [...rec.tagsRemoved] : [stateTag(c, back)]).flatMap(
+              addTag,
+            ),
             ...(note ? { note } : {}),
           };
         }

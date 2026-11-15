@@ -4,7 +4,8 @@
  * **Lifecycle** (exactly as the E2 row states, C2d's set exception included). Every content page's prefix, Status,
  * status tag and location agree:
  *
- * - `[BSRC]` / Authoritative / CANON / its normal place (outside both lifecycle areas);
+ * - `[BSRC]` / Authoritative / CANON / its normal place (outside both lifecycle areas); beneath an index the owner lists
+ *   as Authoritative without CANON (E5.3, "Design References"), `[BSRC]` / Authoritative / no CANON;
  * - `[BWRK]` / Working / Working / directly under `[INDEX] Working`;
  * - `[BARC]` / Archived / Archived / directly under `[INDEX] Archived`;
  *
@@ -21,7 +22,7 @@
  * **Chronology**: D1's `chronology-check` findings, taken from its last stored run, each kind its own code. Nothing is
  * re-implemented and nothing is read from LegendKeeper: the check is a separate job with its own schedule.
  */
-import { areaOf } from '../../lifecycle/settings.js';
+import { areaOf, canonExemptionOfPage } from '../../lifecycle/settings.js';
 import { contentPages, fact, factAmbiguous, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
 import { nameKey } from '../model.js';
@@ -95,7 +96,26 @@ export function lifecycleCheck(ctx: AuditContext): FindingDraft[] {
       });
     else if ((statusRow ?? '').trim().toLowerCase() !== lc.status[state].trim().toLowerCase())
       problems.push({ signal: 'status', expected: lc.status[state], found: statusRow });
-    if (!hasTag(p, tagOf[state])) problems.push({ signal: 'tag', expected: tagOf[state], found: p.tags });
+    // E5.3 (ADR 0046 decision 13): beneath an index the owner lists, a [BSRC] page is Authoritative WITHOUT CANON.
+    const exemptId = state === 'authoritative' ? canonExemptionOfPage(lc, node) : null;
+    const exempt = exemptId
+      ? {
+          id: exemptId,
+          name:
+            ctx.model.pages.get(exemptId)?.displayName ??
+            ctx.snapshotTree.node(exemptId)?.displayName ??
+            exemptId,
+        }
+      : null;
+    if (exempt) {
+      if (hasTag(p, tagOf.authoritative))
+        problems.push({
+          signal: 'tag',
+          expected: `no ${tagOf.authoritative} (${exempt.name} area)`,
+          found: p.tags,
+        });
+    } else if (!hasTag(p, tagOf[state]))
+      problems.push({ signal: 'tag', expected: tagOf[state], found: p.tags });
     for (const other of ['authoritative', 'working', 'archived'] as const)
       if (other !== state && hasTag(p, tagOf[other]))
         problems.push({ signal: 'tag', expected: `not ${tagOf[other]}`, found: p.tags });
@@ -133,7 +153,13 @@ export function lifecycleCheck(ctx: AuditContext): FindingDraft[] {
         code === 'lifecycle_set_inconsistent'
           ? `“${p.rawName}” sits under a ${area} set’s index, so it should be ${PREFIX[area as State]}; it is ${PREFIX[state]}.`
           : `${PREFIX[state]} page: ${problems.map((x) => `${x.signal} should be ${typeof x.expected === 'string' ? `“${x.expected}”` : JSON.stringify(x.expected)}`).join('; ')}.`,
-      evidence: { prefix: PREFIX[state], area, ...(underSet ? { set: true } : {}), problems },
+      evidence: {
+        prefix: PREFIX[state],
+        area,
+        ...(underSet ? { set: true } : {}),
+        ...(exempt ? { canonExemptArea: exempt } : {}),
+        problems,
+      },
     });
   }
 

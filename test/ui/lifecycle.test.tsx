@@ -132,6 +132,39 @@ describe('the Lifecycle section of the Projects page', () => {
   });
 });
 
+describe('E5.3: indexes whose pages are Authoritative without CANON', () => {
+  it('saves the list of index ids with the other lifecycle settings, after a confirmation', async () => {
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /projects/baisheng/canon': canon,
+      'GET /projects/test/canon': { ...canon, project: 'test' },
+      'GET /projects/baisheng/lifecycle': lifecycle({ config: { ...config, canonExemptIndexes: [] } }),
+      'GET /projects/test/lifecycle': lifecycle({ project: 'test' }),
+      'PUT /projects/baisheng/lifecycle': lifecycle({
+        config: { ...config, canonExemptIndexes: ['b034ef351290dfba28e292b0'] },
+      }),
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/projects');
+    const card = await screen.findByRole('region', { name: 'Lifecycle of baisheng' });
+    const group = await within(card).findByRole('group', {
+      name: 'Indexes whose pages are Authoritative without CANON',
+    });
+    const save = within(group).getByRole('button', { name: 'Save' });
+    expect(save).toBeDisabled();
+    await user.type(within(group).getByLabelText('Index ids'), 'b034ef351290dfba28e292b0');
+    await user.click(save);
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('Authoritative without CANON');
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.find('PUT', '/projects/baisheng/lifecycle')).toHaveLength(1));
+    expect(api.find('PUT', '/projects/baisheng/lifecycle')[0]!.body).toEqual({
+      canonExemptIndexes: ['b034ef351290dfba28e292b0'],
+      confirm: true,
+    });
+  });
+});
+
 describe('the Canon card: the two recommended rules', () => {
   it('describes them and switches one off, after a confirmation', async () => {
     const api = installApi({

@@ -25,7 +25,12 @@ import { requestHash } from '../../resources/requests.js';
 import { classifyName } from '../../tree/classify.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { LifecycleMarker } from '../../jobs/index.js';
-import { lifecycleFrom, lifecycleIndexes, type LifecycleConfig } from '../../lifecycle/settings.js';
+import {
+  canonExemptionUnder,
+  lifecycleFrom,
+  lifecycleIndexes,
+  type LifecycleConfig,
+} from '../../lifecycle/settings.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import { liveRead, resolvePage, type RepoCtx } from './repo.js';
 import { resolveLink, type LinkRef } from './set-facts.js';
@@ -245,13 +250,16 @@ export function withStatusTag(
   c: LifecycleConfig,
   tags: readonly string[],
   status: CreateStatus | 'archived' | null,
+  /** E5.3: the existing node the page is made beneath; an Authoritative page beneath an exempt index gets no CANON. */
+  under: TreeNode | null = null,
 ): string[] {
   if (status === null) return [...tags];
   const all = [c.tags.canon, c.tags.working, c.tags.archived].map((t) => t.toLocaleLowerCase('en-GB'));
   const keep = tags.filter((t) => !all.includes(t.toLocaleLowerCase('en-GB')));
   const own = status === 'working' ? c.tags.working : status === 'archived' ? c.tags.archived : c.tags.canon;
+  const exempt = status === 'authoritative' && canonExemptionUnder(c, under) !== null;
   const out: string[] = [];
-  for (const t of [...keep, own])
+  for (const t of exempt ? keep : [...keep, own])
     if (!out.some((x) => x.toLocaleLowerCase('en-GB') === t.toLocaleLowerCase('en-GB'))) out.push(t);
   return out;
 }

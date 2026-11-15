@@ -193,6 +193,72 @@ through the API, so the sandbox never saw it. **Implemented:**
 Tests: `test/snapshots/e5-2.test.ts` (restore, recreate, unknown value, plan, rehearsal; `iconSize`),
 `test/maps/update.test.ts` (a caller's `small` refused; a stored `small` holds `sm`), `test/jobs/named-step.test.ts`.
 
+## Decision 12: Arkona's first audit: "resembles" for Reference Types, and race values read by their anchor (implemented; E5.3, 15 November 2026)
+
+Arkona's first audit gave 1,609 findings. Two checks of ADR 0044 decision 17 and 18 were too loose or too strict for a
+real repository. No new ADR and no migration; the detail is in ADR 0044's note of 15 November and in
+[docs/audits.md](../audits.md).
+
+**`unknown_reference_type` flagged 588 of 589 Facts warnings with strict mode off.** A value counted as resembling a
+registry value when it shared any word of three or more letters, so the generic "reference" made every "… Reference"
+value resemble "Compact Character Reference" ("Continent Reference", "Culture Reference", "Creature Reference", …), each
+with `expected: null`. Arkona uses hundreds of free-form Reference Types by design. **Implemented:** with strict mode off,
+a value the registry, the templates, the rules and the owner's list do not know is flagged only when one of these holds:
+
+- (a) it is a registry value in other letters or spacing (`CharacterCore` against `Character Core`);
+- (b) the page's name carries a registry page-name pattern (`{name} - Character Core`, `{name} - Character Reference`);
+- (c) its **distinctive words** (its words without the generic ones: `reference`, `references`, `the`, `and`, `of`,
+  `a`, `an`, the constant `GENERIC_REFERENCE_TYPE_WORDS`) are a non-empty subset of one registry value's.
+
+So "Character Reference" ({character}) resembles "Compact Character Reference"; "Historical Character Reference" on
+"Mehrana I al-Khalid - Character Core" resembles by (b), and expects "Character Core" with a `set_facts` fix (the owner
+confirmed it is a slip); "Continent Reference", "Character Biography" and "Relationship" resemble nothing. Unchanged:
+strict mode flags every unknown value; the expected value and the fix are offered only when unambiguous (rule (c) alone
+never gives one: "Character Reference" fits both registry values).
+
+**`race_not_in_taxonomy` on qualified values (11 warnings).** "Therian (Aggeloi)", "High Human (Human subrace)", "Sea Elf
+(contemporary classification; …)" and the like matched no entry. The owner's rule for qualified values (decided for
+chronology dates the same day) is to read the value by its **anchor**, never rewriting the page. **Implemented:** when
+the whole value matches no entry's plural, singular or alias, its anchor does: the text before the first `(`, `;` or `-`,
+trimmed (and, when that cut a hyphenated name such as "Half-Elf (Northern)", the text before the first `(` or `;`). A
+match by anchor is checked for placement (`race_index_mismatch`) as a full match is. The last word is never guessed:
+"Fire Genie" and "Wishmaker Genie" stay findings, and the message and the evidence (`anchor`) name the anchor tried, so
+the owner can add it as an alias in Repository Mappings. "Unique draconic Heavenly Beast" stays a finding.
+
+Tests: `test/audits/checks.test.ts` (the two "Arkona, 15 Nov" blocks), `test/audits/world.test.ts` (twenty free-form
+"… Reference" values through a full snapshot of the mock world: none flagged, all flagged in strict mode).
+
+## Decision 13: areas that are Authoritative without CANON (implemented; E5.3 addendum, 15 November 2026)
+
+Arkona's first audit reported `lifecycle_inconsistent` ("tag should be CANON") on `[BSRC] Arkona – Fiction Writing
+Reference` and `[BSRC] Arkona – Narrative Story Planning & Drafting Workflow`, both under `[INDEX] Design References`
+(`b034ef351290dfba28e292b0`). The owner's rule (15 November): anything under the Design References index is excluded
+from CANON; the pages stay `[BSRC]` and Authoritative but must not carry the CANON tag. (The third such finding, Taraji
+al-Mizan, is a real mistake the owner is fixing.) No migration: the setting lives in the project's lifecycle settings.
+**Implemented:**
+
+- **A lifecycle setting, `canonExemptIndexes`**: "Indexes whose pages are Authoritative without CANON", a list of index
+  ids, empty by default, edited on the dashboard's lifecycle settings with the same confirmation and re-authentication
+  (ADR 0036 decision 4) and audited as `project.set_lifecycle`. Each id must be an index in the tree and not a lifecycle
+  index. It applies to every page beneath a listed index at any depth, except pages inside the Working and Archived areas,
+  which keep their own rules (`canonExemptionOf`, `src/lifecycle/settings.ts`).
+- **The audit** (`checks/lifecycle.ts`): beneath such an index a `[BSRC]` page is consistent with Status Authoritative and
+  no CANON; carrying CANON there is a `lifecycle_inconsistent` problem expecting "no CANON (<area> area)", with the area
+  in the evidence (`canonExemptArea`).
+- **The lifecycle tools**: `promote_page` (one page or a set), `unarchive_page` (one page or a set) and a create with
+  `status: "authoritative"` (`create_resource`, `create_bare_resource`, `create_many_resources`, through a chain of new
+  items to the existing page they are made beneath, and `create_character`) landing beneath such an index add no CANON;
+  they still set the prefix and Status, and the Continuity Type rules are unchanged. `archive_page` from there removes
+  only the tags it finds (its record already listed only those) and adds Archived as usual.
+- **Moves do not touch tags**; only the lifecycle tools and creates do. Checked: no guard assumes `[BSRC]` means CANON.
+  `LIFECYCLE_INCONSISTENT` (`stateOf`) compares only the prefix with the Status; the status-tag guard (ADR 0036 decision 7) judges status tags being added or removed and moves into or out of the Working and Archived areas, never a missing
+  CANON, so it needed no change: an exempt page is not refused, and adding CANON by hand is still refused as before.
+- Not changed: snapshot restores never write a status tag (a recreated page's are listed as not restored), so an
+  exempt page comes back consistent.
+
+Tests: `test/lifecycle/canon-exempt.test.ts`, `test/audits/checks.test.ts` (the Design References block),
+`test/secrets/canon-lifecycle-reauth.test.ts`, `test/ui/lifecycle.test.tsx`.
+
 ## Consequences
 
 - No migration. Two documented behaviours change: `write_page` and restores on icon pages (decision 1), and promoting a
@@ -200,3 +266,7 @@ Tests: `test/snapshots/e5-2.test.ts` (restore, recreate, unknown value, plan, re
 - Every delete reads the page once more (decision 4). Every block-by-block write costs its in-lock read, one read per
   replace or delete, and its verify read.
 - The owner's sandbox commands gain the concurrency probe and the maps M6e probe (the review, section 6).
+- Decision 12: an Arkona audit should drop from 589 Facts warnings to about 2 and from 11 Taxonomy warnings to about 3;
+  no request is needed to see it (the audit reads the newest snapshot).
+- Decision 13: until the owner lists `[INDEX] Design References`, its two pages stay `lifecycle_inconsistent`; listing it
+  is a dashboard change (with re-authentication), not a deploy.

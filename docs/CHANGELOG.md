@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased: E5.3 (15 November 2026): Arkona's first audit; Reference Types that resemble, race values by their anchor, and areas without CANON
+
+[ADR 0046](adr/0046-e4-owner-decisions.md) decisions 12 and 13; [ADR 0044](adr/0044-audits.md)'s note of 15 November; new
+[docs/audits.md](audits.md). No migration. Nothing was run against a live system: every test uses the mock and the audit
+fixtures; no sandbox run is needed.
+
+- **`unknown_reference_type` no longer flags every "… Reference" value** (588 of Arkona's 589 Facts warnings, with
+  strict mode off). Sharing any word of three letters counted as resembling a registry value, so the generic "reference"
+  matched "Compact Character Reference". With strict mode off, an unknown value is now flagged only when (a) it is a
+  registry value in other letters, (b) the page's name carries a registry page-name pattern ("{name} - Character Core"),
+  or (c) its distinctive words (without `reference`, `references`, `the`, `and`, `of`, `a`, `an`) are a non-empty subset
+  of one registry value's. "Character Reference" is still flagged; "Historical Character Reference" on a "… - Character
+  Core" page still expects "Character Core" with a `set_facts` fix; "Continent Reference", "Character Biography" and
+  "Relationship" are not flagged. Strict mode, the known values and when a fix is offered are unchanged.
+- **Qualified race values are read by their anchor** (11 Taxonomy warnings). When the whole Race / Species value matches
+  no taxonomy entry, the text before the first `(`, `;` or `-` is tried ("Therian (Aggeloi)" matches Therians; a
+  hyphenated name such as "Half-Elf (Northern)" is also tried whole). The page is never rewritten and no word is guessed:
+  "Fire Genie (…)" stays a finding, whose message and evidence (`anchor`) name the anchor tried, so the owner can add it
+  as an alias in Repository Mappings. A match by anchor is checked for placement (`race_index_mismatch`) as before.
+- **Areas that are Authoritative without CANON** (ADR 0046 decision 13; the owner's rule for `[INDEX] Design References`).
+  A new lifecycle setting, "Indexes whose pages are Authoritative without CANON" (index ids, empty by default; the
+  Projects page's Lifecycle section, with the same confirmation and re-authentication): every page beneath a listed index,
+  at any depth and outside the Working and Archived areas, is `[BSRC]` and Authoritative without the CANON tag. The
+  lifecycle audit accepts that shape and reports CANON there ("no CANON (Design References area)", the area in the
+  evidence); `promote_page`, `unarchive_page` and Authoritative creates landing there add no CANON; `archive_page` removes
+  only what it finds. No guard assumed `[BSRC]` means CANON, so none changed.
+- **Docs.** `docs/audits.md` (new: the three rules, the generic-word list, the anchor), ADR 0044's note, ADR 0046
+  decisions 12 and 13, `docs/dashboard.md` (the setting) and the bridge guide (the page lifecycle).
+- **After deploying**, list `[INDEX] Design References` (`b034ef351290dfba28e292b0`) in Arkona's lifecycle settings, then
+  run the audit again for Arkona from the Audits page. It reads the newest snapshot, so it costs no API requests. Facts
+  should drop from 589 to about 2, Taxonomy warnings from 11 to about 3, and Lifecycle errors from 3 to 1.
+
 ## Unreleased: E5.2 (15 November 2026): Arkona's map image from `assets2`, and old label sizes on map features
 
 [ADR 0041](adr/0041-image-pipeline.md)'s note of 15 November and [ADR 0046](adr/0046-e4-owner-decisions.md) decision 11;

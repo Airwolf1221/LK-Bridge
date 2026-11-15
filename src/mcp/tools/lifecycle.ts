@@ -41,6 +41,7 @@ import { mintClientId } from '../../jobs/ids.js';
 import { compareStoredBlocks } from '../../jobs/verify-blocks.js';
 import {
   archivedScope,
+  canonExemptionUnder,
   fillText,
   isoDate,
   lifecycleIndexes,
@@ -1384,6 +1385,15 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
               );
             }
             const kind = state === 'working' ? 'bwrk' : 'bsrc';
+            // E5.3 (ADR 0046 decision 13): back beneath an index whose pages are Authoritative without CANON: no CANON.
+            const exemptUnder =
+              state === 'working'
+                ? null
+                : canonExemptionUnder(c, ctx.tree.node(ctx.projectId, parentId).data ?? null);
+            if (exemptUnder)
+              flags.push(
+                `returns beneath ${ctx.tree.node(ctx.projectId, exemptUnder).data?.rawName ?? exemptUnder}, whose pages are Authoritative without ${c.tags.canon}: no ${c.tags.canon} tag is added`,
+              );
             const target: LifecycleTarget = {
               name: `${KIND_PREFIX[kind]}${page.displayName}`,
               parentId,
@@ -1395,7 +1405,7 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
                 lastMajorRevision: o.date,
               },
               tagsRemove: [c.tags.archived],
-              tagsAdd: [state === 'working' ? c.tags.working : c.tags.canon],
+              tagsAdd: state === 'working' ? [c.tags.working] : exemptUnder ? [] : [c.tags.canon],
               ...(note ? { note } : {}),
             };
             const twin = ctx.tree
@@ -1532,7 +1542,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Promote a Working page',
     access: 'write',
     description:
-      'Makes a Working [BWRK] page Authoritative (canon): moves it to `destination` (required, an [INDEX]; a dry run suggests where it was before move_to_working), renames it [BSRC], sets Status Authoritative and Last Major Revision, swaps the Working tag for CANON. A Working character’s Core takes its [INDEX] with it. `subtree: true` promotes a whole Working set (a character’s index and all its pages) as ONE proposal; any page of that character left flat under [INDEX] Working is listed as an outsider: move_resource it into the set first. This is the only way to make a page canon: never set Status to Authoritative with set_facts. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 2 reads to propose; the job about 11 reads and 5 writes once approved.',
+      'Makes a Working [BWRK] page Authoritative (canon): moves it to `destination` (required, an [INDEX]; a dry run suggests where it was before move_to_working), renames it [BSRC], sets Status Authoritative and Last Major Revision, swaps the Working tag for CANON (no CANON beneath an index the owner lists as Authoritative without CANON). A Working character’s Core takes its [INDEX] with it. `subtree: true` promotes a whole Working set (a character’s index and all its pages) as ONE proposal; any page of that character left flat under [INDEX] Working is listed as an outsider: move_resource it into the set first. This is the only way to make a page canon: never set Status to Authoritative with set_facts. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 2 reads to propose; the job about 11 reads and 5 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The [BWRK] page (name or id); with subtree, the root of the Working set.'),
       subtree: subtreeArg,
@@ -1676,6 +1686,12 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
             const ct = facts.continuityType;
             const keepCt =
               ct !== null && (same(ct, c.continuityTypes.canon) || same(ct, c.continuityTypes.au));
+            // E5.3 (ADR 0046 decision 13): beneath an index whose pages are Authoritative without CANON, no CANON.
+            const exemptUnder = canonExemptionUnder(c, dest);
+            if (exemptUnder)
+              flags.push(
+                `goes beneath ${ctx.tree.node(ctx.projectId, exemptUnder).data?.rawName ?? exemptUnder}, whose pages are Authoritative without ${c.tags.canon}: no ${c.tags.canon} tag is added`,
+              );
             const target: LifecycleTarget = {
               name: `${KIND_PREFIX.bsrc}${page.displayName}`,
               parentId: dest.id,
@@ -1685,7 +1701,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
                 ...(keepCt ? {} : { continuityType: c.continuityTypes.canon }),
               },
               tagsRemove: [c.tags.working],
-              tagsAdd: [c.tags.canon],
+              tagsAdd: exemptUnder ? [] : [c.tags.canon],
               ...(mover ? { moveIndex: mover } : {}),
             };
             return {
