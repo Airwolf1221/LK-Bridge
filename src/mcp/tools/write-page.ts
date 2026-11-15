@@ -528,7 +528,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
                 counts,
                 hint:
                   'The write is accepted and has NOT failed: it runs by itself, re-checking the page’s version inside its lock (a section edit whose section ' +
-                  'is unchanged is re-planned; anything else ends as a conflict). Never submit it again: follow it with bridge_job_status or bridge_job_wait.',
+                  'is unchanged is re-planned; anything else ends as a conflict). Never submit it again: follow it with bridge_job_status (wait_seconds waits for it).',
                 ...warnings,
                 ...diffBody(full),
               },

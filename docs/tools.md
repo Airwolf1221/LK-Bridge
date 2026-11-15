@@ -43,9 +43,10 @@ what to use instead**; **its scope behaviour** (at `propose` a write becomes a p
 it); **the mistake to avoid**; **the cost line** (`Cost:` in reads and writes, measured against the mock). Examples are kept
 only where the arguments are nested. Shared argument texts (`project`, `operation_id`, `status`, `subtree`, map points) are
 short because they repeat in every schema. The whole list as a client receives it is measured by
-`npx tsx scripts/tool-surface.ts` (`--inventory` for the per-tool table): in a `propose` or `write` profile, 61 tools, about
-31,000 tokens (characters ÷ 4); in a `read` profile, 28 tools, about 9,100; the per-operation tools would add about 171,000
-and stay off. The review, with the proposed merges and hiding (none applied) and what the wording changes did:
+`npx tsx scripts/tool-surface.ts` (`--inventory` for the per-tool table): since v2 E3b in a `propose` or `write` profile, **56 tools,
+about 29,850 tokens** (characters ÷ 4; 61 tools and about 31,100 before the owner's answers); in a `read` profile, **25 tools, about
+8,760** (28 and 9,100 before); with “show low-level and rarely used tools” on, 61 and 28; the per-operation tools would add about
+171,000 and stay off. The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -83,8 +84,7 @@ budget (arkona): writes 0/120·min …
 | `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                                                                                            |
 | `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                                                                                      |
 | `search`                    | read   | true / false / true / false                                     | none; 1 read with `content: true`                                                                          |
-| `get_resource`              | read   | true / false / true / false                                     | 1 read (none with `live: false`)                                                                           |
-| `get_resources`             | read   | true / false / true / false                                     | 1 read per page, one job                                                                                   |
+| `get_resource`              | read   | true / false / true / false                                     | 1 read per page (none with `live: false`); `resources` runs several as one job                             |
 | `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                                                                                            |
 | `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                                                                          |
 | `list_calendars`            | read   | true / false / true / false                                     | 1 read                                                                                                     |
@@ -129,17 +129,17 @@ budget (arkona): writes 0/120·min …
 | `bridge_info`               | read   | true / false / true / false                                     | up to 2 cached reads (10 min)                                                                              |
 | `bridge_budget`             | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                       |
-| `bridge_job_status`         | read   | true / false / true / false                                     | none                                                                                                       |
-| `bridge_job_wait`           | read   | true / false / true / false                                     | none (waits at most 25 s)                                                                                  |
+| `bridge_job_status`         | read   | true / false / true / false                                     | none (`wait_seconds` waits at most 25 s)                                                                   |
 | `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                                                                                       |
 | `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_result_page`        | read   | true / false / true / false                                     | none                                                                                                       |
-| `bridge_proposal_status`    | read   | true / false / true / false                                     | none                                                                                                       |
-| `bridge_proposals_mine`     | read   | true / false / true / false                                     | none                                                                                                       |
+| `bridge_proposal_status`    | read   | true / false / true / false                                     | none (without `proposalId` it lists yours)                                                                 |
 | `lk_op_<operationId>` (89)  | per op | derived from the operation, see below                           | that of the operation                                                                                      |
 
-`lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*` are **low-level tools**: since v2 B2 they are left out of the tool list of a profile whose **show low-level tools** setting is off (the default; [below](#visibility-of-the-low-level-tools)).
+`lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*` are **low-level tools**, and since v2 E3b (the owner's answers to P4 and P5, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md)) so are two **rarely used** ones, `lk_upload_image` (which `upload_image` replaces) and `create_bare_resource` (a page with no template; `create_resource` covers every templated page): they are left out of the tool list of a profile whose **show low-level and rarely used tools** setting is off (the default; [below](#visibility-of-the-low-level-tools)). They still work when called by name, under the same policy.
+
+**Renamed tools (v2 E3b).** `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` were merged into `get_resource` (`resources`), `bridge_proposal_status` (no `proposalId` lists yours) and `bridge_job_status` (`wait_seconds`). For one release the old names stay registered but are never listed: a call (from a client's cached tool list) answers `TOOL_RENAMED` with "renamed to …" and how to ask for the same thing, and does nothing. Remove them in the release after.
 
 `lk_api_write` is annotated `destructiveHint: true` because it covers the destructive operations; clients therefore ask before each write.
 
@@ -192,11 +192,9 @@ budget (arkona): writes 0/120·min …
 
 **`bridge_estimate`** `{ reads?, writes?, createManyItems?, priority? }`: against the asked project's budget, projected wall-clock time, the tightest tier, whether it fits today's request budget, with advice. Call it before large workloads.
 
-**Your own work only.** `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_result_page` and `bridge_errors_recent` show only the calling connection's jobs, stored results and errors; another connection's job id or handle answers exactly like one that does not exist. `bridge_journal_lookup` shows every connection's writes (so agents can cross-check each other), each with its principal, profile and approver; job ids appear only on your own entries, and a `jobId` filter matches only your own jobs.
+**Your own work only.** `bridge_job_status`, `bridge_job_cancel`, `bridge_result_page` and `bridge_errors_recent` show only the calling connection's jobs, stored results and errors; another connection's job id or handle answers exactly like one that does not exist. `bridge_journal_lookup` shows every connection's writes (so agents can cross-check each other), each with its principal, profile and approver; job ids appear only on your own entries, and a `jobId` filter matches only your own jobs.
 
-**`bridge_job_status`** `{ jobId?, steps?, status?, limit? }`: one job (status, progress, last error, result, failed steps), or recent jobs when `jobId` is omitted. Signed-URL material is redacted.
-
-**`bridge_job_wait`** `{ jobId, seconds? }`: waits at most 25 seconds, then returns the job as it stands (`done: true` when finished).
+**`bridge_job_status`** `{ jobId?, steps?, status?, limit?, wait_seconds? }`: one job (status, progress, last error, result, failed steps; `done` is true when it has finished), or recent jobs when `jobId` is omitted. `wait_seconds` (1 to 25, needs a `jobId`: `JOB_ID_REQUIRED` otherwise) waits for the job to finish first and then answers (v2 E3b: this is the former `bridge_job_wait`; call again if `done` is false). Signed-URL material is redacted.
 
 **`bridge_job_cancel`** `{ jobId }`: the step in flight finishes; nothing further is sent; finished steps are not undone. A job the owner approved (an approved proposal's job, which runs as the connection that proposed it) is refused with `OWNER_APPROVED_JOB`: only the owner stops approved work, on the dashboard (CR-2026-11).
 
@@ -204,7 +202,7 @@ budget (arkona): writes 0/120·min …
 
 **`bridge_journal_lookup`** `{ resourceId?, documentId?, targetId?, operationId?, jobId?, principalId?, profile?, outcome?, withPreImage?, before?, sinceMinutes?, limit?, includePreImage? }`: the write journal, newest first. Since chunk 8 it holds **every** write the bridge sends (creates, inserts, patches, deletes), each with operation, target, time, outcome (`applied`, `not_applied`, `unknown`, `pending`), principal, profile and approver; destructive writes also keep their pre-image. Since v2 C1 an entry made by a high-level tool also has `operation`: for `write_page` the tool, mode, section, a SHA-256 of the Markdown (`markdownSha256`) and its length, the version the plan was built on (`plannedOn`), the agent's `baseVersion`, `dropRegions`, and `replannedInLock` when the bridge re-planned a section edit inside the lock. Since v2 C2a, `set_facts` entries have the tool, the page, the property, the counts and the write (`Status: changed`); the first write to the key-value property keeps the property as the plan saw it as its pre-image. `targetId` also matches every resource a `createManyResources` created. Pages hold `limit` entries (default 10, at most 100); when a page is full, `nextBefore` is the cursor for the next, older page (`before`).
 
-**`bridge_proposal_status`** `{ proposalId }` and **`bridge_proposals_mine`** `{ state?, limit? }`: your own proposals in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)). Since v2 C1 a proposal made by a high-level tool also has `operation`, briefly (for `write_page`: the tool, page, document, mode, section, the version it was planned on and the counts; never the Markdown). Since v2 C2a each also has `pages`, the page-level summary (one plain line per page, for example `Asagiri Miyabi: sidebar, 2 facts changed`), and `requiresCanonicalApproval` with `canonicalReason` when the change touches protected canon (only the owner's "Approve and accept as canon" can run it).
+**`bridge_proposal_status`** `{ proposalId?, state?, limit? }`: with `proposalId` one of your own proposals, without it your own proposals newest first (`state` and `limit` filter; v2 E3b: this is the former `bridge_proposals_mine`), in the asked project (a proposal belongs to the project its write was for, and runs there once approved) (writes at scope `propose`, waiting for the owner): state, summary, the rejection reason, the conflicting operation and the job once executed ([policy.md](policy.md)). Since v2 C1 a proposal made by a high-level tool also has `operation`, briefly (for `write_page`: the tool, page, document, mode, section, the version it was planned on and the counts; never the Markdown). Since v2 C2a each also has `pages`, the page-level summary (one plain line per page, for example `Asagiri Miyabi: sidebar, 2 facts changed`), and `requiresCanonicalApproval` with `canonicalReason` when the change touches protected canon (only the owner's "Approve and accept as canon" can run it).
 
 **`bridge_result_page`** `{ handle, offset?, limit?, detail? }`: for a paginate handle `offset` and `limit` count items (the page is trimmed to the output budget; use `nextOffset`); for a stored oversized result `offset` counts characters of the JSON text and slices must be concatenated in order.
 
@@ -267,7 +265,7 @@ search for (only filters), LegendKeeper is not asked. If the tree cannot answer,
 { "query": "foxian tag:elder -kind:index under:Characters", "limit": 10 }
 ```
 
-**`get_resource`** `{ resource, live? }`: the page from the tree (`path`, `kind`, `documents` (id, name, type), `tags`,
+**`get_resource`** `{ resource | resources, live?, detail?, confirm? }`: the page from the tree (`path`, `kind`, `documents` (id, name, type), `tags`,
 `aliases`, `referenceType`, `scope`, `indexScope`, `canonicalDisplayName`, `childCount`, flags, when the tree read it)
 and, from one live `getResource`, its `sidebar` in order: `facts` (key and value, with `mentions` of pages), `links`
 (collections and links, each item with the page's name and, for a link to one document, `documentId` and the document's
@@ -277,9 +275,11 @@ LegendKeeper's answer has one. With a live read it also gives **`factsVersion`**
 the page's sidebar facts (the key-value rows by rank and id, and the link collections' items and filters), the same from
 every read of an unchanged sidebar; pass it to `set_facts` as `baseFactsVersion`. Cost: 1 read; `live: false` makes none.
 
-**`get_resources`** `{ resources, live?, detail?, confirm? }`: up to 25 pages as one `batch_ops` job. Each entry is `ok`
+**Several pages** (v2 E3b, formerly `get_resources`): pass `resources` (up to 25 names or ids) instead of `resource`, one or the other (`RESOURCE_REQUIRED` otherwise). They run as one `batch_ops` job. Each entry is `ok`
 with the same data (summarised unless `detail: "full"`, with each page's `factsVersion`) or has its own `error`. More than 10 live reads return
 `{ status: "estimate", reads, wallClockSeconds, tightestTier, fitsToday }` and run only on `confirm: true`. Cost: 1 read per page.
+
+**A character's pages (v2 E3b).** A character's facts and Scope live on its **Character Core** (or **Character Reference** for a compact character), not on its `[INDEX]`. So `get_resource` on a character's `[INDEX]` page, Working or Archived ones too, adds a `character` note naming the Core (or Reference) with its `id` and that sentence; and an `AMBIGUOUS` answer whose candidates are one character's pages lists each with its `role` (`character index`, `Character Core`, `Character Reference`) and adds the same sentence as a `hint`. Writes stay strict: a name that matches several pages is never resolved for the agent.
 
 **`list_tags`** `{ query?, limit? }`: the tags in use under the root with counts, most used first. Cost: none.
 **`list_templates`** `{ refresh? }`: each template (name, id) and the registry type and role that use it
@@ -310,9 +310,10 @@ result is a handle.
 ### The guides
 
 **`get_bridge_guide`** and **`get_markdown_guide`** `{ section? }` return [bridge-guide.md](bridge-guide.md) and
-[markdown.md](markdown.md), whole or one section by heading (`"Keep regions"`, or `"A > B"`; an unknown heading lists
-them). Both are also MCP resources: `lk-bridge://guides/bridge` and `lk-bridge://guides/markdown`
+[markdown.md](markdown.md), whole or one section by heading (`"Keep regions"`, or `"A > B"`). Both are also MCP resources: `lk-bridge://guides/bridge` and `lk-bridge://guides/markdown`
 (`text/markdown`). Cost: none.
+
+**Forgiving sections (v2 E3b).** A heading is matched exactly first (case does not matter). A miss is matched loosely, and the evaluation showed why: agents guess names such as "find pages", "Promote" or a label copied from the which-tool table, and six exact-match misses wasted calls. The loose match ignores case, punctuation and spacing; counts the key words of a heading (a word found in few headings counts for more than "page" or "text"); knows a few synonyms ("promote", "promotion" and "lifecycle" lead to the page lifecycle; "find", "search" and "read" to finding and reading; "canon" and "approval", "image" and "upload", "date" and "timeline", and so on); and takes the labels of the "Which tool?" table as aliases of the section they point to. One clear match returns that section with `matched` naming the exact name to ask for next time; several return `SECTION_AMBIGUOUS` with the `candidates`; none returns `SECTION_NOT_FOUND` with `sections`, every exact section name. The bridge guide's "How to decide" lists the exact names. The code is `src/mcp/tools/guide-sections.ts`.
 
 ## Writing pages: `write_page` (v2 C1)
 
@@ -420,19 +421,18 @@ the write is caught by the compare-and-swap, and the proposal becomes conflicted
 
 ### Visibility of the low-level tools
 
-Each profile has **show low-level tools** (default off), edited on the dashboard's Clients & Access page and audited
-(`profile.set_low_level_tools`). When off, `tools/list` leaves out `lk_api_list_operations`, `lk_api_describe_operation`,
-`lk_api_paginate_all` and every `lk_op_*`. `lk_api_read`, `lk_api_write`, `lk_api_batch` and `lk_upload_image` stay.
+Each profile has **show low-level and rarely used tools** (default off; called "show low-level tools" before v2 E3b, and the setting, its column and its audit action `profile.set_low_level_tools` are unchanged), edited on the dashboard's Clients & Access page and audited. When off, `tools/list` leaves out `lk_api_list_operations`, `lk_api_describe_operation`,
+`lk_api_paginate_all`, every `lk_op_*`, and (v2 E3b) `lk_upload_image` and `create_bare_resource`. `lk_api_read`, `lk_api_write` and `lk_api_batch` stay.
 **Hiding changes the list, nothing else:** a hidden tool is still refused or allowed at call time by the profile's scope
 and the engine's guards exactly as before. The change applies at the next `tools/list`; ChatGPT needs a tool refresh
 (Plugins, the bridge, Refresh).
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and the 11 `bridge_*` tools (54 for a profile with scope `propose` or `write`; a `read` profile does not see the write tools: `write_page`, `set_facts`, the 12 of C2b, the 4 of C2c, the 5 timeline tools of D1 and D1.1, `upload_image`, `prepare_image_upload`, `lk_api_write`, `lk_api_batch`, `lk_upload_image` and `bridge_job_cancel`) |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). A `read` profile does not see the write tools |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -641,7 +641,7 @@ the same job in the template's order. Refusals: `TEMPLATE_NOT_FOUND` (with `temp
 `CHARACTER_TEMPLATE` (use `create_character`), `INDEX_TEMPLATE` (use `create_index`), `PAGE_EXISTS`, the facts and
 links codes of `set_facts`.
 
-**`create_bare_resource`** `{ name, parent?, status?, tags?, aliases?, dryRun?, operation_id?, project }`: a page
+**`create_bare_resource`** `{ name, parent?, status?, tags?, aliases?, dryRun?, operation_id?, project }` (a rarely used tool, v2 E3b: listed only with the profile's “show low-level and rarely used tools”, callable always): a page
 with no template. The name is used as given and must start with exactly `[INDEX] `, `[BSRC] ` or `[BWRK] `
 (`INVALID_NAME` otherwise, including a doubled prefix and `[BARC] `, which only `archive_page` makes); a page's prefix
 must agree with `status` (`[BWRK] ` for Working, the default; `[BSRC] ` for Authoritative). An index takes no status
@@ -1269,8 +1269,17 @@ asset id is still returned, nothing is retried), and for a staged image `updateA
   no group), the folder names from the taxonomy's asset folder field; an unknown or omitted race goes to
   `Undetermined / Unknown`; a declared race that does not resolve fails (`RACE_NOT_FOUND` and the other refusals of
   `create_character`);
-- `for_page`: a Core, Reference or character index page gives its character (the race from where the page is); any other
-  page needs `folder` too (`FOLDER_REQUIRED`);
+- `for_page`: a Core, Reference or character index page under the Characters index gives its character (the race from where
+  the page is). **Since v2 E3b** a character's page that is not under the Characters index (a Working or Archived Core,
+  Reference or index) or one of its specialist pages (`{name} - …`: any page whose subject, by `subjectOf`, is a
+  character) leads to the character too, and the race is the character's **Race / Species** fact on its Core (else its
+  Reference), read from the repository tree, else by ONE live read (`getResource` on that page; nothing is written).
+  The race rules are those of `create_character`: `Unestablished` (and other unknown values) goes to
+  `Undetermined / Unknown`; a race that does not resolve fails (the message says to pass `for_character` or a `folder`).
+  Only when no route works does it refuse, and the message says exactly what to pass: `FOLDER_REQUIRED` (no Core or
+  Reference for that subject), `CHARACTER_AMBIGUOUS` (several of the same best lifecycle state: never chosen between),
+  `RACE_NOT_FOUND` (the Core has no Race / Species), each naming `for_character { name, race }` or `folder`. Any other page
+  needs `folder` too (`FOLDER_REQUIRED`);
 - `subfolders`: literal folders appended, created in order: a list of names, **or one path string written like the folder
   chain** (`"Wardrobe"`, `"Wardrobe / Qipao"`, Qipao inside Wardrobe). A string is split on `/` and each part trimmed; an empty
   part, `.` and `..` are refused (`INVALID_SUBFOLDER`, before anything is sent). Existing folders are reused, missing ones

@@ -1,5 +1,7 @@
 # E3 evaluation script: does each assistant pick the right tool first time?
 
+> **Machine-readable copy:** the scenarios, prompts and expectations below are also kept as data in [scenarios.json](scenarios.json). The dashboard's Tool calls page runs them from there (its **Evaluation** panel: Start and Done record the tool calls, auto-grade as a hint, and build the results table below). Edit both together; a test checks that every prompt avoids naming a tool. See `docs/dashboard.md`, Tool calls, Evaluation.
+
 **For:** the owner, running it in ChatGPT (profile scope `propose`) and Claude in claude.ai (profile scope `write`).
 **Prepared by:** the E3 session (14 November 2026). Nothing here was run against a live system by that session.
 **Companion:** [E3-tools.md](E3-tools.md) (the tool inventory and the proposed changes). Results go in the template at the end, and come
@@ -93,9 +95,9 @@ Format: **Assistant** (Both, or only one; _approvals_ where ChatGPT needs them) 
 
 - Prompt: _Show me the Scope and Status facts of Asagiri Miyabi, Mehrana al-Khalid and E3 Eval Ren side by side._ (Needs the
   setup first.)
-- Expect: `get_resources` with three pages (or three `get_resource` calls: note which).
+- Expect: `get_resource` with `resources` (three pages), or three `get_resource` calls: note which (`get_resources` was merged into `get_resource` in E3b).
 - Watch for: more than one call per page; `read_document` to find facts; `lk_api_read`; guessing a value.
-- Tool calls: one `get_resources` row (`resources (3 items)`), about 3 requests; or three `get_resource` rows.
+- Tool calls: one `get_resource` row (`resources (3 items)`), about 3 requests; or three `get_resource` rows.
 
 ### B. Editing text and facts
 
@@ -270,7 +272,7 @@ Format: **Assistant** (Both, or only one; _approvals_ where ChatGPT needs them) 
 **25. A proposal's status** · ChatGPT (or Claude after scenario 8 or 16; continues a chat that made a proposal)
 
 - Prompt: _What happened to the proposal you made?_ (First leave it pending, then ask again after you approve or reject it.)
-- Expect: `bridge_proposal_status` (or `bridge_proposals_mine`).
+- Expect: `bridge_proposal_status` (with or without a `proposalId`; `bridge_proposals_mine` was merged into it in E3b).
 - Watch for: making the change again; asking me to look; `lk_api_read`; a stale answer given from memory.
 - Tool calls: `bridge_proposal_status`, success, 0 requests, each time it is asked.
 

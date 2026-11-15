@@ -24,6 +24,7 @@ import { registerRegistry } from './routes/registry.js';
 import { registerLifecycle } from './routes/lifecycle.js';
 import { registerAudits } from './routes/audits.js';
 import { registerToolCalls } from './routes/toolcalls.js';
+import { registerEvaluation } from './routes/evaluation.js';
 import { registerChronology } from './routes/chronology.js';
 import { registerSnapshots } from './routes/snapshots.js';
 import { registerOffsite } from './routes/offsite.js';
@@ -111,6 +112,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerOffsite(api, ctx); // v2 E1b
       registerAudits(api, ctx); // v2 E2
       registerToolCalls(api, ctx); // v2 E3
+      registerEvaluation(api, ctx); // v2 E3: the Evaluation helper
 
       /** The one live stream (docs/dashboard.md › Stream). */
       api.get('/stream', (req, reply) => {

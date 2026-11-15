@@ -22,7 +22,8 @@ import { PROJECT, startStack, type Stack } from './helpers.js';
 
 const PNG_1PX =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-const WRITE_TOOLS = ['lk_api_write', 'lk_api_batch', 'lk_upload_image', 'bridge_job_cancel'];
+// lk_upload_image is a rarely-used tool, hidden from the list by default (v2 E3b); it is still called by name below.
+const WRITE_TOOLS = ['lk_api_write', 'lk_api_batch', 'bridge_job_cancel'];
 
 const model = new LkModel(() => systemClock.now());
 model.seedResource('res1', {
@@ -116,14 +117,7 @@ describe('every engine-backed tool acts as the caller', () => {
       vi.restoreAllMocks();
     }
     const reached = new Set(seen.map((s) => s.tool));
-    for (const t of [
-      'lk_api_read',
-      'lk_api_write',
-      'lk_api_batch',
-      'lk_api_paginate_all',
-      'lk_upload_image',
-      'bridge_info',
-    ]) {
+    for (const t of ['lk_api_read', 'lk_api_write', 'lk_api_batch', 'lk_api_paginate_all', 'bridge_info']) {
       expect(reached, t).toContain(t);
     }
     for (const s of seen) {
@@ -162,11 +156,11 @@ describe('job, error and result visibility', () => {
       ],
     });
     const jobId = batch.body.jobId as string;
-    expect((await stack.call(a.client, 'bridge_job_wait', { jobId, seconds: 10 })).body.status).toBe(
+    expect((await stack.call(a.client, 'bridge_job_status', { jobId, wait_seconds: 10 })).body.status).toBe(
       'succeeded',
     );
     const pages = await stack.call(a.client, 'lk_api_paginate_all', { operationId: 'listResources' });
-    await stack.call(a.client, 'bridge_job_wait', { jobId: pages.body.jobId, seconds: 10 });
+    await stack.call(a.client, 'bridge_job_status', { jobId: pages.body.jobId, wait_seconds: 10 });
     const handle = (await stack.call(a.client, 'bridge_job_status', { jobId: pages.body.jobId })).body.result
       .artifactId as string;
     expect((await stack.call(a.client, 'bridge_result_page', { handle })).isError).toBe(false);
@@ -186,7 +180,7 @@ describe('job, error and result visibility', () => {
     // The other principal: same answers as for ids that do not exist.
     for (const [tool, extra] of [
       ['bridge_job_status', {}],
-      ['bridge_job_wait', { seconds: 1 }],
+      ['bridge_job_status', { wait_seconds: 1 }],
       ['bridge_job_cancel', {}],
     ] as const) {
       const theirs = await stack.call(b.client, tool, { jobId, ...extra });
@@ -338,9 +332,7 @@ describe('the full loop, end to end', () => {
 
   it('propose → approve → executed once; lowering to read applies on the same token; write runs directly', async () => {
     const p = await as('loop-propose', 'propose');
-    expect(await names(p.client)).toEqual(
-      expect.arrayContaining(WRITE_TOOLS.filter((t) => t !== 'lk_upload_image')),
-    );
+    expect(await names(p.client)).toEqual(expect.arrayContaining(WRITE_TOOLS));
     const before = writesAtMock();
     const res = await stack.call(p.client, 'lk_api_write', {
       operationId: 'updateResource',
@@ -358,7 +350,7 @@ describe('the full loop, end to end', () => {
     const writesBefore = res2Writes();
     const approved = await stack.runtime.policy.commands.approve('owner', proposalId);
     expect(approved.state).toBe('executing');
-    const done = await stack.call(p.client, 'bridge_job_wait', { jobId: approved.jobId, seconds: 10 });
+    const done = await stack.call(p.client, 'bridge_job_status', { jobId: approved.jobId, wait_seconds: 10 });
     expect(done.body.status).toBe('succeeded');
     const status = await stack.call(p.client, 'bridge_proposal_status', { proposalId });
     expect(status.body).toMatchObject({ state: 'executed', jobId: approved.jobId });

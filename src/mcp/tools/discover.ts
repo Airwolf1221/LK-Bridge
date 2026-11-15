@@ -24,9 +24,10 @@ import {
 } from '../../discover/search.js';
 import type { NodeKind, TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
-import { defineTool, READ_ANNOTATIONS } from './define.js';
+import { defineTool, READ_ANNOTATIONS, renamedTool } from './define.js';
 import {
   ago,
+  characterIndexNote,
   clip,
   finish,
   liveRead,
@@ -314,197 +315,235 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
       }),
   });
 
-  // ---------------------------------------------------------------------------------------------- get_resource(s)
-  const getResource = defineTool({
-    name: 'get_resource',
-    title: 'Get a page and its sidebar',
-    access: 'read',
-    description:
-      'Shows one page: from the tree its path, kind, documents, tags, aliases, Reference Type and Scope; from one live read its whole sidebar: the facts in template order, each link collection with its items, other properties (read-only) and `factsVersion`. Use it before set_facts (pass factsVersion as baseFactsVersion). For page text use read_document; for several pages get_resources. A name matching several pages is refused with the candidates: pass the id. live: false gives the tree’s data alone, for free. Example: { "resource": "Asagiri Miyabi" }. Cost: 1 read.',
-    inputSchema: z.object({
-      resource: z.string().min(1).max(500).describe('Page name or id.'),
-      live: z
-        .boolean()
-        .optional()
-        .describe('false: the tree’s data only, no LegendKeeper read. Default true.'),
-      project: projectArg,
-    }),
-    annotations: READ_ANNOTATIONS,
-    handler: ({ resource, live, project }, mctx) =>
-      withProject(deps, project, 'read', async (pd) => {
-        const rc = repoContext(pd);
-        if (!rc.ok) return rc.result;
-        const ctx = rc.ctx;
-        const r = resolvePage(ctx, resource);
-        if (!r.ok) return r.result;
-        const item = await describe(ctx, mctx, r.node, live !== false, 'full', 'get_resource');
-        if (!item.ok) return item.result;
-        return finish(
-          pd,
-          mctx,
-          'get_resource',
-          { tree: treeInfo(ctx.meta, ctx.now), resource: item.body },
-          () => ({ resource: { id: r.node.id, name: r.node.displayName } }),
-        );
-      }),
-  });
+  // ---------------------------------------------------------------------------------------------- get_resource
+  // v2 E3b (ADR 0045, P1): `get_resources` is merged in. `resource` is one page; `resources` is up to 25 as ONE job.
+  const getOne = async (
+    pd: ProjectDeps,
+    mctx: McpToolContext,
+    resource: string,
+    live: boolean | undefined,
+  ): Promise<McpToolResult> => {
+    const rc = repoContext(pd);
+    if (!rc.ok) return rc.result;
+    const ctx = rc.ctx;
+    const r = resolvePage(ctx, resource);
+    if (!r.ok) return r.result;
+    const item = await describe(ctx, mctx, r.node, live !== false, 'full', 'get_resource');
+    if (!item.ok) return item.result;
+    const note = characterIndexNote(ctx, r.node);
+    return finish(
+      pd,
+      mctx,
+      'get_resource',
+      { tree: treeInfo(ctx.meta, ctx.now), resource: item.body, ...(note ? { character: note } : {}) },
+      () => ({ resource: { id: r.node.id, name: r.node.displayName } }),
+    );
+  };
 
   const LARGE_BATCH = 10;
-  const getResources = defineTool({
-    name: 'get_resources',
-    title: 'Get several pages and their sidebars',
-    access: 'read',
-    description:
-      'get_resource for up to 25 pages at once, as ONE job. Use it instead of calling get_resource in a loop. A page that cannot be resolved is reported in its own entry. More than 10 pages first returns an estimate: repeat with confirm: true to run it. Results are summaries; detail "full" gives everything. Example: { "resources": ["Asagiri Miyabi", "Asagiri Kaede"] }. Cost: 1 read per page (live: false: none).',
-    inputSchema: z.object({
-      resources: z
-        .array(z.string().min(1).max(500))
-        .min(1)
-        .max(25)
-        .describe('Page names or ids (at most 25).'),
-      live: z.boolean().optional().describe('false: the tree’s data only. Default true.'),
-      detail: z.enum(['summary', 'full']).optional().describe('summary (default) or full.'),
-      confirm: z
-        .boolean()
-        .optional()
-        .describe(`Needed for more than ${LARGE_BATCH} live reads, after the estimate.`),
-      project: projectArg,
-    }),
-    annotations: READ_ANNOTATIONS,
-    handler: ({ resources, live, detail, confirm, project }, mctx) =>
-      withProject(deps, project, 'read', async (pd) => {
-        const rc = repoContext(pd);
-        if (!rc.ok) return rc.result;
-        const ctx = rc.ctx;
-        const level = detail === 'full' ? 'full' : 'summary';
-        interface Entry {
-          readonly asked: string;
-          readonly node?: TreeNode;
-          readonly error?: unknown;
+  const getMany = async (
+    pd: ProjectDeps,
+    mctx: McpToolContext,
+    {
+      resources,
+      live,
+      detail,
+      confirm,
+    }: {
+      resources: readonly string[];
+      live: boolean | undefined;
+      detail: 'summary' | 'full' | undefined;
+      confirm: boolean | undefined;
+    },
+  ): Promise<McpToolResult> => {
+    const rc = repoContext(pd);
+    if (!rc.ok) return rc.result;
+    const ctx = rc.ctx;
+    const level = detail === 'full' ? 'full' : 'summary';
+    interface Entry {
+      readonly asked: string;
+      readonly node?: TreeNode;
+      readonly error?: unknown;
+    }
+    const entries: Entry[] = [];
+    const seen = new Set<string>();
+    for (const asked of resources) {
+      const r = resolvePage(ctx, asked);
+      if (!r.ok) {
+        const text = r.result.content.map((c) => ('text' in c ? c.text : '')).join('');
+        let err: unknown = text;
+        try {
+          err = (JSON.parse(text.split('\n')[0]!) as { error?: unknown }).error;
+        } catch {
+          /* keep the text */
         }
-        const entries: Entry[] = [];
-        const seen = new Set<string>();
-        for (const asked of resources) {
-          const r = resolvePage(ctx, asked);
-          if (!r.ok) {
-            const text = r.result.content.map((c) => ('text' in c ? c.text : '')).join('');
-            let err: unknown = text;
-            try {
-              err = (JSON.parse(text.split('\n')[0]!) as { error?: unknown }).error;
-            } catch {
-              /* keep the text */
-            }
-            entries.push({ asked, error: err });
-          } else if (!seen.has(r.node.id)) {
-            seen.add(r.node.id);
-            entries.push({ asked, node: r.node });
-          }
-        }
-        const nodes = entries.filter((e) => e.node).map((e) => e.node!);
-        const liveReads = live === false ? 0 : nodes.length;
-        if (liveReads > LARGE_BATCH && confirm !== true) {
-          const lk = pd.projects.anyClient(pd.project.id);
-          const e = lk?.governor.estimate({
-            reads: liveReads,
-            writes: 0,
-            createManyItems: 0,
-            priority: 'P1',
-          });
+        entries.push({ asked, error: err });
+      } else if (!seen.has(r.node.id)) {
+        seen.add(r.node.id);
+        entries.push({ asked, node: r.node });
+      }
+    }
+    const nodes = entries.filter((e) => e.node).map((e) => e.node!);
+    const liveReads = live === false ? 0 : nodes.length;
+    if (liveReads > LARGE_BATCH && confirm !== true) {
+      const lk = pd.projects.anyClient(pd.project.id);
+      const e = lk?.governor.estimate({
+        reads: liveReads,
+        writes: 0,
+        createManyItems: 0,
+        priority: 'P1',
+      });
+      return render(
+        {
+          status: 'estimate',
+          tree: treeInfo(ctx.meta, ctx.now),
+          pages: nodes.length,
+          reads: liveReads,
+          ...(e
+            ? {
+                wallClockSeconds: Math.round(e.wallClockMs / 1000),
+                tightestTier: e.tightestTier,
+                fitsToday: e.fitsToday,
+              }
+            : {}),
+          hint: `Nothing was read. This takes ${liveReads} LegendKeeper reads. Repeat the call with confirm: true to run it, or use live: false (no reads) or fewer pages.`,
+        },
+        pd,
+      );
+    }
+    // One job: a getResource step per page, read as they finish.
+    const sidebars = new Map<string, unknown>();
+    const failures = new Map<string, unknown>();
+    let jobNote: Record<string, unknown> | undefined;
+    if (liveReads > 0) {
+      try {
+        const sub = await pd.engine.submit({
+          kind: 'batch_ops',
+          project: pd.project.id,
+          steps: nodes.map((n) => ({
+            op: 'getResource',
+            params: { path: { resourceId: n.id } },
+          })),
+          onError: 'continue',
+          origin: mcpOrigin(mctx, 'get_resource'),
+          priority: 'P1',
+          title: `get_resource (${nodes.length} pages)`,
+        });
+        if (!('jobId' in sub))
+          return errorResult({ code: 'BRIDGE_ERROR', message: 'The read was not accepted.' }, pd);
+        const job = await pd.engine.wait(pd.project.id, sub.jobId, 25_000);
+        const done = job.status === 'succeeded' || job.status === 'failed';
+        const results = done ? pd.engine.stepResults(pd.project.id, sub.jobId) : undefined;
+        if (!results) {
           return render(
             {
-              status: 'estimate',
+              status: 'running',
+              jobId: sub.jobId,
               tree: treeInfo(ctx.meta, ctx.now),
-              pages: nodes.length,
-              reads: liveReads,
-              ...(e
-                ? {
-                    wallClockSeconds: Math.round(e.wallClockMs / 1000),
-                    tightestTier: e.tightestTier,
-                    fitsToday: e.fitsToday,
-                  }
-                : {}),
-              hint: `Nothing was read. This takes ${liveReads} LegendKeeper reads. Repeat the call with confirm: true to run it, or use live: false (no reads) or fewer pages.`,
+              hint: 'The reads are waiting for LegendKeeper’s rate budget and have NOT failed. Follow the job with bridge_job_status; do not start another get_resource.',
             },
             pd,
           );
         }
-        // One job: a getResource step per page, read as they finish.
-        const sidebars = new Map<string, unknown>();
-        const failures = new Map<string, unknown>();
-        let jobNote: Record<string, unknown> | undefined;
-        if (liveReads > 0) {
-          try {
-            const sub = await pd.engine.submit({
-              kind: 'batch_ops',
-              project: pd.project.id,
-              steps: nodes.map((n) => ({
-                op: 'getResource',
-                params: { path: { resourceId: n.id } },
-              })),
-              onError: 'continue',
-              origin: mcpOrigin(mctx, 'get_resources'),
-              priority: 'P1',
-              title: `get_resources (${nodes.length} pages)`,
-            });
-            if (!('jobId' in sub))
-              return errorResult({ code: 'BRIDGE_ERROR', message: 'The read was not accepted.' }, pd);
-            const job = await pd.engine.wait(pd.project.id, sub.jobId, 25_000);
-            const done = job.status === 'succeeded' || job.status === 'failed';
-            const results = done ? pd.engine.stepResults(pd.project.id, sub.jobId) : undefined;
-            if (!results) {
-              return render(
-                {
-                  status: 'running',
-                  jobId: sub.jobId,
-                  tree: treeInfo(ctx.meta, ctx.now),
-                  hint: 'The reads are waiting for LegendKeeper’s rate budget and have NOT failed. Follow the job with bridge_job_status; do not start another get_resources.',
-                },
-                pd,
-              );
-            }
-            results.forEach((st, i) => {
-              const n = nodes[i]!;
-              if (st.status === 'succeeded') sidebars.set(n.id, st.value);
-              else failures.set(n.id, st.error ?? { message: `The read ended ${st.status}.` });
-            });
-            jobNote = { jobId: sub.jobId };
-          } catch (e) {
-            return errorFromThrown(e, pd);
-          }
+        results.forEach((st, i) => {
+          const n = nodes[i]!;
+          if (st.status === 'succeeded') sidebars.set(n.id, st.value);
+          else failures.set(n.id, st.error ?? { message: `The read ended ${st.status}.` });
+        });
+        jobNote = { jobId: sub.jobId };
+      } catch (e) {
+        return errorFromThrown(e, pd);
+      }
+    }
+    const out: Record<string, unknown>[] = [];
+    for (const e of entries) {
+      if (!e.node) {
+        out.push({ asked: e.asked, ok: false, error: e.error });
+        continue;
+      }
+      const failure = failures.get(e.node.id);
+      if (failure) {
+        out.push({ asked: e.asked, ok: false, id: e.node.id, error: failure });
+        continue;
+      }
+      const note = characterIndexNote(ctx, e.node);
+      out.push({
+        asked: e.asked,
+        ok: true,
+        ...nodeBody(ctx, e.node),
+        ...(note ? { character: note } : {}),
+        ...(live === false
+          ? {}
+          : {
+              factsVersion: factsVersionOfRead(ctx, e.node.id, sidebars.get(e.node.id)),
+              sidebar: sidebarOf(ctx, sidebars.get(e.node.id), level),
+            }),
+        ...(live === false ? {} : { liveRead: liveStamp(sidebars.get(e.node.id)) }),
+      });
+    }
+    return finish(
+      pd,
+      mctx,
+      'get_resource',
+      { tree: treeInfo(ctx.meta, ctx.now), count: out.length, ...(jobNote ?? {}), resources: out },
+      () => ({ count: out.length, resources: out.map((o) => ({ asked: o.asked, ok: o.ok, id: o.id })) }),
+    );
+  };
+
+  const getResource = defineTool({
+    name: 'get_resource',
+    title: 'Get one or several pages and their sidebars',
+    access: 'read',
+    description:
+      'Shows a page: from the tree its path, kind, documents, tags, aliases, Reference Type and Scope; from one live read its whole sidebar: the facts in template order, each link collection with its items, other properties (read-only) and `factsVersion`. Pass `resource` for one page, or `resources` (up to 25 names or ids) for several as ONE job: use that instead of a loop. Use it before set_facts (pass factsVersion as baseFactsVersion). For page text use read_document. A name matching several pages is refused with the candidates: pass the id; a character’s facts and Scope are on its Character Core (or Character Reference), not on its [INDEX] page. live: false gives the tree’s data alone, for free. More than 10 pages first returns an estimate: repeat with confirm: true. Example: { "resource": "Asagiri Miyabi" } or { "resources": ["Asagiri Miyabi", "Asagiri Kaede"] }. Cost: 1 read per page (live: false: none).',
+    inputSchema: z.object({
+      resource: z.string().min(1).max(500).optional().describe('One page: name or id.'),
+      resources: z
+        .array(z.string().min(1).max(500))
+        .min(1)
+        .max(25)
+        .optional()
+        .describe(
+          'Several pages (at most 25) instead of `resource`; a page that cannot be resolved is reported in its own entry.',
+        ),
+      live: z
+        .boolean()
+        .optional()
+        .describe('false: the tree’s data only, no LegendKeeper read. Default true.'),
+      detail: z.enum(['summary', 'full']).optional().describe('With `resources`: summary (default) or full.'),
+      confirm: z
+        .boolean()
+        .optional()
+        .describe(`With \`resources\`: needed for more than ${LARGE_BATCH} live reads, after the estimate.`),
+      project: projectArg,
+    }),
+    annotations: READ_ANNOTATIONS,
+    handler: ({ resource, resources, live, detail, confirm, project }, mctx) =>
+      withProject(deps, project, 'read', async (pd) => {
+        if ((resource === undefined) === (resources === undefined)) {
+          return errorResult(
+            {
+              code: 'RESOURCE_REQUIRED',
+              message:
+                resource === undefined
+                  ? 'Say which page: pass `resource` (one page name or id) or `resources` (up to 25).'
+                  : 'Pass either `resource` (one page) or `resources` (several), not both.',
+              hint: 'Nothing was read. Example: { "resource": "Asagiri Miyabi" }.',
+            },
+            pd,
+          );
         }
-        const out: Record<string, unknown>[] = [];
-        for (const e of entries) {
-          if (!e.node) {
-            out.push({ asked: e.asked, ok: false, error: e.error });
-            continue;
-          }
-          const failure = failures.get(e.node.id);
-          if (failure) {
-            out.push({ asked: e.asked, ok: false, id: e.node.id, error: failure });
-            continue;
-          }
-          out.push({
-            asked: e.asked,
-            ok: true,
-            ...nodeBody(ctx, e.node),
-            ...(live === false
-              ? {}
-              : {
-                  factsVersion: factsVersionOfRead(ctx, e.node.id, sidebars.get(e.node.id)),
-                  sidebar: sidebarOf(ctx, sidebars.get(e.node.id), level),
-                }),
-            ...(live === false ? {} : { liveRead: liveStamp(sidebars.get(e.node.id)) }),
-          });
-        }
-        return finish(
-          pd,
-          mctx,
-          'get_resources',
-          { tree: treeInfo(ctx.meta, ctx.now), count: out.length, ...(jobNote ?? {}), resources: out },
-          () => ({ count: out.length, resources: out.map((o) => ({ asked: o.asked, ok: o.ok, id: o.id })) }),
-        );
+        if (resources !== undefined) return getMany(pd, mctx, { resources, live, detail, confirm });
+        return getOne(pd, mctx, resource!, live);
       }),
   });
+
+  /** The old name, kept one release: a cached tool list fails with a pointer to `get_resource` (ADR 0045, P1). */
+  const getResourcesRenamed = renamedTool(
+    'get_resources',
+    'get_resource',
+    'pass `resources` (a list of up to 25 names or ids) instead of `resource`; everything else is as before.',
+  );
 
   // ---------------------------------------------------------------------------------------------- lists
   const listTags = defineTool({
@@ -787,7 +826,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     browseAssets,
     search,
     getResource,
-    getResources,
+    getResourcesRenamed,
     listTags,
     listTemplates,
     listCalendars,

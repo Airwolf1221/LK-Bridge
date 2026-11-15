@@ -62,7 +62,7 @@ describe('docs/bridge-guide.md', () => {
   it('names only tools that exist', () => {
     const names = new Set(tools.map((t) => t.name));
     for (const op of operations) names.add(`lk_op_${op.operationId}`);
-    for (const n of ['bridge_proposal_status', 'bridge_proposals_mine']) names.add(n);
+    names.add('bridge_proposal_status'); // the policy layer's tool, not in this list
     const mentioned = [...guide.matchAll(/`((?:lk|bridge|list|get|browse|write)(?:_[a-zA-Z]+)+)`/g)].map(
       (m) => m[1]!,
     );

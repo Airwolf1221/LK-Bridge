@@ -1822,6 +1822,8 @@ export interface ToolCallRow {
   budgetRequests: number | null;
   budgetWrites: number | null;
   resultChars: number | null;
+  /** A write_page or set_facts that edits existing content with no base version (src/toolcalls/flag.ts). */
+  noBaseVersion?: boolean;
 }
 
 export interface ToolCallsResponse {
@@ -1830,5 +1832,155 @@ export interface ToolCallsResponse {
   hasMore: boolean;
   nextBefore: number | null;
   facets: { tools: string[]; profiles: string[]; codes: string[]; total: number; oldest: number | null };
+  /** The calls matching the filters (the flag aside), and how many of them are writes without a base version. */
+  summary?: { matching: number; noBaseVersion: number };
   settings: { retentionDays: number; maxRetentionDays: number; recording: boolean };
+}
+
+// ------------------------------------------------------------------------------------- Evaluation helper (v2 E3)
+
+export type EvaluationAssistant = 'chatgpt' | 'claude';
+export type EvaluationSet = 'core' | 'all';
+export type OwnerGrade = 'right' | 'partly' | 'wrong';
+
+export interface EvaluationScenario {
+  id: number;
+  section: string;
+  title: string;
+  shortTitle: string;
+  assistants: EvaluationAssistant[];
+  needsApproval: boolean;
+  alwaysProposal: boolean;
+  core: boolean;
+  dependsOn: number[];
+  freshChat: boolean;
+  prompts: string[];
+  interlude: string | null;
+  setupNote: string | null;
+  /** An inner list means "any one of these". */
+  expectedTools: (string | string[])[];
+  optionalTools: string[];
+  mistakeTools: string[];
+  expectedNote: string;
+  watchFor: string;
+  toolCallsNote: string;
+  /** What the owner pastes: the preamble in front of the first prompt of a fresh chat. */
+  copy: string[];
+}
+
+export interface EvaluationScenarios {
+  preamble: string;
+  scenarios: EvaluationScenario[];
+  coreIds: number[];
+}
+
+export type EvaluationHint = 'looks_right' | 'check' | 'looks_wrong' | 'no_calls';
+
+export interface EvaluationAutoGrade {
+  expectedPresent: boolean;
+  missingExpected: string[];
+  mistakeTools: string[];
+  errorCodes: { code: string; count: number }[];
+  callCount: number;
+  writesWithoutBaseVersion: number;
+  hint: EvaluationHint;
+}
+
+export interface EvaluationCall {
+  tool: string;
+  outcome: ToolCallOutcome;
+  code: string | null;
+  live?: boolean;
+  noBase?: true;
+}
+
+export interface EvaluationResult {
+  scenarioId: number;
+  title: string;
+  state: 'pending' | 'recording' | 'done';
+  startedAt: number | null;
+  finishedAt: number | null;
+  startCallId: number | null;
+  endCallId: number | null;
+  principalIds: string[];
+  connectionMode: 'auto' | 'manual';
+  calls: EvaluationCall[];
+  sequence: string;
+  autoGrade: EvaluationAutoGrade | null;
+  ownerGrade: OwnerGrade | null;
+  note: string;
+  live?: { callCount: number; tools: string[] };
+}
+
+export interface EvaluationRunSummary {
+  id: string;
+  createdAt: number;
+  assistant: EvaluationAssistant;
+  set: EvaluationSet;
+  bridgeVersion: string;
+  status: 'in_progress' | 'finished';
+  finishedAt: number | null;
+  progress: { total: number; done: number; graded: number };
+}
+
+export interface EvaluationRun extends EvaluationRunSummary {
+  principalIds: string[] | null;
+  results: EvaluationResult[];
+}
+
+export interface EvaluationRunsResponse {
+  runs: EvaluationRunSummary[];
+  recording: boolean;
+  retentionDays: number;
+}
+
+export interface EvaluationRunResponse {
+  run: EvaluationRun;
+  principals: PrincipalNames;
+}
+
+export interface EvaluationConnection {
+  id: string;
+  name: string;
+  type: 'grant' | 'pat';
+  profile: string | null;
+  scope: string | null;
+  active: boolean;
+  removed: boolean;
+  lastUsedAt: number | null;
+  calls: number;
+  lastCallAt: number | null;
+  assistant: EvaluationAssistant | null;
+  reason: string;
+}
+
+export interface EvaluationConnectionsResponse {
+  connections: EvaluationConnection[];
+  recognised: string[];
+}
+
+export interface EvaluationScenarioComparison {
+  scenarioId: number;
+  shortTitle: string;
+  inA: boolean;
+  inB: boolean;
+  gradeA: OwnerGrade | null;
+  gradeB: OwnerGrade | null;
+  movement: 'better' | 'worse' | 'same' | 'new' | 'unknown';
+  gradeText: string;
+  callsA: number;
+  callsB: number;
+  toolsAdded: { tool: string; from: number; to: number }[];
+  toolsRemoved: { tool: string; from: number; to: number }[];
+  codesAppeared: string[];
+  codesGone: string[];
+}
+
+export interface EvaluationComparison {
+  a: { id: string; createdAt: number; assistant: string };
+  b: { id: string; createdAt: number; assistant: string };
+  scenarios: EvaluationScenarioComparison[];
+  commonScenarios: number;
+  errorCodeChanges: { code: string; from: number; to: number }[];
+  summary: string[];
 }

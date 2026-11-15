@@ -69,7 +69,7 @@ export function rateCostText(op: OperationDef): string {
     case 'items':
       return 'Costs 1 write plus 1 createMany item per entry of body.resources (600 per minute, 6,000 per hour).';
     case 'upload':
-      return 'Costs 1 write plus upload-tier backoff if LegendKeeper throttles uploads; prefer lk_upload_image.';
+      return 'Costs 1 write plus upload-tier backoff if LegendKeeper throttles uploads; prefer upload_image.';
   }
 }
 

@@ -32,7 +32,7 @@ describe('factsVersion', () => {
     // set_facts plans on listProperties; Rheashira's rows are stored out of rank order.
     const dry = await call('set_facts', { page: RHEASHIRA.page, facts: { Mood: 'Calm' }, dryRun: true });
     expect(dry.body.factsVersion).toBe(a);
-    const many = await call('get_resources', { resources: [RHEASHIRA.page, P.miyabi] });
+    const many = await call('get_resource', { resources: [RHEASHIRA.page, P.miyabi] });
     expect(many.body.resources[0].factsVersion).toBe(a);
   });
 

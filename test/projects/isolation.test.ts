@@ -141,7 +141,7 @@ describe('LegendKeeper data stays in its project', () => {
       'lk_api_write',
       'bridge_budget',
       'bridge_job_status',
-      'bridge_proposals_mine',
+      'bridge_proposal_status',
     ]) {
       const r = await t.call(writer.client, tool, {
         ...(tool.startsWith('lk_api') ? { operationId: 'listResources' } : {}),
@@ -298,9 +298,9 @@ describe('proposals', () => {
     }
   });
 
-  it('tools: bridge_proposals_mine and bridge_proposal_status see the asked project only', async () => {
+  it('tools: bridge_proposal_status (listing yours, and one) sees the asked project only', async () => {
     for (const name of NAMES) {
-      const mine = await t.call(proposer.client, 'bridge_proposals_mine', { project: name });
+      const mine = await t.call(proposer.client, 'bridge_proposal_status', { project: name });
       expect(mine.isError, mine.text).toBe(false);
       expect(mine.text).toContain(made[name].proposalId!);
       expect(mine.text).not.toContain(made[other(name)].proposalId!);

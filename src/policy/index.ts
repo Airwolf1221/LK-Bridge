@@ -53,7 +53,7 @@ export interface Policy {
   /** Connection removal, the daily sweep, stale connections and replace-on-reconnect (ADR 0033). */
   readonly connections: ConnectionManager;
   readonly access: McpAccessControl;
-  /** `bridge_proposal_status` and `bridge_proposals_mine`. */
+  /** `bridge_proposal_status` (one proposal, or yours listed) and the retired `bridge_proposals_mine` name. */
   readonly tools: readonly McpToolProvider[];
   readonly commands: OwnerCommands;
   attach(engine: JobEngine): () => void;

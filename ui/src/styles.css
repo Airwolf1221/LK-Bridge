@@ -994,3 +994,25 @@ dl.facts dd {
   word-break: break-all;
   user-select: all;
 }
+
+/* v2 E3: the Evaluation helper on the Tool calls page. */
+ol.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+pre.prompt,
+pre.results-table {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  margin: 0.3rem 0;
+}
+pre.prompt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+pre.results-table {
+  overflow-x: auto;
+}

@@ -9,6 +9,7 @@ import { PolicyDeniedError } from '../jobs/errors.js';
 import type { JobOrigin } from '../jobs/types.js';
 import type { McpAccessControl, McpToolContext, McpToolProvider, McpToolResult } from '../mcp/server.js';
 import type { ProjectSelector, SelectedProject } from '../projects/selection.js';
+import { renamedTool } from '../mcp/tools/define.js';
 import type { LivePolicyGate } from './gate.js';
 import type { ProposalService } from './proposals.js';
 import { PROPOSAL_STATES } from './types.js';
@@ -102,20 +103,41 @@ export function proposalTools(proposals: ProposalService, o: ProposalToolsOption
   };
   const isResult = (v: SelectedProject | McpToolResult): v is McpToolResult => 'content' in v;
 
+  // v2 E3b (ADR 0045, P2): `bridge_proposals_mine` is merged in. With a proposalId one proposal is shown; without it,
+  // the caller's own proposals are listed (newest first, optionally one state).
   const status: McpToolProvider<
-    z.ZodObject<{ proposalId: z.ZodString; project: z.ZodOptional<z.ZodString> }>
+    z.ZodObject<{
+      proposalId: z.ZodOptional<z.ZodString>;
+      state: z.ZodOptional<z.ZodEnum<{ [K in (typeof PROPOSAL_STATES)[number]]: K }>>;
+      limit: z.ZodOptional<z.ZodNumber>;
+      project: z.ZodOptional<z.ZodString>;
+    }>
   > = {
     name: 'bridge_proposal_status',
     title: 'Proposal status',
     description:
-      'Shows the state of one of YOUR proposals (writes held for the owner): pending, approved, executing, executed, rejected (with the reason), conflicted, expired or failed, and the job id once it runs. Pass the project the write was for. Use it after proposal_captured instead of repeating the write; only the owner can approve or reject, on the dashboard. A conflicted proposal means the page changed: read it again and propose afresh. Cost: none.',
-    inputSchema: z.object({ proposalId: z.string().min(1).max(64), project: projectArg }),
+      'Shows the state of one of YOUR proposals (writes held for the owner): pending, approved, executing, executed, rejected (with the reason), conflicted, expired or failed, and the job id once it runs. Pass `proposalId`; without it, lists your proposals in the project, newest first (optionally only one `state`, at most `limit`). Pass the project the write was for. Use it after proposal_captured instead of repeating the write; only the owner can approve or reject, on the dashboard. A conflicted proposal means the page changed: read it again and propose afresh. Cost: none.',
+    inputSchema: z.object({
+      proposalId: z.string().min(1).max(64).optional().describe('One proposal. Leave out to list yours.'),
+      state: z.enum(PROPOSAL_STATES).optional().describe('When listing: only proposals in this state.'),
+      limit: z.number().int().min(1).max(50).optional().describe('When listing: default 20.'),
+      project: projectArg,
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     access: 'read',
-    handler: ({ proposalId, project: asked }, ctx) => {
+    handler: ({ proposalId, state, limit, project: asked }, ctx) => {
       if (!ctx.principal) return text(NO_PRINCIPAL, null, true);
       const project = pick(asked);
       if (isResult(project)) return project;
+      if (proposalId === undefined) {
+        const list = proposals.list({
+          project: project.id,
+          principalId: ctx.principal.principalId,
+          ...(state ? { state } : {}),
+          limit: limit ?? 20,
+        });
+        return text({ proposals: list.map((p) => proposals.agentView(p)) }, project);
+      }
       const p = proposals.get(proposalId);
       // Someone else's proposal, or one in another project, looks exactly like one that does not exist.
       if (!p || p.principalId !== ctx.principal.principalId || p.projectId !== project.id) {
@@ -129,36 +151,11 @@ export function proposalTools(proposals: ProposalService, o: ProposalToolsOption
     },
   };
 
-  const mine: McpToolProvider<
-    z.ZodObject<{
-      state: z.ZodOptional<z.ZodEnum<{ [K in (typeof PROPOSAL_STATES)[number]]: K }>>;
-      limit: z.ZodOptional<z.ZodNumber>;
-      project: z.ZodOptional<z.ZodString>;
-    }>
-  > = {
-    name: 'bridge_proposals_mine',
-    title: 'My proposals',
-    description:
-      'Lists YOUR proposals in one project, newest first (optionally only one state). Use it when you do not have a proposal’s id; bridge_proposal_status shows one. Cost: none.',
-    inputSchema: z.object({
-      state: z.enum(PROPOSAL_STATES).optional(),
-      limit: z.number().int().min(1).max(50).optional(),
-      project: projectArg,
-    }),
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    access: 'read',
-    handler: ({ state, limit, project: asked }, ctx) => {
-      if (!ctx.principal) return text(NO_PRINCIPAL, null, true);
-      const project = pick(asked);
-      if (isResult(project)) return project;
-      const list = proposals.list({
-        project: project.id,
-        principalId: ctx.principal.principalId,
-        ...(state ? { state } : {}),
-        limit: limit ?? 20,
-      });
-      return text({ proposals: list.map((p) => proposals.agentView(p)) }, project);
-    },
-  };
+  /** The old name, kept one release (ADR 0045, P2). */
+  const mine = renamedTool(
+    'bridge_proposals_mine',
+    'bridge_proposal_status',
+    'leave `proposalId` out to list your proposals (`state` and `limit` work as before).',
+  );
   return [status, mine];
 }

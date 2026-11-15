@@ -307,7 +307,7 @@ export function errorFromThrown(e: unknown, deps: Pick<ProjectDeps, 'projects' |
 
 // ------------------------------------------------------------------------------------------------ run results
 
-const WAIT_HINT = 'Do not submit it again. Follow it with bridge_job_status or bridge_job_wait.';
+const WAIT_HINT = 'Do not submit it again. Follow it with bridge_job_status (wait_seconds waits for it).';
 
 /** Shapes an engine `RunResult` for a single-operation tool. Writes that waited or were captured are not errors. */
 export function runResultBody(

@@ -160,9 +160,11 @@ describe('no MCP tool can change policy, tokens or proposal decisions', () => {
       pats: stack.services.pats,
       mcpUrl: `${stack.base}/mcp`,
     });
-    expect(names).toEqual(expect.arrayContaining(stack.runtime.tools.map((t) => t.name)));
-    expect(names).toHaveLength(stack.runtime.tools.length);
-  });
+    // Retired names (v2 E3b) are registered but never listed: they answer "renamed to …" and do nothing.
+    const listed = stack.runtime.tools.filter((t) => t.retired !== true);
+    expect(names).toEqual(expect.arrayContaining(listed.map((t) => t.name)));
+    expect(names).toHaveLength(listed.length);
+  }, 30_000);
 
   it('the same with MCP_EXPOSE_PER_OP_TOOLS=true: every one of the 89 lk_op_* tools too (chunk 8, F-12)', async () => {
     const perOp = await startStack({ respond: specRespond(), env: { MCP_EXPOSE_PER_OP_TOOLS: 'true' } });
@@ -174,8 +176,9 @@ describe('no MCP tool can change policy, tokens or proposal decisions', () => {
         mcpUrl: `${perOp.base}/mcp`,
       });
       expect(names.filter((n) => n.startsWith('lk_op_'))).toHaveLength(89);
-      expect(names).toEqual(expect.arrayContaining(perOp.runtime.tools.map((t) => t.name)));
-      expect(names).toHaveLength(perOp.runtime.tools.length);
+      const listed = perOp.runtime.tools.filter((t) => t.retired !== true);
+      expect(names).toEqual(expect.arrayContaining(listed.map((t) => t.name)));
+      expect(names).toHaveLength(listed.length);
     } finally {
       await perOp.close();
     }

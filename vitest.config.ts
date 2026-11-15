@@ -30,6 +30,7 @@ export default defineConfig({
       'test/snapshots/**/*.test.ts', // v2 E1a: snapshots, restore and the rehearsal
       'test/offsite/**/*.test.ts', // v2 E1b: the encrypted Google Drive copy
       'test/audits/**/*.test.ts', // v2 E2: the audits (findings only, read from the snapshots)
+      'test/evaluation/**/*.test.ts', // v2 E3: the Evaluation helper (scenarios, windows, grading, results table, compare)
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

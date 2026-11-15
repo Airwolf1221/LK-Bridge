@@ -9,16 +9,17 @@ beforeAll(async () => {
 afterAll(() => w.close());
 
 const LOW = ['lk_api_list_operations', 'lk_api_describe_operation', 'lk_api_paginate_all'];
+// v2 E3b (ADR 0045, P4 and P5): two rarely used tools, hidden by the same setting.
+const RARE = ['lk_upload_image', 'create_bare_resource'];
 const list = async (token: string) =>
   (await (await w.stack.connect(token)).listTools()).tools.map((t) => t.name).sort();
 
 describe('showLowLevelTools, per profile', () => {
   it('is off by default: the low-level tools and every lk_op_* are hidden, the fallback stays', async () => {
     const names = await list(w.stack.token);
-    for (const n of LOW) expect(names, n).not.toContain(n);
+    for (const n of [...LOW, ...RARE]) expect(names, n).not.toContain(n);
     expect(names.filter((n) => n.startsWith('lk_op_'))).toEqual([]);
-    for (const n of ['lk_api_read', 'lk_api_write', 'lk_api_batch', 'lk_upload_image'])
-      expect(names, n).toContain(n);
+    for (const n of ['lk_api_read', 'lk_api_write', 'lk_api_batch']) expect(names, n).toContain(n);
     for (const n of ['browse_repository_tree', 'search', 'read_document', 'get_resource', 'get_bridge_guide'])
       expect(names, n).toContain(n);
     // The final list with the setting off (documented in docs/tools.md).
@@ -30,17 +31,14 @@ describe('showLowLevelTools, per profile', () => {
         'bridge_info',
         'bridge_job_cancel',
         'bridge_job_status',
-        'bridge_job_wait',
         'bridge_journal_lookup',
         'bridge_proposal_status',
-        'bridge_proposals_mine',
         'bridge_result_page',
         'browse_asset_tree',
         'browse_repository_tree',
         'get_bridge_guide',
         'get_markdown_guide',
         'get_resource',
-        'get_resources',
         'list_assets',
         'list_calendars',
         'list_projects',
@@ -49,13 +47,11 @@ describe('showLowLevelTools, per profile', () => {
         'lk_api_batch',
         'lk_api_read',
         'lk_api_write',
-        'lk_upload_image',
         'read_document',
         'search',
         'set_facts',
         'write_page',
         // v2 C2b: the Resources, Documents and character tools
-        'create_bare_resource',
         'create_character',
         'create_document',
         'create_index',
@@ -106,7 +102,7 @@ describe('showLowLevelTools, per profile', () => {
       before + 1,
     );
     const withLow = await list(a.token);
-    for (const n of LOW) expect(withLow, n).toContain(n);
+    for (const n of [...LOW, ...RARE]) expect(withLow, n).toContain(n);
     expect(withLow.filter((n) => n.startsWith('lk_op_'))).toHaveLength(operations.length);
     // Another profile is untouched.
     expect(await list(b.token)).not.toContain('lk_api_describe_operation');
@@ -116,11 +112,13 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 61 tools off and 61 + 3 + 89 on', async () => {
+  it('shows 56 tools off and 56 + 3 + 2 + 89 on', async () => {
     const t = w.stack.newToken('counting', 'write');
-    expect(await list(t.token)).toHaveLength(61); // v2 D2: three map tools; v2 D3: two image tools; v2 E1a: three snapshot tools; v2 E2: audit_findings
+    // 61 before v2 E3b; get_resources, bridge_proposals_mine and bridge_job_wait were merged (-3) and lk_upload_image and
+    // create_bare_resource are hidden by default (-2).
+    expect(await list(t.token)).toHaveLength(56);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(61 + 3 + operations.length);
+    expect(await list(t.token)).toHaveLength(56 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

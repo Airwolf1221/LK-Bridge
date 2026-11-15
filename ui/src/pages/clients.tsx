@@ -520,7 +520,7 @@ function ProfilesCard({
               <th>Profile</th>
               <th>Kind</th>
               <th>Scope</th>
-              <th>Low-level tools</th>
+              <th>Low-level and rarely used tools</th>
               <th className="num">Active connections</th>
             </tr>
           </thead>
@@ -557,15 +557,15 @@ function ProfilesCard({
                       type="checkbox"
                       checked={p.showLowLevelTools}
                       disabled={busy}
-                      aria-label={`Show low-level tools to ${p.label}`}
+                      aria-label={`Show low-level and rarely used tools to ${p.label}`}
                       aria-describedby="tool-cache-hint"
                       onChange={(e) =>
                         void run(
                           () =>
                             api.put(`/clients/profiles/${p.id}/low-level-tools`, { show: e.target.checked }),
                           e.target.checked
-                            ? `“${p.label}” is now shown the low-level tools.`
-                            : `“${p.label}” no longer sees the low-level tools.`,
+                            ? `“${p.label}” is now shown the low-level and rarely used tools.`
+                            : `“${p.label}” no longer sees the low-level and rarely used tools.`,
                         ).then(onChanged)
                       }
                     />{' '}
@@ -579,18 +579,20 @@ function ProfilesCard({
         </table>
       </div>
       <p className="muted">
-        <strong>Low-level tools</strong> are the raw LegendKeeper operation tools (
+        <strong>Low-level and rarely used tools</strong> are the raw LegendKeeper operation tools (
         <code>lk_api_list_operations</code>, <code>lk_api_describe_operation</code>,{' '}
-        <code>lk_api_paginate_all</code> and every <code>lk_op_*</code>). Hidden by default. Hiding only
-        changes the tool list the agent is shown: a call to a hidden tool is still allowed or refused by the
-        profile’s scope exactly as before.
+        <code>lk_api_paginate_all</code> and every <code>lk_op_*</code>) and two older or seldom-needed tools
+        (<code>lk_upload_image</code>, which <code>upload_image</code> replaces, and{' '}
+        <code>create_bare_resource</code>, a page with no template). Hidden by default. Hiding only changes
+        the tool list the agent is shown: a call to a hidden tool is still allowed or refused by the profile’s
+        scope exactly as before.
       </p>
       <p className="muted" id="tool-cache-hint">
         <strong>Tool lists are cached by the client.</strong> claude.ai keeps its own copy of a connector’s
-        tool list, so a change to tool visibility (the “Show low-level tools” checkbox, or a scope change that
-        hides or shows the write tools) shows in claude.ai only after the connector is disconnected and
-        reconnected in claude.ai’s settings. New chats alone were not enough (observed on 10 November 2026;
-        not a guarantee). In ChatGPT, use Plugins, then the bridge, then Refresh.
+        tool list, so a change to tool visibility (the “Show low-level and rarely used tools” checkbox, or a
+        scope change that hides or shows the write tools) shows in claude.ai only after the connector is
+        disconnected and reconnected in claude.ai’s settings. New chats alone were not enough (observed on 10
+        November 2026; not a guarantee). In ChatGPT, use Plugins, then the bridge, then Refresh.
       </p>
       <h3>New profile</h3>
       <div className="field-row">

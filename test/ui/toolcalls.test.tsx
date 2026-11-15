@@ -148,3 +148,67 @@ describe('the Tool calls page', () => {
     expect(await screen.findByText(/Recording is switched off/)).toBeInTheDocument();
   });
 });
+
+describe('writes without a base version (v2 E3)', () => {
+  const flagged = call({
+    id: 3,
+    tool: 'set_facts',
+    args: [
+      { name: 'page', type: 'string', size: 14, value: 'Asagiri Miyabi' },
+      { name: 'facts', type: 'object', size: 1 },
+    ],
+    outcome: 'success',
+    code: 'succeeded',
+    proposalId: null,
+    noBaseVersion: true,
+  });
+
+  it('badges each such call, and only those', async () => {
+    installApi(
+      routes({
+        'GET /tool-calls': response([flagged, call(), failed], {
+          summary: { matching: 3, noBaseVersion: 1 },
+        }),
+      }),
+    );
+    renderApp('/ui/tool-calls');
+    const table = await screen.findByRole('table');
+    const row = table.querySelector('[data-call="3"]') as HTMLElement;
+    expect(within(row).getByText('write without a base version')).toBeInTheDocument();
+    expect(within(table).getAllByText('write without a base version')).toHaveLength(1);
+    expect(screen.getByTestId('nobase-summary')).toHaveTextContent(
+      '1 of 3 matching calls is a write without a base version',
+    );
+  });
+
+  it('says nothing when there are none', async () => {
+    installApi(
+      routes({ 'GET /tool-calls': response([call()], { summary: { matching: 1, noBaseVersion: 0 } }) }),
+    );
+    renderApp('/ui/tool-calls');
+    await screen.findByRole('table');
+    expect(screen.queryByTestId('nobase-summary')).toBeNull();
+    expect(screen.queryByText('write without a base version')).toBeNull();
+  });
+
+  it('filters on “Writes without a base version”, sending noBaseVersion=true to the bridge', async () => {
+    const api = installApi(
+      routes({
+        'GET /tool-calls': (c: { query: string }) =>
+          new URLSearchParams(c.query).get('noBaseVersion') === 'true'
+            ? response([flagged], { summary: { matching: 3, noBaseVersion: 1 } })
+            : response([flagged, call(), failed], { summary: { matching: 3, noBaseVersion: 1 } }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/tool-calls');
+    await screen.findByRole('table');
+    expect(new URLSearchParams(api.find('GET', '/tool-calls')[0]!.query).has('noBaseVersion')).toBe(false);
+    await user.click(screen.getByLabelText('Writes without a base version'));
+    await waitFor(() => {
+      const last = api.find('GET', '/tool-calls').at(-1)!;
+      expect(new URLSearchParams(last.query).get('noBaseVersion')).toBe('true');
+    });
+    await waitFor(() => expect(screen.getByRole('table').querySelectorAll('[data-call]')).toHaveLength(1));
+  });
+});

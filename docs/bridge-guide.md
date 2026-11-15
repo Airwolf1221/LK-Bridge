@@ -23,36 +23,58 @@ tasks come first and the reference after. The last section, **Operations**, list
 
 **Which tool?**
 
-| You want to…                                        | Use                                                                     | Not                                                |
-| --------------------------------------------------- | ----------------------------------------------------------------------- | -------------------------------------------------- |
-| Find a page when you know part of its name or a tag | `search`                                                                | `browse_repository_tree` of the whole root         |
-| See how a part of the repository is laid out        | `browse_repository_tree`                                                | many `get_resource` calls                          |
-| Look at one page's facts, links, tags               | `get_resource` (several: `get_resources`)                               | `read_document`, `lk_api_read`                     |
-| Read a page's text (or one section)                 | `read_document` (`outline`, `section`)                                  | `lk_api_read` `getDocumentBlocks`                  |
-| Change a page's text                                | `write_page`, section modes                                             | `replace` of the whole page, `lk_api_write`        |
-| Change facts or links                               | `set_facts` (all changes in one call)                                   | `lk_api_write` on properties                       |
-| Rename, tag, alias, hide, lock                      | `update_resource`                                                       | `lk_api_write`                                     |
-| Make a character                                    | `create_character` (Working), then `create_resource` for its pages      | `create_bare_resource`, `create_many_resources`    |
-| Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` unless there is no template |
-| Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                      |
-| Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                              | `delete_resource`, `move_resource` to the archive  |
-| Make Working work canon                             | `promote_page` (`subtree: true` for a set)                              | `set_facts` Status                                 |
-| Delete (and undo)                                   | `delete_resource`, `restore_resource`                                   | `lk_api_write`                                     |
-| Check or convert a date                             | `calendar_date`                                                         | working it out yourself                            |
-| Add, change, remove a chronology event              | `create_`, `update_`, `delete_timeline_event`                           | `write_page` on a table; `lk_api_*`                |
-| Add or move a map pin, region, path                 | `create_map_feature`, `update_map_feature` (pixels from the image)      | `lk_api_write` `createFeature`                     |
-| Put an image in the library                         | `upload_image` (staged first at `propose`)                              | `lk_upload_image`                                  |
-| See older states of a page and bring one back       | `list_snapshots`, `snapshot_diff`, `restore_snapshot` (always proposal) | rewriting the text with `write_page`               |
-| See what the audits found                           | `audit_findings`                                                        | scanning pages yourself                            |
-| Know how much budget is left, or if work fits       | `bridge_budget`, `bridge_estimate`                                      | reading pages to find out                          |
-| Know what happened to a proposal or job             | `bridge_proposal_status`, `bridge_job_status`                           | repeating the write                                |
-| Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations                        |                                                    |
+| You want to…                                        | Use                                                                     | Not                                               |
+| --------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------------- |
+| Find a page when you know part of its name or a tag | `search`                                                                | `browse_repository_tree` of the whole root        |
+| See how a part of the repository is laid out        | `browse_repository_tree`                                                | many `get_resource` calls                         |
+| Look at one page's facts, links, tags               | `get_resource` (`resources` for several, up to 25)                      | `read_document`, `lk_api_read`                    |
+| Read a page's text (or one section)                 | `read_document` (`outline`, `section`)                                  | `lk_api_read` `getDocumentBlocks`                 |
+| Change a page's text                                | `write_page`, section modes                                             | `replace` of the whole page, `lk_api_write`       |
+| Change facts or links                               | `set_facts` (all changes in one call)                                   | `lk_api_write` on properties                      |
+| Rename, tag, alias, hide, lock                      | `update_resource`                                                       | `lk_api_write`                                    |
+| Make a character                                    | `create_character` (Working), then `create_resource` for its pages      | `create_many_resources`                           |
+| Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` (rare: see Create a page)  |
+| Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                     |
+| Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                              | `delete_resource`, `move_resource` to the archive |
+| Make Working work canon                             | `promote_page` (`subtree: true` for a set)                              | `set_facts` Status                                |
+| Delete (and undo)                                   | `delete_resource`, `restore_resource`                                   | `lk_api_write`                                    |
+| Check or convert a date                             | `calendar_date`                                                         | working it out yourself                           |
+| Add, change, remove a chronology event              | `create_`, `update_`, `delete_timeline_event`                           | `write_page` on a table; `lk_api_*`               |
+| Add or move a map pin, region, path                 | `create_map_feature`, `update_map_feature` (pixels from the image)      | `lk_api_write` `createFeature`                    |
+| Put an image in the library                         | `upload_image` (staged first at `propose`)                              | `lk_upload_image` (older; usually not shown)      |
+| See older states of a page and bring one back       | `list_snapshots`, `snapshot_diff`, `restore_snapshot` (always proposal) | rewriting the text with `write_page`              |
+| See what the audits found                           | `audit_findings`                                                        | scanning pages yourself                           |
+| Know how much budget is left, or if work fits       | `bridge_budget`, `bridge_estimate`                                      | reading pages to find out                         |
+| Know what happened to a proposal or job             | `bridge_proposal_status`, `bridge_job_status` (`wait_seconds` waits)    | repeating the write                               |
+| Do something none of the above does                 | the `lk_api_*` tools, with an id from Operations                        |                                                   |
 
 **What your scope means.** The tools you are shown depend on your connection's scope. `read` shows read tools only.
 `propose` shows every tool, but a write becomes a **proposal**: nothing is written, the owner sees exactly your change on the
 dashboard and approves or rejects it. `write` writes directly, except for the always-proposal changes in rule 4 and
 `restore_snapshot`. `bridge_info` tells you which you have. Every result names its project and ends with that project's
 budget line.
+
+**Sections to ask for.** `get_bridge_guide` takes `section`. Ask for one of these exact names (a near miss is matched
+loosely, but only a clear match is returned, and each miss costs a call):
+
+- `How to decide` (this section)
+- `Find and read a page`
+- `Edit a page's text`
+- `Change facts and links`
+- `Create a page or a character (Working first)`
+- `Rename, move, delete and restore`
+- `The page lifecycle` (promote, archive, unarchive, move to Working)
+- `Dates and the chronology`
+- `Maps`
+- `Images`
+- `Snapshots and restores`
+- `Audit findings`
+- `Budgets, jobs and proposals`
+- `Canon and approval`
+- `When the low-level tools are right`
+- `Reference`, and under it `What the bridge is`, `Projects`, `The repository tree`, `The tools you are shown`,
+  `When something goes wrong`
+- `Operations` (every LegendKeeper operation id)
 
 ## Find and read a page
 
@@ -84,14 +106,17 @@ not appear on any page from a content search.
 **Names and ids.** Wherever a tool takes a page, give a name or an id. A name must match exactly one page (display
 name, full name, alias or Canonical Display Name, ignoring case). If it matches several, you get the candidates with
 their paths: choose one and pass its id. The bridge never guesses. A character often has several pages with its name (its
-`[INDEX]`, its Core, perhaps a Reference): when you write to "the character", name the Core by id.
+`[INDEX]`, its Core, perhaps a Reference): **a character's facts and Scope live on its Character Core (or Character
+Reference for a compact character), not on its `[INDEX]`.** When you read or write "the character", go to the Core by id.
+An `AMBIGUOUS` answer for one character's pages lists each with its role and says so; `get_resource` on a character's
+`[INDEX]` adds a `character` note naming the Core (or Reference) and its id.
 
 **Reading.**
 
 - `get_resource` shows the tree's data for a page (path, kind, documents, tags, Reference Type, Scope) and, from one live
   read, its whole sidebar: the facts in template order, the link collections with their items (an item can point at one
-  document of a page), the other properties (named, read-only) and the `factsVersion`. `get_resources` does up to 25 pages
-  as one job.
+  document of a page), the other properties (named, read-only) and the `factsVersion`. Pass `resources` (up to 25
+  names or ids) instead of `resource` to do several pages as one job.
 - `read_document` returns a page's document as Markdown, with the document version and the list of keep regions.
   `outline: true` returns just the headings; `section: "Biography > Early Life"` just that section. Use them on long pages.
   Maps, timelines and boards come back as read-only Markdown.
@@ -244,8 +269,10 @@ the items of `create_many_resources` follow the same rule. Do not leave a charac
   index has no status, and none is made under `[INDEX] Working` or `[INDEX] Archived`.
 - **Many pages at once:** `create_many_resources` `{ items }` (up to 100; nest them with `key` and `parent_key`; each
   item has its own `status`; Working items are flat, so nothing goes under one).
-- **A page with no template:** `create_bare_resource` `{ name, parent?, status? }`, the name with its prefix:
-  `[BWRK] …` (Working), `[BSRC] …` (Authoritative) or `[INDEX] …`.
+- **A page with no template** is rare, and `create_bare_resource` is not in the usual tool list (the owner shows it with
+  "Show low-level and rarely used tools"; it still works when called). `{ name, parent?, status? }`, the name with its
+  prefix: `[BWRK] …` (Working), `[BSRC] …` (Authoritative) or `[INDEX] …`. Every templated page, a character's
+  specialist pages included, is `create_resource`.
 
 **`operation_id`.** Every create tool takes an optional `operation_id` of your own. If a call times out or you are not
 sure it went through, send the SAME request with the SAME `operation_id`: you get the first call's result
@@ -453,7 +480,10 @@ transparency and every animation frame kept; a WebP is stored as it is; metadata
 `destination` says where it goes; the bridge plans it from the asset tree and refuses rather than guesses:
 `for_character { name, race }` (a folder named after the character is reused wherever it is; otherwise
 `Characters / Group / Race / Name`, created as needed; an unknown race goes to `Undetermined / Unknown`; a race that does
-not resolve fails), `for_page` (a character page gives its character's folder; any other page needs a `folder` too),
+not resolve fails), `for_page` (a character's page, including a Working or Archived one and a specialist page such as
+`{name} - Art`, gives its character's folder, the race read from the character's Race / Species fact; if that cannot be
+found the refusal says exactly what to pass: `for_character` with the name and race, or `folder`; any other page needs a
+`folder` too),
 `folder` (an id or a path such as `Characters / Beastkin / Qishen / Mehrana al-Khalid`), plus `subfolders`: a list, or one
 path written like the folder chain (`"Wardrobe / Qipao"`: Qipao inside Wardrobe; an empty part, `.` and `..` are refused).
 Existing folders are reused and missing ones created. Check with `dryRun: true` first if unsure: it lists the folders that
@@ -516,13 +546,13 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
 - Each project has its own request budget, shared by everyone using it. Every result ends with that budget line.
 - Reads from the tree cost nothing. A live read costs one request. A tool says what it costs.
 - Before a workload of hundreds of calls, ask `bridge_estimate`; do not read pages to find out. Run multi-step low-level
-  work as one `lk_api_batch` job rather than a loop of single calls. Several pages at once: `get_resources`.
+  work as one `lk_api_batch` job rather than a loop of single calls. Several pages at once: `get_resource` with `resources`.
 - **Never loop on a budget error.** `BUDGET_EXHAUSTED` names the time to retry (`retryAt`): wait until then, or tell the
   person. A write that returns `waiting_budget` has not failed: it resumes by itself.
-- `queued` and `waiting_budget` mean the write is accepted and will run. Follow a job with `bridge_job_status` or
-  `bridge_job_wait`. Never submit it again.
+- `queued` and `waiting_budget` mean the write is accepted and will run. Follow a job with `bridge_job_status`; pass
+  `wait_seconds` (1 to 25) to wait for it instead of polling. Never submit it again.
 - A write that returns `proposal_captured` was not made. Tell the person it is waiting for approval; follow it with
-  `bridge_proposal_status` (or list yours with `bridge_proposals_mine`). If the page changes before the owner approves, the
+  `bridge_proposal_status` (leave `proposalId` out to list yours). If the page changes before the owner approves, the
   proposal becomes **conflicted** instead of being applied: read the page again and propose afresh. Never submit a
   proposal twice.
 - You cannot approve your own proposals, change your scope, or see other connections' jobs.
@@ -609,14 +639,15 @@ name, kind, place, tags, aliases, Reference Type, Scope and documents.
 
 ### The tools you are shown
 
-The tools you are shown depend on your profile. The owner can show or hide the low-level tools
-(`lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_op_*`), and a profile's scope decides
+The tools you are shown depend on your profile. The owner can show or hide the low-level and rarely used tools
+(`lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_op_*`, `lk_upload_image` and
+`create_bare_resource`), and a profile's scope decides
 whether the write tools are shown. Hiding is cosmetic: you can still run any operation through `lk_api_read`,
 `lk_api_write` and `lk_api_batch`, and policy decides what is allowed. If you do not have the low-level tools, the
 **Operations** section at the end of this guide lists every operation id, with its kind and risk.
 
 **Tool-list caching (for the person using the connector).** claude.ai keeps its own copy of a connector's tool list. On
-10 November 2026 a change to tool visibility (the "Show low-level tools" checkbox, or a scope change that hides or shows
+10 November 2026 a change to tool visibility (the "Show low-level and rarely used tools" checkbox, or a scope change that hides or shows
 the write tools) appeared in claude.ai only after the connector was disconnected and reconnected in claude.ai's
 settings; new chats alone were not enough. (Observed, not a guarantee.) In ChatGPT, use Plugins, then the bridge, then
 Refresh.

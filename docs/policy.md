@@ -77,7 +77,7 @@ called directly by a `read` connection is refused at call time with the read-onl
 registered; only `tools/list` is filtered), and the policy gate refuses the write in the engine whatever the tool says
 about itself (defence in depth; `test/policy/mcp.test.ts`, `test/tools/policy-e2e.test.ts`).
 
-**Visibility of work.** `bridge_job_status`, `bridge_job_wait`, `bridge_job_cancel`, `bridge_result_page` and
+**Visibility of work.** `bridge_job_status` (with `wait_seconds`; `bridge_job_wait` before v2 E3b), `bridge_job_cancel`, `bridge_result_page` and
 `bridge_errors_recent` show only the caller's own jobs, stored results and errors (by principal). Another principal's
 job id or handle answers exactly like an unknown one. `bridge_journal_lookup` shows every principal's entries,
 read-only, with principal, profile and approver on each, because cross-checking another agent's edits is a
@@ -318,10 +318,10 @@ never pruned. Jobs, journal entries and audit rows keep the proposal id as text.
 Both are read tools (`access: 'read'`, `readOnlyHint: true`) restricted to the caller's own proposals (by principal);
 another principal's proposal is reported exactly as if it did not exist.
 
-| Tool                     | Input                                          | Returns                                                                                                                                                                                                     |
-| ------------------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bridge_proposal_status` | `{ proposalId, project? }`                     | state, summary, operation count, times, the rejection reason, the job id, the conflicting operation, the error text; since v2 C2a the pages affected and `requiresCanonicalApproval` with `canonicalReason` |
-| `bridge_proposals_mine`  | `{ state?, limit? (1-50, def. 20), project? }` | the same, newest first                                                                                                                                                                                      |
+| Tool                     | Input                                       | Returns                                                                                                                                                                                                                                                                       |
+| ------------------------ | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridge_proposal_status` | `{ proposalId?, state?, limit?, project? }` | with `proposalId` one proposal (without it, yours, newest first): state, summary, operation count, times, the rejection reason, the job id, the conflicting operation, the error text; since v2 C2a the pages affected and `requiresCanonicalApproval` with `canonicalReason` |
+| (retired name)           | `bridge_proposals_mine`: renamed in v2 E3b  | answers `TOOL_RENAMED` for one release; `bridge_proposal_status` without `proposalId` lists yours, newest first (`limit` 1-50, default 20)                                                                                                                                    |
 
 No MCP tool can change a scope, approve or reject a proposal, or create or revoke a token
 (`test/policy/no-agent-escalation.test.ts` calls every registered tool with hostile arguments and checks).
@@ -538,7 +538,7 @@ Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PR
 
 ## Tool-list caching (observed 10 November 2026)
 
-Tool visibility (a profile's "Show low-level tools", or a scope change that hides or shows the write tools) changes the
+Tool visibility (a profile's "Show low-level and rarely used tools", or a scope change that hides or shows the write tools) changes the
 next `tools/list`, but a client may keep its own copy. **claude.ai** keeps a copy of a connector's tool list: on 10
 November 2026 a change showed only after the connector was disconnected and reconnected in claude.ai's settings, and
 new chats alone were not enough (observed, not a guarantee). **ChatGPT:** Plugins, then the bridge, then Refresh. The
@@ -568,8 +568,8 @@ The scope cache is fixed at one second at most (`cacheMs`, 0-1000, in code).
 
 ## Hiding the low-level tools (v2 B2)
 
-A profile's **show low-level tools** setting (`showLowLevelTools`, default off, migration 1100) decides whether its
-connections are _shown_ `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all` and every `lk_op_*`
+A profile's **show low-level and rarely used tools** setting (`showLowLevelTools`, default off, migration 1100; named “show low-level tools” until v2 E3b) decides whether its
+connections are _shown_ `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, every `lk_op_*` and, since v2 E3b, `lk_upload_image` and `create_bare_resource`
 in `tools/list`. The owner changes it on Clients & Access (`PUT /api/admin/clients/profiles/:id/low-level-tools`),
 no confirmation is asked, and it is audited as `profile.set_low_level_tools` with the old and new value. **A client may
 keep showing the old tool list:** claude.ai keeps its own copy of a connector's tool list, so a change here (or a scope

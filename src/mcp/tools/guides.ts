@@ -9,6 +9,7 @@ import * as z from 'zod';
 import { getSection, MarkdownError, outline } from '../../markdown/index.js';
 import type { McpResourceProvider, McpToolProvider } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
+import { exactName, matchSection, sectionNames } from './guide-sections.js';
 import { operationsGuideSection } from './discovery.js';
 import { errorResult, projectArg, render, withProject, type ToolDeps } from './shape.js';
 
@@ -33,7 +34,7 @@ export const GUIDES: readonly Guide[] = [
     summary:
       'How to decide which tool to use, then the task-by-task reference: finding and reading pages, editing text and facts, creating pages and characters, the page lifecycle, chronology, maps, images, snapshots, audits, budgets and proposals',
     blurb:
-      'Returns the LK-Bridge guide for agents. It starts with HOW TO DECIDE (which tool for which job, and the rules that matter most); the rest is reference, one section per task. Read the section "How to decide" first, then the section for the task in hand before you do it: pass `section` (a heading, or a path "A > B") to get just that part; without it you get the whole guide (long). The last section lists every LegendKeeper operation id, for the low-level tools. Also the MCP resource lk-bridge://guides/bridge. Cost: none.',
+      'Returns the LK-Bridge guide for agents. It starts with HOW TO DECIDE (which tool for which job, and the rules that matter most); the rest is reference, one section per task. Read the section "How to decide" first, then the section for the task in hand before you do it: pass `section` (a heading, or a path "A > B") to get just that part: a near miss such as "promote" is matched loosely and only a clear match is returned, otherwise you get the candidates or every exact name; without `section` you get the whole guide (long). The last section lists every LegendKeeper operation id, for the low-level tools. Also the MCP resource lk-bridge://guides/bridge. Cost: none.',
   },
   {
     id: 'markdown',
@@ -96,19 +97,50 @@ export function guideTools(deps: ToolDeps): McpToolProvider[] {
           if (section === undefined) return render({ guide: g.id, title: g.title, markdown: text }, pd);
           try {
             const s = getSection(text, section);
-            return render({ guide: g.id, section: s.heading.path, markdown: s.markdown }, pd);
+            return render({ guide: g.id, section: exactName(s.heading), markdown: s.markdown }, pd);
           } catch (e) {
-            if (e instanceof MarkdownError) {
+            if (!(e instanceof MarkdownError)) throw e;
+            if (e.code !== 'SECTION_NOT_FOUND') {
               return errorResult(
+                { code: e.code, message: e.message, sections: sectionNames(outline(text)) },
+                pd,
+              );
+            }
+            // v2 E3b (ADR 0045): a guessed name is matched loosely; only a clear match is returned.
+            const m = matchSection(outline(text), section, g.id);
+            if (m.kind === 'one') {
+              const s = getSection(text, m.heading.path);
+              const exact = exactName(s.heading);
+              return render(
                 {
-                  code: e.code,
-                  message: e.message,
-                  headings: outline(text).map((h) => h.path),
+                  guide: g.id,
+                  section: exact,
+                  matched: `“${section}” was read as the section “${exact}”; ask for it by that exact name.`,
+                  markdown: s.markdown,
                 },
                 pd,
               );
             }
-            throw e;
+            if (m.kind === 'several') {
+              return errorResult(
+                {
+                  code: 'SECTION_AMBIGUOUS',
+                  message: `“${section}” could mean ${m.candidates.length} sections of this guide. Nothing was returned.`,
+                  candidates: m.candidates.map(exactName),
+                  hint: 'Call this tool again with one of the candidates, spelled exactly.',
+                },
+                pd,
+              );
+            }
+            return errorResult(
+              {
+                code: 'SECTION_NOT_FOUND',
+                message: `No section of this guide matches “${section}”.`,
+                sections: sectionNames(outline(text)),
+                hint: 'Ask for one of these exact section names. For the choice of tool, ask for "How to decide".',
+              },
+              pd,
+            );
           }
         }),
     }),

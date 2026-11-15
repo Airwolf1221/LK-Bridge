@@ -116,7 +116,7 @@ LegendKeeper project, with `LK_READ_ONLY=false`. Keep the dashboard (or `sqlite3
    reason.
 7. **Conflict.** Propose an edit to a page, then edit that page in the LegendKeeper app, then approve: the proposal
    ends `conflicted`, naming the operation, and the page keeps your edit.
-8. **Isolation.** Ask Claude to call `bridge_proposals_mine`: ChatGPT's proposals are not listed, and
+8. **Isolation.** Ask Claude to list its proposals (`bridge_proposal_status` with no `proposalId`): ChatGPT's proposals are not listed, and
    `bridge_proposal_status` with ChatGPT's id says there is no such proposal.
 9. **Claude at propose and write.** Repeat 4-5 for the `claude` profile, then set it to `write` and check that a
    write runs at once. Set both profiles back to the scopes you want to keep.

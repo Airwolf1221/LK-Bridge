@@ -521,7 +521,7 @@ function createResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Create a page from a template',
     access: 'write',
     description:
-      'Creates a page from a template (`template` is required: a name or id, see list_templates), in its alphabetical place. `status` "working" (default): a [BWRK] page under [INDEX] Working (leave `parent` out) or, to build a Working character one page at a time, under that character’s own [INDEX] (`parent` = the index create_character made); any other parent is refused (WORKING_PARENT). "authoritative": a [BSRC] page under `parent`: canon, so always a proposal the owner accepts as canon. Optional `facts` and `links` (as in set_facts) are written in the same job. Characters are create_character, indexes create_index, a page with no template create_bare_resource. A page of the same name under the same parent is refused. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 6 writes with a few facts.',
+      'Creates a page from a template (`template` is required: a name or id, see list_templates), in its alphabetical place. `status` "working" (default): a [BWRK] page under [INDEX] Working (leave `parent` out) or, to build a Working character one page at a time, under that character’s own [INDEX] (`parent` = the index create_character made); any other parent is refused (WORKING_PARENT). "authoritative": a [BSRC] page under `parent`: canon, so always a proposal the owner accepts as canon. Optional `facts` and `links` (as in set_facts) are written in the same job. Characters are create_character, indexes create_index; a page with no template is rare (create_bare_resource, which the owner lists with “Show low-level and rarely used tools”). A page of the same name under the same parent is refused. dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 10 reads and 6 writes with a few facts.',
     inputSchema: z.object({
       name: z
         .string()
@@ -662,8 +662,10 @@ function createBareResourceTool(deps: ToolDeps): McpToolProvider {
     name: 'create_bare_resource',
     title: 'Create a page without a template',
     access: 'write',
+    // v2 E3b (ADR 0045, P5): hidden by default; a page with no template is rare and create_resource covers every templated page.
+    lowLevel: true,
     description:
-      'Creates a page with no template (no sidebar), in its alphabetical place. The name carries its prefix: "[INDEX] …" (an index under `parent`), "[BWRK] …" (Working, the default: under [INDEX] Working or a Working set’s index) or "[BSRC] …" (Authoritative: canon, always a proposal). [BARC] is never created (use archive_page). Prefer create_resource, which gives the page its sidebar. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: 2 reads and 1 write.',
+      'Rarely needed (listed only with “Show low-level and rarely used tools”): creates a page with no template (no sidebar), in its alphabetical place. The name carries its prefix: "[INDEX] …" (an index under `parent`), "[BWRK] …" (Working, the default: under [INDEX] Working or a Working set’s index) or "[BSRC] …" (Authoritative: canon, always a proposal). [BARC] is never created (use archive_page). Prefer create_resource, which gives the page its sidebar. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: 2 reads and 1 write.',
     inputSchema: z.object({
       name: z
         .string()

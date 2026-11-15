@@ -54,7 +54,7 @@ describe('scopes', () => {
     });
     const user = userEvent.setup();
     renderApp('/ui/clients');
-    await user.click(await screen.findByLabelText('Show low-level tools to claude-code'));
+    await user.click(await screen.findByLabelText('Show low-level and rarely used tools to claude-code'));
     await waitFor(() => expect(api.find('PUT', '/clients/profiles/prof_cc/low-level-tools')).toHaveLength(1));
     expect(api.find('PUT', '/clients/profiles/prof_cc/low-level-tools')[0]!.body).toEqual({ show: true });
   });
@@ -423,7 +423,7 @@ describe('old connections (ADR 0033)', () => {
   it('says that claude.ai caches the tool list, beside the low-level tools checkbox', async () => {
     installApi(baseRoutes());
     renderApp('/ui/clients');
-    const box = await screen.findByLabelText('Show low-level tools to claude-code');
+    const box = await screen.findByLabelText('Show low-level and rarely used tools to claude-code');
     const hint = document.getElementById(box.getAttribute('aria-describedby')!)!;
     expect(hint).toHaveTextContent(/claude\.ai keeps its own copy of a connector’s tool list/);
     expect(hint).toHaveTextContent(/disconnected and reconnected in claude\.ai’s settings/);
