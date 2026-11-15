@@ -188,3 +188,35 @@ at construction or by a sweep, `upload-tmp` 0700 at the first upload and not bef
 `node_modules`: the working directory is then a read-only app folder, the inner file first checks the harness really refuses a
 write there, then builds `createSoakRuntime` and the real boot path with the default tool settings. It fails with the old code
 (checked by restoring it) and passes now.
+
+## Notes: asset files served from `assets2`, and the one redirect an asset download follows (15 November 2026, E5.2)
+
+Arkona's first full snapshot came out partial, with two rows missing: the background image of the Arkona map (page
+`bwrldgeo`, asset `jhk3txl4lmrvaupwpf4s8t45`), as the image and as the asset, both "The upload host answered HTTP 302".
+The owner's curl showed why: a GET on `assets.legendkeeper.com/<file>.webp` answers `302` with an empty body and
+`Location: https://assets2.legendkeeper.com/<file>.webp` (and a HEAD answers 404 with JSON, so HEAD is no probe on this
+host). The other 49 files were served directly. The browser follows the redirect; the guarded transport refused every
+redirect, and `downloadAsset` reported it as a failure. Because the audits run only on a complete full snapshot, none of
+Arkona's would ever run; the same failure would hit the upload's verify, the bytes kept before a delete and an image
+restore of any asset LegendKeeper serves from `assets2`. Decided, narrowly:
+
+1. **`assets2.legendkeeper.com` is a known asset host.** `DEFAULT_LK_ASSET_HOSTS` (`src/lk/constants.ts`) lists `assets`
+   and `assets2`; they are `LK_ASSET_HOSTS`'s default, the dashboard CSP's `img-src`, and what the snapshot's
+   `imageUrls` recognises (an image URL already on `assets2` is an asset image). A **set** `LK_ASSET_HOSTS` is used as it
+   is: the owner adds `assets2.legendkeeper.com` to it.
+2. **An asset download follows redirects, and nothing else does.** Only `downloadAsset` (`src/images/download.ts`), which
+   every caller uses (the upload's verify, kept bytes, snapshot capture and so image restores), follows one: on 301, 302,
+   303, 307 or 308 with a `Location`, at most 3 hops, a relative `Location` resolved against the URL that answered. Every
+   hop is checked as the first is: `isAssetUrl` (https, no credentials, a host on the list) before it is asked, then the
+   transport's own guards on its own request (public addresses, the port allowlist, the DNS answer pinned), and each hop
+   is a governed request of its own. Another host is refused with a reason naming it; an `http:` Location, a loop or a
+   fourth redirect likewise. A redirect's (empty) body is never taken for the asset. No API key, cookie or other
+   credential is sent on any hop (tested). The transport (`createUploadTransport`) hands an asset GET's redirect back as
+   it is, a status and a `Location`, and follows nothing itself; the API client, OAuth's metadata fetch and the upload PUT
+   still refuse every redirect (tested, unchanged).
+3. **The reference stays the URL the page holds.** The snapshot, the hash index and the kept bytes record the original
+   URL; the page's image URL is never rewritten. The final URL appears only in the upload verify's detail
+   (`servedFrom`).
+
+No migration. Tests: `test/images/redirect.test.ts`, and `test/snapshots/e5-2.test.ts` (a snapshot whose map image
+redirects comes out complete). The same day's other finding (old label sizes on map features) is ADR 0046 decision 11.

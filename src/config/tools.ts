@@ -7,7 +7,7 @@
  */
 import * as z from 'zod';
 import { ConfigError } from './index.js';
-import { DEFAULT_LK_ASSET_HOST } from '../lk/constants.js';
+import { DEFAULT_LK_ASSET_HOSTS } from '../lk/constants.js';
 import { type OutboundPortAllowlist, parseOutboundPortAllowlist } from '../auth/ports.js';
 
 const bool = (def: boolean) => z.stringbool().default(def);
@@ -55,8 +55,11 @@ const toolsEnvSchema = z.object({
   IMAGE_STAGING_REPORT_DAYS: intFrom(30, 1, 3650),
   /** How long the bytes kept before an asset delete are kept. */
   ASSET_BYTES_RETENTION_DAYS: intFrom(90, 1, 3650),
-  /** The hosts LegendKeeper serves asset files from; the bridge downloads (GET, no credentials) only from these. */
-  LK_ASSET_HOSTS: z.string().default(DEFAULT_LK_ASSET_HOST),
+  /**
+   * The hosts LegendKeeper serves asset files from; the bridge downloads (GET, no credentials) only from these, and a
+   * download's redirect is followed only to one of them. Default (v2 E5.2): assets and assets2.legendkeeper.com.
+   */
+  LK_ASSET_HOSTS: z.string().default(DEFAULT_LK_ASSET_HOSTS.join(',')),
   // ---- v2 E1a (ADR 0042): the snapshot store
   /** The snapshot store's directory (objects, manifests). Default: `snapshots/` next to the database. */
   SNAPSHOT_DIR: z.string().min(1).optional(),
@@ -151,7 +154,7 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   idleTimeoutMs: 15_000,
   stagingReportDays: 30,
   keptBytesRetentionDays: 90,
-  assetHosts: [DEFAULT_LK_ASSET_HOST],
+  assetHosts: [...DEFAULT_LK_ASSET_HOSTS],
 };
 
 export const DEFAULT_TOOLS_SETTINGS: ToolsSettings = {

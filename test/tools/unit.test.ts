@@ -59,8 +59,16 @@ describe('tools configuration', () => {
       idleTimeoutMs: 15_000,
       stagingReportDays: 30,
       keptBytesRetentionDays: 90,
-      assetHosts: ['assets.legendkeeper.com'],
+      assetHosts: ['assets.legendkeeper.com', 'assets2.legendkeeper.com'],
     });
+    // v2 E5.2: the defaults apply only where LK_ASSET_HOSTS is unset; a set list is kept as it is.
+    expect(loadToolsConfig({}).images.assetHosts).toEqual([
+      'assets.legendkeeper.com',
+      'assets2.legendkeeper.com',
+    ]);
+    expect(loadToolsConfig({ LK_ASSET_HOSTS: 'assets.legendkeeper.com' }).images.assetHosts).toEqual([
+      'assets.legendkeeper.com',
+    ]);
     expect(() => loadToolsConfig({ LK_ASSET_HOSTS: 'https://evil.example/x' })).toThrow(/LK_ASSET_HOSTS/);
     expect(
       loadToolsConfig({ LK_ASSET_HOSTS: 'Assets.LegendKeeper.com, cdn.example.org' }).images.assetHosts,

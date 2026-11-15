@@ -20,6 +20,7 @@
  * the link collections.
  */
 import { ICON_FIELDS, withWriteIcon } from '../lk/icons.js';
+import { normaliseFeatureBody } from '../maps/features.js';
 import { randomBytes } from 'node:crypto';
 import { expectStep, verifyStep, type ExpectCheck, type VerifyTarget } from '../jobs/internal-steps.js';
 import { stableJson } from '../jobs/sidebar-state.js';
@@ -342,12 +343,29 @@ const noIcon = (o: Obj): Obj => {
 const featureCreate = () => bodyFields('createFeature');
 const featureUpdate = () => bodyFields('updateFeature');
 
-/** A map's features as the plan compares and checks them: by id, the writable fields only. */
+/**
+ * v2 E5.2: a feature body written back from a stored feature: the writable fields, the label size in the write form (an
+ * old `small` sent as `sm`; an unknown one left out and noted) and the icon in the write form.
+ */
+function featureBody(f: Obj, fields: Set<string>, where: string, notes: PlanNote[]): Obj {
+  const r = normaliseFeatureBody(pick(f, fields));
+  if (r.note) notes.push({ what: `the label size of feature ${featureLabel(f)}`, where, why: r.note });
+  return withWriteIcon(r.body);
+}
+
+/** A feature as the owner finds it: its name and id. */
+const featureLabel = (f: Obj): string =>
+  typeof f.name === 'string' && f.name !== '' ? `“${f.name}” (${String(f.id)})` : String(f.id);
+
+/**
+ * A map's features as the plan compares and checks them: by id, the writable fields only, in the form they are written
+ * (v2 E5.2: an old label size as its new name, `small` = `sm`, so a restored `sm` is not a difference).
+ */
 export function featureState(features: readonly unknown[]): Obj[] {
   const fields = featureCreate();
   return features
     .filter(isObj)
-    .map((f) => pick(f, fields))
+    .map((f) => normaliseFeatureBody(pick(f, fields)).body)
     .sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
 }
 
@@ -539,7 +557,9 @@ async function planDocument(
       .sort((a, b) => depth(a, wantById) - depth(b, wantById));
     const updates = want.filter((f) => {
       const l = liveById.get(String(f.id));
-      return l && !same(pick(l, update), pick(f, update));
+      return (
+        l && !same(normaliseFeatureBody(pick(l, update)).body, normaliseFeatureBody(pick(f, update)).body)
+      );
     });
     for (const f of deletes)
       writes.push({
@@ -550,21 +570,29 @@ async function planDocument(
     for (const f of creates)
       writes.push({
         op: 'createFeature',
-        params: { path, body: withWriteIcon(pick(f, create)) },
+        params: { path, body: featureBody(f, create, name, o.notRestored) },
         ...ICON_DROP,
-        journalOperation: { ...journalOperation, write: `create feature ${String(f.name ?? f.id)}` },
+        journalOperation: {
+          ...journalOperation,
+          write: `create feature ${featureLabel(f)}`,
+          feature: { id: String(f.id), name: str(f.name) ?? '' },
+        },
       });
     for (const f of updates) {
-      const body = pick(f, update);
+      const body = featureBody(f, update, name, o.notRestored);
       const l = liveById.get(String(f.id))!;
       // A link or a folder the snapshot did not have is cleared (LegendKeeper takes "" for both).
       if (l.uri && !f.uri) body.uri = '';
       if (l.parentId && !f.parentId) body.parentId = '';
       writes.push({
         op: 'updateFeature',
-        params: { path: { ...path, featureId: String(f.id) }, body: withWriteIcon(body) },
+        params: { path: { ...path, featureId: String(f.id) }, body },
         ...ICON_DROP,
-        journalOperation: { ...journalOperation, write: `update feature ${String(f.name ?? f.id)}` },
+        journalOperation: {
+          ...journalOperation,
+          write: `update feature ${featureLabel(f)}`,
+          feature: { id: String(f.id), name: str(f.name) ?? '' },
+        },
       });
     }
     if (Object.keys(settings).length > 0)
@@ -1570,6 +1598,7 @@ async function planDeleted(
     for (const k of ['isHidden', 'isFullWidth'] as const) if (t.piece.settings[k] === true) set[k] = true;
     if (type === 'map') {
       const create = featureCreate();
+      const docName = str(t.piece.settings.name) ?? t.row.name ?? ref;
       const byId = new Map(((t.piece.features ?? []) as Obj[]).map((f) => [String(f.id), f]));
       const depth = (f: Obj) => {
         let n = 0;
@@ -1579,10 +1608,15 @@ async function planDeleted(
       for (const f of [...byId.values()].sort((a, b) => depth(a) - depth(b)))
         steps.push({
           op: 'createFeature',
-          params: { path: p, body: withWriteIcon(pick(f, create)) },
+          params: { path: p, body: featureBody(f, create, docName, notRestored) },
           ...ICON_DROP,
           bindFrom: bound(ref),
-          journalOperation: { ...journal, write: `feature ${String(f.name ?? f.id)}` },
+          journalOperation: {
+            ...journal,
+            document: { id: ref, name: docName },
+            write: `feature ${featureLabel(f)}`,
+            feature: { id: String(f.id), name: str(f.name) ?? '' },
+          },
         });
       const img = isObj(t.piece.settings.mapImage) ? str(t.piece.settings.mapImage.assetId) : null;
       if (img) {

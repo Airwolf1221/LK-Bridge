@@ -76,11 +76,14 @@ describe('/ui with a session', () => {
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("connect-src 'self'");
     expect(csp).toContain("base-uri 'none'");
-    // v2 D3 (ADR 0041): the one outside source is LegendKeeper's asset host, for images only (Staging thumbnails).
-    expect(csp).toContain("img-src 'self' data: https://assets.legendkeeper.com;");
-    expect(csp.replace(' https://assets.legendkeeper.com;', ';')).not.toMatch(
-      /unsafe-inline|unsafe-eval|\*|https?:/,
+    // v2 D3 (ADR 0041): the only outside sources are LegendKeeper's asset hosts (v2 E5.2: assets and assets2), for
+    // images only (Staging thumbnails).
+    expect(csp).toContain(
+      "img-src 'self' data: https://assets.legendkeeper.com https://assets2.legendkeeper.com;",
     );
+    expect(
+      csp.replace(' https://assets.legendkeeper.com https://assets2.legendkeeper.com;', ';'),
+    ).not.toMatch(/unsafe-inline|unsafe-eval|\*|https?:/);
     expect(res.headers.get('x-frame-options')).toBe('DENY');
     expect(res.headers.get('referrer-policy')).toBe('no-referrer');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');

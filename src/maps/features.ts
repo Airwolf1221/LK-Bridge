@@ -19,6 +19,51 @@ export const isFeatureType = (v: unknown): v is FeatureType =>
 
 // ------------------------------------------------------------------------------------------------ styles
 
+/** The label sizes LegendKeeper takes in a write (FeatureCreateParams / FeatureUpdateParams). */
+export const LABEL_SIZES = ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl'] as const;
+/**
+ * v2 E5.2: features drawn in the app may hold the old label sizes (the spec says so itself), which a write refuses. They
+ * are mapped to the new ones wherever a stored or read feature is written back, and compared as equal to them.
+ */
+export const OLD_LABEL_SIZES = { small: 'sm', medium: 'md', large: 'lg' } as const;
+
+/**
+ * A label size in the write form: a new size as it is, an old one mapped (`small` → `sm`), anything else (an unknown
+ * value) null. Absent stays undefined.
+ */
+export function writeLabelSize(v: unknown): string | null | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'string') return null;
+  if ((LABEL_SIZES as readonly string[]).includes(v)) return v;
+  return Object.hasOwn(OLD_LABEL_SIZES, v) ? OLD_LABEL_SIZES[v as keyof typeof OLD_LABEL_SIZES] : null;
+}
+
+/** A label size as compared: old and new names alike (`small` = `sm`); an unknown value compares as itself. */
+export const comparableLabelSize = (v: unknown): unknown => writeLabelSize(v) ?? v;
+
+/**
+ * v2 E5.2: the ONE normaliser for a feature body sent to LegendKeeper that was built from a stored or read feature (a
+ * restore, a rehearsal): an old label size is mapped to the new one, and an unknown one is left out of the body (its
+ * default applies) with a note for the run's detail, rather than failing the whole write. Valid values pass unchanged;
+ * `iconSize` (which legitimately takes `small` and `medium`) is untouched. Returns a new body.
+ */
+export function normaliseFeatureBody(body: Obj): { body: Obj; note: string | null } {
+  if (!Object.hasOwn(body, 'labelSize')) return { body, note: null };
+  const size = writeLabelSize(body.labelSize);
+  if (size === body.labelSize) return { body, note: null };
+  if (size !== null && size !== undefined) return { body: { ...body, labelSize: size }, note: null };
+  const { labelSize: dropped, ...rest } = body;
+  return {
+    body: rest,
+    note: `its label size ${JSON.stringify(dropped)} is not one LegendKeeper takes (${LABEL_SIZES.join(', ')}): it was left out, so the default applies`,
+  };
+}
+
+/** A feature as compared: its label size in the write form (`small` and `sm` are the same). Returns a new object. */
+export function comparableFeature(f: Obj): Obj {
+  return Object.hasOwn(f, 'labelSize') ? { ...f, labelSize: comparableLabelSize(f.labelSize) } : f;
+}
+
 const hex = z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'a colour as #RRGGBB');
 const num = z.number().finite();
 
@@ -48,7 +93,13 @@ export const styleSchema = z
     textColor: hex,
     textEffect: z.enum(['outline', 'background']),
     textEffectColor: hex,
-    labelSize: z.enum(['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl']),
+    // A caller's own size keeps the strict enum; the old names (`small`…) are refused with the hint to the new ones.
+    labelSize: z.enum(LABEL_SIZES, {
+      error: (iss) =>
+        typeof iss.input === 'string' && Object.hasOwn(OLD_LABEL_SIZES, iss.input)
+          ? `“${iss.input}” is an old label size: use ${OLD_LABEL_SIZES[iss.input as keyof typeof OLD_LABEL_SIZES]} (sizes are ${LABEL_SIZES.join(', ')})`
+          : `a label size is one of ${LABEL_SIZES.join(', ')} (for small, medium and large use sm, md and lg)`,
+    }),
     // any
     labelVisibility: z.enum(['always', 'hover', 'never']),
     visibilityRange: z.tuple([num, num]).describe('The zoom range [min, max], each 0 to 1.'),
@@ -254,6 +305,12 @@ export function holds(stored: Obj, fields: Obj): { field: string; expected: unkn
     if (k === 'uri') {
       const actual = typeof stored.uri === 'string' ? stored.uri : '';
       if ((want ?? '') !== actual) out.push({ field: k, expected: want ?? '', actual: stored.uri ?? null });
+      continue;
+    }
+    // v2 E5.2: an old label size holds its new name (`small` is `sm`).
+    if (k === 'labelSize') {
+      if (comparableLabelSize(want) !== comparableLabelSize(stored[k]))
+        out.push({ field: k, expected: want, actual: stored[k] ?? null });
       continue;
     }
     if (!sameValue(want, stored[k])) out.push({ field: k, expected: want, actual: stored[k] ?? null });

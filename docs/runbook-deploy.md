@@ -948,7 +948,9 @@ the bridge adopts an old `kept-bytes/` at its first start and removes the empty 
   log by default. If the Caddyfile ever gains a `request_body { max_size … }`, it must allow at least `UPLOAD_MAX_BYTES`
   on `/uploads/*`.
 - **Outbound:** the bridge now also downloads asset files from `assets.legendkeeper.com` (anonymous GET, port 443) to
-  verify uploads and to keep bytes before deletes. Nothing to open if outbound https already works.
+  verify uploads and to keep bytes before deletes. Nothing to open if outbound https already works. (E5.2: and from
+  `assets2.legendkeeper.com`, where LegendKeeper redirects some files; if `LK_ASSET_HOSTS` is set in
+  `/etc/lk-bridge/lk-bridge.env`, add `assets2.legendkeeper.com` to it.)
 
 After the deploy, refresh ChatGPT's tools (Plugins → the bridge → Refresh) and disconnect and reconnect the connector on
 claude.ai: two new tools, `upload_image` and `prepare_image_upload`.

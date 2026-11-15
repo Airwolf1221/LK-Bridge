@@ -439,7 +439,7 @@ project's staged images: uploaded, converted to WebP, checked, and hidden in the
   assistant cannot pass a multi-megabyte image in a tool call. Then tell an agent “place staged image img_… for Asagiri
   Miyabi”, or place it here.
 - **The list**: a thumbnail (the asset's own URL; the dashboard's CSP allows images from `https://assets.legendkeeper.com`
-  and nothing else from outside), name and staged id, dimensions, frames and sizes (WebP and original), whether the
+  and `https://assets2.legendkeeper.com` (E5.2) and nothing else from outside), name and staged id, dimensions, frames and sizes (WebP and original), whether the
   stored bytes were verified, who staged it (an agent, or “Owner (dashboard)”), when, and the intended destination if
   one was given. Images older than `IMAGE_STAGING_REPORT_DAYS` (30) are counted at the top and marked **old**: they are
   reported, never removed. **The list updates by itself** (v2 D3.1, 12 November 2026): the page listens for the stream's

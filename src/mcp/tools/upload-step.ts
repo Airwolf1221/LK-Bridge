@@ -127,6 +127,8 @@ export interface StoredVerification {
   readonly expectedSha256: string | null;
   readonly storedSha256?: string;
   readonly storedBytes?: number;
+  /** v2 E5.2: the URL the stored file was served from, when the asset's URL redirected (the asset's URL is unchanged). */
+  readonly servedFrom?: string;
   /** Why it is not verified, in words. */
   readonly reason?: string;
 }
@@ -168,6 +170,7 @@ export function createUploadVerifyHandler(opts: {
         storedBytesVerified: same,
         storedSha256: got.sha256,
         storedBytes: got.bytes.length,
+        ...(got.finalUrl ? { servedFrom: got.finalUrl } : {}),
         ...(same
           ? {}
           : {

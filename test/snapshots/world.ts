@@ -60,6 +60,13 @@ export interface SnapshotsWorld extends ResourcesWorld {
   readonly served: Map<string, Buffer>;
   /** GETs the asset host answered. */
   readonly gets: string[];
+  /**
+   * v2 E5.2: asset ids whose file `assets.test` serves as a 302 to the same path on `assets2.test` (as LegendKeeper
+   * serves some files from `assets2`).
+   */
+  readonly movedToAssets2: Set<string>;
+  /** Every GET of an asset file: the host asked and the request's headers. */
+  readonly assetRequests: { host: string; path: string; headers: Record<string, unknown> }[];
   /** The stored model of a map's features, a timeline's lanes and events, a board's content. */
   readonly features: Map<string, Obj[]>;
   readonly lanes: Map<string, Obj[]>;
@@ -96,7 +103,7 @@ function certificate(): { key: Buffer; cert: string } {
       '-subj',
       '/CN=assets.test',
       '-addext',
-      'subjectAltName=DNS:assets.test,DNS:storage.test',
+      'subjectAltName=DNS:assets.test,DNS:assets2.test,DNS:storage.test',
     ],
     { stdio: 'ignore' },
   );
@@ -123,6 +130,8 @@ export async function snapshotsWorld(
   const { key, cert } = certificate();
   const served = new Map<string, Buffer>();
   const gets: string[] = [];
+  const movedToAssets2 = new Set<string>();
+  const assetRequests: SnapshotsWorld['assetRequests'] = [];
   const puts = new Map<string, Buffer>();
   const server: Server = createServer({ key, cert }, (req, res) => {
     const chunks: Buffer[] = [];
@@ -134,8 +143,14 @@ export async function snapshotsWorld(
         return void res.writeHead(200).end();
       }
       if (req.method === 'GET' && url.startsWith('/a/')) {
-        gets.push(url);
+        const host = (req.headers.host ?? '').replace(/:\d+$/, '');
+        assetRequests.push({ host, path: url, headers: { ...req.headers } });
         const id = url.slice(3).replace(/\.webp$/, '');
+        if (host === 'assets.test' && movedToAssets2.has(id)) {
+          res.writeHead(302, { location: `https://assets2.test:${port}${url}`, 'content-length': 0 });
+          return void res.end();
+        }
+        gets.push(url);
         const b = served.get(id);
         if (!b) return void res.writeHead(404).end();
         res.writeHead(200, { 'content-type': 'image/webp', 'content-length': b.length });
@@ -151,7 +166,7 @@ export async function snapshotsWorld(
       Promise.resolve(host.endsWith('.test') ? [{ address: '127.0.0.1', family: 4 as const }] : []),
     ca: cert,
     allowAddress: (a) => a === '127.0.0.1',
-    allowedPorts: parseOutboundPortAllowlist(`assets.test:${port},storage.test:${port}`),
+    allowedPorts: parseOutboundPortAllowlist(`assets.test:${port},assets2.test:${port},storage.test:${port}`),
   };
   const dir = mkdtempSync(join(tmpdir(), 'lkb-snapshots-world-'));
   const snapshotDir = join(dir, 'snapshots');
@@ -173,7 +188,11 @@ export async function snapshotsWorld(
     tools: {
       ...DEFAULT_TOOLS_SETTINGS,
       ...o.tools,
-      images: { ...DEFAULT_IMAGE_SETTINGS, assetHosts: ['assets.test'], dataDir: join(dir, 'images') },
+      images: {
+        ...DEFAULT_IMAGE_SETTINGS,
+        assetHosts: ['assets.test', 'assets2.test'],
+        dataDir: join(dir, 'images'),
+      },
       snapshots: { ...DEFAULT_SNAPSHOT_SETTINGS, dataDir: snapshotDir, minFreeBytes: 0, ...o.snapshots },
     },
     seed: (world) => {
@@ -687,6 +706,8 @@ export async function snapshotsWorld(
     d,
     served,
     gets,
+    movedToAssets2,
+    assetRequests,
     features,
     lanes,
     events,
