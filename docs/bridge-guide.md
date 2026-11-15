@@ -448,6 +448,12 @@ finds a feature by its id, or by its name (with `featureFolder`, the folder it i
 once: an ambiguous name is refused with each candidate); only what you give changes, and a change that changes nothing is
 `no_change`.
 
+**Label sizes cannot be set.** `style.labelSize` is refused, whatever its value (`LABEL_SIZE_UNSUPPORTED`). LegendKeeper's
+API contradicts itself: its writes take only `xs` to `3xl`, but `listFeatures` then refuses to return a map holding one, so
+the whole map would become unreadable through the API. Tell the person to set label sizes in the LegendKeeper app. A map that
+already holds such a size is refused by every map tool and `read_document` with `MAP_FEATURES_UNREADABLE`: the person sets
+that feature's label size again in the app (any of small, medium or large) and the map can be read again.
+
 **Links.** `link` is a page by name or id (or `{ page, document }` for one document of it). A name that matches several pages
 is refused with every candidate and its role; nothing is guessed. The page must exist and not be deleted. A page the owner
 made in the app a few seconds ago may not be linkable yet: wait and try again. `link: null` on `update_map_feature` clears the

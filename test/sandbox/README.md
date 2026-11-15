@@ -118,6 +118,15 @@ clean-up does.
   `npm run projects -- set <project> useEtagVersions off`): the bridge then re-reads, with no deploy. B12 now makes a
   create, an update, a delete and a second create: about 106 writes in all.
 
+- **LS1, LegendKeeper's label sizes (v2 E5.4, [ADR 0046](../../docs/adr/0046-e4-owner-decisions.md) decision 14):**
+  on a page of its own under the root (its first, blank document), it writes ONE label with `labelSize: 'md'`, raw
+  through the governor (the bridge's engine refuses any label size). It expects `listFeatures` to answer 400 with an
+  issue on `labelSize` ("Invalid enum value. Expected 'small' | 'medium' | 'large'"): **PASS** means the bug is still
+  there. If `listFeatures` answers 200, it reports **NOTED**: LegendKeeper has fixed it, and `LABEL_SIZE_WRITABLE` in
+  `src/maps/features.ts` can be set to true. It then deletes that feature by its id, even if the check failed, and checks
+  that `listFeatures` answers 200 again (a FAIL if not, naming the feature to delete by hand). Two writes and two reads
+  more: about 108 writes in all.
+
 ## The chronology (v2 D1)
 
 `npm run test:sandbox` (on the server `deploy/sandbox-test.sh --project test`) also runs `chronology.test.ts`;

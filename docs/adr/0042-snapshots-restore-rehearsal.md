@@ -298,3 +298,13 @@ a page (settings, sidebar, documents), into an optional manifest field `template
 as any piece, and the store's layout (E1b's contract) is unchanged: a manifest without the field is as valid as before. About 2.3
 reads a template a night. A failed template read leaves the manifest without them and does not fail the snapshot. This is what
 lets the audits compare a page with its template without reading LegendKeeper ([ADR 0044](0044-audits.md) decision 5).
+
+## Note (v2 E5.4, 15 November 2026): label sizes, unreadable maps, and faster sampled rehearsals
+
+[ADR 0046](0046-e4-owner-decisions.md) decision 14. LegendKeeper's `listFeatures` refuses a map holding a label size its
+writes require, so a restore and a rehearsal never send `labelSize`. They list it instead: "label size not restorable", once
+per map with a count. A full snapshot of a map LegendKeeper cannot list records that map document as missing, with the
+reason, and the snapshot is partial. A rehearsal's comparison turns any read error into a difference for that page and
+piece, finishes, and deletes its root. A sampled rehearsal copies at most 25 events of a timeline (with the lanes they
+use) and 40 features of a map (with their folders), and its plan lists what was cut (`cuts`). Its estimate is paced at
+P3's write and request rates. The dashboard preselects the newest complete full snapshot.

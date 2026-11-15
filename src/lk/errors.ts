@@ -217,7 +217,11 @@ function asIssues(value: unknown): LkErrorIssue[] {
     if (typeof v !== 'object' || v === null) return [];
     const { path, message } = v as { path?: unknown; message?: unknown };
     return [
-      { path: typeof path === 'string' ? path : '', message: typeof message === 'string' ? message : '' },
+      {
+        // A path given as a list (Zod's own form) is joined, so `["labelSize"]` reads as `labelSize` (v2 E5.4).
+        path: typeof path === 'string' ? path : Array.isArray(path) ? path.map(String).join('.') : '',
+        message: typeof message === 'string' ? message : '',
+      },
     ];
   });
 }

@@ -9,6 +9,7 @@
  * snapshot reads only the pieces the write changed, and not even those when the job's own verify step already read them.
  */
 import { stableJson } from '../jobs/sidebar-state.js';
+import { isLabelSizeListError, LABEL_SIZE_UNLISTABLE } from '../maps/features.js';
 import type { OpParams } from '../jobs/types.js';
 import {
   blankDocumentPiece,
@@ -276,10 +277,15 @@ export async function capturePage(
       piece = await documentPieceOf(read, node.id, d);
     } catch (e) {
       if (isStop(e)) throw e;
+      // v2 E5.4: LegendKeeper refuses to list a map's features when one holds a label size it will not return. The map's
+      // features are its content, so the document is the missing piece (indexed with no hash: a restore from this
+      // snapshot refuses it rather than read it as empty), with the reason and the advice; the rest of the page goes on.
       missing.push({
         piece: 'document',
         ref: id,
-        reason: `could not be read: ${e instanceof Error ? e.message : String(e)}`,
+        reason: isLabelSizeListError(e)
+          ? `its features: ${LABEL_SIZE_UNLISTABLE}`
+          : `could not be read: ${e instanceof Error ? e.message : String(e)}`,
       });
       continue;
     }

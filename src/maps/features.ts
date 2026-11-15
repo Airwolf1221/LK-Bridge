@@ -19,49 +19,82 @@ export const isFeatureType = (v: unknown): v is FeatureType =>
 
 // ------------------------------------------------------------------------------------------------ styles
 
-/** The label sizes LegendKeeper takes in a write (FeatureCreateParams / FeatureUpdateParams). */
+/** The label sizes LegendKeeper's write schema lists (FeatureCreateParams / FeatureUpdateParams). */
 export const LABEL_SIZES = ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl'] as const;
-/**
- * v2 E5.2: features drawn in the app may hold the old label sizes (the spec says so itself), which a write refuses. They
- * are mapped to the new ones wherever a stored or read feature is written back, and compared as equal to them.
- */
-export const OLD_LABEL_SIZES = { small: 'sm', medium: 'md', large: 'lg' } as const;
+/** The label sizes the app draws with, and the only ones `listFeatures` will return (v2 E5.4). */
+export const APP_LABEL_SIZES = ['small', 'medium', 'large'] as const;
 
 /**
- * A label size in the write form: a new size as it is, an old one mapped (`small` → `sm`), anything else (an unknown
- * value) null. Absent stays undefined.
+ * v2 E5.4 (ADR 0046 decision 14; Arkona's second rehearsal, 15 November 2026): LegendKeeper's API contradicts itself on
+ * `labelSize`. `createFeature` / `updateFeature` take only `xs`–`3xl` (and refuse the app's `small`/`medium`/`large`),
+ * while `listFeatures` validates what it RETURNS against `small | medium | large` only: once one feature of a map holds a
+ * new-style size, LegendKeeper refuses to list any of that map's features (400 VALIDATION_ERROR, issue path `labelSize`).
+ * Writing any label size through the API therefore makes the map unreadable through the API.
+ *
+ * So the bridge never sends `labelSize`. This is the ONE switch: when LegendKeeper fixes `listFeatures`, set it to true
+ * (and run the assumption test in test/sandbox/assumptions.ts first). While false, the map tools refuse a caller's
+ * `labelSize` (LABEL_SIZE_UNSUPPORTED), the engine refuses any feature write that carries one, restores and rehearsals
+ * leave it out (listed as not restorable), and every comparison ignores it.
  */
-export function writeLabelSize(v: unknown): string | null | undefined {
-  if (v === undefined) return undefined;
-  if (typeof v !== 'string') return null;
-  if ((LABEL_SIZES as readonly string[]).includes(v)) return v;
-  return Object.hasOwn(OLD_LABEL_SIZES, v) ? OLD_LABEL_SIZES[v as keyof typeof OLD_LABEL_SIZES] : null;
+export const LABEL_SIZE_WRITABLE: boolean = false;
+
+/** The code a caller's own `labelSize` is refused with while {@link LABEL_SIZE_WRITABLE} is false. */
+export const LABEL_SIZE_UNSUPPORTED = 'LABEL_SIZE_UNSUPPORTED';
+
+/** Why a caller's `labelSize` is refused (the map tools, the engine's backstop). */
+export const LABEL_SIZE_REFUSAL =
+  "labelSize can't be written through LegendKeeper's API at present: its writes take only xs–3xl, but listFeatures then refuses to return a map holding one, so the whole map becomes unreadable through the API. Set the label size in the LegendKeeper app instead.";
+
+/** How a restore and a rehearsal list a feature whose label size was left out. */
+export const LABEL_SIZE_NOT_RESTORABLE =
+  "label size not restorable: LegendKeeper's API can't write the app's values (small/medium/large) and can't read its own (xs–3xl)";
+
+/** Why a map's features could not be read (a snapshot's missing piece, the rehearsal, the map tools). */
+export const LABEL_SIZE_UNLISTABLE =
+  "LegendKeeper can't list this map's features: a feature holds a label size its API refuses to return (set its label size in the app)";
+
+/** The code the tools give a map whose features LegendKeeper refuses to list. */
+export const MAP_FEATURES_UNREADABLE = 'MAP_FEATURES_UNREADABLE';
+
+/**
+ * v2 E5.4: the ONE normaliser for a feature body the bridge sends that was built from a stored or read feature (a
+ * restore, a recreate, a rehearsal): `labelSize` is left out (LegendKeeper's default applies), and `dropped` says whether
+ * it was there, so the caller can list it. `iconSize` (which legitimately takes `small` and `medium`) is untouched.
+ * Returns a new body when it changes.
+ */
+export function normaliseFeatureBody(body: Obj): { body: Obj; dropped: boolean } {
+  if (LABEL_SIZE_WRITABLE || !Object.hasOwn(body, 'labelSize')) return { body, dropped: false };
+  const { labelSize: _omit, ...rest } = body;
+  return { body: rest, dropped: body.labelSize !== undefined && body.labelSize !== null };
 }
 
-/** A label size as compared: old and new names alike (`small` = `sm`); an unknown value compares as itself. */
-export const comparableLabelSize = (v: unknown): unknown => writeLabelSize(v) ?? v;
-
-/**
- * v2 E5.2: the ONE normaliser for a feature body sent to LegendKeeper that was built from a stored or read feature (a
- * restore, a rehearsal): an old label size is mapped to the new one, and an unknown one is left out of the body (its
- * default applies) with a note for the run's detail, rather than failing the whole write. Valid values pass unchanged;
- * `iconSize` (which legitimately takes `small` and `medium`) is untouched. Returns a new body.
- */
-export function normaliseFeatureBody(body: Obj): { body: Obj; note: string | null } {
-  if (!Object.hasOwn(body, 'labelSize')) return { body, note: null };
-  const size = writeLabelSize(body.labelSize);
-  if (size === body.labelSize) return { body, note: null };
-  if (size !== null && size !== undefined) return { body: { ...body, labelSize: size }, note: null };
-  const { labelSize: dropped, ...rest } = body;
-  return {
-    body: rest,
-    note: `its label size ${JSON.stringify(dropped)} is not one LegendKeeper takes (${LABEL_SIZES.join(', ')}): it was left out, so the default applies`,
-  };
-}
-
-/** A feature as compared: its label size in the write form (`small` and `sm` are the same). Returns a new object. */
+/** A feature as compared (v2 E5.4): its label size left out, as the bridge neither writes nor can trust it. */
 export function comparableFeature(f: Obj): Obj {
-  return Object.hasOwn(f, 'labelSize') ? { ...f, labelSize: comparableLabelSize(f.labelSize) } : f;
+  if (!Object.hasOwn(f, 'labelSize')) return f;
+  const { labelSize: _omit, ...rest } = f;
+  return rest;
+}
+
+/**
+ * True for LegendKeeper's refusal to list a map's features because one holds a label size it will not return: a 400
+ * whose issue path is `labelSize` (or ends in `.labelSize`) and whose message is an invalid enum value. Duck-typed over
+ * the governor's error (`errors`) and the engine's wrapper (`lk.errors`), so it works wherever the read failed.
+ */
+export function isLabelSizeListError(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const o = e as { status?: unknown; errors?: unknown; lk?: unknown; opId?: unknown; cause?: unknown };
+  if (o.lk && typeof o.lk === 'object') return isLabelSizeListError(o.lk);
+  if (o.status !== 400) return o.cause !== undefined && o.cause !== e && isLabelSizeListError(o.cause);
+  if (o.opId !== undefined && o.opId !== 'listFeatures') return false;
+  const issues = Array.isArray(o.errors) ? (o.errors as unknown[]) : [];
+  return issues.some((i) => {
+    if (!i || typeof i !== 'object') return false;
+    const { path, message } = i as { path?: unknown; message?: unknown };
+    const p = Array.isArray(path) ? path.map(String).join('.') : typeof path === 'string' ? path : '';
+    return (
+      /(^|[.\]])labelSize$/.test(p) && typeof message === 'string' && /invalid enum value/i.test(message)
+    );
+  });
 }
 
 const hex = z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'a colour as #RRGGBB');
@@ -93,13 +126,15 @@ export const styleSchema = z
     textColor: hex,
     textEffect: z.enum(['outline', 'background']),
     textEffectColor: hex,
-    // A caller's own size keeps the strict enum; the old names (`small`…) are refused with the hint to the new ones.
-    labelSize: z.enum(LABEL_SIZES, {
-      error: (iss) =>
-        typeof iss.input === 'string' && Object.hasOwn(OLD_LABEL_SIZES, iss.input)
-          ? `“${iss.input}” is an old label size: use ${OLD_LABEL_SIZES[iss.input as keyof typeof OLD_LABEL_SIZES]} (sizes are ${LABEL_SIZES.join(', ')})`
-          : `a label size is one of ${LABEL_SIZES.join(', ')} (for small, medium and large use sm, md and lg)`,
-    }),
+    // v2 E5.4: while LABEL_SIZE_WRITABLE is false, any value is accepted HERE so the tools can refuse it with
+    // LABEL_SIZE_UNSUPPORTED and the reason (an enum error would hide why).
+    labelSize: LABEL_SIZE_WRITABLE
+      ? z.enum(LABEL_SIZES)
+      : z
+          .unknown()
+          .describe(
+            'Not accepted at present (refused with LABEL_SIZE_UNSUPPORTED): LegendKeeper’s API cannot round-trip label sizes. Set it in the app.',
+          ),
     // any
     labelVisibility: z.enum(['always', 'hover', 'never']),
     visibilityRange: z.tuple([num, num]).describe('The zoom range [min, max], each 0 to 1.'),
@@ -307,22 +342,18 @@ export function holds(stored: Obj, fields: Obj): { field: string; expected: unkn
       if ((want ?? '') !== actual) out.push({ field: k, expected: want ?? '', actual: stored.uri ?? null });
       continue;
     }
-    // v2 E5.2: an old label size holds its new name (`small` is `sm`).
-    if (k === 'labelSize') {
-      if (comparableLabelSize(want) !== comparableLabelSize(stored[k]))
-        out.push({ field: k, expected: want, actual: stored[k] ?? null });
-      continue;
-    }
+    // v2 E5.4: the bridge never writes a label size, and cannot trust what is read: not compared.
+    if (k === 'labelSize' && !LABEL_SIZE_WRITABLE) continue;
     if (!sameValue(want, stored[k])) out.push({ field: k, expected: want, actual: stored[k] ?? null });
   }
   return out;
 }
 
-/** A stable hash of a stored feature (its `updatedAt` left out): the plan's expectation, confirmed inside the lock. */
+/** A stable hash of a stored feature (its `updatedAt` and, v2 E5.4, its `labelSize` left out): the plan's expectation, confirmed inside the lock. */
 export function featureHash(f: Obj): string {
   const clean = Object.fromEntries(
     Object.entries(f)
-      .filter(([k, v]) => k !== 'updatedAt' && v !== undefined)
+      .filter(([k, v]) => k !== 'updatedAt' && (LABEL_SIZE_WRITABLE || k !== 'labelSize') && v !== undefined)
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
   return createHash('sha256').update(JSON.stringify(clean)).digest('hex').slice(0, 32);

@@ -375,28 +375,45 @@ describe('styles', () => {
     expect(bad.isError).toBe(true);
   });
 
-  it('E5.2: a caller’s old label size (small) is refused with the hint to sm; a stored one holds its new name', async () => {
-    const live = () => w.liveFeatures(w.md.map).find((f) => f.id === w.f['Qishen lands'])!;
+  it('E5.4: a caller’s labelSize is refused (LABEL_SIZE_UNSUPPORTED), whatever its value; nothing is read or sent', async () => {
     const before = writes().length;
-    for (const [old, now] of [
-      ['small', 'sm'],
-      ['medium', 'md'],
-      ['large', 'lg'],
-    ] as const) {
-      const bad = await update({ feature: 'Qishen lands', style: { labelSize: old } });
+    const seen = w.seen.length;
+    for (const labelSize of ['small', 'sm', 'md', '3xl', 'huge', 12]) {
+      const bad = await update({ feature: 'Qishen lands', style: { labelSize } });
       expect(bad.isError, bad.text).toBe(true);
-      expect(bad.text).toContain(`use ${now}`);
+      expect(bad.body.error.code).toBe('LABEL_SIZE_UNSUPPORTED');
+      expect(bad.body.error.message).toMatch(/listFeatures/);
+      expect(bad.body.error.message).toMatch(/in the LegendKeeper app/);
     }
+    const made = await call('create_map_feature', {
+      ...ARKONA,
+      type: 'label',
+      name: 'Sized',
+      pixel: { x: 10, y: 10 },
+      style: { labelSize: 'md' },
+    });
+    expect(made.body.error?.code, made.text).toBe('LABEL_SIZE_UNSUPPORTED');
     expect(writes().length).toBe(before);
-    // A region drawn in the app holds the old name: asking for the new one is no change.
-    live().labelSize = 'small';
+    expect(w.seen.length).toBe(seen);
+  });
+
+  it('E5.4: a map LegendKeeper refuses to list (a feature holds a new-style size) is a clear error with the advice', async () => {
+    const live = () => w.liveFeatures(w.md.map).find((f) => f.id === w.f['Qishen lands'])!;
+    live().labelSize = 'md';
     try {
-      const same = await update({ feature: 'Qishen lands', style: { labelSize: 'sm' } });
-      expect(same.body.status, same.text).toBe('no_change');
-      expect(writes().length).toBe(before);
-      const bigger = await update({ feature: 'Qishen lands', style: { labelSize: 'lg' } });
-      expect(bigger.body.status, bigger.text).toBe('written');
-      expect(stored(w.f['Qishen lands']!).labelSize).toBe('lg');
+      const r = await update({ feature: 'Qishen lands', name: 'Renamed' });
+      expect(r.isError, r.text).toBe(true);
+      expect(r.body.error.code).toBe('MAP_FEATURES_UNREADABLE');
+      expect(r.body.error.message).toMatch(/set its label size in the app/);
+      const read = await call('read_document', { resource: ARKONA.page, document: ARKONA.document });
+      expect(read.body.error?.code, read.text).toBe('MAP_FEATURES_UNREADABLE');
+    } finally {
+      live().labelSize = 'small';
+    }
+    // An old value lists as before; and the map tools leave it alone (it is not compared).
+    try {
+      const r = await update({ feature: 'Qishen lands', name: 'Qishen lands' });
+      expect(r.isError, r.text).toBeFalsy();
     } finally {
       delete live().labelSize;
     }

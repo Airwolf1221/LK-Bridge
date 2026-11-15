@@ -465,6 +465,70 @@ describe('the Snapshots page', () => {
     );
   });
 
+  it('E5.4: the rehearsal preselects the newest COMPLETE full snapshot, marks a partial one, and shows what a sample leaves out', async () => {
+    const COMPLETE = '20261105T003000Z-full-0fedcba9';
+    const NEWER_PARTIAL = '20261114T003000Z-full-0aaaaaaa';
+    const api = installApi(
+      routes({
+        'GET /snapshots': response({
+          snapshots: [
+            snapshotRow({ id: NEWER_PARTIAL, state: 'partial', missing: 1, takenAt: NOW - 86_400_000 }),
+            snapshotRow({ id: SNAP, state: 'partial', missing: 2 }),
+            snapshotRow({ id: COMPLETE, state: 'complete', takenAt: NOW - 10 * 86_400_000 }),
+          ],
+        }),
+        'POST /snapshots/rehearsals/plan': {
+          plan: {
+            source: { projectId: 'lkp_baisheng', snapshotId: COMPLETE, takenAt: '', kind: 'full' },
+            target: { projectId: 'lkp_test', name: 'test' },
+            mode: 'sampled',
+            pages: ['p1', 'p2'],
+            coverage: {},
+            images: 0,
+            cuts: [
+              {
+                page: 'Chronology',
+                document: 'Timeline',
+                what: 'events',
+                kept: 25,
+                of: 730,
+                lanes: { kept: 4, of: 9 },
+              },
+              { page: 'World Map', document: 'Map', what: 'features', kept: 40, of: 310 },
+            ],
+            estimate: {
+              reads: 120,
+              writes: 180,
+              uploads: 0,
+              wallClockMs: 300_000,
+              fitsToday: true,
+              pacing: { msPerWrite: 1000, msPerRead: 400 },
+            },
+          },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/snapshots');
+    const card = await screen.findByRole('region', { name: 'Restore rehearsal' });
+    const picker = within(card).getByLabelText<HTMLSelectElement>('Full snapshot of baisheng');
+    expect(picker.value).toBe(COMPLETE);
+    const options = within(picker).getAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringMatching(/\(partial\)$/),
+      expect.stringMatching(/\(partial\)$/),
+      expect.not.stringMatching(/partial/),
+    ]);
+    await user.click(within(card).getByRole('button', { name: 'Estimate' }));
+    expect(await within(card).findByLabelText('Rehearsal estimate')).toHaveTextContent(
+      'Paced at about 1.0 s a write and 0.4 s a read.',
+    );
+    expect(api.find('POST', '/snapshots/rehearsals/plan')[0]!.body).toMatchObject({ snapshot: COMPLETE });
+    const cuts = within(card).getByLabelText('What the sample leaves out');
+    expect(cuts).toHaveTextContent('Chronology, Timeline: 25 of 730 events (with the 4 of 9 lanes they use)');
+    expect(cuts).toHaveTextContent('World Map, Map: 40 of 310 features');
+  });
+
   it('has no daily changed-pages switch (LegendKeeper’s updatedAt does not track content)', async () => {
     installApi(routes({}));
     renderApp('/ui/snapshots');

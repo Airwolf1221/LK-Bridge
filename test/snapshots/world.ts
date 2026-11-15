@@ -31,6 +31,7 @@ import {
 } from '../../src/config/index.js';
 import type { GuardOptions } from '../../src/mcp/tools/upload-http.js';
 import { buildModels } from '../discover/world.js';
+import { labelSizeListRefusal, labelSizeWriteRefusal } from '../maps/label-size-bug.js';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
 import { resourcesWorld, SidebarModel, type ResourcesWorld } from '../resources/world.js';
 import { PROJECT } from '../tools/helpers.js';
@@ -67,6 +68,18 @@ export interface SnapshotsWorld extends ResourcesWorld {
   readonly movedToAssets2: Set<string>;
   /** Every GET of an asset file: the host asked and the request's headers. */
   readonly assetRequests: { host: string; path: string; headers: Record<string, unknown> }[];
+  /**
+   * v2 E5.4: every body a feature write (POST or PATCH) brought, in order, whether the model took it or not: what
+   * LegendKeeper was actually sent.
+   */
+  readonly featureWrites: { readonly method: string; readonly body: Obj }[];
+  /**
+   * v2 E5.4: LegendKeeper's label-size bug (on by default): `listFeatures` refuses a map holding any label size but
+   * small/medium/large, and a write refuses any but xs–3xl. A test turns it off to stage a map LegendKeeper could not list.
+   */
+  readonly bugs: { labelSize: boolean };
+  /** v2 E5.4: answers a map's `listFeatures` instead of the model when it returns a response (test seam). */
+  listHook: ((documentId: string) => MockResponse | undefined) | null;
   /** The stored model of a map's features, a timeline's lanes and events, a board's content. */
   readonly features: Map<string, Obj[]>;
   readonly lanes: Map<string, Obj[]>;
@@ -131,6 +144,10 @@ export async function snapshotsWorld(
   const served = new Map<string, Buffer>();
   const gets: string[] = [];
   const movedToAssets2 = new Set<string>();
+  const featureWrites: SnapshotsWorld['featureWrites'] = [];
+  const bugs = { labelSize: true };
+  // The returned world, once made: the routes read its `listHook` when a request comes.
+  let world: { listHook: SnapshotsWorld['listHook'] } = { listHook: null };
   const assetRequests: SnapshotsWorld['assetRequests'] = [];
   const puts = new Map<string, Buffer>();
   const server: Server = createServer({ key, cert }, (req, res) => {
@@ -482,11 +499,21 @@ export async function snapshotsWorld(
     }
     if (!doc) return err(404, 'NOT_FOUND');
     if (what === 'features') {
+      if (req.method === 'POST' || req.method === 'PATCH')
+        featureWrites.push({ method: req.method, body: structuredClone(body) });
       const list = features.get(did) ?? [];
       features.set(did, list);
       if (!sub && req.method === 'GET')
-        return { status: 200, body: { data: structuredClone([...list].sort(sortRank)) } };
+        return (
+          world.listHook?.(did) ??
+          (bugs.labelSize ? labelSizeListRefusal(list) : undefined) ?? {
+            status: 200,
+            body: { data: structuredClone([...list].sort(sortRank)) },
+          }
+        );
       if (!sub && req.method === 'POST') {
+        const sized = bugs.labelSize ? labelSizeWriteRefusal(body) : undefined;
+        if (sized) return sized;
         const id = typeof body.id === 'string' ? body.id : newId('f');
         if (list.some((f) => f.id === id)) return err(409, 'DUPLICATE_ID');
         const iconRefused = w.repo.iconError(body);
@@ -500,6 +527,8 @@ export async function snapshotsWorld(
       if (!f) return err(404, 'NOT_FOUND');
       if (req.method === 'GET') return { status: 200, body: structuredClone(f) };
       if (req.method === 'PATCH') {
+        const sized = bugs.labelSize ? labelSizeWriteRefusal(body) : undefined;
+        if (sized) return sized;
         const iconRefused = w.repo.iconError(body);
         if (iconRefused) return iconRefused;
         for (const [k, v] of Object.entries(body))
@@ -699,7 +728,9 @@ export async function snapshotsWorld(
   });
 
   const closeWorld = (w as unknown as { close: () => Promise<void> }).close.bind(w);
-  return Object.assign(w, {
+  const made = Object.assign(w, {
+    bugs,
+    listHook: null as SnapshotsWorld['listHook'],
     port,
     dir,
     snapshotDir,
@@ -708,6 +739,7 @@ export async function snapshotsWorld(
     gets,
     movedToAssets2,
     assetRequests,
+    featureWrites,
     features,
     lanes,
     events,
@@ -723,4 +755,6 @@ export async function snapshotsWorld(
       rmSync(dir, { recursive: true, force: true });
     },
   });
+  world = made;
+  return made;
 }

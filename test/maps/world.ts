@@ -14,6 +14,7 @@
  *   (its `parentId` still names the folder that is gone), and `parentId: ""` moves a feature to the top level (it then reads back with `parentId: ""`; one created there has no field) while `parentId: null` is refused with LegendKeeper's own 400 issue (the owner's probe of 12 November 2026);
  * - failures can be injected at a chosen write, and the stored features are open to edits made "in the app".
  */
+import { labelSizeListRefusal, labelSizeWriteRefusal } from './label-size-bug.js';
 import { keyBetween } from '../../src/maps/rank.js';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
 import { ROOT } from '../discover/world.js';
@@ -109,7 +110,6 @@ const ENUMS: Record<string, string[]> = {
   borderStyle: ['solid', 'dashed', 'dotted', 'none'],
   strokeStyle: ['solid', 'dashed', 'dotted', 'none'],
   labelVisibility: ['always', 'hover', 'never'],
-  labelSize: ['xs', 'sm', 'md', 'lg', 'xl', '2xl', '3xl'],
   textEffect: ['outline', 'background'],
 };
 const COLOUR_TYPES: Record<string, string[]> = {
@@ -400,6 +400,8 @@ export async function mapsWorld(o: Parameters<typeof resourcesWorld>[0] = {}): P
         if (method === 'GET') {
           runHooks('listFeatures');
           if (D.type === 'blank') return { status: 200, body: { data: [] } };
+          const unlistable = labelSizeListRefusal(list);
+          if (unlistable) return unlistable;
           const t = req.query.type;
           return { status: 200, body: { data: list.filter((x) => !t || x.type === t).map(view) } };
         }
@@ -407,6 +409,8 @@ export async function mapsWorld(o: Parameters<typeof resourcesWorld>[0] = {}): P
           const f1 = fault('createFeature');
           if (f1) return f1;
           const type = String(body.type);
+          const sized = labelSizeWriteRefusal(body);
+          if (sized) return sized;
           const bad = validate(body, type, true);
           if (bad) return bad;
           const id = typeof body.id === 'string' ? body.id : fid('x');
@@ -441,6 +445,8 @@ export async function mapsWorld(o: Parameters<typeof resourcesWorld>[0] = {}): P
           return err(400, 'VALIDATION_ERROR', 'Validation failed', [
             { path: 'parentId', message: 'Expected string, received null' },
           ]);
+        const sized = labelSizeWriteRefusal(body);
+        if (sized) return sized;
         const bad = validate(body, String(body.type ?? cur.type), false);
         if (bad) return bad;
         if (parentKey(body) !== null && !list.some((x) => x.id === body.parentId))

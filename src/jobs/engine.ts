@@ -2,6 +2,7 @@
  * The job engine (PLAN §6): everything that talks to LegendKeeper runs as a persisted step, through the governor,
  * with writer slots, locks, guards and the write journal. See src/jobs/README.md for the interface.
  */
+import { LABEL_SIZE_REFUSAL, LABEL_SIZE_UNSUPPORTED, LABEL_SIZE_WRITABLE } from '../maps/features.js';
 import { randomBytes } from 'node:crypto';
 import { WRITERS_LIMIT, WRITERS_MIN, type JobsSettings } from '../config/jobs.js';
 import type { Db } from '../db/open.js';
@@ -2078,6 +2079,15 @@ export class JobEngine {
   private validate(opId: string, params: OpParams): OperationDef {
     const def = getOperation(opId);
     if (!def) throw new UnknownOperationError(opId);
+    // v2 E5.4: the backstop for LABEL_SIZE_WRITABLE: no feature write carries a label size, whoever built it (a written
+    // label size makes the whole map unreadable through LegendKeeper's API). Refused here, so it is never sent.
+    if (!LABEL_SIZE_WRITABLE && (opId === 'createFeature' || opId === 'updateFeature')) {
+      const body = params.body as Record<string, unknown> | undefined;
+      if (body && typeof body === 'object' && body.labelSize !== undefined)
+        throw new InvalidParamsError(opId, [
+          { path: 'body.labelSize', message: `${LABEL_SIZE_UNSUPPORTED}: ${LABEL_SIZE_REFUSAL}` },
+        ]);
+    }
     const parsed = operationInputSchema(opId).safeParse(params);
     if (!parsed.success) {
       throw new InvalidParamsError(

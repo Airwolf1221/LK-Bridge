@@ -638,12 +638,22 @@ function RehearsalResult({ r, onChanged }: { r: RehearsalView; onChanged: () => 
   );
 }
 
+/** v2 E5.4: the newest complete full snapshot of a list (newest first, as the API gives them), if any. */
+function newestComplete<T extends { kind: string; state: string; takenAt: number }>(
+  snaps: readonly T[],
+): T | undefined {
+  return [...snaps]
+    .filter((s) => s.kind === 'full' && s.state === 'complete')
+    .sort((a, b) => b.takenAt - a.takenAt)[0];
+}
+
 function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void }) {
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const fulls = d.snapshots.filter((s) => s.kind === 'full');
   const targets = d.sandboxes.filter((s) => s.name !== d.project);
-  const [snapshot, setSnapshot] = useState(fulls[0]?.id ?? '');
+  // v2 E5.4: the newest COMPLETE full snapshot is chosen first (a partial one cannot be restored whole).
+  const [snapshot, setSnapshot] = useState(newestComplete(fulls)?.id ?? fulls[0]?.id ?? '');
   const [target, setTarget] = useState(targets[0]?.name ?? '');
   const [mode, setMode] = useState<'sampled' | 'full'>('sampled');
   const [keep, setKeep] = useState(false);
@@ -677,8 +687,8 @@ function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => v
       <p className="muted">
         Restores a full snapshot into a throwaway page of a sandbox project (the test world), with new ids,
         compares every page with the snapshot, then deletes it. Sampled: about 50 pages covering every kind of
-        block and document, maps, boards, the chronology and images. Never into the project the snapshot came
-        from.
+        block and document, maps, boards, the chronology and images, with at most 25 events of a timeline and
+        40 features of a map. Never into the project the snapshot came from.
       </p>
       {targets.length === 0 ? (
         <p className="note">
@@ -693,7 +703,7 @@ function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => v
           <select id="rh-snap" value={snapshot} onChange={(e) => setSnapshot(e.target.value)}>
             {fulls.map((s) => (
               <option key={s.id} value={s.id}>
-                {fmtTime(s.takenAt)} ({fmtInt(s.pages)} pages{s.state === 'partial' ? ', partial' : ''})
+                {fmtTime(s.takenAt)} ({fmtInt(s.pages)} pages){s.state === 'partial' ? ' (partial)' : ''}
               </option>
             ))}
           </select>
@@ -733,7 +743,25 @@ function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => v
                 ? `, about ${fmtDuration(plan.estimate.wallClockMs)} at background priority`
                 : ''}
               {plan.estimate.fitsToday === false ? ' (more than today’s budget has left)' : ''}.
+              {plan.estimate.pacing
+                ? ` Paced at about ${(plan.estimate.pacing.msPerWrite / 1000).toFixed(1)} s a write and ${(plan.estimate.pacing.msPerRead / 1000).toFixed(1)} s a read.`
+                : ''}
             </p>
+          )}
+          {plan && (plan.cuts ?? []).length > 0 && (
+            <div className="note" aria-label="What the sample leaves out">
+              <strong>Left out of the sample</strong>
+              <ul>
+                {plan.cuts!.map((x, i) => (
+                  <li key={i}>
+                    {x.page}, {x.document}: {fmtInt(x.kept)} of {fmtInt(x.of)} {x.what}
+                    {x.lanes
+                      ? ` (with the ${fmtInt(x.lanes.kept)} of ${fmtInt(x.lanes.of)} lanes they use)`
+                      : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </form>
       )}

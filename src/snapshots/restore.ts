@@ -20,7 +20,13 @@
  * the link collections.
  */
 import { ICON_FIELDS, withWriteIcon } from '../lk/icons.js';
-import { normaliseFeatureBody } from '../maps/features.js';
+import {
+  comparableFeature,
+  isLabelSizeListError,
+  LABEL_SIZE_NOT_RESTORABLE,
+  LABEL_SIZE_UNLISTABLE,
+  normaliseFeatureBody,
+} from '../maps/features.js';
 import { randomBytes } from 'node:crypto';
 import { expectStep, verifyStep, type ExpectCheck, type VerifyTarget } from '../jobs/internal-steps.js';
 import { stableJson } from '../jobs/sidebar-state.js';
@@ -344,13 +350,23 @@ const featureCreate = () => bodyFields('createFeature');
 const featureUpdate = () => bodyFields('updateFeature');
 
 /**
- * v2 E5.2: a feature body written back from a stored feature: the writable fields, the label size in the write form (an
- * old `small` sent as `sm`; an unknown one left out and noted) and the icon in the write form.
+ * v2 E5.4: a feature body written back from a stored feature: the writable fields, no `labelSize` (LegendKeeper's API
+ * cannot round-trip it: counted in `dropped`, listed once per map) and the icon in the write form.
  */
-function featureBody(f: Obj, fields: Set<string>, where: string, notes: PlanNote[]): Obj {
+function featureBody(f: Obj, fields: Set<string>, dropped: { n: number }): Obj {
   const r = normaliseFeatureBody(pick(f, fields));
-  if (r.note) notes.push({ what: `the label size of feature ${featureLabel(f)}`, where, why: r.note });
+  if (r.dropped) dropped.n++;
   return withWriteIcon(r.body);
+}
+
+/** v2 E5.4: the one note per map for the features whose label size was left out. */
+function labelSizeNote(notes: PlanNote[], map: string, dropped: { n: number }): void {
+  if (dropped.n > 0)
+    notes.push({
+      what: `the label size of ${dropped.n} feature(s) of map ${map}`,
+      where: map,
+      why: `${LABEL_SIZE_NOT_RESTORABLE}; LegendKeeper's default applies`,
+    });
 }
 
 /** A feature as the owner finds it: its name and id. */
@@ -358,14 +374,14 @@ const featureLabel = (f: Obj): string =>
   typeof f.name === 'string' && f.name !== '' ? `“${f.name}” (${String(f.id)})` : String(f.id);
 
 /**
- * A map's features as the plan compares and checks them: by id, the writable fields only, in the form they are written
- * (v2 E5.2: an old label size as its new name, `small` = `sm`, so a restored `sm` is not a difference).
+ * A map's features as the plan compares and checks them: by id, the writable fields only, without `labelSize` (v2 E5.4:
+ * the bridge never writes it, so it is no difference and no reason to update).
  */
 export function featureState(features: readonly unknown[]): Obj[] {
   const fields = featureCreate();
   return features
     .filter(isObj)
-    .map((f) => normaliseFeatureBody(pick(f, fields)).body)
+    .map((f) => comparableFeature(pick(f, fields)))
     .sort((a, b) => (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0));
 }
 
@@ -400,7 +416,15 @@ async function planDocument(
   const writes: StepSpec[] = [];
   const checks: ExpectCheck[] = [];
   const verify: VerifyTarget[] = [];
-  const current = (await documentPieceOf(read, pageId, liveDoc)) as DocumentPiece | undefined;
+  let current: DocumentPiece | undefined;
+  try {
+    current = (await documentPieceOf(read, pageId, liveDoc)) as DocumentPiece | undefined;
+  } catch (e) {
+    // v2 E5.4: a map LegendKeeper refuses to list cannot be planned against; say why, not the raw 400.
+    if (isLabelSizeListError(e))
+      throw new RestoreError('MAP_FEATURES_UNREADABLE', `${name}: ${LABEL_SIZE_UNLISTABLE}.`);
+    throw e;
+  }
   if (current === undefined)
     throw new RestoreError('DOCUMENT_GONE', `The document ${name} has gone; read the page again.`);
   const before = renderDocument(current);
@@ -557,9 +581,7 @@ async function planDocument(
       .sort((a, b) => depth(a, wantById) - depth(b, wantById));
     const updates = want.filter((f) => {
       const l = liveById.get(String(f.id));
-      return (
-        l && !same(normaliseFeatureBody(pick(l, update)).body, normaliseFeatureBody(pick(f, update)).body)
-      );
+      return l && !same(comparableFeature(pick(l, update)), comparableFeature(pick(f, update)));
     });
     for (const f of deletes)
       writes.push({
@@ -567,10 +589,11 @@ async function planDocument(
         params: { path: { ...path, featureId: String(f.id) } },
         journalOperation: { ...journalOperation, write: `delete feature ${String(f.name ?? f.id)}` },
       });
+    const dropped = { n: 0 };
     for (const f of creates)
       writes.push({
         op: 'createFeature',
-        params: { path, body: featureBody(f, create, name, o.notRestored) },
+        params: { path, body: featureBody(f, create, dropped) },
         ...ICON_DROP,
         journalOperation: {
           ...journalOperation,
@@ -579,7 +602,7 @@ async function planDocument(
         },
       });
     for (const f of updates) {
-      const body = featureBody(f, update, name, o.notRestored);
+      const body = featureBody(f, update, dropped);
       const l = liveById.get(String(f.id))!;
       // A link or a folder the snapshot did not have is cleared (LegendKeeper takes "" for both).
       if (l.uri && !f.uri) body.uri = '';
@@ -595,6 +618,7 @@ async function planDocument(
         },
       });
     }
+    labelSizeNote(o.notRestored, name, dropped);
     if (Object.keys(settings).length > 0)
       writes.push({
         op: 'updateDocument',
@@ -1605,10 +1629,11 @@ async function planDeleted(
         for (let q = str(f.parentId); q && n < 50; q = str(byId.get(q)?.parentId)) n++;
         return n;
       };
+      const dropped = { n: 0 };
       for (const f of [...byId.values()].sort((a, b) => depth(a) - depth(b)))
         steps.push({
           op: 'createFeature',
-          params: { path: p, body: featureBody(f, create, docName, notRestored) },
+          params: { path: p, body: featureBody(f, create, dropped) },
           ...ICON_DROP,
           bindFrom: bound(ref),
           journalOperation: {
@@ -1618,6 +1643,7 @@ async function planDeleted(
             feature: { id: String(f.id), name: str(f.name) ?? '' },
           },
         });
+      labelSizeNote(notRestored, docName, dropped);
       const img = isObj(t.piece.settings.mapImage) ? str(t.piece.settings.mapImage.assetId) : null;
       if (img) {
         if (d.assetLive(input.projectId, img)) set.mapImage = { assetId: img };

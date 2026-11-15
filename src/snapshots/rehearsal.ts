@@ -6,7 +6,8 @@
  *
  * - Sampled by default: about 50 pages chosen to cover every block kind, every document type, the chronology, a map, a
  *   board, images, keep regions and unsupported blocks; or every page (`full`), with its estimated requests and time
- *   shown first (Arkona's full rehearsal takes hours under the write limits).
+ *   shown first (Arkona's full rehearsal takes hours under the write limits). v2 E5.4: a sample copies at most 25 events
+ *   of a timeline and 40 features of a map (the plan's `cuts` say what was left out), and the estimate is paced at P3.
  * - It is the owner's job: ordinary jobs through the engine (the system principal, a dashboard origin, P3), so every guard
  *   applies. A rehearsal must not create canon or lifecycle state in the test project, so the three guarded signals are
  *   written in an INERT form and compared in that form: every page name gets the prefix `rehearsal: ` (so `[BSRC] …`,
@@ -26,7 +27,13 @@ import { ICON_FIELDS, withWriteIcon } from '../lk/icons.js';
 import { randomBytes } from 'node:crypto';
 import type { JobEngine, JobOrigin, JobView, StepSpec } from '../jobs/index.js';
 import { InvalidParamsError } from '../jobs/errors.js';
-import { normaliseFeatureBody } from '../maps/features.js';
+import {
+  comparableFeature,
+  isLabelSizeListError,
+  LABEL_SIZE_NOT_RESTORABLE,
+  LABEL_SIZE_UNLISTABLE,
+  normaliseFeatureBody,
+} from '../maps/features.js';
 import { mintClientId } from '../jobs/ids.js';
 import { stableJson } from '../jobs/sidebar-state.js';
 import { normaliseRuns } from '../jobs/verify-blocks.js';
@@ -54,6 +61,10 @@ const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 const INERT = 'rehearsal: ';
 
 export const SAMPLE_SIZE = 50;
+/** v2 E5.4: in a sampled rehearsal, at most this many events of each timeline are copied (with every lane they use). */
+export const SAMPLE_EVENTS_PER_TIMELINE = 25;
+/** v2 E5.4: in a sampled rehearsal, at most this many features of each map (parents with their children). */
+export const SAMPLE_FEATURES_PER_MAP = 40;
 
 export interface RehearsalDeps {
   readonly svc: SnapshotService;
@@ -80,6 +91,8 @@ export interface RehearsalDeps {
               wallClockMs: number;
               fitsToday: boolean;
               tightestTier: string;
+              pacingMs?: number;
+              tiers?: readonly { tier: string; demand: number; capacityPerWindow: number }[];
             };
           };
         }
@@ -104,13 +117,33 @@ export interface RehearsalPlan {
   readonly pages: readonly string[];
   readonly coverage: Readonly<Record<string, readonly string[]>>;
   readonly images: number;
+  /** v2 E5.4: what a sampled rehearsal leaves out of the pages it copies (events of a timeline, features of a map). */
+  readonly cuts: readonly SampleCut[];
   readonly estimate: {
     readonly reads: number;
     readonly writes: number;
     readonly uploads: number;
+    /**
+     * The time the run should take (v2 E5.4): the governor's estimate at P3, and at least the writes one after another
+     * at P3's write rate (the write spacing, or the P3 share of the write tiers if slower) plus the reads at P3's share
+     * of the request tiers, as the rehearsal's jobs run one at a time.
+     */
     readonly wallClockMs: number | null;
     readonly fitsToday: boolean | null;
+    /** What the pacing assumes: the time per write and per read at P3 (null without a governor). */
+    readonly pacing?: { readonly msPerWrite: number; readonly msPerRead: number } | null;
   };
+}
+
+/** v2 E5.4: one cut a sampled rehearsal makes: of `of` items of a document, `kept` are copied. */
+export interface SampleCut {
+  readonly page: string;
+  readonly document: string;
+  readonly what: 'events' | 'features';
+  readonly kept: number;
+  readonly of: number;
+  /** For events: how many lanes of the timeline are copied (the ones the kept events use). */
+  readonly lanes?: { readonly kept: number; readonly of: number };
 }
 
 export interface Difference {
@@ -236,6 +269,139 @@ const hash = (s: string) => {
   for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619) >>> 0;
   return h;
 };
+
+// ============================================================================================ trimming a sample
+
+const spread = <T>(xs: readonly T[], n: number): T[] => {
+  if (xs.length <= n) return [...xs];
+  const out: T[] = [];
+  for (let i = 0; i < n; i++) out.push(xs[Math.floor((i * xs.length) / n)]!);
+  return out;
+};
+
+/**
+ * v2 E5.4: at most `max` events of a timeline, spread over it in its order (by start, then id), with every lane they
+ * use and no other. Returns the piece unchanged when it is within the cap.
+ */
+export function sampleTimeline(piece: DocumentPiece, max: number): { piece: DocumentPiece; cut: boolean } {
+  const events = ((piece.events ?? []) as Obj[]).filter(isObj);
+  if (events.length <= max) return { piece, cut: false };
+  const start = (e: Obj) => (typeof e.start === 'number' ? e.start : Number.POSITIVE_INFINITY);
+  const ordered = [...events].sort((a, b) =>
+    start(a) !== start(b) ? start(a) - start(b) : String(a.id) < String(b.id) ? -1 : 1,
+  );
+  const kept = new Set(spread(ordered, max));
+  const keptEvents = events.filter((e) => kept.has(e));
+  const used = new Set(keptEvents.map((e) => String(e.laneId)));
+  const lanes = ((piece.lanes ?? []) as Obj[]).filter((l) => isObj(l) && used.has(String(l.id)));
+  return { piece: { ...piece, events: keptEvents, lanes }, cut: true };
+}
+
+/**
+ * v2 E5.4: at most `max` features of a map. A kept feature brings its parents (folders) with it, so nothing is copied
+ * without its folder; a region and a path are kept first if the map has them, then the others in the map's order.
+ * Returns the piece unchanged when it is within the cap.
+ */
+export function sampleMap(piece: DocumentPiece, max: number): { piece: DocumentPiece; cut: boolean } {
+  const features = ((piece.features ?? []) as Obj[]).filter(isObj);
+  if (features.length <= max) return { piece, cut: false };
+  const byId = new Map(features.map((f) => [String(f.id), f]));
+  const keep = new Set<string>();
+  const chain = (f: Obj): string[] => {
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (let c: Obj | undefined = f; c && !seen.has(String(c.id)); c = byId.get(str(c.parentId) ?? '')) {
+      seen.add(String(c.id));
+      if (!keep.has(String(c.id))) out.push(String(c.id));
+    }
+    return out;
+  };
+  const add = (f: Obj) => {
+    const c = chain(f);
+    if (c.length > 0 && keep.size + c.length <= max) for (const id of c) keep.add(id);
+  };
+  const region = features.find((f) => f.type === 'region');
+  const path = features.find((f) => f.type === 'path');
+  for (const f of [region, path]) if (f) add(f);
+  // Features with something to show first (pins, labels, regions, paths); folders come with them, or after.
+  for (const f of features.filter((x) => x.type !== 'folder')) {
+    if (keep.size >= max) break;
+    add(f);
+  }
+  for (const f of features.filter((x) => x.type === 'folder')) {
+    if (keep.size >= max) break;
+    add(f);
+  }
+  return { piece: { ...piece, features: features.filter((f) => keep.has(String(f.id))) }, cut: true };
+}
+
+/** The sampled copy of a page's documents (capped timelines and maps), and what was cut. */
+function trimPage(l: Loaded): { loaded: Loaded; cuts: SampleCut[] } {
+  const cuts: SampleCut[] = [];
+  const documents = l.documents.map((d) => {
+    const t = str(d.piece.settings.type) ?? 'blank';
+    const name = str(d.piece.settings.name) ?? d.id;
+    if (t === 'time') {
+      const r = sampleTimeline(d.piece, SAMPLE_EVENTS_PER_TIMELINE);
+      if (!r.cut) return d;
+      cuts.push({
+        page: l.entry.name,
+        document: name,
+        what: 'events',
+        kept: (r.piece.events ?? []).length,
+        of: (d.piece.events ?? []).length,
+        lanes: { kept: (r.piece.lanes ?? []).length, of: (d.piece.lanes ?? []).length },
+      });
+      return { ...d, piece: r.piece };
+    }
+    if (t === 'map') {
+      const r = sampleMap(d.piece, SAMPLE_FEATURES_PER_MAP);
+      if (!r.cut) return d;
+      cuts.push({
+        page: l.entry.name,
+        document: name,
+        what: 'features',
+        kept: (r.piece.features ?? []).length,
+        of: (d.piece.features ?? []).length,
+      });
+      return { ...d, piece: r.piece };
+    }
+    return d;
+  });
+  return { loaded: cuts.length > 0 ? { ...l, documents } : l, cuts };
+}
+
+const WINDOW_MS: Readonly<Record<string, number>> = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
+const windowOf = (tier: string): number | null => WINDOW_MS[tier.split('-').pop() ?? ''] ?? null;
+
+/**
+ * v2 E5.4: the time per write and per read at P3, from the governor's own estimate: a write takes at least the write
+ * spacing, and once the work needs more than a window's P3 share of a tier (`capacityPerWindow`), its share of that tier
+ * (`window / capacity`): a write of the write and request tiers, a read of the request tiers.
+ */
+export function pacingOf(
+  est: {
+    pacingMs?: number;
+    tiers?: readonly { tier: string; demand: number; capacityPerWindow: number }[];
+  },
+  writes: number,
+): { msPerWrite: number; msPerRead: number } {
+  let msPerWrite = writes > 0 && est.pacingMs ? est.pacingMs / writes : 0;
+  let msPerRead = 0;
+  for (const t of est.tiers ?? []) {
+    const w = windowOf(t.tier);
+    // A tier slows the run only once the work needs more than one window's share; then it flows at its steady rate.
+    if (w === null || t.capacityPerWindow <= 0 || t.demand <= t.capacityPerWindow) continue;
+    const per = w / t.capacityPerWindow;
+    if (t.tier.startsWith('write-')) msPerWrite = Math.max(msPerWrite, per);
+    else if (!t.tier.startsWith('items-')) {
+      msPerRead = Math.max(msPerRead, per);
+      // A write is also a request: it costs at least its share of the request tiers.
+      msPerWrite = Math.max(msPerWrite, per);
+    }
+  }
+  return { msPerWrite: Math.ceil(msPerWrite), msPerRead: Math.ceil(msPerRead) };
+}
 
 // ============================================================================================ the copy's transforms
 
@@ -525,11 +691,21 @@ export class Rehearsals {
     if (!manifest)
       throw new RestoreError('SNAPSHOT_DAMAGED', `The manifest of ${row.id} is missing or unreadable.`);
     const chronologyId = str(this.d.projectSettings(row.projectId).chronologyResourceId);
-    const loaded = await load(this.d.svc, manifest, chronologyId);
+    let loaded = await load(this.d.svc, manifest, chronologyId);
     const chosen =
       o.mode === 'full'
         ? { ids: loaded.map((l) => l.entry.id), coverage: {} }
         : choosePages(loaded, o.max ?? SAMPLE_SIZE);
+    // v2 E5.4: a sampled rehearsal copies at most SAMPLE_EVENTS_PER_TIMELINE events of a timeline and
+    // SAMPLE_FEATURES_PER_MAP features of a map (full mode copies everything); the plan says what was cut.
+    const cuts: SampleCut[] = [];
+    if (o.mode === 'sampled')
+      loaded = loaded.map((l) => {
+        if (!chosen.ids.includes(l.entry.id)) return l;
+        const t = trimPage(l);
+        cuts.push(...t.cuts);
+        return t.loaded;
+      });
     const pick = loaded.filter((l) => chosen.ids.includes(l.entry.id));
     const images = new Set(pick.flatMap((l) => (l.entry.images ?? []).map((i) => i.url)));
     let writes = 2 + 2; // the root and its asset folder, made and deleted
@@ -558,6 +734,10 @@ export class Rehearsals {
     writes += images.size * 2;
     reads += images.size;
     const est = this.d.projects.client(target.id)?.governor.estimate({ reads, writes, priority: 'P3' });
+    // v2 E5.4: the governor's estimate assumes the work flows in parallel at the budget's steady rate; the rehearsal's
+    // jobs run one after another, so the writes at P3's write rate plus the reads at its request rate bound it from below.
+    const pacing = est ? pacingOf(est, writes) : null;
+    const paced = pacing ? writes * pacing.msPerWrite + reads * pacing.msPerRead : 0;
     return {
       plan: {
         source: {
@@ -571,12 +751,14 @@ export class Rehearsals {
         pages: chosen.ids,
         coverage: chosen.coverage,
         images: images.size,
+        cuts,
         estimate: {
           reads,
           writes,
           uploads: images.size,
-          wallClockMs: est ? est.wallClockMs : null,
+          wallClockMs: est ? Math.max(est.wallClockMs, paced) : null,
           fitsToday: est ? est.fitsToday : null,
+          pacing,
         },
       },
       loaded,
@@ -604,7 +786,7 @@ export class Rehearsals {
       keep: o.keep,
       startedBy: o.by,
       estimate: plan.estimate,
-      plan: { pages: plan.pages, coverage: plan.coverage, images: plan.images },
+      plan: { pages: plan.pages, coverage: plan.coverage, images: plan.images, cuts: plan.cuts },
     });
     const run = this.run(id, plan, loaded, manifest).catch((e: unknown) => {
       this.d.svc.index.updateRehearsal(id, {
@@ -979,18 +1161,20 @@ export class Rehearsals {
           const create = bodyFields('createFeature');
           const docName = str(d.piece.settings.name) ?? d.id;
           const sorted = [...byId.values()].sort((a, b) => depth(a) - depth(b));
-          // v2 E5.2: a feature drawn in the app may hold an old label size (`small`): written as the new one (`sm`);
-          // an unknown one is left out and listed.
+          // v2 E5.4: no label size is ever sent (LegendKeeper's API cannot round-trip it): left out, its default applies,
+          // and counted once for the map.
+          let dropped = 0;
           const feats = sorted.map((f) => {
             const n = normaliseFeatureBody(pickFields(f, create));
-            if (n.note)
-              cannot.push({
-                page: l.entry.name,
-                piece: `${docName} feature ${featureName(f)}`,
-                reason: n.note,
-              });
+            if (n.dropped) dropped++;
             return map.feature(n.body, ids);
           });
+          if (dropped > 0)
+            cannot.push({
+              page: l.entry.name,
+              piece: `${docName}: the label size of ${dropped} feature(s)`,
+              reason: LABEL_SIZE_NOT_RESTORABLE,
+            });
           feats.forEach((f, i) => {
             const step: StepSpec = {
               op: 'createFeature',
@@ -1095,7 +1279,22 @@ export class Rehearsals {
       if (!exp) continue;
       compared++;
       const before = differences.length;
-      const res = (await counted('getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+      // v2 E5.4: a read that fails is a difference for that page and piece; the comparison goes on with the rest.
+      const failed = (piece: string, e: unknown) =>
+        differences.push({
+          page: l.entry.name,
+          piece,
+          reason: isLabelSizeListError(e)
+            ? LABEL_SIZE_UNLISTABLE
+            : `could not be read: ${(e instanceof Error ? e.message : String(e)).slice(0, 300)}`,
+        });
+      let res: Obj | undefined;
+      try {
+        res = (await counted('getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+      } catch (e) {
+        failed('page', e);
+        continue;
+      }
       if (!res) {
         differences.push({ page: l.entry.name, piece: 'page', reason: 'not found after it was written' });
         continue;
@@ -1149,8 +1348,14 @@ export class Rehearsals {
           differences.push({ page: l.entry.name, piece: `document ${docId}`, reason: 'missing' });
           continue;
         }
-        const got = (await documentPieceOf(counted, pageId, doc)) as DocumentPiece | undefined;
         const name = str(doc.name) ?? docId;
+        let got: DocumentPiece | undefined;
+        try {
+          got = (await documentPieceOf(counted, pageId, doc)) as DocumentPiece | undefined;
+        } catch (e) {
+          failed(name, e);
+          continue;
+        }
         if (!got) {
           differences.push({ page: l.entry.name, piece: name, reason: 'could not be read' });
           continue;
@@ -1170,12 +1375,12 @@ export class Rehearsals {
         } else if (want.type === 'map') {
           const skip = iconDropped.has(l.entry.name) ? ['rank', ...ICON_FIELDS] : ['rank'];
           // The write form has no style (`far`, `fab`): an icon is compared by its name.
-          // v2 E5.2: label sizes in the write form (`small` = `sm`), as they were written.
+          // v2 E5.4: the label size is never written, so never compared.
           const norm = (fs: readonly Obj[]) =>
             fs
               .map((f) =>
                 stableJson(
-                  withWriteIcon(normaliseFeatureBody(pickFields(f, bodyFields('createFeature'), skip)).body),
+                  withWriteIcon(comparableFeature(pickFields(f, bodyFields('createFeature'), skip))),
                 ),
               )
               .sort();
