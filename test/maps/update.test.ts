@@ -374,6 +374,33 @@ describe('styles', () => {
     const bad = await update({ feature: 'Secret', style: { iconShape: 'star' } });
     expect(bad.isError).toBe(true);
   });
+
+  it('E5.2: a caller’s old label size (small) is refused with the hint to sm; a stored one holds its new name', async () => {
+    const live = () => w.liveFeatures(w.md.map).find((f) => f.id === w.f['Qishen lands'])!;
+    const before = writes().length;
+    for (const [old, now] of [
+      ['small', 'sm'],
+      ['medium', 'md'],
+      ['large', 'lg'],
+    ] as const) {
+      const bad = await update({ feature: 'Qishen lands', style: { labelSize: old } });
+      expect(bad.isError, bad.text).toBe(true);
+      expect(bad.text).toContain(`use ${now}`);
+    }
+    expect(writes().length).toBe(before);
+    // A region drawn in the app holds the old name: asking for the new one is no change.
+    live().labelSize = 'small';
+    try {
+      const same = await update({ feature: 'Qishen lands', style: { labelSize: 'sm' } });
+      expect(same.body.status, same.text).toBe('no_change');
+      expect(writes().length).toBe(before);
+      const bigger = await update({ feature: 'Qishen lands', style: { labelSize: 'lg' } });
+      expect(bigger.body.status, bigger.text).toBe('written');
+      expect(stored(w.f['Qishen lands']!).labelSize).toBe('lg');
+    } finally {
+      delete live().labelSize;
+    }
+  });
 });
 
 describe('dry runs, operation_id and the journal', () => {

@@ -744,9 +744,13 @@ export class JobEngine {
         return authItem(this.validate(s.op, params), params, options);
       } catch (e) {
         if (e instanceof InvalidParamsError) {
+          const issues = e.issues.map((x) => ({ path: `steps[${i}].${x.path}`, message: x.message }));
+          // v2 E5.2: a write the bridge planned names what it writes (page, document, feature), not only its index.
+          const what = describeStep(options.journalOperation);
           throw new InvalidParamsError(
             s.op,
-            e.issues.map((x) => ({ path: `steps[${i}].${x.path}`, message: x.message })),
+            issues,
+            what ? `${new InvalidParamsError(s.op, issues).message} (step ${i + 1}: ${what})` : undefined,
           );
         }
         throw e;
@@ -2687,4 +2691,29 @@ function stepOptions(o: StepOptions): StepOptions {
 
 export function createJobEngine(options: CreateJobEngineOptions): JobEngine {
   return new JobEngine(options);
+}
+
+/**
+ * v2 E5.2: what a step planned by bridge code writes, from its journal operation, for an error the owner must act on:
+ * `page “Arkona” (bwrldgeo), document “Arkona Map” (d1), feature “Old Port” (f1)`. Null when it names nothing.
+ */
+export function describeStep(op: Readonly<Record<string, unknown>> | undefined): string | null {
+  if (!op) return null;
+  const named = (kind: string, v: unknown): string | null => {
+    if (v === null || typeof v !== 'object') return null;
+    const o = v as Record<string, unknown>;
+    const id = typeof o.id === 'string' && o.id !== '' ? o.id : null;
+    const name = typeof o.name === 'string' && o.name !== '' ? o.name : null;
+    if (!id && !name) return null;
+    return `${kind} ${name ? `“${name}”` : ''}${name && id ? ' ' : ''}${id ? `(${id})` : ''}`;
+  };
+  const parts = [
+    named('page', op.page),
+    named('document', op.document),
+    named('feature', op.feature),
+    ...(typeof op.feature !== 'object' && typeof op.write === 'string' && op.write !== ''
+      ? [`writing ${op.write}`]
+      : []),
+  ].filter((x): x is string => x !== null);
+  return parts.length > 0 ? parts.join(', ') : null;
 }

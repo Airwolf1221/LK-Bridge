@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased: E5.2 (15 November 2026): Arkona's map image from `assets2`, and old label sizes on map features
+
+[ADR 0041](adr/0041-image-pipeline.md)'s note of 15 November and [ADR 0046](adr/0046-e4-owner-decisions.md) decision 11;
+no new ADR and no migration. Nothing was run against a live system: every test uses the mock; no sandbox run is needed.
+
+- **Arkona's full snapshot is complete again.** Its map's background image (page `bwrldgeo`) is served from
+  `assets2.legendkeeper.com`: `assets` answers `302` to the same path there, and the bridge refused every redirect, so
+  the snapshot came out partial (2 missing) and the audits, which need a complete full snapshot, never ran.
+  `assets2.legendkeeper.com` is now a default asset host (`LK_ASSET_HOSTS` unset: both hosts; the dashboard's CSP
+  `img-src` lists both; an image URL already on `assets2` is recognised by the snapshot). **If `LK_ASSET_HOSTS` is set,
+  it is kept as it is: add `assets2.legendkeeper.com` to it.**
+- **An asset download follows a redirect, and only an asset download.** `downloadAsset` follows 301, 302, 303, 307 and 308
+  with a `Location`, at most 3 hops, a relative `Location` resolved against the URL that answered; every hop is checked
+  as the first (https, no credentials, a host in `LK_ASSET_HOSTS`, then public addresses, the port allowlist and the
+  pinned DNS) and goes through the governor; another host, `http:`, a loop or a fourth redirect is refused with the
+  reason (naming the host). No key or other credential is sent on any hop. The upload's verify, the bytes kept before a
+  delete, snapshot capture and image restores all download through it. The API client, OAuth and the upload PUT still
+  refuse every redirect. The snapshot and the kept bytes record the URL the page holds; the page is never rewritten; the
+  upload verify names the URL the file came from (`servedFrom`).
+- **Old label sizes on map features no longer break restores** (Arkona's first rehearsal: `Invalid params for
+createFeature: steps[1].body.labelSize`). Features drawn in the app may hold `small`, `medium` or `large`, which a write
+  refuses. Restores, recreates and rehearsals now write them as `sm`, `md`, `lg`; a value that is neither old nor new is
+  left out (its default applies) and listed, naming the feature, rather than failing the write. `iconSize` is
+  untouched. Old and new compare as equal in the restore plan, the checks inside the lock, the rehearsal's comparison and
+  the map tools, so a restored `sm` is no difference and is not "updated" again. An agent's own `labelSize: "small"` is
+  still refused, now with the hint to use `sm`.
+- **A refused write names what it writes.** A planned step the engine refuses gives the page, the document and the
+  feature (its name and id), not only `steps[1]`; the rehearsal names its feature writes the same way.
+- **Docs.** ADR 0041's note, ADR 0046 decision 11, `docs/tools.md` (`LK_ASSET_HOSTS`), `docs/dashboard.md` (the CSP), the
+  runbook's outbound note, `.env.example`, and the E4 review's assumptions.
+
 ## Unreleased: E5.1, hotfix during E5 (15 November 2026): the round trip on Arkona, a fix for a count mismatch, Run now for one project, and documents in one order
 
 [ADR 0046](adr/0046-e4-owner-decisions.md) decision 9; [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)'s

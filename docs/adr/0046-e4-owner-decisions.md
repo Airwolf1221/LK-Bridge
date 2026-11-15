@@ -157,6 +157,42 @@ night, as sidebar rows did before C2a.1. **Implemented:**
 No migration: the stored lists settle on tab order at the next check (a getResource read of every page), with no
 correction logged; earlier rows stay in the log.
 
+## Decision 11: Arkona's first snapshot and rehearsal: `assets2`, and old label sizes on map features (implemented; E5.2, 15 November 2026)
+
+Two findings of the owner's first full snapshot and first rehearsal of Arkona. No new ADR and no migration.
+
+**The map image served from `assets2`.** The snapshot came out partial: the map's background image answers `302` from
+`assets` to `assets2`, and the guarded transport refused every redirect. `assets2.legendkeeper.com` is now a default
+asset host, and an asset download (only) follows up to 3 redirects between asset hosts, each hop checked and governed as
+the first, with no credential on any. The detail is in ADR 0041's note of 15 November. A set `LK_ASSET_HOSTS` is kept as
+it is, so the owner adds `assets2` to it.
+
+**Old label sizes.** Rehearsing Arkona's snapshot failed: `Invalid params for createFeature: steps[1].body.labelSize:
+Invalid option`. The spec says so itself: `Feature.labelSize` is written as `xs` to `3xl`, but "features drawn in the app
+may hold `small`, `medium` or `large`", which `FeatureCreateParams` and `FeatureUpdateParams` refuse. Arkona's map
+(`bwrldgeo`, document "Arkona Map") has app-drawn features with the old values; the test world's features were all made
+through the API, so the sandbox never saw it. **Implemented:**
+
+- One normaliser for a feature body sent to LegendKeeper that was built from a stored or read feature,
+  `normaliseFeatureBody` (`src/maps/features.ts`): `small` → `sm`, `medium` → `md`, `large` → `lg`; a value that is
+  neither old nor new is left out of the body (its default applies), with a note in the run's detail (a restore's
+  `notRestored`, a rehearsal's `cannotRestore`, naming the feature by name and id), rather than failing the whole write.
+  Valid values pass unchanged; `iconSize`, which legitimately takes `small` and `medium`, is untouched.
+- Used where a stored feature is written back: a restore's create and update bodies, a recreated page's features
+  (`src/snapshots/restore.ts`) and the rehearsal's (`rehearsal.ts`). The map tools send only what the caller gave (a
+  create's whole feature, an update's changed fields), never a field they read, so nothing there needed it; a caller's
+  own `labelSize` keeps the strict enum, and `small` is refused with the hint to use `sm` (and `md`, `lg`).
+- Old and new compare as equal: the restore plan's "same" check and `featureState` (the check and verify inside the
+  lock), the rehearsal's comparison, and the map tools' `holds` (asking for `sm` on a feature holding `small` is no
+  change). A restored `sm` where the snapshot holds `small` is no difference, so the plan does not keep "updating" it.
+  The audits do not compare features (checked), so nothing changed there.
+- **A refused write is named.** A step planned by bridge code that the engine refuses now names what it writes from its
+  journal operation: `… (step 2: page “Arkona” (bwrldgeo), document “Arkona Map” (…), feature “…” (…))`. The rehearsal
+  names its feature writes the same way, also when LegendKeeper refuses one.
+
+Tests: `test/snapshots/e5-2.test.ts` (restore, recreate, unknown value, plan, rehearsal; `iconSize`),
+`test/maps/update.test.ts` (a caller's `small` refused; a stored `small` holds `sm`), `test/jobs/named-step.test.ts`.
+
 ## Consequences
 
 - No migration. Two documented behaviours change: `write_page` and restores on icon pages (decision 1), and promoting a

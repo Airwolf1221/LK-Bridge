@@ -25,6 +25,8 @@
 import { ICON_FIELDS, withWriteIcon } from '../lk/icons.js';
 import { randomBytes } from 'node:crypto';
 import type { JobEngine, JobOrigin, JobView, StepSpec } from '../jobs/index.js';
+import { InvalidParamsError } from '../jobs/errors.js';
+import { normaliseFeatureBody } from '../maps/features.js';
 import { mintClientId } from '../jobs/ids.js';
 import { stableJson } from '../jobs/sidebar-state.js';
 import { normaliseRuns } from '../jobs/verify-blocks.js';
@@ -644,16 +646,36 @@ export class Rehearsals {
   }
 
   /** Submits a batch to the target and waits for it to end. */
-  private async job(projectId: string, steps: StepSpec[], title: string): Promise<JobView> {
-    const r = await this.d.engine.submit({
-      kind: 'batch_ops',
-      project: projectId,
-      steps,
-      onError: 'continue',
-      priority: 'P3',
-      origin: this.origin(),
-      title: title.slice(0, 300),
-    });
+  /**
+   * `named` (v2 E5.2): what a step writes, so a refused one is named for the owner (the page, the document, the feature
+   * with its name and id), not only by its index.
+   */
+  private async job(
+    projectId: string,
+    steps: StepSpec[],
+    title: string,
+    named?: ReadonlyMap<StepSpec, string>,
+  ): Promise<JobView> {
+    let r: Awaited<ReturnType<JobEngine['submit']>>;
+    try {
+      r = await this.d.engine.submit({
+        kind: 'batch_ops',
+        project: projectId,
+        steps,
+        onError: 'continue',
+        priority: 'P3',
+        origin: this.origin(),
+        title: title.slice(0, 300),
+      });
+    } catch (e) {
+      if (e instanceof InvalidParamsError && named) {
+        const at = e.issues.map((x) => /^steps\[(\d+)\]/.exec(x.path)).find((m) => m !== null);
+        const step = at ? steps[Number(at[1])] : undefined;
+        const what = step ? named.get(step) : undefined;
+        if (what) throw new InvalidParamsError(e.opId, e.issues, `${e.message} (${what})`);
+      }
+      throw e;
+    }
     if (!('jobId' in r))
       throw new RestoreError(
         'REHEARSAL_PROPOSED',
@@ -927,6 +949,7 @@ export class Rehearsals {
       const pageId = map.pages.get(l.entry.id)!;
       if (!created.has(pageId)) continue;
       const steps: StepSpec[] = [];
+      const named = new Map<StepSpec, string>();
       const exp = { docs: new Map<string, Obj>(), sidebar: [] as Obj[] };
       for (const d of l.documents) {
         const docId = map.docs.get(d.id);
@@ -954,11 +977,32 @@ export class Rehearsals {
             return n;
           };
           const create = bodyFields('createFeature');
-          const feats = [...byId.values()]
-            .sort((a, b) => depth(a) - depth(b))
-            .map((f) => map.feature(pickFields(f, create), ids));
-          for (const f of feats)
-            steps.push({ op: 'createFeature', params: { path, body: withWriteIcon(f) }, ...ICON_DROP });
+          const docName = str(d.piece.settings.name) ?? d.id;
+          const sorted = [...byId.values()].sort((a, b) => depth(a) - depth(b));
+          // v2 E5.2: a feature drawn in the app may hold an old label size (`small`): written as the new one (`sm`);
+          // an unknown one is left out and listed.
+          const feats = sorted.map((f) => {
+            const n = normaliseFeatureBody(pickFields(f, create));
+            if (n.note)
+              cannot.push({
+                page: l.entry.name,
+                piece: `${docName} feature ${featureName(f)}`,
+                reason: n.note,
+              });
+            return map.feature(n.body, ids);
+          });
+          feats.forEach((f, i) => {
+            const step: StepSpec = {
+              op: 'createFeature',
+              params: { path, body: withWriteIcon(f) },
+              ...ICON_DROP,
+            };
+            steps.push(step);
+            named.set(
+              step,
+              `page “${l.entry.name}” (${l.entry.id}), document “${docName}” (${d.id}), feature ${featureName(sorted[i]!)}`,
+            );
+          });
           const img = isObj(d.piece.settings.mapImage) ? d.piece.settings.mapImage : null;
           if (img && typeof img.url === 'string' && map.urls.has(img.url)) {
             // The uploaded copy's asset id: the URL's last part is not the id, so the asset is looked up by its upload.
@@ -1023,7 +1067,7 @@ export class Rehearsals {
       expected.set(pageId, exp);
       if (steps.length === 0) continue;
       inside(steps, assetFolder);
-      j = await this.job(target, steps, `rehearsal ${id}: content of ${l.entry.name}`);
+      j = await this.job(target, steps, `rehearsal ${id}: content of ${l.entry.name}`, named);
       counts.jobs++;
       counts.writes += steps.length;
       noteDropped(l.entry.name, this.results(target, j));
@@ -1031,7 +1075,7 @@ export class Rehearsals {
         if (s.status !== 'succeeded')
           differences.push({
             page: l.entry.name,
-            piece: steps[s.stepNo - 1]?.op ?? 'write',
+            piece: ((st) => (st ? (named.get(st) ?? st.op) : 'write'))(steps[s.stepNo - 1]),
             reason: `refused: ${JSON.stringify(s.error).slice(0, 300)}`,
           });
     }
@@ -1126,8 +1170,15 @@ export class Rehearsals {
         } else if (want.type === 'map') {
           const skip = iconDropped.has(l.entry.name) ? ['rank', ...ICON_FIELDS] : ['rank'];
           // The write form has no style (`far`, `fab`): an icon is compared by its name.
+          // v2 E5.2: label sizes in the write form (`small` = `sm`), as they were written.
           const norm = (fs: readonly Obj[]) =>
-            fs.map((f) => stableJson(withWriteIcon(pickFields(f, bodyFields('createFeature'), skip)))).sort();
+            fs
+              .map((f) =>
+                stableJson(
+                  withWriteIcon(normaliseFeatureBody(pickFields(f, bodyFields('createFeature'), skip)).body),
+                ),
+              )
+              .sort();
           if (stableJson(norm(want.features as Obj[])) !== stableJson(norm(got.features ?? [])))
             differences.push({
               page: l.entry.name,
@@ -1334,6 +1385,11 @@ function depthOf(e: PageEntry, m: Manifest): number {
   let n = 0;
   for (let c = e.parentId; c && n < 100; c = m.pages.find((p) => p.id === c)?.parentId ?? null) n++;
   return n;
+}
+
+/** A feature as the owner finds it: its name and its id in the snapshot. */
+function featureName(f: Obj): string {
+  return typeof f.name === 'string' && f.name !== '' ? `“${f.name}” (${String(f.id)})` : String(f.id);
 }
 
 function pickFields(o: Obj, fields: Set<string>, drop: readonly string[] = []): Obj {

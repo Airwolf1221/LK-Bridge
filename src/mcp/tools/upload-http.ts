@@ -257,6 +257,8 @@ export function guardedRequest(r: RawRequest): Promise<RawResponse> {
 // ------------------------------------------------------------------------------------------------ transport
 
 const NO_BODY = new Set([101, 204, 205, 304]);
+/** The redirects an asset download may follow (v2 E5.2). */
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 
 function toBytes(body: RequestInit['body']): Uint8Array | undefined {
   if (body === null || body === undefined) return undefined;
@@ -327,6 +329,15 @@ export function createUploadTransport(o: UploadTransportOptions): Transport {
           timeoutMs: o.timeoutMs ?? 120_000,
           maxResponseBytes: o.maxDownloadBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES,
         });
+        // v2 E5.2: a redirect is returned as it is (its status and Location, no body), never followed here: the
+        // download (`downloadAsset`) decides whether to follow it, and each hop comes back through this guard.
+        if (REDIRECTS.has(res.status)) {
+          const location = res.headers.location;
+          return new Response(null, {
+            status: res.status,
+            headers: location !== undefined ? { location } : {},
+          });
+        }
         return toResponse(res);
       } catch (e) {
         if (e instanceof UploadHttpError) {
