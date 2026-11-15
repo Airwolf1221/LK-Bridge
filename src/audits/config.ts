@@ -83,7 +83,9 @@ const settingsShape = {
   knownReferenceTypes: z.array(text(200)).max(200),
   /**
    * Off (default): only a Reference Type that resembles a registry value is flagged (`Character Reference` for
-   * `Compact Character Reference`). On: every value neither the registry nor the list above knows is flagged.
+   * `Compact Character Reference`; see `resemblesRegistryValue` and docs/audits.md: the same words in other letters, the
+   * page's name pattern, or a subset of a value's distinctive words). On: every value neither the registry nor the list
+   * above knows is flagged.
    */
   strictReferenceTypes: z.boolean(),
 };

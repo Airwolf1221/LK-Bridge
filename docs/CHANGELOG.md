@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased: E5.3 (15 November 2026): Arkona's first audit; Reference Types that resemble, and race values by their anchor
+
+[ADR 0046](adr/0046-e4-owner-decisions.md) decision 12; [ADR 0044](adr/0044-audits.md)'s note of 15 November; new
+[docs/audits.md](audits.md). No migration. Nothing was run against a live system: every test uses the mock and the audit
+fixtures; no sandbox run is needed.
+
+- **`unknown_reference_type` no longer flags every "… Reference" value** (588 of Arkona's 589 Facts warnings, with
+  strict mode off). Sharing any word of three letters counted as resembling a registry value, so the generic "reference"
+  matched "Compact Character Reference". With strict mode off, an unknown value is now flagged only when (a) it is a
+  registry value in other letters, (b) the page's name carries a registry page-name pattern ("{name} - Character Core"),
+  or (c) its distinctive words (without `reference`, `references`, `the`, `and`, `of`, `a`, `an`) are a non-empty subset
+  of one registry value's. "Character Reference" is still flagged; "Historical Character Reference" on a "… - Character
+  Core" page still expects "Character Core" with a `set_facts` fix; "Continent Reference", "Character Biography" and
+  "Relationship" are not flagged. Strict mode, the known values and when a fix is offered are unchanged.
+- **Qualified race values are read by their anchor** (11 Taxonomy warnings). When the whole Race / Species value matches
+  no taxonomy entry, the text before the first `(`, `;` or `-` is tried ("Therian (Aggeloi)" matches Therians; a
+  hyphenated name such as "Half-Elf (Northern)" is also tried whole). The page is never rewritten and no word is guessed:
+  "Fire Genie (…)" stays a finding, whose message and evidence (`anchor`) name the anchor tried, so the owner can add it
+  as an alias in Repository Mappings. A match by anchor is checked for placement (`race_index_mismatch`) as before.
+- **Docs.** `docs/audits.md` (new: both rules, the generic-word list, the anchor), ADR 0044's note, ADR 0046 decision 12.
+- **After deploying**, run the audit again for Arkona from the Audits page. It reads the newest snapshot, so it costs no
+  API requests. Facts should drop from 589 to about 2, and Taxonomy warnings from 11 to about 3.
+
 ## Unreleased: E5.2 (15 November 2026): Arkona's map image from `assets2`, and old label sizes on map features
 
 [ADR 0041](adr/0041-image-pipeline.md)'s note of 15 November and [ADR 0046](adr/0046-e4-owner-decisions.md) decision 11;

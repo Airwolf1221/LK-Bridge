@@ -203,3 +203,20 @@ Character Art Template` is `Character Art`: the snapshot's templates and the reg
 - `replaceBlock` with the block's own `id` in the body keeps the id and answers a version the next write accepts as If-Match.
 - A text run holding `\n` can be read back from a block LegendKeeper stored (the 32 paragraphs show it does).
 - `listTemplates` and `getResource` on each template in a real full snapshot (the template read).
+
+## Note (15 November 2026, E5.3): Arkona's first audit; "resembles", and race values by their anchor
+
+Arkona's first audit (1,609 findings) showed decisions 17 and 18 needed a tighter and a looser reading, decided in
+[ADR 0046](0046-e4-owner-decisions.md) decision 12 and documented in [docs/audits.md](../audits.md):
+
+- **Decision 18, "resembles".** With strict mode off, an unknown Reference Type is flagged only when (a) it is a registry
+  value in other letters, (b) the page's name carries a registry page-name pattern, or (c) its distinctive words (the
+  generic `reference`, `references`, `the`, `and`, `of`, `a`, `an` removed: `GENERIC_REFERENCE_TYPE_WORDS`) are a
+  non-empty subset of one registry value's. Sharing one word of three letters, the old reading, made every "… Reference"
+  value resemble "Compact Character Reference" (588 of Arkona's 589 Facts warnings). The examples of decision 18 still
+  hold: `Character Reference` by (c), `Historical Character Reference` on a `… - Character Core` page by (b). Strict
+  mode, the known values and when a fix is offered are unchanged.
+- **Decision 17, `race_not_in_taxonomy`.** A qualified value is read by its anchor when the whole value matches no entry:
+  the text before the first `(`, `;` or `-`, trimmed (a hyphenated name is tried whole as well). The page is never
+  rewritten and no word is guessed; a finding names the anchor it tried (`evidence.anchor`) so the owner can add an
+  alias. A match by anchor is checked for placement (`race_index_mismatch`) as a full match is.

@@ -4,7 +4,7 @@
  * still present, gone), and acknowledging hides a finding until its evidence changes.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { T } from '../resources/world.js';
+import { SidebarModel, T } from '../resources/world.js';
 import { PROJECT } from '../tools/helpers.js';
 import { A, auditsWorld, type AuditsWorld } from './world.js';
 
@@ -237,5 +237,73 @@ describe('findings across runs', () => {
     expect(again).toMatchObject({ acknowledgement: null, acknowledgementLapsed: true, state: 'open' });
     expect(again.evidence).toMatchObject({ belongsAfter: { name: '[BSRC] Blackberry' } });
     expect(open({ acknowledged: 'only' })).toEqual([]);
+  });
+});
+
+describe('Arkona’s free-form Reference Types on the mock snapshot (15 Nov)', () => {
+  const kinds = [
+    'Continent',
+    'Culture',
+    'Historical Cross-National Conflict',
+    'Magical Applications',
+    'Creature',
+    'Nation',
+    'City',
+    'Religion',
+    'Deity',
+    'Language',
+    'Artefact',
+    'Organisation',
+    'Dynasty',
+    'Battle',
+    'Treaty',
+    'Plant',
+    'Mineral',
+    'Trade Route',
+    'Mythic Event',
+    'Regional Cuisine',
+  ];
+  const ids = kinds.map((_, i) => `arkrt${String(i).padStart(3, '0')}`);
+
+  it('about 20 distinct “… Reference” values give no unknown_reference_type unless strict; Mehrana I keeps her fix', async () => {
+    w = await auditsWorld({
+      seed: (world) => {
+        kinds.forEach((k, i) =>
+          world.repo.seed({
+            id: ids[i]!,
+            name: `[BSRC] Synthetic ${k} ${i}`,
+            parentId: A.zoo,
+            referenceType: `${k} Reference`,
+          }),
+        );
+      },
+    });
+    kinds.forEach((k, i) =>
+      w!.sidebars.page(ids[i]!, [
+        SidebarModel.kv(`kvark${String(i).padStart(3, '0')}`, 'PROPERTIES', [
+          ['Reference Type', `${k} Reference`],
+        ]),
+      ]),
+    );
+    const before = w.requests();
+    await w.stack.runtime.snapshots.full(PROJECT, 'manual');
+    const afterSnapshot = w.requests();
+    await audits().settled();
+    expect(w.requests()).toBe(afterSnapshot); // the audit itself reads nothing live
+    expect(afterSnapshot).toBeGreaterThan(before);
+    expect(open().filter((f) => f.code === 'unknown_reference_type' && ids.includes(f.pageId!))).toEqual([]);
+    // Mehrana (“… - Character Core”, “Historical Character Reference”) is still flagged, with the fix.
+    expect(byCode('unknown_reference_type', A.mehrana)[0]!).toMatchObject({
+      evidence: { expected: 'Character Core' },
+      fix: { kind: 'set_facts' },
+    });
+    // Strict mode flags every unknown value, Continent Reference included, with no fix.
+    audits().setConfig('owner', PROJECT, { settings: { strictReferenceTypes: true } });
+    await audits().run(PROJECT, 'manual');
+    const strict = open().filter((f) => f.code === 'unknown_reference_type' && ids.includes(f.pageId!));
+    expect(strict).toHaveLength(kinds.length);
+    const continent = strict.find((f) => f.pageId === ids[0])!;
+    expect(continent.evidence).toMatchObject({ found: 'Continent Reference', expected: null });
+    expect(continent.fix).toBeNull();
   });
 });

@@ -7,7 +7,9 @@
  * a guess waiting for the owner's review, and an index whose name disagrees with its entry.
  *
  * **Fact consistency**: a character page's Subject or Canonical Display Name disagreeing with its name, and Reference
- * Type values the registry does not know. "Propose a fix" uses `set_facts` only when the right value is unambiguous
+ * Type values the registry does not know (with strict mode off, only those that resemble a registry value:
+ * `resemblesRegistryValue`, with the generic words of `GENERIC_REFERENCE_TYPE_WORDS` ignored). A qualified race value
+ * ("Therian (Aggeloi)") is read by its anchor (`raceAnchors`) when the whole value matches no entry. "Propose a fix" uses `set_facts` only when the right value is unambiguous
  * (a Reference Type that is a registry value in other letters, or whose page name carries the registry's own page-name
  * pattern; a Subject that differs from the name only in case or spacing); otherwise the finding only reports.
  */
@@ -35,6 +37,23 @@ export const referenceTypeOfTemplate = (name: string): string =>
     .replace(/^AI\s+/i, '')
     .replace(/\s+Template\s*$/i, '')
     .trim();
+
+/**
+ * The anchors of a qualified race value, in the order they are tried: the text before the first `(`, `;` or `-`,
+ * trimmed ("Therian (Aggeloi)" → "Therian"); and, when that cut a hyphenated name ("Half-Elf (Northern)"), the text
+ * before the first `(` or `;`. Empty, or the whole value, gives none.
+ */
+export function raceAnchors(value: string): string[] {
+  const whole = value.trim();
+  const out: string[] = [];
+  for (const re of [/[(;-]/, /[(;]/]) {
+    const i = whole.search(re);
+    if (i <= 0) continue;
+    const a = whole.slice(0, i).trim();
+    if (a && a !== whole && !out.includes(a)) out.push(a);
+  }
+  return out;
+}
 
 const isPageKind = (k: string) => k === 'bsrc' || k === 'bwrk' || k === 'barc';
 
@@ -136,16 +155,25 @@ export function taxonomyCheck(ctx: AuditContext): FindingDraft[] {
       if (!n || !n.path.ids.includes(root.id)) continue;
       const race = fact(ctx, p, type.placement.speciesRow);
       if (race === null || unknown.has(nkey(race))) continue;
-      const hit = [...new Set(names.get(nkey(race)) ?? [])];
+      // The whole value first; then, for a qualified value ("Therian (Aggeloi)"), its anchor. The page is never
+      // rewritten, and a last word is never guessed ("Fire Genie" is not "Genies").
+      let hit = [...new Set(names.get(nkey(race)) ?? [])];
+      const anchors = hit.length === 0 ? raceAnchors(race) : [];
+      for (const a of anchors) {
+        hit = [...new Set(names.get(nkey(a)) ?? [])];
+        if (hit.length > 0) break;
+      }
       if (hit.length === 0) {
+        const anchor = anchors[0] ?? null;
         out.push({
           code: 'race_not_in_taxonomy',
           key: nkey(race),
           pageId: p.id,
-          message: `The ${type.placement.speciesRow} “${race}” is not in the ${type.singular} taxonomy (no entry has it as its plural, singular or alias).`,
+          message: `The ${type.placement.speciesRow} “${race}” is not in the ${type.singular} taxonomy (no entry has it${anchor ? `, or its anchor “${anchor}”,` : ''} as its plural, singular or alias)${anchor ? `; to accept it, add “${anchor}” as an alias in Repository Mappings` : ''}.`,
           evidence: {
             type: type.singular,
             race,
+            anchor,
             row: type.placement.speciesRow,
             entries: entries.slice(0, 200).map((e) => e.plural),
           },
@@ -189,6 +217,51 @@ export function taxonomyCheck(ctx: AuditContext): FindingDraft[] {
 /** The suffix a page-name pattern adds to `{name}` ("{name} - Character Core" → " - Character Core"). */
 const suffixOf = (pattern: string): string => pattern.slice(pattern.indexOf('{name}') + '{name}'.length);
 
+/**
+ * The generic words a Reference Type's resemblance ignores: "Continent Reference" shares only "reference" with
+ * "Compact Character Reference", which says nothing. Documented in docs/audits.md.
+ */
+export const GENERIC_REFERENCE_TYPE_WORDS: readonly string[] = [
+  'reference',
+  'references',
+  'the',
+  'and',
+  'of',
+  'a',
+  'an',
+];
+
+/** A value's distinctive words: its words, case ignored, without the generic ones. */
+export const distinctiveWords = (s: string): Set<string> =>
+  new Set(
+    nkey(s)
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w !== '' && !GENERIC_REFERENCE_TYPE_WORDS.includes(w)),
+  );
+
+/**
+ * Whether an unknown Reference Type **resembles** a registry value (strict mode off flags only these). One of:
+ * (a) it is a registry value in other letters or spacing ("CharacterCore"); (b) the page's name carries a registry
+ * page-name pattern (`namePatternMatches`: "{name} - Character Core"); (c) its distinctive words are a non-empty subset
+ * of one registry value's ("Character Reference" → {character} ⊆ {compact, character}). "Continent Reference",
+ * "Character Biography" and "Relationship" resemble nothing.
+ */
+export function resemblesRegistryValue(
+  value: string,
+  registryValues: readonly string[],
+  namePatternMatches: boolean,
+): boolean {
+  if (namePatternMatches) return true;
+  const fold = (s: string) => nkey(s).replace(/[^a-z0-9]+/g, '');
+  if (registryValues.some((v) => fold(v) === fold(value))) return true;
+  const mine = distinctiveWords(value);
+  if (mine.size === 0) return false;
+  return registryValues.some((v) => {
+    const theirs = distinctiveWords(v);
+    return [...mine].every((w) => theirs.has(w));
+  });
+}
+
 export function factsCheck(ctx: AuditContext): FindingDraft[] {
   const out: FindingDraft[] = [];
   const known = new Set<string>(ctx.settings.knownReferenceTypes.map((v) => nkey(v)));
@@ -199,13 +272,16 @@ export function factsCheck(ctx: AuditContext): FindingDraft[] {
   // Every template stands for a Reference Type: "[BSRC] AI Character Art Template" is "Character Art".
   for (const n of ctx.templateNames) known.add(nkey(referenceTypeOfTemplate(n)));
   for (const r of ctx.rules) if (r.selectors.referenceType) known.add(nkey(r.selectors.referenceType));
-  const words = (s: string) =>
-    new Set(
-      nkey(s)
-        .split(/[^a-z0-9]+/)
-        .filter((w) => w.length > 2),
-    );
   const fold = (s: string) => nkey(s).replace(/[^a-z0-9]+/g, '');
+  // The registry's page-name patterns the page's name ends in ("{name} - Character Core"), by type.
+  const nameRoles = (p: AuditPage) =>
+    ctx.types.flatMap((t) =>
+      t.placement
+        ? (['core', 'compact'] as const)
+            .filter((r) => p.displayName.endsWith(suffixOf(t.placement!.pageNames[r])))
+            .map((r) => ({ type: t, role: r }))
+        : [],
+    );
 
   for (const p of contentPages(ctx)) {
     if (!isPageKind(p.kind)) continue;
@@ -215,10 +291,8 @@ export function factsCheck(ctx: AuditContext): FindingDraft[] {
 
     // Reference Type values the registry does not know.
     if (rt !== null && !known.has(nkey(rt))) {
-      const near = registryValues.filter(
-        (v) => fold(v) === fold(rt) || [...words(v)].some((w) => words(rt).has(w)),
-      );
-      if (ctx.settings.strictReferenceTypes || near.length > 0) {
+      const roles = nameRoles(p);
+      if (ctx.settings.strictReferenceTypes || resemblesRegistryValue(rt, registryValues, roles.length > 0)) {
         // The right value, only when unambiguous: the same words in other letters, or the page's own name pattern.
         let right: string | null = null;
         let why = '';
@@ -228,20 +302,17 @@ export function factsCheck(ctx: AuditContext): FindingDraft[] {
           why = `the same words as the registry’s “${right}”`;
         } else {
           for (const t of ctx.types) {
-            if (!t.placement) continue;
-            const roles = (['core', 'compact'] as const).filter((r) =>
-              p.displayName.endsWith(suffixOf(t.placement!.pageNames[r])),
-            );
-            if (roles.length === 1) {
-              const want = t.placement.referenceTypes[roles[0]!];
-              if (right !== null && right !== want) {
-                right = null;
-                why = '';
-                break;
-              }
-              right = want;
-              why = `the page’s name ends “${suffixOf(t.placement.pageNames[roles[0]!])}”, the registry’s name pattern for “${want}”`;
+            const mine = roles.filter((r) => r.type === t);
+            if (!t.placement || mine.length !== 1) continue;
+            const role = mine[0]!.role;
+            const want = t.placement.referenceTypes[role];
+            if (right !== null && right !== want) {
+              right = null;
+              why = '';
+              break;
             }
+            right = want;
+            why = `the page’s name ends “${suffixOf(t.placement.pageNames[role])}”, the registry’s name pattern for “${want}”`;
           }
         }
         out.push({
@@ -277,14 +348,7 @@ export function factsCheck(ctx: AuditContext): FindingDraft[] {
           [t.placement.referenceTypes.core, t.placement.referenceTypes.compact].some(
             (v) => nkey(v) === nkey(rt),
           ),
-      ) ??
-      ctx.types.find(
-        (t) =>
-          t.placement &&
-          (['core', 'compact'] as const).some((r) =>
-            p.displayName.endsWith(suffixOf(t.placement!.pageNames[r])),
-          ),
-      );
+      ) ?? nameRoles(p)[0]?.type;
     if (!type?.placement) continue;
     const fromName = subjectOf(p.displayName, null);
     const subject = fact(ctx, p, type.placement.subjectRow);
