@@ -67,6 +67,12 @@ export const lifecycleSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * E5.3 (ADR 0046 decision 13, the owner's of 15 November 2026): indexes whose pages are Authoritative without CANON
+     * ("Design References"). Every page beneath one, at any depth, outside the Working and Archived areas, is `[BSRC]`
+     * and Authoritative but carries no CANON tag. Empty by default.
+     */
+    canonExemptIndexes: z.array(id).max(100).optional(),
   })
   .strict();
 
@@ -95,6 +101,8 @@ export interface LifecycleConfig {
     /** C2d (ADR 0037): the note an index of an archived set gets as its first block. */
     readonly noteForIndex: string;
   };
+  /** E5.3: indexes whose pages are Authoritative without CANON (`canonExemptionOf`). */
+  readonly canonExemptIndexes: readonly string[];
   /** Why the stored value could not be used (the defaults then apply), or null. */
   readonly problem: string | null;
 }
@@ -126,6 +134,7 @@ export const DEFAULT_LIFECYCLE: Omit<LifecycleConfig, 'problem'> = Object.freeze
     noteForIndex:
       'Archived - {date}. The author retired {source} and the pages beneath it. They are kept for provenance.',
   },
+  canonExemptIndexes: [],
 });
 
 /** The lifecycle settings of a project, with the defaults filled in. Never throws. */
@@ -154,6 +163,7 @@ export function lifecycleFrom(settings: Readonly<Record<string, unknown>> | unde
       ...(d.texts ?? {}),
       noteForIndex: d.texts?.noteForIndex ?? DEFAULT_LIFECYCLE.texts.noteForIndex,
     },
+    canonExemptIndexes: [...new Set(d.canonExemptIndexes ?? [])],
     problem: null,
   };
 }
@@ -169,8 +179,49 @@ export function storedLifecycle(c: Omit<LifecycleConfig, 'problem'>): StoredLife
     fields: { ...c.fields },
     continuityTypes: { ...c.continuityTypes },
     texts: { ...c.texts },
+    canonExemptIndexes: [...c.canonExemptIndexes],
   };
 }
+
+/**
+ * E5.3 (ADR 0046 decision 13): the listed index a place is beneath, when a `[BSRC]` page there is Authoritative without
+ * CANON, or null. `ancestors` are the ids above the place (for a page: its path without itself; for a destination: the
+ * destination's own path, itself included). Inside the Working or Archived area the exemption never applies: those
+ * areas keep their own rules.
+ */
+export function canonExemptionOf(
+  c: Pick<LifecycleConfig, 'canonExemptIndexes' | 'workingIndexId' | 'archiveIndexId'>,
+  ancestors: readonly string[],
+): string | null {
+  if (c.canonExemptIndexes.length === 0) return null;
+  if (c.workingIndexId !== null && ancestors.includes(c.workingIndexId)) return null;
+  if (c.archiveIndexId !== null && ancestors.includes(c.archiveIndexId)) return null;
+  for (let i = ancestors.length - 1; i >= 0; i--)
+    if (c.canonExemptIndexes.includes(ancestors[i]!)) return ancestors[i]!;
+  return null;
+}
+
+/** `canonExemptionOf` for a page's own node (its path without itself). */
+export const canonExemptionOfPage = (
+  c: Pick<LifecycleConfig, 'canonExemptIndexes' | 'workingIndexId' | 'archiveIndexId'>,
+  n: Pick<TreeNode, 'id' | 'path'>,
+): string | null =>
+  canonExemptionOf(
+    c,
+    n.path.ids.filter((x) => x !== n.id),
+  );
+
+/** `canonExemptionOf` for a page that goes under `parent` (the parent's path, the parent included). */
+export const canonExemptionUnder = (
+  c: Pick<LifecycleConfig, 'canonExemptIndexes' | 'workingIndexId' | 'archiveIndexId'>,
+  parent: Pick<TreeNode, 'id' | 'path'> | null,
+): string | null =>
+  parent === null
+    ? null
+    : canonExemptionOf(
+        c,
+        parent.path.ids.includes(parent.id) ? parent.path.ids : [...parent.path.ids, parent.id],
+      );
 
 /** `{date}` and `{source}` filled in. */
 export function fillText(template: string, v: { readonly date: string; readonly source?: string }): string {

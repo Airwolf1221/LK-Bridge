@@ -217,7 +217,19 @@ export function createCharacterTool(deps: ToolDeps): McpToolProvider {
               what: page.rawName,
             });
             if (!f.ok) return { kind: 'answer', result: f.result };
-            const tags = withStatusTag(cc.lifecycle, cc.templateTags.get(pg.templateId) ?? [], status);
+            // E5.3: the existing page the character is made beneath (its index's parent, or the page's own).
+            const underId =
+              ci?.action === 'create'
+                ? ci.parentId
+                : ci?.action === 'reuse'
+                  ? ci.node.id
+                  : (pg.parentId ?? plan.home.id);
+            const tags = withStatusTag(
+              cc.lifecycle,
+              cc.templateTags.get(pg.templateId) ?? [],
+              status,
+              ctx.tree.node(ctx.projectId, underId).data ?? null,
+            );
             pages.push({ ...page, facts: f.value, tags });
             return finishCreate(cc, pages, {
               batch: false,

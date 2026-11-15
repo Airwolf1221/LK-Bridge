@@ -1102,6 +1102,41 @@ const GROUPS: { key: Group; label: string; fields: [string, string][] }[] = [
   },
 ];
 
+/**
+ * E5.3 (ADR 0046 decision 13): the indexes whose pages are Authoritative without CANON ("Design References"), one id per
+ * line. Saved with the other lifecycle settings, so it asks the owner to sign in again.
+ */
+function CanonExemptEditor(props: {
+  project: string;
+  ids: string[];
+  canon: string;
+  busy: boolean;
+  save: (ids: string[]) => void;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  const value = text ?? props.ids.join('\n');
+  const ids = [...new Set(value.split(/[\s,]+/).filter((x) => x !== ''))];
+  const changed = text !== null && ids.join(' ') !== props.ids.join(' ');
+  const id = `lc-${props.project}-canon-exempt`;
+  return (
+    <fieldset className="mt">
+      <legend>Indexes whose pages are Authoritative without {props.canon}</legend>
+      <p className="muted small-text">
+        Every page beneath one of these indexes, at any depth, stays [BSRC] and Authoritative but carries no{' '}
+        {props.canon} tag. Pages inside the Working and Archived areas keep their own rules. One index id per
+        line; empty by default.
+      </p>
+      <label htmlFor={id}>Index ids</label>
+      <textarea id={id} rows={3} cols={40} value={value} onChange={(e) => setText(e.target.value)} />
+      <div className="row">
+        <Button variant="primary" busy={props.busy} disabled={!changed} onClick={() => props.save(ids)}>
+          Save
+        </Button>
+      </div>
+    </fieldset>
+  );
+}
+
 function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
   const v = useApi<LifecycleView>(`/projects/${encodeURIComponent(p.name)}/lifecycle`);
   const { run, busy } = useAction();
@@ -1173,6 +1208,21 @@ function LifecycleEditor({ project: p }: { project: ProjectInfo }) {
           Confirm these indexes
         </Button>
       )}
+      <CanonExemptEditor
+        project={p.name}
+        ids={c.canonExemptIndexes ?? []}
+        canon={c.tags.canon}
+        busy={busy}
+        save={(ids) =>
+          put(
+            { canonExemptIndexes: ids },
+            `Save the indexes whose pages are Authoritative without ${c.tags.canon}`,
+            ids.length === 0
+              ? `Every Authoritative page needs ${c.tags.canon} again.`
+              : `Pages beneath ${ids.join(', ')} (outside the Working and Archived areas) are Authoritative without ${c.tags.canon}.`,
+          )
+        }
+      />
       <details className="mt">
         <summary>Values</summary>
         {GROUPS.map((g) => (

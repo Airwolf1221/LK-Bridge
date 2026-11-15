@@ -1037,6 +1037,8 @@ export interface LifecycleConfigView {
     /** C2d: the note an index archived with its set gets. */
     noteForIndex: string;
   };
+  /** E5.3: indexes whose pages are Authoritative without CANON (ids). */
+  canonExemptIndexes: string[];
   problem: string | null;
 }
 

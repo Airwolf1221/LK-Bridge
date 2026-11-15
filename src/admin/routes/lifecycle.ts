@@ -58,6 +58,8 @@ const patchSchema = z
       })
       .strict()
       .optional(),
+    // E5.3 (ADR 0046 decision 13): indexes whose pages are Authoritative without CANON.
+    canonExemptIndexes: z.array(z.string().min(1).max(64)).max(100).optional(),
   })
   .strict();
 

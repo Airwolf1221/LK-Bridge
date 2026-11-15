@@ -312,6 +312,10 @@ A page is in one of three states, and its prefix, Status, status tag and place a
 (The exception to "flat": a whole set kept together, below. A Working page may also sit under an `[INDEX]` inside a
 Working set, and an archived page under an `[INDEX]` inside an archived set.)
 
+The owner may list indexes whose pages are Authoritative **without** `CANON` (for example `[INDEX] Design References`):
+a page beneath one is `[BSRC]` and `Authoritative` with no `CANON` tag, and the tools below, and creates with
+`status: "authoritative"`, add none there. Do not add `CANON` to such a page yourself.
+
 **Four tools change a page's state, and nothing else can.** Each one is always a proposal that only the owner can
 accept as canon, whatever your scope: you get `proposal_captured` with `requiresCanonicalApproval`. Never retry it;
 follow it with `bridge_proposal_status`. `dryRun: true` shows the whole plan (new name and place, every fact before and

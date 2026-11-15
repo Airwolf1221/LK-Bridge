@@ -5,7 +5,7 @@ complete full snapshot and the change snapshots after it, never LegendKeeper, so
 is [ADR 0044](adr/0044-audits.md); the owner's later decisions are in [ADR 0046](adr/0046-e4-owner-decisions.md)
 decision 12. The findings are on the dashboard's **Audits** page and, read-only, through the `audit_findings` tool.
 
-This page documents how two checks decide what to flag, because their rules are the owner's settings.
+This page documents how three checks decide what to flag, because their rules are the owner's settings.
 
 ## Reference Types (`unknown_reference_type`, category Facts)
 
@@ -73,3 +73,15 @@ entry in **Repository Mappings**, and the next audit matches it.
 
 A match by anchor is checked for placement exactly as a full match is: a page whose race belongs to another index than
 the one it sits under is `race_index_mismatch` (a subrace under its parent race's index is fine).
+
+## Authoritative without CANON (`lifecycle_inconsistent`, category Lifecycle)
+
+A `[BSRC]` page normally needs Status Authoritative, the `CANON` tag and a place outside the Working and Archived areas.
+The lifecycle setting **"Indexes whose pages are Authoritative without CANON"** (Projects page, Lifecycle; empty by
+default) lists indexes, such as Arkona's `[INDEX] Design References`, beneath which a `[BSRC]` page is consistent with
+Status Authoritative and **without** `CANON`, at any depth. Pages inside the Working and Archived areas keep their own
+rules.
+
+There, `CANON` is itself a problem: the finding's tag signal expects "no CANON (Design References area)", and the
+evidence names the area (`canonExemptArea`: its id and name). Status and the other status tags are checked as
+everywhere. A page outside a listed index still needs `CANON`.

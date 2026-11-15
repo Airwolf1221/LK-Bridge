@@ -988,3 +988,70 @@ describe('race values read by their anchor (Arkona, 15 Nov)', () => {
     expect(run([core('Wishmaker Genie (Genie)', 'hum')], withAlias)).toEqual([]);
   });
 });
+
+describe('Authoritative without CANON beneath a listed index (Design References, 15 Nov)', () => {
+  const lifecycle = {
+    workingIndexId: 'work',
+    archiveIndexId: 'arch',
+    canonExemptIndexes: ['b034ef351290dfba28e292b0'],
+  };
+  const design = page({ id: 'b034ef351290dfba28e292b0', name: '[INDEX] Design References', parent: 'root' });
+  const nested = page({ id: 'craft', name: '[INDEX] Craft', parent: design.id });
+  const base = [
+    ROOT,
+    page({ id: 'work', name: '[INDEX] Working', parent: 'root' }),
+    page({ id: 'arch', name: '[INDEX] Archived', parent: 'root' }),
+    page({ id: 'chars', name: '[INDEX] Characters', parent: 'root' }),
+    design,
+    nested,
+  ];
+  const run = (pages: ReturnType<typeof page>[], o: Parameters<typeof context>[1] = {}) =>
+    lifecycleCheck(context(model([...base, ...pages]), { lifecycle, ...o }));
+  const bsrc = (id: string, name: string, parent: string, tags: string[]) =>
+    page({ id, name: `[BSRC] ${name}`, parent, facts: { Status: 'Authoritative' }, tags });
+
+  it('the two pages’ shape (Authoritative, no CANON) gives no finding, at any depth', () => {
+    expect(
+      run([
+        bsrc('fic', 'Arkona – Fiction Writing Reference', design.id, ['reference']),
+        bsrc('nar', 'Arkona – Narrative Story Planning & Drafting Workflow', nested.id, []),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('CANON there is itself a lifecycle_inconsistent problem, naming the area', () => {
+    const out = run([bsrc('fic', 'Arkona – Fiction Writing Reference', design.id, ['CANON'])]);
+    expect(codes(out)).toEqual(['lifecycle_inconsistent']);
+    expect(out[0]!.message).toContain('no CANON (Design References area)');
+    expect(out[0]!.evidence).toMatchObject({
+      canonExemptArea: { id: design.id, name: 'Design References' },
+      problems: [{ signal: 'tag', expected: 'no CANON (Design References area)' }],
+    });
+  });
+
+  it('a page outside the area still needs CANON; Status and the other status tags are still checked inside it', () => {
+    const out = run([
+      bsrc('taraji', 'Taraji al-Mizan', 'chars', []),
+      page({
+        id: 'st',
+        name: '[BSRC] Wrong Status',
+        parent: design.id,
+        facts: { Status: 'Working' },
+        tags: [],
+      }),
+      bsrc('wt', 'Working Tag', design.id, ['Working']),
+    ]);
+    expect(out.map((d) => d.pageId).sort()).toEqual(['st', 'taraji', 'wt']);
+    expect(out.find((d) => d.pageId === 'taraji')!.evidence).toMatchObject({
+      problems: [{ signal: 'tag', expected: 'CANON' }],
+    });
+    expect(out.find((d) => d.pageId === 'taraji')!.evidence).not.toHaveProperty('canonExemptArea');
+  });
+
+  it('with the list empty (the default) the pages need CANON as before', () => {
+    const out = run([bsrc('fic', 'Fiction', design.id, [])], {
+      lifecycle: { ...lifecycle, canonExemptIndexes: [] },
+    });
+    expect(codes(out)).toEqual(['lifecycle_inconsistent']);
+  });
+});

@@ -220,3 +220,7 @@ Arkona's first audit (1,609 findings) showed decisions 17 and 18 needed a tighte
   the text before the first `(`, `;` or `-`, trimmed (a hyphenated name is tried whole as well). The page is never
   rewritten and no word is guessed; a finding names the anchor it tried (`evidence.anchor`) so the owner can add an
   alias. A match by anchor is checked for placement (`race_index_mismatch`) as a full match is.
+- **Decision 19, lifecycle consistency** (the same day's addendum, [ADR 0046](0046-e4-owner-decisions.md) decision 13):
+  beneath an index the owner lists as "Authoritative without CANON" (Arkona's `[INDEX] Design References`), a `[BSRC]`
+  page is consistent with Status Authoritative and no CANON tag; CANON there is the problem, and the evidence names the
+  area (`canonExemptArea`). Pages inside the Working and Archived areas keep their own rules.
