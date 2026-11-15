@@ -200,6 +200,9 @@ export async function makeWorld(o: { configured?: boolean } = {}): Promise<World
         google: { endpoints: google.endpoints },
         tmpRoot,
         log: () => undefined,
+        // v2 E4: the database copy each run takes (deploy/backup.sh offsite in production) is a no-op here unless a
+        // test passes its own.
+        takeDatabaseCopy: () => Promise.resolve('database copy skipped (test)'),
         ...over,
       });
     },

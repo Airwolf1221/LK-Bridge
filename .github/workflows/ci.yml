@@ -10,10 +10,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # v2 E4 (backlog 7): exactly the server's Node (deploy/install-node.sh pins v24.22.2; PLAN section 3.1), from .nvmrc,
+      # so CI, the server and a developer's nvm agree. Keep the two in step. The run fails at once on another major.
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version-file: .nvmrc
           cache: npm
+      - name: Node is 24 (the server's version)
+        run: node -e "const m=+process.versions.node.split('.')[0]; console.log('node', process.versions.node); if (m !== 24) { console.error('expected Node 24'); process.exit(1); }"
       - run: npm ci
       - name: Deployment scripts pass shellcheck (preinstalled on ubuntu-latest)
         run: shellcheck -x deploy/*.sh

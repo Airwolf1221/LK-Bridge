@@ -147,6 +147,7 @@ class Parser {
 
   run(root: Root): Draft[] {
     this.collectDefinitions(root);
+    if (!this.opts.collectNames) this.refuseFootnotes(root);
     const drafts = this.flow(root.children);
     const unused = [...this.definitions.values()].filter((d) => !this.usedDefinitions.has(d.identifier));
     if (unused.length > 0 && !this.opts.collectNames) {
@@ -172,6 +173,42 @@ class Parser {
       );
     }
     return drafts;
+  }
+
+  /**
+   * v2 E4 (the finding E3b left): LegendKeeper has no footnotes. A `[^1]: note` line is, to CommonMark, either a link
+   * reference definition (a one-word note: `text[^1]` then silently became a link to "note") or plain text that only
+   * looks like a footnote (a longer note). Either way the page would not say what the agent meant, so a footnote
+   * definition is refused, naming each one. A bare `[^1]` with no definition stays text, and an escaped `\[^1]: …` line
+   * is written as text.
+   */
+  private refuseFootnotes(root: Root): void {
+    const found: { label: string; line: number }[] = [];
+    const walk = (node: Nodes): void => {
+      if (node.type === 'definition') {
+        const label = node.label ?? node.identifier;
+        if (label.startsWith('^')) found.push({ label, line: lineOf(node) });
+        return;
+      }
+      if (node.type === 'paragraph' && node.position?.start.offset !== undefined) {
+        const raw = this.src.slice(node.position.start.offset, node.position.end.offset ?? undefined);
+        raw.split('\n').forEach((line, i) => {
+          // A paragraph's later lines keep their container prefixes (quote markers, indentation) in the source.
+          const m = /^[\s>]*\[(\^[^\]\s]+)\]:/.exec(i === 0 ? line : line.replace(/^[\s>]*/, ''));
+          if (m) found.push({ label: m[1]!, line: node.position!.start.line + i });
+        });
+        return;
+      }
+      if ('children' in node) for (const c of node.children as Nodes[]) walk(c);
+    };
+    walk(root);
+    if (found.length === 0) return;
+    const first = found[0]!;
+    throw new MarkdownError(
+      'UNSUPPORTED_MARKDOWN',
+      `Line ${first.line} is a footnote ([${first.label}]: …), and LegendKeeper has no footnotes: the page would show a link or stray text, not a note. Write the note in the text instead (in brackets, or in a list under a "Notes" heading). To keep it as written text, escape the bracket: \\[${first.label}]: …`,
+      { line: first.line, footnotes: found },
+    );
   }
 
   private collectDefinitions(node: Nodes): void {

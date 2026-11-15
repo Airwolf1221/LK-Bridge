@@ -164,7 +164,13 @@ describe('Propose a fix: split a paragraph', () => {
 
   it('a refused insert loses nothing: the new paragraphs go in first, so a paragraph in a container the API refuses stays whole', async () => {
     w = await auditsWorld();
-    // A paragraph inside a table cell: the mock (like a LegendKeeper that refuses it) takes insertBlock only at the top level.
+    // A paragraph inside a table cell, and a LegendKeeper that refuses the insert beside it (E4: the mock now takes
+    // nested inserts, as the spec says, so the refusal is made explicit).
+    w.overrides.set(/\/docs\/[^/]+\/blocks$/, (req) =>
+      req.method === 'POST' && JSON.stringify(req.body).includes('"after":"nested-p"')
+        ? { status: 422, body: { code: 'INVALID_CONTENT', message: 'refused (test)' } }
+        : undefined,
+    );
     w.blocksOf(A.breaks).push({
       id: 'nested-t',
       kind: 'table',

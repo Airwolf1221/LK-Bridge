@@ -165,6 +165,47 @@ export function storedGeometry(f: Obj): {
   return { pos: isPair(f.pos) ? f.pos : null, polygons, polyline: list(f.polyline) };
 }
 
+/**
+ * v2 E4 (backlog 4): the regions that carry BOTH a non-empty `polygon` and a non-empty `polygons` (LegendKeeper keeps
+ * the old field when the other is written; which one the app draws is not known until the sandbox probe M6e answers).
+ * read_document and the snapshots say so, rather than show one of them as the region's shape without a word.
+ */
+export function regionsWithBothForms(
+  features: readonly unknown[],
+): { id: string; name: string; polygonPoints: number; polygons: number }[] {
+  const out: { id: string; name: string; polygonPoints: number; polygons: number }[] = [];
+  for (const f of features) {
+    if (!f || typeof f !== 'object') continue;
+    const o = f as Obj;
+    if (o.type !== 'region') continue;
+    if (
+      Array.isArray(o.polygon) &&
+      o.polygon.length > 0 &&
+      Array.isArray(o.polygons) &&
+      o.polygons.length > 0
+    )
+      out.push({
+        id: String(o.id),
+        name: typeof o.name === 'string' ? o.name : '',
+        polygonPoints: o.polygon.length,
+        polygons: o.polygons.length,
+      });
+  }
+  return out;
+}
+
+/** The note read_document and the snapshots give for such regions (empty when there are none). */
+export function bothFormsNote(features: readonly unknown[]): string | null {
+  const both = regionsWithBothForms(features);
+  if (both.length === 0) return null;
+  return `${both.length} region(s) carry both a single \`polygon\` and \`polygons\` (${both
+    .slice(0, 10)
+    .map((r) => `“${r.name || r.id}”: polygon of ${r.polygonPoints} points, ${r.polygons} polygon(s)`)
+    .join(
+      '; ',
+    )}). LegendKeeper keeps both; the positions shown are the \`polygons\`, and the app may draw the other. Check them in the app.`;
+}
+
 const close = (a: number, b: number): boolean =>
   Math.abs(a - b) <= 1e-7 * Math.max(1, Math.abs(a), Math.abs(b));
 
@@ -192,6 +233,12 @@ export function holds(stored: Obj, fields: Obj): { field: string; expected: unkn
   const g = storedGeometry(stored);
   for (const [k, want] of Object.entries(fields)) {
     if (want === undefined) continue;
+    // v2 E4 (backlog 4): written beside `polygons`, `polygon` is their first one (one consistent form): compared as it is.
+    if (k === 'polygon' && fields.polygons !== undefined) {
+      if (!sameValue(stored.polygon ?? null, want))
+        out.push({ field: k, expected: want, actual: stored.polygon ?? null });
+      continue;
+    }
     if (k === 'polygon' || k === 'polygons') {
       const wantList = k === 'polygon' ? [want as LatLng[]] : (want as LatLng[][]);
       if (!sameValue(g.polygons ?? [], wantList))

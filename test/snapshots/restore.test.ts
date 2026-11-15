@@ -113,17 +113,32 @@ describe('restore_snapshot: a page document', () => {
     expect(texts()).toContain('First notes.');
   });
 
-  it('a page that now holds an inline icon is refused (the whole document cannot be written back); nothing is proposed', async () => {
+  it('a page that now holds an inline icon is restored block by block around it (E4): the icon paragraph stays as it is, and is listed', async () => {
+    // E1a refused this page (RESTORE_NOT_WRITABLE: the whole document cannot be written back). v2 E4 (ADR 0046)
+    // restores the other blocks one by one and leaves the icon paragraph as the page holds it now.
     const snap = await setup();
+    const atSnapshot = structuredClone(mainBlocks());
     mainBlocks()[1]!.content!.push({ icon: 'star' } as never);
+    // Another block is changed after the snapshot too: that one comes back.
+    const other = mainBlocks().findIndex((b, i) => i > 1 && b.kind === 'paragraph');
+    expect(other).toBeGreaterThan(1);
+    mainBlocks()[other]!.content = [{ text: 'Changed after the snapshot.' }];
+    const iconBlock = structuredClone(mainBlocks()[1]);
     const r = await call('restore_snapshot', {
       page: S.atlas,
       snapshot: snap,
       scope: 'document',
       document: 'Main',
     });
-    expect(r.body.error).toMatchObject({ code: 'RESTORE_NOT_WRITABLE' });
-    expect(w!.stack.runtime.restores.list(PROJECT)).toHaveLength(0);
+    expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
+    expect(JSON.stringify(r.body)).toMatch(/inline icon/);
+    const since = w!.repo.mutations.length;
+    expect(await approve(r)).toMatchObject({ state: 'executed' });
+    const ops = w!.repo.mutations.slice(since).map((m) => m.op);
+    expect(ops).toContain('replaceBlock');
+    expect(ops).not.toContain('replaceDocumentBlocks');
+    expect(mainBlocks()[1]).toEqual(iconBlock); // the icon paragraph, untouched
+    expect(mainBlocks()[other]).toEqual(atSnapshot[other]); // the other block, back as it was
   });
 
   it('an inline icon in the snapshot that the page no longer has is restored without it, and listed as lost', async () => {

@@ -145,6 +145,24 @@ describe('docs/reviews/scenarios.json', () => {
     expect(scenariosFor(file, 'core', 'claude')).toHaveLength(17);
   });
 
+  it('E4: scenario 4 asks for a section by its place, never a heading the test page lacks', () => {
+    // The owner's run of 15 November 2026: "Biography" is not a heading of the page, so the right tools ended in
+    // SECTION_NOT_FOUND. The repository holds no copy of the page's real headings, so the prompt names the first one.
+    const p = byId(4).prompts[0]!;
+    expect(p).not.toMatch(/Biography/);
+    expect(p).toMatch(/first section/);
+    expect(byId(4).expectedTools).toEqual(['read_document']);
+    const md = readFileSync(new URL('../../docs/reviews/E3-evaluation.md', import.meta.url), 'utf8');
+    expect(md).toContain('Read only the first section of Asagiri Miyabi');
+  });
+
+  it('E4: scenario 21 records `deduplicated` on a repeat run as an expected, correct outcome', () => {
+    const s = byId(21);
+    for (const note of [s.expectedNote, s.toolCallsNote, s.setupNote ?? ''])
+      expect(note, note).toMatch(/deduplicated/);
+    expect(s.watchFor).toMatch(/deduplicate: false/);
+  });
+
   it('is pointed to from the human copy', () => {
     const md = readFileSync(new URL('../../docs/reviews/E3-evaluation.md', import.meta.url), 'utf8');
     expect(md.slice(0, 1200)).toContain('scenarios.json');

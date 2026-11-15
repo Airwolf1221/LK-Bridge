@@ -31,9 +31,16 @@ export default defineConfig({
       'test/offsite/**/*.test.ts', // v2 E1b: the encrypted Google Drive copy
       'test/audits/**/*.test.ts', // v2 E2: the audits (findings only, read from the snapshots)
       'test/evaluation/**/*.test.ts', // v2 E3: the Evaluation helper (scenarios, windows, grading, results table, compare)
+      'test/e4/**/*.test.ts', // v2 E4: the second independent review's regression tests (docs/reviews/E4-2026-11.md)
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',
+    // v2 E4 (backlog 2): realistic defaults. Most files start the real server, runtime, mock LegendKeeper and MCP client;
+    // under the full suite's load (4 workers) a test that takes 2 s alone took more than Vitest's 5-second default (seen
+    // in C2d.1, D3, E1a and E3b), and a world's set-up more than the 10-second hook default. Tests that are long by
+    // design (sandbox dry runs that wait for budget, property tests) keep their own, longer timeouts.
+    testTimeout: 20_000,
+    hookTimeout: 60_000,
     // test/ui/*.tsx run in jsdom (a docblock in each file); the JSX needs no plugin to compile.
     setupFiles: [],
   },

@@ -90,14 +90,14 @@
       "dependsOn": [],
       "freshChat": true,
       "prompts": [
-        "Read only the Biography section of Asagiri Miyabi's Character Core and summarise it in three lines."
+        "Read only the first section of Asagiri Miyabi's Character Core (the first heading below the page's title, with what is under it) and summarise it in three lines."
       ],
       "interlude": null,
-      "setupNote": "If the page has no Biography heading, ask for the first heading instead.",
+      "setupNote": "E4: the repository holds no copy of this page's real headings, so the prompt names the section by its place, not by a heading it may not have (\"Biography\" ended in SECTION_NOT_FOUND on 15 November 2026). Before the run, check in LegendKeeper that the page has at least one heading below its title; if it has none, the right answer is to say so after reading the outline.",
       "expectedTools": ["read_document"],
       "optionalTools": [],
       "mistakeTools": ["lk_api_read"],
-      "expectedNote": "`read_document` with `section` (or `outline: true` first, then `section`).",
+      "expectedNote": "`read_document` with `outline: true` first, then `section` with that heading's exact text (2 requests). Reading the outline and then the section is the right path; a `SECTION_NOT_FOUND` here is a mistake, because the outline names the heading.",
       "watchFor": "reading the whole page and cutting it down; `lk_api_read` (`getDocumentBlocks`); a section path that does not match (a good agent reads the outline once, then retries once).",
       "toolCallsNote": "`read_document` rows with `section=…` or `outline=true`; 1 request each."
     },
@@ -503,13 +503,13 @@
         "Upload this small PNG (base64) for the character E3 Eval Ren, into the subfolder Wardrobe / Qipao of her art folder: iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQI12M4YWODFTEMLQkAZZlQAUIevGcAAAAASUVORK5CYII="
       ],
       "interlude": null,
-      "setupNote": null,
+      "setupNote": "E4: on a repeat run the bridge finds the same image already uploaded and answers `deduplicated: true` (a dry run stops there too). That is an expected, correct outcome: the same original returns the existing asset (PLAN-v2 4.10). To exercise the upload and its placement again, delete the earlier asset in the test world first.",
       "expectedTools": ["upload_image"],
       "optionalTools": [],
       "mistakeTools": ["lk_upload_image", "prepare_image_upload", "lk_api_write"],
-      "expectedNote": "`upload_image` (`data_base64`, `destination` `for_character` or `for_page`, `subfolders` \"Wardrobe / Qipao\"); a `dryRun` first is good. ChatGPT: the image is staged and the placement is a proposal.",
-      "watchFor": "`lk_upload_image`; `prepare_image_upload` (needs a shell); creating folders by hand (`lk_api_write`); repeating the call after a proposal; a made-up race.",
-      "toolCallsNote": "`upload_image` (`data_base64 (128 chars)`, `subfolders=…`), success or Proposal captured. The Staging page and the Asset Tree show the result."
+      "expectedNote": "`upload_image` (`data_base64`, `destination` `for_character` or `for_page`, `subfolders` \"Wardrobe / Qipao\"); a `dryRun` first is good. ChatGPT: the image is staged and the placement is a proposal. **Also right:** `deduplicated: true` (the image is already in the library from an earlier run), reported to the owner with where the existing asset is.",
+      "watchFor": "`lk_upload_image`; `prepare_image_upload` (needs a shell); creating folders by hand (`lk_api_write`); repeating the call after a proposal; a made-up race; after `deduplicated`, calling again with `deduplicate: false` unasked (that uploads a second copy).",
+      "toolCallsNote": "`upload_image` (`data_base64 (128 chars)`, `subfolders=…`), success, **Proposal captured**, or success with `deduplicated` on a repeat run. The Staging page and the Asset Tree show the result."
     },
     {
       "id": 22,

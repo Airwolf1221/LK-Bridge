@@ -721,14 +721,68 @@ export async function runMapsSandbox(
             fail(
               `stored polygon ${JSON.stringify(s.polygon)} / polygons ${JSON.stringify(s.polygons)}, expected two polygons`,
             );
-          // Both fields present: the app may draw either, which this API check cannot tell. Reported, not guessed.
-          if (Array.isArray(s.polygon) && s.polygon.length > 0)
-            throw new Unclear(
-              `two polygons were stored in \`polygons\`, but the old \`polygon\` (${s.polygon.length} points) is still there: LegendKeeper keeps both, and which one the app draws is not known. Look at the region in the app.`,
-            );
+          // v2 E4 (backlog 4): the bridge writes one consistent form: a region that still carries a `polygon` gets it set to
+          // the first of its new polygons, so the two never show different shapes. A stale OLD shape is still a finding.
+          if (Array.isArray(s.polygon) && s.polygon.length > 0) {
+            const first = want[0]!;
+            const mirrored =
+              s.polygon.length === first.length &&
+              (s.polygon as unknown[]).every(
+                (v, j) => Array.isArray(v) && nearPair(v as number[], first[j]!),
+              );
+            if (!mirrored)
+              throw new Unclear(
+                `two polygons were stored in \`polygons\`, but the old \`polygon\` (${s.polygon.length} points) is still there: LegendKeeper keeps both, and which one the app draws is not known. Look at the region in the app.`,
+              );
+            return 'two polygons stored in `polygons`; `polygon` holds the first of them (the bridge’s one consistent form), not the old shape';
+          }
           return 'two polygons stored in `polygons`; the old `polygon` is gone';
         },
       );
+
+      // ---- M6e (v2 E4, backlog 4): can a region's `polygon` be cleared, and how? Three tries on throwaway regions, each
+      // written RAW (bodies the bridge itself does not send): `polygon: null`, `polygon: []`, and `polygons` alone. What
+      // LegendKeeper accepts, and what reads back, is recorded (NOTED); it decides which form the bridge writes.
+      const m6eTitle =
+        'how a region’s single `polygon` can be cleared when it is given `polygons` (null, [], or left out)';
+      await (async () => {
+        try {
+          const f = needFrame();
+          const tri = (dx: number) => [
+            { x: 10 + dx, y: 10 },
+            { x: 60 + dx, y: 10 },
+            { x: 60 + dx, y: 60 },
+          ];
+          const ll = (pts: { x: number; y: number }[]) => pts.map((q) => schemaPos(f, q.x, q.y));
+          const results: string[] = [];
+          for (const [label, extra] of [
+            ['polygon: null', { polygon: null }],
+            ['polygon: []', { polygon: [] }],
+            ['polygons alone', {}],
+          ] as const) {
+            const c = await create({
+              type: 'region',
+              name: `M6e ${label}`,
+              geometry: { system: 'pixel', shape: 'points', points: tri(0) },
+            });
+            const r = await rawUpdateFeature(c.id, { polygons: [ll(tri(100)), ll(tri(200))], ...extra });
+            const back = await stored(c.id);
+            const poly = Array.isArray(back.polygon)
+              ? `${back.polygon.length} points`
+              : JSON.stringify(back.polygon ?? null);
+            const polys = Array.isArray(back.polygons)
+              ? `${back.polygons.length} polygon(s)`
+              : JSON.stringify(back.polygons ?? null);
+            results.push(
+              `${label}: ${r.status}${r.code ? ` ${r.code}` : ''}${r.issues.length ? ` (${r.issues.join('; ')})` : ''}; reads back polygon ${poly}, polygons ${polys}`,
+            );
+            await run('deleteFeature', p({ ...path, featureId: c.id }));
+          }
+          record('M6e', m6eTitle, 'noted', `NOTED: ${results.join(' | ')}`);
+        } catch (e) {
+          record('M6e', m6eTitle, 'inconclusive', `the probe could not complete: ${(e as Error).message}`);
+        }
+      })();
 
       // ---- M7: deleting a folder -----------------------------------------------------------------------------------
       await check(

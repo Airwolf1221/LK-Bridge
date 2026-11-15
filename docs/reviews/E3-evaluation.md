@@ -84,9 +84,12 @@ Format: **Assistant** (Both, or only one; _approvals_ where ChatGPT needs them) 
 
 **4. Read one section** · Both
 
-- Prompt: _Read only the Biography section of Asagiri Miyabi's Character Core and summarise it in three lines._ (If the page
-  has no Biography heading, ask for the first heading instead.)
-- Expect: `read_document` with `section` (or `outline: true` first, then `section`).
+- Prompt: _Read only the first section of Asagiri Miyabi's Character Core (the first heading below the page's title, with what
+  is under it) and summarise it in three lines._ (E4: the page has no Biography heading, so the right tools ended in
+  `SECTION_NOT_FOUND` on 15 November 2026; the repository holds no copy of the page's real headings, so the section is named
+  by its place. Check before the run that the page has a heading below its title; if it has none, the right answer is to say
+  so after reading the outline.)
+- Expect: `read_document` with `outline: true` first, then `section` with that heading's exact text (2 requests).
 - Watch for: reading the whole page and cutting it down; `lk_api_read` (`getDocumentBlocks`); a section path that does not
   match (a good agent reads the outline once, then retries once).
 - Tool calls: `read_document` rows with `section=…` or `outline=true`; 1 request each.
@@ -237,11 +240,13 @@ Format: **Assistant** (Both, or only one; _approvals_ where ChatGPT needs them) 
 - Prompt: _Upload this small PNG (base64) for the character E3 Eval Ren, into the subfolder Wardrobe / Qipao of her art folder:_
   `iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQI12M4YWODFTEMLQkAZZlQAUIevGcAAAAASUVORK5CYII=`
 - Expect: `upload_image` (`data_base64`, `destination` `for_character` or `for_page`, `subfolders` "Wardrobe / Qipao"); a `dryRun`
-  first is good. ChatGPT: the image is staged and the placement is a proposal.
+  first is good. ChatGPT: the image is staged and the placement is a proposal. **Also right (E4):** on a repeat run the bridge
+  finds the image already in the library and answers `deduplicated: true` (a dry run stops there too); the assistant reports
+  the existing asset. To exercise the upload and placement again, delete the earlier asset in the test world first.
 - Watch for: `lk_upload_image`; `prepare_image_upload` (needs a shell); creating folders by hand (`lk_api_write`); repeating the
-  call after a proposal; a made-up race.
-- Tool calls: `upload_image` (`data_base64 (128 chars)`, `subfolders=…`), success or **Proposal captured**. The Staging page
-  and the Asset Tree show the result.
+  call after a proposal; a made-up race; after `deduplicated`, calling again with `deduplicate: false` unasked.
+- Tool calls: `upload_image` (`data_base64 (128 chars)`, `subfolders=…`), success, **Proposal captured**, or success with
+  `deduplicated` on a repeat run. The Staging page and the Asset Tree show the result.
 
 ### F. Snapshots, audits and the budget
 

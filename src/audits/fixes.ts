@@ -367,9 +367,42 @@ export interface SplitPlan {
   readonly parts: readonly Obj[][];
 }
 
+/** The list holding block `id` (the document's or a container's children). */
+function siblingsOf(list: readonly unknown[], id: string): readonly unknown[] | null {
+  for (const b of list) {
+    if (isObj(b) && b.id === id) return list;
+    if (isObj(b) && Array.isArray(b.children)) {
+      const hit = siblingsOf(b.children, id);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /** The document checker run inside the lock: the block must still hold exactly the runs the plan was made from. */
 export const splitChecker: DocumentChecker = (ctx) => {
-  const input = ctx.input as { blockId: string; runsKey: string };
+  const input = ctx.input as { blockId: string; runsKey: string; parts?: string[]; finishing?: string[] };
+  // v2 E4 (RV4-4): the parts are already after the paragraph (a split stopped after its inserts) and this plan would
+  // insert them again: a conflict; the fix is proposed again, and then only finishes the split.
+  if (input.parts && input.parts.length > 0 && !input.finishing) {
+    const sib = siblingsOf(ctx.document.blocks, input.blockId) ?? [];
+    const at = sib.findIndex((b) => isObj(b) && b.id === input.blockId);
+    const next = sib.slice(at + 1, at + 1 + input.parts.length);
+    if (
+      next.length === input.parts.length &&
+      next.every((b, i) => isObj(b) && b.kind === 'paragraph' && runsKey(b.content) === input.parts![i])
+    )
+      return {
+        differences: [
+          {
+            path: `block ${input.blockId}`,
+            expected: 'the paragraph not yet split',
+            actual:
+              'its parts are already after it (a split stopped part-way): propose the fix again to finish it',
+          },
+        ],
+      };
+  }
   const block = findBlock(ctx.document.blocks, input.blockId);
   if (!block)
     return {
@@ -448,7 +481,19 @@ async function fixSplit(d: FixDeps, projectId: string, f: Finding): Promise<FixR
       status: 'nothing_to_do',
       message: 'Splitting would give fewer than two paragraphs (the breaks are at the ends).',
     };
-  const newIds = parts.slice(1).map(() => mintClientId());
+  // v2 E4 (RV4-4): a split that stopped after its inserts left the parts after the paragraph (the text twice, as
+  // planned); proposing again finishes it with the replace alone, never inserting the parts a second time.
+  const siblings = siblingsOf(blocks, blockId) ?? [];
+  const at = siblings.findIndex((b) => isObj(b) && b.id === blockId);
+  const following = siblings.slice(at + 1, at + parts.length);
+  const already =
+    following.length === parts.length - 1 &&
+    following.every(
+      (b, i) => isObj(b) && b.kind === 'paragraph' && runsKey(b.content) === runsKey(parts[i + 1]),
+    );
+  const newIds = already
+    ? following.map((b) => String((b as Obj).id))
+    : parts.slice(1).map(() => mintClientId());
   const name = String(res.name);
   const label = `Split a paragraph of ${name} into ${parts.length}`;
   const writeBase = { judgedInLock: true } as const;
@@ -464,7 +509,13 @@ async function fixSplit(d: FixDeps, projectId: string, f: Finding): Promise<FixR
               resourceId: pageId,
               documentId,
               checker: SPLIT_CHECK,
-              input: { blockId, runsKey: runsKey(runs) },
+              input: {
+                blockId,
+                runsKey: runsKey(runs),
+                // v2 E4 (RV4-4): the parts the inserts would add, so a split already half made is never inserted again.
+                parts: parts.slice(1).map((p) => runsKey(p)),
+                ...(already ? { finishing: newIds } : {}),
+              },
             },
           ],
         },
@@ -473,7 +524,7 @@ async function fixSplit(d: FixDeps, projectId: string, f: Finding): Promise<FixR
     // The new paragraphs first, each after the one before and the original still whole, then the original is cut down to its
     // first part: a refused insert leaves the paragraph exactly as it was, and nothing is ever lost (a failure after the
     // inserts leaves the text twice, never less).
-    ...parts.slice(1).map((p, i): StepSpec => ({
+    ...(already ? [] : parts.slice(1)).map((p, i): StepSpec => ({
       op: 'insertBlock',
       ...writeBase,
       params: {
@@ -493,7 +544,7 @@ async function fixSplit(d: FixDeps, projectId: string, f: Finding): Promise<FixR
         path: { resourceId: pageId, documentId, blockId },
         body: { kind: 'paragraph', id: blockId, content: parts[0] },
       },
-      ifMatchFrom: { step: parts.length },
+      ifMatchFrom: already ? { step: 1, key: 'paragraph' } : { step: parts.length },
       journalOperation: { tool: 'audits.split_paragraph', page: { id: pageId, name }, block: blockId },
     },
     {

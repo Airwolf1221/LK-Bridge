@@ -8,6 +8,7 @@
  * image blocks (one whole-document write each, with If-Match) and a map's image. Any other place (a banner, an event's or
  * a lane's image, a board asset) is listed for the owner to change by hand.
  */
+import { asStoredImage } from '../images/convert.js';
 import { randomBytes } from 'node:crypto';
 import type { AssetService } from '../assets/index.js';
 import type { ImageService } from '../images/service.js';
@@ -218,7 +219,8 @@ export async function restoreImage(
   if (!row || !row.staged) {
     const plan = d.images.planStaging(input.projectId);
     if (!plan.ok) throw new RestoreError(plan.error.code, plan.error.message);
-    const image = await d.images.convert(old.bytes);
+    // v2 E4 (RV3-4): the snapshot store's bytes, exactly (never re-encoded: a PNG or JPEG would come back as lossy WebP).
+    const image = await asStoredImage(old.bytes);
     const started = await d.images.startUpload({
       projectId: input.projectId,
       image,

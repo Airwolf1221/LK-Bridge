@@ -814,6 +814,8 @@ function FolderCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void 
 // ================================================================================================ settings
 
 function SettingsCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => void }) {
+  // v2 E4 (RV1-4): a change that weakens a protection asks for the password again (the bridge says which).
+  const withReauth = useReauth();
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const s = d.settings;
@@ -845,7 +847,7 @@ function SettingsCard({ d, onChanged }: { d: OffsiteStatus; onChanged: () => voi
       if (!ack) return;
     }
     const r = await run(
-      () => api.put('/offsite/settings', { settings, acknowledgeNewFolder: ack }),
+      () => withReauth(() => api.put('/offsite/settings', { settings, acknowledgeNewFolder: ack })),
       'Settings saved.',
     );
     if (r) onChanged();

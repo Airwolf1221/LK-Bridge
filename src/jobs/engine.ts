@@ -1372,6 +1372,34 @@ export class JobEngine {
   }
 
   /**
+   * v2 E4 (ADR 0046): each step of a job of `projectId` as it was planned and as it ended (its operation, params,
+   * status and whether it may have been sent), for the block-by-block undo (src/pages/undo.ts). Read-only. Undefined
+   * for a job of another project or one that does not exist.
+   */
+  stepPlans(
+    projectId: string,
+    jobId: string,
+  ):
+    | readonly {
+        readonly stepNo: number;
+        readonly opId: string;
+        readonly status: string;
+        readonly maybeSent: boolean;
+        readonly params: OpParams;
+      }[]
+    | undefined {
+    const job = this.repo.job(jobId);
+    if (!job || job.projectId !== projectId) return undefined;
+    return this.repo.steps(jobId).map((st) => ({
+      stepNo: st.stepNo,
+      opId: st.opId,
+      status: st.status,
+      maybeSent: st.maybeSent || st.firstSentAt !== null,
+      params: this.repo.stepParams(st),
+    }));
+  }
+
+  /**
    * Bounded wait (at most `maxWaitMs`, 25 s) for a job of `projectId` to finish. Resolves with the job as it then
    * stands. A job of another project is not found.
    */

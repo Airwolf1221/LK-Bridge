@@ -52,6 +52,8 @@ export interface PageEntry {
   readonly rank: string | null;
   readonly name: string;
   readonly kind: string;
+  /** When this page's pieces were read (a full run takes hours; its manifest's takenAt is when it finished). */
+  readonly capturedAt?: string;
   /** The page was deleted (a change snapshot after a delete); it has no pieces. */
   readonly deleted?: true;
   readonly resource?: PieceRef;

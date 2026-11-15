@@ -322,7 +322,11 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
               {
                 status: 'nothing_to_do',
                 ...view,
-                hint: 'The page already matches the snapshot here; nothing was proposed.',
+                // v2 E4 (RV4-3): "already matches" only when nothing is listed as not restored; otherwise say what is not.
+                hint:
+                  plan.notRestored.length > 0 || plan.lost.length > 0
+                    ? 'Nothing this restore covers needs writing, and nothing was proposed; but the page is NOT simply as it was at the snapshot: what is listed under notRestored (and lost) is not restored by this tool. Tell the person; those parts are restored by hand.'
+                    : 'The page already matches the snapshot here; nothing was proposed.',
               },
               pd,
             );

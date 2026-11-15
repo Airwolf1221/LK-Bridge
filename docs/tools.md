@@ -372,6 +372,23 @@ otherwise the heading stays.
 **Cost**: normally 2 reads and 1 write, plus the verify read (a dry run: 1 read; a proposal: 1 read to capture, then 2
 reads, 1 write and the verify read when approved).
 
+**Block by block (v2 E4, [ADR 0046](adr/0046-e4-owner-decisions.md) decision 1).** A page holding content LegendKeeper's
+write schema would not take back (text with an inline icon) cannot be written back whole, so `write_page` writes only the
+blocks the edit changes, one by one: `insertBlock` for new blocks (each placed after its nearest earlier sibling that is
+already there), then `replaceBlock` for changed ones, then `deleteBlock` for removed ones, so a stop part-way never loses
+text. It is ONE job (or one proposal) holding the document's lock: the page must be exactly as planned inside the lock
+(compared by content), each write's If-Match is chained from the write before (a delete's from its `ETag`), each replace
+and delete keeps its pre-image in the journal, and the whole page is verified at the end. The plan is replayed on a copy
+first and must give the edit exactly. The answer carries `blockwise` (`writes`, `inserts`, `replaces`, `deletes`) and the
+new `version`. Refused (`PAGE_NOT_WRITABLE`, with `reason`): an edit that changes, removes or re-sends the icon paragraph
+itself (`unwritable`), moves blocks (`moved`), would delete an `unsupported` block (`unsupported`), needs more than 200
+writes (`too_many`), or meets a legacy page without block ids (`ids`). **A write that stops part-way is undone** by the
+bridge (the system principal, at P1) from the job's own record, but only when the page is exactly as the stopped job left
+it; the answer's `undo` says what happened (`succeeded`, `stale` when the page changed since: nothing is undone, the
+journal holds every block as it was). Removing the icon paragraph on purpose with `dropRegions` is C1's deliberate
+deletion and writes the page whole. Cost: 1 plan read, the in-lock read, 1 read per replace or delete, the writes, and the
+verify read.
+
 **The version rules (`baseVersion`)**
 
 | The page's version now                      | `append`, `prepend`, `replace`                     | `replace_section`, `append_to_section`                                                                                                                                                                |
@@ -405,9 +422,10 @@ budget (test): writes 1/120·min …
 with `blockIds`, `MENTION_NOT_FOUND`, `MENTION_AMBIGUOUS` with the candidates in `problems`, `EDITOR_LIMIT` with
 `rule`, `FIELD_LIMIT`, `SCHEMA_VIOLATION`, `SECTION_NOT_FOUND` with `available`, `SECTION_AMBIGUOUS` with `options`,
 `KEEP_REGION_UNKNOWN`, `KEEP_REGION_DUPLICATE`, `INVALID_LK_BLOCK`, `IMAGE_URL_REFUSED`, …), `VERSION_CONFLICT`
-(above), `WRONG_TOOL_FOR_DOCUMENT`, `PAGE_NOT_WRITABLE` (the page already holds blocks LegendKeeper's write schema
-would not take back, such as text with an inline icon, listed in `blocks`: a whole-document write cannot leave them as
-they are), `INVALID_PARAMS` (a section mode without `section`, or a whole-page mode with one), and the name and tree
+(above), `WRONG_TOOL_FOR_DOCUMENT`, `PAGE_NOT_WRITABLE` (v2 E4: the page holds blocks LegendKeeper's write schema
+would not take back, such as text with an inline icon, and this edit would change, remove, move or re-send one of them,
+or delete an `unsupported` block; `reason` says which, and `blocks` lists them. Any other edit of such a page is written
+block by block: see below), `INVALID_PARAMS` (a section mode without `section`, or a whole-page mode with one), and the name and tree
 codes of the read tools (`NOT_FOUND`, `NOT_IN_REPOSITORY`, `AMBIGUOUS`, `DOCUMENT_NOT_FOUND`, `TREE_NOT_READY`).
 
 **At scope `propose`** (or whenever policy turns the write into a proposal) the same plan is captured as ONE proposal
@@ -892,8 +910,11 @@ its other pages stay; the result flags it, and `promote_page` takes it back).
 `CANON` or `AU` and otherwise set to `CANON`, `Working` swapped for `CANON`. Without `destination` it is refused with
 `DESTINATION_REQUIRED` and, when the page came from `move_to_working`, `suggestedDestination`: the place it was in
 (never used unless you pass it). A Working character's Core (or compact page) under its own `[INDEX] {name}` takes
-that index with it to the destination (normally its race index); other pages under the index keep their state and are
-listed. Only from `[BWRK]` (`NOT_WORKING`); a destination in a lifecycle area is refused (`LIFECYCLE_AREA`).
+that index with it to the destination (normally its race index). v2 E4 ([ADR 0046](adr/0046-e4-owner-decisions.md)
+decision 2): when any other page is under that index, at any depth, promoting the Core alone is refused
+(`SET_HAS_OTHER_PAGES`, naming them): promote the set with `subtree: true` on the index, or move the pages out first; the
+job also checks inside the lock that the index still holds only the Core, so a page added since makes the proposal
+`conflicted`. Only from `[BWRK]` (`NOT_WORKING`); a destination in a lifecycle area is refused (`LIFECYCLE_AREA`).
 
 ### Order, failures and resuming
 
@@ -1382,8 +1403,9 @@ What a restore cannot bring back is in its result and on the proposal, never hid
   fail the restore: the write is sent again without the icon (its default applies), and the restore record lists it under
   "couldn't be restored exactly" on the Snapshots page.
 - **`unsupported` blocks and inline icons** cannot be written by the API: those the live page still holds are echoed by
-  id, the rest are listed under `cannotRestore` (lost); a page whose live blocks hold an inline icon is refused
-  (`RESTORE_NOT_WRITABLE`) rather than drop it.
+  id, the rest are listed under `cannotRestore` (lost); a page whose live blocks hold an inline icon is restored block by
+  block around it (v2 E4, ADR 0046 decision 1): each icon paragraph stays as the page holds it now (listed when the
+  snapshot held it otherwise), and a restore that would have to remove or move one is refused (`RESTORE_NOT_WRITABLE`).
 - **Map features and timeline events** have no versions: their restore is checked inside the lock against the planned
   state, and a change in between stops the job instead of overwriting it.
 - **Refusals:** `RESTORE_LIFECYCLE` (the restore would change a page's lifecycle state, prefix, Status or status tag: use
@@ -1429,7 +1451,8 @@ Categories: `rules` (no rule matches a page, several do), `template` (a page's s
   and the owner decides which of the prefix, Status, tag and place is right.
 - A paragraph with a line break (`line_break_paragraph`) is kept as a keep region by `read_document`; `write_page` cannot change
   it as text. Tell the owner: the dashboard offers to split it, block by block.
-- A page holding inline icons (`inline_icon_page`) is refused by `write_page` (`PAGE_NOT_WRITABLE`): do not try to rewrite it.
+- A page holding inline icons (`inline_icon_page`) is written by `write_page` block by block (v2 E4); only an edit of the icon
+  paragraph itself is refused (`PAGE_NOT_WRITABLE`).
 - There is no tool to run, edit or acknowledge an audit: the owner does that on the dashboard.
 
 **Costs.** `audit_findings`: none (no request to LegendKeeper). The dashboard's "Propose a fix" re-reads its page first (a

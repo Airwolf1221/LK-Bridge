@@ -138,8 +138,10 @@ other sites' URLs are refused.
 
 Formatting around a mention (`**[label](lk://…)**`) is allowed but a mention itself carries no formatting.
 
-**Footnotes are not supported.** `text[^1]` with a `[^1]: note` line is not a footnote on a LegendKeeper page: it is read
-as a link whose text is `^1`, so do not write them.
+**Footnotes are refused (v2 E4).** LegendKeeper has no footnotes: `text[^1]` with a `[^1]: note` line would become a link
+or stray text, so any footnote definition is refused with `UNSUPPORTED_MARKDOWN`, naming each. Write the note in the text
+(in brackets, or in a list under a "Notes" heading). A bare `[^1]` with no definition stays text; `\[^1]: …` (escaped)
+is written as text.
 
 ### Escaping
 

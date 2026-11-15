@@ -1358,7 +1358,8 @@ export class StepExecutor {
         ((op.versioned && !callerVersion) ||
           meta.guard !== undefined ||
           (step.options.expectCurrent !== undefined && !callerVersion) ||
-          (meta.journal === 'pre-image' && !journalled));
+          // v2 E4: a step whose pre-image the tool supplied needs no read for it.
+          (meta.journal === 'pre-image' && !journalled && step.options.journalPreImage === undefined));
 
       // ONE read serves the If-Match version, the unsupported-block guard and the journal pre-image.
       const current = needRead
@@ -1437,13 +1438,16 @@ export class StepExecutor {
             ref,
           );
         }
+        const ent = (current.entity ?? current.body) as { name?: unknown; tags?: unknown } | undefined;
         const now =
-          expect.state === 'rows'
-            ? rowsState(
-                (current.body as { data?: unknown } | undefined)?.data ??
-                  (current.entity as { rows?: unknown } | undefined)?.rows,
-              )
-            : collectionState(current.entity ?? current.body);
+          expect.state === 'resource'
+            ? { name: ent?.name ?? null, tags: Array.isArray(ent?.tags) ? ent.tags : [] }
+            : expect.state === 'rows'
+              ? rowsState(
+                  (current.body as { data?: unknown } | undefined)?.data ??
+                    (current.entity as { rows?: unknown } | undefined)?.rows,
+                )
+              : collectionState(current.entity ?? current.body);
         // Rows in rank order on both sides (rowsState and rowsContentHash sort them), whichever endpoint gave them.
         const hash = expect.state === 'rows' ? rowsContentHash(now as RowState[]) : stateHash(now);
         if (hash !== expect.hash) {

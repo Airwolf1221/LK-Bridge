@@ -109,7 +109,8 @@ export interface StepOptions {
    * src/jobs/sidebar-state.ts), or nothing is sent (a conflict).
    */
   readonly expectCurrent?: {
-    readonly state: 'rows' | 'collection';
+    /** RV4 sketch: `resource`, a page's name and tags as planned (updateResource, which LegendKeeper does not version). */
+    readonly state: 'rows' | 'collection' | 'resource';
     readonly hash: string;
     readonly label?: string;
   };
