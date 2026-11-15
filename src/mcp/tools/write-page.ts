@@ -31,7 +31,10 @@ import {
   type WritePageReplanInput,
 } from '../../pages/index.js';
 import type { McpToolProvider, McpToolResult } from '../server.js';
+import { planBlockwise, type BlockOp } from '../../pages/blockwise.js';
+import { blockwiseJob, validateBlockOp } from '../../pages/blockwise-job.js';
 import { defineTool } from './define.js';
+import { runWriteJob } from './write-job.js';
 import { pickDocument } from './read-document.js';
 import { finish, liveRead, repoContext, resolvePage } from './repo.js';
 import {
@@ -304,25 +307,44 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           return errorFromThrown(e, pd);
         }
         const unwritable = plan.plan.empty ? [] : unwritableBlocks(path, plan.version, plan.blocks);
+        // v2 E4 (ADR 0046): a page LegendKeeper's API cannot take back whole (an inline icon) is written block by block,
+        // touching only the blocks the edit changes; an edit to such a block itself stays refused.
+        let blockwise: { ops: readonly BlockOp[] } | undefined;
         if (unwritable.length > 0) {
-          return errorResult(
-            {
-              code: 'PAGE_NOT_WRITABLE',
-              message:
-                `LegendKeeper's API would refuse this page as written back: ${unwritable.length} block(s) the page already holds ` +
-                `(${unwritable
-                  .slice(0, 10)
-                  .map((b) => `${b.id ?? b.at} (${b.kind})`)
-                  .join(
-                    ', ',
-                  )}) have content its write format has no form for, for example text with an inline icon. ` +
-                'write_page sends the whole document, so it cannot write this page without changing those blocks. Nothing was written. ' +
-                'Tell the person: the text has to be changed in the LegendKeeper app, or the owner can split the blocks on the dashboard (Audits). ' +
-                'Do not try replaceDocumentBlocks or another low-level route: it would drop what the page holds. read_document, get_resource and set_facts still work on this page.',
-              blocks: unwritable.slice(0, 50),
-            },
-            pd,
+          const held = new Set(
+            unwritableBlocks(path, plan.version, current.blocks)
+              .map((b) => b.id)
+              .filter((id): id is string => id !== null),
           );
+          const bw = planBlockwise(current.blocks, plan.blocks, {
+            unwritable: held,
+            validate: (op) => validateBlockOp(node.id, doc.id, op),
+          });
+          if (!bw.ok) {
+            return errorResult(
+              {
+                code: 'PAGE_NOT_WRITABLE',
+                reason: bw.refusal.reason,
+                message:
+                  `LegendKeeper's API would refuse this page as written back whole: ${unwritable.length} block(s) the page already holds ` +
+                  `(${unwritable
+                    .slice(0, 10)
+                    .map((b) => `${b.id ?? b.at} (${b.kind})`)
+                    .join(
+                      ', ',
+                    )}) have content its write format has no form for, for example text with an inline icon. ` +
+                  `write_page then writes only the blocks the edit changes, one by one, but not this edit: ${bw.refusal.message} ` +
+                  'Nothing was written. Edit another section, or tell the person the text has to be changed in the LegendKeeper app. ' +
+                  'Do not try replaceDocumentBlocks or another low-level route: it would drop what the page holds. read_document, get_resource and set_facts still work on this page.',
+                blocks: [
+                  ...unwritable.slice(0, 50),
+                  ...bw.refusal.blocks.filter((b) => !unwritable.some((u) => u.id === b.id)),
+                ].slice(0, 50),
+              },
+              pd,
+            );
+          }
+          blockwise = { ops: bw.ops };
         }
         const head = {
           page: { id: node.id, name: node.displayName, path: node.path.names.join(' / ') },
@@ -380,6 +402,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
               ...rebased,
               ...warnings,
               ...diffBody(true),
+              ...(blockwise ? { blockwise: blockwiseSummary(blockwise.ops) } : {}),
               message: 'Dry run: nothing was written and nothing was proposed.',
             },
             preview,
@@ -425,6 +448,23 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
           ...warnings,
         };
         const title = `write_page ${mode}${head.section ? ` “${head.section}”` : ''} on “${node.displayName}” (${doc.name ?? doc.id})`;
+        if (blockwise) {
+          return writeBlockwise(pd, mctx, {
+            resourceId: node.id,
+            documentId: doc.id,
+            before: current.blocks,
+            plan,
+            ops: blockwise.ops,
+            title,
+            head: { ...head, ...warnings },
+            operation: { ...operation, blockwise: blockwiseSummary(blockwise.ops) },
+            journalOperation,
+            prefetched: [{ op: 'getDocumentBlocks', path, body: read.value }],
+            preview,
+            counts,
+            diffBody: diffBody(full0(args.detail)),
+          });
+        }
         let run;
         try {
           run = await pd.engine.run(
@@ -558,4 +598,112 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
         }
       }),
   });
+}
+
+const full0 = (detail: string | undefined): boolean => detail === 'full';
+
+/** What a block-by-block write will send (v2 E4). */
+function blockwiseSummary(ops: readonly BlockOp[]): Record<string, unknown> {
+  return {
+    writes: ops.length,
+    inserts: ops.filter((o) => o.op === 'insertBlock').length,
+    replaces: ops.filter((o) => o.op === 'replaceBlock').length,
+    deletes: ops.filter((o) => o.op === 'deleteBlock').length,
+    note:
+      'The page holds content LegendKeeper’s API cannot take back whole (an inline icon), so only the blocks this edit changes are written, ' +
+      'one by one: new blocks first, then changed ones, then removals. If it stops part-way the bridge undoes what it wrote, provided the ' +
+      'page is still exactly as it left it.',
+  };
+}
+
+/**
+ * v2 E4 (ADR 0046): the write of a page LegendKeeper cannot take back whole, block by block, as ONE job (or one
+ * proposal): the in-lock check, the chained writes, the verify of the whole page. A stop part-way is undone
+ * (src/pages/undo.ts) when the page is exactly as the job left it; the answer says what happened.
+ */
+async function writeBlockwise(
+  pd: ProjectDeps,
+  mctx: Parameters<typeof finish>[1],
+  w: {
+    readonly resourceId: string;
+    readonly documentId: string;
+    readonly before: readonly unknown[];
+    readonly plan: PagePlan;
+    readonly ops: readonly BlockOp[];
+    readonly title: string;
+    readonly head: Record<string, unknown>;
+    readonly operation: Record<string, unknown>;
+    readonly journalOperation: Record<string, unknown>;
+    readonly prefetched: readonly Record<string, unknown>[];
+    readonly preview: () => unknown;
+    readonly counts: Record<string, unknown>;
+    readonly diffBody: Record<string, unknown>;
+  },
+): Promise<McpToolResult> {
+  const job = blockwiseJob({
+    resourceId: w.resourceId,
+    documentId: w.documentId,
+    before: w.before,
+    after: w.plan.blocks,
+    ops: w.ops,
+    journalOperation: w.journalOperation,
+  });
+  const head = {
+    ...w.head,
+    blockwise: blockwiseSummary(w.ops),
+    plannedOn: w.plan.version,
+    counts: w.counts,
+    summary: summaryLine(w.plan),
+  };
+  const out = await runWriteJob(pd, mctx, 'write_page', {
+    steps: job.steps,
+    labels: job.labels,
+    title: `${w.title} (block by block)`,
+    holdDocuments: [w.documentId],
+    proposal: {
+      operation: w.operation,
+      summary: `${w.title}: ${summaryLine(w.plan)}, block by block`.slice(0, 500),
+      prefetched: w.prefetched as never,
+    },
+    head,
+    preview: w.preview,
+  });
+  const body = out.body;
+  if (body.status === 'written' && out.jobId) {
+    // The page's new version: the last write's answer (a block write's body, a delete's ETag).
+    const steps = pd.engine.stepResults(pd.project.id, out.jobId) ?? [];
+    const last = [...steps]
+      .reverse()
+      .find((x) => x.status === 'succeeded' && x.stepNo > 1 && x.stepNo < job.steps.length);
+    const v = last?.value as { version?: unknown; etag?: unknown } | null | undefined;
+    const version = typeof v?.version === 'string' ? v.version : typeof v?.etag === 'string' ? v.etag : null;
+    if (version && body.verified === true)
+      pd.services?.versions?.remember(pd.project.id, w.documentId, version, w.plan.after);
+    const answer = { ...body, version, previousVersion: w.plan.version, ...w.diffBody };
+    return finish(pd, mctx, 'write_page', answer, w.preview);
+  }
+  if (
+    (body.code === 'WRITTEN_IN_PART' || body.code === 'OUTCOME_UNKNOWN') &&
+    out.jobId &&
+    pd.services?.blockwiseUndo
+  ) {
+    const view = pd.engine.queries.getJob(pd.project.id, out.jobId);
+    const u = view ? await pd.services.blockwiseUndo.consider(view) : undefined;
+    let undo: Record<string, unknown> | undefined;
+    if (u?.status === 'submitted') {
+      const done = await pd.engine.wait(pd.project.id, u.undoJobId, 25_000);
+      undo = {
+        jobId: u.undoJobId,
+        status: done.status,
+        message:
+          done.status === 'succeeded'
+            ? 'The bridge undid what this write had made: the page is as it was before it.'
+            : done.status === 'failed' || done.status === 'cancelled'
+              ? 'The bridge tried to undo what this write had made, and the undo stopped too: read the page; the journal holds every block as it was.'
+              : 'The bridge is undoing what this write had made (it runs by itself; follow it with bridge_job_status).',
+      };
+    } else if (u && 'message' in u) undo = { status: u.status, message: u.message };
+    return errorResult({ ...body, ...(undo ? { undo } : {}) } as never, pd);
+  }
+  return out.result;
 }

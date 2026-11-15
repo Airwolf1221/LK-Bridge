@@ -206,6 +206,39 @@ async function header(bytes: Buffer, format: SourceFormat, limits: ConvertLimits
 
 const timeoutSeconds = (ms: number) => Math.max(1, Math.ceil(ms / 1000));
 
+/**
+ * v2 E4 (RV3-4): an image's bytes taken exactly as they are, for a restore of the snapshot store's bytes: the type from
+ * the magic bytes and the facts from the header (nothing decoded, nothing re-encoded). The byte and pixel limits that
+ * guard an agent's upload do not apply: these bytes came from LegendKeeper's own library. Recorded as a passthrough.
+ */
+export async function asStoredImage(input: Uint8Array): Promise<ConvertedImage> {
+  const started = Date.now();
+  const bytes = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+  const { contentType, format } = detectImageType(bytes);
+  const h = await header(bytes, format, {
+    maxBytes: Number.POSITIVE_INFINITY,
+    maxPixels: Number.POSITIVE_INFINITY,
+    maxFrames: Number.POSITIVE_INFINITY,
+  } as ConvertLimits);
+  const facts: ImageFacts = {
+    format,
+    contentType,
+    bytes: bytes.length,
+    sha256: sha256Hex(bytes),
+    width: h.orientation !== null && h.orientation >= 5 ? h.pageHeight : h.width,
+    height: h.orientation !== null && h.orientation >= 5 ? h.width : h.pageHeight,
+    frames: h.frames,
+    hasAlpha: h.hasAlpha,
+  };
+  return {
+    mode: 'webp_passthrough',
+    source: { ...facts, orientation: h.orientation },
+    output: { ...facts, data: bytes },
+    quality: null,
+    ms: Date.now() - started,
+  };
+}
+
 /** Converts one image (see the module comment). Runs immediately: use `ConversionQueue` to serialise. */
 export async function convertImage(input: Uint8Array, limits: ConvertLimits): Promise<ConvertedImage> {
   const started = Date.now();

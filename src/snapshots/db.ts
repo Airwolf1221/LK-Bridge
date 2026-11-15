@@ -260,8 +260,25 @@ export class SnapshotDb {
         `INSERT OR IGNORE INTO snapshot_pieces (snapshot_id, project_id, page_id, piece, ref, doc_type, name, sha256, size, taken_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
+      const at = new Map(
+        [...m.pages, ...(m.templates ?? [])].map((p) => [
+          p.id,
+          p.capturedAt ? Date.parse(p.capturedAt) : takenAt,
+        ]),
+      );
       for (const p of pieces)
-        add.run(m.id, m.project.id, p.pageId, p.piece, p.ref, p.docType, p.name, p.sha256, p.size, takenAt);
+        add.run(
+          m.id,
+          m.project.id,
+          p.pageId,
+          p.piece,
+          p.ref,
+          p.docType,
+          p.name,
+          p.sha256,
+          p.size,
+          at.get(p.pageId) ?? takenAt,
+        );
     })();
   }
 
@@ -759,6 +776,24 @@ export class SnapshotDb {
       )
       .run(f.sha256, f.problem, f.detail ?? null, JSON.stringify(f.snapshots), this.now());
     return true;
+  }
+
+  /** Snapshots marked partial by verify whose every finding is resolved, and whose manifest was complete, are complete again. */
+  clearRepaired(): number {
+    const open = new Set<string>();
+    for (const r of this.db
+      .prepare('SELECT snapshots FROM snapshot_findings WHERE resolved_at IS NULL')
+      .all() as { snapshots: string }[])
+      for (const id of JSON.parse(r.snapshots) as string[]) open.add(id);
+    let n = 0;
+    for (const r of this.db
+      .prepare(`SELECT id FROM snapshots WHERE damaged IS NOT NULL AND missing = 0`)
+      .all() as { id: string }[])
+      if (!open.has(r.id))
+        n += this.db
+          .prepare(`UPDATE snapshots SET state = 'complete', damaged = NULL WHERE id = ?`)
+          .run(r.id).changes;
+    return n;
   }
 
   resolveFindings(sha256: string): number {

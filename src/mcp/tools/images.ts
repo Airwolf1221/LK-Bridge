@@ -355,12 +355,44 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
           const run = () =>
             args.staged_id !== undefined
               ? placeStaged(pd, mctx, svc, args)
-              : uploadBytes(pd, mctx, svc, args);
+              : uploadBytesOnce(pd, mctx, svc, args);
           return withRequest(pd, mctx, TOOL, args, null, run);
         }),
     }),
     prepareTool(deps),
   ];
+}
+
+/**
+ * v2 E4 (RV1-2): one `upload_id` is used by one call at a time. A received file is consumed only once the upload's job
+ * is submitted, so two calls that read the slot together both saw it `received`; the second is now told it is in use.
+ * The hold is in process (one bridge process per project, ADR 0023) and is released however the call ends.
+ */
+async function uploadBytesOnce(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  svc: ImageService,
+  args: UploadArgs,
+): Promise<CreateOutcome> {
+  const id = args.upload_id;
+  if (id === undefined) return uploadBytes(pd, mctx, svc, args);
+  if (!svc.slots.hold(id)) {
+    return {
+      kind: 'answer',
+      result: errorResult(
+        {
+          code: 'UPLOAD_ID_USED',
+          message: `Upload ${id} is being used by another call at this moment; each upload_id works once. Follow that call's answer.`,
+        },
+        pd,
+      ),
+    };
+  }
+  try {
+    return await uploadBytes(pd, mctx, svc, args);
+  } finally {
+    svc.slots.release(id);
+  }
 }
 
 async function uploadBytes(
@@ -672,12 +704,30 @@ async function placeStaged(
   const now = svc.settle(svc.store.upload(pd.project.id, row.id)!);
   const verified = (view.result as { verified?: unknown } | null)?.verified;
   if (view.status === 'failed' || view.status === 'cancelled') {
+    // v2 E4 (RV4-6): what the placement made before it stopped (a folder, for instance), as every other write says.
+    const steps = pd.engine.stepResults(pd.project.id, view.id) ?? [];
+    const isWrite = (n: number) => {
+      const l = placed.labels[n - 1];
+      return l !== undefined && l !== 'check' && l !== 'verify';
+    };
+    const written = steps
+      .filter((x) => x.status === 'succeeded' && isWrite(x.stepNo))
+      .map((x) => placed.labels[x.stepNo - 1]!);
+    const uncertain = steps
+      .filter((x) => x.status === 'uncertain' && isWrite(x.stepNo))
+      .map((x) => placed.labels[x.stepNo - 1]!);
+    const notWritten = steps
+      .filter((x) => x.status !== 'succeeded' && x.status !== 'uncertain' && isWrite(x.stepNo))
+      .map((x) => placed.labels[x.stepNo - 1]!);
     const err = {
       code: 'PLACE_FAILED',
-      message: view.lastError?.message ?? `The placement ${view.status}.`,
+      message: `${view.lastError?.message ?? `The placement ${view.status}.`}${written.length ? ` Written before it stopped: ${written.join('; ')}.` : ' Nothing was written.'}`,
       ...head,
       jobId: view.id,
-      hint: 'The image is still staged. Nothing is retried; see bridge_job_status.',
+      written,
+      ...(uncertain.length ? { uncertain } : {}),
+      notWritten,
+      hint: 'The image is still staged. Nothing is retried; placing it again reuses what was made (a folder is not made twice). See bridge_job_status.',
     };
     return {
       kind: 'job',

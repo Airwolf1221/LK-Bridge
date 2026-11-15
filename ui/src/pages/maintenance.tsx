@@ -3,6 +3,7 @@ import { api } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, StatusBadge, useAction } from '../components';
 import { fmtAgo, fmtDuration, fmtTime } from '../format';
 import { useApi, useNow, useReloadOn } from '../hooks';
+import { useReauth } from '../reauth';
 import { Link } from '../router';
 
 /** Maintenance Jobs (PLAN §8 page 6, docs/maintenance.md): the registry, toggles, schedule editing and Run now. */
@@ -174,6 +175,8 @@ function JobRows({
   onChanged: () => void;
 }) {
   const { run, busy } = useAction();
+  // v2 E4 (RV1-4): switching off a job that keeps the backups asks for the password again.
+  const withReauth = useReauth();
   const toggleId = `toggle-${j.id}`;
   return (
     <>
@@ -219,7 +222,10 @@ function JobRows({
               aria-describedby={j.implemented ? undefined : `${toggleId}-why`}
               onChange={(e) =>
                 void run(
-                  () => api.post(`/maintenance/${j.id}/${e.target.checked ? 'enable' : 'disable'}`),
+                  () =>
+                    withReauth(() =>
+                      api.post(`/maintenance/${j.id}/${e.target.checked ? 'enable' : 'disable'}`),
+                    ),
                   `${j.name} ${e.target.checked ? 'enabled' : 'disabled'}.`,
                 ).then(onChanged)
               }

@@ -481,7 +481,7 @@ describe('what is sent and recorded', () => {
     });
     expect((journal[0]!.preImage as { blocks: unknown }).blocks).toEqual(miyabi());
   });
-  it('the rich page: an inline icon LegendKeeper would not take back makes the page unwritable, named, nothing sent', async () => {
+  it('the rich page: an inline icon LegendKeeper would not take back means block by block (E4), a dry run sends nothing', async () => {
     const { richPage } = await import('../markdown/fixtures.js');
     w.setPage(FIXTURE_PAGES.rich, richPage(), 1);
     const before = w.blockRequests(FIXTURE_PAGES.rich).length;
@@ -492,11 +492,9 @@ describe('what is sent and recorded', () => {
       markdown: 'x',
       dryRun: true,
     });
-    expect(r.body.error).toMatchObject({
-      code: 'PAGE_NOT_WRITABLE',
-      blocks: [{ id: 'richp002', kind: 'paragraph' }],
-    });
-    expect(r.body.error.message).toMatch(/inline icon.*Nothing was written/);
+    // C1 refused this page as PAGE_NOT_WRITABLE; v2 E4 (ADR 0046) writes only the blocks the edit changes, one by one
+    // (test/pages/blockwise.test.ts). An edit to the icon paragraph itself is still refused there.
+    expect(r.body).toMatchObject({ status: 'dry_run', blockwise: { writes: 1, inserts: 1 } });
     expect(methods(FIXTURE_PAGES.rich, before)).toEqual(['GET']);
   });
   it('the infobox / collection / unsupported page: an edit keeps every keep region exactly, and echoes the unsupported block', async () => {

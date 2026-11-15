@@ -13,6 +13,12 @@
  *
  * It is a scoring heuristic with a deliberate bias to "several" over a wrong guess: a word that is in many headings
  * ("page", "text") counts for little, one that is in few counts for a lot, and a lone match must beat the runner-up by half.
+ *
+ * v2 E4 (the owner's run of 15 November 2026): **task sections rank above reference sections.** `section: "chronology"`
+ * answered SECTION_AMBIGUOUS because the task section "Dates and the chronology" tied with the generated reference
+ * sections "Operations > Timelines" and "Operations > Calendars". The guide's level-2 sections other than `Reference` and
+ * `Operations` (and nothing beneath those two) are its tasks; a match among the tasks alone is decided first, by the same
+ * rules, and only when no task section matches clearly are the reference sections weighed with them.
  */
 import type { OutlineEntry } from '../../markdown/index.js';
 
@@ -193,6 +199,29 @@ interface Entry {
   readonly heading: OutlineEntry;
   readonly bag: Set<string>;
   readonly aliases: readonly string[];
+  /** A task section (v2 E4): not `Reference` or `Operations`, nor beneath them. */
+  readonly task: boolean;
+}
+
+/** The level-2 sections that hold reference material rather than a task (the second is generated at serve time). */
+const REFERENCE_SECTIONS = new Set(['reference', 'operation']);
+
+/** Whether a heading is a task section: its top section (below the title) is not a reference one. */
+function isTask(h: OutlineEntry): boolean {
+  const top = h.path.split(' > ')[1] ?? h.text;
+  return !REFERENCE_SECTIONS.has(normalise(top));
+}
+
+type Scored = { readonly e: Entry; readonly hits: number; readonly score: number };
+
+/** One clear winner among `scored` (best first), or undefined. */
+function clearWinner(scored: readonly Scored[], asked: number): Scored | undefined {
+  const top = scored[0];
+  if (!top) return undefined;
+  const second = scored[1]?.score ?? 0;
+  // A clear match needs a strong score, a lead over the runner-up, and at least half of what was asked: one shared word
+  // in a long, unrelated ask ("no such heading" and "Headings and paragraphs") is a candidate, never the answer.
+  return top.score >= 1 && top.score >= second * 1.5 && top.hits * 2 >= asked ? top : undefined;
 }
 
 /**
@@ -217,17 +246,27 @@ export function matchSection(
       // The bag is the heading's own key words (and what their synonym groups stand for), plus a few extras; the
       // aliases only match as whole phrases, because a table label's verb ("Add a pin") would pull in other sections.
       const bag = conceptsOf(`${h.text} ${KEYWORDS[h.text] ?? ''}`);
-      return { heading: h, bag, aliases: aliases.map(normalise) };
+      return { heading: h, bag, aliases: aliases.map(normalise), task: isTask(h) };
     });
   if (entries.length === 0) return { kind: 'none' };
 
   const nq = normalise(query);
   if (nq === '') return { kind: 'none' };
 
-  // 1. The same words as a heading's text, or as one of its aliases (exactly, whatever the case and punctuation).
+  // 0. "A > B" spelled as a heading's whole path, whatever the case and punctuation.
+  if (asked.includes('>')) {
+    const np = asked.split('>').map(normalise).join(' > ');
+    const byPath = entries.filter((e) => exactName(e.heading).split(' > ').map(normalise).join(' > ') === np);
+    if (byPath.length === 1) return { kind: 'one', heading: byPath[0]!.heading };
+  }
+
+  // 1. The same words as a heading's text, or as one of its aliases (exactly, whatever the case and punctuation). A
+  // single task section among several matches wins (v2 E4).
   const same = entries.filter((e) => normalise(e.heading.text) === nq || e.aliases.includes(nq));
   const sameSections = [...new Set(same.map((e) => e.heading.path))];
   if (sameSections.length === 1) return { kind: 'one', heading: same[0]!.heading };
+  const sameTasks = [...new Set(same.filter((e) => e.task).map((e) => e.heading.path))];
+  if (sameTasks.length === 1) return { kind: 'one', heading: same.find((e) => e.task)!.heading };
   if (sameSections.length > 1) return { kind: 'several', candidates: same.map((e) => e.heading) };
 
   // 2. Key words: every concept of the ask that is in a heading counts, by how few headings have it.
@@ -240,7 +279,7 @@ export function matchSection(
     return GENERIC.has(c) ? idf * GENERIC_WEIGHT : idf;
   };
   const q = conceptsOf(query);
-  const scored = entries
+  const scored: Scored[] = entries
     .map((e) => {
       const hit = [...q].filter((c) => e.bag.has(c));
       return { e, hits: hit.length, score: hit.reduce((s, c) => s + weight(c), 0) };
@@ -248,13 +287,16 @@ export function matchSection(
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.e.heading.line - b.e.heading.line);
   if (scored.length === 0) return { kind: 'none' };
+  // v2 E4: the task sections are judged on their own first; a clear task match is the answer even when reference
+  // sections share its words. Only when no task section wins are the reference sections weighed with them.
+  const taskWinner = clearWinner(
+    scored.filter((x) => x.e.task),
+    q.size,
+  );
+  if (taskWinner) return { kind: 'one', heading: taskWinner.e.heading };
+  const winner = clearWinner(scored, q.size);
+  if (winner) return { kind: 'one', heading: winner.e.heading };
   const top = scored[0]!;
-  const second = scored[1]?.score ?? 0;
-  // A clear match needs a strong score, a lead over the runner-up, and at least half of what was asked: one shared word
-  // in a long, unrelated ask ("no such heading" and "Headings and paragraphs") is a candidate, never the answer.
-  if (top.score >= 1 && top.score >= second * 1.5 && top.hits * 2 >= q.size) {
-    return { kind: 'one', heading: top.e.heading };
-  }
   const near = scored.filter((x) => x.score >= top.score * 0.5).slice(0, 6);
   return { kind: 'several', candidates: near.map((x) => x.e.heading) };
 }

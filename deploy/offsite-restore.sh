@@ -3,7 +3,8 @@
 #
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/offsite-restore.sh [--dest DIR] [--folder "LK-Bridge backups/<server>/copy-<n>"]
 #
-# Pulls the snapshot store (objects/ first, then manifests/, then STORE.json) and the newest nightly database copy from
+# Pulls the snapshot store (objects/ first, then manifests/, then STORE.json) and the newest database copy (of any label:
+# nightly, pre-deploy or the offsite one each copy run takes, v2 E4) from
 # the encrypted Google Drive copy into DIR (default /var/lib/lk-bridge/offsite-restore/<UTC time>), then checks them:
 # every object re-hashed against its name, every manifest's pieces present, the database copy through SQLite's
 # integrity_check (unpacked to DIR/bridge.db). It never touches the live database or store: when the check passes it

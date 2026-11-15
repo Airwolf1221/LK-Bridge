@@ -21,7 +21,9 @@ import { createHash, randomBytes } from 'node:crypto';
 import { rmSync, type Dirent } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import Database from 'better-sqlite3';
 import type { Db } from '../db/open.js';
@@ -70,6 +72,32 @@ export interface RunnerOptions {
   readonly log?: (line: string) => void;
   /** Test seam: called with the temporary config's path once it is written. */
   readonly onConfig?: (path: string) => void | Promise<void>;
+  /**
+   * v2 E4 (backlog 3, the owner's restore drill of 13 November 2026): takes a fresh database copy (`deploy/backup.sh
+   * offsite`) at the start of each copy run, so the copy on Drive carries a database as new as the store it goes with.
+   * The default runs the script; tests pass their own. Resolves with what to log; rejects when no copy was made.
+   */
+  readonly takeDatabaseCopy?: () => Promise<string>;
+}
+
+/** v2 E4: the default database copy: `deploy/backup.sh offsite` (sqlite3 .backup, integrity_check, the newest 3 kept). */
+function backupScriptCopy(o: { dbPath: string; backupDir: string }): Promise<string> {
+  const script = fileURLToPath(new URL('../../deploy/backup.sh', import.meta.url));
+  return new Promise((resolve, reject) => {
+    execFile(
+      'bash',
+      [script, 'offsite'],
+      {
+        env: { PATH: process.env.PATH ?? '/usr/bin:/bin', DB_PATH: o.dbPath, BACKUP_DIR: o.backupDir },
+        timeout: 10 * 60_000,
+        maxBuffer: 1024 * 1024,
+      },
+      (err, stdout, stderr) => {
+        if (err) reject(new Error(`${String(stderr).trim().split('\n').pop() || err.message}`));
+        else resolve(String(stdout).trim().split('\n')[0] ?? 'database copy taken');
+      },
+    );
+  });
 }
 
 export class RunnerRefusal extends Error {
@@ -95,7 +123,8 @@ function installExitHook(): void {
 
 const OBJECT_PATH = /^objects\/([0-9a-f]{2})\/([0-9a-f]{64})\.gz$/;
 const MANIFEST_PATH = /^manifests\/[^/]+\/[^/]+\.json\.gz$/;
-const DB_COPY = /^(nightly|pre-deploy)-(\d{8}T\d{6}Z)\.db\.gz$/;
+// v2 E4: `offsite` copies too (taken at the start of each copy run); the newest copy of any label wins.
+const DB_COPY = /^(nightly|pre-deploy|offsite)-(\d{8}T\d{6}Z)\.db\.gz$/;
 const DELETED_DIR = /^(\d{4}-\d{2}-\d{2})\/?$/;
 
 interface Session {
@@ -346,6 +375,33 @@ export class OffsiteRunner {
           'The local snapshot store holds no manifests. Refusing to mirror an empty store over the Drive copy (take a full snapshot first, or restore the store).',
         );
       }
+      // v2 E4 (backlog 3): a fresh database copy first, so the store and the database on Drive are of one time. A
+      // failure is reported with the run but does not stop the copy of the store (the older database copies still go).
+      const dbStarted = this.now();
+      let dbCopyNote: string | null = null;
+      try {
+        const line = await (this.o.takeDatabaseCopy ?? (() => backupScriptCopy(this.o)))();
+        this.log(`  database-copy: ${line}`);
+        steps.push({
+          name: 'database-copy',
+          code: 0,
+          bytes: 0,
+          files: 1,
+          errors: 0,
+          ms: this.now() - dbStarted,
+        });
+      } catch (e) {
+        dbCopyNote = `the fresh database copy could not be taken (${(e as Error).message}); the newest earlier copy goes instead`;
+        this.log(`  database-copy: FAILED: ${(e as Error).message}`);
+        steps.push({
+          name: 'database-copy',
+          code: 1,
+          bytes: 0,
+          files: 0,
+          errors: 1,
+          ms: this.now() - dbStarted,
+        });
+      }
       const t0 = this.now();
       const result = await this.session(folder.path, async (s) => {
         version = s.version;
@@ -393,6 +449,8 @@ export class OffsiteRunner {
               'nightly-*.db.gz',
               '--include',
               'pre-deploy-*.db.gz',
+              '--include',
+              'offsite-*.db.gz',
             ],
           });
         }
@@ -429,7 +487,7 @@ export class OffsiteRunner {
         exitCode: result.exitCode,
         rcloneVersion: version,
         message: result.ok
-          ? `Copied ${totals.files} files (${totals.bytes} bytes) into "${folder.path}".${result.message ? ` ${result.message}` : ''}`
+          ? `Copied ${totals.files} files (${totals.bytes} bytes) into "${folder.path}".${result.message ? ` ${result.message}` : ''}${dbCopyNote ? ` Note: ${dbCopyNote}.` : ''}`
           : result.message,
         detail: { steps, ...('purged' in result ? { purged: result.purged } : {}) },
       });
@@ -732,11 +790,12 @@ async function newestDatabase(s: Session): Promise<string | null> {
   const names = list
     .map((x) => (typeof x.Path === 'string' ? x.Path : typeof x.Name === 'string' ? x.Name : ''))
     .filter((n) => DB_COPY.test(n));
-  // Newest by its time; a nightly copy wins over a pre-deploy one of the same second.
+  // v2 E4: the newest by its time, whatever its label (nightly, pre-deploy or offsite); of one second, nightly first.
+  const rank = (n: string) => (n.startsWith('nightly') ? 0 : n.startsWith('offsite') ? 1 : 2);
   names.sort((a, b) => {
     const ta = DB_COPY.exec(a)![2]!;
     const tb = DB_COPY.exec(b)![2]!;
-    return ta === tb ? (a.startsWith('nightly') ? -1 : 1) : tb.localeCompare(ta);
+    return ta === tb ? rank(a) - rank(b) : tb.localeCompare(ta);
   });
   return names[0] ?? null;
 }

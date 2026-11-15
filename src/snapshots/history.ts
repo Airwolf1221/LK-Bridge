@@ -193,7 +193,11 @@ export async function pieceThen(
   const s = svc.index.snapshot(snapshotId);
   if (!s || s.projectId !== projectId)
     throw new RestoreError('SNAPSHOT_NOT_FOUND', `No snapshot ${snapshotId} of this project.`);
-  const row = stateAt(svc, projectId, pageId, f.piece!, f.ref ?? '', { id: s.id, takenAt: s.takenAt });
+  const row = stateAt(svc, projectId, pageId, f.piece!, f.ref ?? '', {
+    id: s.id,
+    takenAt: s.takenAt,
+    kind: s.kind,
+  });
   if (!row)
     return f.piece === 'document' ? '(the document did not exist then)' : '(no state at that snapshot)';
   if (!row.sha256) return '(missing from that snapshot: it was partial)';

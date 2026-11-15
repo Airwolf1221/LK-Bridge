@@ -67,7 +67,7 @@ describe('sandbox assumptions script (dry run)', () => {
     // every page the script writes (the sandbox runtime has no tree), and the clean-up's guard reads: the canon guard
     // lists and reads every page of a cascade at entry and again inside the lock (CR-09).
     expect(writes).toBeLessThanOrEqual(110);
-    expect(reads).toBeLessThanOrEqual(520);
+    expect(reads).toBeLessThanOrEqual(530); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
     const ids = findings.map((f) => f.id);
     for (const id of [
       'A1',

@@ -255,10 +255,13 @@ describe('other guards', () => {
     );
     expect(r.error).toBeUndefined();
     expect(h.model.resources.get('rchild01')!.deletedAt).toBeDefined();
-    expect(e.engine.queries.journalLookup(PROJECT, { resourceId: 'rparent1' })[0]).toMatchObject({
+    // v2 E4 (RV2-1): a delete keeps the page itself (name, parent, tags), so a restore of it can be judged.
+    expect(
+      e.engine.queries.journalLookup(PROJECT, { resourceId: 'rparent1', includePreImage: true })[0],
+    ).toMatchObject({
       opId: 'deleteResource',
       params: { query: { cascade: true } },
-      preImage: null,
+      preImage: { id: 'rparent1' },
     });
   });
 
@@ -376,7 +379,7 @@ describe('other guards', () => {
 });
 
 describe('write journal', () => {
-  it('captures resource metadata before updates and moves, and ids for deletes; prunes by age and size', async () => {
+  it('captures resource metadata before updates, moves and deletes (v2 E4: deletes too); prunes by age and size', async () => {
     h = await harness();
     h.model.seedResource('r1', { name: 'Before' });
     h.model.seedResource('r2');
@@ -401,7 +404,7 @@ describe('write journal', () => {
     ]);
     expect(entries[2]!.preImage).toMatchObject({ id: 'r1', name: 'Before' });
     expect(entries[1]!.preImage).toMatchObject({ id: 'r1', name: 'After' });
-    expect(entries[0]).toMatchObject({ targetId: 'r3', preImage: null });
+    expect(entries[0]).toMatchObject({ targetId: 'r3', preImage: { id: 'r3' } });
     expect(
       e.engine.queries.journalLookup(PROJECT, { resourceId: 'r1', includePreImage: false })[0],
     ).not.toHaveProperty('preImage');

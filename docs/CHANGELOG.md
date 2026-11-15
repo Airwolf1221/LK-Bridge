@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased: v2 E4: the second independent review, block-by-block page writes, and the concurrency acceptance tests
+
+[reviews/E4-2026-11.md](reviews/E4-2026-11.md); [ADR 0046](adr/0046-e4-owner-decisions.md) (proposed); no migration; PLAN-v2
+phase E, the E4 row. Nothing was run against a live system: no call to the owner's LegendKeeper bridge connector, Google or any
+other live service, not even a read. Every test uses the mock; the sandbox tests are written and dry-run, not run.
+
+- **27 findings, 26 fixed, each with a test that fails on the old code** (`test/e4/`, and beside the code). Critical: a
+  `restoreResource` (through `restore_resource`, `restore_snapshot` or `lk_api_write`) was never judged by the lifecycle guard,
+  so a restore could bring a `[BWRK]` page into canon or a canon page into the archive (now judged as a move from the page's
+  own area to where it lands; every delete keeps the page in its journal pre-image; one read more per delete); promoting one
+  Core moved Working pages under its index into canon unlisted, and pages added after the proposal (now refused,
+  `SET_HAS_OTHER_PAGES`, with an in-lock subtree check: ADR 0046 decision 2); verify left full snapshots partial for good
+  after one damaged object was repaired, and retention then deleted every weekly full, or every full (now set complete again,
+  and the newest full of any state is always kept). High: look-alike status tags and Status values could replace the genuine
+  ones unseen; a full snapshot's pieces were dated at the run's end, so restores could revert writes made during it (each page
+  now records `capturedAt`, an optional manifest field); abandoning a running full snapshot wrote an empty complete one; a
+  restored image was re-encoded (now its stored bytes exactly: ADR 0046 decision 5); `update_timeline_event` dropped an
+  event's styling when it re-made it; a disk error during `POST /uploads/<id>` stopped the bridge (now a 507 `storage`
+  refusal); backup protections switched off without re-authentication (ADR 0046 decision 3; the dashboard asks); a set job
+  held after its first write, and two `update_resource` calls at once, overwrote or lost tags (now an in-lock name and tag
+  check, no extra request); chronology stops misreported and a resume replayed a stale plan; a stopped recreate said the page
+  "already matches"; a re-proposed paragraph split duplicated text. Medium and low: one `upload_id` used twice at once, the
+  tool-call log storing an unknown tool's name as sent, missing pre-images (`updateEvent`, `updateLane`, a restore's
+  `updateFeature` and sidebar rows), documents taken from an older snapshot, the CLI sign-in's checks, `PLACE_FAILED`'s
+  report. **Open:** finishing a stopped recreate (E4-OPEN-1).
+- **Block-by-block `write_page` and restores** (backlog 1; src/pages/blockwise.ts, blockwise-job.ts, undo.ts). A page with an
+  inline icon is no longer `PAGE_NOT_WRITABLE`: only the blocks the edit changes are written (`insertBlock`, then
+  `replaceBlock`, then `deleteBlock`), as one job with an in-lock content check, If-Match chained from the write before (a
+  delete's from its ETag), journal pre-images and a whole-page verify; the plan is replayed on a copy first. An edit of the icon
+  paragraph itself, a move, or an `unsupported` loss is still refused. A write that stops part-way is undone automatically,
+  only when the page is exactly as it was left (`undo` in the answer). Restores of such pages work the same way, the icon
+  paragraphs left as they are. The mock now models nested blocks, `parent` inserts and ETags.
+- **PLAN-v2 10.6's concurrency acceptance tests:** many simultaneous writes to one page through mixed tools (every answer
+  written or an explicit conflict, nothing lost; it found the `update_resource` tag loss); an outside write between the read
+  and the write for blocks, sidebar, map features, board, resource and events. **New sandbox test** `concurrency`: same-version
+  writes sent straight to LegendKeeper through the governor's raw client, recorded, not fixed (about 14 writes).
+- **The off-site copy carries a fresh database copy** (backlog 3): each copy run starts with `deploy/backup.sh offsite`
+  (newest 3 kept, apart from `nightly` and `pre-deploy`); the verify and `offsite-restore.sh` take the newest copy of any label.
+- **Regions** (backlog 4): one consistent form (a region that still carries `polygon` gets it set to the first of its new
+  `polygons`); `read_document` and the snapshot text name regions that carry both; the maps sandbox gains the M6e probe.
+- **Footnotes are refused** (`UNSUPPORTED_MARKDOWN`, naming each; ADR 0046 decision 7). **Guides:** task sections rank above
+  the reference sections ("chronology", "timeline", "event", "date", "map", "image", "snapshot", "audit" each lead to one).
+  **Scenarios:** 4 asks for the first section; 21 records `deduplicated` as right (ADR 0046 decision 8).
+- **Node 24:** `.nvmrc` pins `v24.22.2` (the server's, `deploy/install-node.sh`) and CI reads it and fails on another major.
+  **Tests:** realistic defaults (20 s a test, 60 s a hook); timeline change snapshots are unchanged and proposed to the owner
+  (ADR 0046 decision 6).
+- **The E5 checklist** (the review, section 8): everything that must be true before the Arkona key goes into the bridge.
+- **Tests:** 3,672 pass (4 skipped; 3,592 before), three full runs in a row with no failure or timeout, one on Node 22 and
+  two on Node 24.22.2; the full CI passes on Node 24.22.2.
+
 ## Unreleased: v2 E3b: the owner's evaluation applied, forgiving guides, steering to the Core, and the evaluation helper
 
 [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md) (section "E3b"); migration `2500_evaluation`; PLAN-v2 phase E, the E3b

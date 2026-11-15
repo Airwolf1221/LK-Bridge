@@ -14,6 +14,9 @@
  * Canon (ADR 0036 decision 6, option (a), decided 11 November 2026): these edits are ordinary edits on an Authoritative
  * page, never canon-gated; only deleting a whole timeline document of an Authoritative page is canonical.
  */
+import { requireOperation } from '../../lk/registry.js';
+import { defs } from '../../lk/registry.defs.generated.js';
+import { withWriteIcon } from '../../lk/icons.js';
 import { createHash } from 'node:crypto';
 import * as z from 'zod';
 import { CalendarError, formatKcy, type Calendar, type ParsedDate } from '../../calendar/index.js';
@@ -399,9 +402,22 @@ function remaining(
         // event writes are checked against their own state.
         if (!rec) writes.push(w);
         break;
-      case 'row.insert':
-        if (!rowOf(w.documentId, w.rowId)) writes.push(w);
+      case 'row.insert': {
+        const r = rowOf(w.documentId, w.rowId);
+        if (!r) writes.push(w);
+        // v2 E4 (RV4-5): the row this change inserted is there, but no longer as it was written (edited since in the
+        // app): finishing the change would pair an event and a count with a row that now says something else.
+        else if ('texts' in w && w.texts && !same(r, w.texts))
+          return {
+            ok: false,
+            result: refuse(
+              pd,
+              'CHRONOLOGY_RESUME_CONFLICT',
+              `The row ${w.rowId} of ${w.age} that this change inserted has been edited since it stopped; it was not finished. The owner checks it and marks the change resolved.`,
+            ),
+          };
         break;
+      }
       case 'row.delete':
         if (rowOf(w.documentId, w.rowId)) writes.push(w);
         break;
@@ -1307,7 +1323,12 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
           let unlink: ChronologyTarget['unlink'] = null;
           const rowsCtx: Record<string, WriteContext['rows'][string]> = {};
           const moves = new Set<string>();
+          // v2 E4 (RV3-5): an event made again (an end taken away, a move to another age) keeps everything else it had
+          // (its colour, icon, image, hidden and calendar flags…): the writable fields of the old event, in their write
+          // form, then the changes.
+          const kept = keptEventFields(event.raw);
           const eventBody = (id: string, a: AgeConfig) => ({
+            ...kept,
             id,
             laneId: a.laneId,
             type: 'event',
@@ -2060,3 +2081,32 @@ export function timelineTools(deps: ToolDeps): McpToolProvider[] {
 }
 
 export { uriPointsAt };
+
+/**
+ * v2 E4 (RV3-5): the fields of an event that a re-made copy keeps: every field `createEvent` takes, except those the
+ * update decides (id, lane, type, name, dates, detail, link) and LegendKeeper's own formatted text; icons in their write
+ * form (ADR 0042 decision 9).
+ */
+function keptEventFields(raw: Record<string, unknown>): Record<string, unknown> {
+  const body = (
+    requireOperation('createEvent').inputJsonSchema.properties as Record<string, unknown> | undefined
+  )?.body as { $ref?: string; properties?: Record<string, unknown> } | undefined;
+  const ref = typeof body?.$ref === 'string' ? body.$ref.split('/').pop()! : null;
+  const def = (ref ? (defs[ref] as { properties?: Record<string, unknown> } | undefined) : body) ?? {};
+  const decided = new Set([
+    'id',
+    'laneId',
+    'type',
+    'name',
+    'start',
+    'end',
+    'detail',
+    'uri',
+    'formattedStart',
+    'formattedEnd',
+  ]);
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(def.properties ?? {}))
+    if (!decided.has(k) && raw[k] !== undefined && raw[k] !== null) out[k] = raw[k];
+  return withWriteIcon(out);
+}

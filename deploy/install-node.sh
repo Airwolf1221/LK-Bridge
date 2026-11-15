@@ -17,6 +17,7 @@
 set -euo pipefail
 
 # Pinned: Node 24 LTS "Krypton", released 2026-10-27. Override with NODE_VERSION. Must stay on major 24.
+# v2 E4: .nvmrc (CI's Node) names the same version; change both together.
 NODE_VERSION="${NODE_VERSION:-v24.22.2}"
 LKB_ROOT="${LKB_ROOT:-/opt/lk-bridge}"
 RUNTIME_DIR="${RUNTIME_DIR:-${LKB_ROOT}/runtime}"

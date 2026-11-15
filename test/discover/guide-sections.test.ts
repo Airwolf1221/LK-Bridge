@@ -71,6 +71,34 @@ describe('the misses of the owner’s evaluation (14 to 15 November 2026)', () =
   });
 });
 
+describe('E4 (the owner’s run of 15 November 2026): a task section wins over reference sections', () => {
+  // `section: "chronology"` answered SECTION_AMBIGUOUS: "Dates and the chronology" tied with the generated
+  // "Operations > Timelines" and "Operations > Calendars". A task section that matches beats reference sections.
+  it.each([
+    ['chronology', 'Dates and the chronology'],
+    ['timeline', 'Dates and the chronology'],
+    ['event', 'Dates and the chronology'],
+    ['date', 'Dates and the chronology'],
+    ['dates', 'Dates and the chronology'],
+    ['calendar', 'Dates and the chronology'],
+    ['map', 'Maps'],
+    ['image', 'Images'],
+    ['snapshot', 'Snapshots and restores'],
+    ['audit', 'Audit findings'],
+  ])('%j leads to exactly one section, %j', (asked, section) => {
+    expect(one(asked)).toBe(section);
+  });
+
+  it('a reference section is still found when no task section matches', () => {
+    expect(one('errors')).toBe('Reference > When something goes wrong');
+    expect(one('Operations > Timelines')).toBe('Operations > Timelines');
+  });
+
+  it('two task sections that both match stay ambiguous', () => {
+    expect(matchSection(bridge, 'page', 'bridge').kind).toBe('several');
+  });
+});
+
 describe('several matches and none', () => {
   it('a word several sections share lists the candidates, best first', () => {
     const m = matchSection(bridge, 'page', 'bridge');

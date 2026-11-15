@@ -2,8 +2,12 @@
  * Maintenance Jobs page API (chunk 6, docs/maintenance.md). Every change goes through the owner commands
  * (`runtime.maintenance.commands`), which audit it and emit a `policy` event; a route only validates and calls.
  */
+import { requireReauth } from '../guard.js';
 import * as z from 'zod';
 import { idSchema, parseInput, type Register } from './util.js';
+
+/** v2 E4 (RV1-4): the maintenance jobs that keep the backups (switching one off needs re-authentication). */
+const PROTECTING_JOBS = /^(snapshot-|offsite)/;
 
 export const registerMaintenance: Register = (api, ctx) => {
   const { maintenance } = ctx.deps.runtime;
@@ -28,6 +32,9 @@ export const registerMaintenance: Register = (api, ctx) => {
 
   api.post('/maintenance/:id/disable', (req) => {
     const { id } = parseInput(params, req.params);
+    // v2 E4 (RV1-4; ADR 0046 decision 3): switching off a job that keeps the backups (the snapshots, their verify and
+    // retention, the off-site copy) needs the owner's re-authentication; other jobs stay one click.
+    if (PROTECTING_JOBS.test(id)) requireReauth(ctx.deps.services, req);
     return { job: cmd.disable('owner', id) };
   });
 

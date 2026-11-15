@@ -187,10 +187,14 @@ function failedBody(
   };
   const why = typeof err.message === 'string' ? err.message : null;
   const steps = pd.engine.stepResults(pd.project.id, view.id) ?? [];
+  // The bridge's own steps (its check, its record of a change that can be resumed, its read back) are not writes.
+  const BRIDGE_STEPS = new Set(['check', 'verify', 'record', 'record complete']);
   const isWrite = (n: number) => {
     const l = labels[n - 1];
-    return l !== undefined && l !== 'check' && l !== 'verify';
+    return l !== undefined && !BRIDGE_STEPS.has(l);
   };
+  // A change with a record (chronology, lifecycle) is finished by repeating the same request: only what is left is done.
+  const resumable = labels.includes('record');
   const written = steps
     .filter((s) => s.status === 'succeeded' && isWrite(s.stepNo))
     .map((s) => labels[s.stepNo - 1]!);
@@ -251,9 +255,11 @@ function failedBody(
     written,
     notWritten,
     journal,
-    hint:
-      `Read the pages before doing anything else. Do not repeat this request: make a new, smaller one for what was not ` +
-      `written. bridge_journal_lookup with jobId ${view.id} shows each write.`,
+    hint: resumable
+      ? `Read the pages before doing anything else. Then repeat this same request to finish it: it resumes from what is ` +
+        `there now and writes only what is left. bridge_journal_lookup with jobId ${view.id} shows each write.`
+      : `Read the pages before doing anything else. Do not repeat this request: make a new, smaller one for what was not ` +
+        `written. bridge_journal_lookup with jobId ${view.id} shows each write.`,
     ...head,
   };
 }

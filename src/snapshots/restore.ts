@@ -41,6 +41,8 @@ import {
   type ResourcePiece,
   type SidebarPiece,
 } from './canonical.js';
+import { BLOCKWISE_CHECK, blocksHash, planBlockwise } from '../pages/blockwise.js';
+import { opParams, validateBlockOp } from '../pages/blockwise-job.js';
 import { documentPieceOf, type Reader } from './capture.js';
 import type { PieceRow } from './db.js';
 import { diffText, renderDocument, renderSidebar } from './diff.js';
@@ -141,7 +143,7 @@ export function stateAt(
   pageId: string,
   piece: 'resource' | 'sidebar' | 'document',
   ref: string,
-  snap: { id: string; takenAt: number },
+  snap: { id: string; takenAt: number; kind?: string },
 ): PieceRow | null {
   const rows = svc.index.pageHistory(projectId, pageId, {
     piece,
@@ -157,6 +159,10 @@ export function stateAt(
       r.snapshotId === snap.id &&
       (r.piece === piece || r.piece === 'deleted' || r.piece === 'document-deleted'),
   );
+  // v2 E4 (RV3-7): a full snapshot lists every page and every document it found; what it does not list was not there
+  // then (a document added since, or one deleted before it). Only a change snapshot's missing piece means "not taken",
+  // to be found in an older snapshot.
+  if (!own && snap.kind === 'full') return null;
   const row = own ?? at[0] ?? null;
   if (!row || row.piece === 'deleted' || row.piece === 'document-deleted') return null;
   return row;
@@ -183,7 +189,7 @@ function documentsAt(
   svc: SnapshotService,
   projectId: string,
   pageId: string,
-  snap: { id: string; takenAt: number },
+  snap: { id: string; takenAt: number; kind?: string },
 ): PieceRow[] {
   const all = svc.index.pageHistory(projectId, pageId, { piece: 'document', limit: 10_000 });
   const refs = [
@@ -205,6 +211,8 @@ export function writeFormBlocks(
   liveIds: ReadonlySet<string> | null,
   lost: PlanNote[],
   where: string,
+  /** v2 E4: blocks left exactly as the live page holds them (inline icons, restored block by block around them). */
+  keepAsIs: ReadonlySet<string> = new Set(),
 ): unknown[] {
   const walk = (list: readonly unknown[]): unknown[] => {
     const out: unknown[] = [];
@@ -222,7 +230,7 @@ export function writeFormBlocks(
           });
         continue;
       }
-      if (Array.isArray(b.content)) {
+      if (Array.isArray(b.content) && !(typeof b.id === 'string' && keepAsIs.has(b.id))) {
         const runs = b.content as unknown[];
         const kept = runs.filter((r) => !isUnwritableRun(r));
         if (kept.length !== runs.length)
@@ -239,6 +247,67 @@ export function writeFormBlocks(
     return out;
   };
   return walk(blocks);
+}
+
+/** Placeholders for a block-by-block document's If-Match chain, bound to step numbers by `chainBlockwise`. */
+const BLOCKWISE_FIRST = -101;
+const BLOCKWISE_NEXT = -102;
+
+/**
+ * v2 E4: binds the If-Match chain of each block-by-block document of a restore job, once its steps are in order: the
+ * first write chains from the check step's version of that document, each next one from the write before.
+ */
+export function chainBlockwise(steps: StepSpec[]): StepSpec[] {
+  const checkStep = steps.findIndex(
+    (s) => s.op === 'bridge.expect' && JSON.stringify(s.params).includes(BLOCKWISE_CHECK),
+  );
+  return steps.map((s, i) => {
+    const from = s.ifMatchFrom;
+    if (!from) return s;
+    if (from.step === BLOCKWISE_FIRST) return { ...s, ifMatchFrom: { step: checkStep + 1, key: from.key! } };
+    if (from.step === BLOCKWISE_NEXT) return { ...s, ifMatchFrom: { step: i } };
+    return s;
+  });
+}
+
+/**
+ * v2 E4: the snapshot's blocks with each live inline-icon block put back as the page holds it now (the API cannot write
+ * it). When the snapshot held it otherwise, that difference cannot be restored and is said so. A live icon block the
+ * snapshot did not hold at all stays where it is (`planBlockwise` refuses a restore that would have to remove it).
+ */
+function keepLiveBlocks(
+  target: readonly unknown[],
+  live: readonly unknown[],
+  ids: ReadonlySet<string>,
+  notRestored: PlanNote[],
+  where: string,
+): unknown[] {
+  const liveById = new Map<string, Obj>();
+  const index = (list: readonly unknown[]): void => {
+    for (const b of list) {
+      if (!isObj(b)) continue;
+      if (typeof b.id === 'string' && ids.has(b.id)) liveById.set(b.id, stripVersions(b) as Obj);
+      if (Array.isArray(b.children)) index(b.children as unknown[]);
+    }
+  };
+  index(live);
+  const walk = (list: readonly unknown[]): unknown[] =>
+    list.map((raw) => {
+      if (!isObj(raw)) return raw;
+      const id = str(raw.id);
+      const now = id ? liveById.get(id) : undefined;
+      if (now) {
+        if (!same(stripVersions(raw), now))
+          notRestored.push({
+            what: `block ${id}`,
+            where,
+            why: 'it holds an inline icon, which the API cannot write: it stays as the page holds it now (change it in the LegendKeeper app)',
+          });
+        return now;
+      }
+      return Array.isArray(raw.children) ? { ...raw, children: walk(raw.children as unknown[]) } : raw;
+    });
+  return walk(target);
 }
 
 function liveUnsupported(blocks: readonly unknown[]): string[] {
@@ -355,19 +424,19 @@ async function planDocument(
     if (!body) throw new RestoreError('DOCUMENT_GONE', `The document ${name} has gone; read the page again.`);
     const liveBlocks = Array.isArray(body.blocks) ? (body.blocks as unknown[]) : [];
     const icons = unwritableBlocks(liveBlocks).filter((f) => f.what === 'inline-icon');
-    if (icons.length > 0)
-      throw new RestoreError(
-        'RESTORE_NOT_WRITABLE',
-        `The page ${name} now holds content LegendKeeper's write schema has no form for (inline icons in ${icons
-          .slice(0, 5)
-          .map((f) => f.blockId)
-          .join(
-            ', ',
-          )}), so the whole document cannot be written back without losing it. Nothing was planned. E4 adds a block-by-block route for such pages; until then remove the icons by hand, or restore by hand.`,
-        { blocks: icons.map((f) => f.blockId) },
-      );
+    // v2 E4 (ADR 0046): a page holding inline icons now cannot be written back whole; it is restored block by block,
+    // each icon paragraph left exactly as the page holds it (the API cannot write it).
+    const iconIds = new Set(icons.map((f) => f.blockId).filter((id): id is string => id !== null));
     const live = new Set(liveUnsupported(liveBlocks));
-    const targetBlocks = writeFormBlocks(target.blocks ?? [], live, o.lost, name);
+    const targetBlocks = writeFormBlocks(
+      iconIds.size > 0
+        ? keepLiveBlocks(target.blocks ?? [], liveBlocks, iconIds, o.notRestored, name)
+        : (target.blocks ?? []),
+      live,
+      o.lost,
+      name,
+      iconIds,
+    );
     const echoed = blockIds(targetBlocks);
     for (const id of live) {
       if (echoed.has(id)) continue;
@@ -391,7 +460,49 @@ async function planDocument(
         `${name} gets back ${urls.length} image(s) it does not show now; LegendKeeper refuses an image whose asset was deleted (the write then fails and nothing changes).`,
       );
     const changedBlocks = !same(stripVersions(liveBlocks), targetBlocks);
-    if (changedBlocks) {
+    if (changedBlocks && iconIds.size > 0) {
+      const plan = planBlockwise(stripVersions(liveBlocks) as unknown[], targetBlocks, {
+        unwritable: iconIds,
+        validate: (op) => validateBlockOp(pageId, documentId, op),
+      });
+      if (!plan.ok)
+        throw new RestoreError(
+          'RESTORE_NOT_WRITABLE',
+          `The page ${name} holds inline icons (${[...iconIds].slice(0, 5).join(', ')}), so it is restored block by block, but not this restore: ${plan.refusal.message} Restore the rest by hand.`,
+          { blocks: [...iconIds], reason: plan.refusal.reason, refused: plan.refusal.blocks },
+        );
+      const label = `blocks of ${documentId}`;
+      checks.push({
+        label,
+        kind: 'document',
+        resourceId: pageId,
+        documentId,
+        checker: BLOCKWISE_CHECK,
+        input: { hash: blocksHash(liveBlocks), before: stripVersions(liveBlocks) },
+      });
+      plan.ops.forEach((op, n) =>
+        writes.push({
+          op: op.op,
+          judgedInLock: true,
+          params: opParams(pageId, documentId, op),
+          // Bound to real step numbers when the job is put together (`chainBlockwise`).
+          ifMatchFrom: n === 0 ? { step: BLOCKWISE_FIRST, key: label } : { step: BLOCKWISE_NEXT },
+          journalOperation: { ...journalOperation, write: 'blocks', blockwise: true, block: op.id },
+        }),
+      );
+      verify.push({
+        kind: 'blocks',
+        label: `${name} (block by block)`,
+        resourceId: pageId,
+        documentId,
+        blocks: targetBlocks,
+      });
+      o.kept.push({
+        what: `${iconIds.size} block(s) with inline icons`,
+        where: name,
+        why: 'the API cannot write them: the page is restored block by block around them, and they stay as the page holds them now',
+      });
+    } else if (changedBlocks) {
       writes.push({
         op: 'replaceDocumentBlocks',
         params: { path, ifMatch: str(body.version) ?? '', body: { blocks: targetBlocks } },
@@ -913,13 +1024,13 @@ export async function planRestore(d: RestoreDeps, input: RestoreInput): Promise<
       parts.unshift(...plan.parts);
     }
   }
-  const steps: StepSpec[] = [
+  const steps: StepSpec[] = chainBlockwise([
     // The sidebar's steps first: their own check is step 1 and their writes chain from it by step number.
     ...sidebarSteps,
     ...(checks.length > 0 ? [expectStep(checks)] : []),
     ...writes,
     ...(verify.length > 0 ? [verifyStep(verify)] : []),
-  ];
+  ]);
   return finish({
     scope: input.scope,
     page,
@@ -1215,6 +1326,11 @@ async function planSidebar(
       }
     if (want.some((r) => !have.some((h) => h.id === r.id)))
       o.warnings.push(`${label}: rows the page lost come back with new ids, after the row before them`);
+    // v2 E4 (RV3-2): the first row write of each property keeps the whole property as it is now (as set_facts does),
+    // so what the restore replaces is in the journal; LegendKeeper keeps no history of rows.
+    const firstOfThis = rowSteps.findIndex((st) => st.params?.path?.propertyId === String(p.id));
+    if (firstOfThis >= 0)
+      rowSteps[firstOfThis] = { ...rowSteps[firstOfThis]!, journalPreImage: { property: live } };
   }
   let plan;
   try {

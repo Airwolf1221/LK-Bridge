@@ -6,6 +6,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { writeRequest } from '../../src/offsite/requests.js';
 import { OFFSITE_SCOPE } from '../../src/secrets/store.js';
@@ -77,6 +78,48 @@ describe('a copy', () => {
       'nightly-20261113T041500Z.db.gz',
     ]);
     expect(w.store.folder(1)!.lastGoodCopyAt).not.toBeNull();
+  });
+
+  it('E4 (backlog 3): takes a fresh database copy first, and carries it to Drive beside the nightly ones', async () => {
+    const order: string[] = [];
+    const runner = w.runner({
+      takeDatabaseCopy: () => {
+        order.push(`database-copy (${w.calls().length} rclone calls before it)`);
+        // What deploy/backup.sh offsite writes.
+        writeFileSync(
+          join(w.backupDir, 'offsite-20261115T060000Z.db.gz'),
+          gzipSync(Buffer.from('a database')),
+          {
+            mode: 0o600,
+          },
+        );
+        return Promise.resolve('Backup written: offsite-20261115T060000Z.db.gz');
+      },
+    });
+    const id = await runner.copy('request');
+    const run = w.store.run(id)!;
+    expect(run.state).toBe('succeeded');
+    expect(order).toEqual(['database-copy (0 rclone calls before it)']);
+    expect((run.detail as { steps: { name: string }[] }).steps[0]).toMatchObject({
+      name: 'database-copy',
+      code: 0,
+    });
+    expect(readdirSync(join(w.remote, 'database')).sort()).toEqual([
+      'nightly-20261112T041500Z.db.gz',
+      'nightly-20261113T041500Z.db.gz',
+      'offsite-20261115T060000Z.db.gz',
+    ]);
+  });
+
+  it('E4: a database copy that cannot be taken does not stop the copy of the store, and the run says so', async () => {
+    const runner = w.runner({
+      takeDatabaseCopy: () => Promise.reject(new Error('sqlite3 is not installed')),
+    });
+    const id = await runner.copy('request');
+    const run = w.store.run(id)!;
+    expect(run.state).toBe('succeeded');
+    expect(run.message).toMatch(/fresh database copy could not be taken \(sqlite3 is not installed\)/);
+    expect(existsSync(join(w.remote, 'store/STORE.json'))).toBe(true);
   });
 
   it('copies only manifests older than the run (--min-age), and moves removed pieces into deleted/<date> (--backup-dir)', async () => {

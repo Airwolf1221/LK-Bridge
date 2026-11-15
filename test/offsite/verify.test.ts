@@ -18,7 +18,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FAKE_RCLONE, makeWorld, PASSWORD, PUBLIC_URL, SALT, type World } from './world.js';
+import { bridgeDbCopy, FAKE_RCLONE, makeWorld, PASSWORD, PUBLIC_URL, SALT, type World } from './world.js';
 
 let w: World;
 beforeEach(async () => {
@@ -49,6 +49,18 @@ describe('the verify job', () => {
       database: 'nightly-20261113T041500Z.db.gz: ok',
     });
     expect(readdirSync(w.tmpRoot)).toEqual([]); // the private temp area is gone
+  });
+
+  it('E4 (backlog 3): checks the newest database copy of ANY label: the offsite one a copy run took', async () => {
+    const runner = w.runner({
+      takeDatabaseCopy: () => {
+        bridgeDbCopy(join(w.backupDir, 'offsite-20261115T060000Z.db.gz'));
+        return Promise.resolve('Backup written');
+      },
+    });
+    await runner.copy('request');
+    const id = await w.runner().verify('request');
+    expect(w.store.run(id)!.detail).toMatchObject({ database: 'offsite-20261115T060000Z.db.gz: ok' });
   });
 
   it('samples 1% of the objects, at least the minimum, plus every manifest', async () => {

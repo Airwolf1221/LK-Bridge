@@ -268,7 +268,18 @@ export async function runOffsiteCli(
             { clientId: idR.value, clientSecret: secR.value },
             { code, verifier, redirectUri: svc.redirectUri },
           );
+          // v2 E4 (RV1-5): the dashboard's two checks (ADR 0043): a grant without drive.file is revoked and refused,
+          // and the token it replaces is revoked so it cannot linger.
+          if (!t.scope.split(/\s+/).includes('https://www.googleapis.com/auth/drive.file')) {
+            await google.revoke(t.refreshToken ?? t.accessToken).catch(() => undefined);
+            out(
+              'ERROR: Google did not grant the drive.file permission (it must be ticked on the consent page). Nothing was kept; connect again.',
+            );
+            return 1;
+          }
+          const old = secrets.read(OFFSITE_SCOPE, 'drive_refresh_token');
           secrets.write(OFFSITE_SCOPE, 'drive_refresh_token', t.refreshToken!, { source: 'dashboard' });
+          if (old.ok && old.value !== t.refreshToken) await google.revoke(old.value).catch(() => undefined);
           const account = await google.account(t.accessToken).catch(() => ({ email: null, name: null }));
           store.setConnected(account);
           out(`Connected${account.email ? ` as ${account.email}` : ''}.`);

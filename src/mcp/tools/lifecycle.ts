@@ -24,6 +24,7 @@
  * precondition checked again). Nothing is ever replayed.
  */
 import * as z from 'zod';
+import { stateHash } from '../../jobs/sidebar-state.js';
 import { factKey, factRows, sidebarFrom, valueText, type SidebarProperty } from '../../facts/index.js';
 import { FactsPlanError, planFacts, rowStates, type FactsPlan } from '../../facts/plan.js';
 import { rowTextRuns } from '../../facts/values.js';
@@ -290,6 +291,17 @@ async function build(
         name: mover.name,
         parentId: currentParent,
       });
+      // v2 E4 (RV2-2; ADR 0036 decision 5): the index moves with everything under it, so what is under it must still be
+      // exactly the page itself, as planned: a page added there since is a conflict, never taken along unlisted.
+      checks.push({
+        label: `${mover.name} (what is under it)`,
+        kind: 'subtree',
+        resourceId: mover.id,
+        pages:
+          page.parentId === mover.id
+            ? [{ id: page.node.id, parentId: mover.id, name: page.name, tags: [...page.tags] }]
+            : [],
+      });
     }
   }
   checks.push(...part.checks);
@@ -491,6 +503,13 @@ export async function planPage(
           journalOperation: journal(renameChange ? `renamed to ${target.name}` : 'tags'),
           // CR-2026-11 (CR-03): the tree re-reads the page once, when the job ends, for all its writes together.
           deferTreeReread: true,
+          // RV4 sketch: the page's name and tags as planned, compared inside the lock just before this write (a set's
+          // later pages are written minutes after the job's check, and after a hold the check is not repeated).
+          expectCurrent: {
+            state: 'resource',
+            hash: stateHash({ name: page.name, tags: [...page.tags] }),
+            label: page.name,
+          },
         }
       : null;
   const updateLabel = [
@@ -1610,11 +1629,25 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
                   `The destination is under ${mover.name}, which moves with the page.`,
                 );
               }
-              for (const k of ctx.tree.children(ctx.projectId, mover.id).data)
-                if (k.id !== page.node.id) others.push({ id: k.id, name: k.rawName });
+              // v2 E4 (RV2-2; ADR 0046 decision 2): every page under the character's index, at any depth. Since C2d.1 a
+              // Working character's specialist pages are made under its index, and moving the index with the Core alone
+              // took them into canon still Working, on an approval that did not list them. Promoting one Core while
+              // other pages are under the index is refused: promote the set with subtree: true (one approval for every
+              // page), or move the other pages out first.
+              const below = ctx.tree.subtree(ctx.projectId, mover.id).data.entries;
+              for (const k of below)
+                if (k.node.id !== mover.id && k.node.id !== page.node.id)
+                  others.push({ id: k.node.id, name: k.node.rawName });
               if (others.length)
-                flags.push(
-                  `${others.length} other page(s) under ${mover.name} move with it and keep their state: ${others.map((x) => x.name).join(', ')}`,
+                return refuse(
+                  pd,
+                  'SET_HAS_OTHER_PAGES',
+                  `${others.length} other page(s) are under ${mover.name}, which moves with the Core: ${others
+                    .slice(0, 20)
+                    .map((x) => x.name)
+                    .join(
+                      ', ',
+                    )}. Promoting the Core alone would take them into canon unapproved. Promote the whole set with subtree: true on ${mover.name} (one approval for every page), or move those pages out first.`,
                 );
               const twinIdx = ctx.tree
                 .children(ctx.projectId, dest.id)

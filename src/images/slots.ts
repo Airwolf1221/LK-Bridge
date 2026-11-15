@@ -31,7 +31,15 @@ const hashToken = (t: string) => createHash('sha256').update(t, 'utf8').digest('
 
 export type ReceiveRefusal =
   /** The one generic refusal: missing, malformed, expired, used, unknown, or bound to something else. */
-  'capability' | 'too_large' | 'too_small' | 'hash_mismatch' | 'type_mismatch' | 'timeout' | 'aborted';
+  | 'capability'
+  | 'too_large'
+  | 'too_small'
+  | 'hash_mismatch'
+  | 'type_mismatch'
+  | 'timeout'
+  | 'aborted'
+  /** The bridge could not write the temporary file (disk full, quota, I/O): the slot is spent, nothing is kept. */
+  | 'storage';
 
 export class ReceiveError extends Error {
   constructor(
@@ -165,14 +173,26 @@ export class UploadSlots {
   ): Promise<{ sha256: string; bytes: number }> {
     const fileName = `${randomBytes(16).toString('hex')}.bin`;
     const part = join(this.dir, `${fileName}.part`);
+    const storage = () =>
+      new ReceiveError(
+        'storage',
+        'The bridge could not store the upload; nothing was kept. Prepare a new one later.',
+      );
     // The first upload creates the directory (private: 0700); later ones find it.
     try {
       await mkdir(this.dir, { recursive: true, mode: 0o700 });
-    } catch (e) {
+    } catch {
       this.store.transitionSlot(slot.id, 'receiving', 'expired'); // the slot is spent, as for any other refusal
-      throw e;
+      throw storage();
     }
     const out = createWriteStream(part, { mode: 0o600, flags: 'wx' });
+    // An I/O error on the file (ENOSPC, EDQUOT, EIO, EMFILE) must never be an unhandled 'error' event.
+    let outError: Error | null = null;
+    let onOutError: (() => void) | null = null;
+    out.on('error', (e) => {
+      outError = e;
+      onOutError?.();
+    });
     const hash = createHash('sha256');
     const head: Buffer[] = [];
     let headLen = 0;
@@ -245,6 +265,7 @@ export class UploadSlots {
             out.once('drain', () => body.resume());
           }
         };
+        onOutError = () => finish(storage());
         const onEnd = () => finish();
         const onError = () => finish(new ReceiveError('aborted', 'The upload connection failed.'));
         const onAborted = () => finish(new ReceiveError('aborted', 'The client aborted the upload.'));
@@ -261,9 +282,15 @@ export class UploadSlots {
     } catch (e) {
       return fail(e instanceof ReceiveError ? e : new ReceiveError('aborted', 'The upload failed.'));
     }
-    await new Promise<void>((resolve, reject) =>
-      out.end((err?: Error | null) => (err ? reject(err) : resolve())),
-    );
+    onOutError = null;
+    try {
+      await new Promise<void>((resolve, reject) =>
+        out.end((err?: Error | null) => (err ? reject(err) : resolve())),
+      );
+      if (outError !== null) throw new Error('the temporary file could not be written');
+    } catch {
+      return fail(storage());
+    }
     if (size !== slot.byteLength) {
       return fail(
         new ReceiveError('too_small', `The body is ${size} bytes; ${slot.byteLength} were declared.`),
@@ -289,7 +316,11 @@ export class UploadSlots {
         ),
       );
     }
-    await rename(part, join(this.dir, fileName));
+    try {
+      await rename(part, join(this.dir, fileName));
+    } catch {
+      return fail(storage());
+    }
     if (
       !this.store.transitionSlot(slot.id, 'receiving', 'received', {
         fileName,
@@ -322,6 +353,20 @@ export class UploadSlots {
     } catch {
       return null;
     }
+  }
+
+  /** v2 E4 (RV1-2): the upload ids an `upload_image` call is using now (in process; released when the call ends). */
+  private readonly inUse = new Set<string>();
+
+  /** Takes an upload id for one call; false when another call holds it. Synchronous, so two calls cannot both take it. */
+  hold(uploadId: string): boolean {
+    if (this.inUse.has(uploadId)) return false;
+    this.inUse.add(uploadId);
+    return true;
+  }
+
+  release(uploadId: string): void {
+    this.inUse.delete(uploadId);
   }
 
   /** Marks a received file used (once) and removes it. False when another call got there first. */

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Consistent online backup of the bridge database with `sqlite3 .backup`.
 #
-#   backup.sh [nightly|pre-deploy]      (default: nightly; run as lkbridge)
+#   backup.sh [nightly|pre-deploy|offsite]      (default: nightly; run as lkbridge)
 #
 # Writes /var/lib/lk-bridge/backups/<label>-<UTC timestamp>.db.gz, mode 0600, after checking that the copy passes
-# SQLite's integrity_check. Only then are old copies removed: the newest 14 `nightly` ones are kept, and the newest 5
-# `pre-deploy` ones (deploy.sh takes one before every migration), so a deploy never pushes out a nightly copy.
+# SQLite's integrity_check. Only then are old copies removed: the newest 14 `nightly` ones are kept, the newest 5
+# `pre-deploy` ones (deploy.sh takes one before every migration), and the newest 3 `offsite` ones (v2 E4: the off-site
+# runner takes one at the start of each copy to Google Drive, so the copy carries a database as new as its store). Each
+# label is kept on its own, so a deploy or an off-site run never pushes out a nightly copy.
 # `.backup` is safe while the bridge is running (it takes a consistent snapshot of the WAL database).
 # v2 E1a (ADR 0042): the copy is the whole database, so it holds the snapshot index, runs, findings, restores and
 # rehearsals. The snapshots' manifests and pieces are files in the snapshot store (/var/lib/lk-bridge/snapshots), not
@@ -17,8 +19,9 @@ label="${1:-nightly}"
 case "$label" in
   nightly) keep="${KEEP_NIGHTLY:-14}" ;;
   pre-deploy) keep="${KEEP_PRE_DEPLOY:-5}" ;;
+  offsite) keep="${KEEP_OFFSITE:-3}" ;;
   *)
-    echo "usage: backup.sh [nightly|pre-deploy]" >&2
+    echo "usage: backup.sh [nightly|pre-deploy|offsite]" >&2
     exit 2
     ;;
 esac

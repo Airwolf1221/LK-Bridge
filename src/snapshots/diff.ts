@@ -5,6 +5,7 @@
  * read tools' Markdown; a sidebar is its properties as `key: value` lines, link collections as lists of mentions,
  * `unsupported` properties as a placeholder line; the resource is its settings, one per line.
  */
+import { bothFormsNote } from '../maps/features.js';
 import { renderBoard, renderMap, renderTimeline, toMarkdown, type DocumentInput } from '../markdown/index.js';
 import { markdownDiff, unifiedText, withPlaceholders, type MarkdownDiff } from '../pages/diff.js';
 import type { DocumentPiece, ResourcePiece, SidebarPiece } from './canonical.js';
@@ -92,7 +93,9 @@ export function renderDocument(piece: DocumentPiece | null): string {
       renderMap({ name, features: piece.features ?? [] }) +
       (img
         ? `\n\nImage: ${str(img.url) || '(none)'} (${typeof img.width === 'number' ? String(img.width) : '?'} × ${typeof img.height === 'number' ? String(img.height) : '?'})`
-        : '');
+        : '') +
+      // v2 E4 (backlog 4): a region holding both geometry fields is said so in the snapshot's text and its diffs.
+      ((note) => (note ? `\n\nNote: ${note}` : ''))(bothFormsNote(piece.features ?? []));
   } else if (type === 'time') {
     body = renderTimeline({ name, lanes: piece.lanes ?? [], events: piece.events ?? [] });
   } else if (type === 'board') {

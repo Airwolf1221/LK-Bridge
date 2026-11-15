@@ -171,9 +171,14 @@ entry named in the result holds the page as it was before.
 Other refusals name what to fix: `KEEP_REGIONS_MISSING` (put the regions back, or name them in `dropRegions`),
 `UNSUPPORTED_BLOCK_LOSS` (content the API cannot show is never deleted by `write_page`), `SECTION_NOT_FOUND` and
 `SECTION_AMBIGUOUS` (the headings or options are listed), `MENTION_NOT_FOUND` and `MENTION_AMBIGUOUS`,
-`WRONG_TOOL_FOR_DOCUMENT` (maps, timelines and boards have their own tools), `PAGE_NOT_WRITABLE` (the page holds
-something LegendKeeper's API would not take back, such as text with an inline icon: tell the owner; `get_resource` and
-`set_facts` still work on it).
+`WRONG_TOOL_FOR_DOCUMENT` (maps, timelines and boards have their own tools), `PAGE_NOT_WRITABLE` (your edit would
+change, remove or re-send a block LegendKeeper's API cannot write back, such as the paragraph with an inline icon itself:
+edit another section, or tell the owner; `get_resource` and `set_facts` still work on it).
+
+**A page with an inline icon** is written block by block: only the blocks your edit changes are sent, one by one, and the
+answer says so (`blockwise`). Everything else works as usual (baseVersion, sections, the verify). If such a write stops
+part-way the bridge undoes what it wrote, provided the page is still exactly as it left it; the answer says what happened
+(`undo`). Do not try to edit the icon paragraph itself.
 
 ## Change facts and links
 
@@ -322,7 +327,9 @@ after, the tags, the archive note) and proposes nothing.
   `[BWRK]`, Status `Working`). The bridge remembers where it was.
 - **`promote_page`** `{ page, destination }`: makes a Working page Authoritative under `destination` (`[BSRC]`, Status
   `Authoritative`, Last Major Revision today). Without `destination` you are told where it was before
-  `move_to_working`, if anywhere. A Working character's index goes with its Core.
+  `move_to_working`, if anywhere. A Working character's index goes with its Core; if any other page is under that index
+  (an Art or Relationship page, say), promoting the Core alone is refused (`SET_HAS_OTHER_PAGES`): promote the whole set
+  with `subtree: true` on the index, or move the other pages out first.
 
 **Whole sets: `subtree: true`.** A set is a page and every page beneath it; the usual one is a character (its
 `[INDEX] {name}`, Core and specialist pages). Pass `subtree: true` to any of the four tools to change the whole set as
@@ -512,7 +519,7 @@ page's earlier states are there to compare and bring back.
   **It is always a proposal, whatever your scope:** nothing is written until the owner approves it; never retry it, follow
   it with `bridge_proposal_status`. Check with `dryRun: true` first: the plan shows the diff and everything it cannot
   restore. Say so to the person: blocks the API cannot show (`unsupported`) and inline icons that are no longer on the
-  page are **lost**, a restored image is a **new asset with a new URL** (ask whether the pages that showed the old one
+  page are **lost**, a page that holds inline icons now is restored block by block around them (they stay as they are), a restored image is a **new asset with a new URL** (ask whether the pages that showed the old one
   should be updated: `updateReferences`), and a restore never changes a page's lifecycle state (use the lifecycle tools
   first).
 
@@ -656,26 +663,26 @@ Refresh.
 
 Every refusal has a code and a plain message that names the next step. The common ones:
 
-| Code                                     | Meaning, and what to do                                                                                           |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `AMBIGUOUS`                              | A name matched several pages (listed with paths). Pass the id of the one you mean.                                |
-| `NOT_FOUND`, `NOT_IN_REPOSITORY`         | No such page inside the AI REPOSITORY (it may be outside the root: use `lk_api_read`).                            |
-| `TREE_NOT_READY`, `TREE_NOT_CONFIGURED`  | The repository tree cannot answer yet. Nothing was spent. Tell the owner.                                         |
-| `SEARCH_SYNTAX`                          | The search query is malformed; the message says where.                                                            |
-| `SECTION_AMBIGUOUS`, `SECTION_NOT_FOUND` | A section path matched several headings, or none. The options are listed.                                         |
-| `BUDGET_EXHAUSTED`                       | Wait until `retryAt`. Do not retry in a loop.                                                                     |
-| `PROJECT_REQUIRED`                       | A write did not name its project. Pass `project`.                                                                 |
-| `VERSION_CONFLICT`                       | The page changed since you read it. Nothing was written: read again and redo the edit.                            |
-| `requiresCanonicalApproval`              | The change touches protected canon: it waits for the owner. Never retry it.                                       |
-| `POLICY_DENIED`                          | This route is closed (a lifecycle change by another tool, a protected change). The message names the tool to use. |
-| `WORKING_PARENT`                         | A Working page needs `[INDEX] Working` or an index inside a Working set. The allowed parents are listed.          |
-| `PAGE_NOT_WRITABLE`                      | `write_page` cannot write this page back (for example an inline icon). Tell the owner.                            |
-| `DUPLICATE_REQUEST`                      | Another request for the same character is under way. Follow it (its job or proposal).                             |
-| `OPERATION_ID_REUSED`                    | That `operation_id` was used for a different request. Use a new id.                                               |
-| `WRITTEN_IN_PART`                        | Some writes were made, then it stopped. Read the pages; make a new, smaller request.                              |
-| `OUTCOME_UNKNOWN`                        | A write may or may not have been made (`uncertain`). Read the pages; do not repeat it.                            |
-| `OWNER_APPROVED_JOB`                     | The owner approved that job; only the owner can cancel it.                                                        |
-| `HAS_CHILDREN`                           | The page has pages under it: add `cascade: true` to delete them all.                                              |
-| `INVALID_ARGUMENTS` / `INVALID_PARAMS`   | An argument does not fit the tool's schema. Read the message; do not invent arguments.                            |
+| Code                                     | Meaning, and what to do                                                                                                |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `AMBIGUOUS`                              | A name matched several pages (listed with paths). Pass the id of the one you mean.                                     |
+| `NOT_FOUND`, `NOT_IN_REPOSITORY`         | No such page inside the AI REPOSITORY (it may be outside the root: use `lk_api_read`).                                 |
+| `TREE_NOT_READY`, `TREE_NOT_CONFIGURED`  | The repository tree cannot answer yet. Nothing was spent. Tell the owner.                                              |
+| `SEARCH_SYNTAX`                          | The search query is malformed; the message says where.                                                                 |
+| `SECTION_AMBIGUOUS`, `SECTION_NOT_FOUND` | A section path matched several headings, or none. The options are listed.                                              |
+| `BUDGET_EXHAUSTED`                       | Wait until `retryAt`. Do not retry in a loop.                                                                          |
+| `PROJECT_REQUIRED`                       | A write did not name its project. Pass `project`.                                                                      |
+| `VERSION_CONFLICT`                       | The page changed since you read it. Nothing was written: read again and redo the edit.                                 |
+| `requiresCanonicalApproval`              | The change touches protected canon: it waits for the owner. Never retry it.                                            |
+| `POLICY_DENIED`                          | This route is closed (a lifecycle change by another tool, a protected change). The message names the tool to use.      |
+| `WORKING_PARENT`                         | A Working page needs `[INDEX] Working` or an index inside a Working set. The allowed parents are listed.               |
+| `PAGE_NOT_WRITABLE`                      | The edit would change a block the API cannot write back (the inline-icon paragraph). Edit elsewhere or tell the owner. |
+| `DUPLICATE_REQUEST`                      | Another request for the same character is under way. Follow it (its job or proposal).                                  |
+| `OPERATION_ID_REUSED`                    | That `operation_id` was used for a different request. Use a new id.                                                    |
+| `WRITTEN_IN_PART`                        | Some writes were made, then it stopped. Read the pages; make a new, smaller request.                                   |
+| `OUTCOME_UNKNOWN`                        | A write may or may not have been made (`uncertain`). Read the pages; do not repeat it.                                 |
+| `OWNER_APPROVED_JOB`                     | The owner approved that job; only the owner can cancel it.                                                             |
+| `HAS_CHILDREN`                           | The page has pages under it: add `cascade: true` to delete them all.                                                   |
+| `INVALID_ARGUMENTS` / `INVALID_PARAMS`   | An argument does not fit the tool's schema. Read the message; do not invent arguments.                                 |
 
 `bridge_errors_recent` lists recent failures with LegendKeeper's request ids when you need to report one.

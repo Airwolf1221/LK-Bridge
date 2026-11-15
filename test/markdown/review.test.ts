@@ -187,6 +187,39 @@ describe('Markdown that would vanish', () => {
   });
 });
 
+describe('footnotes (v2 E4, the finding E3b left)', () => {
+  // `text[^1]` plus a `[^1]: note` line read as a link reference and its definition: the page silently got a link to
+  // "note". LegendKeeper has no footnotes, so the converter refuses them and says what to write instead.
+  it('a footnote reference with its definition is refused, naming the footnote', () => {
+    let err: unknown;
+    try {
+      fromMarkdown('Ashgate fell in 4A 881.[^1]\n\n[^1]: The annals disagree.\n', []);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(MarkdownError);
+    const e = err as MarkdownError;
+    expect(e.code).toBe('UNSUPPORTED_MARKDOWN');
+    expect(e.message).toMatch(/footnote/i);
+    expect(e.details).toMatchObject({ footnotes: [{ label: '^1', line: 3 }] });
+  });
+
+  it('a footnote definition alone is refused too, and so is one in an edit', () => {
+    expect(code(() => fromMarkdown('[^note]: An aside.\n', []))).toBe('UNSUPPORTED_MARKDOWN');
+    expect(code(() => applyEdit([], { mode: 'append', markdown: 'Text.[^a]\n\n[^a]: Aside.\n' }))).toBe(
+      'UNSUPPORTED_MARKDOWN',
+    );
+  });
+
+  it('a bare [^1] with no definition stays text, and an escaped one is written as text', () => {
+    expect(fromMarkdown('Text [^1] here.\n', []).blocks[0]!.content).toEqual([{ text: 'Text [^1] here.' }]);
+    expect(fromMarkdown('Text.\\[^1]\n\n\\[^1]: aside\n', []).blocks.map((b) => b.content)).toEqual([
+      [{ text: 'Text.[^1]' }],
+      [{ text: '[^1]: aside' }],
+    ]);
+  });
+});
+
 describe('lk-blocks', () => {
   it('cannot create an unsupported block at any depth', () => {
     const md = '```lk-block\n{"kind":"quote","children":[{"kind":"unsupported","id":"zzzzzzzz"}]}\n```\n';

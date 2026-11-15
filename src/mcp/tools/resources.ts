@@ -10,6 +10,7 @@
  * a template gets Status `Working` (the project's default) when it has a Status row, and its template is recorded in the
  * tree at once.
  */
+import { stateHash } from '../../jobs/sidebar-state.js';
 import { toWriteIcon } from '../../lk/icons.js';
 import * as z from 'zod';
 import {
@@ -1248,6 +1249,22 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
             op: 'updateResource',
             params: { path: { resourceId: node.id }, body },
             journalOperation: { tool: 'update_resource', page },
+            // v2 E4 (E4-01): LegendKeeper does not version a resource, and `tags` replaces the whole list: inside the
+            // lock the page's name and tags must still be what this plan read, or the write is a conflict (two
+            // update_resource calls at once both answered "written" while one tag was lost; an app edit made meanwhile
+            // was overwritten). Compared with the read the write already makes for its pre-image: no extra request.
+            ...('tags' in body || 'name' in body
+              ? {
+                  expectCurrent: {
+                    state: 'resource' as const,
+                    hash: stateHash({
+                      name: typeof cur.name === 'string' ? cur.name : null,
+                      tags: Array.isArray(cur.tags) ? cur.tags : [],
+                    }),
+                    label: node.rawName,
+                  },
+                }
+              : {}),
           },
         ];
         const labels = [`change ${Object.keys(changes).join(', ')}`];
@@ -1571,7 +1588,13 @@ function deleteResourceTool(deps: ToolDeps): McpToolProvider {
             },
             journalPreImage: {
               resource: read.value,
-              subtree: subtree.map((n) => ({ id: n.id, name: n.rawName, parentId: n.parentId })),
+              // v2 E4 (RV2-1): with the tags, so a restore of any of these pages is judged by its own lifecycle state.
+              subtree: subtree.map((n) => ({
+                id: n.id,
+                name: n.rawName,
+                parentId: n.parentId,
+                tags: [...n.tags],
+              })),
             },
           },
           {

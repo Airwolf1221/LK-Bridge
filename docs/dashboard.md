@@ -602,6 +602,12 @@ the copy is not set up at all.
 `POST /offsite/folders/:generation/delete`, `POST /offsite/adopt`. Google's answer arrives at `GET /admin/drive/callback`
 (outside `/api/admin`, because it is a navigation from Google), which redirects to `/ui/offsite`.
 
+v2 E4 ([ADR 0046](adr/0046-e4-owner-decisions.md) decision 3): `PUT /offsite/settings` needs the re-authentication when
+the change weakens a protection (the verify switched off, a smaller verify sample, a later stale-copy warning, fewer days
+for removed pieces on Drive, another folder), and so does switching off a maintenance job that keeps the backups
+(`POST /maintenance/:id/disable` for `snapshot-*` and `offsite*`); the dashboard asks for the password. Times, bandwidth,
+transfers and enabling a job stay one click.
+
 ## Canon (Projects page, v2 C2a)
 
 The **Canon** section of the Projects page lists each project's protected facts as plain sentences ("Status =

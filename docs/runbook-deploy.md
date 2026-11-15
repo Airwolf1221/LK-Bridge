@@ -652,6 +652,9 @@ sudo ls -l /etc/lk-bridge/
   after the next boot). `sqlite3 .backup` takes a consistent snapshot while the bridge is running, the copy must pass
   `PRAGMA integrity_check`, and it is compressed to `/var/lib/lk-bridge/backups/nightly-<UTC time>.db.gz` (mode 0600). The
   **newest 14** are kept. `deploy.sh` adds `pre-deploy-…` copies (newest 5, separate, so deploys never push out nightlies).
+  v2 E4: each off-site copy run starts with `backup.sh offsite` (`offsite-…` copies, newest 3, separate again), so the copy
+  on Google Drive always carries a database as new as its snapshot store; a failure is noted on the run and the store is
+  still copied. The off-site verify and `offsite-restore.sh` take the newest copy of any of the three labels.
 - **Check:**
 
   ```bash

@@ -298,3 +298,22 @@ follow it, the bold mark stays with its words); the same fix for a paragraph **i
 `insertBlock` takes `after` a block inside a container, which decides whether the fix should be offered only at the top
 level); and that the finding is gone after the next full snapshot. Like the snapshot sandbox it uses the bridge's own runtime
 (a temporary database and snapshot store) with the throwaway root as its AI REPOSITORY.
+
+## Concurrency (v2 E4, PLAN-v2 10.6 test 2)
+
+`npm run test:sandbox -- concurrency` (on the server `deploy/sandbox-test.sh --project test -- concurrency`): what
+LegendKeeper itself does with simultaneous writes that carry the SAME expected version, sent straight through the
+governor's raw client (bypassing the engine and its locks) on one throwaway page (`lk-bridge concurrency <time>`), deleted
+at the end. C1: two `replaceDocumentBlocks` with one If-Match together; C2: five `insertBlock` with one If-Match together;
+C3: the control, one after the other (the second must be refused with 412). PASS when LegendKeeper behaved as an atomic
+compare-and-swap, **NOTED** when it accepted more than one (the behaviour PLAN-v2 10.6 designs around: report it, nothing
+to fix), FAIL only when the control did not refuse a stale version. Its runtime sends writes with no spacing
+(`WRITE_SPACING_MS=0`, still through the governor's tiers). About 14 writes and 12 reads. Code: `concurrency.ts`; dry run:
+`test/e4/sandbox-concurrency-dryrun.test.ts`.
+
+## Maps M6e (v2 E4, backlog 4)
+
+The `maps` run gains M6e: three throwaway regions, each written RAW with several `polygons` and `polygon: null`,
+`polygon: []` or no `polygon`, recording what LegendKeeper accepts and what reads back (NOTED). Until its answer is in,
+the bridge writes one consistent form (a region that still carries a `polygon` gets it set to the first of its new
+polygons; M6d checks it), and `read_document` and the snapshots name regions that carry both.

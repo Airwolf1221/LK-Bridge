@@ -144,6 +144,26 @@ export function assessFactChange(
             after: at,
             text: `${rule.key} would change from ${v} to ${shown(at)}`,
           });
+        } else if (na > 0) {
+          // v2 E4 (RV2-3): the fold reads a look-alike ("Authoritаtive", a Cyrillic а) as the protected value, so
+          // it catches a disguised value being set; but the genuine spelling swapped for a disguise folds the same. The
+          // same count with other exact spellings is a protected change too.
+          const exact = (l: readonly string[]) =>
+            l
+              .filter((t) => factValueKey(t) === vk)
+              .map((t) => t.trim())
+              .sort()
+              .join('\u0000');
+          if (exact(bt) !== exact(at))
+            out.push({
+              ruleId: rule.id,
+              key: rule.key,
+              direction: 'from',
+              value: v,
+              before: bt,
+              after: at,
+              text: `${rule.key} would change from ${v} to a look-alike spelling (${shown(at)})`,
+            });
         }
       }
       continue;

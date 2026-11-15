@@ -31,6 +31,7 @@ const STATUS: Record<ReceiveError['refusal'], number> = {
   type_mismatch: 422,
   timeout: 408,
   aborted: 400,
+  storage: 507,
 };
 
 function send(reply: FastifyReply, status: number, body: Record<string, unknown>, close = false) {

@@ -1,3 +1,6 @@
+import { deletedPageRecord } from './lifecycle/deleted.js';
+import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
+import { BlockwiseUndo } from './pages/undo.js';
 import { pino } from 'pino';
 import type { Writable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
@@ -348,6 +351,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     settings: (projectId) => projectStore.byId(projectId)?.settings,
     engine,
     node: treeNode,
+    // v2 E4 (RV2-1): what a delete recorded of a page (its name, parent and tags), so its restore can be judged.
+    deletedPage: (projectId, id) => deletedPageRecord(engine, projectId, id),
   });
   const unregisterGuard = engine.setWriteGuard(
     combineGuards(
@@ -525,7 +530,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const detachAuditCheckers = [
     engine.registerChecker(SPLIT_CHECK, splitChecker),
     engine.registerChecker(SPLIT_VERIFY, splitVerifier),
+    // v2 E4 (ADR 0046): block-by-block page writes (write_page on a page the API cannot take back whole, and restores).
+    engine.registerChecker(BLOCKWISE_CHECK, blockwiseChecker),
   ];
+  // v2 E4: a block-by-block write that stops part-way is undone when the page is exactly as it left it.
+  const blockwiseUndo = new BlockwiseUndo({ engine, log: { warn: (obj, msg) => log.warn(obj, msg) } });
+  const detachBlockwiseUndo = blockwiseUndo.start();
   // v2 E1a: restores are always proposals; the plan reads the page live at P1 and the tree for names and places.
   const restores = new Restores({
     db: o.db,
@@ -657,6 +667,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         restores,
         // v2 E2: the audits (audit_findings).
         audits,
+        // v2 E4: the undo of a block-by-block write that stopped part-way.
+        blockwiseUndo,
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
@@ -750,6 +762,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       for (const off of detachMaps) off();
       for (const off of detachSnapshotCheckers) off();
       for (const off of detachAuditCheckers) off();
+      detachBlockwiseUndo();
       detachRestores();
       await tree.stop();
       detachRegistry();

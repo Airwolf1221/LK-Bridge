@@ -190,6 +190,24 @@ export function statusTagChanges(
     if (a.has(s) && !b.has(s)) out.push({ tag: a.get(s)!, added: true, to: s, tool: TAG_TOOL_ADD[s] });
     if (b.has(s) && !a.has(s)) out.push({ tag: b.get(s)!, added: false, to: null, tool: TAG_TOOL_REMOVE[s] });
   }
+  // RV2-3: the fold catches a disguised status tag being ADDED; the exact spellings catch the genuine one being SWAPPED
+  // for a disguise (a look-alike added beside CANON, then CANON removed). Any tag that folds to a status tag and is added
+  // or removed by its exact spelling is a change, whatever else of that state the list still holds.
+  const want: [State, string][] = [
+    ['authoritative', factKey(c.tags.canon)],
+    ['working', factKey(c.tags.working)],
+    ['archived', factKey(c.tags.archived)],
+  ];
+  for (const [s, k] of want) {
+    if (out.some((x) => (x.added ? x.to === s : false))) continue;
+    const exact = (l: readonly string[]) => l.filter((t) => factKey(t) === k);
+    const bs = exact(before);
+    const as = exact(after);
+    for (const t of as) if (!bs.includes(t)) out.push({ tag: t, added: true, to: s, tool: TAG_TOOL_ADD[s] });
+    for (const t of bs)
+      if (!as.includes(t) && !out.some((x) => !x.added && x.tag === t))
+        out.push({ tag: t, added: false, to: null, tool: TAG_TOOL_REMOVE[s] });
+  }
   return out;
 }
 
@@ -212,6 +230,17 @@ export interface LifecycleGuardDeps {
   readonly engine: Pick<JobEngine, 'internalRead'>;
   /** A node of the repository tree, or null. */
   readonly node: (projectId: string, id: string) => TreeNode | null;
+  /**
+   * v2 E4 (RV2-1): what the bridge recorded of a deleted page when it was deleted (the delete's journal entry): its
+   * name, parent and tags. Null when it has no record (the page was deleted outside the bridge, or long ago).
+   */
+  readonly deletedPage?: (projectId: string, id: string) => DeletedPageRecord | null;
+}
+
+export interface DeletedPageRecord {
+  readonly name: string;
+  readonly parentId: string | null;
+  readonly tags?: readonly string[];
 }
 
 /**
@@ -416,6 +445,68 @@ export class LifecycleGuard implements WriteGuard {
       tool: ch.tool,
       ...(stepIndex !== undefined ? { stepIndex } : {}),
     };
+  }
+
+  /**
+   * v2 E4 (RV2-1): the lifecycle area a page belongs in by its own state: `[BWRK]` (or the Working status tag) in the
+   * Working area, `[BARC]` (or the Archived tag) in the Archived area, anything else in neither.
+   */
+  private ownArea(c: LifecycleConfig, name: string, tags: readonly string[] = []): Area {
+    const kind = looseKind(name);
+    if (kind === 'bwrk') return 'working';
+    if (kind === 'barc') return 'archived';
+    const states = statusTagStates(c, tags);
+    if (states.has('working')) return 'working';
+    if (states.has('archived')) return 'archived';
+    return null;
+  }
+
+  /**
+   * v2 E4 (RV2-1): a page whose own state says Working or Archived may not be moved anywhere outside that area, whatever
+   * area it is moved from (a page that got out of its area, to the top level for instance, cannot be moved on into canon).
+   */
+  private ownAreaMove(
+    c: LifecycleConfig,
+    rid: string,
+    name: string | null,
+    to: Area | 'unknown',
+    stepIndex?: number,
+  ): LifecycleChange | null {
+    if (name === null || to === 'unknown') return null;
+    const own = this.ownArea(c, name);
+    if (own === null || own === to) return null;
+    return this.moveChange(c, rid, name, own, to, stepIndex);
+  }
+
+  /**
+   * v2 E4 (RV2-1): `restoreResource` brings a page back under the parent it was deleted from (LegendKeeper puts it at the
+   * top level when that parent is gone). Judged as a move from the area the page belongs in by its own state (as the
+   * delete's journal entry recorded it) to the area it lands in; with no record of the page, the area it lands in cannot
+   * be told, which counts as a crossing.
+   */
+  private async restoreChange(
+    c: LifecycleConfig,
+    project: string,
+    rid: string,
+    read: (opId: string, params: OpParams) => Promise<unknown>,
+    stepIndex?: number,
+  ): Promise<LifecycleChange | null> {
+    if (c.workingIndexId === null && c.archiveIndexId === null) return null;
+    const rec = this.d.deletedPage?.(project, rid) ?? null;
+    if (!rec) {
+      return {
+        resourceId: rid,
+        page: rid,
+        what: 'place',
+        to: null,
+        text: 'the page would be restored, and the bridge has no record of what it was or where it was deleted from, so it cannot tell whether that crosses a lifecycle index',
+        tool: 'restore it in the LegendKeeper app (the owner), then let the sweep pick it up',
+        ...(stepIndex !== undefined ? { stepIndex } : {}),
+      };
+    }
+    const own = this.ownArea(c, rec.name, rec.tags ?? []);
+    const landing = rec.parentId === null ? null : await this.areaLive(c, project, rec.parentId, read);
+    return this.moveChange(c, rid, rec.name, own, landing, stepIndex);
   }
 
   /** CR-2026-11 (CR-15): a write to one of the confirmed lifecycle indexes themselves. */
@@ -807,7 +898,16 @@ export class LifecycleGuard implements WriteGuard {
           typeof body.parentId === 'string' ? body.parentId : null,
           internal,
         );
-        const ch = this.moveChange(c, rid, name(rid), from, to, i);
+        const ch =
+          this.moveChange(c, rid, name(rid), from, to, i) ??
+          this.ownAreaMove(c, rid, known?.rawName ?? (await this.nameNow(input.project, rid)), to, i);
+        if (ch) out.push(ch);
+        continue;
+      }
+      if (it.op === 'restoreResource') {
+        const rid = it.params.path?.resourceId;
+        if (!rid) continue;
+        const ch = await this.restoreChange(c, input.project, rid, internal, i);
         if (ch) out.push(ch);
         continue;
       }
@@ -1005,7 +1105,14 @@ export class LifecycleGuard implements WriteGuard {
         typeof body.parentId === 'string' ? body.parentId : null,
         read,
       );
-      const ch = this.moveChange(c, rid, typeof current?.name === 'string' ? current.name : rid, from, to);
+      const pageName = typeof current?.name === 'string' ? current.name : await this.nameNow(project, rid);
+      const ch = this.moveChange(c, rid, pageName ?? rid, from, to) ?? this.ownAreaMove(c, rid, pageName, to);
+      if (ch) refuse(ch);
+      return;
+    }
+    // v2 E4 (RV2-1): a restore lands the page under its old parent (or at the top level): judged as a move.
+    if (input.opId === 'restoreResource') {
+      const ch = await this.restoreChange(c, project, rid, read);
       if (ch) refuse(ch);
       return;
     }

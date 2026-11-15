@@ -141,7 +141,9 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   createResourceFromTemplate: created('resource'),
   saveResourceAsTemplate: created('resource'),
   updateResource: patch('resource', 'pre-image'),
-  deleteResource: gone('resource', 'ids'),
+  // v2 E4 (RV2-1): the page itself (name, parent, tags) is kept, so a later restore of it can be judged by the lifecycle
+  // guard (it lands back under that parent); restoreResource brings back its content, so nothing more is needed.
+  deleteResource: gone('resource', 'pre-image'),
   moveResource: { verify: 'idempotent', reader: 'resource', journal: 'pre-image' },
   restoreResource: { verify: 'idempotent' },
   // Documents
@@ -207,20 +209,21 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   listLanes: read,
   createLane: created('lane'),
   getLane: read,
-  updateLane: patch('lane'),
+  // v2 E4 (RV3-6): LegendKeeper keeps no history of lanes, events or features: an update keeps what it overwrote.
+  updateLane: patch('lane', 'pre-image'),
   // CR-2026-11 (CR-01): lanes, events and features have no restore: their deletes keep what they deleted. A lane's
-  // pre-image is the lane alone; the events it takes with it are not read (open for D1, docs/reviews/CR-2026-11.md).
+  // pre-image holds its events too (D1: step-exec reads them before the delete, on every route).
   deleteLane: gone('lane', 'pre-image'),
   listEvents: read,
   createEvent: created('event'),
   getEvent: read,
-  updateEvent: patch('event'),
+  updateEvent: patch('event', 'pre-image'),
   deleteEvent: gone('event', 'pre-image'),
   // Map features
   listFeatures: read,
   createFeature: created('feature'),
   getFeature: read,
-  updateFeature: patch('feature'),
+  updateFeature: patch('feature', 'pre-image'),
   deleteFeature: gone('feature', 'pre-image'),
   // Boards
   getBoardContent: read,

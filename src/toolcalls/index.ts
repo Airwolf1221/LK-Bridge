@@ -191,8 +191,12 @@ export class ToolCallLog {
    * Starts timing a call; the returned function records it. Never throws and never delays the call by more than a few
    * counter reads.
    */
-  begin(tool: string, args: unknown, caller: CallerInfo): (end: ToolCallEnd) => void {
+  begin(rawTool: string, args: unknown, caller: CallerInfo): (end: ToolCallEnd) => void {
     if (this.retentionDays() === 0) return () => undefined;
+    // The name is the client's text: keep it only when it looks like a tool name (the registry's own rule).
+    const tool = /^[A-Za-z0-9_-]{1,64}$/.test(rawTool)
+      ? rawTool
+      : `(not a tool name: ${rawTool.length} chars)`;
     const startedAt = this.now();
     let before: ReturnType<BudgetProbe> = null;
     let summary: ArgSummary[] = [];

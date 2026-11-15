@@ -33,6 +33,7 @@ export interface ImageUploadRow {
   readonly height: number;
   readonly frames: number;
   readonly hasAlpha: boolean;
+  /** `webp_passthrough`: the bytes as given, unchanged (a WebP original, or a restore of the snapshot store's bytes). */
   readonly conversionMode: 'converted' | 'webp_passthrough';
   readonly quality: number | null;
   readonly convertMs: number | null;

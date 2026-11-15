@@ -2,6 +2,7 @@
  * `read_document` (v2 B2, ADR 0029): a page's document as Markdown (B1's converter), its outline, one section, or the
  * raw blocks. Maps, timelines and boards are shown with B1's read-only renderers. Works only inside the AI REPOSITORY.
  */
+import { bothFormsNote, regionsWithBothForms } from '../../maps/features.js';
 import * as z from 'zod';
 import {
   getSection,
@@ -126,6 +127,7 @@ async function load(
           map:
             fs.kind === 'image'
               ? {
+                  ...bothForms(features),
                   image: 'single',
                   width: fs.frame.width,
                   height: fs.frame.height,
@@ -133,6 +135,7 @@ async function load(
                   ...(fs.assetId ? { assetId: fs.assetId } : {}),
                 }
               : {
+                  ...bothForms(features),
                   image:
                     fs.kind === 'legacy' ? 'legacy tiled map (no single image: no pixel positions)' : 'none',
                 },
@@ -357,4 +360,10 @@ export function readDocumentTool(deps: ToolDeps): McpToolProvider {
         );
       }),
   });
+}
+
+/** v2 E4 (backlog 4): regions with both geometry fields, named in the answer (see `bothFormsNote`). */
+function bothForms(features: readonly unknown[]): Record<string, unknown> {
+  const note = bothFormsNote(features);
+  return note ? { regionsWithBothForms: regionsWithBothForms(features), note } : {};
 }

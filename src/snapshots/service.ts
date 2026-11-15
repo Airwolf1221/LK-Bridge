@@ -670,14 +670,26 @@ export class SnapshotService {
     const resumed = run.done > 0;
     const read = this.reader(projectId, 'P3');
     const deps = this.captureDeps(projectId, 'P3');
+    const abandoned = (): RunOutcome | null =>
+      this.index.run(run.id)?.state === 'running'
+        ? null
+        : {
+            skipped: true,
+            changed: false,
+            runId: run.id,
+            summary: 'The run was abandoned; nothing was written.',
+          };
     try {
       for (const pageId of this.index.pendingPages(run.id)) {
+        const gone = abandoned();
+        if (gone) return gone;
         // Agents' work first: wait while P1 or P2 work is queued for the project (at most a minute a page).
         for (let i = 0; i < 240 && this.o.busy?.(projectId); i++) await this.sleep(250);
         if (this.stopper.signal.aborted) throw new StopError();
         const n = this.nodeOf(projectId, pageId);
         const c = newCounters();
-        const entry = await capturePage(deps, read, n, EVERYTHING, c);
+        const captured = await capturePage(deps, read, n, EVERYTHING, c);
+        const entry = { ...captured, capturedAt: new Date(this.o.now()).toISOString() };
         this.index.savePage(run.id, pageId, entry.deleted ? null : entry, {
           reads: c.reads,
           downloads: c.downloads,
@@ -709,6 +721,8 @@ export class SnapshotService {
           });
         }
       }
+      const gone = abandoned();
+      if (gone) return gone;
       const done = this.index.run(run.id)!;
       const pages = this.index.runEntries(run.id);
       const manifest = this.buildManifest({
@@ -1337,6 +1351,7 @@ export class SnapshotService {
       });
       this.index.markDamaged(using, `piece ${sha.slice(0, 12)}… is ${r}`);
     }
+    this.index.clearRepaired();
     let bad = 0;
     const rows = this.index.snapshots(null, { limit: 1_000_000 });
     for (const s of rows) {
@@ -1415,7 +1430,7 @@ export class SnapshotService {
     try {
       const files: { name: string; label: string; size: number; at: number }[] = [];
       for (const f of await readdir(dir)) {
-        const m = /^(nightly|pre-deploy)-(\d{8}T\d{6}Z)\.db\.gz$/.exec(f);
+        const m = /^(nightly|pre-deploy|offsite)-(\d{8}T\d{6}Z)\.db\.gz$/.exec(f);
         if (!m) continue;
         const st = await stat(join(dir, f));
         const t = m[2]!;
@@ -1505,7 +1520,10 @@ export function fullsToDrop(
 ): SnapshotRow[] {
   const allCut = now - s.keepFullDays * DAY;
   const weeklyCut = allCut - s.keepWeekly * 7 * DAY;
-  const newestComplete = fulls.filter((x) => x.state === 'complete').sort((a, b) => b.takenAt - a.takenAt)[0];
+  const newestComplete =
+    fulls.filter((x) => x.state === 'complete').sort((a, b) => b.takenAt - a.takenAt)[0] ??
+    // No complete one (verify marked them all partial): the newest of any state stays.
+    [...fulls].sort((a, b) => b.takenAt - a.takenAt)[0];
   // The latest complete full snapshot of each ISO week (of all of them: a week that straddles the 30 days is kept by its
   // latest, which is then inside the first window).
   const latestOfWeek = new Map<string, SnapshotRow>();

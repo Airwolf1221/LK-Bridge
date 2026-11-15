@@ -63,6 +63,29 @@ const rankNum = (r: string) => parseInt(r.slice(1), 36);
 
 let seq = 0;
 /** A cuid2-shaped id (a letter, then 7 letters or digits). */
+/** v2 E4: the list a block is in (the document's or a container's children) and its place there, at any depth. */
+function blockPlace(list: unknown[], id: string): { list: unknown[]; index: number } | null {
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i] as { id?: unknown; children?: unknown };
+    if (b && b.id === id) return { list, index: i };
+    if (b && Array.isArray(b.children)) {
+      const hit = blockPlace(b.children as unknown[], id);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** v2 E4: every block id in a tree. */
+function allBlockIds(list: readonly unknown[], out: string[] = []): string[] {
+  for (const x of list) {
+    const b = x as { id?: unknown; children?: unknown };
+    if (b && typeof b.id === 'string') out.push(b.id);
+    if (b && Array.isArray(b.children)) allBlockIds(b.children as unknown[], out);
+  }
+  return out;
+}
+
 export const newId = (prefix = 'x'): string =>
   `${prefix}${(++seq).toString(36).padStart(7, '0')}`.slice(0, 8);
 
@@ -552,58 +575,72 @@ export class TreeModel {
         return { status: 200, body: view() };
       }
       // v2 C2c: insertBlock, block-level (beside content the whole-document write cannot take back, an inline icon).
+      // v2 E4: anywhere in the tree (`after` / `before` a block in its own list, or last in a `parent` container), an id
+      // the document already holds (the block's or one in its subtree) refused 409 DUPLICATE_ID, and the document's
+      // new version in the body and in the ETag, as the spec describes.
       if (M === 'POST') {
         const ifMatch = req.headers['if-match'];
         if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
         const block = structuredClone(body.block ?? {}) as Record<string, unknown>;
         if (typeof block.id !== 'string') block.id = newId('b');
-        const ids = (b.blocks as { id?: unknown }[]).map((x) => x.id);
-        if (ids.includes(block.id)) return err(409, 'DUPLICATE_ID');
-        let at = b.blocks.length;
-        if (typeof body.before === 'string') {
-          at = ids.indexOf(body.before);
-          if (at < 0) return err(404, 'NOT_FOUND');
-        } else if (typeof body.after === 'string') {
-          at = ids.indexOf(body.after);
-          if (at < 0) return err(404, 'NOT_FOUND');
-          at++;
-        }
-        b.blocks.splice(at, 0, block);
+        const held = new Set(allBlockIds(b.blocks));
+        if (allBlockIds([block]).some((id) => held.has(id))) return err(409, 'DUPLICATE_ID');
+        if (typeof body.before === 'string' || typeof body.after === 'string') {
+          const anchor = (body.before ?? body.after) as string;
+          const at = blockPlace(b.blocks, anchor);
+          if (!at) return err(404, 'NOT_FOUND');
+          at.list.splice(typeof body.after === 'string' ? at.index + 1 : at.index, 0, block);
+        } else if (typeof body.parent === 'string') {
+          const at = blockPlace(b.blocks, body.parent);
+          if (!at) return err(404, 'NOT_FOUND');
+          const parent = at.list[at.index] as Record<string, unknown>;
+          const kids = Array.isArray(parent.children) ? (parent.children as unknown[]) : [];
+          kids.push(block);
+          parent.children = kids;
+        } else b.blocks.push(block);
         b.version++;
         doc.type = 'page';
         this.mutations.push({ op: 'insertBlock', id: String(block.id) });
-        return { status: 201, body: { ...structuredClone(block), version: `v${b.version}` } };
+        return {
+          status: 201,
+          body: { ...structuredClone(block), version: `v${b.version}` },
+          headers: { etag: `"v${b.version}"` },
+        };
       }
     }
-    // v2 C2c: one top-level block: getBlock and deleteBlock.
+    // v2 C2c: one block: getBlock and deleteBlock (v2 E4: at any depth, the new version in the ETag).
     if (p.length === 6 && p[4] === 'blocks') {
       const b = this.blocks.get(doc.id) ?? { version: 1, blocks: [] };
-      const at = (b.blocks as { id?: unknown }[]).findIndex((x) => x.id === p[5]);
-      if (at < 0) return err(404, 'NOT_FOUND');
+      const at = blockPlace(b.blocks, p[5]!);
+      if (!at) return err(404, 'NOT_FOUND');
       if (M === 'GET') {
         return {
           status: 200,
-          body: { ...structuredClone(b.blocks[at] as object), version: `v${b.version}` },
+          body: { ...structuredClone(at.list[at.index] as object), version: `v${b.version}` },
         };
       }
-      // v2 E2: replaceBlock (a top-level block, replaced whole, its id kept).
+      // v2 E2: replaceBlock (replaced whole, its id kept).
       if (M === 'PUT') {
         const ifMatch = req.headers['if-match'];
         if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
         const block = structuredClone<Record<string, unknown>>(body);
         block.id = p[5];
-        b.blocks.splice(at, 1, block);
+        at.list.splice(at.index, 1, block);
         b.version++;
         this.mutations.push({ op: 'replaceBlock', id: p[5]! });
-        return { status: 200, body: { ...structuredClone(block), version: `v${b.version}` } };
+        return {
+          status: 200,
+          body: { ...structuredClone(block), version: `v${b.version}` },
+          headers: { etag: `"v${b.version}"` },
+        };
       }
       if (M === 'DELETE') {
         const ifMatch = req.headers['if-match'];
         if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
-        b.blocks.splice(at, 1);
+        at.list.splice(at.index, 1);
         b.version++;
         this.mutations.push({ op: 'deleteBlock', id: p[5]! });
-        return { status: 204 };
+        return { status: 204, headers: { etag: `"v${b.version}"` } };
       }
     }
     if (p.length === 4) {
