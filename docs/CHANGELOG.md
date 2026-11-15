@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased: hotfix during E5 (15 November 2026): the round trip on Arkona, and a fix for a count mismatch
+## Unreleased: E5.1, hotfix during E5 (15 November 2026): the round trip on Arkona, a fix for a count mismatch, and Run now for one project
 
 [ADR 0046](adr/0046-e4-owner-decisions.md) decision 9; [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)'s
 note of 15 November; no migration. Nothing was run against a live system: no call to the owner's LegendKeeper bridge
@@ -21,10 +21,19 @@ connector, the live dashboard or any other live service. Every test uses the moc
   only that cell, in the Main table's writing style (thousands separators, the cell's marks); a Main document changed
   before approval, or the table's row count, conflicts and writes nothing. A count that already matches answers "nothing
   to fix"; a Main table with no row for the age has no fix.
+- **Maintenance: Run now for one project, and per-project status** (the owner's report of 15 November: Run now of the
+  tree check with Arkona selected ran `test` first, and the page showed `test`'s result and job link while Arkona's pass,
+  about 1,500 reads at P3, was still running). `POST /maintenance/:id/run` takes an optional `project`; the dashboard
+  sends the selected project for a per-project job, so only that project runs, and the job's schedule is not moved.
+  Without `project` every project runs, as before; scheduled runs still cover every project; a bridge-wide job ignores
+  it. The audit record names the project. `GET /maintenance` gives a per-project job's line for each project (last run,
+  outcome, summary, running now) and the project running now (`runningProjectId`, in memory); each job link opens in its
+  own project (`?project=`); the history shows the selected project's runs, or every project's with each row named.
 - **Docs.** The E4 checklist item 3, the runbook's "Going live" and PLAN-v2 section 7: the bridge-wide `LK_READ_ONLY` is
   already `false` (the test world takes writes); Arkona stays read-only by its own Read-only setting on the Projects page,
   which item 21 lifts. Item 16 names the command. `docs/projects.md` and the runbook: only the sandbox, soak and spike
-  scripts refuse a project not marked as a sandbox; a new runbook section, "Markdown round trip".
+  scripts refuse a project not marked as a sandbox; a new runbook section, "Markdown round trip". `docs/maintenance.md`
+  and `docs/dashboard.md`: Run now acts on the selected project; per-project status.
 
 ## Unreleased: v2 E4: the second independent review, block-by-block page writes, and the concurrency acceptance tests
 

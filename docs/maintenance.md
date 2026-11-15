@@ -44,8 +44,19 @@ a pass already running) is recorded as **skipped** with the reason, and is not r
 jobs are bridge-wide (`budget-sampler` stores one snapshot per project, from each project's own governor;
 `journal-prune`, `proposal-expiry`, `proposal-prune` and `sqlite-optimise` cover every project's rows). Their runs are
 recorded with project `*` and are **not** engine jobs (an engine job belongs to one project). A **per-project** job (the
-later LegendKeeper jobs) runs once for each project served now, through that project's governor, and each run is
-recorded with its project. The Maintenance page is bridge-wide.
+later LegendKeeper jobs) runs once for each project served now, one after another, through that project's governor,
+and each run is recorded with its project. The Maintenance page is bridge-wide.
+
+**Run now and per-project status (v2 E5.1).** The scheduled runs of a per-project job still cover every project. **Run
+now** acts on the **selected project** only: the page sends it (`POST /maintenance/:id/run` with `{ "project": "<name>" }`),
+only that project's pass runs, and the job's next scheduled run is left as it was. Without `project` the API runs every
+project, as before; a bridge-wide job ignores `project`. A project the bridge does not serve now is refused
+(`409 PROJECT_NOT_SERVED`); a run for one project still waits while that project's P1 or P2 work is queued. The audit
+record (`maintenance.run_now`) names the project, or `all`. The page shows a per-project job with **one line per project**
+(its own last run, outcome and summary, or **running** for the project being run now), and its status names the project
+running (in memory: the scheduler's current target, exposed as `runningProjectId` and `projects` in `GET /maintenance`).
+Every job link opens in the run's own project (`/jobs/<id>?project=<name>`), whichever project is selected. The history
+shows the selected project's runs (`GET /maintenance/:id?project=<name>`), or every project's with each row named.
 
 A **placeholder** is registered so the page is complete, but it cannot be enabled, run or rescheduled: the toggle is
 disabled and says "Not implemented yet", and the API answers `409 NOT_IMPLEMENTED`. Its real logic is a later chunk's work.

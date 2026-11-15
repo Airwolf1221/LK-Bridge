@@ -120,4 +120,5 @@ export type {
   RunView,
   RunOutcome,
   RunTrigger,
+  ProjectRunLine,
 } from './types.js';

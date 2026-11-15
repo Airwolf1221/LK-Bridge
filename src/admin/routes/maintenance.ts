@@ -4,7 +4,7 @@
  */
 import { requireReauth } from '../guard.js';
 import * as z from 'zod';
-import { idSchema, parseInput, type Register } from './util.js';
+import { idSchema, parseInput, projectParam, type Register } from './util.js';
 
 /** v2 E4 (RV1-4): the maintenance jobs that keep the backups (switching one off needs re-authentication). */
 const PROTECTING_JOBS = /^(snapshot-|offsite)/;
@@ -20,9 +20,12 @@ export const registerMaintenance: Register = (api, ctx) => {
     now: ctx.now(),
   }));
 
+  /** v2 E5.1: `?project=` narrows the history to that project's runs; without it, every project's (each row names it). */
   api.get('/maintenance/:id', (req) => {
     const { id } = parseInput(params, req.params);
-    return { job: cmd.get('owner', id) };
+    const q = parseInput(z.object({ project: projectParam }), req.query);
+    const p = q.project !== undefined ? ctx.project(q.project) : null;
+    return { job: cmd.get('owner', id, p?.id) };
   });
 
   api.post('/maintenance/:id/enable', (req) => {
@@ -48,10 +51,15 @@ export const registerMaintenance: Register = (api, ctx) => {
     return { job: cmd.setSchedule('owner', id, body.schedule) };
   });
 
-  /** Starts the run and answers at once with the job as `running`; the page follows it on its next refresh. */
+  /**
+   * Starts the run and answers at once with the job as `running`; the page follows it on its next refresh. v2 E5.1: an
+   * optional `project` (in the body) runs a per-project job for that project only; a bridge-wide job ignores it.
+   */
   api.post('/maintenance/:id/run', (req, reply) => {
     const { id } = parseInput(params, req.params);
-    const { job, done } = cmd.runNow('owner', id);
+    const body = parseInput(z.object({ project: projectParam }).strict(), req.body ?? {});
+    const project = body.project !== undefined ? ctx.project(body.project) : undefined;
+    const { job, done } = cmd.runNow('owner', id, project);
     done.catch(() => undefined); // failures are recorded on the run; nothing is left unhandled
     return reply.code(202).send({ job });
   });

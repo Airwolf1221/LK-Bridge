@@ -4,6 +4,7 @@ import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, StatusBadge, useA
 import { fmtAgo, fmtDuration, fmtTime } from '../format';
 import { useApi, useNow, useReloadOn } from '../hooks';
 import { useReauth } from '../reauth';
+import { useProject } from '../project';
 import { Link } from '../router';
 
 /** Maintenance Jobs (PLAN §8 page 6, docs/maintenance.md): the registry, toggles, schedule editing and Run now. */
@@ -31,6 +32,17 @@ export interface MaintenanceRun {
   durationMs: number;
   jobId: string | null;
   detail: string | null;
+  /** v2 E5.1: whose run it was (a project's LegendKeeper id, or `*` for a bridge-wide run). */
+  projectId?: string;
+  trigger?: string;
+}
+
+/** v2 E5.1: one project's line of a per-project job. */
+export interface MaintenanceProjectLine {
+  projectId: string;
+  project: string;
+  running: boolean;
+  lastRun: MaintenanceRun | null;
 }
 
 export interface MaintenanceJob {
@@ -49,6 +61,12 @@ export interface MaintenanceJob {
   lastRun: MaintenanceRun | null;
   nextRunAt: number | null;
   note: string | null;
+  /** `project`: one run per served project (v2 A1). */
+  scope?: 'project' | 'bridge';
+  /** v2 E5.1: the project being run now (null when none, or bridge-wide). */
+  runningProjectId?: string | null;
+  /** v2 E5.1: a per-project job's state for each project. */
+  projects?: MaintenanceProjectLine[];
 }
 
 interface ListResponse {
@@ -59,6 +77,7 @@ interface ListResponse {
 
 interface HistoryRow {
   id: number;
+  projectId: string;
   trigger: string;
   startedAt: number;
   outcome: MaintenanceRun['outcome'];
@@ -151,9 +170,17 @@ export function MaintenancePage() {
   );
 }
 
-function statusOf(j: MaintenanceJob) {
+function statusOf(j: MaintenanceJob, nameOf: (id: string | null | undefined) => string | null) {
   if (!j.implemented) return <Badge>Not implemented</Badge>;
-  if (j.running) return <StatusBadge status="running" />;
+  if (j.running) {
+    const on = nameOf(j.runningProjectId);
+    return (
+      <>
+        <StatusBadge status="running" />
+        {on && <div className="muted small-text">for {on}</div>}
+      </>
+    );
+  }
   return j.enabled ? <Badge tone="ok">Enabled</Badge> : <Badge>Disabled</Badge>;
 }
 
@@ -177,7 +204,15 @@ function JobRows({
   const { run, busy } = useAction();
   // v2 E4 (RV1-4): switching off a job that keeps the backups asks for the password again.
   const withReauth = useReauth();
+  const { selected, nameOf } = useProject();
   const toggleId = `toggle-${j.id}`;
+  // v2 E5.1: Run now acts on the selected project for a per-project job (the schedule still covers every project).
+  const perProject = j.scope === 'project';
+  const runNow = () =>
+    void run(
+      () => api.post(`/maintenance/${j.id}/run`, perProject && selected ? { project: selected } : {}),
+      perProject && selected ? `${j.name} started for ${selected}.` : `${j.name} started.`,
+    ).then(onChanged);
   return (
     <>
       <tr data-job={j.id}>
@@ -186,7 +221,7 @@ function JobRows({
           <div className="muted small-text">{j.description}</div>
           {j.writes && <div className="muted small-text">Writes to LegendKeeper.</div>}
         </td>
-        <td>{statusOf(j)}</td>
+        <td>{statusOf(j, nameOf)}</td>
         <td>
           {j.implemented ? (
             <>
@@ -199,7 +234,11 @@ function JobRows({
         </td>
         <td>{j.priority}</td>
         <td>
-          <LastRun run={j.lastRun} now={now} />
+          {perProject && j.projects ? (
+            <ProjectLines lines={j.projects} now={now} />
+          ) : (
+            <LastRun run={j.lastRun} now={now} />
+          )}
         </td>
         <td>
           {j.nextRunAt !== null ? (
@@ -245,11 +284,10 @@ function JobRows({
               disabled={!j.implemented || j.running}
               busy={busy}
               aria-label={`Run ${j.name} now`}
-              onClick={() =>
-                void run(() => api.post(`/maintenance/${j.id}/run`), `${j.name} started.`).then(onChanged)
-              }
+              title={perProject && selected ? `Runs for ${selected} only` : undefined}
+              onClick={runNow}
             >
-              Run now
+              {perProject && selected ? `Run now for ${selected}` : 'Run now'}
             </Button>
             <Button
               className="small"
@@ -288,11 +326,50 @@ function JobRows({
       {historyOpen && (
         <tr>
           <td colSpan={8}>
-            <History id={j.id} name={j.name} now={now} />
+            <History id={j.id} name={j.name} now={now} perProject={perProject} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** A job link that opens in the run's own project (v2 E5.1), whichever project is selected. */
+function JobLink({ jobId, projectId }: { jobId: string; projectId?: string | undefined }) {
+  const { nameOf } = useProject();
+  const project = projectId && projectId !== '*' ? nameOf(projectId) : null;
+  return (
+    <Link
+      to={`/jobs/${encodeURIComponent(jobId)}${project ? `?project=${encodeURIComponent(project)}` : ''}`}
+    >
+      job{project ? ` (${project})` : ''}
+    </Link>
+  );
+}
+
+/** v2 E5.1: a per-project job's last run and "running now", one line per project. */
+function ProjectLines({ lines, now }: { lines: MaintenanceProjectLine[]; now: number }) {
+  if (lines.length === 0) return <span className="muted">no project is served</span>;
+  return (
+    <ul className="plain" aria-label="Per project">
+      {lines.map((l) => (
+        <li key={l.projectId} data-project={l.project}>
+          <strong>{l.project}</strong>:{' '}
+          {l.running ? (
+            <StatusBadge status="running" />
+          ) : l.lastRun ? (
+            <LastRun run={l.lastRun} now={now} />
+          ) : (
+            <span className="muted">never</span>
+          )}
+          {l.running && l.lastRun && (
+            <div className="muted small-text">
+              before: {l.lastRun.outcome} {fmtAgo(l.lastRun.at, now)}
+            </div>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -306,7 +383,7 @@ function LastRun({ run, now }: { run: MaintenanceRun | null; now: number }) {
         {run.jobId && (
           <>
             {' · '}
-            <Link to={`/jobs/${run.jobId}`}>job</Link>
+            <JobLink jobId={run.jobId} projectId={run.projectId} />
           </>
         )}
       </div>
@@ -436,26 +513,53 @@ function ScheduleEditor({ job: j, onDone }: { job: MaintenanceJob; onDone: () =>
   );
 }
 
-function History({ id, name, now }: { id: string; name: string; now: number }) {
-  const h = useApi<{ job: { history: HistoryRow[] } }>(`/maintenance/${id}`);
+function History({
+  id,
+  name,
+  now,
+  perProject,
+}: {
+  id: string;
+  name: string;
+  now: number;
+  perProject: boolean;
+}) {
+  const { selected, nameOf } = useProject();
+  // v2 E5.1: a per-project job's history is the selected project's, or every project's (each row named).
+  const [all, setAll] = useState(false);
+  const only = perProject && !all && selected ? selected : null;
+  const h = useApi<{ job: { history: HistoryRow[] } }>(
+    `/maintenance/${id}${only ? `?project=${encodeURIComponent(only)}` : ''}`,
+  );
   if (h.error) return <ErrorNote error={h.error} onRetry={h.reload} />;
   if (!h.data) return <Loading />;
   const rows = h.data.job.history;
   return (
     <div aria-label={`History of ${name}`}>
-      <h3>Recent runs of {name}</h3>
+      <h3>
+        Recent runs of {name}
+        {only ? ` in ${only}` : ''}
+      </h3>
+      {perProject && selected && (
+        <label className="row small-text">
+          <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} /> Every project
+        </label>
+      )}
       {rows.length === 0 ? (
         <Empty>No runs yet.</Empty>
       ) : (
         <ul className="plain">
           {rows.map((r) => (
             <li key={r.id}>
+              {!only && r.projectId && r.projectId !== '*' && (
+                <strong>{nameOf(r.projectId) ?? r.projectId}: </strong>
+              )}
               <Badge tone={OUTCOME_TONE[r.outcome]}>{r.outcome}</Badge> {fmtTime(r.startedAt)} (
               {fmtAgo(r.startedAt, now)}), {r.trigger}, {fmtDuration(r.durationMs)}
               {r.engineJobId && (
                 <>
                   {' · '}
-                  <Link to={`/jobs/${r.engineJobId}`}>job</Link>
+                  <JobLink jobId={r.engineJobId} projectId={r.projectId} />
                 </>
               )}
               {r.detail && <div className="muted small-text">{r.detail}</div>}

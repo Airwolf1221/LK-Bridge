@@ -3,7 +3,16 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { baseRoutes, installApi, openStream, renderApp, useDom } from './helpers';
+import {
+  OTHER_PROJECT_ID,
+  PROJECT_ID,
+  baseRoutes,
+  installApi,
+  openStream,
+  projectOf,
+  renderApp,
+  useDom,
+} from './helpers';
 
 useDom();
 
@@ -292,6 +301,138 @@ describe('the Maintenance Jobs page', () => {
     expect(within(history).getByText('Skipped: writes are paused.')).toBeInTheDocument();
     expect(within(history).getByRole('link', { name: 'job' })).toHaveAttribute('href', '/ui/jobs/jx1');
     expect(within(history).getByText(/catch-up/)).toBeInTheDocument();
+  });
+
+  it('a per-project job (v2 E5.1): one line per project, which project is running, links in their own project', async () => {
+    const perProject = [
+      {
+        projectId: PROJECT_ID,
+        project: 'baisheng',
+        running: true,
+        lastRun: null,
+      },
+      {
+        projectId: OTHER_PROJECT_ID,
+        project: 'test',
+        running: false,
+        lastRun: {
+          projectId: OTHER_PROJECT_ID,
+          at: NOW - 60_000,
+          outcome: 'succeeded',
+          durationMs: 900,
+          jobId: 'jtest1',
+          detail: 'No differences.',
+        },
+      },
+    ];
+    const tree = job({
+      id: 'tree-check',
+      name: 'Repository tree consistency check',
+      description: 'Compares the tree with LegendKeeper.',
+      scope: 'project',
+      running: true,
+      runningProjectId: PROJECT_ID,
+      lastRun: {
+        projectId: OTHER_PROJECT_ID,
+        at: NOW - 60_000,
+        outcome: 'succeeded',
+        durationMs: 900,
+        jobId: 'jtest1',
+        detail: 'No differences.',
+      },
+      projects: perProject,
+    });
+    let listed = 0;
+    const historyRow = (id: number, projectId: string, engineJobId: string) => ({
+      id,
+      projectId,
+      trigger: 'manual',
+      startedAt: NOW - id * 1000,
+      outcome: 'succeeded',
+      durationMs: 5,
+      engineJobId,
+      detail: `run ${id}`,
+    });
+    const api = installApi(
+      routes({
+        // Running for baisheng at first; finished (never run there yet, in this fixture) after a refresh.
+        'GET /maintenance': () => ({
+          jobs: [
+            listed++ === 0
+              ? tree
+              : {
+                  ...tree,
+                  running: false,
+                  runningProjectId: null,
+                  projects: perProject.map((l) => ({ ...l, running: false })),
+                },
+          ],
+          schedulerEnabled: true,
+          now: NOW,
+        }),
+        'POST /maintenance/tree-check/run': { status: 202, body: { job: tree } },
+        'GET /maintenance/tree-check': (c: { query: string }) => ({
+          job: {
+            ...tree,
+            history:
+              projectOf(c) === 'baisheng'
+                ? [historyRow(2, PROJECT_ID, 'jbai2')]
+                : [historyRow(2, PROJECT_ID, 'jbai2'), historyRow(3, OTHER_PROJECT_ID, 'jtest3')],
+          },
+        }),
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/maintenance');
+    await screen.findByText('Repository tree consistency check');
+    const r = within(row('tree-check'));
+    // Running, and for which project.
+    expect(r.getByText('for baisheng')).toBeInTheDocument();
+    const lines = r.getByRole('list', { name: 'Per project' });
+    const baisheng = lines.querySelector<HTMLElement>('li[data-project="baisheng"]')!;
+    const test = lines.querySelector<HTMLElement>('li[data-project="test"]')!;
+    expect(within(baisheng).getByText(/running/i)).toBeInTheDocument();
+    expect(within(test).getByText('succeeded')).toBeInTheDocument();
+    expect(within(test).getByText('No differences.')).toBeInTheDocument();
+    // test's job link opens in test, whichever project is selected.
+    expect(within(test).getByRole('link', { name: 'job (test)' })).toHaveAttribute(
+      'href',
+      '/ui/jobs/jtest1?project=test',
+    );
+
+    // Run now acts on the selected project only (once the running pass has finished).
+    await user.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() =>
+      expect(r.getByRole('button', { name: 'Run Repository tree consistency check now' })).toBeEnabled(),
+    );
+    expect(r.getByRole('button', { name: 'Run Repository tree consistency check now' })).toHaveTextContent(
+      'Run now for baisheng',
+    );
+    await user.click(r.getByRole('button', { name: 'Run Repository tree consistency check now' }));
+    await waitFor(() => expect(api.find('POST', '/maintenance/tree-check/run')).toHaveLength(1));
+    expect(api.find('POST', '/maintenance/tree-check/run')[0]!.body).toEqual({ project: 'baisheng' });
+    expect(
+      await screen.findByText('Repository tree consistency check started for baisheng.'),
+    ).toBeInTheDocument();
+
+    // The history: the selected project's runs, then every project's with each row named.
+    await user.click(
+      r.getByRole('button', { name: 'Show the history of Repository tree consistency check' }),
+    );
+    const history = await screen.findByLabelText('History of Repository tree consistency check');
+    expect(projectOf(api.find('GET', '/maintenance/tree-check')[0]!)).toBe('baisheng');
+    expect(within(history).getByRole('link', { name: 'job (baisheng)' })).toHaveAttribute(
+      'href',
+      '/ui/jobs/jbai2?project=baisheng',
+    );
+    await user.click(within(history).getByRole('checkbox', { name: /Every project/ }));
+    await waitFor(() => expect(within(history).getByText('run 3')).toBeInTheDocument());
+    expect(projectOf(api.find('GET', '/maintenance/tree-check').at(-1)!)).toBeNull();
+    expect(within(history).getByText('test:')).toBeInTheDocument();
+    expect(within(history).getByRole('link', { name: 'job (test)' })).toHaveAttribute(
+      'href',
+      '/ui/jobs/jtest3?project=test',
+    );
   });
 
   it('says when the scheduler is switched off', async () => {
