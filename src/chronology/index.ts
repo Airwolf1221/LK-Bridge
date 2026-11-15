@@ -21,8 +21,9 @@ import type { TreeNode, TreeService } from '../tree/index.js';
 import { nameKey } from '../tree/index.js';
 import { chronologyCheckers } from './checkers.js';
 import { runCheck, type CheckReader } from './check.js';
-import { buildJob } from './plan.js';
+import { buildJob, type WriteContext } from './plan.js';
 import { planSync, SYNC_TOOL } from './sync.js';
+import { COUNT_FIX_TOOL, planCountFix } from './count.js';
 import {
   chronologyConfigFrom,
   chronologySchema,
@@ -32,7 +33,7 @@ import {
   type ChronologyConfig,
   type StoredChronology,
 } from './settings.js';
-import { ChronologyStore, type ChronologyTarget, type ChronologyTool } from './store.js';
+import { ChronologyStore, type ChronologyTarget, type ChronologyTool, type TargetWrite } from './store.js';
 import { detectStyle, readAgeTable, readMainTable, type AgeTable, type DetectedStyle } from './table.js';
 
 export * from './settings.js';
@@ -41,6 +42,7 @@ export * from './table.js';
 export * from './checkers.js';
 export { runCheck, type CheckReader, type CheckReport } from './check.js';
 export * from './sync.js';
+export { COUNT_FIX_TOOL, planCountFix, type CountFixPlan, type CountFixResult } from './count.js';
 
 type Obj = Record<string, unknown>;
 
@@ -164,11 +166,15 @@ export interface Chronology {
    * to approve as normal, whatever the caller. Nothing is written until the owner approves. Audited
    * `chronology.propose_fix`. Throws `ChronologyError` with the refusal (an ambiguous pairing, a change that stopped
    * part-way, a row that is gone).
+   *
+   * v2 E5 hotfix: `kind: 'count'` is the fix of a `count_mismatch`: the age's Event count cell in the Main table set to
+   * the age table's row count, both re-read live (src/chronology/count.ts), as ONE proposal in the same way. A count that
+   * already matches answers `nothing_to_do`; a Main table with no row for the age has no fix (`MAIN_ROW_NOT_FOUND`).
    */
   proposeFix(
     actor: string,
     projectId: string,
-    fix: { readonly age: string; readonly rowId: string },
+    fix: ChronologyFix,
   ): Promise<
     | { readonly status: 'proposal_captured'; readonly proposalId: string; readonly summary: string | null }
     | { readonly status: 'nothing_to_do'; readonly message: string }
@@ -176,6 +182,11 @@ export interface Chronology {
   attach(): () => void;
   stop(): void;
 }
+
+/** What "Propose a fix" fixes: a table row's timeline event (the default), or an age's Main count (v2 E5 hotfix). */
+export type ChronologyFix =
+  | { readonly kind?: 'sync'; readonly age: string; readonly rowId: string }
+  | { readonly kind: 'count'; readonly age: string };
 
 const nodeView = (n: TreeNode) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') });
 
@@ -742,6 +753,24 @@ export function createChronology(d: ChronologyDeps): Chronology {
     if (!def)
       throw new ChronologyError('CALENDAR_NOT_FOUND', `The calendar ${String(c.calendarId)} was not found.`);
     const cal = remember(projectId, def);
+    const page = { id: c.resourceId!, name: ready.resource.rawName };
+    if (fix.kind === 'count') {
+      const plan = await planCountFix({ config: c, calendar: cal, read, age });
+      if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
+      if (plan.action === 'nothing')
+        return {
+          status: 'nothing_to_do',
+          message: `The ${age.name} count on the Main table already matches its table (${plan.main.text.trim()}; table rows ${plan.rows}): nothing to fix, and nothing was proposed.`,
+        };
+      return capture(actor, projectId, {
+        tool: COUNT_FIX_TOOL,
+        config: c,
+        age,
+        page,
+        plan,
+        audit: { kind: 'count', from: plan.main.value, to: plan.rows, events: plan.events },
+      });
+    }
     const plan = await planSync({
       config: c,
       calendar: cal,
@@ -755,15 +784,52 @@ export function createChronology(d: ChronologyDeps): Chronology {
         status: 'nothing_to_do',
         message: 'The row and its timeline event already agree; nothing was proposed.',
       };
-    const built = buildJob({
+    return capture(actor, projectId, {
       tool: SYNC_TOOL,
       config: c,
+      age,
+      page,
+      plan,
+      audit: { rowId: fix.rowId, action: plan.action },
+    });
+  };
+
+  /**
+   * One planned chronology change captured as ONE proposal, whatever the caller (`forceProposal`; the policy gate and
+   * the write guard still run, a deny still denies), proposed by the dashboard. Nothing is written until the owner
+   * approves it; approving runs the ordinary chronology job (src/chronology/plan.ts). Audited `chronology.propose_fix`.
+   */
+  const capture = async (
+    actor: string,
+    projectId: string,
+    o: {
+      readonly tool: ChronologyTool;
+      readonly config: ChronologyConfig;
+      readonly age: AgeConfig;
+      readonly page: { readonly id: string; readonly name: string };
+      readonly plan: {
+        readonly target: ChronologyTarget;
+        readonly writes: readonly TargetWrite[];
+        readonly ctx: WriteContext;
+        readonly requestKey: string;
+        readonly summary: string;
+        readonly head: Obj;
+        readonly markdown: { readonly before: string; readonly after: string };
+      };
+      readonly audit: Obj;
+    },
+  ): Promise<{ status: 'proposal_captured'; proposalId: string; summary: string | null }> => {
+    const { plan, page, tool } = o;
+    const built = buildJob({
+      tool,
+      config: o.config,
       target: plan.target,
       writes: plan.writes,
       ctx: plan.ctx,
-      record: { requestKey: plan.requestKey, ages: [age.name], summary: plan.summary },
+      record: { requestKey: plan.requestKey, ages: [o.age.name], summary: plan.summary },
+      // The count fix sets a count: a Main document changed since the proposal conflicts at approval, as usual.
+      ...(tool === COUNT_FIX_TOOL ? { captureMainVersion: true } : {}),
     });
-    const page = { id: c.resourceId!, name: ready.resource.rawName };
     const parts = built.labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l));
     const r = await d.engine.submit({
       kind: 'batch_ops',
@@ -778,25 +844,22 @@ export function createChronology(d: ChronologyDeps): Chronology {
       forceProposal: true,
       proposal: {
         operation: {
-          tool: SYNC_TOOL,
+          tool,
           page,
           before: plan.markdown.before,
           after: plan.markdown.after,
           chronology: plan.head,
         },
-        operations: [
-          { tool: SYNC_TOOL, page, pageParts: parts, summaryLabel: plan.summary, chronology: plan.head },
-        ],
+        operations: [{ tool, page, pageParts: parts, summaryLabel: plan.summary, chronology: plan.head }],
         summary: plan.summary,
       },
     });
     if (!('proposalId' in r))
       throw new ChronologyError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
     d.audit(actor, 'chronology.propose_fix', projectId, null, {
-      age: age.name,
-      rowId: fix.rowId,
+      age: o.age.name,
+      ...o.audit,
       proposalId: r.proposalId,
-      action: plan.action,
     });
     return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary ?? null };
   };

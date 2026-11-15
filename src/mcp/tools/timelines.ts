@@ -402,6 +402,10 @@ function remaining(
         // event writes are checked against their own state.
         if (!rec) writes.push(w);
         break;
+      case 'row.count':
+        // The count fix's compare-and-swap (v2 E5 hotfix), likewise of a first run only.
+        if (!rec) writes.push(w);
+        break;
       case 'row.insert': {
         const r = rowOf(w.documentId, w.rowId);
         if (!r) writes.push(w);

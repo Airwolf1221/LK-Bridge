@@ -133,4 +133,39 @@ describe('the chronology fold-in', () => {
     expect(chronologyFindings().map((f) => f.code)).not.toContain('chronology_row_without_event');
     expect(chronologyFindings('gone').map((f) => f.code)).toContain('chronology_row_without_event');
   });
+
+  it('v2 E5 hotfix: a count mismatch offers Propose a fix, routed through the chronology module', async () => {
+    // The Main table says one more than the 4A table has (the test world's 337 against 336), edited in the app.
+    const main = w.repo.blocks.get(w.mainDoc)! as { version: number; blocks: Record<string, unknown>[] };
+    const table = main.blocks.find((b) => b.kind === 'table')!;
+    const row = (table.children as Record<string, unknown>[]).find((r) => r.id === w.ages[FOURTH]!.mainRow)!;
+    const para = ((row.children as Record<string, unknown>[])[1]!.children as Record<string, unknown>[])[0]!;
+    const rows = w.rows(FOURTH).length;
+    para.content = [{ text: String(rows + 1) }];
+    main.version++;
+    await rt().chronology.check(PROJECT, 'manual', 'P2');
+    await audits.run(PROJECT, 'manual');
+    const f = chronologyFindings().find((x) => x.code === 'chronology_count_mismatch')!;
+    expect(f.fix).toMatchObject({ kind: 'chronology_count', args: { age: FOURTH } });
+    const r = await audits.proposeFix('owner', PROJECT, f.id);
+    expect(r).toMatchObject({ status: 'proposal_captured', fix: 'chronology_count' });
+    if (r.status !== 'proposal_captured') throw new Error('not captured');
+    expect(r.summary).toBe(
+      `${FOURTH}: Main ${rows + 1} → ${rows} (table rows ${rows}; timeline events ${w.liveEvents(w.ages[FOURTH]!.timeline).length})`,
+    );
+    expect(w.count(FOURTH)).toBe(String(rows + 1)); // nothing written yet
+    await rt().policy.commands.approve('owner', r.proposalId);
+    for (let i = 0; i < 400 && rt().policy.proposals.get(r.proposalId)!.state !== 'executed'; i++)
+      await new Promise((x) => setTimeout(x, 20));
+    expect(rt().policy.proposals.get(r.proposalId)!.state).toBe('executed');
+    expect(w.count(FOURTH)).toBe(String(rows));
+    expect(
+      rt()
+        .policy.store.listAudit({ action: 'audits.propose_fix' })
+        .some((a) => {
+          const after = a.after as { fix?: string } | null;
+          return after?.fix === 'chronology_count';
+        }),
+    ).toBe(true);
+  });
 });

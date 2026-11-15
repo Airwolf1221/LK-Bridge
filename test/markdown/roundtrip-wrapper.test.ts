@@ -3,8 +3,9 @@
  * as deploy/spike-v2.sh is. It takes `--project <name>`, exports only DB_PATH and the env file's path (OPS2 hotfix: no
  * key; the script finds the key as the bridge does, test/unit/sandbox-wrappers.test.ts), passes the project on, puts
  * the report in the data directory, and never prints a key. There is no `--allow-bridge-project` and no LK_SANDBOX_*
- * any more. The refusal of a project that is not a registered sandbox is the script's own (resolveSandboxTarget;
- * test/unit/sandbox-target.test.ts), shown here end to end once.
+ * any more. v2 E5 hotfix: any registered project is accepted (Arkona included), always read-only; the refusal of a
+ * project that is not registered is the script's own (resolveReadOnlyTarget; test/unit/sandbox-target.test.ts), shown
+ * here end to end once.
  */
 import { spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -124,7 +125,7 @@ describe('deploy/markdown-roundtrip.sh', () => {
     expect(logged).not.toContain(`${join(dir, 'data')}/roundtrip`);
   }, 30_000);
 
-  it('the script refuses a project the bridge has not registered as a sandbox, before any request', () => {
+  it('the script refuses a project the bridge has not registered, before any request', () => {
     // No bridge database at DB_PATH: nothing is registered, so nothing may be read.
     const r = run(envFile('g.env', [...MULTI, `DB_PATH=${join(dir, 'no-such.db')}`]), ['--project', 'test']);
     expect(r.status).toBe(2);

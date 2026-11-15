@@ -512,14 +512,16 @@ Phase E ── E1a snapshots and restore ─► E1b Drive copy ─► E2 audits 
 
 ## 7. Moving to Arkona (E5)
 
-1. Register `arkona` with its own key and **read-only** settings.
+1. Register `arkona` with its own key and **read-only** settings: its own Read-only flag on the Projects page
+   (`setReadOnly`), not the bridge-wide `LK_READ_ONLY`, which is already `false` because the test world takes writes
+   (hotfix of 15 November 2026).
 2. Build its tree and asset tree, and review the daily check's first report (unclassified pages, ordering, taxonomy drift).
 3. Seed and review its taxonomy and type registry on the dashboard.
-4. Run the Markdown **round-trip script on every Arkona page** (read-only). Any page that doesn't come back identical blocks the move until it's fixed.
+4. Run the Markdown **round-trip script on every Arkona page** (read-only: `deploy/markdown-roundtrip.sh --project arkona`, which accepts a registered project that is not a sandbox and is read-only by construction, ADR 0046). Any page that doesn't come back identical blocks the move until it's fixed.
 5. Run the date engine against **every Arkona age table**, then **run `chronology-check` on Arkona and propose fixes** (the dashboard's "Propose a fix", approved as normal) for everything it finds, until it reports no findings: the move is not called done before that.
 6. Take the first full snapshot and the first Google Drive copy, and do a restore rehearsal into `test`.
 7. Move ChatGPT's work from the old bridge to this one, and **retire the old bridge and revoke its key**. Anything that edits Arkona outside this bridge is only picked up by the daily check.
-8. Lift read-only on Arkona with `WRITERS_MAX=1`, and agents at `propose`, for the first weeks.
+8. Lift read-only on Arkona (switch its own Read-only flag off on the Projects page) with `WRITERS_MAX=1`, and agents at `propose`, for the first weeks.
 9. Raise scopes when you're confident.
 
 ---

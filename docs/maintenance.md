@@ -120,7 +120,8 @@ and cells written differently from the confirmed style, Main counts that differ 
 not point at their age's table, and dates the engine cannot read. Default **weekly** (an interval: change it on the
 Maintenance page); a **background** job. The findings are on the dashboard's **Chronology** page, which can also run
 it at once (P2), with **Propose a fix** for a row without an event and for a date mismatch (one `sync_timeline_event`
-proposal each, for the owner to approve; the check itself still never repairs). Runs are kept in `chronology_checks`
+proposal each, for the owner to approve; the check itself still never repairs), and for a count mismatch (one proposal
+setting the age's Main count to its table's row count; hotfix of 15 November 2026). Runs are kept in `chronology_checks`
 (migration 1800); a run cut off by a restart is closed as failed by the next.
 
 ## `link-sweep` (v2 C2c)

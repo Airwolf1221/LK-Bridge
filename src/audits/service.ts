@@ -292,19 +292,18 @@ export class Audits {
       throw new AuditError('NO_FIX', 'This finding offers no fix: only the owner can decide what is right.');
     if (f.state !== 'open') throw new AuditError('FINDING_GONE', 'This finding is no longer present.');
     let r: FixResult;
-    if (f.fix.kind === 'chronology_sync') {
-      const c = await this.d.chronology.proposeFix(actor, projectId, {
-        age: String(f.fix.args.age),
-        rowId: String(f.fix.args.rowId),
-      });
+    if (f.fix.kind === 'chronology_sync' || f.fix.kind === 'chronology_count') {
+      const kind = f.fix.kind;
+      const c = await this.d.chronology.proposeFix(
+        actor,
+        projectId,
+        kind === 'chronology_count'
+          ? { kind: 'count', age: String(f.fix.args.age) }
+          : { age: String(f.fix.args.age), rowId: String(f.fix.args.rowId) },
+      );
       r =
         c.status === 'proposal_captured'
-          ? {
-              status: 'proposal_captured',
-              proposalId: c.proposalId,
-              summary: c.summary,
-              fix: 'chronology_sync',
-            }
+          ? { status: 'proposal_captured', proposalId: c.proposalId, summary: c.summary, fix: kind }
           : c;
     } else {
       r = await proposeFixVia({ engine: this.d.engine as never, now: this.d.now }, projectId, f, {

@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased: hotfix during E5 (15 November 2026): the round trip on Arkona, and a fix for a count mismatch
+
+[ADR 0046](adr/0046-e4-owner-decisions.md) decision 9; [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)'s
+note of 15 November; no migration. Nothing was run against a live system: no call to the owner's LegendKeeper bridge
+connector, the live dashboard or any other live service. Every test uses the mock; no sandbox run is needed.
+
+- **The Markdown round trip runs on any registered project, read-only by construction.** `deploy/markdown-roundtrip.sh
+--project arkona` now works without marking Arkona as a sandbox (never mark Arkona): the script resolves its project with
+  the new `resolveReadOnlyTarget` (any registered, not removed project; the key handling and every refusal as before), and
+  its runtime (`createReadOnlyRuntime`) has `LK_READ_ONLY=true`, a governor allow-list (`listProjects`, `listResources`,
+  `getDocumentBlocks`; anything else is refused with `OPERATION_NOT_ALLOWED` before a request) and a transport that sends
+  only GET. The report's header says whether the project is a sandbox and that the run was read-only. The sandbox, soak
+  and spike scripts and every sandbox test still refuse a project not marked as a sandbox (tested). It shares the
+  project's hourly budget, at P3.
+- **"Propose a fix" for a count mismatch.** The Chronology page's `count_mismatch` findings (when the Main table has a row
+  for the age) and the audits' `chronology_count_mismatch` (`fix: 'chronology_count'`) offer it: ONE ordinary proposal
+  setting that age's Event count cell in the Main table to the age table's row count, both re-read live, its summary
+  showing both figures (`Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline events …)`). Approved, it changes
+  only that cell, in the Main table's writing style (thousands separators, the cell's marks); a Main document changed
+  before approval, or the table's row count, conflicts and writes nothing. A count that already matches answers "nothing
+  to fix"; a Main table with no row for the age has no fix.
+- **Docs.** The E4 checklist item 3, the runbook's "Going live" and PLAN-v2 section 7: the bridge-wide `LK_READ_ONLY` is
+  already `false` (the test world takes writes); Arkona stays read-only by its own Read-only setting on the Projects page,
+  which item 21 lifts. Item 16 names the command. `docs/projects.md` and the runbook: only the sandbox, soak and spike
+  scripts refuse a project not marked as a sandbox; a new runbook section, "Markdown round trip".
+
 ## Unreleased: v2 E4: the second independent review, block-by-block page writes, and the concurrency acceptance tests
 
 [reviews/E4-2026-11.md](reviews/E4-2026-11.md); [ADR 0046](adr/0046-e4-owner-decisions.md) (proposed); no migration; PLAN-v2

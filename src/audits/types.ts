@@ -51,7 +51,9 @@ export type FixKind =
   /** `replaceBlock` for the first part and `insertBlock` for the rest, block by block. */
   | 'split_paragraph'
   /** D1.1's `sync_timeline_event`, through the chronology module's own "Propose a fix". */
-  | 'chronology_sync';
+  | 'chronology_sync'
+  /** v2 E5 hotfix: the age's Main count set to its table's row count, through the chronology module likewise. */
+  | 'chronology_count';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -351,6 +353,7 @@ export const CODES = {
     category: 'chronology',
     severity: 'warning',
     title: 'The Main table’s count differs from the table',
+    fix: 'chronology_count',
   },
   chronology_wrong_uri: {
     category: 'chronology',

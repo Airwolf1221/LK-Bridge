@@ -61,6 +61,12 @@ export interface GovernorOptions {
    * they change and on `close()` (`persist.ts`). Optional: without it the governor starts empty, as before.
    */
   readonly persistence?: GovernorPersistence;
+  /**
+   * v2 E5 hotfix (ADR 0046): when set, the only registry operations this governor will send. Any other `opId` is
+   * refused with `OPERATION_NOT_ALLOWED` before it is queued, counted or sent. Only the read-only runtime of the
+   * Markdown round trip sets it (test/sandbox/soak.ts, `createReadOnlyRuntime`); the bridge never does.
+   */
+  readonly allowedOperations?: ReadonlySet<string>;
 }
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._-]{1,255}$/;
@@ -173,9 +179,11 @@ export class Governor {
   private closed = false;
   private readonly persistence: GovernorPersistence | undefined;
   private saveTimer: TimerHandle | null = null;
+  private readonly allowedOperations: ReadonlySet<string> | undefined;
 
   constructor(options: GovernorOptions) {
     this.current = options.settings;
+    this.allowedOperations = options.allowedOperations ? new Set(options.allowedOperations) : undefined;
     this.clock = options.clock ?? systemClock;
     this.transport = options.transport ?? defaultTransport;
     this.random = options.random ?? Math.random;
@@ -233,6 +241,7 @@ export class Governor {
    * `maxShortWaitMs`).
    */
   async execute<T>(req: ExecuteRequest<T>): Promise<T> {
+    this.refuseOutsideAllowList(req);
     this.validate(req);
     let state: RetryState = INITIAL_RETRY_STATE;
     let attempts = 0;
@@ -447,6 +456,21 @@ export class Governor {
   }
 
   // ---------------------------------------------------------------------------------------------- admission
+
+  /** The allow-list (`GovernorOptions.allowedOperations`), checked before anything else: nothing is queued or sent. */
+  private refuseOutsideAllowList(req: ExecuteRequest<unknown>): void {
+    const allowed = this.allowedOperations;
+    if (allowed === undefined || allowed.has(req.opId)) return;
+    throw new BridgeLkError({
+      message:
+        `${req.opId} is not on this governor's allow-list (${[...allowed].join(', ')}); refused before any request. ` +
+        'This runtime is read-only by construction.',
+      code: 'OPERATION_NOT_ALLOWED',
+      retryable: false,
+      classification: 'bridge',
+      opId: req.opId,
+    });
+  }
 
   private validate(req: ExecuteRequest<unknown>): void {
     const invalid = (message: string) =>

@@ -612,6 +612,7 @@ export async function proposeFix(
     case 'split_paragraph':
       return fixSplit(d, projectId, f);
     case 'chronology_sync':
+    case 'chronology_count':
       throw new AuditError('USE_CHRONOLOGY', 'This fix goes through the chronology module.');
   }
 }

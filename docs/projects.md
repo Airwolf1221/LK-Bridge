@@ -98,7 +98,9 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- sandbox
 sudo -u lkbridge /opt/lk-bridge/app/deploy/lk-run.sh npm run projects -- list
 ```
 
-The scripts then take `--project test` and refuse any project not marked (`deploy/sandbox-test.sh`, `deploy/soak-sandbox.sh`, `deploy/spike-v2.sh`, `deploy/markdown-roundtrip.sh`; [runbook-deploy.md](runbook-deploy.md)). Never mark Arkona.
+The scripts then take `--project test` and refuse any project not marked (`deploy/sandbox-test.sh`, `deploy/soak-sandbox.sh`, `deploy/spike-v2.sh`; [runbook-deploy.md](runbook-deploy.md)). Never mark Arkona.
+
+The one exception is the Markdown round trip (`deploy/markdown-roundtrip.sh`, v2 E5 hotfix, [ADR 0046](adr/0046-e4-owner-decisions.md)): it only reads, so it accepts any registered project that has not been removed, sandbox or not, for example `--project arkona`. Its runtime is read-only by construction, whatever the project's own flags: `LK_READ_ONLY=true` in its own runtime, and an allow-list in its governor (`listProjects`, `listResources`, `getDocumentBlocks`; any other operation is refused before a request), and it sends only GET. It still refuses a project that is not registered or was removed, and a key whose own project is not the registered one. It shares the project's hourly budget, at the lowest priority (P3).
 
 They find the project's key exactly as the bridge does: the key in the encrypted store (opened with `SECRETS_MASTER_KEY`
 from the env file); only when nothing is stored for the project, the env file's `LK_PROJECT_<NAME>_API_KEY`; never the

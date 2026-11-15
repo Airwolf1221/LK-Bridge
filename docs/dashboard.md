@@ -406,6 +406,12 @@ project.
   paired event's minutes, `detail`, shape and `uri`, and never touches the table or the Main count. An ambiguous pairing
   (several events could be the row's), a change of that age that stopped part-way and a row that is gone are refused with
   their reason; a row whose event already agrees says so. After approving, run the check again: no findings.
+  Since the hotfix of 15 November 2026 a **Count mismatch** has the button too, when the Main table has a row for that
+  age: it re-reads the Main table and the age table and makes ONE proposal setting that age's **Event count** cell to the
+  table's row count (in the Main table's writing style; every other cell untouched). Its summary shows both figures, for
+  example `Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline events 335)`. A Main document changed before you
+  approve, or a row added to or removed from the table, makes it conflict, and nothing is written; a count that already
+  matches says "nothing to fix"; a Main table with no row for the age has no fix (add the row by hand).
 - **Changes.** The record of every chronology change, newest first: the tool and summary, the ages, the writes, who made
   it (and who approved it), its state (**complete**, **incomplete**, **resolved**) and its jobs linked to the Journal
   page. A change that stopped part-way is finished by the same request again; **Mark resolved** (asks for a

@@ -22,6 +22,8 @@ export interface LkClientConfig extends LkSettings {
   readonly governorInstance?: Governor;
   /** v1.0.1 (F-14): keep the governor's recent counts across restarts (the bridge passes its SQLite store). */
   readonly persistence?: GovernorPersistence;
+  /** v2 E5 hotfix: the only operations the governor may send (`GovernorOptions.allowedOperations`). */
+  readonly allowedOperations?: ReadonlySet<string>;
 }
 
 export interface LkCallRequest<T> {
@@ -66,6 +68,7 @@ export function createLkClient(config: LkClientConfig): LkClient {
       ...(config.transport ? { transport: config.transport } : {}),
       ...(config.random ? { random: config.random } : {}),
       ...(config.persistence ? { persistence: config.persistence } : {}),
+      ...(config.allowedOperations ? { allowedOperations: config.allowedOperations } : {}),
     });
   const sdk = new LegendKeeper({
     apiKey: config.apiKey,

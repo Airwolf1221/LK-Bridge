@@ -6,7 +6,8 @@
  * fake server (test/unit/sandbox-wrapper-fixture.ts): the bridge's database with keys in the encrypted store, env files
  * in each state, and a fake LegendKeeper inside each Node process that logs only a hash of the bearer token it was sent.
  * For each: the key comes from the store with no env key present; the env file's key is used when nothing is stored;
- * a key in neither place, and a project that is not a sandbox, are refused before any request; no key and no master key
+ * a key in neither place, and a project that is not a sandbox (but by the round trip, which is read-only by construction:
+ * ADR 0046), are refused before any request; no key and no master key
  * is ever exported to a process or printed (stdout and stderr are scanned for every secret). Then one end-to-end dry
  * run of the round trip in the retired-keys state.
  */
@@ -91,12 +92,20 @@ describe.each(wrappers)('deploy/%s', (wrapper) => {
     expectNoSecret(r.out);
   }, 120_000);
 
-  it('still refuses a project that is not marked as a sandbox, before any request', () => {
+  it('still refuses a project that is not marked as a sandbox, before any request (all but the round trip)', () => {
     const env = srv.envFile(`${wrapper}-arkona.env`, retiredEnv(srv.dbPath));
     const r = srv.run(wrapper, env, ['--project', 'arkona']);
     expect(r.status).not.toBe(0);
-    expect(r.out).toMatch(/not marked as a sandbox/);
-    expect(srv.tokensSeen()).toEqual([]);
+    if (wrapper === 'markdown-roundtrip.sh') {
+      // v2 E5 hotfix (ADR 0046): the round trip accepts a registered project that is not a sandbox, read-only by
+      // construction. It got past the guard to the fake LegendKeeper (which refuses the key) with Arkona's own key.
+      expect(r.out).not.toMatch(/not marked as a sandbox/);
+      expect(r.out).toContain('Project "arkona": using its key');
+      expect(srv.tokensSeen().length).toBeGreaterThan(0);
+    } else {
+      expect(r.out).toMatch(/not marked as a sandbox/);
+      expect(srv.tokensSeen()).toEqual([]);
+    }
     expectNoSecret(r.out);
   }, 120_000);
 });

@@ -3,8 +3,11 @@
  * 4.7, and the go-live gate in section 7, step 4). READ-ONLY: it sends only listProjects, listResources and
  * getDocumentBlocks, through the real job engine and governor at priority P3, so it gives way to agents and jobs.
  *
- * v2 A1: `--project NAME` names a project registered in the bridge's database (DB_PATH) and marked as a sandbox there;
- * any other project is refused before any request (test/sandbox/target.ts), as for the spike and the soak. Its key is
+ * v2 A1: `--project NAME` names a project registered in the bridge's database (DB_PATH). v2 E5 hotfix (ADR 0046): any
+ * registered, not removed project, sandbox or not (Arkona included: `resolveReadOnlyTarget` in test/sandbox/target.ts),
+ * because the runtime is read-only by construction (`createReadOnlyRuntime`): LK_READ_ONLY=true, the governor's
+ * allow-list (ROUNDTRIP_OPS: listProjects, listResources, getDocumentBlocks; anything else is refused before a request)
+ * and a transport that sends only GET. An unregistered or removed project is still refused before any request. Its key is
  * found as the bridge finds it: the key in the bridge's encrypted store (OPS2), or, only when none is stored, the env
  * file's `LK_PROJECT_<NAME>_API_KEY` (`LK_API_KEY` in the single-project form). It refuses to run unless the key's own
  * project is exactly the registered one, uses a temporary database, and never prints a secret. On the server,
@@ -18,12 +21,17 @@
 import { mkdirSync } from 'node:fs';
 import { fileStamp } from '../test/sandbox/spike-report.js';
 import { SandboxGuardError } from '../test/sandbox/smoke.js';
-import { createSoakRuntime, type SoakRuntime } from '../test/sandbox/soak.js';
-import { keySourceLine, resolveSandboxTarget, type SandboxTarget } from '../test/sandbox/target.js';
-import { formatRoundTripReport, runRoundTrip, writeRoundTripReport } from './markdown-roundtrip-core.js';
+import { createReadOnlyRuntime, type SoakRuntime } from '../test/sandbox/soak.js';
+import { keySourceLine, resolveReadOnlyTarget, type ReadOnlyTarget } from '../test/sandbox/target.js';
+import {
+  ROUNDTRIP_OPS,
+  formatRoundTripReport,
+  runRoundTrip,
+  writeRoundTripReport,
+} from './markdown-roundtrip-core.js';
 
 const USAGE = `usage: npm run roundtrip -- --project NAME [flags]
-  --project NAME   the project to check (registered by the bridge and marked as a sandbox)
+  --project NAME   the project to check (any project registered by the bridge, sandbox or not; always read-only)
   --root ID        only pages of this resource and everything under it (default: the whole project)
   --max-pages N    stop after N pages (a quick trial)
   --out-dir DIR    where the report and reproductions go (default /var/lib/lk-bridge/roundtrip)
@@ -58,9 +66,9 @@ async function main(): Promise<void> {
     return;
   }
   const flags = parseArgs(process.argv.slice(2));
-  let target: SandboxTarget;
+  let target: ReadOnlyTarget;
   try {
-    target = resolveSandboxTarget(flags.get('--project'));
+    target = resolveReadOnlyTarget(flags.get('--project'));
   } catch (e) {
     if (e instanceof SandboxGuardError) fail(e.message);
     throw e;
@@ -96,7 +104,11 @@ async function main(): Promise<void> {
 
   let rt: SoakRuntime;
   try {
-    rt = await createSoakRuntime({ apiKey: target.apiKey, project: target.name, writersMax: 1 });
+    rt = await createReadOnlyRuntime({
+      apiKey: target.apiKey,
+      project: target.name,
+      allowedOperations: ROUNDTRIP_OPS,
+    });
   } catch (e) {
     if (e instanceof SandboxGuardError) fail(e.message);
     throw e;
@@ -105,7 +117,10 @@ async function main(): Promise<void> {
   try {
     const started = new Date();
     const stamp = fileStamp(started);
-    process.stderr.write(`Markdown round trip of project "${target.name}": read-only, every read at P3.\n`);
+    process.stderr.write(
+      `Markdown round trip of project "${target.name}" (${target.isSandbox ? 'a sandbox' : 'not a sandbox'}): ` +
+        `read-only, only ${[...ROUNDTRIP_OPS].join(', ')}, every read at P3.\n`,
+    );
     const out = await runRoundTrip(
       { engine: rt.runtime.engine, lk: rt.lk, projectId: rt.projectId, counters: rt.counters },
       target.projectId,
@@ -122,6 +137,11 @@ async function main(): Promise<void> {
     const report = formatRoundTripReport(out, {
       generatedAt: started.toISOString(),
       projectId: `${target.name} (${target.projectId})`,
+      access: {
+        isSandbox: target.isSandbox,
+        readOnly: rt.runtime.engine.queries.controls(rt.projectId).readOnly,
+        allowedOperations: [...ROUNDTRIP_OPS],
+      },
       ...(root !== undefined ? { root } : {}),
       ...(listKeep !== undefined ? { listKeep } : {}),
       requests: { total: rt.counters.requests, reads: rt.counters.reads, writes: rt.counters.writes },

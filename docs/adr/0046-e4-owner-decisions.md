@@ -110,6 +110,31 @@ on refusals reliably (E3's evaluation). **Owner to confirm.**
   rather than generating a new image each run, because an assistant producing valid PNG bytes in chat is unreliable and
   deduplication is a behaviour PLAN-v2 4.10 wants. To exercise the upload again, delete the earlier asset first.
 
+## Decision 9: the Markdown round trip's read-only target (implemented; hotfix of 15 November 2026, during E5)
+
+The E4 checklist (item 16) and PLAN-v2 section 7 step 4 require the round trip over every Arkona page before writes go on,
+but the script resolved its project with `resolveSandboxTarget`, which refuses any project not marked as a sandbox, and
+Arkona must never be marked: the soak's runtime is built with `LK_READ_ONLY: 'false'` and a temporary database of its
+own, so it would not see Arkona's own read-only flag, and while Arkona was marked the sandbox, soak and spike scripts could
+write to it. **Implemented:**
+
+- `resolveReadOnlyTarget` (test/sandbox/target.ts) accepts any registered project that has not been removed, sandbox or
+  not, and says which (`isSandbox`). The key handling, the database opened read-only, the key's own-project check and
+  every refusal are `resolveSandboxTarget`'s, which is unchanged; only a missing `--project` is worded without asking for a
+  sandbox. Only `scripts/markdown-roundtrip.ts` uses it (a unit test checks that the spike, the soak and every
+  `test/sandbox/*.test.ts` keep `resolveSandboxTarget`).
+- The round trip's runtime is read-only by construction (`createReadOnlyRuntime` in test/sandbox/soak.ts), belt and
+  braces: `LK_READ_ONLY=true` (applied last, so no extra environment lifts it) and one writer; an operation allow-list in
+  the governor (`GovernorOptions.allowedOperations`, through `createLkClient`, the project registry and
+  `RuntimeOptions.lkAllowedOperations`): only `listProjects`, `listResources` and `getDocumentBlocks`, the round trip's
+  `ROUNDTRIP_OPS`; any other operation is refused with `OPERATION_NOT_ALLOWED` before it is queued, counted or sent; and a
+  transport that refuses any method but GET and HEAD. No other read is needed (the runtime's own key check is
+  `listProjects`). The soak's own `createSoakRuntime` default is unchanged; the bridge never sets an allow-list.
+- The report's header says whether the project is a sandbox and that the run was read-only, with the allow-list ("Project:
+  not a sandbox, read-only."). It shares the project's hourly budget with the bridge, at P3.
+
+Alternative: mark Arkona as a sandbox for the run. Rejected (above). **Owner to confirm.**
+
 ## Consequences
 
 - No migration. Two documented behaviours change: `write_page` and restores on icon pages (decision 1), and promoting a

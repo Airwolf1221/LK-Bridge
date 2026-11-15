@@ -128,3 +128,34 @@ the check inside the lock; a block write with no version in its body (a `deleteB
 - The sandbox again (`deploy/sandbox-test.sh --project test`): B12 should pass. If it does not, switch
   `useEtagVersions` off and send the report.
 - For E5: run `chronology-check` on Arkona and propose fixes before the move is called done.
+
+## Note (15 November 2026, hotfix during E5): "Propose a fix" for a count mismatch
+
+`count_mismatch` (the Main table's Event count cell against the age table's row count) had no fix: on the test world the
+4A row said 337 against 336 rows, and the owner could only correct it by hand. It now has one, through the same
+machinery as decision 8 (`Chronology.proposeFix` with `kind: 'count'`; src/chronology/count.ts):
+
+- It plans ONE change: the age's Event count cell in the Main table set to the age table's row count. Both sides are
+  re-read live (the calendar, the Main document, the age table, and the age's timeline events, shown only), so a count
+  that already matches answers `nothing_to_do` ("nothing to fix") and proposes nothing, and a Main table with no row for
+  the age has no fix (`MAIN_ROW_NOT_FOUND`, saying so); a count that is not a number is refused (`COUNT_UNREADABLE`).
+- It is captured as ONE ordinary proposal whatever the caller (`forceProposal`, proposed by the dashboard, audited
+  `chronology.propose_fix`), as decision 8's. The canon rules apply unchanged: the Universal Chronology is Authoritative,
+  but a cell edit is a content edit (ADR 0036 decision 6, option (a)), so no canon approval.
+- Approving runs the ordinary chronology job (decision 7; record tool `chronology_count_fix`): the Main document and the
+  age table locked, `bridge.expect` inside the lock, ONE `updateBlock` of the count cell's paragraph with its If-Match
+  chained from the in-lock read, `bridge.verify`, the journal (the cell's pre-image), the record. The new text keeps the
+  Main table's learned style (`formatCount`: thousands separators when the Main table writes them) and the cell's first
+  run's marks; every other cell and block is untouched.
+- Its compare-and-swap: unlike the timeline tools' count writes (ADR 0038, judged only inside the lock), the proposal
+  captures the Main document's version, so any change to the Main document between the proposal and its approval ends it
+  `conflicted` as usual; inside the lock the Main count must still be the one read (`expectBefore`) and the age table must
+  still have the rows read (a new `row.count` assertion, `TableOp` `rows`), or the job stops before the write.
+- The proposal's summary shows both figures, for example `Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline
+events 335)`, so the owner can see which side changed before approving.
+- The dashboard's Chronology page shows the button on a `count_mismatch` finding whose age has a Main row
+  (`POST /chronology/propose-fix` with `kind: 'count'` and no `rowId`), and the audits' `chronology_count_mismatch` has
+  `fix: 'chronology_count'`, routed through the chronology module as `chronology_sync` is.
+- Cost: 4 reads to plan and capture (the calendar, the Main document, the age table, one page of events per 100, and the
+  proposal's capture of the Main document's version), no write; approving: the in-lock reads of the two documents, one
+  write, the verify read.

@@ -108,6 +108,11 @@ export async function createSoakRuntime(o: {
   readonly transport?: Transport;
   /** Where the runtime logs (tests capture it); default stdout. */
   readonly logStream?: Writable;
+  /**
+   * v2 E5 hotfix (ADR 0046): build the runtime read-only instead (`createReadOnlyRuntime`). Unset (the soak, the spike,
+   * the sandbox tests): writes allowed, as before.
+   */
+  readonly readOnly?: { readonly allowedOperations: ReadonlySet<string> };
 }): Promise<SoakRuntime> {
   const dir = mkdtempSync(join(tmpdir(), 'lkb-soak-'));
   const db = openDatabase(join(dir, 'soak.db'));
@@ -119,15 +124,18 @@ export async function createSoakRuntime(o: {
     LK_PROJECTS: name,
     [projectKeyVariable(name)]: o.apiKey,
     LK_DEFAULT_PROJECT: name,
-    LK_READ_ONLY: 'false',
+    LK_READ_ONLY: o.readOnly ? 'true' : 'false',
     LOG_LEVEL: 'warn',
-    WRITERS_MAX: String(o.writersMax ?? 2),
+    WRITERS_MAX: String(o.readOnly ? 1 : (o.writersMax ?? 2)),
     SESSION_SECRET: secret(),
     JWT_SIGNING_KEY: secret(),
     ...(o.baseUrl ? { LK_BASE_URL: o.baseUrl } : {}),
     ...o.env,
+    // Last, so no extra environment can undo it.
+    ...(o.readOnly ? { LK_READ_ONLY: 'true' } : {}),
   });
   const counters = newCounters();
+  const counted = countingTransport(o.transport ?? defaultTransport, counters);
   const runtime = createRuntime({
     config,
     // The owner's sandbox run of 12 November 2026: DEFAULT_TOOLS_SETTINGS has `images.dataDir: null` ("`images/` next to the
@@ -141,7 +149,8 @@ export async function createSoakRuntime(o: {
     },
     db,
     version: 'soak',
-    lkTransport: countingTransport(o.transport ?? defaultTransport, counters),
+    lkTransport: o.readOnly ? readsOnlyTransport(counted) : counted,
+    ...(o.readOnly ? { lkAllowedOperations: o.readOnly.allowedOperations } : {}),
     maintenanceSettings: defaultMaintenanceSettings({ enabled: false }),
     // C2d: a temporary database of its own that keeps no secrets; the key is handed over directly (target.ts opened
     // the bridge's store with the env file's master key), and the wrappers keep that master key out of every
@@ -164,6 +173,50 @@ export async function createSoakRuntime(o: {
     );
   }
   return { runtime, counters, projectId: view.id, lk, db, close };
+}
+
+/**
+ * The third brace of the read-only runtime: whatever got past the engine's read-only flag and the governor's allow-list,
+ * a request with any method but GET or HEAD is refused here, before it reaches the network (and before it is counted).
+ */
+export function readsOnlyTransport(inner: Transport): Transport {
+  return (input, init) => {
+    const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') {
+      return Promise.reject(
+        new SandboxGuardError(`Refused a ${method} request: this runtime is read-only and sends only reads.`),
+      );
+    }
+    return inner(input, init);
+  };
+}
+
+/**
+ * v2 E5 hotfix (ADR 0046): the runtime of the Markdown round trip, read-only by construction, for any registered
+ * project (sandbox or not, Arkona included). Belt and braces: `LK_READ_ONLY=true` (the engine refuses every write, and
+ * no extra environment can lift it), one writer, the governor's allow-list (`allowedOperations`: any other operation
+ * is refused before a request), and a transport that refuses any method but GET and HEAD. Its own temporary database,
+ * as for the soak; the soak's own `createSoakRuntime` default (writes allowed) is unchanged.
+ */
+export function createReadOnlyRuntime(o: {
+  readonly apiKey: string;
+  readonly project: string;
+  readonly allowedOperations: ReadonlySet<string>;
+  readonly baseUrl?: string;
+  readonly env?: Readonly<Record<string, string>>;
+  readonly transport?: Transport;
+  readonly logStream?: Writable;
+}): Promise<SoakRuntime> {
+  return createSoakRuntime({
+    apiKey: o.apiKey,
+    project: o.project,
+    writersMax: 1,
+    readOnly: { allowedOperations: o.allowedOperations },
+    ...(o.baseUrl ? { baseUrl: o.baseUrl } : {}),
+    ...(o.env ? { env: o.env } : {}),
+    ...(o.transport ? { transport: o.transport } : {}),
+    ...(o.logStream ? { logStream: o.logStream } : {}),
+  });
 }
 
 export interface SoakTarget {

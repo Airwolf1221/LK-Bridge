@@ -22,6 +22,7 @@ export type BridgeErrorCode =
   | 'ONE_REQUEST_PER_CALL'
   | 'IF_MATCH_REQUIRED'
   | 'INVALID_REQUEST'
+  | 'OPERATION_NOT_ALLOWED'
   | 'BUDGET_WAIT'
   | 'UNEXPECTED';
 

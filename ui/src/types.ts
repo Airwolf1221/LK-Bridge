@@ -1264,7 +1264,12 @@ export interface ChronologyCheckResponse {
 
 export interface ChronologyRecordView {
   id: number;
-  tool: 'create_timeline_event' | 'update_timeline_event' | 'delete_timeline_event' | 'sync_timeline_event';
+  tool:
+    | 'create_timeline_event'
+    | 'update_timeline_event'
+    | 'delete_timeline_event'
+    | 'sync_timeline_event'
+    | 'chronology_count_fix';
   summary: string;
   ages: string[];
   state: 'incomplete' | 'complete' | 'resolved';
