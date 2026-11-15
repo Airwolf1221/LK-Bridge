@@ -151,9 +151,10 @@ export const registerChronology: Register = (api, ctx) => {
   });
 
   /**
-   * "Propose a fix" for one finding of the check: `sync_timeline_event` for that table row, captured as ONE proposal (the
-   * owner approves it as normal on the Proposals page). Reads about 3 requests to plan; writes nothing. Audited
-   * `chronology.propose_fix`.
+   * "Propose a fix" for one finding of the check: `sync_timeline_event` for that table row, or (v2 E5 hotfix,
+   * `kind: 'count'`) the age's Main count set to its table's row count, captured as ONE proposal (the owner approves it
+   * as normal on the Proposals page). Reads about 3 requests to plan (the count fix: the calendar, the Main document,
+   * the age table and one page of events per 100); writes nothing. Audited `chronology.propose_fix`.
    */
   api.post('/chronology/propose-fix', async (req) => {
     const b = parseInput(
@@ -162,14 +163,24 @@ export const registerChronology: Register = (api, ctx) => {
           confirm: z.literal(true),
           project: projectParam,
           age: z.string().min(1).max(200),
-          rowId: z.string().min(1).max(64),
+          // v2 E5 hotfix: `count` proposes the Main count of the age set to its table's row count (no row).
+          kind: z.enum(['sync', 'count']).optional(),
+          rowId: z.string().min(1).max(64).optional(),
         })
-        .strict(),
+        .strict()
+        .refine((x) => x.kind === 'count' || x.rowId !== undefined, {
+          message: 'rowId is required unless kind is count',
+          path: ['rowId'],
+        }),
       req.body,
     );
     const p = ctx.project(b.project);
     try {
-      return await chronology().proposeFix('owner', p.id, { age: b.age, rowId: b.rowId });
+      return await chronology().proposeFix(
+        'owner',
+        p.id,
+        b.kind === 'count' ? { kind: 'count', age: b.age } : { age: b.age, rowId: b.rowId! },
+      );
     } catch (e) {
       if (e instanceof ChronologyError) {
         const conflict = [
@@ -179,6 +190,8 @@ export const registerChronology: Register = (api, ctx) => {
           'CHRONOLOGY_NOT_CONFIGURED',
           'CHRONOLOGY_CHANGED',
           'EVENT_TAKEN',
+          'MAIN_ROW_NOT_FOUND',
+          'COUNT_UNREADABLE',
         ];
         throw new AdminHttpError(conflict.includes(e.code) ? 409 : 400, e.code, e.message, e.details);
       }

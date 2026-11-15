@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Runs the Markdown round trip (`npm run roundtrip`) on the server against a SANDBOX project the bridge has registered
-# (v2 A1): every page of the project is read, converted to Markdown and back, and checked to come back identical with an
-# empty write plan. READ-ONLY. Run as lkbridge:
+# Runs the Markdown round trip (`npm run roundtrip`) on the server against ANY project the bridge has registered and not
+# removed, sandbox or not (v2 E5 hotfix, ADR 0046): every page of the project is read, converted to Markdown and back,
+# and checked to come back identical with an empty write plan. ALWAYS READ-ONLY. Run as lkbridge:
 #
-#   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test
-#   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test --max-pages 50   # a trial
+#   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project arkona --max-pages 20   # a trial
+#   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project arkona                  # every page
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test --root <resourceId>
 #   sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project test --list-keep paragraph
 #       (v2 C1: also lists every paragraph kept read-only, with the characters that made it so, as \n or \u0007)
@@ -12,11 +12,14 @@
 # Every other argument goes to the script (see `npm run roundtrip -- --help`).
 #
 # Like spike-v2.sh: it exports only DB_PATH and the env file's path and reads no key; the script finds the project's key
-# as the bridge does (its encrypted store first, the env file's key only when nothing is stored) and prints none. The
-# script refuses any project not registered as a sandbox in the bridge's database (`npm run projects -- sandbox <name>
-# on`), and any key whose own project is not exactly that one; it sends only reads (listProjects, listResources,
-# getDocumentBlocks: about one per page) at the lowest priority, and uses its own temporary database. It draws on the
-# same rate budget as the bridge does for that project, but gives way to agents and jobs.
+# as the bridge does (its encrypted store first, the env file's key only when nothing is stored) and prints none. Unlike
+# the sandbox, soak and spike scripts, it needs no sandbox mark (never mark Arkona): it refuses only a project that is
+# not registered in the bridge's database or was removed, and any key whose own project is not exactly that one. It is
+# read-only by construction, whatever the project's own flags: its runtime has LK_READ_ONLY=true, a governor that allows
+# only listProjects, listResources and getDocumentBlocks (anything else is refused before a request), and a transport
+# that sends only GET; it uses its own temporary database. The report's header says whether the project is a sandbox and
+# that the run was read-only. It shares the project's hourly budget with the bridge (about one read per page), at the
+# lowest priority (P3), so it gives way to agents and jobs.
 #
 # The report is printed and written to /var/lib/lk-bridge/roundtrip/roundtrip-<timestamp>.md (the data directory), with
 # a minimal reproduction of each failing page in /var/lib/lk-bridge/roundtrip/roundtrip-<timestamp>/.

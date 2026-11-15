@@ -215,7 +215,7 @@ class Reader {
 }
 
 /**
- * Runs the round trip. `expectedProjectId` is the registered sandbox project's LegendKeeper id (resolveSandboxTarget);
+ * Runs the round trip. `expectedProjectId` is the registered project's LegendKeeper id (resolveReadOnlyTarget);
  * throws SandboxGuardError (nothing read beyond the project list) if the key's own project is not exactly that one.
  */
 export async function runRoundTrip(
@@ -357,6 +357,15 @@ export async function runRoundTrip(
 export interface ReportMeta {
   readonly generatedAt: string;
   readonly projectId: string;
+  /**
+   * v2 E5 hotfix (ADR 0046): what the header says about the run's access: whether the project is a sandbox, whether the
+   * runtime was read-only, and the operations its governor allowed. Absent in older callers: no access line.
+   */
+  readonly access?: {
+    readonly isSandbox: boolean;
+    readonly readOnly: boolean;
+    readonly allowedOperations: readonly string[];
+  };
   readonly root?: string;
   /** v2 C1: the kind `--list-keep` asked for. */
   readonly listKeep?: string;
@@ -369,6 +378,14 @@ const clip = (v: unknown, n = 160) => {
   const s = typeof v === 'string' ? v : (JSON.stringify(v) ?? 'undefined');
   return s.length > n ? `${s.slice(0, n)}…` : s;
 };
+
+/** The header's access line, for example "Project: not a sandbox, read-only (allow-list: …)." */
+export function accessLine(a: NonNullable<ReportMeta['access']>): string {
+  return (
+    `- **Project: ${a.isSandbox ? 'a sandbox' : 'not a sandbox'}, ${a.readOnly ? 'read-only' : 'NOT read-only'}.** ` +
+    `The run's governor allowed only ${a.allowedOperations.map(code).join(', ')}; anything else is refused before a request.`
+  );
+}
 
 /** The Markdown report. Page content appears only in each failure's first difference (clipped). */
 export function formatRoundTripReport(out: RoundTripOutcome, meta: ReportMeta): string {
@@ -385,6 +402,7 @@ export function formatRoundTripReport(out: RoundTripOutcome, meta: ReportMeta): 
     `# Markdown round trip`,
     '',
     `- Generated ${meta.generatedAt} for project ${code(meta.projectId)}${meta.root ? `, subtree ${code(meta.root)}` : ', whole project'}.`,
+    ...(meta.access ? [accessLine(meta.access)] : []),
     `- **Verdict: ${failed.length === 0 && unread.length === 0 && !out.interrupted ? 'PASS' : failed.length > 0 ? 'FAIL' : 'INCOMPLETE'}.** Pages checked: ${checked.length}; passed: ${checked.length - failed.length}; failed: ${failed.length}; could not be read: ${unread.length}.`,
     `- Resources scanned: ${out.resources}; other documents (maps, timelines, boards, blank) skipped: ${out.otherDocuments}.${out.truncated ? ' Stopped at --max-pages.' : ''}${out.interrupted ? ' **Interrupted before the end.**' : ''}`,
     `- Requests: ${meta.requests.total} (${meta.requests.reads} reads, ${meta.requests.writes} writes). Duration ${Math.round(out.durationMs / 1000)} s.`,

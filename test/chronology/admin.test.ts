@@ -45,6 +45,21 @@ describe('the chronology admin routes', () => {
     const r = await stack.post('/api/admin/chronology/propose-fix', { confirm: true, ...body });
     expect(r.status).toBe(409);
     expect(r.json.error.code).toBe('CHRONOLOGY_NOT_CONFIGURED');
+    // v2 E5 hotfix: a count mismatch's fix names the age only (`kind: 'count'`); the timeline fix still needs its row.
+    const count = await stack.post('/api/admin/chronology/propose-fix', {
+      confirm: true,
+      project: name,
+      age: 'Fourth Arkonan Age',
+      kind: 'count',
+    });
+    expect(count.status).toBe(409);
+    expect(count.json.error.code).toBe('CHRONOLOGY_NOT_CONFIGURED');
+    const noRow = await stack.post('/api/admin/chronology/propose-fix', {
+      confirm: true,
+      project: name,
+      age: 'Fourth Arkonan Age',
+    });
+    expect(noRow.status).toBe(400);
   });
 
   it('refuses the check until the chronology is confirmed, and lists no changes', async () => {

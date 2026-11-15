@@ -9,7 +9,7 @@
  * wrappers), only the names it needs are read from that file. The wrappers end to end: test/unit/sandbox-wrappers.test.ts.
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -18,7 +18,13 @@ import { openDatabase } from '../../src/db/open.js';
 import { ProjectStore } from '../../src/projects/index.js';
 import { SecretStore, resolveProjectKey } from '../../src/secrets/index.js';
 import { SandboxGuardError } from '../sandbox/smoke.js';
-import { keyNames, keySourceLine, projectFlag, resolveSandboxTarget } from '../sandbox/target.js';
+import {
+  keyNames,
+  keySourceLine,
+  projectFlag,
+  resolveReadOnlyTarget,
+  resolveSandboxTarget,
+} from '../sandbox/target.js';
 
 let dir: string;
 let dbPath: string;
@@ -157,6 +163,88 @@ describe('resolveSandboxTarget', () => {
   });
 });
 
+describe('resolveReadOnlyTarget (v2 E5 hotfix: the Markdown round trip only)', () => {
+  it('accepts any registered project, sandbox or not, and says which', () => {
+    expect(resolveReadOnlyTarget('arkona', multi, dbPath)).toEqual({
+      name: 'arkona',
+      projectId: 'lkp_arkona',
+      apiKey: REAL,
+      keySource: 'env',
+      keyVariable: 'LK_PROJECT_ARKONA_API_KEY',
+      isSandbox: false,
+    });
+    expect(resolveReadOnlyTarget('test', multi, dbPath)).toMatchObject({
+      projectId: 'lkp_test',
+      isSandbox: true,
+    });
+    expect(resolveReadOnlyTarget('stored', { SECRETS_MASTER_KEY: MASTER }, dbPath)).toMatchObject({
+      apiKey: STORED,
+      keySource: 'store',
+      isSandbox: true,
+    });
+  });
+
+  it('refuses exactly as resolveSandboxTarget does, but for the sandbox mark', () => {
+    const message = (f: () => unknown) => {
+      try {
+        f();
+      } catch (e) {
+        expect(e).toBeInstanceOf(SandboxGuardError);
+        return (e as Error).message;
+      }
+      throw new Error('not refused');
+    };
+    const cases: [string | undefined, NodeJS.ProcessEnv, string][] = [
+      ['nowhere', multi, dbPath],
+      ['Bad Name', multi, dbPath],
+      ['gone', { LK_PROJECT_GONE_API_KEY: KEY }, dbPath],
+      ['test', multi, join(dir, 'missing.db')],
+      ['test', { LK_PROJECTS: 'test', LK_PROJECT_ARKONA_API_KEY: REAL }, dbPath],
+      ['stored', { LK_PROJECT_STORED_API_KEY: KEY }, dbPath],
+      ['test', { LKB_ENV_FILE: join(dir, 'missing.env') }, dbPath],
+    ];
+    for (const [name, env, db] of cases) {
+      const ro = message(() => resolveReadOnlyTarget(name, env, db));
+      expect(ro).toBe(message(() => resolveSandboxTarget(name, env, db)));
+      for (const secret of [KEY, REAL, STORED, MASTER]) expect(ro).not.toContain(secret);
+    }
+    // A missing name: the same refusal, without asking for a sandbox.
+    expect(message(() => resolveReadOnlyTarget(undefined, multi, dbPath))).toMatch(/--project <name>/);
+  });
+
+  it('resolveSandboxTarget still refuses a project that is not a sandbox, and returns what it did before', () => {
+    expect(() => resolveSandboxTarget('arkona', multi, dbPath)).toThrow(/not marked as a sandbox/);
+    expect(Object.keys(resolveSandboxTarget('test', multi, dbPath)).sort()).toEqual([
+      'apiKey',
+      'keySource',
+      'keyVariable',
+      'name',
+      'projectId',
+    ]);
+  });
+
+  it('only scripts/markdown-roundtrip.ts uses it; the spike, the soak and every sandbox test keep the sandbox guard', () => {
+    const root = new URL('../../', import.meta.url).pathname;
+    const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
+    const users = (rel: string) => /\b(resolveReadOnlyTarget|createReadOnlyRuntime)\(/.test(read(rel));
+    const scripts = readdirSync(join(root, 'scripts')).filter((f) => f.endsWith('.ts'));
+    expect(scripts.filter((f) => users(`scripts/${f}`))).toEqual(['markdown-roundtrip.ts']);
+    expect(read('scripts/markdown-roundtrip.ts')).not.toMatch(/resolveSandboxTarget|createSoakRuntime\(/);
+    for (const f of ['scripts/soak-sandbox.ts', 'scripts/spike-v2.ts']) {
+      expect(read(f)).toMatch(/resolveSandboxTarget\(/);
+      expect(users(f)).toBe(false);
+    }
+    const sandboxTests = readdirSync(join(root, 'test/sandbox')).filter((f) => f.endsWith('.test.ts'));
+    expect(sandboxTests.length).toBeGreaterThan(5);
+    for (const f of sandboxTests) {
+      const src = read(`test/sandbox/${f}`);
+      expect(users(`test/sandbox/${f}`), f).toBe(false);
+      // Each one that reaches a project resolves it with the sandbox guard.
+      if (/LKB_SANDBOX_PROJECT|projectName/.test(src)) expect(src, f).toMatch(/resolveSandboxTarget\(/);
+    }
+  });
+});
+
 describe('resolveProjectKey: the bridge’s rule, for the tools beside it', () => {
   it('store first; the env key only when nothing is stored; a database from before OPS2 uses the env key', () => {
     const db = openDatabase(':memory:');
@@ -188,7 +276,7 @@ describe('resolveProjectKey: the bridge’s rule, for the tools beside it', () =
   });
 });
 
-describe('the scripts refuse a project that is not a sandbox (no request is made)', () => {
+describe('the scripts refuse a project that is not a sandbox (no request is made); the round trip, one not registered', () => {
   const tsx = new URL('../../node_modules/.bin/tsx', import.meta.url).pathname;
   const run = (script: string, args: string[]) =>
     spawnSync(tsx, [new URL(`../../scripts/${script}`, import.meta.url).pathname, ...args], {
@@ -216,6 +304,16 @@ describe('the scripts refuse a project that is not a sandbox (no request is made
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/not marked as a sandbox/);
     expect(`${r.stdout}${r.stderr}`).not.toContain(REAL);
+  }, 60_000);
+
+  it('roundtrip refuses a project that is not registered, or was removed, before any request (v2 E5 hotfix)', () => {
+    const unknown = run('markdown-roundtrip.ts', ['--project', 'nowhere', '--out-dir', join(dir, 'rt')]);
+    expect(unknown.status).toBe(2);
+    expect(unknown.stderr).toMatch(/is not registered/);
+    const gone = run('markdown-roundtrip.ts', ['--project', 'gone', '--out-dir', join(dir, 'rt')]);
+    expect(gone.status).toBe(2);
+    expect(gone.stderr).toMatch(/removed on the dashboard/);
+    for (const r of [unknown, gone]) expect(`${r.stdout}${r.stderr}`).not.toContain(REAL);
   }, 60_000);
 
   it('soak:sandbox without --project', () => {

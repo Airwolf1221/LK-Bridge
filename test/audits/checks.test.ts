@@ -707,6 +707,31 @@ describe('the chronology fold-in', () => {
     expect(find(out, 'chronology_wrong_kcy').source).toMatchObject({ kind: 'chronology-check', checkId: 9 });
   });
 
+  it('offers the count fix for a count mismatch with a Main row, and none when the Main table has no row (v2 E5 hotfix)', () => {
+    const counts: CheckRun = {
+      ...run,
+      findings: [
+        {
+          kind: 'count_mismatch',
+          age: 'Fourth Age',
+          message: 'The Main table says 337; the table has 336 rows (the timeline 335 events).',
+          detail: { main: '337', rows: 336, events: 335 },
+        },
+        {
+          kind: 'count_mismatch',
+          age: 'Third Age',
+          message: 'The Main table has no row m3 for Third Age.',
+          detail: { main: null, rows: 12, events: 12 },
+        },
+      ],
+    };
+    const out = chronologyCheck(context(model([ROOT]), { chronologyConfigured: true, chronology: counts }));
+    const fourth = out.find((f) => f.message.startsWith('Fourth Age'))!;
+    const third = out.find((f) => f.message.startsWith('Third Age'))!;
+    expect(fourth.fix).toMatchObject({ kind: 'chronology_count', args: { age: 'Fourth Age' } });
+    expect(third.fix).toBeUndefined();
+  });
+
   it('is silent when the chronology is not confirmed, and says so when it was never checked', () => {
     expect(chronologyCheck(context(model([ROOT])))).toEqual([]);
     expect(codes(chronologyCheck(context(model([ROOT]), { chronologyConfigured: true })))).toEqual([

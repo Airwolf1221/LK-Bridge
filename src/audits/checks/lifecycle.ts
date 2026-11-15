@@ -286,6 +286,8 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
     const id = str(d.rowId) || str(d.eventId);
     const fixable =
       (f.kind === 'row_without_event' || f.kind === 'date_mismatch') && typeof d.rowId === 'string';
+    // v2 E5 hotfix: a count mismatch has a fix when the Main table has a row for the age (it has a count to set).
+    const countFixable = f.kind === 'count_mismatch' && typeof d.main === 'string';
     out.push({
       code,
       key: `${f.age}:${f.kind}:${id}:${f.kind === 'count_mismatch' ? '' : str(d.cell) || str(d.date)}`,
@@ -302,7 +304,15 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
               summary: `Propose sync_timeline_event for the ${f.age} row.`,
             },
           }
-        : {}),
+        : countFixable
+          ? {
+              fix: {
+                kind: 'chronology_count' as const,
+                args: { age: f.age },
+                summary: `Propose setting the ${f.age} count on the Main table to its table's row count.`,
+              },
+            }
+          : {}),
     });
   }
   return out;

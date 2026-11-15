@@ -98,8 +98,27 @@ export interface MaintenanceJobView {
   readonly scheduleOverridden: boolean;
   readonly priority: 'P3';
   readonly running: boolean;
+  /**
+   * v2 E5.1: the project a per-project job is running for now (its current target), or null (not running, waiting, or
+   * a bridge-wide run). In memory: the bridge's own record of what it is doing.
+   */
+  readonly runningProjectId: string | null;
+  /** v2 E5.1: a per-project job's state for each project (absent for a bridge-wide job). */
+  readonly projects?: readonly ProjectRunLine[];
+  /** The newest run of any project (`projectId` says whose). */
   readonly lastRun: RunView | null;
   readonly nextRunAt: number | null;
   /** Why a not-implemented job cannot be switched on. */
   readonly note: string | null;
+}
+
+/** v2 E5.1: one project's line of a per-project job on the Maintenance page. */
+export interface ProjectRunLine {
+  readonly projectId: string;
+  /** The project's name. */
+  readonly project: string;
+  /** This project's pass is the one running now. */
+  readonly running: boolean;
+  /** This project's newest run, or null. */
+  readonly lastRun: RunView | null;
 }

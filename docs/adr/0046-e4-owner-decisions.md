@@ -110,6 +110,53 @@ on refusals reliably (E3's evaluation). **Owner to confirm.**
   rather than generating a new image each run, because an assistant producing valid PNG bytes in chat is unreliable and
   deduplication is a behaviour PLAN-v2 4.10 wants. To exercise the upload again, delete the earlier asset first.
 
+## Decision 9: the Markdown round trip's read-only target (implemented; hotfix of 15 November 2026, during E5)
+
+The E4 checklist (item 16) and PLAN-v2 section 7 step 4 require the round trip over every Arkona page before writes go on,
+but the script resolved its project with `resolveSandboxTarget`, which refuses any project not marked as a sandbox, and
+Arkona must never be marked: the soak's runtime is built with `LK_READ_ONLY: 'false'` and a temporary database of its
+own, so it would not see Arkona's own read-only flag, and while Arkona was marked the sandbox, soak and spike scripts could
+write to it. **Implemented:**
+
+- `resolveReadOnlyTarget` (test/sandbox/target.ts) accepts any registered project that has not been removed, sandbox or
+  not, and says which (`isSandbox`). The key handling, the database opened read-only, the key's own-project check and
+  every refusal are `resolveSandboxTarget`'s, which is unchanged; only a missing `--project` is worded without asking for a
+  sandbox. Only `scripts/markdown-roundtrip.ts` uses it (a unit test checks that the spike, the soak and every
+  `test/sandbox/*.test.ts` keep `resolveSandboxTarget`).
+- The round trip's runtime is read-only by construction (`createReadOnlyRuntime` in test/sandbox/soak.ts), belt and
+  braces: `LK_READ_ONLY=true` (applied last, so no extra environment lifts it) and one writer; an operation allow-list in
+  the governor (`GovernorOptions.allowedOperations`, through `createLkClient`, the project registry and
+  `RuntimeOptions.lkAllowedOperations`): only `listProjects`, `listResources` and `getDocumentBlocks`, the round trip's
+  `ROUNDTRIP_OPS`; any other operation is refused with `OPERATION_NOT_ALLOWED` before it is queued, counted or sent; and a
+  transport that refuses any method but GET and HEAD. No other read is needed (the runtime's own key check is
+  `listProjects`). The soak's own `createSoakRuntime` default is unchanged; the bridge never sets an allow-list.
+- The report's header says whether the project is a sandbox and that the run was read-only, with the allow-list ("Project:
+  not a sandbox, read-only."). It shares the project's hourly budget with the bridge, at P3.
+
+Alternative: mark Arkona as a sandbox for the run. Rejected (above). **Owner to confirm.**
+
+## Decision 10: a page's documents are compared as a set and stored in tab order (implemented; E5.1, 15 November 2026)
+
+Arkona's first consistency check reported "4 corrected" with eight rows: for the root, a chronology page, a geography
+page and a language page, each pair swapped the same documents between name order and tab order. `listResources` lists
+a page's documents by name (the spec's `ListedDocument`: id, name, type; "ordered by name"); `getResource` gives them in
+tab order, each with a `rank` (`Document.rank`). `documentsOf` kept the response's order, `TreeStore.updateNode` stored
+it, and the comparison was order-sensitive, so the structure pass and the properties pass "corrected" each other, every
+night, as sidebar rows did before C2a.1. **Implemented:**
+
+- The documents are compared as a set of `{ id, name, type }`: the same set in another order is no change and logs no
+  correction. A document added, removed, renamed or retyped is still one correction (logged as stored, in its order).
+- One order is stored, LegendKeeper's tab order. The rule used: **sort by `rank` where the response has it** (a
+  `getResource` read, every document ranked; equal ranks keep the response's order); a listing has no rank, so **the
+  same set keeps the stored order**, and **a changed set keeps the stored order for the documents still there and adds
+  the new ones after them** (in the listing's order) until the next `getResource` read sorts them.
+- Checked, and unaffected by order alone: `factsVersion` hashes only the sidebar; snapshots read `getResource` every time
+  (one source, one order); the audits key documents by id; the chronology's readiness finds documents by name and type.
+  Nothing else compares the tree's document lists.
+
+No migration: the stored lists settle on tab order at the next check (a getResource read of every page), with no
+correction logged; earlier rows stay in the log.
+
 ## Consequences
 
 - No migration. Two documented behaviours change: `write_page` and restores on icon pages (decision 1), and promoting a

@@ -514,16 +514,22 @@ of the checklist walks through it against the sandbox project.
 
 ## 14. Going live ✋
 
-Follows PLAN §9.7. The bridge starts read-only (`LK_READ_ONLY=true`, `WRITERS_MAX=1`).
+Follows PLAN §9.7 and PLAN-v2 section 7. A first install starts read-only (`LK_READ_ONLY=true`, `WRITERS_MAX=1`). Once
+the test world takes writes, the bridge-wide `LK_READ_ONLY` is `false` and stays so: a further project is kept read-only
+with its **own** Read-only flag on the Projects page (`setReadOnly`, audited `project.set_read_only`), not with the
+bridge-wide setting, which would stop the test world's writes too.
 
 1. Run the sandbox script and the checklist sections against the **test** project first (agents pass
    `project: "test"`; with one project they may leave it out).
 2. Add the real project as a further project ([Adding a project](#adding-a-project)) and switch on its **Read-only** flag
    on the Projects page while ChatGPT finishes its maintenance on the repository. Two writers on one project would contend
    for versions and for the shared project rate tier; and never give one project's key to two bridges (ADR 0023).
-3. When that maintenance is over, revoke the old bridge's LegendKeeper key, then set `LK_READ_ONLY=false` in the env file
-   and `sudo systemctl restart lk-bridge`, and switch the project's own Read-only flag off. Keep `WRITERS_MAX=1` for the
-   first week.
+3. Run the Markdown round trip over every page of the real project ([Markdown round trip](#markdown-round-trip-)); it is
+   read-only by construction, so it runs while the project is still read-only and needs no sandbox mark.
+4. When that maintenance is over, revoke the old bridge's LegendKeeper key, then switch the project's own Read-only flag
+   off on the Projects page. `LK_READ_ONLY` is already `false` (the test world takes writes); if a first install still has
+   it `true`, set it `false` in the env file and `sudo systemctl restart lk-bridge`. Keep `WRITERS_MAX=1` for the first
+   weeks.
 
 ---
 
@@ -834,6 +840,35 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/spike-v2.sh --project test
   all. Ctrl-C stops after the current call and still deletes the throwaway resource.
 - Exit code: 0 when the report was produced (a FAIL is a finding, not a fault), 1 when the clean-up failed or the report
   file could not be written, 2 when it refused to run.
+
+## Markdown round trip ✋
+
+PLAN-v2 4.7 and section 7, step 4: every page of a project read, converted to Markdown and back, and checked to come
+back identical with an empty write plan. Any page that does not blocks the move to that project until it is fixed.
+
+🔒 sudo (as `lkbridge`)
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project arkona --max-pages 20
+```
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/markdown-roundtrip.sh --project arkona
+```
+
+- `--project` names **any project the bridge has registered** and not removed, sandbox or not (v2 E5 hotfix,
+  [ADR 0046](adr/0046-e4-owner-decisions.md)): Arkona is never marked as a sandbox, and the round trip needs no mark,
+  because it is **always read-only**, whatever the project's own flags. Its runtime has `LK_READ_ONLY=true`, a governor
+  that allows only `listProjects`, `listResources` and `getDocumentBlocks` (any other operation is refused before a
+  request), and a transport that sends only GET. It refuses a project that is not registered or was removed, and a key
+  whose own project is not that project's stored id. The key is found as for step 12; nothing prints it.
+- The report's header says whether the project is a sandbox and that the run was read-only, with the allow-list: for
+  Arkona, "**Project: not a sandbox, read-only.**"
+- It shares the project's hourly budget with the bridge (about one read per page, plus one per 100 resources for the
+  listing), at the lowest priority (P3): agents and jobs go first. Run it while the project is quiet.
+- The report is printed and written to `/var/lib/lk-bridge/roundtrip/roundtrip-<timestamp>.md`, with a minimal
+  reproduction of each failing page beside it. Exit code 0 when every page passed, 1 when a page failed or could not be
+  read, 2 when it refused to run. `--root <resourceId>` checks a subtree; `--list-keep paragraph` lists keep regions.
 
 ## Browser smoke test
 

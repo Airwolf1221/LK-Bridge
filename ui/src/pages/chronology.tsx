@@ -553,19 +553,21 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
     return () => clearInterval(t);
   }, [running, kick, reload]);
 
-  // "Propose a fix": one `sync_timeline_event` proposal for the finding's row; the owner approves it as normal.
+  // "Propose a fix": one `sync_timeline_event` proposal for the finding's row, or (a count mismatch) one proposal
+  // setting the age's Main count to its table's row count; the owner approves it as normal.
   const [proposing, setProposing] = useState<string | null>(null);
   const [proposed, setProposed] = useState<Record<string, string>>({});
   const propose = (f: ChronologyFinding, key: string) => {
     const rowId = typeof f.detail?.rowId === 'string' ? f.detail.rowId : null;
-    if (!rowId) return;
+    const count = f.kind === 'count_mismatch';
+    if (!rowId && !count) return;
     setProposing(key);
     void run(() =>
       api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
         confirm: true,
         project,
         age: f.age,
-        rowId,
+        ...(count ? { kind: 'count' } : { rowId }),
       }),
     )
       .then((res) => {
@@ -601,9 +603,9 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
       <h2 id="chronology-check-h">Chronology check</h2>
       <p className="muted small-text">
         Compares each age’s table with its timeline and the Main counts. The check itself only reads and never
-        repairs anything; “Propose a fix” on a row without an event, or a row and event that disagree about
-        the date, makes ONE proposal (the table is the authority) for you to approve on the Proposals page. It
-        also runs weekly (Maintenance Jobs page).
+        repairs anything; “Propose a fix” on a row without an event, a row and event that disagree about the
+        date, or a Main count that differs from its table makes ONE proposal (the table is the authority) for
+        you to approve on the Proposals page. It also runs weekly (Maintenance Jobs page).
       </p>
       {last && state ? (
         <dl className="kv">
@@ -661,8 +663,10 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
                 {last.findings.map((f, i) => {
                   const key = `${f.kind}:${typeof f.detail?.rowId === 'string' ? f.detail.rowId : i}`;
                   const fixable =
-                    (f.kind === 'row_without_event' || f.kind === 'date_mismatch') &&
-                    typeof f.detail?.rowId === 'string';
+                    ((f.kind === 'row_without_event' || f.kind === 'date_mismatch') &&
+                      typeof f.detail?.rowId === 'string') ||
+                    // A count mismatch has a fix when the Main table has a row (a count) for the age.
+                    (f.kind === 'count_mismatch' && typeof f.detail?.main === 'string');
                   return (
                     <tr key={i} data-kind={f.kind}>
                       <td>{KIND[f.kind] ?? f.kind}</td>
@@ -706,6 +710,7 @@ const TOOL: Record<ChronologyRecordView['tool'], string> = {
   update_timeline_event: 'Updated',
   delete_timeline_event: 'Deleted',
   sync_timeline_event: 'Repaired the timeline',
+  chronology_count_fix: 'Set the Main count',
 };
 
 function RecordsCard({ project, r }: { project: string | null; r: Resource<ChronologyRecordsResponse> }) {

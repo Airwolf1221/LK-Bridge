@@ -10,7 +10,8 @@
  *   handed to the insert or move that follows (`bindBody`): rows added elsewhere since the plan (another approved
  *   proposal) move nothing.
  * - `chronology.main`: the Main table's row of each age is still that age's, with a count; the new count (one more or
- *   one less than the count NOW) is handed to the write that follows, and what was found is kept for the record.
+ *   one less than the count NOW; for the count fix, the table's row count, with the count as planned required) is
+ *   handed to the write that follows, and what was found is kept for the record.
  *
  * After the writes, `chronology.verify.table` and `chronology.verify.main` read the documents back.
  */
@@ -54,6 +55,8 @@ export type TableOp =
   | { readonly op: 'delete'; readonly rowId: string; readonly texts: RowTexts }
   /** v2 D1.1: the row must still be exactly this (a repair that writes only the timeline); nothing is written to it. */
   | { readonly op: 'assert'; readonly rowId: string; readonly texts: RowTexts }
+  /** v2 E5 hotfix: the table must still have exactly this many rows (the count fix's compare-and-swap). */
+  | { readonly op: 'rows'; readonly count: number }
   | {
       readonly op: 'replace';
       readonly rowId: string;
@@ -148,6 +151,10 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
           sameText(r.description, description),
       );
     for (const op of input.ops) {
+      if (op.op === 'rows') {
+        if (t.rows.length !== op.count) differences.push(diff(`${ctx.label} rows`, op.count, t.rows.length));
+        continue;
+      }
       if (op.op === 'insert') {
         if (byId.has(op.rowId)) differences.push(diff(`${ctx.label} row ${op.rowId}`, 'absent', 'present'));
         const twin = duplicate(op.date, op.description, null);

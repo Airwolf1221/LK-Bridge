@@ -324,6 +324,47 @@ describe('the Chronology page', () => {
     expect(within(table).getAllByRole('button', { name: 'Propose a fix' })).toHaveLength(1);
   });
 
+  it('offers "Propose a fix" on a count mismatch with a Main row (v2 E5 hotfix), and none without one', async () => {
+    const findings = [
+      {
+        kind: 'count_mismatch',
+        age: 'Fourth Arkonan Age',
+        message: 'The Main table says 337; the table has 336 rows (the timeline 336 events).',
+        detail: { main: '337', rows: 336, events: 336 },
+      },
+      {
+        kind: 'count_mismatch',
+        age: 'Age of Dawn',
+        message: 'The Main table has no row m1 for Age of Dawn.',
+        detail: { main: null, rows: 3, events: 3 },
+      },
+    ];
+    const api = installApi(
+      routes({
+        'GET /chronology/check': { ...checkJson, last: { ...checkJson.last, findings } },
+        'POST /chronology/propose-fix': {
+          status: 'proposal_captured',
+          proposalId: 'prop_43',
+          summary: 'Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline events 336)',
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    const buttons = within(table).getAllByRole('button', { name: 'Propose a fix' });
+    expect(buttons).toHaveLength(1);
+    await user.click(buttons[0]!);
+    await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
+    expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      kind: 'count',
+    });
+    expect(await screen.findByText(/Proposal prop_43 is waiting on the Proposals page/)).toBeInTheDocument();
+  });
+
   it('lists the changes with journal links, and marks an incomplete one resolved', async () => {
     const api = installApi(
       routes({

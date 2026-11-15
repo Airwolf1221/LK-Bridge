@@ -79,6 +79,12 @@ export function buildJob(o: {
     readonly summary: string;
     readonly resumeOf?: number;
   };
+  /**
+   * v2 E5 hotfix: the count write is NOT judged only inside the lock: a proposal captures the Main document's version,
+   * so any change to the Main document between the proposal and its approval ends it `conflicted` (the count fix,
+   * which sets a count rather than adding one to it). The timeline tools leave it unset (ADR 0038).
+   */
+  readonly captureMainVersion?: boolean;
 }): BuiltJob {
   const c = o.config;
   const resourceId = c.resourceId!;
@@ -129,6 +135,11 @@ export function buildJob(o: {
       case 'row.assert': {
         // Not a write: the table is locked and the row compared inside the lock (the repair's compare-and-swap).
         pushTableOp(w.documentId, { op: 'assert', rowId: w.rowId, texts: w.texts });
+        break;
+      }
+      case 'row.count': {
+        // Not a write either: the table is locked and its row count compared inside the lock (the count fix).
+        pushTableOp(w.documentId, { op: 'rows', count: w.rows });
         break;
       }
       case 'row.insert': {
@@ -330,7 +341,7 @@ export function buildJob(o: {
           mainDoc,
           {
             op: 'updateBlock',
-            judgedInLock: true,
+            ...(o.captureMainVersion === true ? {} : { judgedInLock: true }),
             params: {
               path: { resourceId, documentId: mainDoc, blockId: cell.paragraphId },
               body: { content: [{ text: cell.text }] },
@@ -342,7 +353,9 @@ export function buildJob(o: {
               countCell: { paragraphId: cell.paragraphId, text: cell.text, asPlanned: true },
             },
           },
-          `${w.delta > 0 ? 'add one to' : 'take one from'} the ${w.age} count on the Main table`,
+          w.delta === 1 || w.delta === -1
+            ? `${w.delta > 0 ? 'add one to' : 'take one from'} the ${w.age} count on the Main table`
+            : `set the ${w.age} count on the Main table to ${cell.text}`,
         );
         break;
       }

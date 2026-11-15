@@ -48,6 +48,7 @@ const MAINTENANCE_STATUS: Readonly<Record<string, number>> = {
   ALREADY_RUNNING: 409,
   INVALID_SCHEDULE: 400,
   NOT_OWNER: 403,
+  PROJECT_NOT_SERVED: 409,
 };
 
 const MAPPING_STATUS: Readonly<Record<string, number>> = {

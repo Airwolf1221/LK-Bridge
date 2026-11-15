@@ -19,7 +19,12 @@ const parse = <T>(s: string | null | undefined, fallback: T): T => {
 // ============================================================================================ the record
 
 export type ChronologyTool =
-  'create_timeline_event' | 'update_timeline_event' | 'delete_timeline_event' | 'sync_timeline_event';
+  | 'create_timeline_event'
+  | 'update_timeline_event'
+  | 'delete_timeline_event'
+  | 'sync_timeline_event'
+  /** v2 E5 hotfix: the "Propose a fix" of a count mismatch (src/chronology/count.ts); no MCP tool. */
+  | 'chronology_count_fix';
 
 /** One write a change makes, as the record keeps it (what resuming checks against the documents as they are). */
 export type TargetWrite =
@@ -34,6 +39,17 @@ export type TargetWrite =
       readonly documentId: string;
       readonly rowId: string;
       readonly texts: { readonly description: string; readonly date: string; readonly kcy: string };
+    }
+  | {
+      /**
+       * v2 E5 hotfix. Not a write: the age table must still have exactly this many rows inside the lock (the
+       * compare-and-swap of the count fix, which sets the Main count to the table's row count).
+       */
+      readonly kind: 'row.count';
+      readonly age: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly rows: number;
     }
   | {
       readonly kind: 'row.insert';

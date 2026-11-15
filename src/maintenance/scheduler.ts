@@ -26,11 +26,18 @@ import type {
   MaintenanceJobView,
   RunOutcome,
   RunTrigger,
+  ProjectRunLine,
   RunView,
 } from './types.js';
 
 export type MaintenanceErrorCode =
-  'NOT_FOUND' | 'NOT_IMPLEMENTED' | 'ALREADY_RUNNING' | 'INVALID_SCHEDULE' | 'NOT_OWNER';
+  | 'NOT_FOUND'
+  | 'NOT_IMPLEMENTED'
+  | 'ALREADY_RUNNING'
+  | 'INVALID_SCHEDULE'
+  | 'NOT_OWNER'
+  /** v2 E5.1: Run now for a project the bridge does not serve now. */
+  | 'PROJECT_NOT_SERVED';
 
 export class MaintenanceError extends Error {
   constructor(
@@ -57,6 +64,11 @@ export class MaintenanceScheduler {
   private readonly store: MaintenanceStore;
   private readonly defs = new Map<string, MaintenanceJobDef>();
   private readonly running = new Set<string>();
+  /**
+   * v2 E5.1: the project each running job is working on now (its current target; null for a bridge-wide run). In memory
+   * only: a per-project job runs its projects one after another, and the page shows which one is running.
+   */
+  private readonly runningTarget = new Map<string, string | null>();
   private readonly active = new Set<Promise<unknown>>();
   /** Jobs held back because P1/P2 work was queued: not before this time. */
   private readonly retryAt = new Map<string, number>();
@@ -133,6 +145,8 @@ export class MaintenanceScheduler {
     this.stopped = true;
     if (this.timer) this.o.clock.clearTimeout(this.timer);
     this.timer = undefined;
+    for (const wake of this.waiters) wake();
+    this.waiters.clear();
     await Promise.allSettled([...this.active]);
   }
 
@@ -208,18 +222,61 @@ export class MaintenanceScheduler {
   }
 
   /**
-   * Starts a run now. Validates at once (unknown, not implemented, already running) and returns; `done` resolves
-   * with the run when it finishes (or null if it had to wait for P1/P2 work to clear first).
+   * Starts a run now. Validates at once (unknown, not implemented, already running, a project not served) and returns;
+   * `done` resolves with the run when it finishes (or null if it had to wait for P1/P2 work to clear first).
+   *
+   * v2 E5.1: `projectId` runs a per-project job for that project only (the dashboard sends the selected project); the
+   * job's schedule is left as it was, so the scheduled run still covers every project. A bridge-wide job ignores it.
+   * Without it, a per-project job runs for every served project, as before.
    */
-  runNow(id: string): { done: Promise<RunView | null> } {
+  runNow(id: string, projectId?: string): { done: Promise<RunView | null>; projectId: string | null } {
     const def = this.def(id);
     if (!def.implemented || !def.run) throw new MaintenanceError('NOT_IMPLEMENTED', 'Not implemented yet');
-    if (this.running.has(id) || this.inBackground.has(id)) {
+    if (this.running.has(id) || this.inBackground.has(id) || this.waitingOne.has(id)) {
       throw new MaintenanceError('ALREADY_RUNNING', `${def.name} is already running`);
     }
+    const only = (def.scope ?? 'bridge') === 'project' && projectId !== undefined ? projectId : null;
+    if (only !== null && !this.o.projects.activeIds().includes(only)) {
+      throw new MaintenanceError(
+        'PROJECT_NOT_SERVED',
+        `Project ${this.o.projects.nameOf(only)} is not served now, so ${def.name} cannot run for it.`,
+      );
+    }
     this.ensureRow(def);
-    const done = this.track(this.execute(def, 'manual'));
-    return { done };
+    const done = this.track(only !== null ? this.executeFor(def, only) : this.execute(def, 'manual'));
+    return { done, projectId: only };
+  }
+
+  /** v2 E5.1: per-project jobs waiting to run now for one project (P1/P2 work of that project was queued). */
+  private readonly waitingOne = new Set<string>();
+  /** Wakes those waits at once when the scheduler stops. */
+  private readonly waiters = new Set<() => void>();
+
+  /**
+   * A manual run of a per-project job for one project only. P3 yields to that project's P1/P2 work: it waits here
+   * (looking again every `deferMs`) rather than through the schedule, so the job's next scheduled run, which covers
+   * every project, is not moved.
+   */
+  private async executeFor(def: MaintenanceJobDef, projectId: string): Promise<RunView | null> {
+    this.waitingOne.add(def.id);
+    try {
+      while (this.busy(def, projectId)) {
+        if (this.stopped) return null;
+        await new Promise<void>((res) => {
+          const wake = () => {
+            this.waiters.delete(wake);
+            this.o.clock.clearTimeout(t);
+            res();
+          };
+          const t = this.o.clock.setTimeout(wake, this.o.settings.deferMs);
+          this.waiters.add(wake);
+        });
+      }
+    } finally {
+      this.waitingOne.delete(def.id);
+    }
+    if (this.stopped) return null;
+    return this.executeOne(def, 'manual', { id: projectId, name: this.o.projects.nameOf(projectId) }, false);
   }
 
   // --------------------------------------------------------------------------------------------- internals
@@ -247,6 +304,7 @@ export class MaintenanceScheduler {
 
   private view(def: MaintenanceJobDef): MaintenanceJobView {
     const s = this.store.get(def.id);
+    const lastProjectId = s?.lastRunAt != null ? this.store.history(def.id, 1)[0]?.projectId : undefined;
     const schedule = s?.schedule ?? def.defaultSchedule;
     return {
       id: def.id,
@@ -261,7 +319,9 @@ export class MaintenanceScheduler {
       defaultSchedule: def.defaultSchedule,
       scheduleOverridden: s?.schedule != null,
       priority: 'P3',
-      running: this.running.has(def.id) || this.inBackground.has(def.id),
+      running: this.running.has(def.id) || this.inBackground.has(def.id) || this.waitingOne.has(def.id),
+      runningProjectId: this.running.has(def.id) ? (this.runningTarget.get(def.id) ?? null) : null,
+      ...((def.scope ?? 'bridge') === 'project' ? { projects: this.projectLines(def) } : {}),
       lastRun:
         s && s.lastRunAt !== null && s.lastOutcome
           ? {
@@ -270,11 +330,44 @@ export class MaintenanceScheduler {
               durationMs: s.lastDurationMs ?? 0,
               jobId: s.lastJobId,
               detail: s.lastDetail,
+              // v2 E5.1: whose run it was (a per-project job's last run is one project's).
+              ...(lastProjectId !== undefined ? { projectId: lastProjectId } : {}),
             }
           : null,
       nextRunAt: def.implemented && s?.enabled ? s.nextRunAt : null,
       note: def.implemented ? null : 'Not implemented yet',
     };
+  }
+
+  /**
+   * v2 E5.1: one line per served project of a per-project job (and any project it last ran for that is no longer
+   * served): its own last run, and whether it is the project being run now.
+   */
+  private projectLines(def: MaintenanceJobDef): ProjectRunLine[] {
+    const last = this.store.lastRunsByProject(def.id);
+    const ids = [...new Set([...this.o.projects.activeIds(), ...last.keys()])].filter(
+      (x) => x !== BRIDGE_WIDE,
+    );
+    const running = this.running.has(def.id) ? (this.runningTarget.get(def.id) ?? null) : null;
+    return ids.map((id) => {
+      const r = last.get(id);
+      return {
+        projectId: id,
+        project: this.o.projects.nameOf(id),
+        running: running === id,
+        lastRun: r
+          ? {
+              projectId: id,
+              at: r.startedAt,
+              outcome: r.outcome,
+              durationMs: r.durationMs,
+              jobId: r.engineJobId,
+              detail: r.detail,
+              trigger: r.trigger,
+            }
+          : null,
+      };
+    });
   }
 
   /** Sets one timer for the earliest thing due. */
@@ -421,6 +514,7 @@ export class MaintenanceScheduler {
     def: MaintenanceJobDef,
     trig: RunTrigger,
     project: { id: string; name: string } | null,
+    reschedule = true,
   ): Promise<RunView | null> {
     const { clock } = this.o;
     const id = def.id;
@@ -429,9 +523,10 @@ export class MaintenanceScheduler {
 
     const blocked = this.blockedReason(def, projectId);
     if (blocked) {
-      return this.finish(def, trig, started, 'skipped', blocked, null, projectId);
+      return this.finish(def, trig, started, 'skipped', blocked, null, projectId, reschedule);
     }
     this.running.add(id);
+    this.runningTarget.set(id, projectId);
     this.store.update(id, { runningSince: started }, started);
     let outcome: RunOutcome = 'succeeded';
     let detail: string;
@@ -466,6 +561,7 @@ export class MaintenanceScheduler {
       detail = e instanceof Error ? e.message : String(e);
     } finally {
       this.running.delete(id);
+      this.runningTarget.delete(id);
     }
 
     let engineJobId: string | null = null;
@@ -493,7 +589,7 @@ export class MaintenanceScheduler {
         this.o.log?.warn({ err: e, job: id }, 'could not record a maintenance run as a job');
       }
     }
-    return this.finish(def, trig, started, outcome, detail, engineJobId, projectId);
+    return this.finish(def, trig, started, outcome, detail, engineJobId, projectId, reschedule);
   }
 
   /** Records the run and schedules the next one from now (never from a missed slot). */
@@ -505,6 +601,8 @@ export class MaintenanceScheduler {
     detail: string | null,
     engineJobId: string | null,
     projectId: string | null,
+    /** False for a manual run of one project (v2 E5.1): the schedule, which covers every project, is left as it was. */
+    reschedule = true,
   ): RunView {
     const finished = this.o.clock.now();
     const durationMs = Math.max(0, finished - started);
@@ -523,7 +621,7 @@ export class MaintenanceScheduler {
       this.o.settings.historyPerJob,
     );
     const state = this.store.get(def.id)!;
-    if (state.enabled) {
+    if (state.enabled && reschedule) {
       const sched = this.scheduleOf(def, state);
       let next = nextRun(sched, started);
       if (next <= finished) next = nextRun(sched, finished);

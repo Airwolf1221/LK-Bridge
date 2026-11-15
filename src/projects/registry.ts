@@ -113,6 +113,11 @@ export interface CreateProjectRegistryOptions {
   readonly log?: RegistryLogger;
   /** Keep each governor's counts across restarts (default true; table governor_counters, one row per project). */
   readonly persistCounters?: boolean;
+  /**
+   * v2 E5 hotfix: the only registry operations every project's governor may send (the Markdown round trip's read-only
+   * runtime). Unset for the bridge: every operation.
+   */
+  readonly allowedOperations?: ReadonlySet<string>;
   /** First and largest delay before an `unverified` project is checked again. */
   readonly retryMs?: { readonly first: number; readonly max: number };
   /**
@@ -882,6 +887,7 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
       ...(this.o.clock ? { clock: this.o.clock } : {}),
       ...(this.o.transport ? { transport: this.o.transport } : {}),
       ...(this.o.random ? { random: this.o.random } : {}),
+      ...(this.o.allowedOperations ? { allowedOperations: this.o.allowedOperations } : {}),
       ...(persist && projectId !== '' && this.o.persistCounters !== false
         ? {
             persistence: {

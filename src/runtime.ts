@@ -158,6 +158,11 @@ export interface RuntimeOptions {
   /** Test seams. */
   readonly clock?: Clock;
   readonly lkTransport?: Transport;
+  /**
+   * v2 E5 hotfix (ADR 0046): the only registry operations any project's governor may send; anything else is refused
+   * before a request. Only the Markdown round trip's read-only runtime sets it. Unset: every operation.
+   */
+  readonly lkAllowedOperations?: ReadonlySet<string>;
   readonly uploadGuard?: GuardOptions;
   /**
    * Claim the database for this process (ADR 0023: one bridge process per database and project). Default true; the
@@ -248,6 +253,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     ...(o.clock ? { clock: o.clock } : {}),
     ...(o.projectRetryMs ? { retryMs: o.projectRetryMs } : {}),
+    ...(o.lkAllowedOperations ? { allowedOperations: o.lkAllowedOperations } : {}),
   });
   const selector = new ProjectSelector(projects, config.lk.requireProjectForWrites);
   const footer = (p: { id: string | null; name: string }) => footerFor({ projects }, p.id, p.name);

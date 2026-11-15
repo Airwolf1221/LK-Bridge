@@ -138,6 +138,19 @@ export class MaintenanceStore {
     })();
   }
 
+  /** v2 E5.1: each project's newest run of a job (bridge-wide runs under `*`), by project id. */
+  lastRunsByProject(jobId: string): Map<string, RunRecord> {
+    const ids = this.db
+      .prepare('SELECT project_id, MAX(id) AS id FROM maintenance_runs WHERE job_id = ? GROUP BY project_id')
+      .all(jobId) as { project_id: string; id: number }[];
+    const out = new Map<string, RunRecord>();
+    for (const r of ids) {
+      const row = this.history(jobId, 1, r.project_id)[0];
+      if (row) out.set(r.project_id, row);
+    }
+    return out;
+  }
+
   /** Runs of a job, newest first: of every project (and bridge-wide), unless `projectId` narrows it. */
   history(jobId: string, limit = 20, projectId?: string): RunRecord[] {
     return (

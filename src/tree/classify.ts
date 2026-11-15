@@ -95,17 +95,27 @@ const str = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 const strings = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 
+/**
+ * A resource's documents. v2 E5.1: `getResource` gives each document its `rank` (LegendKeeper's tab order, the spec's
+ * `Document.rank`); `listResources` gives none and lists them by name (`ListedDocument`). When every document has a
+ * rank they are put in tab order (by rank; equal ranks keep the response's order), so a `getResource` observation is
+ * always in tab order whatever order the response used. A listing's stay in its order; the store keeps the stored
+ * (tab) order for them (`TreeStore`, `documentsToStore`).
+ */
 function documentsOf(v: unknown): TreeDocument[] {
   if (!Array.isArray(v)) return [];
-  const out: TreeDocument[] = [];
+  const out: { doc: TreeDocument; rank: string | null; at: number }[] = [];
   for (const d of v) {
     if (!d || typeof d !== 'object') continue;
     const o = d as Record<string, unknown>;
     if (typeof o.id !== 'string') continue;
     if (typeof o.deletedAt === 'string') continue; // a deleted document is not the resource's
-    out.push({ id: o.id, name: str(o.name), type: str(o.type) });
+    out.push({ doc: { id: o.id, name: str(o.name), type: str(o.type) }, rank: str(o.rank), at: out.length });
   }
-  return out;
+  if (out.length > 1 && out.every((x) => x.rank !== null)) {
+    out.sort((a, b) => (a.rank! < b.rank! ? -1 : a.rank! > b.rank! ? 1 : a.at - b.at));
+  }
+  return out.map((x) => x.doc);
 }
 
 /** A row's plain text: `text` when given, otherwise its runs (mentions by their text or name, breaks as newlines). */
