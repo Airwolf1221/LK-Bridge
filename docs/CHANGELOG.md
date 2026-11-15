@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased: E5.1, hotfix during E5 (15 November 2026): the round trip on Arkona, a fix for a count mismatch, and Run now for one project
+## Unreleased: E5.1, hotfix during E5 (15 November 2026): the round trip on Arkona, a fix for a count mismatch, Run now for one project, and documents in one order
 
 [ADR 0046](adr/0046-e4-owner-decisions.md) decision 9; [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md)'s
 note of 15 November; no migration. Nothing was run against a live system: no call to the owner's LegendKeeper bridge
@@ -29,6 +29,12 @@ connector, the live dashboard or any other live service. Every test uses the moc
   it. The audit record names the project. `GET /maintenance` gives a per-project job's line for each project (last run,
   outcome, summary, running now) and the project running now (`runningProjectId`, in memory); each job link opens in its
   own project (`?project=`); the history shows the selected project's runs, or every project's with each row named.
+- **The tree no longer "corrects" a page's documents for their order** (Arkona's first check: 4 pages corrected twice
+  each, the same documents swapped between name order, from `listResources`, and tab order, from `getResource`). The
+  documents are compared as a set of `{ id, name, type }`, and stored in LegendKeeper's tab order: sorted by `rank` from
+  `getResource`; a listing keeps the stored order (new documents after the others). A document added, removed or renamed
+  is still one correction. `factsVersion`, snapshots, audits and the chronology were checked: order alone changes none.
+  ADR 0046 decision 10.
 - **Docs.** The E4 checklist item 3, the runbook's "Going live" and PLAN-v2 section 7: the bridge-wide `LK_READ_ONLY` is
   already `false` (the test world takes writes); Arkona stays read-only by its own Read-only setting on the Projects page,
   which item 21 lifts. Item 16 names the command. `docs/projects.md` and the runbook: only the sandbox, soak and spike

@@ -45,6 +45,12 @@ the tree is built (Maintenance Jobs page).
 | template id                                                          | recorded for pages the bridge creates from a template, by the create's re-read (v2 C2b; empty for others)                                                                      |
 | last read (when, and by `build`, `write`, `sweep` or `check`); stale | the tree itself                                                                                                                                                                |
 
+**A page's documents (v2 E5.1).** A listing gives them by name, `getResource` in LegendKeeper's tab order (each with a
+`rank`). The tree stores them in tab order: a `getResource` read sorts them by `rank`; a listing keeps the stored order
+when the set is the same, and when it changed keeps the stored order for the documents still there and adds new ones
+after them, until the next `getResource` read. They are compared as a set of `{ id, name, type }`: an order alone is no
+correction ([ADR 0046](adr/0046-e4-owner-decisions.md) decision 10).
+
 ## Status
 
 | Status           | Meaning                                                                                                            |

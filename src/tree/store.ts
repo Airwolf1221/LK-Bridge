@@ -141,13 +141,41 @@ function parse<T>(text: string | null, fallback: T): T {
 }
 
 /** The fields a correction can name, with how to read each from a stored row. */
+/** A document list's identity regardless of order: its `{ id, name, type }` entries, sorted by id. */
+function sameSetKey(docs: readonly TreeDocument[]): TreeDocument[] {
+  return [...docs]
+    .map((d) => ({ id: d.id, name: d.name, type: d.type }))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * v2 E5.1 (the owner's first Arkona check: 4 pages "corrected" twice a night, the same documents in two orders): the
+ * documents to store, in ONE order, LegendKeeper's tab order. A `getResource` observation (it has `props`) is already in
+ * tab order (`documentsOf` sorts by `rank`) and is stored as it is. A listing gives no rank and lists by name, so: the
+ * same set as stored keeps the stored order; a changed set (a document added, removed, renamed or retyped) keeps the
+ * stored order for the documents still there (with their new name and type) and adds the new ones after them, in the
+ * listing's order, until the next `getResource` read puts them in tab order.
+ */
+export function documentsToStore(
+  stored: readonly TreeDocument[],
+  observed: readonly TreeDocument[],
+  fromResource: boolean,
+): readonly TreeDocument[] {
+  if (fromResource || stored.length === 0) return observed;
+  const byId = new Map(observed.map((d) => [d.id, d]));
+  const kept = stored.filter((d) => byId.has(d.id)).map((d) => byId.get(d.id)!);
+  const keptIds = new Set(kept.map((d) => d.id));
+  return [...kept, ...observed.filter((d) => !keptIds.has(d.id))];
+}
+
 const STRUCT_FIELDS: readonly [string, (r: NodeRow) => unknown][] = [
   ['name', (r) => r.raw_name],
   ['parentId', (r) => r.parent_id],
   ['rank', (r) => r.rank],
   ['tags', (r) => parse(r.tags, [])],
   ['aliases', (r) => parse(r.aliases, [])],
-  ['documents', (r) => parse(r.documents, [])],
+  // v2 E5.1: the same documents in another order are no change (a listing gives them by name, getResource in tab order).
+  ['documents', (r) => sameSetKey(parse<TreeDocument[]>(r.documents, []))],
   ['isHidden', (r) => r.is_hidden === 1],
 ];
 const PROP_FIELDS: readonly [string, (r: NodeRow) => unknown][] = [
@@ -451,7 +479,10 @@ export class TreeStore {
       set('rank', obs.rank);
       set('tags', j(obs.tags));
       set('aliases', j(obs.aliases));
-      set('documents', j(obs.documents));
+      set(
+        'documents',
+        j(documentsToStore(parse<TreeDocument[]>(old.documents, []), obs.documents, obs.props !== undefined)),
+      );
       set('is_hidden', obs.isHidden ? 1 : 0);
       set('struct_observed_at', t);
     }
@@ -494,7 +525,10 @@ export class TreeStore {
         continue;
       }
       changed = true;
-      if (ctx.log) this.log(ctx, old.id, now.raw_name, 'updated', field, before, after, null);
+      // The documents are compared as a set, and logged as stored (in their order).
+      const shown = (r: NodeRow, v: unknown) => (field === 'documents' ? parse(r.documents, []) : v);
+      if (ctx.log)
+        this.log(ctx, old.id, now.raw_name, 'updated', field, shown(old, before), shown(now, after), null);
     }
     if (
       structNewer &&

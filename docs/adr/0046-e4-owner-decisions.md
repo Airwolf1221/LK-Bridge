@@ -135,6 +135,28 @@ write to it. **Implemented:**
 
 Alternative: mark Arkona as a sandbox for the run. Rejected (above). **Owner to confirm.**
 
+## Decision 10: a page's documents are compared as a set and stored in tab order (implemented; E5.1, 15 November 2026)
+
+Arkona's first consistency check reported "4 corrected" with eight rows: for the root, a chronology page, a geography
+page and a language page, each pair swapped the same documents between name order and tab order. `listResources` lists
+a page's documents by name (the spec's `ListedDocument`: id, name, type; "ordered by name"); `getResource` gives them in
+tab order, each with a `rank` (`Document.rank`). `documentsOf` kept the response's order, `TreeStore.updateNode` stored
+it, and the comparison was order-sensitive, so the structure pass and the properties pass "corrected" each other, every
+night, as sidebar rows did before C2a.1. **Implemented:**
+
+- The documents are compared as a set of `{ id, name, type }`: the same set in another order is no change and logs no
+  correction. A document added, removed, renamed or retyped is still one correction (logged as stored, in its order).
+- One order is stored, LegendKeeper's tab order. The rule used: **sort by `rank` where the response has it** (a
+  `getResource` read, every document ranked; equal ranks keep the response's order); a listing has no rank, so **the
+  same set keeps the stored order**, and **a changed set keeps the stored order for the documents still there and adds
+  the new ones after them** (in the listing's order) until the next `getResource` read sorts them.
+- Checked, and unaffected by order alone: `factsVersion` hashes only the sidebar; snapshots read `getResource` every time
+  (one source, one order); the audits key documents by id; the chronology's readiness finds documents by name and type.
+  Nothing else compares the tree's document lists.
+
+No migration: the stored lists settle on tab order at the next check (a getResource read of every page), with no
+correction logged; earlier rows stay in the log.
+
 ## Consequences
 
 - No migration. Two documented behaviours change: `write_page` and restores on icon pages (decision 1), and promoting a
