@@ -47,6 +47,8 @@ other live service, not even a read. Every test uses the mock; the sandbox tests
   **Tests:** realistic defaults (20 s a test, 60 s a hook); timeline change snapshots are unchanged and proposed to the owner
   (ADR 0046 decision 6).
 - **The E5 checklist** (the review, section 8): everything that must be true before the Arkona key goes into the bridge.
+- **Tests:** 3,672 pass (4 skipped; 3,592 before), three full runs in a row with no failure or timeout, one on Node 22 and
+  two on Node 24.22.2; the full CI passes on Node 24.22.2.
 
 ## Unreleased: v2 E3b: the owner's evaluation applied, forgiving guides, steering to the Core, and the evaluation helper
 
