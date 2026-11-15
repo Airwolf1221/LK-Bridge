@@ -35,7 +35,7 @@ import {
 import { NameResolver } from './resolve.js';
 import { RegistryStore } from './store.js';
 import { ProjectTree, type RegistryTree } from './tree-view.js';
-import type { CharacterRole, MentionChoice } from './resolve.js';
+import type { CharacterOfPageResult, CharacterRole, MentionChoice } from './resolve.js';
 import type { NodeRef, ResolveKind, ResolveOptions, ResolveResult, Slot, TemplateInfo } from './types.js';
 
 /** The registry of ONE project (its LegendKeeper id); nothing of another project is reachable through it. */
@@ -56,6 +56,8 @@ export interface ProjectTypes {
   ): ResolveMention;
   /** v2 C2b: a page's character role (Core, Reference, index) and subject, or null. */
   characterRole(id: string): { readonly role: CharacterRole; readonly subject: string } | null;
+  /** v2 E3b: the character a page (its Core or Reference, its index, or a specialist page) belongs to, from the tree. */
+  characterOfPage(id: string): CharacterOfPageResult;
   /** The ordering slot for a new or moved page (PLAN-v2 4.5). */
   placementFor(parentId: string, newDisplayName: string, kind: ResolveKind, o?: { excludeId?: string }): Slot;
   /** Siblings out of order (reports only). */
@@ -148,6 +150,7 @@ export function createRegistry(o: RegistryOptions): Registry {
         ro?: ResolveOptions & { readonly onChoice?: (c: MentionChoice & { name: string }) => void },
       ) => resolver().mentionResolver(ro),
       characterRole: (id: string) => resolver().characterRole(id),
+      characterOfPage: (id: string) => resolver().characterOfPage(id),
       placementFor: (parentId: string, name: string, kind: ResolveKind, po?: { excludeId?: string }) =>
         placementFor(tree(), parentId, name, kind, po),
       outOfOrder: (parentId?: string) => outOfOrder(tree(), parentId),
@@ -182,7 +185,14 @@ export function createRegistry(o: RegistryOptions): Registry {
 
 export { RegistryStore } from './store.js';
 export { ProjectTree, type RegistryTree } from './tree-view.js';
-export { NameResolver, ROLE_LABEL, type CharacterRole, type MentionChoice } from './resolve.js';
+export {
+  NameResolver,
+  ROLE_LABEL,
+  type CharacterOfPage,
+  type CharacterOfPageResult,
+  type CharacterRole,
+  type MentionChoice,
+} from './resolve.js';
 export { classifyType, type Classification, type CategoryCandidate } from './classify.js';
 export { computeDrift, type DriftCode, type DriftFinding, type DriftReport } from './drift.js';
 export {

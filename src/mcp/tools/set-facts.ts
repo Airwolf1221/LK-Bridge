@@ -456,7 +456,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
             jobId: view.id,
             hint:
               'The change is accepted and has NOT failed: it runs by itself, checking the sidebar again inside the page’s lock. ' +
-              'Never submit it again: follow it with bridge_job_status or bridge_job_wait.',
+              'Never submit it again: follow it with bridge_job_status (wait_seconds waits for it).',
           },
           pd,
         );

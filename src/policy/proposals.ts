@@ -449,7 +449,7 @@ export class ProposalService implements ProposalSink {
         ops[0]?.op ?? 'operation',
         `this connection already has ${pending} proposals waiting for the owner (the limit is ` +
           `${MAX_PENDING_PROPOSALS_PER_PRINCIPAL}); wait until the owner has approved or rejected some, ` +
-          'and follow them with bridge_proposals_mine',
+          'and follow them with bridge_proposal_status (no proposalId lists yours)',
         principal.principalId,
       );
     }

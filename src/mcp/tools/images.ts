@@ -20,6 +20,7 @@ import { readOnlyReason } from '../../policy/gate.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import { withRequest, type CreateOutcome } from './create-support.js';
 import { defineTool } from './define.js';
+import { liveRead } from './repo.js';
 import { operationIdArg } from './resources.js';
 import {
   errorFromThrown,
@@ -51,7 +52,7 @@ const destinationArg = z
       .max(300)
       .optional()
       .describe(
-        'A page by name or id. A character page (Core, Reference or its index) gives the character’s folder; any other page also needs folder.',
+        'A page by name or id. A character’s page (Core, Reference or index, Working or Archived included) or one of its specialist pages (“{name} - Art”) gives the character’s folder, the race read from its Race / Species fact; any other page also needs folder.',
       ),
     for_character: z
       .object({
@@ -89,6 +90,58 @@ const WAIT = z
   .max(25)
   .optional()
   .describe('How long to wait for the result. Default 10.');
+
+/** The Race / Species fact of a live getResource answer: the text of the row, or null (no such row, or it is empty). */
+function raceFactOf(resource: unknown, rowName: string): string | null {
+  const props = (resource as { properties?: unknown } | null)?.properties;
+  if (!Array.isArray(props)) return null;
+  const want = rowName.trim().toLowerCase();
+  for (const p of props) {
+    const block = p as { kind?: unknown; rows?: unknown };
+    if (block.kind !== 'keyValue' || !Array.isArray(block.rows)) continue;
+    for (const r of block.rows as { key?: unknown; text?: unknown; content?: unknown }[]) {
+      if (typeof r.key !== 'string' || r.key.trim().toLowerCase() !== want) continue;
+      const t =
+        typeof r.text === 'string'
+          ? r.text
+          : Array.isArray(r.content)
+            ? (r.content as { text?: unknown }[])
+                .map((c) => (typeof c.text === 'string' ? c.text : ''))
+                .join('')
+            : '';
+      return t.trim() === '' ? null : t.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Plans a destination (v2 E3b, ADR 0045). A `for_page` that leads to a character whose Race / Species the repository tree
+ * does not hold (`RACE_NOT_READ`) costs ONE live read of that character's Core or Reference, then plans again with it.
+ * When that read cannot be made or says nothing, the first answer stands: it says exactly what to pass instead.
+ */
+async function planDestination(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  svc: ImageService,
+  dest: DestinationInput,
+): Promise<ReturnType<ImageService['plan']>> {
+  const first = svc.plan(pd.project.id, dest);
+  if (first.ok || first.error.code !== 'RACE_NOT_READ') return first;
+  const coreId = (first.error.details?.core as { id?: unknown } | undefined)?.id;
+  if (typeof coreId !== 'string') return first;
+  const read = await liveRead(pd, mctx, TOOL, 'getResource', { path: { resourceId: coreId } });
+  if (!read.ok) return first;
+  const speciesRow =
+    pd.services?.registry
+      .forProject(pd.project.id)
+      .store.listTypes()
+      .find((t) => t.placementKind === 'character' && t.placement)?.placement?.speciesRow ?? 'Race / Species';
+  return svc.plan(pd.project.id, {
+    ...dest,
+    pageRace: { core: coreId, race: raceFactOf(read.value, speciesRow) },
+  });
+}
 
 function svcOf(pd: ProjectDeps): ImageService | null {
   return pd.services?.images ?? null;
@@ -188,7 +241,7 @@ function rowAnswer(pd: ProjectDeps, r: ImageUploadRow, job: JobView | undefined)
 }
 
 const QUEUED_HINT =
-  'Accepted and NOT failed: it runs by itself. Never send it again: follow it with bridge_job_wait, or call upload_image with the ' +
+  'Accepted and NOT failed: it runs by itself. Never send it again: follow it with bridge_job_status (wait_seconds waits for it), or call upload_image with the ' +
   'same operation_id.';
 
 // ================================================================================================ upload_image
@@ -248,7 +301,7 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
       description:
         'Uploads an image as a LegendKeeper asset: converted to WebP (quality 90; orientation, transparency and animation kept), checked after storing, and filed in the right folder. Give exactly ONE source: `data_base64` (small images only: 2 MB is about 2.7 million characters), ' +
         (deps.settings.upload.allowUrlSource ? '`url` (a public https image)' : '`url` (switched off here)') +
-        ', `upload_id` (from prepare_image_upload: for agents with a shell) or `staged_id` (an image already staged). `destination`: `for_character` { name, race } (the character’s folder), `for_page` (a character page gives its character’s folder) or `folder` (an id, or a path such as "Characters / Beastkin / Qishen / Mehrana al-Khalid"), plus `subfolders` (a list, or one path such as "Wardrobe / Qipao"); missing folders are created. dryRun lists the folders it would create. `stage: true` keeps the image hidden for later placement. The same original sent again returns the existing asset: never upload a copy to move an image. At scope propose the image is staged and its placement is the proposal. Never repeat a call that returned a jobId or proposalId. Then put the image on a page with write_page: ![alt](asset url). Example: { "data_base64": "…", "destination": { "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "subfolders": "Wardrobe / Qipao", "project": "test" }. Cost: 2 writes (1 more per new folder), 1 read and 1 download to verify. PNG, JPEG, GIF or WebP up to ' +
+        ', `upload_id` (from prepare_image_upload: for agents with a shell) or `staged_id` (an image already staged). `destination`: `for_character` { name, race } (the character’s folder), `for_page` (a character’s page, Working or Archived included, or one of its specialist pages such as “{name} - Art”, gives its character’s folder; the race is read from its Race / Species fact) or `folder` (an id, or a path such as "Characters / Beastkin / Qishen / Mehrana al-Khalid"), plus `subfolders` (a list, or one path such as "Wardrobe / Qipao"); missing folders are created. dryRun lists the folders it would create. `stage: true` keeps the image hidden for later placement. The same original sent again returns the existing asset: never upload a copy to move an image. At scope propose the image is staged and its placement is the proposal. Never repeat a call that returned a jobId or proposalId. Then put the image on a page with write_page: ![alt](asset url). Example: { "data_base64": "…", "destination": { "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "subfolders": "Wardrobe / Qipao", "project": "test" }. Cost: 2 writes (1 more per new folder), 1 read and 1 download to verify. PNG, JPEG, GIF or WebP up to ' +
         `${max} bytes.`,
       inputSchema: uploadSchema,
       annotations: {
@@ -407,7 +460,7 @@ async function uploadBytes(
   let intended: { destination: DestinationInput; path: readonly string[] } | null = null;
   let finalPlan: AssetPlan | null = null;
   if (args.destination) {
-    const d = svc.plan(pd.project.id, args.destination);
+    const d = await planDestination(pd, mctx, svc, args.destination);
     if (!d.ok) return fail(d.error.code, d.error.message, d.error.details ?? {});
     finalPlan = d.plan;
     intended = { destination: args.destination, path: d.plan.destination.path };
@@ -476,7 +529,7 @@ async function uploadBytes(
 
   // At scope propose with a destination: the placement becomes the owner's proposal.
   if (propose && intended && row.state === 'uploaded' && row.staged) {
-    const again = svc.plan(pd.project.id, intended.destination);
+    const again = await planDestination(pd, mctx, svc, intended.destination);
     if (again.ok) {
       try {
         const placed = await svc.place({
@@ -569,7 +622,7 @@ async function placeStaged(
       `${row.id} has no intended destination; give one (folder, for_page or for_character).`,
     );
   }
-  const d = svc.plan(pd.project.id, dest);
+  const d = await planDestination(pd, mctx, svc, dest);
   if (!d.ok) return fail(d.error.code, d.error.message, d.error.details ?? {});
   const rename = args.name !== undefined ? displayNameOf(args.name) : undefined;
   const head = {

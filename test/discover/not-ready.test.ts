@@ -19,7 +19,7 @@ const TREE_TOOLS: [string, Record<string, unknown>][] = [
   ['browse_repository_tree', {}],
   ['search', { query: 'miyabi' }],
   ['get_resource', { resource: 'miyabi01' }],
-  ['get_resources', { resources: ['miyabi01'] }],
+  ['get_resource', { resources: ['miyabi01'] }],
   ['read_document', { resource: 'miyabi01' }],
   ['list_tags', {}],
 ];

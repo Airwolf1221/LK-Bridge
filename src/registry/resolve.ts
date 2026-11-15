@@ -10,6 +10,7 @@ import type { RegistryStore } from './store.js';
 import type { ProjectTree } from './tree-view.js';
 import {
   RegistryError,
+  type CharacterPlacementConfig,
   type MatchField,
   type NodeRef,
   type ResolveKind,
@@ -33,6 +34,32 @@ export const ROLE_LABEL: Readonly<Record<MentionRole, string>> = {
 
 /** v2 C2c (ADR 0035): the order a mention prefers the lifecycle states of one subject in: current first. */
 const STATE_RANK: Readonly<Record<PageKind, number>> = { bsrc: 0, bwrk: 1, barc: 2 };
+
+/**
+ * v2 E3b (ADR 0045): the character a page belongs to, for the places that need the character's own page: a Core or
+ * Reference itself, a character's index (Working or Archived ones too), or a specialist page (`{name} - Art`, any page
+ * whose subject is the character).
+ */
+export interface CharacterOfPage {
+  readonly subject: string;
+  /** The character's Character Core, else its Compact Character Reference. */
+  readonly core: NodeRef;
+  readonly role: 'core' | 'compact';
+  /** How the page led to the character: it is the Core or Reference, it is the character's index, or its subject names the character. */
+  readonly via: 'page' | 'index' | 'subject';
+  /** The Race / Species fact as the repository tree holds it; null when the tree has none for that page. */
+  readonly race: string | null;
+}
+
+export type CharacterOfPageResult =
+  | { readonly ok: true; readonly value: CharacterOfPage }
+  | { readonly ok: false; readonly reason: 'not_found'; readonly subject: string | null }
+  | {
+      readonly ok: false;
+      readonly reason: 'several';
+      readonly subject: string;
+      readonly candidates: readonly NodeRef[];
+    };
 
 /** v2 C2b: the page a mention of one character's pages went to, and why. */
 export interface MentionChoice {
@@ -260,6 +287,89 @@ export class NameResolver {
       return { role: 'index', subject: n.displayName };
     }
     return null;
+  }
+
+  /**
+   * v2 E3b (ADR 0045): the character a page belongs to, and the page that holds the character's facts (its Core, else its
+   * Reference), from the tree alone. Null `reason: not_found` when the page leads to no character: the subject (a Subject
+   * row, else the name before " - ") has no Core or Reference. Several Cores of one subject in one lifecycle state are
+   * `several` (they are never chosen between).
+   */
+  characterOfPage(id: string): CharacterOfPageResult {
+    const n = this.tree.node(id);
+    if (!n) return { ok: false, reason: 'not_found', subject: null };
+    const placementOf = (core: TreeNode): CharacterPlacementConfig | null => {
+      for (const t of this.store.listTypes()) {
+        const p = t.placement;
+        if (t.placementKind === 'character' && p && core.referenceType) {
+          const ref = key(core.referenceType);
+          if (ref === key(p.referenceTypes.core) || ref === key(p.referenceTypes.compact)) return p;
+        }
+      }
+      return null;
+    };
+    const coreRole = (node: TreeNode): 'core' | 'compact' | null => {
+      const r = this.characterRole(node.id)?.role;
+      return r === 'core' || r === 'compact' ? r : null;
+    };
+    const found = (
+      core: TreeNode,
+      role: 'core' | 'compact',
+      via: CharacterOfPage['via'],
+      subject: string,
+    ): CharacterOfPageResult => {
+      const p = placementOf(core);
+      return {
+        ok: true,
+        value: {
+          subject,
+          core: this.tree.ref(core),
+          role,
+          via,
+          race: p ? this.tree.rowValue(core.id, p.speciesRow) : null,
+        },
+      };
+    };
+    const self = coreRole(n);
+    if (self) return found(n, self, 'page', this.characterRole(n.id)!.subject);
+
+    // A character's index (under Working or Archived too): the Core, else the Reference, directly under it.
+    if (n.kind === 'index') {
+      const kids = this.tree.children(n.id);
+      const core = kids.find((k) => coreRole(k) === 'core');
+      const ref = kids.find((k) => coreRole(k) === 'compact');
+      if (core) return found(core, 'core', 'index', n.displayName);
+      if (ref) return found(ref, 'compact', 'index', n.displayName);
+      return { ok: false, reason: 'not_found', subject: null };
+    }
+    if (!isPageKind(n.kind)) return { ok: false, reason: 'not_found', subject: null };
+
+    // A specialist page: its subject names the character. Look beside it first, then by name.
+    const subject = subjectOf(n.displayName, this.tree.rowValue(n.id, 'Subject'));
+    const sk = key(subject);
+    const pool = new Map<string, TreeNode>();
+    const consider = (c: TreeNode | null | undefined) => {
+      if (!c || pool.has(c.id)) return;
+      const role = coreRole(c);
+      if (role && key(this.characterRole(c.id)!.subject) === sk) pool.set(c.id, c);
+    };
+    const parent = n.path.ids.length >= 2 ? this.tree.node(n.path.ids[n.path.ids.length - 2]!) : null;
+    if (parent) for (const k of this.tree.children(parent.id)) consider(k);
+    for (const m of this.tree.findByName(subject)) {
+      consider(m.node);
+      if (m.node.kind === 'index') for (const k of this.tree.children(m.node.id)) consider(k);
+    }
+    const cores = [...pool.values()];
+    if (cores.length === 0) return { ok: false, reason: 'not_found', subject };
+    // The current page first ([BSRC], then [BWRK], then [BARC]), a Core before a Reference; one best page is the answer.
+    const rank = (c: TreeNode): number =>
+      (isPageKind(c.kind) ? STATE_RANK[c.kind] : 3) * 2 + (coreRole(c) === 'core' ? 0 : 1);
+    const best = Math.min(...cores.map(rank));
+    const top = cores.filter((c) => rank(c) === best);
+    if (top.length > 1) {
+      return { ok: false, reason: 'several', subject, candidates: top.map((c) => this.tree.ref(c)) };
+    }
+    return found(top[0]!, coreRole(top[0]!)!, 'subject', subject);
   }
 
   /**

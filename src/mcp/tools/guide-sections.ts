@@ -1,0 +1,273 @@
+/**
+ * Forgiving guide sections (v2 E3b, ADR 0045). Agents guess the section they ask `get_bridge_guide` or
+ * `get_markdown_guide` for ("find pages", "Promote", a row of the which-tool table), and an exact-heading match sent six
+ * of the owner's evaluation runs to SECTION_NOT_FOUND. The guides still match a heading exactly first (see
+ * `getSection`); only a miss comes here. A miss is matched loosely:
+ *
+ * - case, punctuation and spacing do not matter ("find-and-read a page", "Page’s  Text");
+ * - the key words of a heading count, and a few common synonyms lead to the same place ("promote", "promotion" and
+ *   "lifecycle" to the page lifecycle; "find", "search" and "read" to finding and reading);
+ * - the labels of the "Which tool?" table are aliases of the section they point to;
+ * - one clear match is returned (the reply names the exact section); several are listed as candidates; none lists every
+ *   exact section name.
+ *
+ * It is a scoring heuristic with a deliberate bias to "several" over a wrong guess: a word that is in many headings
+ * ("page", "text") counts for little, one that is in few counts for a lot, and a lone match must beat the runner-up by half.
+ */
+import type { OutlineEntry } from '../../markdown/index.js';
+
+export type SectionMatch =
+  | { readonly kind: 'one'; readonly heading: OutlineEntry }
+  | { readonly kind: 'several'; readonly candidates: readonly OutlineEntry[] }
+  | { readonly kind: 'none' };
+
+const STOP = new Set(
+  (
+    'a an the of to or and for in on with my your how do does did i it is are be been when what which where one ' +
+    'some any all about into from at by as this that can should would use using me please want need'
+  ).split(' '),
+);
+
+/** Words so common in the guides' headings that they say little about which section is meant. */
+const GENERIC = new Set(['page', 'text', 'section', 'guide', 'tool', 'bridge', 'thing', 'part']);
+const GENERIC_WEIGHT = 0.3;
+
+/**
+ * Synonym groups: every word (and its plural and -ed / -ing / -ion forms) is one concept. A group is first-come: a word
+ * in an earlier group is not taken by a later one.
+ */
+const GROUPS: readonly (readonly string[])[] = [
+  ['audit', 'finding', 'lint', 'problem', 'issue'],
+  [
+    'find',
+    'search',
+    'read',
+    'look',
+    'lookup',
+    'locate',
+    'browse',
+    'discover',
+    'view',
+    'get',
+    'list',
+    'outline',
+  ],
+  ['edit', 'write', 'rewrite', 'append', 'replace', 'modify', 'revise', 'paragraph'],
+  ['fact', 'sidebar', 'property', 'link', 'scope', 'rank', 'attribute'],
+  ['create', 'new', 'add', 'make', 'build', 'template'],
+  ['rename', 'move', 'delete', 'remove', 'tag', 'alias', 'hide', 'lock', 'destroy', 'undo'],
+  ['promote', 'promotion', 'lifecycle', 'archive', 'unarchive', 'retire', 'retirement'],
+  ['date', 'chronology', 'timeline', 'calendar', 'event', 'age', 'lane'],
+  ['map', 'pin', 'region', 'path', 'marker', 'feature', 'label'],
+  ['image', 'upload', 'picture', 'photo', 'asset', 'png', 'jpeg'],
+  ['snapshot', 'history', 'revision', 'diff', 'rollback', 'older', 'earlier'],
+  ['budget', 'job', 'proposal', 'estimate', 'rate', 'queue', 'wait'],
+  ['canon', 'canonical', 'approval', 'approve', 'authoritative', 'status', 'protected', 'continuity'],
+  ['low', 'level', 'lk', 'api', 'fallback', 'raw'],
+  ['error', 'wrong', 'refusal', 'refuse', 'fail', 'failure', 'troubleshoot', 'trouble', 'code'],
+];
+
+const SUFFIXES = ['', 's', 'es', 'd', 'ed', 'ing', 'ion', 'ions'];
+
+/** word → the group's first word (its concept). */
+const CONCEPT = new Map<string, string>();
+for (const g of GROUPS) {
+  const root = g[0]!;
+  for (const w of g) {
+    for (const sfx of SUFFIXES) {
+      const forms = [w + sfx];
+      if (w.endsWith('e') && (sfx === 'd' || sfx === 'ing' || sfx === 'ion' || sfx === 'ions'))
+        forms.push(w.slice(0, -1) + sfx);
+      for (const f of forms) if (!CONCEPT.has(f)) CONCEPT.set(f, root);
+    }
+  }
+}
+
+/** The tokens of a text: lower case, punctuation and underscores as spaces, apostrophes dropped. */
+function tokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[’'`]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((t) => t !== '' && !STOP.has(t));
+}
+
+/** A token as a concept: its synonym group's root, else the word without a plural. */
+function concept(token: string): string {
+  const g = CONCEPT.get(token);
+  if (g) return g;
+  if (/ies$/.test(token) && token.length > 4) return `${token.slice(0, -3)}y`;
+  if (/(ss|us|is)$/.test(token)) return token;
+  if (/s$/.test(token) && token.length > 3) return token.slice(0, -1);
+  return token;
+}
+
+const conceptsOf = (text: string): Set<string> => new Set(tokens(text).map(concept));
+
+/** The normal form of a phrase, to compare an asked name with an alias exactly (case, punctuation, spacing). */
+export const normalise = (text: string): string =>
+  tokens(text)
+    .map((t) => (/(ss|us|is)$/.test(t) || t.length <= 3 ? t : t.replace(/s$/, '')))
+    .join(' ');
+
+/**
+ * Extra phrases that lead to a section, by the section's heading text: the labels of the which-tool table in the
+ * bridge guide's "How to decide" (agents copy them), and the words of the tasks. A test checks every key is a heading.
+ */
+export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
+  bridge: {
+    'How to decide': [
+      'which tool',
+      'which tool should I use',
+      'choose a tool',
+      'five rules',
+      'start',
+      'overview',
+    ],
+    'Find and read a page': [
+      'Find a page when you know part of its name or a tag',
+      'See how a part of the repository is laid out',
+      "Look at one page's facts, links, tags",
+      "Read a page's text (or one section)",
+      'find pages',
+      'finding and reading',
+      'search',
+      'read',
+    ],
+    "Edit a page's text": ["Change a page's text", 'write a page', 'edit text', 'write_page', 'baseVersion'],
+    'Change facts and links': ['Change facts or links', 'set facts', 'set_facts', 'baseFactsVersion'],
+    'Create a page or a character (Working first)': [
+      'Make a character',
+      'Make any other page',
+      'create a page',
+      'create a character',
+      'new page from a template',
+      'create a page from a template',
+      'page from a template',
+      'template',
+    ],
+    'Rename, move, delete and restore': [
+      'Rename, tag, alias, hide, lock',
+      'Move a page',
+      'Delete (and undo)',
+    ],
+    'The page lifecycle': [
+      'Retire a page or a whole character',
+      'Make Working work canon',
+      'promote',
+      'promotion',
+      'archive',
+      'lifecycle',
+    ],
+    'Dates and the chronology': [
+      'Check or convert a date',
+      'Add, change, remove a chronology event',
+      'calendar',
+      'timeline',
+    ],
+    Maps: ['Add or move a map pin, region, path'],
+    Images: ['Put an image in the library', 'upload an image'],
+    'Snapshots and restores': ['See older states of a page and bring one back'],
+    'Audit findings': ['See what the audits found'],
+    'Budgets, jobs and proposals': [
+      'Know how much budget is left, or if work fits',
+      'Know what happened to a proposal or job',
+    ],
+    'Canon and approval': ['canon', 'approval'],
+    'When the low-level tools are right': [
+      'Do something none of the above does',
+      'low-level tools',
+      'lk_api',
+    ],
+  },
+  markdown: {},
+};
+
+/** Key words added to a heading's own (by the heading's text), where its words alone would not be asked for. */
+const KEYWORDS: Readonly<Record<string, string>> = {
+  'How to decide': 'rules choose overview start',
+};
+
+interface Entry {
+  readonly heading: OutlineEntry;
+  readonly bag: Set<string>;
+  readonly aliases: readonly string[];
+}
+
+/**
+ * Matches `asked` against the guide's headings (the level-2 and deeper ones: the title is not a section).
+ * `guide` selects the alias table.
+ */
+export function matchSection(
+  headings: readonly OutlineEntry[],
+  asked: string,
+  guide: 'bridge' | 'markdown',
+): SectionMatch {
+  // "A > B": a loose ask names the last segment.
+  const query = asked
+    .split('>')
+    .at(-1)!
+    .replace(/\s*\[\d+\]\s*$/, '');
+  const aliasTable = SECTION_ALIASES[guide] ?? {};
+  const entries: Entry[] = headings
+    .filter((h) => h.level >= 2)
+    .map((h) => {
+      const aliases = aliasTable[h.text] ?? [];
+      // The bag is the heading's own key words (and what their synonym groups stand for), plus a few extras; the
+      // aliases only match as whole phrases, because a table label's verb ("Add a pin") would pull in other sections.
+      const bag = conceptsOf(`${h.text} ${KEYWORDS[h.text] ?? ''}`);
+      return { heading: h, bag, aliases: aliases.map(normalise) };
+    });
+  if (entries.length === 0) return { kind: 'none' };
+
+  const nq = normalise(query);
+  if (nq === '') return { kind: 'none' };
+
+  // 1. The same words as a heading's text, or as one of its aliases (exactly, whatever the case and punctuation).
+  const same = entries.filter((e) => normalise(e.heading.text) === nq || e.aliases.includes(nq));
+  const sameSections = [...new Set(same.map((e) => e.heading.path))];
+  if (sameSections.length === 1) return { kind: 'one', heading: same[0]!.heading };
+  if (sameSections.length > 1) return { kind: 'several', candidates: same.map((e) => e.heading) };
+
+  // 2. Key words: every concept of the ask that is in a heading counts, by how few headings have it.
+  const df = new Map<string, number>();
+  for (const e of entries) for (const c of e.bag) df.set(c, (df.get(c) ?? 0) + 1);
+  const weight = (c: string): number => {
+    const n = df.get(c);
+    if (!n) return 0;
+    const idf = Math.log(1 + entries.length / n);
+    return GENERIC.has(c) ? idf * GENERIC_WEIGHT : idf;
+  };
+  const q = conceptsOf(query);
+  const scored = entries
+    .map((e) => {
+      const hit = [...q].filter((c) => e.bag.has(c));
+      return { e, hits: hit.length, score: hit.reduce((s, c) => s + weight(c), 0) };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || a.e.heading.line - b.e.heading.line);
+  if (scored.length === 0) return { kind: 'none' };
+  const top = scored[0]!;
+  const second = scored[1]?.score ?? 0;
+  // A clear match needs a strong score, a lead over the runner-up, and at least half of what was asked: one shared word
+  // in a long, unrelated ask ("no such heading" and "Headings and paragraphs") is a candidate, never the answer.
+  if (top.score >= 1 && top.score >= second * 1.5 && top.hits * 2 >= q.size) {
+    return { kind: 'one', heading: top.e.heading };
+  }
+  const near = scored.filter((x) => x.score >= top.score * 0.5).slice(0, 6);
+  return { kind: 'several', candidates: near.map((x) => x.e.heading) };
+}
+
+/**
+ * A section's exact name as `section` takes it: its heading path without the guide's title ("Find and read a page",
+ * "Reference > Projects"). Both guides have one level-1 heading, the title, at the root of every path.
+ */
+export function exactName(h: OutlineEntry): string {
+  return h.path.split(' > ').slice(1).join(' > ');
+}
+
+/** Every exact section name of a guide, in order (the title is not one). */
+export function sectionNames(headings: readonly OutlineEntry[]): string[] {
+  return headings.filter((h) => h.level >= 2).map(exactName);
+}

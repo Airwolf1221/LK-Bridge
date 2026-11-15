@@ -58,7 +58,7 @@ describe('result sizes (3.5 characters per token, under 20,000 tokens)', () => {
   });
   it('a full sidebar, 25 pages at once, tags, assets and templates', async () => {
     const ids = Array.from({ length: 25 }, (_, i) => `bk${i.toString(36).padStart(6, '0')}`);
-    const many = await call('get_resources', { resources: ids, confirm: true, live: false });
+    const many = await call('get_resource', { resources: ids, confirm: true, live: false });
     expect(tokens(many.text)).toBeLessThan(LIMIT);
     for (const [n, a] of [
       ['list_tags', {}],

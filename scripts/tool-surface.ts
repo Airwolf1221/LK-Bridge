@@ -110,13 +110,8 @@ export const NOTES: Readonly<Record<string, Note>> = {
   ),
   get_resource: N(
     'Discover',
-    'get_resources; read_document',
-    'Using it for page text; skipping it before set_facts (no `factsVersion`).',
-  ),
-  get_resources: N(
-    'Discover',
-    'get_resource',
-    'A loop of get_resource calls instead; not repeating with `confirm` above 10 pages.',
+    'read_document',
+    'Using it for page text; skipping it before set_facts (no `factsVersion`); a character’s [INDEX] for its facts (they are on its Core).',
   ),
   list_tags: N('Discover', 'search `tag:`', 'Reading pages to count tags.'),
   list_templates: N(
@@ -154,7 +149,7 @@ export const NOTES: Readonly<Record<string, Note>> = {
   create_bare_resource: N(
     'Resources',
     'create_resource (the better default)',
-    'Using it when a template exists, so the page has no sidebar.',
+    'Hidden by default (E3b). Using it when a template exists, so the page has no sidebar.',
   ),
   create_many_resources: N(
     'Resources',
@@ -271,7 +266,7 @@ export const NOTES: Readonly<Record<string, Note>> = {
   lk_upload_image: N(
     'Assets',
     'upload_image (a superset)',
-    'Picking the older tool: no conversion, folder planning or staging.',
+    'Hidden by default (E3b). Picking the older tool: no conversion, folder planning or staging.',
   ),
   list_snapshots: N(
     'Snapshots',
@@ -292,8 +287,11 @@ export const NOTES: Readonly<Record<string, Note>> = {
   bridge_info: N('Bridge', 'list_projects; bridge_budget', 'Calling it for the budget.'),
   bridge_budget: N('Bridge', 'bridge_estimate', 'Calling it in a loop to wait for budget.'),
   bridge_estimate: N('Bridge', 'bridge_budget', 'Not calling it before bulk reads.'),
-  bridge_job_status: N('Bridge', 'bridge_job_wait', 'Polling it in a loop.'),
-  bridge_job_wait: N('Bridge', 'bridge_job_status', 'Forgetting `done: false` means call again.'),
+  bridge_job_status: N(
+    'Bridge',
+    'none (bridge_job_wait was merged in, E3b)',
+    'Polling it in a loop instead of `wait_seconds`; forgetting `done: false` means call again.',
+  ),
   bridge_job_cancel: N('Bridge', 'none', 'Cancelling an approved job (owner only).'),
   bridge_errors_recent: N('Bridge', 'bridge_journal_lookup', 'Using it to decide whether to retry.'),
   bridge_journal_lookup: N(
@@ -304,10 +302,9 @@ export const NOTES: Readonly<Record<string, Note>> = {
   bridge_result_page: N('Bridge', 'none', 'Re-running the tool instead of paging the handle.'),
   bridge_proposal_status: N(
     'Bridge',
-    'bridge_proposals_mine',
+    'none (bridge_proposals_mine was merged in, E3b)',
     'Repeating the write instead; wrong `project`.',
   ),
-  bridge_proposals_mine: N('Bridge', 'bridge_proposal_status', 'Using it when the id is known.'),
   get_bridge_guide: N('Guides', 'get_markdown_guide', 'Reading the whole guide instead of a `section`.'),
   get_markdown_guide: N('Guides', 'get_bridge_guide', 'Skipping it before write_page.'),
   lk_api_read: N(
@@ -378,7 +375,7 @@ export function inventory(report: SurfaceReport, baseline?: Baseline): string {
       ? 'read, propose, write'
       : seen.propose.has(n)
         ? 'propose, write'
-        : 'any profile with “show low-level tools”';
+        : 'any profile with “show low-level and rarely used tools”';
     const note = NOTES[n];
     const b = before?.get(n);
     rows.push(
@@ -392,7 +389,7 @@ export function inventory(report: SurfaceReport, baseline?: Baseline): string {
   if (op.length > 0) {
     const chars = op.reduce((s, t) => s + t.entryChars, 0);
     rows.push(
-      `| \`lk_op_<operationId>\` (${op.length}) | Low-level | per operation | only with \`MCP_EXPOSE_PER_OP_TOOLS=true\` and “show low-level tools” | – | – | ${tok(chars)} in all | the lk_api_* tools | Off by default. |`,
+      `| \`lk_op_<operationId>\` (${op.length}) | Low-level | per operation | only with \`MCP_EXPOSE_PER_OP_TOOLS=true\` and “show low-level and rarely used tools” | – | – | ${tok(chars)} in all | the lk_api_* tools | Off by default. |`,
     );
   }
   return rows.join('\n');
@@ -411,7 +408,7 @@ function summary(report: SurfaceReport, baseline?: Baseline): string {
     const bchars = b
       ? b.tools.filter((t) => !t.name.startsWith('lk_op_')).reduce((s, t) => s + t.entryChars, 0)
       : null;
-    const name = `${p.scope}${p.lowLevel ? ' + low-level setting' : ''}`;
+    const name = `${p.scope}${p.lowLevel ? ' + low-level and rarely used setting' : ''}`;
     lines.push(
       `| ${name} | ${plain.length} | ${num(bchars !== null ? bchars : chars)}${bchars !== null ? ` → ${num(chars)}` : ''} | ${bchars !== null ? `${tok(bchars)} → ` : ''}${tok(chars)} |`,
     );
@@ -421,7 +418,7 @@ function summary(report: SurfaceReport, baseline?: Baseline): string {
   if (op.length > 0) {
     const chars = op.reduce((s, t) => s + t.entryChars, 0);
     lines.push(
-      `| write + low-level + \`MCP_EXPOSE_PER_OP_TOOLS=true\` | +${op.length} | +${num(chars)} | +${tok(chars)} |`,
+      `| write + low-level and rarely used + \`MCP_EXPOSE_PER_OP_TOOLS=true\` | +${op.length} | +${num(chars)} | +${tok(chars)} |`,
     );
   }
   lines.push(

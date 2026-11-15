@@ -31,10 +31,8 @@ describe('the MCP surface with the official client', () => {
         'bridge_info',
         'bridge_job_cancel',
         'bridge_job_status',
-        'bridge_job_wait',
         'bridge_journal_lookup',
         'bridge_proposal_status',
-        'bridge_proposals_mine',
         'bridge_result_page',
         // v2 B2: Discover, Read and the guides
         'browse_asset_tree',
@@ -42,7 +40,6 @@ describe('the MCP surface with the official client', () => {
         'get_bridge_guide',
         'get_markdown_guide',
         'get_resource',
-        'get_resources',
         'list_assets',
         'list_calendars',
         'list_projects', // v2 A1
@@ -53,13 +50,13 @@ describe('the MCP surface with the official client', () => {
         // profile without showLowLevelTools (v2 B2).
         'lk_api_read',
         'lk_api_write',
-        'lk_upload_image',
+        // lk_upload_image and create_bare_resource are rarely-used tools: hidden for a profile without
+        // showLowLevelTools (v2 E3b, ADR 0045).
         'read_document',
         'search',
         'set_facts', // v2 C2a
         'write_page', // v2 C1
         // v2 C2b
-        'create_bare_resource',
         'create_character',
         'create_document',
         'create_index',
@@ -105,7 +102,6 @@ describe('the MCP surface with the official client', () => {
       destructiveHint: true,
       idempotentHint: false,
     });
-    expect(by.lk_upload_image!.annotations?.readOnlyHint).toBe(false);
     for (const t of tools) {
       expect(t.annotations?.readOnlyHint, t.name).toBeTypeOf('boolean');
       expect(t.description, t.name).toMatch(/Cost|cost|Costs/);
@@ -116,7 +112,6 @@ describe('the MCP surface with the official client', () => {
       'bridge_budget',
       'bridge_estimate',
       'bridge_job_status',
-      'bridge_job_wait',
       'bridge_errors_recent',
       'bridge_journal_lookup',
       'bridge_result_page',
@@ -124,7 +119,6 @@ describe('the MCP surface with the official client', () => {
       'browse_asset_tree',
       'search',
       'get_resource',
-      'get_resources',
       'list_tags',
       'list_templates',
       'list_calendars',
@@ -135,7 +129,7 @@ describe('the MCP surface with the official client', () => {
     ]) {
       expect(by[n]!.annotations?.readOnlyHint, n).toBe(true);
     }
-    for (const n of ['bridge_job_cancel', 'lk_api_batch', 'lk_api_write', 'lk_upload_image']) {
+    for (const n of ['bridge_job_cancel', 'lk_api_batch', 'lk_api_write']) {
       expect(by[n]!.annotations?.readOnlyHint, n).toBe(false);
     }
     expect(client.getInstructions()).toMatch(/bridge_estimate/);
@@ -195,7 +189,7 @@ describe('the MCP surface with the official client', () => {
     expect(b.isError, b.text).toBe(false);
     expect(b.body).toMatchObject({ status: 'queued', steps: 2 });
     expect(b.body.jobId).toBeTypeOf('string');
-    const w = await stack.call(client, 'bridge_job_wait', { jobId: b.body.jobId, seconds: 10 });
+    const w = await stack.call(client, 'bridge_job_status', { jobId: b.body.jobId, wait_seconds: 10 });
     expect(w.body).toMatchObject({ status: 'succeeded', done: true, progress: { stepsDone: 2 } });
     expect(w.footer).toMatch(/^budget \(test\):/);
   });
@@ -209,7 +203,7 @@ describe('the MCP surface with the official client', () => {
     expect(p.isError, p.text).toBe(false);
     const handle = p.body.handle as string;
     expect(handle).toBeTypeOf('string');
-    await stack.call(client, 'bridge_job_wait', { jobId: p.body.jobId });
+    await stack.call(client, 'bridge_job_status', { jobId: p.body.jobId, wait_seconds: 10 });
     const page = await stack.call(client, 'bridge_result_page', { handle, offset: 0, limit: 4 });
     expect(page.body).toMatchObject({ kind: 'items', offset: 0, count: 4, nextOffset: 4 });
     expect(page.body.total).toBeGreaterThanOrEqual(8);

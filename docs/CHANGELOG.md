@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased: v2 E3b: the owner's evaluation applied, forgiving guides, steering to the Core, and the evaluation helper
+
+[ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md) (section "E3b"); migration `2500_evaluation`; PLAN-v2 phase E, the E3b
+row. The owner's results: [reviews/E3-results.md](reviews/E3-results.md) (scenarios 1 to 8 in both assistants, then a shortlist;
+**every run ended right**). Nothing was run against a live system: no call to the owner's LegendKeeper bridge connector, not even
+a read. Every test and measurement uses the mock.
+
+- **The owner's answers on P1 to P11 ([reviews/E3-tools.md](reviews/E3-tools.md) section 3.2).** Applied: **P1** `get_resources`
+  merged into `get_resource` (`resource`, or `resources` for up to 25 as one job; `RESOURCE_REQUIRED` if neither or both); **P2**
+  `bridge_proposals_mine` merged into `bridge_proposal_status` (no `proposalId` lists yours); **P3** `bridge_job_wait` merged into
+  `bridge_job_status` (`wait_seconds`, 1 to 25, with a `jobId`); **P4** `lk_upload_image` and **P5** `create_bare_resource` hidden
+  by default; **P6** the checkbox reads "Show low-level and rarely used tools". Not applied: P7 (`create_many_resources` stays
+  visible), P8 (`lk_api_batch` stays), P9 (`baseVersion` and `baseFactsVersion` stay optional: agents passed them every time),
+  P10 (two guides), P11 (the map `style` schema).
+- **The old names fail helpfully for one release.** `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` stay
+  registered but are never listed; a call from a cached tool list answers `TOOL_RENAMED` ("renamed to get_resource: pass
+  `resources` …") and does nothing. Hidden tools (`lk_upload_image`, `create_bare_resource`) still work when called, under the same
+  policy; the profile setting shows them. A `propose` or `write` profile now sees **56** tools (61 before), a `read` profile
+  **25** (28 before); with the setting on, 61 and 28. Sizes are in [reviews/E3-tools.md](reviews/E3-tools.md) section 6.
+- **Instead of P9: "write without a base version" on the Tool calls page.** A `write_page` call that edits existing content
+  without `baseVersion`, or a `set_facts` call without `baseFactsVersion`, is badged and can be filtered, so the owner can see
+  whether it ever happens.
+- **Forgiving guide sections** (`get_bridge_guide`, `get_markdown_guide`). Six or more `SECTION_NOT_FOUND` in the evaluation ("find
+  pages", "Read a page's text (or one section)", "Promote", …). A miss is now matched loosely (case, punctuation, spacing, a
+  heading's key words, synonyms such as promote / promotion / lifecycle and find / search / read, and the labels of the "Which tool?"
+  table): one clear match is returned and names the exact section; several return `SECTION_AMBIGUOUS` with the candidates; none
+  returns `SECTION_NOT_FOUND` with `sections`, every exact name (this replaces the `headings` list in that error). "How to decide"
+  lists the exact names to ask for.
+- **Steering towards the Core.** `AMBIGUOUS` for one character's pages lists each with its role and adds "a character's facts and
+  Scope live on its Character Core (or Character Reference for a compact character)"; `get_resource` on a character's `[INDEX]`
+  (Working and Archived ones too) adds a `character` note naming the Core or Reference with its id; the bridge guide says so.
+  Writes stay strict: a name that matches several pages is never resolved for the agent.
+- **`upload_image` for Working, Archived and specialist pages.** `for_page` now works for a character's Core, Reference or index
+  outside the Characters index, and for a specialist page (`{name} - …`), taking the race from the character's Race / Species fact
+  (the repository tree, else one live read of that page; nothing is written). The D3 race rules are unchanged. When neither route
+  works the refusal says exactly what to pass (`for_character { name, race }` or a `folder`): `FOLDER_REQUIRED`,
+  `CHARACTER_AMBIGUOUS`, `RACE_NOT_FOUND`.
+- **New: the Evaluation panel** on the Tool calls page, and the scenarios as data
+  ([reviews/scenarios.json](reviews/scenarios.json)). Choose core or all and ChatGPT or Claude; copy each prompt, Start, paste
+  into a fresh chat, Done: the bridge attributes that assistant's tool calls between Start and Done. Auto-grade hints (expected
+  tools present, mistake tools present, error codes seen); the owner confirms Right, Partly or Wrong. Saved runs, a results table in
+  the owner's format to copy, and a comparison of two runs. Owner only; no agent tool; prompts never name a tool. See
+  [dashboard.md](dashboard.md).
+- **For the owner after deploying:** refresh both assistants' tool lists (ChatGPT: Plugins, the bridge, **Refresh**; claude.ai:
+  disconnect and reconnect). Run the core set once with the new helper, in Claude at least, to confirm the guide misses and the
+  index-first habit are gone, and that scenario 21 places the image first time.
+
 ## Unreleased: v2 E3: the tool review, shorter and steering descriptions, and the tool-call log
 
 [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md); migration `2400_tool_calls`; PLAN-v2 phase E, the E3 row (and a new E3b
@@ -38,8 +85,7 @@ LegendKeeper bridge connector, not even a read. Every measurement and test uses 
   measures the tool list as each client receives it.
 - **For the owner after deploying:** refresh both assistants' tool lists (ChatGPT: Plugins, the bridge, **Refresh**; claude.ai:
   disconnect and reconnect), run [the evaluation](reviews/E3-evaluation.md), fill in its results template and send it back
-  (E3b applies it). The proposals in the review's section 3.2 (merging `get_resources`, `bridge_proposals_mine` and
-  `bridge_job_wait`; hiding `lk_upload_image` and `create_bare_resource`) await your answer.
+  (E3b applied it, above).
 
 ## Unreleased: v2 E2: audits (findings only, read from the snapshots)
 

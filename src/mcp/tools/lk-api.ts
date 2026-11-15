@@ -299,7 +299,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Run LegendKeeper operations as a batch job',
     access: 'write',
     description:
-      'Submits an ordered list of low-level operations as ONE persisted job and returns { jobId, status, eta } at once; onError "stop" (default) or "continue". Use it, not a loop of lk_api_write calls, for multi-step low-level work. Every step is checked before anything is queued. Follow it with bridge_job_wait or bridge_job_status; never resubmit it. Cost: the sum of its steps, at job priority.',
+      'Submits an ordered list of low-level operations as ONE persisted job and returns { jobId, status, eta } at once; onError "stop" (default) or "continue". Use it, not a loop of lk_api_write calls, for multi-step low-level work. Every step is checked before anything is queued. Follow it with bridge_job_status (wait_seconds waits for it); never resubmit it. Cost: the sum of its steps, at job priority.',
     inputSchema: z.object({
       calls: z
         .array(
@@ -359,7 +359,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Read every page of a LegendKeeper list',
     access: 'read',
     description:
-      'Follows every cursor of a paged list operation (listResources, listTemplates, listEvents, listAssets, listProjects) as a job and returns { jobId, handle } at once. Wait with bridge_job_wait, then read the items with bridge_result_page. Inside the repository prefer search, browse_repository_tree or list_assets. Cost: 1 read per page of 100.',
+      'Follows every cursor of a paged list operation (listResources, listTemplates, listEvents, listAssets, listProjects) as a job and returns { jobId, handle } at once. Wait with bridge_job_status (wait_seconds), then read the items with bridge_result_page. Inside the repository prefer search, browse_repository_tree or list_assets. Cost: 1 read per page of 100.',
     inputSchema: z.object({
       operationId: z.string().describe('A paged read, e.g. "listResources".'),
       params: paramsSchema.optional(),
@@ -402,7 +402,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             {
               ...submitBody(r, 1),
               handle,
-              hint: 'Wait with bridge_job_wait, then bridge_result_page({ handle }).',
+              hint: 'Wait with bridge_job_status({ jobId, wait_seconds: 20 }), then bridge_result_page({ handle }).',
             },
             pd,
           );
@@ -433,7 +433,7 @@ export function submitBody(
     status: r.status,
     eta: r.eta === null ? null : new Date(r.eta).toISOString(),
     steps,
-    hint: 'Do not submit it again. Follow it with bridge_job_wait({ jobId }) or bridge_job_status({ jobId }).',
+    hint: 'Do not submit it again. Follow it with bridge_job_status({ jobId, wait_seconds: 20 }).',
   };
 }
 

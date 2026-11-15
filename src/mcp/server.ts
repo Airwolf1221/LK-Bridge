@@ -97,6 +97,11 @@ export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
    * `showLowLevelTools`. Hiding changes `tools/list` only: a call is still refused or allowed by policy as before.
    */
   readonly lowLevel?: boolean;
+  /**
+   * v2 E3b (ADR 0045): a retired name kept for one release. Never listed, whatever the profile; a call to it answers
+   * with a short "renamed to …" error (see `renamedTool`), so a client's cached tool list fails helpfully.
+   */
+  readonly retired?: boolean;
   /** Scopes the caller must hold (checked before the handler). Default: none beyond `/mcp` access. */
   readonly requiredScopes?: readonly string[];
   handler(input: z.output<S>, ctx: McpToolContext): McpToolResult | Promise<McpToolResult>;
@@ -294,7 +299,12 @@ export function createMcpServerFactory(
     const showLow = policy?.showLowLevelTools === true;
     const visible = new Set(
       tools
-        .filter((t) => toolVisible(toolAccess(t), policy?.scope) && (t.lowLevel !== true || showLow))
+        .filter(
+          (t) =>
+            t.retired !== true &&
+            toolVisible(toolAccess(t), policy?.scope) &&
+            (t.lowLevel !== true || showLow),
+        )
         .map((t) => t.name),
     );
     // Every tool is registered, so a direct call to a hidden write tool gets the clear read-only refusal (from

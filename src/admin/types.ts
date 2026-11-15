@@ -18,6 +18,7 @@ import type { Restores } from '../snapshots/restores.js';
 import type { Rehearsals } from '../snapshots/rehearsal.js';
 import type { OffsiteService } from '../offsite/service.js';
 import type { ToolCallLog } from '../toolcalls/index.js';
+import type { Evaluation } from '../evaluation/index.js';
 
 /**
  * What the admin API needs from the running bridge. `Runtime` (src/runtime.ts) satisfies it; tests may build their own.
@@ -53,6 +54,8 @@ export interface AdminRuntime {
   readonly audits?: Audits;
   /** v2 E3: the tool-call log (the Tool calls page); optional for tests' runtimes. */
   readonly toolCalls?: ToolCallLog;
+  /** v2 E3: the Evaluation helper (the Tool calls page's Evaluation panel); optional for tests' runtimes. */
+  readonly evaluation?: Evaluation;
   /** v2 E1b: the off-site copy to Google Drive (the Off-site copy page, the Overview's warning); optional for tests. */
   readonly offsite?: OffsiteService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */

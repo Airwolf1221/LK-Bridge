@@ -154,7 +154,7 @@ export function describeJob(
     jobId: view.id,
     hint:
       'Accepted and NOT failed: it runs by itself, with every check made again when it runs. Never submit it again: ' +
-      'follow it with bridge_job_status or bridge_job_wait.',
+      'follow it with bridge_job_status (wait_seconds waits for it).',
   };
   return { body, result: render(body, pd), error: false };
 }

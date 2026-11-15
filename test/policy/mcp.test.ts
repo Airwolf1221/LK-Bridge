@@ -197,12 +197,7 @@ describe('consent screen: profile and scope', () => {
     const grants = bridge.policy.commands.listGrantsAndPats('owner').filter((x) => x.type === 'grant');
     const grant = grants.find((x) => x.clientId === c.clientId)!;
     expect(grant).toMatchObject({ profile: 'claude', scope: 'read', active: true });
-    expect(await toolNames(t.access)).toEqual([
-      'bridge_proposal_status',
-      'bridge_proposals_mine',
-      'stub_mislabelled',
-      'stub_whoami',
-    ]);
+    expect(await toolNames(t.access)).toEqual(['bridge_proposal_status', 'stub_mislabelled', 'stub_whoami']);
     const r = await tokenRequest(bridge, {
       grant_type: 'refresh_token',
       refresh_token: t.refresh,
@@ -525,7 +520,7 @@ describe('tool lists and calls per scope', () => {
     const cb = await connect(b.token);
     try {
       expect(
-        json(await ca.callTool({ name: 'bridge_proposals_mine', arguments: {} })).proposals,
+        json(await ca.callTool({ name: 'bridge_proposal_status', arguments: {} })).proposals,
       ).toHaveLength(1);
       expect(
         json(await ca.callTool({ name: 'bridge_proposal_status', arguments: { proposalId: 'prop_a1' } })),
@@ -533,7 +528,9 @@ describe('tool lists and calls per scope', () => {
         state: 'rejected',
         rejectReason: 'No thanks',
       });
-      expect(json(await cb.callTool({ name: 'bridge_proposals_mine', arguments: {} })).proposals).toEqual([]);
+      expect(json(await cb.callTool({ name: 'bridge_proposal_status', arguments: {} })).proposals).toEqual(
+        [],
+      );
       const other = await cb.callTool({
         name: 'bridge_proposal_status',
         arguments: { proposalId: 'prop_a1' },

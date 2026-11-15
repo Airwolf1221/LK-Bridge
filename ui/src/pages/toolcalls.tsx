@@ -4,6 +4,7 @@ import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction } from 
 import { fmtInt, fmtTime, principalText } from '../format';
 import { useApi } from '../hooks';
 import type { ToolCallArg, ToolCallOutcome, ToolCallRow, ToolCallsResponse } from '../types';
+import { EvaluationPanel } from './evaluation';
 
 const SINCE: [string, string][] = [
   ['', 'Any time'],
@@ -50,7 +51,9 @@ export const budgetText = (r: Pick<ToolCallRow, 'budgetRequests' | 'budgetWrites
 /**
  * Which tools each connection actually called (v2 E3, ADR 0045): when, who, which tool, a short summary of the
  * arguments (names and sizes, never page content or secrets), the outcome, how long it took and the request budget used.
- * For evaluating the assistants without copying transcripts. View only; kept for a number of days you set below.
+ * For evaluating the assistants without copying transcripts. View only; kept for a number of days you set below. Writes
+ * that edit a page without a base version are badged and can be filtered. The Evaluation helper (its own panel) runs the
+ * scripted scenarios from this log.
  */
 export function ToolCallsPage() {
   const [f, setF] = useState({
@@ -59,14 +62,15 @@ export function ToolCallsPage() {
     outcome: '',
     code: '',
     sinceMinutes: '1440',
+    noBaseVersion: false,
   });
   const [cursors, setCursors] = useState<number[]>([]);
   const before = cursors.at(-1);
   const [open, setOpen] = useState<number | null>(null);
   const list = useApi<ToolCallsResponse>(
-    `/tool-calls${qs({ ...f, limit: 100, ...(before !== undefined ? { before } : {}) })}`,
+    `/tool-calls${qs({ ...f, noBaseVersion: f.noBaseVersion ? 'true' : '', limit: 100, ...(before !== undefined ? { before } : {}) })}`,
   );
-  const set = (k: keyof typeof f) => (e: { target: { value: string } }) => {
+  const set = (k: Exclude<keyof typeof f, 'noBaseVersion'>) => (e: { target: { value: string } }) => {
     setCursors([]);
     setF({ ...f, [k]: e.target.value });
   };
@@ -97,6 +101,7 @@ export function ToolCallsPage() {
         call made in the same moment.
       </p>
       <RetentionCard data={d} onSaved={list.reload} />
+      <EvaluationPanel />
       <div className="filters">
         <div>
           <label htmlFor="tc-conn">Connection</label>
@@ -153,7 +158,29 @@ export function ToolCallsPage() {
             ))}
           </select>
         </div>
+        <div>
+          <label className="inline" htmlFor="tc-nobase">
+            <input
+              id="tc-nobase"
+              type="checkbox"
+              checked={f.noBaseVersion}
+              onChange={(e) => {
+                setCursors([]);
+                setF({ ...f, noBaseVersion: e.target.checked });
+              }}
+            />{' '}
+            Writes without a base version
+          </label>
+        </div>
       </div>
+      {d?.summary && d.summary.noBaseVersion > 0 && (
+        <p className="note note-warn" data-testid="nobase-summary">
+          {fmtInt(d.summary.noBaseVersion)} of {fmtInt(d.summary.matching)} matching calls{' '}
+          {d.summary.noBaseVersion === 1 ? 'is a write' : 'are writes'} without a base version: a write_page
+          with no baseVersion, or a set_facts with no baseFactsVersion, that edits an existing page (a dry run
+          does not count). Base versions are optional; this shows whether an assistant skips them.
+        </p>
+      )}
       <ErrorNote error={list.error} onRetry={list.reload} />
       {!d ? (
         <Loading />
@@ -197,6 +224,11 @@ export function ToolCallsPage() {
                   <td className="mono">
                     {c.tool}
                     {c.project && <div className="muted small-text">{c.project}</div>}
+                    {c.noBaseVersion && (
+                      <div>
+                        <Badge tone="warn">write without a base version</Badge>
+                      </div>
+                    )}
                   </td>
                   <td className="small-text">
                     {c.args.length === 0 ? (

@@ -27,7 +27,9 @@ export function uploadTools(deps: ToolDeps) {
       name: 'lk_upload_image',
       title: 'Upload an image to LegendKeeper',
       access: 'write',
-      description: `The older three-step upload (createImageUpload, a PUT, createImageAsset) of a base64 or https image, with no conversion, folder planning or staging: prefer upload_image. PNG, JPEG, GIF or WebP up to ${maxMb} MB. Returns the asset, or a jobId to follow with bridge_job_wait; never repeat a call that returned a jobId. Cost: 2 writes.`,
+      // v2 E3b (ADR 0045, P4): hidden by default; upload_image does everything this does and more.
+      lowLevel: true,
+      description: `Rarely needed (listed only with “Show low-level and rarely used tools”): the older three-step upload (createImageUpload, a PUT, createImageAsset) of a base64 or https image, with no conversion, folder planning or staging: prefer upload_image. PNG, JPEG, GIF or WebP up to ${maxMb} MB. Returns the asset, or a jobId to follow with bridge_job_status (wait_seconds waits for it); never repeat a call that returned a jobId. Cost: 2 writes.`,
       inputSchema: z.object({
         name: z.string().min(1).max(200).describe('Asset name, 1-200 characters.'),
         base64: z.string().min(1).optional().describe('The image bytes, base64 (a data: URI is accepted).'),

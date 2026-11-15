@@ -96,7 +96,6 @@ describe('the tool seam (requirement 14)', () => {
       expect(tools.map((t) => t.name).sort()).toEqual([
         'bridge_info',
         'bridge_proposal_status',
-        'bridge_proposals_mine',
         'echo',
         'explode',
         'needs_admin',

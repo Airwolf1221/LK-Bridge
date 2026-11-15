@@ -26,7 +26,7 @@ import {
   type PlanDeps,
   type PlanError,
 } from '../assets/plan.js';
-import { RegistryError, type ProjectTypes } from '../registry/index.js';
+import { RegistryError, type NodeRef, type ProjectTypes } from '../registry/index.js';
 
 export interface DestinationInput {
   readonly folder?: string | readonly string[] | undefined;
@@ -36,6 +36,11 @@ export interface DestinationInput {
     | undefined;
   /** A list of folder names, or one path string (`"Wardrobe / Qipao"`): see {@link parseSubfolders}. */
   readonly subfolders?: string | readonly string[] | undefined;
+  /**
+   * v2 E3b (ADR 0045): set only by the tool layer, after ONE live read of the character's Core or Reference, when the
+   * repository tree did not hold its Race / Species fact (`RACE_NOT_READ`). Never part of a destination as given or kept.
+   */
+  readonly pageRace?: { readonly core: string; readonly race: string | null } | undefined;
 }
 
 export interface DestinationDeps {
@@ -173,41 +178,26 @@ export function planDestination(
       name: page.displayName,
       ...(role ? { role: role.role, character: role.subject } : {}),
     };
-    if (role && input.folder === undefined) {
-      // The race is read from where the page is (its ancestry under Characters).
-      const r = planAssetDestination(
-        projectId,
-        {
-          characterResourceId: page.id,
-          ...(role.role === 'compact' ? { subjectName: role.subject } : {}),
-          ...(subfolders.length ? { subfolders } : {}),
-        },
-        deps.plan,
-      );
-      if (!r.ok && r.error.code === 'NOT_A_CHARACTER') {
-        return {
-          ok: false,
-          error: {
-            code: 'PAGE_NOT_UNDER_CHARACTERS',
-            message:
-              `“${page.displayName}” is a ${role.role} page of “${role.subject}”, but it is not under the Characters index ` +
-              '(a Working or Archived page), so its race cannot be read from where it is. Give for_character with the ' +
-              'name and race, or a folder.',
-            details: { page: pageNote },
-          },
-        };
-      }
-      return fromPlan(r, { for_page: pageNote, ...(subfolders.length ? { subfolders } : {}) });
-    }
     if (input.folder === undefined) {
-      return {
-        ok: false,
-        error: {
-          code: 'FOLDER_REQUIRED',
-          message: `“${page.displayName}” is not a character page (Core, Reference or a character's index), so no folder can be derived from it. Give a folder as well.`,
-          details: { page: pageNote },
-        },
-      };
+      // A character page under the Characters index: the race is read from where the page is (its ancestry).
+      if (role) {
+        const r = planAssetDestination(
+          projectId,
+          {
+            characterResourceId: page.id,
+            ...(role.role === 'compact' ? { subjectName: role.subject } : {}),
+            ...(subfolders.length ? { subfolders } : {}),
+          },
+          deps.plan,
+        );
+        if (!r.ok && r.error.code === 'NOT_A_CHARACTER') {
+          // A Working or Archived page (or a Core outside the Characters index): its race is its Race / Species fact.
+          return planFromCharacterFact(projectId, page, pageNote, input, subfolders, deps);
+        }
+        return fromPlan(r, { for_page: pageNote, ...(subfolders.length ? { subfolders } : {}) });
+      }
+      // Any other page: a character's index under Working or Archived, or a specialist page of a character.
+      return planFromCharacterFact(projectId, page, pageNote, input, subfolders, deps);
     }
   }
 
@@ -240,9 +230,23 @@ export function planDestination(
   }
 
   // ---- for_character: the rules of create_character.
-  const fc = input.for_character!;
+  return planForCharacter(projectId, input.for_character!, subfolders, deps, null);
+}
+
+/**
+ * The rules of `create_character` for a declared name and race: a folder named after the character is reused wherever it
+ * is; otherwise Characters / Group / Race / Name. An unknown or omitted race goes to `Undetermined / Unknown`; a declared
+ * race that does not resolve fails and never falls back. `from` (for_page) is the page the character was found from.
+ */
+function planForCharacter(
+  projectId: string,
+  fc: NonNullable<DestinationInput['for_character']>,
+  subfolders: readonly string[],
+  deps: DestinationDeps,
+  from: { readonly page: Record<string, unknown>; readonly raceNote: string } | null,
+): DestinationResult {
   let raceLabels: readonly string[] | null;
-  const notes: string[] = [];
+  const notes: string[] = from ? [from.raceNote] : [];
   let race: Record<string, unknown>;
   try {
     const r = deps.types(projectId).raceFolders(fc.race ?? null, fc.type);
@@ -252,24 +256,131 @@ export function planDestination(
       : { given: fc.race, matched: r.race.plural, by: r.race.matchedBy };
     if (!r.unknown) notes.push(...r.notes);
   } catch (e) {
-    if (e instanceof RegistryError) return { ok: false, error: registryError(e) };
+    if (e instanceof RegistryError) {
+      const err = registryError(e);
+      // The race came from the character's own page: say what to pass instead (nothing is guessed).
+      return from
+        ? {
+            ok: false,
+            error: {
+              ...err,
+              message: `${err.message} (the race was read from ${from.raceNote.replace(/^The race /, '')}) Pass for_character { name: "${fc.name}", race } with the right race, or a folder.`,
+            },
+          }
+        : { ok: false, error: err };
+    }
     throw e;
   }
   const r = planAssetDestination(
     projectId,
-    { characterName: fc.name, raceLabels, ...(subfolders.length ? { subfolders } : {}) },
+    { characterName: fc.name, raceLabels, ...(subfolders.length ? { subfolders: [...subfolders] } : {}) },
     deps.plan,
   );
+  const described = {
+    ...(from ? { for_page: from.page } : {}),
+    for_character: { name: fc.name, race },
+    ...(subfolders.length ? { subfolders: [...subfolders] } : {}),
+  };
   if (r.ok && notes.length) {
+    return { ok: true, plan: { ...r.plan, notes: [...r.plan.notes, ...notes] }, described };
+  }
+  return fromPlan(r, described);
+}
+
+/**
+ * v2 E3b (ADR 0045): a page that is not under the Characters index leads to its character anyway: a Working or Archived
+ * Core or Reference, a character's index, or a specialist page (`{name} - Art`: its subject is the character). The race is
+ * the Race / Species fact of the character's Core or Reference, read from the repository tree; when the tree holds none,
+ * `RACE_NOT_READ` asks the tool layer for ONE live read of that page and plans again with it (`pageRace`). Only when no
+ * route works is the page refused, and the message says exactly what to pass.
+ */
+function planFromCharacterFact(
+  projectId: string,
+  page: NodeRef,
+  pageNote: Record<string, unknown>,
+  input: DestinationInput,
+  subfolders: readonly string[],
+  deps: DestinationDeps,
+): DestinationResult {
+  const types = deps.types(projectId);
+  const c = types.characterOfPage(page.id);
+  if (!c.ok) {
+    const name = c.subject ?? page.displayName;
+    if (c.reason === 'several') {
+      return {
+        ok: false,
+        error: {
+          code: 'CHARACTER_AMBIGUOUS',
+          message:
+            `“${page.displayName}” belongs to “${name}”, but ${c.candidates.length} Character Cores or References of that name ` +
+            `could be its character (${c.candidates.map((x) => `${x.displayName} (${x.id})`).join('; ')}). ` +
+            `Pass for_character { name: "${name}", race } with the character's race, or a folder.`,
+          details: {
+            page: pageNote,
+            candidates: c.candidates.map((x) => ({ id: x.id, name: x.displayName })),
+          },
+        },
+      };
+    }
     return {
-      ok: true,
-      plan: { ...r.plan, notes: [...r.plan.notes, ...notes] },
-      described: { for_character: { name: fc.name, race }, ...(subfolders.length ? { subfolders } : {}) },
+      ok: false,
+      error: {
+        code: 'FOLDER_REQUIRED',
+        message:
+          `“${page.displayName}” is not a character page, and no Character Core or Reference was found for “${name}”, so no ` +
+          `folder can be derived from it. Pass for_character { name: "${name}", race } with the character's race, or a folder.`,
+        details: { page: pageNote },
+      },
     };
   }
-  return fromPlan(r, {
-    for_character: { name: fc.name, race },
-    ...(subfolders.length ? { subfolders } : {}),
+  const { core, subject, via } = c.value;
+  const mine = input.pageRace && input.pageRace.core === core.id ? input.pageRace : null;
+  const race = mine ? mine.race : c.value.race;
+  const where =
+    via === 'page'
+      ? `its Race / Species fact`
+      : via === 'index'
+        ? `the Race / Species fact on its ${c.value.role === 'core' ? 'Character Core' : 'Character Reference'} “${core.displayName}”`
+        : `the Race / Species fact on “${subject}”’s ${c.value.role === 'core' ? 'Character Core' : 'Character Reference'} “${core.displayName}”`;
+  const note = {
+    ...pageNote,
+    character: subject,
+    via:
+      via === 'page'
+        ? 'its own Race / Species fact'
+        : via === 'index'
+          ? 'its Core or Reference'
+          : 'its subject',
+    core: { id: core.id, name: core.displayName },
+  };
+  if (race === null && !mine) {
+    // The tree has no value for it: the tool layer reads that one page live and asks again.
+    return {
+      ok: false,
+      error: {
+        code: 'RACE_NOT_READ',
+        message:
+          `The repository tree holds no Race / Species fact for “${core.displayName}”, the page that holds “${subject}”’s race. ` +
+          `Pass for_character { name: "${subject}", race } with the character's race, or a folder.`,
+        details: { page: pageNote, core: { id: core.id, name: core.displayName }, character: subject },
+      },
+    };
+  }
+  if (race === null || race.trim() === '') {
+    return {
+      ok: false,
+      error: {
+        code: 'RACE_NOT_FOUND',
+        message:
+          `“${core.displayName}” has no Race / Species fact to read, so “${subject}”’s race is not known from the page. ` +
+          `Pass for_character { name: "${subject}", race } with the character's race (an unknown race goes to Undetermined / Unknown), or a folder.`,
+        details: { page: pageNote, core: { id: core.id, name: core.displayName }, character: subject },
+      },
+    };
+  }
+  return planForCharacter(projectId, { name: subject, race: race.trim() }, subfolders, deps, {
+    page: note,
+    raceNote: `The race “${race.trim()}” was read from ${where}.`,
   });
 }
 

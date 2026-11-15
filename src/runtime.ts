@@ -64,6 +64,7 @@ import type { GoogleOAuthOptions } from './offsite/google.js';
 import { requestDir as offsiteRequestDir } from './offsite/requests.js';
 import { FactsVersions } from './facts/version.js';
 import { ToolCallLog } from './toolcalls/index.js';
+import { Evaluation } from './evaluation/index.js';
 import { RequestRegistry } from './resources/requests.js';
 import { TemplateKeys } from './facts/templates.js';
 import {
@@ -99,6 +100,8 @@ export interface Runtime {
   readonly policy: Policy;
   /** v2 E3 (ADR 0045): the log of tool calls (names and sizes only) behind the dashboard's Tool calls page. */
   readonly toolCalls: ToolCallLog;
+  /** v2 E3: the Evaluation helper (scripted scenarios recorded from the tool-call log); owner only. */
+  readonly evaluation: Evaluation;
   /** The maintenance registry, scheduler and owner commands (chunk 6). */
   readonly maintenance: Maintenance;
   /** Repository mappings: data model and owner commands (chunk 6). */
@@ -681,6 +684,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     ...(o.clock ? { now: () => o.clock!.now() } : {}),
     warn: (message, err) => log.warn({ err }, message),
   });
+  const evaluation = new Evaluation({
+    db: o.db,
+    log: toolCalls,
+    store: policy.store,
+    version: o.version,
+    ...(o.clock ? { now: () => o.clock!.now() } : {}),
+  });
   // Each project's key is checked now; a project is served from the moment its check passes.
   const ready = projects.verifyAll().catch((err: unknown) => log.error({ err }, 'project checks failed'));
   // v2 E1a: a full snapshot a restart interrupted continues once the projects are served.
@@ -694,6 +704,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine,
     policy,
     toolCalls,
+    evaluation,
     maintenance,
     mappings,
     tree,

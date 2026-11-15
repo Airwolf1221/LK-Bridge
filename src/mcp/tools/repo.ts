@@ -4,7 +4,7 @@
  * root, and the size rule for results.
  */
 import type { ProjectTypes } from '../../registry/index.js';
-import { RegistryError, ROLE_LABEL } from '../../registry/index.js';
+import { RegistryError, ROLE_LABEL, type CharacterRole } from '../../registry/index.js';
 import type { NodeRef } from '../../registry/index.js';
 import type { TreeMeta, TreeNode, TreeQueries } from '../../tree/index.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
@@ -120,6 +120,52 @@ export function registryError(e: RegistryError, ctx: Pick<RepoCtx, 'pd' | 'meta'
   return errorResult(body, ctx.pd);
 }
 
+/** The sentence that steers an agent from a character's index to the page that holds its facts (v2 E3b, ADR 0045). */
+export const CHARACTER_FACTS_HINT =
+  "a character's facts and Scope live on its Character Core (or Character Reference for a compact character)";
+
+/**
+ * A page's character role: the registry's (a Core or Reference of any lifecycle state, or an index under a character
+ * type's root), and also a character's own index under [INDEX] Working or [INDEX] Archived (it holds a Core or a
+ * Reference, which the registry's index rule, written for the type's root, does not see). Null for any other page.
+ */
+export function characterRoleOf(
+  ctx: RepoCtx,
+  node: TreeNode,
+): { readonly role: CharacterRole; readonly subject: string } | null {
+  const r = ctx.types.characterRole?.(node.id) ?? null;
+  if (r) return r;
+  if (node.kind !== 'index') return null;
+  return coreOf(ctx, node) ? { role: 'index', subject: node.displayName } : null;
+}
+
+/** The Character Core (else the Character Reference) directly under a character's index, or null. */
+function coreOf(ctx: RepoCtx, index: TreeNode): { node: TreeNode; role: 'core' | 'compact' } | null {
+  const kids = ctx.tree.children(ctx.projectId, index.id).data;
+  let reference: TreeNode | null = null;
+  for (const k of kids) {
+    const r = ctx.types.characterRole?.(k.id);
+    if (r?.role === 'core') return { node: k, role: 'core' };
+    if (r?.role === 'compact' && !reference) reference = k;
+  }
+  return reference ? { node: reference, role: 'compact' } : null;
+}
+
+/**
+ * The short note `get_resource` adds on a character's [INDEX] page: the page that holds the character's facts and
+ * Scope (its Core, else its Reference) with its id, and the rule. Null for any other page.
+ */
+export function characterIndexNote(ctx: RepoCtx, node: TreeNode): Record<string, unknown> | null {
+  if (node.kind !== 'index') return null;
+  const c = coreOf(ctx, node);
+  if (!c) return null;
+  const label = ROLE_LABEL[c.role];
+  return {
+    note: `This is a character's index, not the character. Its facts and Scope are on its ${label}: “${c.node.displayName}” (id ${c.node.id}); ${CHARACTER_FACTS_HINT}.`,
+    [c.role === 'core' ? 'core' : 'reference']: { id: c.node.id, name: c.node.displayName, role: label },
+  };
+}
+
 export type Resolved =
   { readonly ok: true; readonly node: TreeNode } | { readonly ok: false; readonly result: McpToolResult };
 
@@ -157,13 +203,18 @@ export function resolvePage(
             // v2 C2b: a write target is never chosen for the agent, even among one character's pages; each
             // candidate says its character role, so the agent can name the one it means.
             candidates: r.candidates.map((c) => {
-              const role = ctx.types.characterRole?.(c.id);
+              const node = ctx.tree.node(ctx.projectId, c.id).data;
+              const role = node ? characterRoleOf(ctx, node) : null;
               return {
                 ...nodeRefBody(c),
                 matchedBy: c.matchedBy,
                 ...(role ? { role: ROLE_LABEL[role.role] } : {}),
               };
             }),
+            // v2 E3b (ADR 0045): when the candidates are one character's pages, say where its facts live.
+            ...(oneCharacter(ctx, r.candidates)
+              ? { hint: `Choose one and pass its id: ${CHARACTER_FACTS_HINT}.` }
+              : {}),
           },
           ctx.pd,
         ),
@@ -187,6 +238,20 @@ export function resolvePage(
     if (e instanceof RegistryError) return { ok: false, result: registryError(e, ctx) };
     throw e;
   }
+}
+
+/** True when every candidate is a page or index of ONE character (each has a character role, with one subject). */
+function oneCharacter(ctx: RepoCtx, candidates: readonly NodeRef[]): boolean {
+  let subject: string | null = null;
+  for (const c of candidates) {
+    const node = ctx.tree.node(ctx.projectId, c.id).data;
+    const role = node ? characterRoleOf(ctx, node) : null;
+    if (!role) return false;
+    const k = role.subject.trim().toLowerCase();
+    if (subject !== null && subject !== k) return false;
+    subject = k;
+  }
+  return candidates.length > 1;
 }
 
 /** One governed live read for a tool, at interactive priority. */

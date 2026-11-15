@@ -8,7 +8,7 @@ import type { JobView, JobWithSteps, StepView } from '../../jobs/index.js';
 import type { McpToolContext } from '../server.js';
 import { TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
 import type { BudgetSnapshot, TierSnapshot } from '../../lk/index.js';
-import { defineTool, READ_ANNOTATIONS } from './define.js';
+import { defineTool, READ_ANNOTATIONS, renamedTool } from './define.js';
 import {
   errorFromThrown,
   errorResult,
@@ -349,7 +349,7 @@ function jobTools(deps: ToolDeps) {
       title: 'Job status',
       access: 'read',
       description:
-        'Shows one job (status, progress, current step, last error, result) or, without jobId, your recent jobs. Use it for work that returned queued or waiting_budget: that work is not lost and is never resubmitted. bridge_job_wait waits for it. Only your own jobs are visible. Cost: none.',
+        'Shows one job (status, progress, current step, last error, result; `done` is true when it has finished) or, without jobId, your recent jobs. Use it for work that returned queued or waiting_budget: that work is not lost and is never resubmitted. Pass `wait_seconds` (1 to 25) with a jobId to wait for it to finish first: use that instead of polling in a loop, and call again if `done` is false. Only your own jobs are visible. Cost: none.',
       inputSchema: z.object({
         jobId: jobId.optional(),
         steps: z
@@ -370,11 +370,27 @@ function jobTools(deps: ToolDeps) {
           .optional()
           .describe('When listing: only jobs in this status.'),
         limit: z.number().int().min(1).max(50).optional().describe('When listing: default 10.'),
+        wait_seconds: z
+          .number()
+          .min(1)
+          .max(25)
+          .optional()
+          .describe('With jobId: wait up to this many seconds (1 to 25) for the job to finish, then answer.'),
         project: projectArg,
       }),
       annotations: READ_ANNOTATIONS,
-      handler: ({ jobId: id, steps, status, limit, project: asked }, ctx) =>
-        withProject(deps, asked, 'read', (pd) => {
+      handler: ({ jobId: id, steps, status, limit, wait_seconds: wait, project: asked }, ctx) =>
+        withProject(deps, asked, 'read', async (pd) => {
+          if (id === undefined && wait !== undefined) {
+            return errorResult(
+              {
+                code: 'JOB_ID_REQUIRED',
+                message: 'wait_seconds needs a jobId: it waits for one job.',
+                hint: 'Pass the jobId a result gave you, or leave wait_seconds out to list your recent jobs.',
+              },
+              pd,
+            );
+          }
           if (id === undefined) {
             const who = callerId(ctx);
             const jobs =
@@ -400,36 +416,26 @@ function jobTools(deps: ToolDeps) {
               pd,
             );
           }
+          // Checked before waiting, so another principal's job returns at once, exactly like an unknown id.
+          if (!ownJob(pd, ctx, id)) return jobNotFound(pd, id);
+          if (wait !== undefined) {
+            try {
+              await deps.engine.wait(pd.project.id, id, Math.min(25, wait) * 1000);
+            } catch (e) {
+              return errorFromThrown(e, pd);
+            }
+          }
           const job = ownJob(pd, ctx, id);
           if (!job) return jobNotFound(pd, id);
           return render(jobBody(job, steps ? 'steps' : 'summary'), pd);
         }),
     }),
-    defineTool({
-      name: 'bridge_job_wait',
-      title: 'Wait for a job',
-      access: 'read',
-      description:
-        'Waits up to 25 seconds for a job to finish and returns its status (done: true when finished); call again if done is false. Use it after queued or waiting_budget instead of polling bridge_job_status in a loop. Cost: none.',
-      inputSchema: z.object({
-        jobId,
-        seconds: z.number().min(1).max(25).optional().describe('How long to wait, 1-25. Default 20.'),
-        project: projectArg,
-      }),
-      annotations: READ_ANNOTATIONS,
-      handler: ({ jobId: id, seconds, project: asked }, ctx) =>
-        withProject(deps, asked, 'read', async (pd) => {
-          // Checked before waiting, so another principal's job returns at once, exactly like an unknown id.
-          if (!ownJob(pd, ctx, id)) return jobNotFound(pd, id);
-          try {
-            await deps.engine.wait(pd.project.id, id, Math.min(25, seconds ?? 20) * 1000);
-            const job = ownJob(pd, ctx, id);
-            return job ? render(jobBody(job, 'summary'), pd) : jobNotFound(pd, id);
-          } catch (e) {
-            return errorFromThrown(e, pd);
-          }
-        }),
-    }),
+    /** The old name, kept one release (ADR 0045, P3). */
+    renamedTool(
+      'bridge_job_wait',
+      'bridge_job_status',
+      'pass the same jobId with `wait_seconds` (1 to 25) to wait for the job; `done: true` means it finished.',
+    ),
     defineTool({
       name: 'bridge_job_cancel',
       title: 'Cancel a job',

@@ -170,11 +170,86 @@ admin API sits behind your session like every other route, and no tool lists or 
 - **Budget** is how far the projects' hourly request and write counters moved while the call ran, as `3 req (1 w)`. It is
   approximate: another call in the same moment counts too.
 - **Filters:** connection, tool, outcome (including "anything but success", the quickest way to find stumbles), error code or
-  status, and time (last hour, 24 hours, 3 days, 7 days). **Newer** and **Older** page through 100 at a time.
+  status, time (last hour, 24 hours, 3 days, 7 days) and **Writes without a base version** (below). **Newer** and **Older** page
+  through 100 at a time.
+- **Writes without a base version.** Base versions stay optional, but you can see whether an assistant ever skips them. A call is
+  badged **write without a base version**, and found with the filter of that name, when it is a `write_page` with no
+  `baseVersion`, or a `set_facts` with no `baseFactsVersion`, that edits an existing page. Exactly which calls count, decided
+  when the call is recorded from the names of its arguments (the log keeps no values) and stored with the row:
+  - Both tools only ever edit a page that already exists (new pages come from the `create_*` tools), and every `write_page`
+    mode changes the page's current document, so no mode is exempt. A `set_facts` counts only when it carries something to
+    change: a `facts` or `links` argument with at least one entry.
+  - A **dry run** (`dryRun: true`) does not count: it shows a plan and writes nothing. `dryRun: false`, or no `dryRun`, is a real
+    write.
+  - A version argument that is missing, null or empty counts as no version.
+  - A call the MCP layer refused before the tool ran (`INVALID_ARGUMENTS`, `READ_ONLY_CONNECTION`, `MISSING_SCOPE`,
+    `TOOL_NOT_FOUND`) edited nothing and is not flagged. A call the tool itself refused (a page not found, say) is still flagged:
+    the assistant skipped the version.
+  - Rows recorded before this was added (migration 2500) read as not flagged. When any call in the filtered view is flagged, the
+    page says how many of the matching calls are. The API: `GET /tool-calls?noBaseVersion=true` returns only those calls; every
+    row carries `noBaseVersion`, and the answer a `summary` of `{ matching, noBaseVersion }` for the other filters.
 - **Retention:** 7 days by default, a setting on the page (0 to 90 days; **0 switches recording off** and removes what is kept).
   It applies at once and is audited (`policy.set_toolcalls_retention`). Old rows are removed by the log itself, so there is no
   maintenance job to switch on.
 - Recording never affects a call: if it fails, the bridge logs it once and the call carries on.
+
+### Evaluation
+
+The **Evaluation** panel (open it on the Tool calls page) makes the manual evaluation in
+[docs/reviews/E3-evaluation.md](reviews/E3-evaluation.md) repeatable. The scenarios are data in
+[docs/reviews/scenarios.json](reviews/scenarios.json) (the markdown stays the human copy; edit both together). Only you can use
+it: the API sits behind your session like every other route, and no agent tool lists, reads or names the log, the scenarios or
+the runs. A prompt never names a tool, so the choice of tool is what is tested (a test checks every prompt against the real
+tool list).
+
+- **API** (all under `/api/admin`, owner session only, CSRF token and Origin on every POST and PUT like the other routes):
+  `GET /evaluation/scenarios`; `GET /evaluation/connections` (`assistant`; each connection with what the classifier made of it);
+  `GET /evaluation/runs`; `POST /evaluation/runs` (`{ assistant: "chatgpt"|"claude", set: "core"|"all", principalIds? }`);
+  `GET /evaluation/runs/:id`; `POST /evaluation/runs/:id/scenarios/:scenario/start` (`{ principalIds? }`), `…/done` and `…/reset`;
+  `PUT /evaluation/runs/:id/scenarios/:scenario/grade` (`{ grade: "right"|"partly"|"wrong"|null, note? }`);
+  `POST /evaluation/runs/:id/finish`; `POST /evaluation/runs/:id/delete` (`{ confirm: true }`);
+  `GET /evaluation/runs/:id/table` (`{ markdown }`); `GET /evaluation/compare?a=<earlier run>&b=<later run>`.
+- **A run.** Choose the **assistant** (ChatGPT or Claude) and the **scenarios**: _Core_ (your shortlist: 1, 4 to 11, 13, 14, 16,
+  18, 21, 26, 28 and 29) or _All_ (30). A run keeps its date, the assistant, the set, **the bridge version** it was made on, and
+  a result for each scenario. It is _in progress_ until you press **Finish the run**. Delete a run with **Delete** (it asks
+  first, and the deletion is audited as `evaluation.delete_run`).
+- **For each scenario:** the prompt is shown with a **Copy prompt** button (the preamble is in front of the first prompt of a
+  fresh chat; a scenario that continues the previous chat, or has two prompts, says so). Press **Start**, paste the prompt into
+  a fresh chat in the assistant, let it finish, then press **Done**. Scenarios that need others first (for example 5 and 9 to 16
+  need 6 and 7), need your approval on the Proposals page when run in ChatGPT, or always end in a proposal are labelled.
+- **The window.** The bridge does not copy the calls: they are already in the log. Start notes the newest call; Done notes the
+  newest again; the scenario's calls are those in between **made by that assistant's connections**. With ChatGPT and Claude
+  both connected, only the chosen assistant's calls are counted; calls made before Start or after Done never are. Only one
+  scenario of a run records at a time.
+- **Which connections.** By default the bridge recognises the assistant's active connections, strongest signal first: the
+  OAuth client's redirect host (`chatgpt.com` or `openai.com`; `claude.ai`, `claude.com` or `anthropic.com`: the bridge only
+  accepts those hosted callbacks), then the client's name, a token's name, and the profile's name ("ChatGPT", "Claude"). A name
+  that matches both assistants decides nothing. A connection made during a scenario is taken in at Done if it is the
+  assistant's. If the bridge cannot tell (a token called "laptop", say) it refuses to Start and says so: under **Connections to
+  record** choose **Choose the connections myself** and tick them; only those are recorded.
+- **Recording must be on.** Start is refused when the retention (above) is 0 days, with a message saying so.
+- **Retention.** A run stores its own compact copy of each scenario's calls (the tool, the outcome, the error code, whether
+  `get_resource` was called with `live`), so it **survives the log's pruning**. The window (the ids of the calls it spans and the
+  connections) is kept too, so the rows can still be looked at in the log while they are kept.
+- **The hint, and your grade.** After Done the page shows a hint, never a grade: whether the **expected tools** are present
+  (where a scenario accepts either of two, one is enough), whether any **mistake tool** was called (for scenario 1, any
+  `lk_api_*` tool; for 14, `create_bare_resource`; for 21, `lk_upload_image` or `prepare_image_upload`), the **error codes seen**
+  (`SECTION_NOT_FOUND`, `AMBIGUOUS`, `INVALID_ARGUMENTS`…), the number of calls and any writes without a base version. The hint
+  reads _Looks right_, _Check it_, _Looks wrong_ or _No calls recorded_. You confirm **Right**, **Partly** or **Wrong** with one
+  click, and may add a note; the bridge never sets the grade for you. Tools merged into another count as the new one when
+  grading (`get_resources` as `get_resource`, `bridge_proposals_mine` as `bridge_proposal_status`, `bridge_job_wait` as
+  `bridge_job_status`).
+- **The results table.** Under the scenarios, a Markdown table of the scenarios you have pressed Done for, with a **Copy the
+  results table** button, in the format of your own: columns `#`, `Scenario`, `Assistant`, `Tools called`, `Result`, `Notes`.
+  Tools are in the order called, and consecutive repeats collapse to `name ×N` (`guide ×3, search, get_resource (live: false)`; a
+  repeat after another tool is listed again). As a display choice only, because your own table writes it so, `get_bridge_guide`
+  is shown as `guide`; every other tool keeps its name (`get_markdown_guide` too). `Result` is Right, Partly or Wrong as you
+  confirmed it, or _not graded_. `Notes` holds your note, then the error codes seen, then a count of writes without a base
+  version.
+- **Compare two runs.** **Compare two runs** takes an earlier and a later run (any two, usually of the same assistant). For each
+  scenario recorded in either it shows the grade change (`Partly → Right`), the tools added and removed with their counts, the
+  number of calls, and the error codes that appeared or went away; above it a summary, for example `SECTION_NOT_FOUND: 6 → 0`,
+  the grade counts, and the calls in the scenarios both runs recorded.
 
 ## Journal page (chunk 8)
 

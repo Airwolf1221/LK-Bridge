@@ -21,7 +21,6 @@ describe('every tool: access, annotations and the budget footer', () => {
     'browse_asset_tree',
     'search',
     'get_resource',
-    'get_resources',
     'list_tags',
     'list_templates',
     'list_calendars',
@@ -396,11 +395,11 @@ describe('get_resource', () => {
   });
 });
 
-describe('get_resources', () => {
+describe('get_resource with several pages (resources)', () => {
   it('reads several pages as one job, summarised, and reports each failure on its own', async () => {
     const before = w.stack.runtime.engine.queries.listJobs?.length;
     void before;
-    const r = await call('get_resources', {
+    const r = await call('get_resource', {
       resources: ['miyabi01', 'Kaede', 'Ashgate', 'No Such', 'outside1', 'miyabi01'],
     });
     expect(r.isError, r.text).toBe(false);
@@ -423,24 +422,24 @@ describe('get_resources', () => {
   it('shows an estimate first when large and runs on confirm', async () => {
     const list = Array.from({ length: 12 }, (_, i) => `bk${i.toString(36).padStart(6, '0')}`);
     const before = w.stack.mock.calls.length;
-    const est = await call('get_resources', { resources: list });
+    const est = await call('get_resource', { resources: list });
     expect(est.isError).toBe(false);
     expect(est.body).toMatchObject({ status: 'estimate', pages: 12, reads: 12 });
     expect(est.body.hint).toMatch(/confirm: true/);
     expect(w.stack.mock.calls.length).toBe(before); // nothing was read
-    const run = await call('get_resources', { resources: list, confirm: true });
+    const run = await call('get_resource', { resources: list, confirm: true });
     expect(run.body.count).toBe(12);
     expect(run.body.resources.every((x: any) => x.ok)).toBe(true);
     expect(w.stack.mock.calls.length - before).toBe(12);
     // Beyond 25 is refused by the schema.
     expect(
-      (await call('get_resources', { resources: Array.from({ length: 26 }, (_, i) => `x${i}`) })).isError,
+      (await call('get_resource', { resources: Array.from({ length: 26 }, (_, i) => `x${i}`) })).isError,
     ).toBe(true);
   });
   it('is free with live: false', async () => {
     const before = w.stack.mock.calls.length;
     const list = Array.from({ length: 20 }, (_, i) => `bk${i.toString(36).padStart(6, '0')}`);
-    const r = await call('get_resources', { resources: list, live: false });
+    const r = await call('get_resource', { resources: list, live: false });
     expect(r.body.count).toBe(20);
     expect(w.stack.mock.calls.length).toBe(before);
   });
@@ -567,9 +566,10 @@ describe('the guides', () => {
     expect(md.body.markdown).toMatch(/^# Writing LegendKeeper pages in Markdown/);
     const keep = await call('get_markdown_guide', { section: 'Keep regions' });
     expect(keep.body.markdown).toMatch(/^## Keep regions/);
-    const bad = await call('get_markdown_guide', { section: 'No such heading' });
+    const bad = await call('get_markdown_guide', { section: 'Nothing like it' });
     expect(bad.body.error.code).toBe('SECTION_NOT_FOUND');
-    expect(bad.body.error.headings).toContain('Writing LegendKeeper pages in Markdown > Keep regions');
+    expect(bad.body.error.sections).toContain('Keep regions');
+    expect(bad.body.error.sections).not.toContain('Writing LegendKeeper pages in Markdown');
   });
   it('are also published as MCP resources', async () => {
     const { resources } = await c.listResources();
