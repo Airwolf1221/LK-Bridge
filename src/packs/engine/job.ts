@@ -40,6 +40,8 @@ export const PACK_CHECKS = {
   page: 'pack.page',
 } as const;
 export const PACK_FILLER = 'pack.body';
+/** v3 F3b (ADR 0052): appends new image sections to an existing Art page inside the lock. */
+export const PACK_ART_FILLER = 'pack.art_append';
 export const PACK_RECORD_STORE = 'pack';
 
 /** Adds `base` to every step number a step names (its bindings, and the bridge's own steps' references). */
@@ -134,7 +136,13 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       },
     },
   ];
-  if (plan.absent.reservation || plan.absent.under.length > 0) {
+  if (
+    plan.absent.reservation ||
+    plan.absent.under.length > 0 ||
+    (plan.absent.reservations?.length ?? 0) > 0 ||
+    (plan.absent.present?.length ?? 0) > 0 ||
+    (plan.absent.images?.length ?? 0) > 0
+  ) {
     checks.push({
       label: 'absent',
       kind: 'registered',
@@ -145,6 +153,11 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         mode: plan.mode,
         under: plan.absent.under,
         type: type.name,
+        // v3 F3b (ADR 0052): the owner tools' run-time re-checks (design section 5).
+        ...(plan.absent.reservations?.length ? { reservations: plan.absent.reservations } : {}),
+        ...(plan.absent.present?.length ? { present: plan.absent.present } : {}),
+        ...(plan.absent.kind ? { kind: plan.absent.kind } : {}),
+        ...(plan.absent.images?.length ? { images: plan.absent.images } : {}),
       },
     });
   }
@@ -401,6 +414,34 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         .map((im) => ({ step: assetSteps.get(im.stagedId)!, placeholder: im.placeholder })),
     });
   }
+  // v3 F3b (ADR 0052): new images on an existing Art page, appended under its images section inside the lock.
+  for (const c of plan.existing) {
+    if (c.kind !== 'images') continue;
+    const at = steps.length + 1;
+    steps.push({
+      op: 'replaceDocumentBlocks',
+      params: { path: { resourceId: c.page.id, documentId: c.documentId }, body: { blocks: [...c.blocks] } },
+      fill: { filler: PACK_ART_FILLER, input: { section: c.section, boundaries: c.boundaries } },
+      judgedInLock: true,
+      verifyAfterWrite: true,
+      bindAssetUrls: c.images
+        .filter((im) => assetSteps.has(im.stagedId))
+        .map((im) => ({ step: assetSteps.get(im.stagedId)!, placeholder: im.placeholder })),
+      journalOperation: journal(
+        { id: c.page.id, name: c.page.rawName },
+        `${c.section}: ${c.images.length} image(s) added`,
+      ),
+    });
+    labels.push(`${c.page.rawName}: ${c.section} +${c.images.length} image(s)`);
+    lmrPages.push({ id: c.page.id, name: c.page.rawName, after: [at] });
+    operations.push({
+      tool,
+      pack: pack.id,
+      page: { id: c.page.id, name: c.page.rawName },
+      pageParts: [`${c.section}: ${c.images.length} image(s) added, each with its label and interpretation`],
+      summaryLabel: `${c.page.rawName}: ${c.section} gains ${c.images.map((im) => `“${im.name}”`).join(', ')}`,
+    });
+  }
 
   // 6. A Reference moved under its new index, placed among the new pages there.
   for (const c of plan.existing) {
@@ -446,6 +487,36 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
           before: at + 1 < order.length ? order[at + 1]!.id : null,
         },
       };
+    }
+    // v3 F3b (ADR 0052): the pages made beside the moved page (the new index itself, in the moved page's old parent)
+    // stand beside whatever was on the moved page's other side once it has gone: their expected neighbours are worked
+    // out again from the old parent's order (its pages as the tree has them, the new ones in their planned places).
+    const oldParent = node?.parentId ?? null;
+    if (oldParent) {
+      const list = ctx.tree.children(ctx.projectId, oldParent).data.map((x) => x.id);
+      for (const p of created) {
+        const w = placement.get(p.id);
+        if (!w || w.parentId !== oldParent) continue;
+        const ia = w.after ? list.indexOf(w.after) : -1;
+        const ib = w.before ? list.indexOf(w.before) : -1;
+        list.splice(ia >= 0 ? ia + 1 : ib >= 0 ? ib : w.after ? list.length : 0, 0, p.id);
+      }
+      const remaining = list.filter((id) => id !== c.page.id);
+      for (let i = 0; i < targets.length; i++) {
+        const t = targets[i]!;
+        if (t.kind !== 'resource' || !t.placement || t.placement.parentId !== oldParent) continue;
+        if (t.placement.after !== c.page.id && t.placement.before !== c.page.id) continue;
+        const at = remaining.indexOf(t.resourceId);
+        if (at < 0) continue;
+        targets[i] = {
+          ...t,
+          placement: {
+            parentId: oldParent,
+            after: at > 0 ? remaining[at - 1]! : null,
+            before: at + 1 < remaining.length ? remaining[at + 1]! : null,
+          },
+        };
+      }
     }
     operations.push({
       tool,
@@ -579,6 +650,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       ...(p.tags && p.tags.length ? [`tags ${p.tags.join(', ')}`] : p.kind === 'index' ? ['no tags'] : []),
       ...(p.blocks ? [`text (${p.blocks.length} blocks)`] : []),
       ...(p.images.length ? [`${p.images.length} image${p.images.length === 1 ? '' : 's'}`] : []),
+      ...(p.notes ?? []),
     ];
     operations.unshift({
       tool,
@@ -598,11 +670,20 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
   operations.reverse();
 
   const writes = steps.filter((s) => !s.op.startsWith('bridge.') && !s.op.startsWith('upload_image.')).length;
-  const marker = createMarker(tool, [
+  const created0 = createMarker(tool, [
     ...created.filter((p) => p.status).map((p) => ({ id: p.id, to: p.status! })),
     ...created.filter((p) => p.kind === 'index').map((p) => ({ id: p.id, to: null })),
   ]);
-  const summary = `${tool}: ${plan.mode === 'new' ? '' : 'extend '}${plan.subject} (${plan.status === 'working' ? 'Working' : 'Authoritative'}): ${created.length} new page${created.length === 1 ? '' : 's'}${plan.images.length ? `, ${plan.images.length} image${plan.images.length === 1 ? '' : 's'}` : ''}${plan.existing.length ? `, ${plan.existing.length} change${plan.existing.length === 1 ? '' : 's'} to existing pages` : ''}`;
+  // v3 F3b (ADR 0052): a package that moves an Authoritative page (promoteNation) is a canonical proposal, as always.
+  const marker: ReturnType<typeof createMarker> = plan.canonical
+    ? {
+        tool,
+        canonical: true,
+        reason: created0?.canonical ? `${created0.reason ?? ''}; ${plan.canonical.reason}` : plan.canonical.reason,
+        pages: created0?.pages ?? [],
+      }
+    : created0;
+  const summary = `${tool}: ${plan.mode === 'new' ? '' : 'extend '}${plan.subject} (${plan.status === 'working' ? 'Working' : 'Authoritative'}): ${created.length} new page${created.length === 1 ? '' : 's'}${plan.images.length ? `, ${plan.images.length} image${plan.images.length === 1 ? '' : 's'}` : ''}${plan.existing.length ? `, ${plan.existing.length} change${plan.existing.length === 1 ? '' : 's'} to existing pages` : ''}${plan.summaryNote ? `; ${plan.summaryNote}` : ''}`;
   return {
     ok: true,
     value: { steps, labels, operations, summary, writes, assetSteps, placement, marker },

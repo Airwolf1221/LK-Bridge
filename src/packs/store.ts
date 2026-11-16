@@ -142,6 +142,38 @@ export class PackStore {
     return this.get(id)!;
   }
 
+  /**
+   * v3 F3b (ADR 0052): a newer seed offered as a new version, in one transaction: the rules (validated), the governance
+   * sources and the seed's name; the approval stays on the version it covered, so the pack waits for the owner.
+   */
+  upgrade(
+    id: string,
+    rules: PackRules,
+    governance: readonly GovernanceSource[],
+    seed: string,
+    reason: string,
+  ): Pack {
+    const at = this.now();
+    const valid = JSON.stringify(packRulesSchema.parse(rules));
+    const sources = JSON.stringify(governance.map((g) => governanceSourceSchema.parse(g)));
+    this.db.transaction(() => {
+      const cur = this.db.prepare('SELECT version FROM packs WHERE id = ?').get(id) as
+        { version: number } | undefined;
+      if (!cur) throw new Error(`No pack ${id}`);
+      const version = cur.version + 1;
+      this.db
+        .prepare('UPDATE packs SET rules = ?, version = ?, governance = ?, seed = ?, updated_at = ? WHERE id = ?')
+        .run(valid, version, sources, seed, at, id);
+      this.db
+        .prepare(
+          `INSERT INTO pack_versions (pack_id, version, rules, governance, approved, reason, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+        )
+        .run(id, version, valid, sources, reason.slice(0, 500), at);
+    })();
+    return this.get(id)!;
+  }
+
   /** Records the owner's approval of the CURRENT version (and clears the drift it settles). */
   approve(id: string, approval: PackApproval): Pack {
     const at = this.now();

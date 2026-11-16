@@ -50,7 +50,14 @@ describe('the Arkona pack, as data', () => {
     expect(a.templates.core).toBe('tplcore1');
     expect(w.stack.runtime.packs.toolListed('arkona')).toBe(true);
     const view = w.stack.runtime.packs.view('arkona')!;
-    expect(view.tools).toEqual(['arkona_create_character']);
+    // v3 F3b (ADR 0052): the character hook's own tools and the owners' tool beside the character tool.
+    expect(view.tools).toEqual([
+      'arkona_create_character',
+      'arkona_create_relationship',
+      'arkona_add_character_art',
+      'arkona_character_brief',
+      'arkona_create_owner',
+    ]);
     expect(view.attachments.map((x) => x.projectName)).toEqual(['test']);
   });
 

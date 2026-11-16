@@ -74,6 +74,13 @@ export interface ImageServiceOptions {
   /** The proposal states, for placements proposed at scope `propose`. */
   readonly proposals?: {
     get(id: string): { readonly state: string; readonly jobId: string | null } | undefined;
+    /**
+     * v3 F3b (ADR 0052): whether a proposal does nothing but place this one staged image (upload_image's own placement:
+     * no high-level operation, and every operation it lists is that image's placement).
+     */
+    isImagePlacement?(id: string, stagedId: string): boolean;
+    /** v3 F3b: withdraws a PENDING proposal for a package that takes over what it does (recorded with the reason). */
+    supersede?(id: string, reason: string): boolean;
   };
   readonly now: () => number;
   readonly log?: {
@@ -1237,6 +1244,36 @@ export class ImageService {
     if (!taken.has(name)) return name;
     for (let n = 2; n < 1000; n++) if (!taken.has(`${name} (${n})`)) return `${name} (${n})`;
     return name;
+  }
+
+  /**
+   * v3 F3b (ADR 0052; design section 6): the placement proposal a setting pack's package may take over: the image's OWN
+   * placement (made by upload_image at scope `propose`), still pending, and its only activity. Null when anything else
+   * is going on (another package's proposal, an approved or running placement, a discard): that stays STAGED_IMAGE_BUSY.
+   */
+  ownPendingPlacement(row: ImageUploadRow): string | null {
+    if (!row.staged || row.placementJobId || row.discardJobId || !row.placementProposalId) return null;
+    const p = this.o.proposals?.get(row.placementProposalId);
+    if (!p || p.state !== 'pending' || p.jobId) return null;
+    if (!this.o.proposals?.isImagePlacement?.(row.placementProposalId, row.id)) return null;
+    return row.placementProposalId;
+  }
+
+  /**
+   * v3 F3b: withdraws that proposal for the package `by` (its proposal or job id), recorded as "superseded by package
+   * <by>"; the image's record then follows the package. False when the proposal is no longer pending (decided meanwhile:
+   * the package's own job checks the image is still unplaced before it writes anything).
+   */
+  supersedePlacement(projectId: string, stagedId: string, proposalId: string, by: string): boolean {
+    const row = this.store.upload(projectId, stagedId);
+    if (!row || row.placementProposalId !== proposalId) return false;
+    const ok = this.o.proposals?.supersede?.(proposalId, `superseded by package ${by}`) ?? false;
+    if (ok)
+      this.store.updateUpload(projectId, stagedId, {
+        placementProposalId: null,
+        error: null,
+      });
+    return ok;
   }
 
   /** Discards a staged image: deletes the asset (its bytes are kept first, by the delete keeper). */

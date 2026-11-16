@@ -353,6 +353,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     registry,
     setTemplate: (projectId, resourceId, templateId) =>
       tree.store.setTemplate(projectId, resourceId, templateId),
+    // v3 F3b (ADR 0052): the job's check that each staged image it places is still its to place (read when jobs run,
+    // after the image service below exists).
+    stagedImage: (projectId, stagedId) => images.staged(projectId, stagedId),
+    proposalJob: (proposalId) => policy.proposals.get(proposalId)?.jobId ?? null,
   });
   // v2 C1: the bridge's memory of recent page versions, and write_page's in-lock re-planner (section edits whose section
   // is unchanged). Registered before any job can run: the scheduler starts in a microtask, after createRuntime returns.
@@ -679,7 +683,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     dbPath: runtimeDbPath,
     keptBytes: snapshots.keptBytes,
     uploadedBytes: (bytes) => snapshots.rememberBytes(bytes),
-    proposals: { get: (id) => policy.proposals.get(id) },
+    proposals: {
+      get: (id) => policy.proposals.get(id),
+      // v3 F3b (ADR 0052): a setting pack's package takes over a staged image's own pending placement.
+      isImagePlacement: (id, stagedId) => policy.proposals.isImagePlacement(id, stagedId),
+      supersede: (id, reason) => policy.proposals.supersede(id, reason),
+    },
     now: () => (o.clock ?? systemClock).now(),
     log: { info: (obj, msg) => log.info(obj, msg), warn: (obj, msg) => log.warn(obj, msg) },
   });

@@ -1200,6 +1200,45 @@ export class ProposalService implements ProposalSink {
     return this.require(id);
   }
 
+  /**
+   * v3 F3b (ADR 0052; design section 6): withdraws a PENDING proposal because a setting pack's package takes over what
+   * it would do (a staged image's own placement): rejected by `system`, with the reason the package gives ("superseded
+   * by package prop_…"), audited `proposal.superseded`. False when it is not pending any more (one compare-and-set).
+   */
+  supersede(id: string, reason: string): boolean {
+    const why = reason.trim().slice(0, REASON_MAX) || 'superseded';
+    const ok = this.transition(id, ['pending'], 'rejected', {
+      decided_at: this.now(),
+      decided_by: 'system',
+      reject_reason: why,
+      finished_at: this.now(),
+    });
+    if (ok) this.store.audit('system', 'proposal.superseded', id, { state: 'pending' }, { state: 'rejected', reason: why });
+    return ok;
+  }
+
+  /**
+   * v3 F3b: whether a proposal does nothing but place one staged image (upload_image's own placement at scope
+   * `propose`): no high-level operation, and every operation it lists is that image's `place_image`.
+   */
+  isImagePlacement(id: string, stagedId: string): boolean {
+    const row = this.store.db.prepare('SELECT operation, operations FROM proposals WHERE id = ?').get(id) as
+      { operation: string | null; operations: string | null } | undefined;
+    if (!row || row.operation) return false;
+    const ops = parseJson<unknown>(row.operations, null);
+    return (
+      Array.isArray(ops) &&
+      ops.length > 0 &&
+      ops.every(
+        (o) =>
+          typeof o === 'object' &&
+          o !== null &&
+          (o as Record<string, unknown>).kind === 'place_image' &&
+          (o as Record<string, unknown>).stagedId === stagedId,
+      )
+    );
+  }
+
   /** Expires every pending proposal past its expiry. Returns how many. */
   expireDue(): number {
     const due = this.store.db

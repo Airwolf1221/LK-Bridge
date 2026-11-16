@@ -16,6 +16,8 @@ import type { ProjectView } from '../projects/types.js';
 import type { Registry } from '../registry/index.js';
 import { cleanPrefixes, templateBaseKey } from '../registry/names.js';
 import { PACK_SEEDS } from './arkona.js';
+import { hookFor } from './hooks.js';
+import { headingsOf, pinnedSections, type FoundSection } from './sections.js';
 import { PackStore } from './store.js';
 import {
   PackError,
@@ -63,6 +65,15 @@ export interface SourceStatus {
   readonly digest: string | null;
   readonly state: 'same' | 'changed' | 'unreadable' | 'unapproved';
   readonly reason?: string;
+  /**
+   * v3 F3b (ADR 0052): the pinned sections, each as read now: `same`, `changed` (its digest differs from the approved
+   * one), `missing` (no such heading now), `unapproved` (no approved digest yet). Absent when the source pins none.
+   */
+  readonly sections?: readonly {
+    readonly heading: string;
+    readonly found: string | null;
+    readonly state: 'same' | 'changed' | 'missing' | 'unapproved';
+  }[];
 }
 
 export interface GovernanceStatus {
@@ -163,24 +174,30 @@ export function createPacks(d: PacksDeps): Packs {
     homeTemplates: Readonly<Record<string, string | null>>,
     projectId: string,
     given?: Readonly<Record<string, string>>,
+    /** v3 F3b: only these roles (an attachment's missing ones); default every role the home ids and seed name. */
+    only?: readonly string[],
   ): { templates: Record<string, string | null>; notes: string[] } => {
     const notes: string[] = [];
     const templates: Record<string, string | null> = {};
     const home = seed ? projectByName(seed.home) : undefined;
     const homeSnapshot = home?.id != null ? d.registry.forProject(home.id).store.templates().templates : [];
     const target = d.registry.forProject(projectId).store.templates();
-    for (const [role, homeId] of Object.entries(homeTemplates)) {
+    const named = seed?.templateNames ?? {};
+    const roles = only ?? [...new Set([...Object.keys(homeTemplates), ...Object.keys(named)])];
+    for (const role of roles) {
+      const homeId = homeTemplates[role] ?? null;
       const g = given?.[role];
       if (g) {
         templates[role] = g;
         continue;
       }
-      if (!homeId) {
+      if (!homeId && !named[role]) {
         templates[role] = null;
         notes.push(`${role}: the home project has no template for this role.`);
         continue;
       }
-      const name = homeSnapshot.find((t) => t.id === homeId)?.name ?? null;
+      // v3 F3b (ADR 0052): a role the seed names by template name is worked out by that name, in every project.
+      const name = (homeId ? homeSnapshot.find((t) => t.id === homeId)?.name : undefined) ?? named[role] ?? null;
       if (!name) {
         templates[role] = null;
         notes.push(
@@ -208,7 +225,8 @@ export function createPacks(d: PacksDeps): Packs {
   const ensureSeeded = (): void => {
     let any = false;
     for (const s of seeds) {
-      if (!store.get(s.id)) {
+      const stored = store.get(s.id);
+      if (!stored) {
         store.insert({
           id: s.id,
           name: s.name,
@@ -219,13 +237,54 @@ export function createPacks(d: PacksDeps): Packs {
         });
         d.audit('system', 'pack.seed', s.id, undefined, { version: 1, seed: s.seed });
         any = true;
+      } else if (stored.seed !== s.seed && stored.seed !== null && (s.supersedes ?? []).includes(stored.seed)) {
+        // v3 F3b (ADR 0052): a newer seed is OFFERED as a new version, never approved here: the owner's token maps are
+        // kept, the governance sources keep their stored places and take the seed's names and pinned sections.
+        const rules = packRulesSchema.parse({
+          ...s.rules,
+          tags: { ...s.rules.tags, race: stored.rules.tags.race, culture: stored.rules.tags.culture },
+        });
+        const governance = mergeGovernance(stored.governance, s.governance);
+        const after = store.upgrade(
+          s.id,
+          rules,
+          governance,
+          s.seed,
+          `seed ${s.seed} (replaces ${stored.seed}): offered for the owner's approval; the token maps kept`,
+        );
+        d.audit(
+          'system',
+          'pack.seed_upgrade',
+          s.id,
+          { version: stored.version, seed: stored.seed },
+          { version: after.version, seed: s.seed },
+        );
+        any = true;
       }
       const homeGiven =
         s.projects.find((p) => p.name.toLowerCase() === s.home.toLowerCase())?.templates ?? {};
+      const needed = templateRolesOf(store.get(s.id)!.rules);
       for (const p of s.projects) {
         const view = projectByName(p.name);
         if (!view || view.id === null) continue;
-        if (store.attachment(s.id, view.id)) continue;
+        const had = store.attachment(s.id, view.id);
+        if (had) {
+          // v3 F3b: a role the rules now need that the attachment does not map yet is worked out (or noted).
+          const missing = needed.filter((r) => !(r in had.templates));
+          if (missing.length === 0) continue;
+          const extra = deriveTemplates(s, homeGiven, view.id, p.templates, missing);
+          store.setTemplates(s.id, view.id, { ...had.templates, ...extra.templates }, [
+            ...had.notes,
+            ...extra.notes,
+          ]);
+          d.audit('system', 'pack.attach', s.id, had, {
+            project: view.name,
+            templates: extra.templates,
+            notes: extra.notes,
+          });
+          any = true;
+          continue;
+        }
         const { templates, notes } = deriveTemplates(s, homeGiven, view.id, p.templates);
         store.attach(s.id, view.id, templates, notes, 'seed');
         d.audit('system', 'pack.attach', s.id, undefined, { project: view.name, templates, notes });
@@ -235,7 +294,20 @@ export function createPacks(d: PacksDeps): Packs {
     if (any) changed();
   };
 
-  const toolsOf = (pack: Pack) => pack.rules.types.map((t) => `${pack.prefix}${t.tool}`);
+  /** v3 F3b: the tools a pack offers: its types' tools, the owners' tool and its hooks' own tools (each once). */
+  const toolsOf = (pack: Pack) => {
+    const out: string[] = [];
+    const add = (t: string) => {
+      const n = `${pack.prefix}${t}`;
+      if (!out.includes(n)) out.push(n);
+    };
+    for (const t of pack.rules.types) {
+      add(t.tool);
+      for (const extra of hookFor(t)?.tools ?? []) add(extra);
+    }
+    if (pack.rules.owners) add(pack.rules.owners.tool);
+    return out;
+  };
 
   const viewOf = (pack: Pack): PackView => {
     const active = new Set(d.projects.activeIds());
@@ -253,12 +325,20 @@ export function createPacks(d: PacksDeps): Packs {
   const readSource = async (
     src: GovernanceSource,
     signal?: AbortSignal,
-  ): Promise<{ version: string | null; digest: string | null; reason?: string }> => {
+  ): Promise<{
+    version: string | null;
+    digest: string | null;
+    reason?: string;
+    /** v3 F3b: each pinned section as read now (empty when the source pins none or could not be read). */
+    sections: FoundSection[];
+    headings: string[];
+  }> => {
+    const none = { sections: [] as FoundSection[], headings: [] as string[] };
     const p = projectByName(src.project);
     if (!p || p.id === null)
-      return { version: null, digest: null, reason: `project ${src.project} is not registered` };
+      return { version: null, digest: null, reason: `project ${src.project} is not registered`, ...none };
     if (!d.projects.activeIds().includes(p.id))
-      return { version: null, digest: null, reason: `project ${src.project} is not served now` };
+      return { version: null, digest: null, reason: `project ${src.project} is not served now`, ...none };
     try {
       const r = (await d.engine.internalRead(
         p.id,
@@ -267,12 +347,20 @@ export function createPacks(d: PacksDeps): Packs {
         { priority: 'P1', notFoundIsAnswer: true, ...(signal ? { signal } : {}) },
       )) as { version?: unknown; blocks?: unknown } | null;
       if (!r || typeof r.version !== 'string')
-        return { version: null, digest: null, reason: 'the document is gone or has no version' };
-      return { version: r.version, digest: blocksDigest(r.blocks) };
+        return { version: null, digest: null, reason: 'the document is gone or has no version', ...none };
+      return {
+        version: r.version,
+        digest: blocksDigest(r.blocks),
+        sections: pinnedSections(r.blocks, src.sections ?? []),
+        headings: (src.sections ?? []).length > 0 ? headingsOf(r.blocks) : [],
+      };
     } catch (e) {
-      return { version: null, digest: null, reason: e instanceof Error ? e.message : String(e) };
+      return { version: null, digest: null, reason: e instanceof Error ? e.message : String(e), ...none };
     }
   };
+
+  /** The pinned sections read at the last governance check, by source key (for the owner's approval). */
+  const lastSections = new Map<string, { sections: FoundSection[]; headings: string[] }>();
 
   const governance = async (packId: string, o: { signal?: AbortSignal } = {}): Promise<GovernanceStatus> => {
     const pack = store.get(packId);
@@ -281,7 +369,9 @@ export function createPacks(d: PacksDeps): Packs {
     const sources: SourceStatus[] = [];
     for (const src of pack.governance) {
       const read = await readSource(src, o.signal);
-      const was = approved?.sources.find((x) => x.key === src.key)?.version ?? null;
+      lastSections.set(src.key, { sections: read.sections, headings: read.headings });
+      const approvedSource = approved?.sources.find((x) => x.key === src.key);
+      const was = approvedSource?.version ?? null;
       const state: SourceStatus['state'] =
         read.version === null
           ? 'unreadable'
@@ -290,6 +380,26 @@ export function createPacks(d: PacksDeps): Packs {
             : was === read.version
               ? 'same'
               : 'changed';
+      // v3 F3b (ADR 0052): each pinned section against the digest the approval recorded. The document's version alone
+      // decides the source's state (fail closed, as F3a); this says which pinned part moved.
+      const sections =
+        (src.sections ?? []).length === 0 || read.version === null
+          ? undefined
+          : read.sections.map((s) => {
+              const had = approvedSource?.sections?.find((x) => x.heading === s.heading)?.digest ?? null;
+              return {
+                heading: s.heading,
+                found: s.found,
+                state:
+                  s.digest === null
+                    ? ('missing' as const)
+                    : had === null
+                      ? ('unapproved' as const)
+                      : had === s.digest
+                        ? ('same' as const)
+                        : ('changed' as const),
+              };
+            });
       sources.push({
         key: src.key,
         name: src.name,
@@ -302,8 +412,18 @@ export function createPacks(d: PacksDeps): Packs {
         digest: read.digest,
         state,
         ...(read.reason ? { reason: read.reason } : {}),
+        ...(sections ? { sections } : {}),
       });
     }
+    /** The changed pinned sections of a changed source, in words. */
+    const sectionWords = (s: SourceStatus): string => {
+      const moved = (s.sections ?? []).filter((x) => x.state === 'changed' || x.state === 'missing');
+      if (!s.sections || s.sections.length === 0) return s.name;
+      if (moved.length === 0) return `${s.name} (outside its pinned sections)`;
+      return `${s.name} (pinned section${moved.length === 1 ? '' : 's'} ${moved
+        .map((x) => `“${x.heading}”${x.state === 'missing' ? ' gone' : ''}`)
+        .join(', ')})`;
+    };
     const base = { sources, version: pack.version, approvedVersion: approved?.version ?? null };
     let out: GovernanceStatus;
     if (!approved) {
@@ -323,7 +443,7 @@ export function createPacks(d: PacksDeps): Packs {
       out = {
         ...base,
         state: 'changed',
-        message: `Arkona's governance changed since the owner approved the ${pack.name} pack: ${changed.map((s) => s.name).join(', ')}. Tags are not computed until the owner checks the rules and approves the pack again on the Packs page.`,
+        message: `Arkona's governance changed since the owner approved the ${pack.name} pack: ${changed.map(sectionWords).join(', ')}. Tags are not computed until the owner checks the rules and approves the pack again on the Packs page.`,
       };
     } else if (sources.some((s) => s.state === 'unreadable')) {
       out = {
@@ -349,7 +469,19 @@ export function createPacks(d: PacksDeps): Packs {
         at: now(),
         changed: sources
           .filter((s) => s.state === 'changed')
-          .map((s) => ({ key: s.key, name: s.name, approved: s.approved, current: s.current })),
+          .map((s) => ({
+            key: s.key,
+            name: s.name,
+            approved: s.approved,
+            current: s.current,
+            ...(s.sections
+              ? {
+                  sections: s.sections
+                    .filter((x) => x.state === 'changed' || x.state === 'missing')
+                    .map((x) => x.heading),
+                }
+              : {}),
+          })),
       };
       const had = pack.drift;
       if (!had || stableJson(had.changed) !== stableJson(drift.changed)) {
@@ -407,25 +539,62 @@ export function createPacks(d: PacksDeps): Packs {
             { sources: status.sources },
           );
         }
-        // Work out the templates again for every attachment whose template ids are not all known.
+        // v3 F3b (ADR 0052): every pinned section must be found, or there is nothing to pin (fail closed).
+        const missing = status.sources.flatMap((s) =>
+          (s.sections ?? [])
+            .filter((x) => x.state === 'missing')
+            .map((x) => ({ source: s.name, key: s.key, heading: x.heading })),
+        );
+        if (missing.length > 0) {
+          throw new PackError(
+            'GOVERNANCE_SECTION_MISSING',
+            `The pack cannot be approved: ${missing.map((m) => `${m.source} has no section “${m.heading}”`).join('; ')}. The pack's rules were derived from these sections; check the governance page (or tell the bridge's maintainer the section's new heading).`,
+            {
+              missing,
+              headings: Object.fromEntries(
+                [...new Set(missing.map((m) => m.key))].map((k) => [k, lastSections.get(k)?.headings ?? []]),
+              ),
+            },
+          );
+        }
+        // Work out the templates again for every attachment whose template ids are not all known (v3 F3b: and every
+        // role the rules now need that it does not map yet).
         const seed = seedOf(pack.id);
         const homeGiven = seed?.projects.find(
           (p) => p.name.toLowerCase() === seed.home.toLowerCase(),
         )?.templates;
+        const needed = templateRolesOf(pack.rules);
         for (const a of store.attachments(pack.id)) {
-          if (Object.values(a.templates).every((v) => v !== null) && Object.keys(a.templates).length > 0)
+          const unmapped = needed.filter((r) => !(r in a.templates));
+          if (
+            unmapped.length === 0 &&
+            Object.values(a.templates).every((v) => v !== null) &&
+            Object.keys(a.templates).length > 0
+          )
             continue;
           const given = Object.fromEntries(
             Object.entries(a.templates).filter((e): e is [string, string] => e[1] !== null),
           );
-          const derived = deriveTemplates(seed, homeGiven ?? a.templates, a.projectId, given);
+          const roles = [...new Set([...Object.keys(a.templates), ...needed])];
+          const derived = deriveTemplates(seed, homeGiven ?? a.templates, a.projectId, given, roles);
           store.setTemplates(pack.id, a.projectId, derived.templates, derived.notes);
         }
         const approval: PackApproval = {
           version: pack.version,
           at: now(),
           by: actor,
-          sources: status.sources.map((s) => ({ key: s.key, version: s.current! })),
+          sources: status.sources.map((s) => {
+            const pinned = (lastSections.get(s.key)?.sections ?? []).filter(
+              (x): x is FoundSection & { digest: string } => x.digest !== null,
+            );
+            return {
+              key: s.key,
+              version: s.current!,
+              ...(pinned.length > 0
+                ? { sections: pinned.map((x) => ({ heading: x.heading, digest: x.digest })) }
+                : {}),
+            };
+          }),
         };
         const before = pack.approved;
         const after = store.approve(pack.id, approval);
@@ -503,6 +672,36 @@ export function createPacks(d: PacksDeps): Packs {
       },
     },
   };
+}
+
+/** v3 F3b: every template role a pack's rules use (its types' roles, the owners' types and their index). */
+export function templateRolesOf(rules: PackRules): string[] {
+  const out = new Set<string>();
+  for (const t of rules.types) for (const r of t.roles) out.add(r.template);
+  if (rules.owners) {
+    out.add(rules.owners.index.template);
+    for (const t of rules.owners.types) out.add(t.template);
+  }
+  return [...out];
+}
+
+/**
+ * v3 F3b: a newer seed's governance sources over the stored ones: a source the pack already has keeps its stored place
+ * (project, resource, document: a test world points them at its own documents) and takes the seed's name, label and
+ * pinned sections; a new source is added; a stored source the seed no longer names is kept.
+ */
+export function mergeGovernance(
+  stored: readonly GovernanceSource[],
+  seed: readonly GovernanceSource[],
+): GovernanceSource[] {
+  const out: GovernanceSource[] = seed.map((s) => {
+    const had = stored.find((x) => x.key === s.key);
+    return had
+      ? { ...s, project: had.project, resourceId: had.resourceId, documentId: had.documentId }
+      : { ...s };
+  });
+  for (const s of stored) if (!out.some((x) => x.key === s.key)) out.push({ ...s });
+  return out;
 }
 
 /** A token map from the dashboard: keys and tokens trimmed, 1 to 200 characters, at most 500 entries. */

@@ -98,6 +98,49 @@ export interface PackageInput {
   readonly target?: string | undefined;
   readonly upgradeToCore?: boolean | undefined;
   readonly split?: unknown;
+  /**
+   * v3 F3b (ADR 0052): the names a relationship's page takes for its two participants, exactly as their indexes give
+   * them (arkona_create_relationship); by default the target's Canonical Display Name and the partner's subject.
+   */
+  readonly names?: { readonly subject?: string | undefined; readonly partner?: string | undefined } | undefined;
+}
+
+/** A character found by name, alias, Canonical Display Name or id (an index, a Core or a Compact Reference). */
+export interface CharacterHit {
+  readonly identity: NodeRef;
+  readonly role: string;
+  readonly via: string;
+  readonly node: TreeNode;
+  readonly subject: string;
+  readonly race: string | null;
+}
+
+/** v3 F3b: the characters a query names (each once, by its identity page), as the character tool finds them. */
+export function findCharacters(ctx: RepoCtx, q: string): { subjects: CharacterHit[] } {
+  const r = ctx.types.resolve(q, {});
+  const nodes: TreeNode[] =
+    r.status === 'resolved'
+      ? [ctx.tree.node(ctx.projectId, r.node.id).data!].filter(Boolean)
+      : r.status === 'ambiguous'
+        ? r.candidates.map((c) => ctx.tree.node(ctx.projectId, c.id).data!).filter(Boolean)
+        : [];
+  const subjects = new Map<string, CharacterHit>();
+  for (const n of nodes) {
+    const c = ctx.types.characterOfPage(n.id);
+    if (c.ok) {
+      const id = c.value.core.id;
+      if (!subjects.has(id))
+        subjects.set(id, {
+          identity: c.value.core,
+          role: c.value.role,
+          via: c.value.via,
+          node: n,
+          subject: c.value.subject,
+          race: c.value.race,
+        });
+    }
+  }
+  return { subjects: [...subjects.values()] };
 }
 
 export interface Issue {
@@ -123,6 +166,11 @@ export interface PlannedImage {
   /** The string the Art page's image block carries until the job binds the asset's address. */
   readonly placeholder: string;
   readonly subfolder: string | null;
+  /**
+   * v3 F3b (ADR 0052; design section 6): the image's own pending placement proposal (upload_image's at scope
+   * `propose`), which the package takes over: withdrawn, "superseded by package prop_…", when the package is proposed.
+   */
+  readonly takeover?: string | null;
 }
 
 export interface PlannedPage extends NewPage {
@@ -143,6 +191,27 @@ export interface PlannedPage extends NewPage {
   readonly images: readonly PlannedImage[];
   /** For the preview: where its body's headings are. */
   readonly headings: readonly string[];
+  /** v3 F3b (ADR 0052): what the proposal says of this page besides its facts (a named step, a home override). */
+  readonly notes?: readonly string[];
+}
+
+/**
+ * v3 F3b (ADR 0052): one of the job's run-time re-checks under an existing parent: none of `names` (exact display
+ * names) and no name starting with one of `prefixes` may have appeared there since the plan; `code` is the refusal.
+ */
+export interface AbsentUnder {
+  readonly parentId: string;
+  readonly names: readonly string[];
+  readonly prefixes?: readonly string[];
+  readonly code?: string;
+}
+
+/** v3 F3b: an existing page the job moves or relies on, still where the plan saw it when the job runs. */
+export interface PresentCheck {
+  readonly resourceId: string;
+  readonly parentId: string;
+  readonly name: string;
+  readonly code: string;
 }
 
 /** A change to a page that exists (an extension). */
@@ -182,6 +251,21 @@ export type ExistingChange =
       readonly markdown: string;
       readonly sectionHash: string;
       readonly section: string;
+    }
+  | {
+      /**
+       * v3 F3b (ADR 0052; design section 3): new images on an EXISTING Art page, appended under its images section
+       * (made before the boundary sections when it has none) by the `pack.art_append` filler inside the job's lock, on
+       * the document as it is then (nothing else on the page is touched; `unsupported` blocks are kept).
+       */
+      readonly kind: 'images';
+      readonly page: NodeRef;
+      readonly documentId: string;
+      /** Per image: its label (level 3), the image block (its address bound in the job), its interpretation. */
+      readonly blocks: readonly LkBlock[];
+      readonly section: string;
+      readonly boundaries: readonly string[];
+      readonly images: readonly PlannedImage[];
     };
 
 export interface PackPlan {
@@ -201,7 +285,15 @@ export interface PackPlan {
   /** A new subject: the name its job reserves, and where it checks again (live) that nothing appeared meanwhile. */
   readonly absent: {
     readonly reservation: string | null;
-    readonly under: readonly { readonly parentId: string; readonly names: readonly string[] }[];
+    readonly under: readonly AbsentUnder[];
+    /** v3 F3b: more names the job reserves (a nation index, a relationship's pair). */
+    readonly reservations?: readonly string[];
+    /** v3 F3b: existing pages that must still be where the plan saw them (a Reference promoteNation moves). */
+    readonly present?: readonly PresentCheck[];
+    /** v3 F3b: what kind of package it is (`owner`, `relationship`): the character-only checks are skipped. */
+    readonly kind?: 'character' | 'owner' | 'relationship' | 'art';
+    /** v3 F3b: staged images whose placement the job takes on (still staged and placed by nothing else). */
+    readonly images?: readonly string[];
   };
   readonly target: {
     readonly identity: NodeRef;
@@ -209,6 +301,14 @@ export interface PackPlan {
     readonly role: string;
   } | null;
   readonly notes: string[];
+  /** v3 F3b (ADR 0052): more of the preview (an owner's home and nation, a relationship's pair, an art page). */
+  readonly extra?: Readonly<Record<string, unknown>>;
+  /** v3 F3b: why the package needs the owner's canonical approval besides an Authoritative page (a move of one). */
+  readonly canonical?: { readonly reason: string };
+  /** v3 F3b: added to the proposal's one-line summary (a home override's reason). */
+  readonly summaryNote?: string;
+  /** v3 F3b: staged images whose own pending placement proposal the package takes over (design section 6). */
+  readonly takeovers?: readonly { readonly stagedId: string; readonly proposalId: string }[];
 }
 
 export interface PlanEnv {
@@ -235,7 +335,7 @@ export interface PlanEnv {
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** The value of an identity field, and its reason when it is the deliberate gap. */
-function identityOf(v: IdentityValue | undefined): { value: string | null; reason: string | null } {
+export function identityOf(v: IdentityValue | undefined): { value: string | null; reason: string | null } {
   if (v === undefined) return { value: null, reason: null };
   if (typeof v === 'string') return { value: v.trim() === '' ? '' : v.trim(), reason: null };
   return { value: v.value.trim(), reason: v.reason?.trim() || null };
@@ -245,13 +345,13 @@ const fill = (pattern: string, vars: Readonly<Record<string, string>>) =>
   pattern.replace(/\{(Name|Title|A|B|Label|Subject)\}/g, (_m, k: string) => vars[k] ?? '');
 
 /** The template's PROPERTIES keys in order (null when it has no such property, or several). */
-function keysOf(sidebar: readonly SidebarProperty[], title: string): string[] | null {
+export function keysOf(sidebar: readonly SidebarProperty[], title: string): string[] | null {
   const kv = sidebar.filter((p) => p.kind === 'keyValue' && factKey(p.title) === factKey(title));
   return kv.length === 1 ? (kv[0]!.rows ?? []).map((r) => r.key) : null;
 }
 
 /** The value of a row of a live sidebar, as plain text (null when the page has no such row). */
-function rowValue(sidebar: readonly SidebarProperty[], title: string, key: string): string | null {
+export function rowValue(sidebar: readonly SidebarProperty[], title: string, key: string): string | null {
   const kv = sidebar.find((p) => p.kind === 'keyValue' && factKey(p.title) === factKey(title));
   const row = kv?.rows?.find((r) => factKey(r.key) === factKey(key));
   if (!row) return null;
@@ -383,35 +483,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   };
   const props = rules.sidebar.property;
 
-  const characterCandidates = (q: string) => {
-    const r = ctx.types.resolve(q, {});
-    const nodes: TreeNode[] =
-      r.status === 'resolved'
-        ? [ctx.tree.node(ctx.projectId, r.node.id).data!].filter(Boolean)
-        : r.status === 'ambiguous'
-          ? r.candidates.map((c) => ctx.tree.node(ctx.projectId, c.id).data!).filter(Boolean)
-          : [];
-    const subjects = new Map<
-      string,
-      { identity: NodeRef; role: string; via: string; node: TreeNode; subject: string; race: string | null }
-    >();
-    for (const n of nodes) {
-      const c = ctx.types.characterOfPage(n.id);
-      if (c.ok) {
-        const id = c.value.core.id;
-        if (!subjects.has(id))
-          subjects.set(id, {
-            identity: c.value.core,
-            role: c.value.role,
-            via: c.value.via,
-            node: n,
-            subject: c.value.subject,
-            race: c.value.race,
-          });
-      }
-    }
-    return { result: r, subjects: [...subjects.values()] };
-  };
+  const characterCandidates = (q: string) => findCharacters(ctx, q);
 
   if (input.target !== undefined) {
     mode = 'extend';
@@ -465,9 +537,10 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
           continuity: rowValue(targetSidebar, props, 'Continuity'),
           inheritance: rowValue(targetSidebar, props, 'Inheritance'),
         };
-        subject = rowValue(targetSidebar, props, 'Canonical Display Name') || subjectName;
+        subject =
+          input.names?.subject || rowValue(targetSidebar, props, 'Canonical Display Name') || subjectName;
         targetRace = rowValue(targetSidebar, props, 'Race / Species') ?? targetRace;
-      } else subject = subjectName;
+      } else subject = input.names?.subject || subjectName;
       const kind = targetIdentityNode?.kind;
       if (kind === 'barc' || standing.status === env.lifecycle.status.archived) {
         refuse(
@@ -839,7 +912,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       const s = found.subjects[0]!;
       const pnode = ctx.tree.node(ctx.projectId, s.identity.id).data;
       const pparent = pnode?.parentId ? ctx.tree.node(ctx.projectId, pnode.parentId).data : null;
-      const psubject = s.subject || subjectOf(s.identity.displayName, null);
+      const psubject = input.names?.partner || s.subject || subjectOf(s.identity.displayName, null);
       partner = {
         node: s.identity,
         subject: psubject,
@@ -1161,6 +1234,8 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
           culture: rule.tags.includes('$culture') ? (identity['namingCulture']?.value ?? null) : null,
           specialist,
           unestablished: type.unestablished,
+          // v3 F3b (ADR 0052; the owner's AU ruling): an Authoritative page of an AU character carries AU, not CANON.
+          continuityType,
         })
       : { tags: [], held: [] };
     held.push(...tagResult.held);
@@ -1547,16 +1622,24 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     absent: {
       reservation: mode === 'new' ? `${type.name.toLowerCase()}:${nameKey(subject)}` : null,
       under: absentUnder,
+      ...(images.length ? { images: images.map((i) => i.stagedId) } : {}),
     },
     target,
     notes,
+    ...(images.some((i) => i.takeover)
+      ? {
+          takeovers: images
+            .filter((i) => i.takeover)
+            .map((i) => ({ stagedId: i.stagedId, proposalId: i.takeover! })),
+        }
+      : {}),
   };
 }
 
 // ============================================================================================ helpers
 
 /** The facts plan of a new page on its template's sidebar (ids are the template's; the job binds the copy's). */
-function planOnTemplate(
+export function planOnTemplate(
   p: PlannedPage,
   sidebar: readonly SidebarProperty[],
   property: string,
@@ -1637,6 +1720,26 @@ export function draftIndex(
   subject: string,
   children: readonly { id: string; name: string; scope: string | null }[],
 ): string {
+  return draftIndexText(type.index, subject, children);
+}
+
+/**
+ * v3 F3b (ADR 0052): the drafted index text from explicit wording (an owner package's nation index, national subindex
+ * or character navigation): Purpose, one routing line per child, the collection, the boundaries. An index with no
+ * child yet says how its routing section fills, never a placeholder line.
+ */
+export function draftIndexText(
+  index: {
+    readonly purpose: string;
+    readonly routing: string;
+    readonly collection: string;
+    readonly boundaries: string;
+    readonly boundariesText: string;
+  },
+  subject: string,
+  children: readonly { id: string; name: string; scope: string | null }[],
+  emptyRouting = '- (no pages yet)',
+): string {
   const lines = children.map((c) => {
     const label = c.name.replace(/\[/g, '\\[').replace(/\]/g, '\\]');
     return `- [${label}](lk://resources/${c.id})${c.scope ? `: ${c.scope}` : ''}`;
@@ -1644,17 +1747,17 @@ export function draftIndex(
   return [
     `## Purpose`,
     '',
-    type.index.purpose.replace(/\{Name\}/g, subject),
+    index.purpose.replace(/\{Name\}/g, subject),
     '',
-    `## ${type.index.routing}`,
+    `## ${index.routing}`,
     '',
-    ...(lines.length ? lines : ['- (no pages yet)']),
+    ...(lines.length ? lines : [emptyRouting]),
     '',
-    `## ${type.index.collection}`,
+    `## ${index.collection}`,
     '',
-    `## ${type.index.boundaries}`,
+    `## ${index.boundaries}`,
     '',
-    type.index.boundariesText.replace(/\{Name\}/g, subject),
+    index.boundariesText.replace(/\{Name\}/g, subject),
     '',
   ].join('\n');
 }
@@ -1664,7 +1767,7 @@ export function draftIndex(
  * then for each image its label as a level-3 heading, the image block (its address bound when the job runs) and its
  * interpretation.
  */
-function withImages(
+export function withImages(
   blocks: readonly LkBlock[],
   images: readonly PlannedImage[],
   section: string,
@@ -1708,7 +1811,7 @@ function withImages(
 }
 
 /** The staged images of an Art page, with their folder and display names (refused rather than guessed). */
-function planImages(
+export function planImages(
   env: PlanEnv,
   o: {
     page: string;
@@ -1763,8 +1866,14 @@ function planImages(
       );
       continue;
     }
-    if (row.placementJobId || row.placementProposalId || row.discardJobId) {
-      o.refuse('STAGED_IMAGE_BUSY', `${where}: ${im.staged_id} is already being placed or discarded.`);
+    // v3 F3b (design section 6): the image's own pending placement is taken over; any other activity still refuses.
+    const takeover = row.placementProposalId ? images.ownPendingPlacement(row) : null;
+    if (row.placementJobId || row.discardJobId || (row.placementProposalId && !takeover)) {
+      o.refuse(
+        'STAGED_IMAGE_BUSY',
+        `${where}: ${im.staged_id} is already being placed or discarded${row.placementProposalId ? ` (proposal ${row.placementProposalId}, not its own placement alone)` : row.placementJobId ? ` (job ${row.placementJobId})` : ''}.`,
+        { hint: 'Stage art for a pack with upload_image { stage: true } and no destination: that proposes nothing.' },
+      );
       continue;
     }
     if (seen.has(im.staged_id)) {
@@ -1830,6 +1939,7 @@ function planImages(
       creates: p.wouldCreate.map((c) => ({ name: c.name, parentFolderId: c.parentFolderId })),
       placeholder: `https://lk-bridge.invalid/staged/${im.staged_id}`,
       subfolder: sub.join(' / ') || null,
+      takeover,
     });
   }
   return out;

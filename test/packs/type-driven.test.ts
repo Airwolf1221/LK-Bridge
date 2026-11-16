@@ -3,7 +3,8 @@
  * v3 F3a (ADR 0050), A2: the engine is type-driven. A dummy second type, defined ONLY in this test's data (a "Polity"
  * with one template, a fixed placement and a primary tag, no hook), plans, previews and proposes through the same engine
  * as the Character type, with no code change: the pack's rules gain the type, the owner approves the new version, and
- * the generic pack tool its `tool` name calls for appears in the tool list.
+ * the generic pack tool its `tool` name calls for appears in the tool list. (v3 F3b: its tool is `create_ward`, since
+ * `arkona_create_owner` is now the real owner tool, ADR 0052.)
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { packRulesSchema, type TypeRules } from '../../src/packs/types.js';
@@ -19,7 +20,7 @@ afterAll(async () => {
 
 const POLITY: TypeRules = {
   name: 'Polity',
-  tool: 'create_owner',
+  tool: 'create_ward',
   hook: null,
   placement: { kind: 'fixed', index: 'Locations' },
   roles: [
@@ -90,7 +91,7 @@ describe('a type defined only in test data (the dummy Polity)', () => {
     const packs = w.stack.runtime.packs;
     const before = packs.get('arkona')!;
     const client = await w.stack.connect();
-    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('arkona_create_owner');
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('arkona_create_ward');
     packs.commands.replaceRules(
       'owner',
       'arkona',
@@ -98,7 +99,7 @@ describe('a type defined only in test data (the dummy Polity)', () => {
       'test: a Polity type',
     );
     // A new version waits for the owner's approval: until then nothing is computed (fail closed).
-    const waiting = await w.call('arkona_create_owner', {
+    const waiting = await w.call('arkona_create_ward', {
       type: 'Polity',
       name: 'Kingdom of Ash',
       pages: [
@@ -114,7 +115,7 @@ describe('a type defined only in test data (the dummy Polity)', () => {
     expect(waiting.body.error.code).toBe('PACK_NOT_CURRENT');
     expect(waiting.body.error.preview.governance.state).toBe('rules_changed');
     await packs.commands.approve('owner', 'arkona');
-    expect((await client.listTools()).tools.map((t) => t.name)).toContain('arkona_create_owner');
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain('arkona_create_ward');
     const pkg = {
       type: 'Polity',
       name: 'Kingdom of Ash',
@@ -128,7 +129,7 @@ describe('a type defined only in test data (the dummy Polity)', () => {
       ],
       project: 'test',
     };
-    const dry = await w.call('arkona_create_owner', { ...pkg, dryRun: true });
+    const dry = await w.call('arkona_create_ward', { ...pkg, dryRun: true });
     expect(dry.isError, dry.text).toBe(false);
     expect(dry.body.type).toBe('Polity');
     expect(dry.body.tree).toEqual([
@@ -142,7 +143,7 @@ describe('a type defined only in test data (the dummy Polity)', () => {
         { key: 'Status', value: 'Authoritative' },
       ]),
     );
-    const p = await w.call('arkona_create_owner', pkg);
+    const p = await w.call('arkona_create_ward', pkg);
     expect(p.body.status, p.text).toBe('proposal_captured');
     expect(p.body.requiresCanonicalApproval).toBe(true);
     const done = await approve(w, String(p.body.proposalId));
@@ -152,12 +153,12 @@ describe('a type defined only in test data (the dummy Polity)', () => {
     expect(page.tags).toEqual(['CANON', 'Polity']);
     expect(w.repo.res.get(page.parentId!)!.name).toBe('[INDEX] Locations');
     // A type the tool does not make is refused with the ones it does.
-    const wrong = await w.call('arkona_create_owner', { ...pkg, type: 'Creature', dryRun: true });
+    const wrong = await w.call('arkona_create_ward', { ...pkg, type: 'Creature', dryRun: true });
     expect(wrong.body.error.code).toBe('PACK_TYPE_NOT_FOUND');
     expect(wrong.body.error.types).toEqual(['Polity']);
     // The rules without the type: its tool leaves the list.
     packs.commands.replaceRules('owner', 'arkona', before.rules, 'test: the Polity type removed');
-    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('arkona_create_owner');
+    expect((await client.listTools()).tools.map((t) => t.name)).not.toContain('arkona_create_ward');
     await client.close();
   });
 });
