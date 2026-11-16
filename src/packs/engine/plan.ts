@@ -102,7 +102,8 @@ export interface PackageInput {
    * v3 F3b (ADR 0052): the names a relationship's page takes for its two participants, exactly as their indexes give
    * them (arkona_create_relationship); by default the target's Canonical Display Name and the partner's subject.
    */
-  readonly names?: { readonly subject?: string | undefined; readonly partner?: string | undefined } | undefined;
+  readonly names?:
+    { readonly subject?: string | undefined; readonly partner?: string | undefined } | undefined;
 }
 
 /** A character found by name, alias, Canonical Display Name or id (an index, a Core or a Compact Reference). */
@@ -313,7 +314,11 @@ export interface PackPlan {
    * v3 F3b (design 1.1a): a character navigation index the package makes, recorded in the Character taxonomy when the
    * job runs, so the character tool can place a character of that race.
    */
-  readonly taxonomy?: readonly { readonly resourceId: string; readonly plural: string; readonly parentNodeId: string }[];
+  readonly taxonomy?: readonly {
+    readonly resourceId: string;
+    readonly plural: string;
+    readonly parentNodeId: string;
+  }[];
 }
 
 export interface PlanEnv {
@@ -1877,7 +1882,9 @@ export function planImages(
       o.refuse(
         'STAGED_IMAGE_BUSY',
         `${where}: ${im.staged_id} is already being placed or discarded${row.placementProposalId ? ` (proposal ${row.placementProposalId}, not its own placement alone)` : row.placementJobId ? ` (job ${row.placementJobId})` : ''}.`,
-        { hint: 'Stage art for a pack with upload_image { stage: true } and no destination: that proposes nothing.' },
+        {
+          hint: 'Stage art for a pack with upload_image { stage: true } and no destination: that proposes nothing.',
+        },
       );
       continue;
     }

@@ -228,7 +228,8 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
   const packs = () => deps.services?.packs;
   const arkona = () => packs()?.get('arkona');
   const hasCharacters = () =>
-    (packs()?.toolListed('arkona') ?? false) && (arkona()?.rules.types.some((t) => t.hook === 'character') ?? false);
+    (packs()?.toolListed('arkona') ?? false) &&
+    (arkona()?.rules.types.some((t) => t.hook === 'character') ?? false);
   return [
     defineTool({
       name: 'arkona_create_character',
@@ -342,17 +343,27 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         kind: z
           .enum(['race', 'racialGroup', 'subrace'])
           .optional()
-          .describe('Species on the race roster only (Races of Arkona); without it a Species goes to the Bestiary.'),
-        name: z.string().min(1).max(200).describe('The Subject, no prefix: the page is “{name} - {descriptor}”.'),
+          .describe(
+            'Species on the race roster only (Races of Arkona); without it a Species goes to the Bestiary.',
+          ),
+        name: z
+          .string()
+          .min(1)
+          .max(200)
+          .describe('The Subject, no prefix: the page is “{name} - {descriptor}”.'),
         descriptor: z
           .string()
           .max(200)
           .optional()
-          .describe('The name’s second part, e.g. "Historical Polity Reference" (default: the Reference Type).'),
+          .describe(
+            'The name’s second part, e.g. "Historical Polity Reference" (default: the Reference Type).',
+          ),
         status: z
           .enum(['working', 'authoritative'])
           .optional()
-          .describe('working (default): [BWRK] under [INDEX] Working, to promote into home; authoritative: canon.'),
+          .describe(
+            'working (default): [BWRK] under [INDEX] Working, to promote into home; authoritative: canon.',
+          ),
         continuity: z
           .string()
           .max(200)
@@ -363,12 +374,16 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .object({ reason: z.string().min(1).max(1000) })
           .strict()
           .optional()
-          .describe('Only when the owner decided on a home the rules do not list; the reason is in the proposal.'),
+          .describe(
+            'Only when the owner decided on a home the rules do not list; the reason is in the proposal.',
+          ),
         nation: z.string().max(200).optional().describe('The nation it belongs to.'),
         promoteNation: z
           .boolean()
           .optional()
-          .describe('With nation: give a compact polity its own [INDEX] in this proposal (its Reference moved in).'),
+          .describe(
+            'With nation: give a compact polity its own [INDEX] in this proposal (its Reference moved in).',
+          ),
         createSubindex: z
           .string()
           .max(200)
@@ -378,7 +393,9 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .boolean()
           .optional()
           .describe('A new race or racial group: also make its Characters navigation index.'),
-        referenceType: identityValue.optional().describe('Required (free text, e.g. "Historical Polity Reference").'),
+        referenceType: identityValue
+          .optional()
+          .describe('Required (free text, e.g. "Historical Polity Reference").'),
         scope: identityValue.optional().describe('Required: one line of what the page covers.'),
         temporalScope: identityValue.optional().describe('Required: the period it covers.'),
         supersedes: z.string().max(500).optional().describe('Default "None".'),
@@ -387,7 +404,9 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .string()
           .max(200_000)
           .optional()
-          .describe('The text: “## Purpose” first, then its sections, then Source Boundaries and Unresolved Material.'),
+          .describe(
+            'The text: “## Purpose” first, then its sections, then Source Boundaries and Unresolved Material.',
+          ),
         dependencies: linkList('Current Authoritative owners it depends on'),
         related: linkList('Related Sources'),
         dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
@@ -505,13 +524,19 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
                   .min(1)
                   .max(300)
                   .describe('“{Visual Role} - {Descriptor}”, e.g. “Primary Reference - Character Portrait”.'),
-                interpretation: z.string().max(5000).optional().describe('What this reference establishes (required).'),
+                interpretation: z
+                  .string()
+                  .max(5000)
+                  .optional()
+                  .describe('What this reference establishes (required).'),
                 subfolder: z
                   .string()
                   .max(300)
                   .nullable()
                   .optional()
-                  .describe('“Forms / <form>”, “Outfits / <outfit>” or “Details”; omit for the character’s folder.'),
+                  .describe(
+                    '“Forms / <form>”, “Outfits / <outfit>” or “Details”; omit for the character’s folder.',
+                  ),
               })
               .strict(),
           )
@@ -527,7 +552,9 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           })
           .strict()
           .optional()
-          .describe('In ChatGPT: the attached image (ChatGPT fills this in), for the one image with no other source.'),
+          .describe(
+            'In ChatGPT: the attached image (ChatGPT fills this in), for the one image with no other source.',
+          ),
         scope: z.string().max(1000).optional().describe('A new Art page’s Scope.'),
         markdown: z
           .string()

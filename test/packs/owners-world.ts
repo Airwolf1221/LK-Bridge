@@ -140,7 +140,12 @@ export const PINNED = {
   tagging: ['Exact Tag Grammar', 'Closed Primary Categories'],
 } as const;
 
-const heading = (id: string, level: number, text: string) => ({ id, kind: 'heading', level, content: [{ text }] });
+const heading = (id: string, level: number, text: string) => ({
+  id,
+  kind: 'heading',
+  level,
+  content: [{ text }],
+});
 const para = (id: string, text: string) => ({ id, kind: 'paragraph', content: [{ text }] });
 
 export interface OwnersWorld extends PackWorld {
@@ -157,7 +162,13 @@ export async function ownersWorld(o: Parameters<typeof packWorld>[0] = {}): Prom
     seed: (world) => {
       const r = world.repo;
       const page = (id: string, name: string, parentId: string, referenceType?: string, scope?: string) =>
-        r.seed({ id, name, parentId, ...(referenceType ? { referenceType } : {}), ...(scope ? { scope } : {}) });
+        r.seed({
+          id,
+          name,
+          parentId,
+          ...(referenceType ? { referenceType } : {}),
+          ...(scope ? { scope } : {}),
+        });
       // ------------------------------------------------------------------------------------- Salahad
       page(O.continents, '[INDEX] Continents', ROOT);
       page(O.salahad, '[INDEX] Salahad', O.continents);
@@ -255,23 +266,52 @@ export async function ownersWorld(o: Parameters<typeof packWorld>[0] = {}): Prom
   const mainOf = (id: string) => w.repo.liveDocs(w.repo.live(id)!).find((d) => d.name === 'Main')!;
   const placeholderBody = (t: string, headings: string[]) => ({
     version: 1,
-    blocks: headings.flatMap((h, i) => [heading(`${t}h${i}`, 2, h), para(`${t}p${i}`, `[Describe the ${h.toLowerCase()}.]`)]),
+    blocks: headings.flatMap((h, i) => [
+      heading(`${t}h${i}`, 2, h),
+      para(`${t}p${i}`, `[Describe the ${h.toLowerCase()}.]`),
+    ]),
   });
   w.repo.blocks.set(
     mainOf(OTPL.polity).id,
-    placeholderBody(OTPL.polity, ['Purpose', 'Overview', 'Government', 'Military', 'Economy', 'Source Boundaries', 'Unresolved Material']),
+    placeholderBody(OTPL.polity, [
+      'Purpose',
+      'Overview',
+      'Government',
+      'Military',
+      'Economy',
+      'Source Boundaries',
+      'Unresolved Material',
+    ]),
   );
   w.repo.blocks.set(
     mainOf(OTPL.place).id,
-    placeholderBody(OTPL.place, ['Purpose', 'Geography', 'Settlements', 'Source Boundaries', 'Unresolved Material']),
+    placeholderBody(OTPL.place, [
+      'Purpose',
+      'Geography',
+      'Settlements',
+      'Source Boundaries',
+      'Unresolved Material',
+    ]),
   );
   w.repo.blocks.set(
     mainOf(OTPL.magictech).id,
-    placeholderBody(OTPL.magictech, ['Purpose', 'Mechanisms', 'Limits', 'Source Boundaries', 'Unresolved Material']),
+    placeholderBody(OTPL.magictech, [
+      'Purpose',
+      'Mechanisms',
+      'Limits',
+      'Source Boundaries',
+      'Unresolved Material',
+    ]),
   );
   w.repo.blocks.set(
     mainOf(OTPL.creature).id,
-    placeholderBody(OTPL.creature, ['Purpose', 'Biology', 'Behaviour', 'Source Boundaries', 'Unresolved Material']),
+    placeholderBody(OTPL.creature, [
+      'Purpose',
+      'Biology',
+      'Behaviour',
+      'Source Boundaries',
+      'Unresolved Material',
+    ]),
   );
   const templates = [
     { id: T.index, name: '[INDEX] AI Index Template' },
@@ -309,7 +349,10 @@ export async function ownersWorld(o: Parameters<typeof packWorld>[0] = {}): Prom
       blocks: [
         heading(`${doc}h0`, 1, title),
         para(`${doc}p0`, `${title}: the owner's rules.`),
-        ...sections.flatMap((s, i) => [heading(`${doc}h${i + 1}`, 2, s), para(`${doc}p${i + 1}`, `The rules of ${s}.`)]),
+        ...sections.flatMap((s, i) => [
+          heading(`${doc}h${i + 1}`, 2, s),
+          para(`${doc}p${i + 1}`, `The rules of ${s}.`),
+        ]),
       ],
     });
   };

@@ -28,7 +28,10 @@ export function addPackTaxonomyEntry(
   const type = types.find((t) => t.rootIndexId !== null) ?? types[0];
   if (!type) return { recorded: null, why: 'no character type in the registry' };
   if (type.taxonomySeededAt === null)
-    return { recorded: null, why: `the taxonomy of ${type.singular} is not seeded yet (Repository Mappings)` };
+    return {
+      recorded: null,
+      why: `the taxonomy of ${type.singular} is not seeded yet (Repository Mappings)`,
+    };
   const had = store.entryBySource(r.resourceId);
   if (had) return { recorded: null, why: 'the index already has a taxonomy entry', entryId: had.id };
   const s = singularFor(r.plural);

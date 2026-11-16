@@ -19,14 +19,33 @@ beforeAll(async () => {
   w = await ownersWorld({ mehranaAlias: false });
   const sidebar = (id: string, rows: Record<string, string>) =>
     w.sidebars.page(id, [
-      SidebarModel.kv(`kv${id}`.slice(0, 8), 'PROPERTIES', IDENTITY_KEYS.map((k) => [k, rows[k] ?? ''] as [string, string])),
+      SidebarModel.kv(
+        `kv${id}`.slice(0, 8),
+        'PROPERTIES',
+        IDENTITY_KEYS.map((k) => [k, rows[k] ?? ''] as [string, string]),
+      ),
       SidebarModel.links(`dp${id}`.slice(0, 8), 'Dependencies', []),
       SidebarModel.links(`rl${id}`.slice(0, 8), 'Related Sources', []),
       { id: `tg${id}`.slice(0, 8), kind: 'unsupported' as const, title: 'TAGS' },
     ]);
-  const canon = { Status: 'Authoritative', 'Continuity Type': 'CANON', Continuity: 'Main', Inheritance: 'None' };
-  sidebar(MIYABI, { ...canon, Subject: 'Asagiri Miyabi', 'Race / Species': 'Foxian', 'Reference Type': 'Character Core' });
-  sidebar(MEHRANA, { ...canon, Subject: 'Mehrana al-Khalid', 'Race / Species': 'Qishen', 'Reference Type': 'Character Core' });
+  const canon = {
+    Status: 'Authoritative',
+    'Continuity Type': 'CANON',
+    Continuity: 'Main',
+    Inheritance: 'None',
+  };
+  sidebar(MIYABI, {
+    ...canon,
+    Subject: 'Asagiri Miyabi',
+    'Race / Species': 'Foxian',
+    'Reference Type': 'Character Core',
+  });
+  sidebar(MEHRANA, {
+    ...canon,
+    Subject: 'Mehrana al-Khalid',
+    'Race / Species': 'Qishen',
+    'Reference Type': 'Character Core',
+  });
 });
 afterAll(async () => {
   await w?.close();
@@ -39,7 +58,9 @@ const pngOf = (prompt: string) => /([A-Za-z0-9+/]{60,}={0,2})\s*$/.exec(prompt)!
 const pageNamed = (name: string) =>
   [...w.repo.res.values()].find((r) => r.deletedAt === null && r.name === name);
 const related = (id: string) =>
-  (w.sidebars.pages.get(id)?.props.find((p) => p.title === 'Related Sources')?.items ?? []).map((i) => i.resourceId);
+  (w.sidebars.pages.get(id)?.props.find((p) => p.title === 'Related Sources')?.items ?? []).map(
+    (i) => i.resourceId,
+  );
 
 describe('the F3b Arkona evaluation scenarios, as a good run sends them', () => {
   it('35: a compact polity under Salahad Polities, previewed, proposed once as canon, approved', async () => {
@@ -74,7 +95,9 @@ describe('the F3b Arkona evaluation scenarios, as a good run sends them', () => 
     const done = await approve(w, String(p.body.proposalId));
     expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
     expect((done.job?.result as { verified?: boolean }).verified).toBe(true);
-    expect(pageNamed('[BSRC] Kingdom of Saba - Historical Polity Reference')!.parentId).toBe(O.salahadPolities);
+    expect(pageNamed('[BSRC] Kingdom of Saba - Historical Polity Reference')!.parentId).toBe(
+      O.salahadPolities,
+    );
   });
 
   it('36: the institution that needs promoteNation: refused without it, previewed and proposed with it', async () => {
@@ -90,7 +113,11 @@ describe('the F3b Arkona evaluation scenarios, as a good run sends them', () => 
       markdown: ownerText('The Terrace Council of the Kingdom of Saba.'),
       project: 'test',
     };
-    const first = await w.call('arkona_create_owner', { ...base, home: 'Salahad Institutions', dryRun: true });
+    const first = await w.call('arkona_create_owner', {
+      ...base,
+      home: 'Salahad Institutions',
+      dryRun: true,
+    });
     expect(first.body.error.code).toBe('NATION_NEEDS_INDEX');
     const pkg = { ...base, home: 'Kingdom of Saba', promoteNation: true };
     const dry = await w.call('arkona_create_owner', { ...pkg, dryRun: true });

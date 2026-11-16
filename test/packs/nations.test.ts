@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
 /**
  * v3 F3b (ADR 0052; design 1.3): a nation's three scalable levels. A compact polity is only its Reference in a Polities
  * index; a second developed owner needs `[INDEX] <Nation>` (NATION_NEEDS_INDEX), which `promoteNation` makes in the
@@ -65,7 +65,10 @@ describe('a compact polity and promoteNation', () => {
     expect(index.indexText).toContain('Sultanate of Tarim - Historical Polity Reference');
     expect(index.indexText).toContain('Court of Pearls - Institution Reference');
     // The Polities index itself as home stands for the new nation index.
-    const viaPolities = await call({ ...institution({ promoteNation: true, home: 'Salahad Polities' }), dryRun: true });
+    const viaPolities = await call({
+      ...institution({ promoteNation: true, home: 'Salahad Polities' }),
+      dryRun: true,
+    });
     expect(viaPolities.isError, viaPolities.text).toBe(false);
     expect(viaPolities.body.tree[1].parent).toBe('[INDEX] Sultanate of Tarim');
   });
@@ -97,7 +100,10 @@ describe('a compact polity and promoteNation', () => {
       '[BSRC] Emirate of Qasr - Polity Reference',
     ]);
     // Now the nation has its index: promoting again is refused, and the index is a home.
-    const again = await call({ ...institution({ name: 'Court of Tides', promoteNation: true }), dryRun: true });
+    const again = await call({
+      ...institution({ name: 'Court of Tides', promoteNation: true }),
+      dryRun: true,
+    });
     expect(again.body.error.code).toBe('NATION_ALREADY_INDEXED');
     const home = await call({ ...institution({ name: 'Court of Tides' }), dryRun: true });
     expect(home.isError, home.text).toBe(false);
@@ -106,13 +112,19 @@ describe('a compact polity and promoteNation', () => {
 
   it('a Working owner with promoteNation: the restructure is canon (a canonical proposal), the owner drafted in Working', async () => {
     const r = await call({
-      ...institution({ nation: 'Emirate of Qasr', home: 'Emirate of Qasr', name: 'Qasr Guard', promoteNation: true, status: 'working' }),
+      ...institution({
+        nation: 'Emirate of Qasr',
+        home: 'Emirate of Qasr',
+        name: 'Qasr Guard',
+        promoteNation: true,
+        status: 'working',
+      }),
     });
     expect(r.body.status, r.text).toBe('proposal_captured');
     expect(r.body.requiresCanonicalApproval).toBe(true);
     const prop = w.stack.runtime.policy.proposals.get(String(r.body.proposalId))!;
     expect(prop.pages.join('\n')).toMatch(/\[BWRK\] Qasr Guard - Institution Reference/);
-    await w.stack.runtime.policy.commands.reject('owner', prop.id, 'test');
+    w.stack.runtime.policy.commands.reject('owner', prop.id, 'test');
   });
 });
 
@@ -166,7 +178,11 @@ describe('national subindexes: only when named', () => {
     };
     const wrong = await call({ ...base, home: 'Menkhet Cultures', createSubindex: 'Menkhet Cultures' });
     expect(wrong.body.error.code).toBe('SUBINDEX_NOT_ALLOWED');
-    const exists = await call({ ...base, home: 'Menkhet Institutions', createSubindex: 'Menkhet Institutions' });
+    const exists = await call({
+      ...base,
+      home: 'Menkhet Institutions',
+      createSubindex: 'Menkhet Institutions',
+    });
     expect(exists.body.error.code).toBe('SUBINDEX_EXISTS');
     // Without createSubindex a missing subindex is not a home: the nation index or an existing subindex is.
     const missing = await call({ ...base, home: 'Menkhet Cultures' });
@@ -203,7 +219,12 @@ describe('national subindexes: only when named', () => {
 describe('the job checks again before it writes (design section 5)', () => {
   it('a nation index made between planning and the job: promoteNation stops cleanly, nothing written', async () => {
     const pkg = {
-      ...institution({ nation: 'Emirate of Qasr', home: 'Emirate of Qasr', name: 'Qasr Court', promoteNation: true }),
+      ...institution({
+        nation: 'Emirate of Qasr',
+        home: 'Emirate of Qasr',
+        name: 'Qasr Court',
+        promoteNation: true,
+      }),
     };
     const p = await call(pkg);
     expect(p.body.status, p.text).toBe('proposal_captured');
@@ -221,7 +242,12 @@ describe('the job checks again before it writes (design section 5)', () => {
 
   it('the Reference moved elsewhere meanwhile: stops cleanly', async () => {
     const p = await call({
-      ...institution({ nation: 'Emirate of Qasr', home: 'Emirate of Qasr', name: 'Qasr Archive', promoteNation: true }),
+      ...institution({
+        nation: 'Emirate of Qasr',
+        home: 'Emirate of Qasr',
+        name: 'Qasr Archive',
+        promoteNation: true,
+      }),
     });
     expect(p.body.status, p.text).toBe('proposal_captured');
     // Moved before the approval: the proposal's own re-read finds the change (conflicted), nothing runs.
@@ -232,7 +258,12 @@ describe('the job checks again before it writes (design section 5)', () => {
     w.repo.outside.move(O.qasr, O.salahadPolities);
     // Moved after the approval, before the job's first write: the job's own check stops it.
     const q = await call({
-      ...institution({ nation: 'Emirate of Qasr', home: 'Emirate of Qasr', name: 'Qasr Records', promoteNation: true }),
+      ...institution({
+        nation: 'Emirate of Qasr',
+        home: 'Emirate of Qasr',
+        name: 'Qasr Records',
+        promoteNation: true,
+      }),
     });
     // The move happens when the job reads the governance (its first check), just before its in-lock re-checks.
     let moved = false;

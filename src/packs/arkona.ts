@@ -314,7 +314,8 @@ const rules: PackRules = packRulesSchema.parse({
     index: {
       template: 'index',
       purpose: 'Routes to the sources of {Name}. This index holds no material of its own.',
-      navigationPurpose: 'Routes to the characters of {Name}. This index holds no character material of its own.',
+      navigationPurpose:
+        'Routes to the characters of {Name}. This index holds no character material of its own.',
       routing: 'How to Use This Index',
       collection: 'Subpages',
       boundaries: 'Index Boundaries',

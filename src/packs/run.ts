@@ -55,7 +55,9 @@ export async function packBasis(
   mctx: McpToolContext,
   packId: string,
   tool: string,
-): Promise<{ readonly ok: true; readonly value: PackBasis } | { readonly ok: false; readonly result: McpToolResult }> {
+): Promise<
+  { readonly ok: true; readonly value: PackBasis } | { readonly ok: false; readonly result: McpToolResult }
+> {
   const packs = pd.services?.packs;
   if (!packs)
     return {
@@ -102,7 +104,12 @@ export async function packBasis(
 }
 
 /** The planning environment of a pack tool, without its type (an owner's is made by its planner). */
-export function envOf(pd: ProjectDeps, mctx: McpToolContext, tool: string, b: PackBasis): Omit<PlanEnv, 'type' | 'hook'> {
+export function envOf(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  tool: string,
+  b: PackBasis,
+): Omit<PlanEnv, 'type' | 'hook'> {
   return {
     pd,
     mctx,

@@ -61,7 +61,8 @@ export async function stageForPack(
         return {
           ok: false,
           code: 'UPLOAD_NOT_RECEIVED',
-          message: 'The file has not been received yet: run the script prepare_image_upload gave, then call again.',
+          message:
+            'The file has not been received yet: run the script prepare_image_upload gave, then call again.',
         };
       if (slot.state === 'consumed')
         return {
@@ -130,7 +131,8 @@ export async function stageForPack(
     if (slot) await svc.slots.consume(slot);
     return { ok: true, stagedId: row.id, deduplicated: false, source: seen };
   } catch (e) {
-    if (e instanceof ImageServiceError) return { ok: false, code: e.code, message: e.message, details: e.details };
+    if (e instanceof ImageServiceError)
+      return { ok: false, code: e.code, message: e.message, details: e.details };
     throw e;
   }
 }

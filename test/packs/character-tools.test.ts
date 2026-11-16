@@ -27,7 +27,9 @@ afterAll(async () => {
 const pageNamed = (name: string) =>
   [...w.repo.res.values()].find((r) => r.deletedAt === null && r.name === name);
 const related = (id: string) =>
-  (w.sidebars.pages.get(id)?.props.find((p) => p.title === 'Related Sources')?.items ?? []).map((i) => i.resourceId);
+  (w.sidebars.pages.get(id)?.props.find((p) => p.title === 'Related Sources')?.items ?? []).map(
+    (i) => i.resourceId,
+  );
 const stage = async (file: string) => {
   const r = await w.call('upload_image', {
     data_base64: fixture(file).toString('base64'),
@@ -86,18 +88,32 @@ describe('arkona_create_relationship (design section 2)', () => {
   });
 
   it('refuses a pair that already has a relationship owner (either order), naming it', async () => {
-    const r = await w.call('arkona_create_relationship', { ...rel({ a: 'Mehrana II al-Khalid', b: 'Nadira al-Khalid' }), dryRun: true });
+    const r = await w.call('arkona_create_relationship', {
+      ...rel({ a: 'Mehrana II al-Khalid', b: 'Nadira al-Khalid' }),
+      dryRun: true,
+    });
     expect(r.body.error.code).toBe('RELATIONSHIP_EXISTS');
-    expect(r.body.error.existing[0].name).toBe('[BSRC] Nadira al-Khalid & Mehrana II al-Khalid - Relationship');
-    const labelled = await w.call('arkona_create_relationship', { ...rel({ label: 'Rivalry' }), dryRun: true });
+    expect(r.body.error.existing[0].name).toBe(
+      '[BSRC] Nadira al-Khalid & Mehrana II al-Khalid - Relationship',
+    );
+    const labelled = await w.call('arkona_create_relationship', {
+      ...rel({ label: 'Rivalry' }),
+      dryRun: true,
+    });
     expect(labelled.body.error.code).toBe('RELATIONSHIP_EXISTS');
   });
 
   it('refuses a character that does not exist, pointing to arkona_create_character', async () => {
-    const r = await w.call('arkona_create_relationship', { ...rel({ b: 'Nobody of Nowhere' }), dryRun: true });
+    const r = await w.call('arkona_create_relationship', {
+      ...rel({ b: 'Nobody of Nowhere' }),
+      dryRun: true,
+    });
     expect(r.body.error.code).toBe('CHARACTER_NOT_FOUND');
     expect(r.body.error.hint).toMatch(/arkona_create_character/);
-    const self = await w.call('arkona_create_relationship', { ...rel({ b: 'Nadira al-Khalid' }), dryRun: true });
+    const self = await w.call('arkona_create_relationship', {
+      ...rel({ b: 'Nadira al-Khalid' }),
+      dryRun: true,
+    });
     expect(self.body.error.code).toBe('RELATIONSHIP_WITH_SELF');
   });
 
@@ -131,7 +147,11 @@ describe('arkona_create_relationship (design section 2)', () => {
   });
 
   it('two packages for one pair: the second job stops cleanly with RELATIONSHIP_EXISTS', async () => {
-    const pkg = rel({ a: 'Mehrana I al-Khalid', b: 'Mehrana II al-Khalid', markdown: ownerText('Two Mehranas.') });
+    const pkg = rel({
+      a: 'Mehrana I al-Khalid',
+      b: 'Mehrana II al-Khalid',
+      markdown: ownerText('Two Mehranas.'),
+    });
     const one = await w.call('arkona_create_relationship', pkg);
     const two = await w.call('arkona_create_relationship', pkg);
     expect(one.body.status, one.text).toBe('proposal_captured');
@@ -146,7 +166,9 @@ describe('arkona_create_relationship (design section 2)', () => {
     } else expect(second.state).toBe('conflicted');
     expect(
       [...w.repo.res.values()].filter(
-        (r) => r.deletedAt === null && r.name === '[BSRC] Mehrana I al-Khalid & Mehrana II al-Khalid - Relationship',
+        (r) =>
+          r.deletedAt === null &&
+          r.name === '[BSRC] Mehrana I al-Khalid & Mehrana II al-Khalid - Relationship',
       ),
     ).toHaveLength(1);
   });
@@ -194,9 +216,9 @@ describe('arkona_add_character_art (design section 3)', () => {
     const row = w.stack.runtime.images.staged(PROJECT, id)!;
     expect(row.staged).toBe(false);
     expect(row.name).toBe('Mehrana I al-Khalid - Primary Reference - Character Portrait');
-    expect((done.job?.result as { foldersUsed?: { outcome: string }[] }).foldersUsed?.map((f) => f.outcome)).toEqual([
-      'created folder',
-    ]);
+    expect(
+      (done.job?.result as { foldersUsed?: { outcome: string }[] }).foldersUsed?.map((f) => f.outcome),
+    ).toEqual(['created folder']);
   });
 
   it('extends an existing Art page under “Reference Images”, the folder found (and a subfolder made) when the job runs', async () => {
@@ -206,7 +228,10 @@ describe('arkona_add_character_art (design section 3)', () => {
     const p = await w.call('arkona_add_character_art', {
       character: 'Mehrana I al-Khalid',
       images: [
-        image(a, { label: 'Detail Reference - Signet Ring', interpretation: 'Her signet ring, worn on the left hand.' }),
+        image(a, {
+          label: 'Detail Reference - Signet Ring',
+          interpretation: 'Her signet ring, worn on the left hand.',
+        }),
         image(b, {
           label: 'Outfit Reference - Court Dress',
           interpretation: 'Her court dress.',
@@ -229,7 +254,8 @@ describe('arkona_add_character_art (design section 3)', () => {
       'Detail Reference - Signet Ring',
       'Outfit Reference - Court Dress',
     ]);
-    const used = (done.job?.result as { foldersUsed?: { name: string; outcome: string }[] }).foldersUsed ?? [];
+    const used =
+      (done.job?.result as { foldersUsed?: { name: string; outcome: string }[] }).foldersUsed ?? [];
     // The character's folder was there when planned (used by its id); the outfit's subfolders were made in the job.
     expect(used.map((f) => [f.name, f.outcome])).toEqual([
       ['Outfits', 'created folder'],
@@ -255,18 +281,18 @@ describe('arkona_add_character_art (design section 3)', () => {
     expect(d1.job?.status, JSON.stringify(d1.job?.lastError)).toBe('succeeded');
     expect(d2.job?.status, JSON.stringify(d2.job?.lastError)).toBe('succeeded');
     const outcome = (d: typeof d1) =>
-      ((d.job?.result as { foldersUsed?: { name: string; outcome: string }[] }).foldersUsed ?? []).map((f) => [
-        f.name,
-        f.outcome,
-      ]);
+      ((d.job?.result as { foldersUsed?: { name: string; outcome: string }[] }).foldersUsed ?? []).map(
+        (f) => [f.name, f.outcome],
+      );
     expect(outcome(d1)).toEqual([['Gown', 'created folder']]);
     expect(outcome(d2)).toEqual([['Gown', 'found existing folder']]);
     expect(w.assets.byName('Gown')).toHaveLength(1);
     const art = pageNamed('[BSRC] Mehrana I al-Khalid - Character Art')!;
-    expect(imagesOn(art.id).map((x) => x.alt).slice(-2)).toEqual([
-      'Outfit Reference - Gown Front',
-      'Outfit Reference - Gown Back',
-    ]);
+    expect(
+      imagesOn(art.id)
+        .map((x) => x.alt)
+        .slice(-2),
+    ).toEqual(['Outfit Reference - Gown Front', 'Outfit Reference - Gown Back']);
   });
 
   it('refuses an image without its interpretation, and a label with a file extension', async () => {
@@ -321,7 +347,9 @@ describe('arkona_add_character_art (design section 3)', () => {
       project: 'test',
     });
     expect(dry.isError, dry.text).toBe(false);
-    expect(dry.body.stagedNow).toEqual([expect.objectContaining({ from: 'file file-nadira2', deduplicated: false })]);
+    expect(dry.body.stagedNow).toEqual([
+      expect.objectContaining({ from: 'file file-nadira2', deduplicated: false }),
+    ]);
     const again = await w.call('arkona_add_character_art', {
       character: 'Nadira al-Khalid',
       images: [{ label: 'Primary Reference - Character Portrait', interpretation: 'Her face.' }],
@@ -330,7 +358,7 @@ describe('arkona_add_character_art (design section 3)', () => {
     });
     expect(again.body.status, again.text).toBe('proposal_captured');
     expect(again.body.stagedNow ?? []).toEqual([]);
-    await w.stack.runtime.policy.commands.reject('owner', String(again.body.proposalId), 'test');
+    w.stack.runtime.policy.commands.reject('owner', String(again.body.proposalId), 'test');
   });
 
   it('an upload_id is staged first too; each image has exactly one source', async () => {
@@ -349,13 +377,22 @@ describe('arkona_add_character_art (design section 3)', () => {
     const id = String(prep.body.upload_id);
     const sent = await fetch(new URL(`/uploads/${id}`, w.stack.base), {
       method: 'POST',
-      headers: { 'content-type': 'application/octet-stream', authorization: `Upload ${String(prep.body.capability)}` },
+      headers: {
+        'content-type': 'application/octet-stream',
+        authorization: `Upload ${String(prep.body.capability)}`,
+      },
       body: other,
     });
     expect(sent.status).toBe(201);
     const r = await w.call('arkona_add_character_art', {
       character: 'Nadira al-Khalid',
-      images: [{ upload_id: id, label: 'Detail Reference - Archive Key', interpretation: 'The archive key she carries.' }],
+      images: [
+        {
+          upload_id: id,
+          label: 'Detail Reference - Archive Key',
+          interpretation: 'The archive key she carries.',
+        },
+      ],
       dryRun: true,
       project: 'test',
     });
@@ -426,7 +463,9 @@ describe('arkona_character_brief (design section 4)', () => {
       'Temporal Scope': '5A 900 - 5A 931',
     });
     expect(r.body.identityFrom.source).toBe('tree');
-    expect(r.body.pages.map((p: { name: string; referenceType: string }) => [p.name, p.referenceType])).toEqual([
+    expect(
+      r.body.pages.map((p: { name: string; referenceType: string }) => [p.name, p.referenceType]),
+    ).toEqual([
       ['[BSRC] Hoshino Kaya - Biography', 'Character Biography'],
       ['[BSRC] Hoshino Kaya - Character Core', 'Character Core'],
     ]);
@@ -437,7 +476,11 @@ describe('arkona_character_brief (design section 4)', () => {
     expect(r.body.freshness.snapshots).not.toBeNull();
     // live: true is one read of the Core's sidebar.
     const b2 = w.seen.length;
-    const live = await w.call('arkona_character_brief', { character: 'Hoshino Kaya', live: true, project: 'test' });
+    const live = await w.call('arkona_character_brief', {
+      character: 'Hoshino Kaya',
+      live: true,
+      project: 'test',
+    });
     expect(live.isError, live.text).toBe(false);
     expect(w.seen.slice(b2)).toEqual([`GET /resources/${String(r.body.character.identityPage.id)}`]);
     expect(live.body.identityFrom.source).toBe('live');
@@ -473,9 +516,15 @@ describe('arkona_character_brief (design section 4)', () => {
         fix: null,
       } as never,
     ]);
-    const after = await w.call('arkona_character_brief', { character: 'Mehrana I al-Khalid', project: 'test' });
+    const after = await w.call('arkona_character_brief', {
+      character: 'Mehrana I al-Khalid',
+      project: 'test',
+    });
     expect(after.body.findings).toEqual([
-      expect.objectContaining({ page: '[BSRC] Mehrana I al-Khalid - Character Core', message: 'A test finding.' }),
+      expect.objectContaining({
+        page: '[BSRC] Mehrana I al-Khalid - Character Core',
+        message: 'A test finding.',
+      }),
     ]);
   });
 

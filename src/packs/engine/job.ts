@@ -451,7 +451,12 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         body: {
           action: 'complete',
           store: PACK_RECORD_STORE,
-          record: { kind: 'taxonomy_entry', resourceId: t.resourceId, plural: t.plural, parentNodeId: t.parentNodeId },
+          record: {
+            kind: 'taxonomy_entry',
+            resourceId: t.resourceId,
+            plural: t.plural,
+            parentNodeId: t.parentNodeId,
+          },
         },
       },
     });
@@ -700,7 +705,9 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     ? {
         tool,
         canonical: true,
-        reason: created0?.canonical ? `${created0.reason ?? ''}; ${plan.canonical.reason}` : plan.canonical.reason,
+        reason: created0?.canonical
+          ? `${created0.reason ?? ''}; ${plan.canonical.reason}`
+          : plan.canonical.reason,
         pages: created0?.pages ?? [],
       }
     : created0;

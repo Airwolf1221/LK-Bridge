@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * v3 F3b (ADR 0052; design section 6, the F3a fix found in evaluation scenario 32): at scope `propose`, `upload_image`
  * with a destination stages the image AND proposes its placement; a package that then names that staged image takes the
@@ -25,7 +25,8 @@ afterAll(async () => {
 
 const asProposer = (name: string, args: Record<string, unknown>) =>
   w.stack.call(proposer, name, { project: 'test', ...args });
-const bytes = (salt: number) => Buffer.concat([fixture('alpha.png'), Buffer.from([salt, salt])]).toString('base64');
+const bytes = (salt: number) =>
+  Buffer.concat([fixture('alpha.png'), Buffer.from([salt, salt])]).toString('base64');
 const proposals = () => w.stack.runtime.policy.proposals;
 const art = (stagedId: string, label = 'Primary Reference - Character Portrait') => ({
   character: 'Nadira al-Khalid',
@@ -52,11 +53,22 @@ describe('a staged image’s own pending placement is taken over', () => {
     expect(p.body.status, p.text).toBe('proposal_captured');
     const pkg = String(p.body.proposalId);
     expect(p.body.takenOver).toEqual([
-      expect.objectContaining({ staged_id: staged, proposalId: own, withdrawn: true, note: `superseded by package ${pkg}` }),
+      expect.objectContaining({
+        staged_id: staged,
+        proposalId: own,
+        withdrawn: true,
+        note: `superseded by package ${pkg}`,
+      }),
     ]);
     const old = proposals().get(own)!;
-    expect(old).toMatchObject({ state: 'rejected', rejectReason: `superseded by package ${pkg}`, decidedBy: 'system' });
-    expect(w.stack.runtime.policy.store.listAudit({ action: 'proposal.superseded' }).map((a) => a.target)).toContain(own);
+    expect(old).toMatchObject({
+      state: 'rejected',
+      rejectReason: `superseded by package ${pkg}`,
+      decidedBy: 'system',
+    });
+    expect(
+      w.stack.runtime.policy.store.listAudit({ action: 'proposal.superseded' }).map((a) => a.target),
+    ).toContain(own);
     expect(w.stack.runtime.images.staged(PROJECT, staged)!.placementProposalId).toBe(pkg);
     // Approved, the package places the image once.
     const done = await approve(w, pkg);
@@ -89,23 +101,37 @@ describe('a staged image’s own pending placement is taken over', () => {
         {
           role: 'core',
           scope: 'A shrine archer',
-          markdown: '## Purpose\n\nRin.\n\n## Source Boundaries\n\nOnly.\n\n## Unresolved Material\n\nNone.\n',
+          markdown:
+            '## Purpose\n\nRin.\n\n## Source Boundaries\n\nOnly.\n\n## Unresolved Material\n\nNone.\n',
         },
         {
           role: 'art',
           scope: 'Her references',
           markdown: '## Purpose\n\nHer references.\n',
-          images: [{ staged_id: staged, label: 'Primary Reference - Character Portrait', interpretation: 'Her face.' }],
+          images: [
+            {
+              staged_id: staged,
+              label: 'Primary Reference - Character Portrait',
+              interpretation: 'Her face.',
+            },
+          ],
         },
       ],
     });
     expect(p.body.status, p.text).toBe('proposal_captured');
-    expect(proposals().get(String(up.body.proposalId))!.rejectReason).toBe(`superseded by package ${String(p.body.proposalId)}`);
-    await w.stack.runtime.policy.commands.reject('owner', String(p.body.proposalId), 'test');
+    expect(proposals().get(String(up.body.proposalId))!.rejectReason).toBe(
+      `superseded by package ${String(p.body.proposalId)}`,
+    );
+    w.stack.runtime.policy.commands.reject('owner', String(p.body.proposalId), 'test');
   });
 
   it('refuses any other pending activity: an image in another package’s proposal is STAGED_IMAGE_BUSY', async () => {
-    const up = await w.call('upload_image', { data_base64: bytes(3), name: 'busy', stage: true, project: 'test' });
+    const up = await w.call('upload_image', {
+      data_base64: bytes(3),
+      name: 'busy',
+      stage: true,
+      project: 'test',
+    });
     const staged = String(up.body.staged_id);
     const first = await w.call('arkona_add_character_art', { ...art(staged), project: 'test' });
     expect(first.body.status, first.text).toBe('proposal_captured');
@@ -118,13 +144,21 @@ describe('a staged image’s own pending placement is taken over', () => {
     expect(second.body.error.hint).toMatch(/stage: true \} and no destination/);
     // The first package's proposal is untouched.
     expect(proposals().get(String(first.body.proposalId))!.state).toBe('pending');
-    await w.stack.runtime.policy.commands.reject('owner', String(first.body.proposalId), 'test');
+    w.stack.runtime.policy.commands.reject('owner', String(first.body.proposalId), 'test');
   });
 
   it('the job checks again before it writes: an image no longer its to place stops it, nothing written', async () => {
-    const up = await w.call('upload_image', { data_base64: bytes(4), name: 'late', stage: true, project: 'test' });
+    const up = await w.call('upload_image', {
+      data_base64: bytes(4),
+      name: 'late',
+      stage: true,
+      project: 'test',
+    });
     const staged = String(up.body.staged_id);
-    const p = await w.call('arkona_add_character_art', { ...art(staged, 'Detail Reference - Ink Stains'), project: 'test' });
+    const p = await w.call('arkona_add_character_art', {
+      ...art(staged, 'Detail Reference - Ink Stains'),
+      project: 'test',
+    });
     expect(p.body.status, p.text).toBe('proposal_captured');
     // Something else claims the image meanwhile (as a direct placement would).
     w.stack.runtime.images.store.updateUpload(PROJECT, staged, { placementProposalId: 'prop_someoneelse' });
@@ -160,7 +194,10 @@ describe('the owner tool’s run-time re-check (design section 5)', () => {
     const pkg = compactPolity({ name: 'Kingdom of Marib', status: 'authoritative' });
     const one = await w.call('arkona_create_owner', pkg);
     const two = await w.call('arkona_create_owner', pkg);
-    const [a, b] = await Promise.all([approve(w, String(one.body.proposalId)), approve(w, String(two.body.proposalId))]);
+    const [a, b] = await Promise.all([
+      approve(w, String(one.body.proposalId)),
+      approve(w, String(two.body.proposalId)),
+    ]);
     const statuses = [a.job?.status, b.job?.status].sort();
     expect(statuses).toEqual(['failed', 'succeeded']);
     const failed = [a, b].find((x) => x.job?.status === 'failed')!;

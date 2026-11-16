@@ -69,7 +69,13 @@ it('reads and writes per typical package', async () => {
   });
   await measure('art: a new Art page with 1 image', 'arkona_add_character_art', {
     character: 'Nadira al-Khalid',
-    images: [{ staged_id: staged.body.staged_id, label: 'Primary Reference - Portrait', interpretation: 'Her face.' }],
+    images: [
+      {
+        staged_id: String(staged.body.staged_id),
+        label: 'Primary Reference - Portrait',
+        interpretation: 'Her face.',
+      },
+    ],
     project: 'test',
   });
   const staged2 = await w.call('upload_image', {
@@ -80,11 +86,21 @@ it('reads and writes per typical package', async () => {
   });
   await measure('art: 1 image on an existing Art page', 'arkona_add_character_art', {
     character: 'Nadira al-Khalid',
-    images: [{ staged_id: staged2.body.staged_id, label: 'Detail Reference - Ring', interpretation: 'Her ring.' }],
+    images: [
+      {
+        staged_id: String(staged2.body.staged_id),
+        label: 'Detail Reference - Ring',
+        interpretation: 'Her ring.',
+      },
+    ],
     project: 'test',
   });
   await measure('brief', 'arkona_character_brief', { character: 'Nadira al-Khalid', project: 'test' });
-  await measure('brief, live', 'arkona_character_brief', { character: 'Nadira al-Khalid', live: true, project: 'test' });
+  await measure('brief, live', 'arkona_character_brief', {
+    character: 'Nadira al-Khalid',
+    live: true,
+    project: 'test',
+  });
   // LegendKeeper changes one sidebar row per request, so a page's facts are most of its writes (an owner page has nine
   // rows to fill and Last Major Revision). The job re-reads the governance (the drift check in the lock), lists the
   // places for the in-job re-checks, then per page: the copy, its rows, its tags, its text and Last Major Revision, and

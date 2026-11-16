@@ -49,7 +49,11 @@ about 29,850 tokens** (characters ÷ 4; 61 tools and about 31,100 before the own
 171,000 and stay off. **Since v3 F3a** a bridge that serves a project with a setting pack attached also lists the pack's tool,
 `arkona_create_character` ([below](#setting-packs-arkona_create_character-v3-f3a)): **57 tools, about 32,660 tokens** in a
 `propose` or `write` profile (the pack tool is about 2,330 of them; 62 with the low-level tools on), and the same 25 in a
-`read` profile. The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
+`read` profile. **Since v3 F3b** the Arkona pack lists five tools ([below](#setting-packs-owners-relationships-art-and-the-brief-v3-f3b)):
+**61 tools, about 36,620 tokens** in a `propose` or `write` profile (the five pack tools about 6,110 of them:
+`arkona_create_character` 2,410, `arkona_create_owner` 1,630, `arkona_add_character_art` 990, `arkona_create_relationship`
+750, `arkona_character_brief` 330; 66 with the low-level tools on), and **26, about 9,090**, in a `read` profile (the
+read-only `arkona_character_brief`; 29 with the low-level tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -188,7 +192,7 @@ proposal ([below](#last-major-revision-on-every-substantial-edit-v3-f2)).
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (152 tools in all with v3 F3a's `arkona_create_character`, 154 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (156 tools in all with the Arkona pack's five tools, v3 F3a's `arkona_create_character` and v3 F3b's four, 158 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -482,10 +486,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). A `read` profile does not see the write tools |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; 62 with a setting pack attached), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). **Since v3 F3b: 61 for `propose` or `write`, 26 for `read`** with the Arkona pack attached (its five tools; `arkona_character_brief` is a read tool). A `read` profile does not see the write tools |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; with the Arkona pack attached 66 and 29 since v3 F3b, 62 with F3a's one tool), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -1127,7 +1131,8 @@ rules, and the governance pages they were taken from. The owner approves a pack 
 page ([dashboard.md](dashboard.md#packs-v3-f3a)); the approval records each governance page's document version, and a
 changed page (or rules edited since) stops the pack's tools until the owner approves again. Design:
 [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md), [packs.md](packs.md) and the owner-approved
-[character pack design](design/F3-character-pack.md). The agent guide's section is "Setting packs (Arkona characters)".
+[character pack design](design/F3-character-pack.md). The agent guide's section is "Setting packs (Arkona)", its part
+"Arkona characters" (v3 F3b gave the section a part per tool).
 
 A pack's tools carry its prefix (`arkona_`) and are listed only while the pack is attached to a project the bridge
 serves (the list changes at the next `tools/list` when that changes); called for any other project they answer
@@ -1231,9 +1236,10 @@ Links: `LINK_TARGET_NOT_FOUND`, `LINK_TARGET_AMBIGUOUS`, `LINK_TARGET_NOT_CURREN
 
 **A type defined as data.** The engine is driven by the pack's rules, not by the Character type: a type whose rules
 name no hook gets the generic behaviour, and a tool name that a pack's types share, other than the explicit
-`arkona_create_character`, is served by a generic pack tool, `{prefix}{tool}` with a `type` argument (for example a
-later `arkona_create_owner`), listed while its types exist and the pack is attached. F3a ships no such type; a test
-defines one in data only and runs it through the same plan, preview, proposal and verify.
+`arkona_create_character` and v3 F3b's `arkona_create_owner`, is served by a generic pack tool, `{prefix}{tool}` with a
+`type` argument, listed while its types exist and the pack is attached. Arkona has no such type (its owner types are the
+pack's owner table, behind the explicit owner tool); a test defines one in data only (`arkona_create_ward`) and runs it
+through the same plan, preview, proposal and verify.
 
 ### Costs (reads and writes, measured against the mock)
 
@@ -1249,6 +1255,134 @@ Measured against the mock LegendKeeper (test/packs/costs.test.ts), every request
 Three of the planning reads are the pack's governance pages (read again in the job's first check). LegendKeeper changes
 one sidebar row per request, so a page's rows are most of its writes (a Compact Reference has 17). Capturing the
 proposal writes nothing; the job runs when the owner approves.
+
+## Setting packs: owners, relationships, art and the brief (v3 F3b)
+
+v3 F3b adds four tools to the Arkona pack, on the same engine as `arkona_create_character`: the pack's rules decide the
+pages, the planner computes the whole package from them and the tree, a dry run shows it, and anything else is **one
+proposal** for the owner whatever the connection's scope (canonical when it makes or moves canon). On approval it runs
+as one job that re-reads the pack's governance (drift stops it before it writes), checks again that nothing it relies on
+appeared or moved meanwhile, writes, sets Last Major Revision on each page it made or changed, and verifies. Design:
+[ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md), [packs.md](packs.md) and the owner-approved
+[F3b design](design/F3b-owner-tools.md). The agent guide's parts are "Arkona owners" and "Arkona relationships, art and
+the brief" (under "Setting packs (Arkona)").
+
+**The AU ruling (all five tools).** A canon page of an alternate universe (Continuity Type AU) carries the status tag `AU`
+in place of `CANON`; a Working or Archived page leads with its lifecycle tag, so neither appears. The owner's ruling of
+16 November 2026, recorded in the pack with its date. `arkona_create_character` changed with it.
+
+**`arkona_create_owner`** `{ type, kind?, name, descriptor?, status?, continuity?, home, homeOverride?, nation?, promoteNation?, createSubindex?, createCharacterNavigation?, referenceType, scope, temporalScope, supersedes?, specialistTag?, markdown?, dependencies?, related?, dryRun?, preview?, operation_id?, project }`:
+ONE non-character owner page, typed by the pack's owner table (19 types: Polity, Institution, Military, Culture, Event,
+Place, Technology, Magic, Material, Equipment, Species, Creature, Religion, Law, Programme, Education, Ceremony,
+Condition and the inter-polity Relationship; each its template, primary tag, closed specialist tags and allowed homes,
+listed in [packs.md](packs.md#the-owner-table-v3-f3b)).
+
+- **Name and place.** `{name} - {descriptor}` (the descriptor defaults to the Reference Type), `[BSRC]` in its home for
+  `status: "authoritative"`, or `[BWRK]` under `[INDEX] Working` (the default; `home` is still checked, as the place it
+  is promoted to). A sibling of the same name is refused, now and in the place a Working page will be promoted to.
+- **Homes.** `home` (a name, id or path) must be one of the type's homes, recognised by the index's name and place:
+  `<Continent> <Category>`, `<Nation> <Category>`, a nation index (an index directly in a `<Continent> Polities`
+  index), `Arkonan <Category>`, `Divine Realm Cultures`, a Divine Realm index, the Bestiary, or the race roster's pages.
+  A home that does not fit is `HOME_NOT_ALLOWED`, with the allowed homes and up to five suitable indexes nearby (by
+  distance in the tree); `homeOverride: { reason }` places it anyway with a warning and the reason in the proposal's
+  summary. The Working and Archived areas are never a home. No category index is ever made.
+- **Nations.** `nation` names the nation. A nation that is only a compact Reference (`[BSRC] <Nation> - …` directly in a
+  Polities index) is `NATION_NEEDS_INDEX`; `promoteNation: true` makes `[INDEX] <Nation>` from AI Index there (its
+  routing text drafted), moves the Reference into it (id, links and tags kept) and places the owner beside it, in the
+  same proposal; the move of canon makes it canonical. `createSubindex: "<Nation> <Category>"` makes one national
+  subindex, its own step, for a category the type lives in.
+- **The race roster.** `type: "Species"` with `kind`: `racialGroup` (home Races of Arkona, `<Group> - Racial Group
+Reference`, tag Racial Group), `race` (home its group's Racial Group Reference or Races of Arkona, `<Race> - Core
+Information`, Reference Type Race Core Reference) or `subrace` (home its race's Core Information, `<Subrace> -
+Subrace Reference`). Any other species and every creature: the Bestiary. `createCharacterNavigation: true` makes the
+  new race's (or group's) `[INDEX]` under `Characters` and records its Character taxonomy entry, so
+  `arkona_create_character` can place its characters (a guessed singular waits for the owner's review on Repository
+  Mappings).
+- **Facts.** Reference Type, Scope and Temporal Scope are required (Unestablished only with the owner's reason); Subject
+  is the name; Status, Continuity Type, Continuity and Inheritance follow from `status` and `continuity`; Supersedes
+  "None" unless given; Last Major Revision set by the job; the rows in the template's order.
+- **Text and links.** As the character tool: `## Purpose` first, Source Boundaries and Unresolved Material warned about
+  when missing, no placeholder section (the template's own unfilled placeholder headings are left out). Dependencies
+  name current Authoritative owners only.
+- **Tags.** `CANON` (or `AU`), the primary, at most one specialist; a Working page `Working` and the primary (a
+  specialist given is held and reported until promotion).
+
+**Refusals**: `PACK_TYPE_NOT_FOUND` (with the types), `KIND_NOT_FOR_TYPE`, `INVALID_NAME` and F3a's name, dash and text
+refusals, `OWNER_FACTS_INCOMPLETE`, `UNESTABLISHED_NEEDS_REASON`, `REFERENCE_TYPE_FIXED`, `DESCRIPTOR_FIXED`,
+`DESCRIPTOR_REQUIRED`, `LIFECYCLE_NOT_CONFIGURED`, `NATION_REQUIRED`, `NATION_NOT_FOUND`, `NATION_AMBIGUOUS`,
+`NATION_NEEDS_INDEX`, `NATION_ALREADY_INDEXED`, `HOME_NOT_FOUND`, `HOME_AMBIGUOUS`, `HOME_NOT_ALLOWED`,
+`HOME_IN_LIFECYCLE_AREA`, `OVERRIDE_NEEDS_REASON`, `SUBINDEX_NEEDS_NATION`, `SUBINDEX_NOT_ALLOWED`, `SUBINDEX_EXISTS`,
+`NAVIGATION_PARENT_MISSING`, `NAVIGATION_NOT_FOR_KIND`, `OWNER_EXISTS`, `NATION_INDEX_EXISTS`, `DUPLICATE_PAGE`,
+`TAG_NOT_ALLOWED`, `DEPENDENCY_NOT_AUTHORITATIVE`, `LINK_TARGET_NOT_CURRENT`, `BODY_REQUIRED`, `FACT_UNSUPPORTED`,
+`PACK_TEMPLATE_UNSET`, `PACK_TEMPLATE_UNKNOWN`, `TEMPLATES_NOT_READ`, `TEMPLATE_UNREADABLE`, `PACK_NOT_CURRENT`.
+**Warnings**: `HOME_OVERRIDDEN`, `HOME_OUTSIDE_NATION`, `CHARACTER_NAVIGATION_MISSING`, `TAXONOMY_SINGULAR_GUESS`,
+`SECTION_MISSING`, `TEMPLATE_ROW_MISSING`. **In the job**, before its first write: `PACK_GOVERNANCE_CHANGED`,
+`OWNER_EXISTS`, `NATION_INDEX_EXISTS`, `SUBINDEX_EXISTS`, `NAVIGATION_EXISTS`, `NATION_REFERENCE_MOVED`.
+
+**`arkona_create_relationship`** `{ a, b, label?, host?, status?, scope?, markdown?, dependencies?, related?, dryRun?, preview?, operation_id?, project }`:
+ONE joint relationship page for two existing characters, on the character tool's builder: `{a} & {b} - {label}` (both
+names as their indexes give them; label "Relationship" by default) from AI Relationship, under `a`'s index (`host: "b"`
+for b's), Working or canon as its host is unless `status` says otherwise, tagged `CANON` (or `AU`), Character,
+Relationship, added to both characters' Related Sources and announced in the hosting index, all in one proposal.
+**Refusals**: `CHARACTER_NOT_FOUND` (pointing to `arkona_create_character`), `CHARACTER_AMBIGUOUS` (with the
+candidates), `RELATIONSHIP_WITH_SELF`, `RELATIONSHIP_EXISTS` (any label, either order, anywhere in the tree, naming the
+page), and the character tool's refusals for the host (`TARGET_ARCHIVED`, a Working relationship under a canon
+partner's index) and for the page. **Warning**: `PARTNER_LINK_DEFERRED` (a Working relationship is linked from a canon
+character only after promotion). **In the job**: `RELATIONSHIP_EXISTS`.
+
+**`arkona_add_character_art`** `{ character, images: [{ staged_id? | upload_id?, label, interpretation, subfolder? }], file?, scope?, markdown?, status?, dryRun?, preview?, operation_id?, project }`:
+reference images for an existing character. Each is placed in the character's asset folder (`Characters / <race path>
+/ <name>`, with `Forms / <form>`, `Outfits / <outfit>` or `Details` subfolders, found or created when the job runs) as
+`{name} - {label}` (no extension; numbered when taken), and on its Art page with its label and interpretation: the Art
+page (AI Character Art) is made when missing, or extended under "Reference Images" by a filler that appends to the page
+as it is inside the job's lock (nothing else on it changes; `unsupported` blocks stay). Sources: `staged_id`, `upload_id`
+(`prepare_image_upload`) or ChatGPT's attached `file` (`_meta["openai/fileParams"]: ["file"]`, for one image); an upload
+or file is staged on the bridge's server first, even on a dry run, and its `staged_id` returned. **Refusals**:
+`IMAGES_REQUIRED`, `IMAGE_SOURCE_INVALID`, `BARE_IMAGE`, `IMAGE_LABEL_INVALID`, `SUBFOLDER_INVALID`,
+`STAGED_IMAGE_NOT_FOUND`, `STAGED_IMAGE_BUSY`, `STAGED_IMAGE_TWICE`, `IMAGE_NAME_TWICE`, `IMAGE_ALREADY_IN_LIBRARY`,
+`UPLOAD_ID_UNKNOWN`, `UPLOAD_ID_USED`, `UPLOAD_NOT_RECEIVED`, `UPLOAD_EXPIRED`, `FILE_URL_EXPIRED`, `CHARACTER_NOT_FOUND`,
+`CHARACTER_AMBIGUOUS`, `TARGET_ARCHIVED`, `ART_PAGE_UNREADABLE`. **In the job**: `STAGED_IMAGE_BUSY` (an image no longer
+the package's to place).
+
+**`arkona_character_brief`** `{ character, live?, project }` (read): who a character is, from the bridge's own tree,
+snapshots and audits, with no LegendKeeper read: the six identity fields (from the identity page's sidebar as the tree
+last read it), every page of the set with its Reference Type and Scope, the relationships, the Art pages with their image
+counts (from each page's newest snapshot), the Unresolved Material headings, the open audit findings, and how fresh each
+part is. `live: true` re-reads the identity page's sidebar (one read). It does not read the pack's governance, so it
+answers while the pack waits for approval.
+
+**The staged-image takeover (all the pack's image tools).** At scope `propose`, `upload_image` with a destination stages
+the image AND proposes its placement. A package that names that staged image now takes the placement over instead of
+answering `STAGED_IMAGE_BUSY`: once the package's proposal is captured, the image's own pending placement proposal is
+withdrawn (rejected by `system`, reason "superseded by package prop_…", audited `proposal.superseded`) and the answer
+lists it under `takenOver`. Any other activity on the image is still `STAGED_IMAGE_BUSY`, with the hint to stage art with
+`upload_image { stage: true }` and no destination, which proposes nothing.
+
+**Governance sections.** The approval now also records a digest of each pinned section the rules come from (Source
+Formatting's Page Names and Templates, Nation-Centred Territorial Navigation, Approved Hierarchy and Active Template
+Suite; the Tagging Standard's Exact Tag Grammar and Closed Primary Categories) and is refused when one cannot be found
+(`GOVERNANCE_SECTION_MISSING`). Drift still fails closed on the document's version; `PACK_NOT_CURRENT` and the job's
+`PACK_GOVERNANCE_CHANGED` now name the pinned section that changed.
+
+### Costs (reads and writes, measured against the mock)
+
+Measured against the mock LegendKeeper (test/packs/owner-costs.test.ts), every request included:
+
+| Package                                      | Plan reads | Job reads | Job writes |
+| -------------------------------------------- | ---------- | --------- | ---------- |
+| Compact owner, a dry run                     | 4          | 0         | 0          |
+| Compact owner, Working                       | 4          | 20        | 13         |
+| Compact owner, Authoritative                 | 4          | 18        | 13         |
+| promoteNation: index, Reference moved, owner | 7          | 31        | 16         |
+| Relationship of two canon characters         | 14         | 40        | 15         |
+| Art: a new Art page with one image           | 7          | 27        | 16         |
+| Art: one image on an existing Art page       | 4          | 11        | 3          |
+| Brief                                        | 0          | -         | -          |
+| Brief, `live: true`                          | 1          | -         | -          |
+
+Three of the planning reads are the pack's governance pages (read again in the job's first check). An owner page's ten
+sidebar rows are most of its writes (LegendKeeper changes one row per request). A relationship reads both characters'
+sidebars and pages to plan, and the job writes both participants' Related Sources and the hosting index's routing line.
 
 ## The calendar and the timelines (v2 D1)
 

@@ -37,13 +37,26 @@ async function everyTool(): Promise<{ tool: string; code: string | undefined; me
     ['arkona_create_character', compactPackage({ name: 'Gov Check', dryRun: true })],
     [
       'arkona_create_relationship',
-      { a: 'Nadira al-Khalid', b: 'Mehrana I al-Khalid', scope: 'x', markdown: ownerText('x'), dryRun: true, project: 'test' },
+      {
+        a: 'Nadira al-Khalid',
+        b: 'Mehrana I al-Khalid',
+        scope: 'x',
+        markdown: ownerText('x'),
+        dryRun: true,
+        project: 'test',
+      },
     ],
     [
       'arkona_add_character_art',
       {
         character: 'Nadira al-Khalid',
-        images: [{ staged_id: staged.body.staged_id, label: 'Primary Reference - Portrait', interpretation: 'x' }],
+        images: [
+          {
+            staged_id: String(staged.body.staged_id),
+            label: 'Primary Reference - Portrait',
+            interpretation: 'x',
+          },
+        ],
         dryRun: true,
         project: 'test',
       },
@@ -70,8 +83,12 @@ describe('pinned sections', () => {
     const tagging = approved.sources.find((s) => s.key === 'tagging-standard')!;
     expect(tagging.sections?.map((s) => s.heading)).toEqual([...PINNED.tagging]);
     // The seed pins the same sections on Arkona's own documents.
-    expect(ARKONA_PACK.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([...PINNED.formatting]);
-    expect(ARKONA_PACK.governance.find((g) => g.key === 'tagging-standard')!.sections).toEqual([...PINNED.tagging]);
+    expect(ARKONA_PACK.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([
+      ...PINNED.formatting,
+    ]);
+    expect(ARKONA_PACK.governance.find((g) => g.key === 'tagging-standard')!.sections).toEqual([
+      ...PINNED.tagging,
+    ]);
   });
 
   it('a changed pinned section refuses every package, naming the section; approved again, all work', async () => {
@@ -141,7 +158,9 @@ describe('pinned sections', () => {
       doc.version++;
     }
     // A heading renumbered or recased is still found.
-    (doc.blocks as { kind: string; content?: { text: string }[] }[])[at]!.content = [{ text: '4. ACTIVE TEMPLATE SUITE' }];
+    (doc.blocks as { kind: string; content?: { text: string }[] }[])[at]!.content = [
+      { text: '4. ACTIVE TEMPLATE SUITE' },
+    ];
     doc.version++;
     await packs().commands.approve('owner', 'arkona');
     expect((await packs().governance('arkona')).state).toBe('current');
@@ -158,12 +177,23 @@ describe('the new seed is offered to a pack stored from F3a’s seed', () => {
       ...before.rules,
       owners: undefined,
       rulings: undefined,
-      tags: { ...before.rules.tags, au: undefined, race: { ...before.rules.tags.race, Starborn: 'Starborn' } },
+      tags: {
+        ...before.rules.tags,
+        au: undefined,
+        race: { ...before.rules.tags.race, Starborn: 'Starborn' },
+      },
     });
     p.commands.replaceRules('owner', 'arkona', f3a, 'test: as F3a left it');
     p.store.setGovernance(
       'arkona',
-      before.governance.map((g) => ({ key: g.key, project: g.project, resourceId: g.resourceId, documentId: g.documentId, name: g.name, ...(g.label ? { label: g.label } : {}) })),
+      before.governance.map((g) => ({
+        key: g.key,
+        project: g.project,
+        resourceId: g.resourceId,
+        documentId: g.documentId,
+        name: g.name,
+        ...(g.label ? { label: g.label } : {}),
+      })),
     );
     w.stack.db.prepare("UPDATE packs SET seed = 'arkona-2026-11-16' WHERE id = 'arkona'").run();
     await p.commands.approve('owner', 'arkona');
@@ -179,9 +209,13 @@ describe('the new seed is offered to a pack stored from F3a’s seed', () => {
     expect(after.rules.tags.race.Starborn).toBe('Starborn');
     // The governance documents stay where they are (this world's), with the seed's pinned sections.
     expect(after.governance.map((g) => g.documentId)).toEqual(before.governance.map((g) => g.documentId));
-    expect(after.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([...PINNED.formatting]);
+    expect(after.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([
+      ...PINNED.formatting,
+    ]);
     expect((await p.governance('arkona')).state).toBe('rules_changed');
-    expect(w.stack.runtime.policy.commands.listAudit('owner', { action: 'pack.seed_upgrade' })).toHaveLength(1);
+    expect(w.stack.runtime.policy.commands.listAudit('owner', { action: 'pack.seed_upgrade' })).toHaveLength(
+      1,
+    );
     expect(p.store.versions('arkona')[0]!.reason).toMatch(/seed arkona-2026-11-16-f3b/);
     // Until the owner approves it, nothing is computed.
     const refused = await w.call('arkona_create_owner', compactPolity({ dryRun: true }));

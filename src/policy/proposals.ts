@@ -1213,7 +1213,14 @@ export class ProposalService implements ProposalSink {
       reject_reason: why,
       finished_at: this.now(),
     });
-    if (ok) this.store.audit('system', 'proposal.superseded', id, { state: 'pending' }, { state: 'rejected', reason: why });
+    if (ok)
+      this.store.audit(
+        'system',
+        'proposal.superseded',
+        id,
+        { state: 'pending' },
+        { state: 'rejected', reason: why },
+      );
     return ok;
   }
 

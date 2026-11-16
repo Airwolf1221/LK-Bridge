@@ -87,7 +87,9 @@ function indexOf(env: PlanEnv, hit: CharacterHit): TreeNode | null {
   const node = env.ctx.tree.node(env.ctx.projectId, hit.identity.id).data;
   const parent = node?.parentId ? env.ctx.tree.node(env.ctx.projectId, node.parentId).data : null;
   const subject = hit.subject || subjectOf(hit.identity.displayName, null);
-  return parent && parent.kind === 'index' && nameKey(parent.displayName) === nameKey(subject) ? parent : null;
+  return parent && parent.kind === 'index' && nameKey(parent.displayName) === nameKey(subject)
+    ? parent
+    : null;
 }
 
 /** "Both names exactly as their indexes give them" (design section 2): the index's name, else the subject. */
@@ -186,7 +188,12 @@ export async function runRelationship(
       ...plan.absent,
       under: [
         ...plan.absent.under,
-        ...[...new Set(where)].map((parentId) => ({ parentId, names: [], prefixes, code: 'RELATIONSHIP_EXISTS' })),
+        ...[...new Set(where)].map((parentId) => ({
+          parentId,
+          names: [],
+          prefixes,
+          code: 'RELATIONSHIP_EXISTS',
+        })),
       ],
       reservations: [...(plan.absent.reservations ?? []), `relationship:${pair}`],
       kind: 'relationship',
@@ -224,7 +231,11 @@ export interface ArtInput {
   readonly status?: 'working' | 'authoritative' | undefined;
 }
 
-export async function runArt(pd: ProjectDeps, mctx: McpToolContext, o: Run<ArtInput>): Promise<McpToolResult> {
+export async function runArt(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  o: Run<ArtInput>,
+): Promise<McpToolResult> {
   const b = await packBasis(pd, mctx, o.packId, o.tool);
   if (!b.ok) return b.result;
   const e = characterEnv(pd, mctx, o.tool, b.value, 'Character');
@@ -237,7 +248,11 @@ export async function runArt(pd: ProjectDeps, mctx: McpToolContext, o: Run<ArtIn
     return errorResult({ code: 'IMAGES_REQUIRED', message: 'Give at least one image.' }, pd);
   // 1. Each image's source: a staged image, or an upload or ChatGPT file staged now on the bridge's server.
   const unsourced = o.input.images.filter((im) => im.staged_id === undefined && im.upload_id === undefined);
-  if (unsourced.length > 1 || (unsourced.length === 1 && !o.input.file) || (unsourced.length === 0 && o.input.file))
+  if (
+    unsourced.length > 1 ||
+    (unsourced.length === 1 && !o.input.file) ||
+    (unsourced.length === 0 && o.input.file)
+  )
     return errorResult(
       {
         code: 'IMAGE_SOURCE_INVALID',
@@ -263,7 +278,8 @@ export async function runArt(pd: ProjectDeps, mctx: McpToolContext, o: Run<ArtIn
         im.upload_id !== undefined ? { upload_id: im.upload_id } : { file: o.input.file! },
         im.label,
       );
-      if (!r.ok) return errorResult({ code: r.code, message: `${im.label}: ${r.message}`, ...(r.details ?? {}) }, pd);
+      if (!r.ok)
+        return errorResult({ code: r.code, message: `${im.label}: ${r.message}`, ...(r.details ?? {}) }, pd);
       id = r.stagedId;
       staged.push({ from: r.source, staged_id: id, deduplicated: r.deduplicated });
     }
@@ -285,7 +301,8 @@ export async function runArt(pd: ProjectDeps, mctx: McpToolContext, o: Run<ArtIn
   // 2. The character's Art page: extended when it has one, else made.
   const subject = nameOf(env, ch.hit);
   const index = indexOf(env, ch.hit);
-  const artName = type.roles.find((r) => r.role === type.assets.role)?.name.replace('{Name}', subject) ?? null;
+  const artName =
+    type.roles.find((r) => r.role === type.assets.role)?.name.replace('{Name}', subject) ?? null;
   const artRef = type.roles.find((r) => r.role === type.assets.role)?.referenceType ?? null;
   const art = index
     ? (env.ctx.tree
@@ -315,10 +332,16 @@ export async function runArt(pd: ProjectDeps, mctx: McpToolContext, o: Run<ArtIn
       ],
     });
     if (o.input.markdown === undefined)
-      plan.notes.push('The Art page’s Purpose is drafted (shown in the preview); give markdown for your own.');
+      plan.notes.push(
+        'The Art page’s Purpose is drafted (shown in the preview); give markdown for your own.',
+      );
     return finishPackage(pd, mctx, o, env, {
       ...plan,
-      extra: { ...(plan.extra ?? {}), artPage: { create: plan.pages.find((p) => p.role === type.assets.role)?.rawName ?? null }, ...stagedNote },
+      extra: {
+        ...(plan.extra ?? {}),
+        artPage: { create: plan.pages.find((p) => p.role === type.assets.role)?.rawName ?? null },
+        ...stagedNote,
+      },
     });
   }
   const plan = await planArtExtension(env, ch.hit, subject, art, images);
@@ -339,7 +362,10 @@ async function planArtExtension(
   const refuse = (code: string, message: string, more: Obj = {}) => refusals.push({ code, message, ...more });
   const warn = (code: string, message: string, more: Obj = {}) => warnings.push({ code, message, ...more });
   if (art.kind === 'barc')
-    refuse('TARGET_ARCHIVED', `${art.rawName} is Archived: unarchive it first (unarchive_page, the owner's approval).`);
+    refuse(
+      'TARGET_ARCHIVED',
+      `${art.rawName} is Archived: unarchive it first (unarchive_page, the owner's approval).`,
+    );
   const status: 'working' | 'authoritative' = art.kind === 'bwrk' ? 'working' : 'authoritative';
   const doc =
     art.documents.find((d) => d.name === 'Main' && (d.type === 'page' || d.type === 'blank')) ??
@@ -350,7 +376,9 @@ async function planArtExtension(
   // The race for the asset folder: as the repository tree has it (a fact read at the last pass).
   let race = hit.race;
   if (race === null) {
-    const read = await liveRead(pd, env.mctx, env.tool, 'getResource', { path: { resourceId: hit.identity.id } });
+    const read = await liveRead(pd, env.mctx, env.tool, 'getResource', {
+      path: { resourceId: hit.identity.id },
+    });
     if (read.ok) {
       const props = (read.value as { properties?: unknown }).properties;
       for (const p of Array.isArray(props) ? (props as Obj[]) : [])

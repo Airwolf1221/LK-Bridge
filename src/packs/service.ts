@@ -197,7 +197,8 @@ export function createPacks(d: PacksDeps): Packs {
         continue;
       }
       // v3 F3b (ADR 0052): a role the seed names by template name is worked out by that name, in every project.
-      const name = (homeId ? homeSnapshot.find((t) => t.id === homeId)?.name : undefined) ?? named[role] ?? null;
+      const name =
+        (homeId ? homeSnapshot.find((t) => t.id === homeId)?.name : undefined) ?? named[role] ?? null;
       if (!name) {
         templates[role] = null;
         notes.push(
@@ -237,7 +238,11 @@ export function createPacks(d: PacksDeps): Packs {
         });
         d.audit('system', 'pack.seed', s.id, undefined, { version: 1, seed: s.seed });
         any = true;
-      } else if (stored.seed !== s.seed && stored.seed !== null && (s.supersedes ?? []).includes(stored.seed)) {
+      } else if (
+        stored.seed !== s.seed &&
+        stored.seed !== null &&
+        (s.supersedes ?? []).includes(stored.seed)
+      ) {
         // v3 F3b (ADR 0052): a newer seed is OFFERED as a new version, never approved here: the owner's token maps are
         // kept, the governance sources keep their stored places and take the seed's names and pinned sections.
         const rules = packRulesSchema.parse({

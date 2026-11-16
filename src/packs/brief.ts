@@ -30,7 +30,8 @@ export async function characterBrief(
   o: { readonly packId: string; readonly tool: string; readonly character: string; readonly live: boolean },
 ): Promise<McpToolResult> {
   const packs = pd.services?.packs;
-  if (!packs) return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Setting packs are not available here.' }, pd);
+  if (!packs)
+    return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Setting packs are not available here.' }, pd);
   const pack = packs.get(o.packId);
   if (!pack) return errorResult({ code: 'PACK_NOT_FOUND', message: `No pack ${o.packId}.` }, pd);
   if (!packs.attachment(pack.id, pd.project.id)) {
@@ -46,7 +47,10 @@ export async function characterBrief(
   }
   const type = pack.rules.types.find((t) => hookFor(t)?.name === 'character');
   if (!type)
-    return errorResult({ code: 'PACK_TYPE_NOT_FOUND', message: `The ${pack.name} pack has no character type.` }, pd);
+    return errorResult(
+      { code: 'PACK_TYPE_NOT_FOUND', message: `The ${pack.name} pack has no character type.` },
+      pd,
+    );
   const rc = repoContext(pd);
   if (!rc.ok) return rc.result;
   const ctx = rc.ctx;
@@ -81,11 +85,13 @@ export async function characterBrief(
   const gated = type.identity.filter((f) => f.gated).map((f) => f.key);
   const property = pack.rules.sidebar.property;
   let fieldsFrom: Obj;
-  let rows: { key: string; text: string }[] = [];
+  let rows: { key: string; text: string }[];
   if (o.live) {
     const read = await liveRead(pd, mctx, o.tool, 'getResource', { path: { resourceId: hit.identity.id } });
     if (!read.ok) return read.result;
-    const kv = sidebarFrom(read.value).find((p) => p.kind === 'keyValue' && textKey(p.title) === textKey(property));
+    const kv = sidebarFrom(read.value).find(
+      (p) => p.kind === 'keyValue' && textKey(p.title) === textKey(property),
+    );
     rows = (kv?.rows ?? []).map((r) => ({
       key: r.key,
       text: r.content.map((x) => (typeof x.text === 'string' ? x.text : '')).join(''),
@@ -100,7 +106,9 @@ export async function characterBrief(
       source: 'tree',
       readAt: readAt !== null ? new Date(readAt).toISOString() : null,
       age: readAt !== null ? ago(ctx.now - readAt) : null,
-      ...(sb === null ? { note: 'The tree has not read this page’s sidebar yet: call again with live: true.' } : {}),
+      ...(sb === null
+        ? { note: 'The tree has not read this page’s sidebar yet: call again with live: true.' }
+        : {}),
     };
   }
   const fields: Record<string, string | null> = {};
@@ -144,9 +152,7 @@ export async function characterBrief(
   // ---------------------------------------------------------------------------------- snapshots (free)
   const snaps = pd.services?.snapshots;
   const unresolvedHeading = type.text.unresolved;
-  const newestDocument = async (
-    n: TreeNode,
-  ): Promise<{ blocks: unknown[]; takenAt: number } | null> => {
+  const newestDocument = async (n: TreeNode): Promise<{ blocks: unknown[]; takenAt: number } | null> => {
     if (!snaps) return null;
     const doc =
       n.documents.find((d) => d.name === 'Main' && (d.type === 'page' || d.type === 'blank')) ??
@@ -202,7 +208,8 @@ export async function characterBrief(
     unresolved.push({ page: n.rawName, items });
   }
   for (const n of pages.slice(SNAPSHOT_PAGES))
-    if (isArt(n)) art.push({ id: n.id, name: n.rawName, images: null, from: 'not looked at (a very large set)' });
+    if (isArt(n))
+      art.push({ id: n.id, name: n.rawName, images: null, from: 'not looked at (a very large set)' });
 
   // ---------------------------------------------------------------------------------- open audit findings
   const findings: Obj[] = [];
@@ -250,7 +257,9 @@ export async function characterBrief(
           : null,
       ...(o.live ? { live: 'the identity fields were read now (one read)' } : {}),
     },
-    cost: o.live ? 'one read (the identity page’s sidebar)' : 'free: the bridge’s own tree, snapshots and audits',
+    cost: o.live
+      ? 'one read (the identity page’s sidebar)'
+      : 'free: the bridge’s own tree, snapshots and audits',
   };
   return finish(pd, mctx, o.tool, body, () => ({ pages: pages.length }));
 }
@@ -266,9 +275,10 @@ function firstText(b: unknown): string | null {
       .trim();
     if (t) return t;
   }
-  if (Array.isArray(o.children)) for (const c of o.children as unknown[]) {
-    const t = firstText(c);
-    if (t) return t;
-  }
+  if (Array.isArray(o.children))
+    for (const c of o.children as unknown[]) {
+      const t = firstText(c);
+      if (t) return t;
+    }
   return null;
 }

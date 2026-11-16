@@ -162,7 +162,9 @@ export class PackStore {
       if (!cur) throw new Error(`No pack ${id}`);
       const version = cur.version + 1;
       this.db
-        .prepare('UPDATE packs SET rules = ?, version = ?, governance = ?, seed = ?, updated_at = ? WHERE id = ?')
+        .prepare(
+          'UPDATE packs SET rules = ?, version = ?, governance = ?, seed = ?, updated_at = ? WHERE id = ?',
+        )
         .run(valid, version, sources, seed, at, id);
       this.db
         .prepare(

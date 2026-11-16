@@ -152,3 +152,103 @@ The fix:
 - **D4:** AU is refused until you set a rule, or you give the rule now.
 - **D5:** relationship and art standalone tools as described.
 - **D6:** the staged-image takeover in section 6.
+
+---
+
+## 7. As built in F3b (16 Nov 2026): decisions and differences
+
+Everything above is the approved design, kept as approved. This section records how session F3b built it; the full
+record is [ADR 0052](../adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md), and the tools' reference is in
+[tools.md](../tools.md#setting-packs-owners-relationships-art-and-the-brief-v3-f3b). Nothing was run against Arkona or
+any live system: every test uses the mock LegendKeeper and fixtures built from the shapes quoted above (the ten-row
+sidebar, Salahad, Races of Arkona, the Bestiary, Characters / Beastkin / Qishen).
+
+**The six decisions, as built.** (D1) The type table is pack data, the pack's new **owner table**: 19 types (the table
+above, with Technology and Magic, Material and Equipment, and Religion, Law, Programme, Education, Ceremony and Condition
+each a type of its own), the ★ rows as you confirmed them, each with its template, primary tag, closed specialist tags
+and allowed homes. (D2) `home` is required and checked; `HOME_NOT_ALLOWED` lists the allowed homes and up to five
+suitable indexes nearby; `homeOverride: { reason }` lets it through with a warning, the reason printed in the
+proposal's summary and on the page's line; no home is invented and no category index made. (D3) `promoteNation: true`
+makes `[INDEX] <Nation>` from AI Index with drafted routing text, moves the Reference into it (its id, Dependencies and
+tags kept), places the owner beside it and checks the order, in the same proposal, which is canonical; `createSubindex`
+is its own named step, only for a category the type lives in. (D4) AU as you ruled in 1.5, for all five tools, F3a's
+character tool changed with it; the ruling is stored in the pack with its date. (D5) The relationship and art tools as
+described. (D6) The takeover as described in section 6.
+
+**Where the build differs from the text above, or fills a gap in it, and why:**
+
+- **Subject is the package's `name`**, not a separate field: the name's first part is the Subject, and asking twice
+  invites a mismatch. The name's second part is `descriptor`, which defaults to the Reference Type.
+- **`continuity`** (`"Main"`, the default, or an alternate universe's name) is the field 1.4's "from `status` and
+  `continuity`" needed; a name other than Main makes the page AU.
+- **A Working page's tags** are read literally from 1.4: `Working` and the primary tag. A specialist tag given for a
+  Working page is held and reported ("add it when the page is promoted"), never dropped silently. 1.5's "lifecycle tags
+  replace the status tag" could be read as keeping the specialist: the literal reading is the safer one, and both lists
+  are data, so you can change it with a new pack version.
+- **Recognising a home** needed specifics the table leaves open: `<Continent> <Category>` is an index so named whose
+  nearest ancestor index named `<Continent>` is not a nation (so `Salahad Conflicts` beneath `Salahad Historical Events`
+  counts); a nation index is an index directly in a `<Continent> Polities` index; "a national history index" is
+  `<Nation> Historical Events` or `<Nation> History`; "a Divine Realm index" is an index directly under `[INDEX] Divine
+  Realms`; "the matching" index of Religion, Law, Programme, Education, Ceremony and Condition is named `Religions`,
+  `Laws`, `Programmes`, `Education`, `Ceremonies` or `Conditions`, at continental or national level (world level,
+  `Arkonan …`, for Religion only, as the table says); the Bestiary is found by its id, else its name. All of it is data.
+- **"Up to five suitable indexes nearby"** are the allowed homes nearest the refused one in the tree. A home that does
+  not exist at all is `HOME_NOT_FOUND`, with the five nearest the root. A home in the Working or Archived area is
+  refused even with an override (`HOME_IN_LIFECYCLE_AREA`): a Working page is drafted under `[INDEX] Working` by
+  `status`, and its `home` is checked as the place it will be promoted to.
+- **A subrace's Reference Type** is not named in 1.1a: the package gives it. A race's and a racial group's are fixed.
+- **`createCharacterNavigation`** also records one Character taxonomy entry for the new index in the same proposal,
+  because the character tool places characters by the registry's taxonomy: an index alone would still not place anyone.
+  When the bridge has to guess the race's singular, it says so (`TAXONOMY_SINGULAR_GUESS`) and the entry waits for your
+  review on Repository Mappings.
+- **`promoteNation` with a Working owner** makes the restructure (the index and the move, which are canon) and drafts
+  the owner itself under `[INDEX] Working`, to promote into the new index later; the proposal is canonical either way.
+- **"Re-checks sibling order"**: the verify reads every new page's neighbours, and the job now works out again the
+  expected neighbours of a new page made beside a page the job then moves away.
+- **Placeholder headings are removed** by writing the package's text in place of the template copy's, keeping only what
+  Markdown cannot express (a collection, `unsupported` content); the job's note lists the headings left out.
+- **A home index's own routing text is not changed** by the owner tool (the preview says so; add a line with
+  `write_page` if that index lists its pages). New indexes it makes get drafted routing text.
+- **The relationship tool** keeps F3a's routing line in the hosting index, takes an optional `label` (default
+  "Relationship") and `status` (default: the hosting character's), and refuses an existing pair under any label and in
+  either order. `host: "a"` is F3a's `self` and `"b"` its `other`.
+- **Art sources**: ChatGPT's `file` is one top-level parameter, for the one image with no other source (ChatGPT fills
+  declared file parameters at the top level only). An upload or file is staged on the bridge's server even on a dry run,
+  because ChatGPT's link expires; the staged id is returned for the next call. An image whose original is already in
+  the library is refused (`IMAGE_ALREADY_IN_LIBRARY`).
+- **Extending an Art page** is done by a filler that appends the new image sections to the page as it is inside the job's
+  lock: no version of the page is captured, so an edit elsewhere on it does not conflict, and nothing else on it changes.
+- **The brief** reads the identity fields from the tree's copy of the identity page's sidebar (`live: true` re-reads
+  it), finds relationships by Reference Type and name, counts images from each Art page's newest snapshot, and does not
+  check the pack's governance (it computes nothing), so it answers while a new pack version waits for approval.
+- **The takeover** rejects the image's own placement proposal (decided by `system`, the reason "superseded by package
+  prop_…", audited) once the package's proposal is captured; no new proposal state was added. The job checks again,
+  before it writes, that each image is still the package's to place.
+- **The governance pages' sections** (section 5) are pinned by a digest of each section, recorded at your approval; an
+  approval is refused when a pinned section cannot be found. Drift is still decided by the page's version, as in F3a;
+  the message now names the section that changed.
+- **The new rules reach the stored pack** as a new version when the bridge starts (no migration), waiting for your
+  approval on the Packs page; your token maps are kept.
+- **Unestablished** is allowed for Reference Type, Scope and Temporal Scope, with a reason, which is written into
+  Unresolved Material.
+
+**Left for later.** Outside the pack tools, `promote_page` still writes `CANON` when it promotes an AU page, and the
+lifecycle audit still expects `CANON` on an Authoritative AU page: both should learn the ruling. Editing the owner table
+on the dashboard (it is read-only there). The monolith split and selective approval (PLAN-v2 10.5).
+
+**Costs, measured against the mock** (reads and writes; plan, then the job on approval):
+
+| Package | Plan reads | Job reads | Job writes |
+|---|---|---|---|
+| Compact owner, a dry run | 4 | 0 | 0 |
+| Compact owner, Working | 4 | 20 | 13 |
+| Compact owner, Authoritative | 4 | 18 | 13 |
+| `promoteNation`: index, Reference moved, owner | 7 | 31 | 16 |
+| Relationship of two canon characters | 14 | 40 | 15 |
+| Art: a new Art page with one image | 7 | 27 | 16 |
+| Art: one image on an existing Art page | 4 | 11 | 3 |
+| Brief | 0 | - | - |
+| Brief, `live: true` | 1 | - | - |
+
+**After deploying.** Approve the new Arkona pack version on the Packs page (it is offered at start; until it is approved
+every pack tool refuses with `PACK_NOT_CURRENT`). Then run the four new evaluation scenarios, 35 to 38.

@@ -359,7 +359,12 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     stagedImage: (projectId, stagedId) => images.staged(projectId, stagedId),
     proposalJob: (proposalId) => policy.proposals.get(proposalId)?.jobId ?? null,
     addTaxonomyEntry: (projectId, r, actor) =>
-      addPackTaxonomyEntry(registry.forProject(projectId).store, r, (...a) => policy.store.audit(...a), actor),
+      addPackTaxonomyEntry(
+        registry.forProject(projectId).store,
+        r,
+        (...a) => policy.store.audit(...a),
+        actor,
+      ),
   });
   // v2 C1: the bridge's memory of recent page versions, and write_page's in-lock re-planner (section edits whose section
   // is unchanged). Registered before any job can run: the scheduler starts in a microtask, after createRuntime returns.

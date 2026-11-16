@@ -48,6 +48,9 @@ export interface FoundSection {
   readonly digest: string | null;
 }
 
+/** A heading block's level (1 when it has none). */
+const levelOf = (b: Obj): number => (typeof b.level === 'number' ? b.level : 1);
+
 /** Each pinned heading's section in a document's top-level blocks (the first match when a heading repeats). */
 export function pinnedSections(blocks: unknown, headings: readonly string[]): FoundSection[] {
   const list = (Array.isArray(blocks) ? blocks : []).filter(
@@ -57,11 +60,11 @@ export function pinnedSections(blocks: unknown, headings: readonly string[]): Fo
     const want = headingKey(heading);
     const at = list.findIndex((b) => b.kind === 'heading' && headingKey(runsText(b)) === want);
     if (at < 0) return { heading, found: null, digest: null };
-    const level = typeof list[at]!.level === 'number' ? (list[at]!.level as number) : 1;
+    const level = levelOf(list[at]!);
     let end = at + 1;
     while (end < list.length) {
       const b = list[end]!;
-      if (b.kind === 'heading' && (typeof b.level === 'number' ? (b.level as number) : 1) <= level) break;
+      if (b.kind === 'heading' && levelOf(b) <= level) break;
       end++;
     }
     const digest = createHash('sha256')

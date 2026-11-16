@@ -349,7 +349,10 @@ export const packRulesSchema = z
          * Type is `continuityType` carries `tag` as its status tag in place of `authoritative`. A Working or Archived
          * page leads with its lifecycle tag instead, so it carries neither. Absent (an older pack): `authoritative`.
          */
-        au: z.object({ continuityType: text(100), tag: text(100) }).strict().optional(),
+        au: z
+          .object({ continuityType: text(100), tag: text(100) })
+          .strict()
+          .optional(),
       })
       .strict(),
     /** Page names: words and date forms a name may never hold, and the dash rule. */
@@ -386,7 +389,10 @@ export const packRulesSchema = z
           ctx.addIssue({ code: 'custom', message: `${t.name}: only Species has kinds` });
       }
       if (r.types.some((t) => t.tool === r.owners!.tool))
-        ctx.addIssue({ code: 'custom', message: `${r.owners.tool} is both a type's tool and the owners' tool` });
+        ctx.addIssue({
+          code: 'custom',
+          message: `${r.owners.tool} is both a type's tool and the owners' tool`,
+        });
     }
     const names = new Set<string>();
     for (const t of r.types) {

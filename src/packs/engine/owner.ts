@@ -25,7 +25,15 @@ import { fromMarkdown, MarkdownError, type FromMarkdownContext, type LkBlock } f
 import { pageConverterContext } from '../../pages/index.js';
 import { cleanPrefixes, key as nameKey, singularFor } from '../../registry/names.js';
 import type { TreeNode } from '../../tree/index.js';
-import type { HomeRule, OwnerKind, OwnerKindName, OwnerType, PackRules, RoleRule, TypeRules } from '../types.js';
+import type {
+  HomeRule,
+  OwnerKind,
+  OwnerKindName,
+  OwnerType,
+  PackRules,
+  RoleRule,
+  TypeRules,
+} from '../types.js';
 import {
   describeHome,
   findNation,
@@ -220,7 +228,8 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
     name = name.slice(0, at).trim();
     notes.push(`The name was read as Subject “${name}” and descriptor “${descriptor}”.`);
   }
-  if (name === '' || name.length > 200) refuse('INVALID_NAME', 'The name (the Subject, 1 to 200 characters) is required.');
+  if (name === '' || name.length > 200)
+    refuse('INVALID_NAME', 'The name (the Subject, 1 to 200 characters) is required.');
   const fact = (v: IdentityValue | undefined, field: string) => {
     const x = identityOf(v);
     return {
@@ -327,7 +336,10 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       : null;
   let nation: NationLookup = null;
   if (input.promoteNation === true && nationName === null)
-    refuse('NATION_REQUIRED', 'promoteNation needs `nation`: the nation whose compact Reference gets its own index.');
+    refuse(
+      'NATION_REQUIRED',
+      'promoteNation needs `nation`: the nation whose compact Reference gets its own index.',
+    );
   if (nationName !== null) {
     nation = findNation(t, nationName);
     if (nation === null)
@@ -336,15 +348,26 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
         `No nation “${nationName}”: neither a nation index nor a compact Reference (“${nationName} - …”) in a <Continent> ${owners.nations} index.`,
       );
     else if (nation.kind === 'ambiguous')
-      refuse('NATION_AMBIGUOUS', `“${nationName}” names ${nation.nodes.length} nations; give the id of the one meant.`, {
-        candidates: nation.nodes.map((n) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') })),
-      });
+      refuse(
+        'NATION_AMBIGUOUS',
+        `“${nationName}” names ${nation.nodes.length} nations; give the id of the one meant.`,
+        {
+          candidates: nation.nodes.map((n) => ({
+            id: n.id,
+            name: n.rawName,
+            path: n.path.names.join(' / '),
+          })),
+        },
+      );
     else if (nation.kind === 'reference' && input.promoteNation !== true)
       refuse(
         'NATION_NEEDS_INDEX',
         `${nationName} is a compact polity: all it has is its Reference, ${nation.node.rawName}, directly in ${nation.polities.rawName}. A nation with several developed owners gets its own index (Source Formatting: Nation-Centred Territorial Navigation). Call again with promoteNation: true to do it in this proposal: [INDEX] ${nationName} made in ${nation.polities.rawName}, the Reference moved into it (its id, Dependencies and tags kept), and this owner placed beside it.`,
         {
-          nation: { reference: { id: nation.node.id, name: nation.node.rawName }, in: nation.polities.rawName },
+          nation: {
+            reference: { id: nation.node.id, name: nation.node.rawName },
+            in: nation.polities.rawName,
+          },
           hint: 'Call again with promoteNation: true.',
         },
       );
@@ -386,9 +409,13 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
         const n = t.node(r.node.id);
         if (n) home = { kind: 'node', node: n };
       } else if (r.status === 'ambiguous')
-        refuse('HOME_AMBIGUOUS', `The home “${homeText}” names ${r.candidates.length} places; give its id or path.`, {
-          candidates: r.candidates.map((c) => ({ id: c.id, name: c.rawName, path: c.path })),
-        });
+        refuse(
+          'HOME_AMBIGUOUS',
+          `The home “${homeText}” names ${r.candidates.length} places; give its id or path.`,
+          {
+            candidates: r.candidates.map((c) => ({ id: c.id, name: c.rawName, path: c.path })),
+          },
+        );
       else
         refuse('HOME_NOT_FOUND', `No index named “${homeText}” in the repository.`, {
           suggestions: suggestHomes(t, homeRules, null),
@@ -397,12 +424,17 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   }
   // promoteNation: the Polities index that holds the Reference stands for the new nation index.
   if (promote && home?.kind === 'node' && home.node.id === promote.polities.id) {
-    notes.push(`The owner goes into the new [INDEX] ${nationName} (promoteNation), not ${promote.polities.rawName}.`);
+    notes.push(
+      `The owner goes into the new [INDEX] ${nationName} (promoteNation), not ${promote.polities.rawName}.`,
+    );
     home = { kind: 'planned', key: subName ? 'subindex' : 'nation' };
   }
   const override = input.homeOverride?.reason?.trim() || null;
   if (input.homeOverride !== undefined && !override)
-    refuse('OVERRIDE_NEEDS_REASON', 'homeOverride needs a reason (it is printed in the proposal for the owner).');
+    refuse(
+      'OVERRIDE_NEEDS_REASON',
+      'homeOverride needs a reason (it is printed in the proposal for the owner).',
+    );
   let homeFits: string | null = null;
   let overridden = false;
   const allowed = homeRules.map((r) => describeHome(t, r));
@@ -414,13 +446,18 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
     refuse(
       'HOME_NOT_ALLOWED',
       `${n.rawName} is not a home for a ${otype.name}${kindName ? ` (${kindName})` : ''}: ${why} Allowed: ${allowed.join('; ')}. Pass homeOverride { "reason": "…" } only when the owner has decided otherwise.${hint}`,
-      { home: { id: n.id, name: n.rawName, path: n.path.names.join(' / ') }, allowed, suggestions: suggestHomes(t, homeRules, n) },
+      {
+        home: { id: n.id, name: n.rawName, path: n.path.names.join(' / ') },
+        allowed,
+        suggestions: suggestHomes(t, homeRules, n),
+      },
     );
   };
   if (home?.kind === 'node') {
     const n = home.node;
     const area =
-      env.lifecycle.workingIndexId && (n.id === env.lifecycle.workingIndexId || n.path.ids.includes(env.lifecycle.workingIndexId))
+      env.lifecycle.workingIndexId &&
+      (n.id === env.lifecycle.workingIndexId || n.path.ids.includes(env.lifecycle.workingIndexId))
         ? 'Working'
         : env.lifecycle.archiveIndexId &&
             (n.id === env.lifecycle.archiveIndexId || n.path.ids.includes(env.lifecycle.archiveIndexId))
@@ -459,11 +496,19 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
             : 'a substantive page is never a home (Races of Arkona and its racial group and race pages hold only the race roster).',
         );
       if (nationIndexNode && rule && !n.path.ids.includes(nationIndexNode.id) && n.id !== nationIndexNode.id)
-        warn('HOME_OUTSIDE_NATION', `The home ${n.rawName} is not inside ${nationIndexNode.rawName} (nation “${nationName}”).`);
+        warn(
+          'HOME_OUTSIDE_NATION',
+          `The home ${n.rawName} is not inside ${nationIndexNode.rawName} (nation “${nationName}”).`,
+        );
     }
   }
   // A planned home must itself be an allowed one.
-  if (home?.kind === 'planned' && home.key === 'nation' && !homeRules.some((r) => r.kind === 'nation') && !override)
+  if (
+    home?.kind === 'planned' &&
+    home.key === 'nation' &&
+    !homeRules.some((r) => r.kind === 'nation') &&
+    !override
+  )
     refuse(
       'HOME_NOT_ALLOWED',
       `A ${otype.name} does not live directly in a nation index (allowed: ${allowed.join('; ')}); with promoteNation, name its national subindex in createSubindex.`,
@@ -473,7 +518,9 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   // ---------------------------------------------------------------------------------- the national subindex
   let subParent: { existing: TreeNode } | { planned: true } | null = null;
   if (subName) {
-    const natNode = promote ? null : (nationIndexNode ?? (home?.kind === 'node' ? nationOf(t, home.node) : null));
+    const natNode = promote
+      ? null
+      : (nationIndexNode ?? (home?.kind === 'node' ? nationOf(t, home.node) : null));
     const natName = promote ? nationName! : (natNode?.displayName ?? null);
     if (!natName)
       refuse(
@@ -482,7 +529,9 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       );
     else {
       const cats = homeRules
-        .filter((r): r is Extract<HomeRule, { kind: 'category' }> => r.kind === 'category' && r.level === 'nation')
+        .filter(
+          (r): r is Extract<HomeRule, { kind: 'category' }> => r.kind === 'category' && r.level === 'nation',
+        )
         .map((r) => r.category);
       const fits =
         k(subName).startsWith(`${k(natName)} `) && cats.some((c) => k(`${natName} ${c}`) === k(subName));
@@ -495,9 +544,13 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       if (natNode) {
         const there = t.children(natNode.id).find((c) => k(c.displayName) === k(subName));
         if (there)
-          refuse('SUBINDEX_EXISTS', `${there.rawName} exists in ${natNode.rawName}: give it as home instead of createSubindex.`, {
-            existing: { id: there.id, name: there.rawName },
-          });
+          refuse(
+            'SUBINDEX_EXISTS',
+            `${there.rawName} exists in ${natNode.rawName}: give it as home instead of createSubindex.`,
+            {
+              existing: { id: there.id, name: there.rawName },
+            },
+          );
         subParent = { existing: natNode };
       } else if (promote) subParent = { planned: true };
       if (home === null || home.kind !== 'planned' || home.key !== 'subindex')
@@ -516,18 +569,25 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       .filter((n) => k(n.displayName) === k(owners.races.navigation))
       .sort((a, b) => a.depth - b.depth);
     const navRoot = roots[0] ?? null;
-    const groupSuffix = (t.kinds.racialGroup?.name ?? '{Name} - Racial Group Reference').replace('{Name}', '');
+    const groupSuffix = (t.kinds.racialGroup?.name ?? '{Name} - Racial Group Reference').replace(
+      '{Name}',
+      '',
+    );
     const group =
       kind.navigation === 'group'
         ? null
-        : home?.kind === 'node' && home.node.kind === 'bsrc' && k(home.node.displayName).endsWith(k(groupSuffix))
+        : home?.kind === 'node' &&
+            home.node.kind === 'bsrc' &&
+            k(home.node.displayName).endsWith(k(groupSuffix))
           ? home.node.displayName.slice(0, home.node.displayName.length - groupSuffix.length).trim()
           : null;
     const chain = [...(group ? [group] : []), name];
     const path = [owners.races.navigation, ...chain].join(' / ');
     let parent: TreeNode | null = navRoot;
     for (const step of chain.slice(0, -1))
-      parent = parent ? (t.children(parent.id).find((c) => c.kind === 'index' && k(c.displayName) === k(step)) ?? null) : null;
+      parent = parent
+        ? (t.children(parent.id).find((c) => c.kind === 'index' && k(c.displayName) === k(step)) ?? null)
+        : null;
     const exists = parent
       ? t.children(parent.id).find((c) => c.kind === 'index' && k(c.displayName) === k(name))
       : undefined;
@@ -591,7 +651,8 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
     }
     return id;
   };
-  const templateName = (id: string) => ctx.types.store.templates().templates.find((x) => x.id === id)?.name ?? id;
+  const templateName = (id: string) =>
+    ctx.types.store.templates().templates.find((x) => x.id === id)?.name ?? id;
   const tid = templateId(otype.template);
   const needsIndex = promote !== null || subName !== null || navPlan !== null;
   const indexTid = needsIndex ? templateId(owners.index.template) : null;
@@ -629,9 +690,13 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   ]) {
     const hit = sameNamed(p);
     if (hit)
-      refuse('OWNER_EXISTS', `${hit.rawName} exists in ${t.node(p)?.rawName ?? p}: a page of that name is there already.`, {
-        existing: { id: hit.id, name: hit.rawName },
-      });
+      refuse(
+        'OWNER_EXISTS',
+        `${hit.rawName} exists in ${t.node(p)?.rawName ?? p}: a page of that name is there already.`,
+        {
+          existing: { id: hit.id, name: hit.rawName },
+        },
+      );
   }
   if (promote) {
     if (k(promote.node.displayName) === k(display))
@@ -647,7 +712,8 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   const sidebarRead = tid
     ? await readSidebar(pd, env.mctx, env.tool, tid, env.cc.sidebars, env.cc.templateTags)
     : null;
-  if (sidebarRead && !sidebarRead.ok) refuse('TEMPLATE_UNREADABLE', `${display}: its template could not be read now.`);
+  if (sidebarRead && !sidebarRead.ok)
+    refuse('TEMPLATE_UNREADABLE', `${display}: its template could not be read now.`);
   const tSidebar = sidebarRead?.ok ? sidebarRead.value : [];
   const tKeys = keysOf(tSidebar, props);
   const want: { key: string; value: string }[] = [];
@@ -672,15 +738,22 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   if (tKeys)
     for (const key of ['Subject', ...owners.facts.required])
       if (!tKeys.some((x) => factKey(x) === factKey(key)))
-        warn('TEMPLATE_ROW_MISSING', `${display}: the template has no “${key}” row, so it cannot be written there.`, {
-          page: display,
-        });
+        warn(
+          'TEMPLATE_ROW_MISSING',
+          `${display}: the template has no “${key}” row, so it cannot be written there.`,
+          {
+            page: display,
+          },
+        );
 
   // ---------------------------------------------------------------------------------- the tags (design 1.4, 1.5)
   let specialist: string | null = null;
   if (kind) {
     specialist = kind.specialist;
-    if (input.specialistTag && (!kind.specialist || textKey(input.specialistTag) !== textKey(kind.specialist)))
+    if (
+      input.specialistTag &&
+      (!kind.specialist || textKey(input.specialistTag) !== textKey(kind.specialist))
+    )
       refuse(
         'TAG_NOT_ALLOWED',
         `${display}: a ${kindName} page's tags are computed (${kind.specialist ? `its specialist tag is always ${kind.specialist}` : 'it takes no specialist tag'}).`,
@@ -759,8 +832,12 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
     }
     return { resourceId: r.node.id, name: r.node.rawName };
   };
-  const deps = (input.dependencies ?? []).map((r) => resolveLink(r, 'dependency')).filter((x): x is LinkTarget => x !== null);
-  const rel = (input.related ?? []).map((r) => resolveLink(r, 'related')).filter((x): x is LinkTarget => x !== null);
+  const deps = (input.dependencies ?? [])
+    .map((r) => resolveLink(r, 'dependency'))
+    .filter((x): x is LinkTarget => x !== null);
+  const rel = (input.related ?? [])
+    .map((r) => resolveLink(r, 'related'))
+    .filter((x): x is LinkTarget => x !== null);
   const linkTargets: { title: string; targets: LinkTarget[] }[] = [];
   if (deps.length) linkTargets.push({ title: linkTitle.dependencies, targets: deps });
   if (rel.length) linkTargets.push({ title: linkTitle.related, targets: rel });
@@ -916,7 +993,11 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       };
   }
   // The created indexes' drafted text: one routing line per page they hold.
-  const drafted = (p: PlannedPage, purpose: string, children: { id: string; name: string; scope: string | null }[]) => {
+  const drafted = (
+    p: PlannedPage,
+    purpose: string,
+    children: { id: string; name: string; scope: string | null }[],
+  ) => {
     const text = draftIndexText(
       { ...owners.index, purpose },
       p.displayName,
@@ -983,11 +1064,17 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   }
 
   if (!tagsCurrent)
-    refuse('PACK_NOT_CURRENT', `${env.governance.message} No tags were computed (fail closed), so nothing can be proposed now.`, {
-      governance: { state: env.governance.state, sources: env.governance.sources },
-    });
+    refuse(
+      'PACK_NOT_CURRENT',
+      `${env.governance.message} No tags were computed (fail closed), so nothing can be proposed now.`,
+      {
+        governance: { state: env.governance.state, sources: env.governance.sources },
+      },
+    );
   if (status === 'authoritative')
-    notes.push('status "authoritative": the page is made in place as canon, so this is a canonical proposal ("Approve and accept as canon").');
+    notes.push(
+      'status "authoritative": the page is made in place as canon, so this is a canonical proposal ("Approve and accept as canon").',
+    );
 
   // ---------------------------------------------------------------------------------- the job's re-checks (design 5)
   const under: AbsentUnder[] = [];
@@ -999,8 +1086,10 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
         ? `${home.key}:${promote?.polities.id ?? (subParent && 'existing' in subParent ? subParent.existing.id : '')}:${k(destinationName ?? '')}`
         : 'none';
   reservations.push(`owner:${destKey}:${k(display)}`);
-  if (ownerParent && 'existing' in ownerParent) under.push({ parentId: ownerParent.existing, names: [display], code: 'OWNER_EXISTS' });
-  if (working && home?.kind === 'node') under.push({ parentId: home.node.id, names: [display], code: 'OWNER_EXISTS' });
+  if (ownerParent && 'existing' in ownerParent)
+    under.push({ parentId: ownerParent.existing, names: [display], code: 'OWNER_EXISTS' });
+  if (working && home?.kind === 'node')
+    under.push({ parentId: home.node.id, names: [display], code: 'OWNER_EXISTS' });
   const present: PresentCheck[] = [];
   if (promote) {
     reservations.push(`nation:${promote.polities.id}:${k(nationName!)}`);
@@ -1062,7 +1151,13 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       ...(navPlan ? { createCharacterNavigation: navPlan.path } : {}),
       continuity: { type: continuityType, name: continuity },
     },
-    ...(promote ? { canonical: { reason: `moves the Authoritative page ${promote.node.rawName} into the new ${nationRaw} (promoteNation)` } } : {}),
+    ...(promote
+      ? {
+          canonical: {
+            reason: `moves the Authoritative page ${promote.node.rawName} into the new ${nationRaw} (promoteNation)`,
+          },
+        }
+      : {}),
     ...(navPage && navPlan
       ? { taxonomy: [{ resourceId: navPage.id, plural: navPlan.name, parentNodeId: navPlan.parent.id }] }
       : {}),

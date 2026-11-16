@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
 /**
  * v3 F3b (ADR 0052): `arkona_create_owner`, by the owner-approved design (docs/design/F3b-owner-tools.md, section 1),
  * against the mock LegendKeeper with the owners world's fixtures: every type of the pack's table makes the right
@@ -73,7 +73,12 @@ function homeFor(rule: HomeRule): string | null {
         if (salahad.includes(rule.category)) return `Salahad ${rule.category}`;
         return rule.category in VELARIA ? `Velaria ${rule.category}` : null;
       }
-      const menkhet = ['Government & Administration', 'Institutions', 'Settlements & Locations', 'Unique Magic & Technologies'];
+      const menkhet = [
+        'Government & Administration',
+        'Institutions',
+        'Settlements & Locations',
+        'Unique Magic & Technologies',
+      ];
       if (menkhet.includes(rule.category)) return `Menkhet ${rule.category}`;
       return rule.category in OSTRAND ? `Ostrand ${rule.category}` : null;
     }
@@ -132,9 +137,10 @@ describe('every type of the table (design 1.1)', () => {
       expect(page.template.id, t.name).toBe(TEMPLATE_OF[t.template]);
       expect(page.tags, t.name).toEqual(['CANON', t.primary]);
       // The ten rows in the template's rank order (Last Major Revision is dated by the job).
-      expect(page.facts.map((f: { key: string }) => f.key), t.name).toEqual(
-        OWNER_KEYS.filter((k) => k !== 'Last Major Revision'),
-      );
+      expect(
+        page.facts.map((f: { key: string }) => f.key),
+        t.name,
+      ).toEqual(OWNER_KEYS.filter((k) => k !== 'Last Major Revision'));
       expect(page.facts, t.name).toEqual(
         expect.arrayContaining([
           { key: 'Status', value: 'Authoritative' },
@@ -153,7 +159,9 @@ describe('every type of the table (design 1.1)', () => {
   it('a specialist tag from the type’s closed list follows the primary; another is refused', async () => {
     const ok = await dry(pkg('Polity', 'Salahad Polities', { specialistTag: 'Government' }));
     expect(ok.body.pages[0].tags).toEqual(['CANON', 'Polity', 'Government']);
-    const eq = await dry(pkg('Equipment', 'Salahad Unique Magic & Technologies', { specialistTag: 'Sacred Blade' }));
+    const eq = await dry(
+      pkg('Equipment', 'Salahad Unique Magic & Technologies', { specialistTag: 'Sacred Blade' }),
+    );
     expect(eq.body.pages[0].tags).toEqual(['CANON', 'Equipment', 'Sacred Blade']);
     const bad = await dry(pkg('Polity', 'Salahad Polities', { specialistTag: 'Magic' }));
     expect(bad.body.error.code).toBe('TAG_NOT_ALLOWED');
@@ -206,7 +214,9 @@ describe('homes (design 1.2)', () => {
 
   it('refuses a home of another kind for every type, with suitable homes nearby that are themselves allowed', async () => {
     for (const t of owners().types) {
-      const wrong = t.homes.some((r) => homeFor(r) === 'Salahad Cultures') ? 'Salahad Polities' : 'Salahad Cultures';
+      const wrong = t.homes.some((r) => homeFor(r) === 'Salahad Cultures')
+        ? 'Salahad Polities'
+        : 'Salahad Cultures';
       const r = await dry(pkg(t.name, wrong));
       expect(r.body.error?.code, `${t.name} in ${wrong}`).toBe('HOME_NOT_ALLOWED');
       const s = r.body.error.suggestions as { name: string; path: string; fits: string }[];
@@ -247,7 +257,9 @@ describe('homes (design 1.2)', () => {
     expect(r.isError, r.text).toBe(false);
     expect(r.body.warnings.map((x: { code: string }) => x.code)).toContain('HOME_OVERRIDDEN');
     expect(r.body.home.override).toBe(reason);
-    const p = await call(pkg('Polity', 'Salahad Cultures', { name: 'Override Polity', homeOverride: { reason } }));
+    const p = await call(
+      pkg('Polity', 'Salahad Cultures', { name: 'Override Polity', homeOverride: { reason } }),
+    );
     expect(p.body.status, p.text).toBe('proposal_captured');
     const prop = w.stack.runtime.policy.proposals.get(String(p.body.proposalId))!;
     expect(prop.summary).toContain(`home override: ${reason}`);
@@ -300,7 +312,12 @@ describe('the race roster and the Bestiary (design 1.1a, the owner’s ruling)',
 
   it('a subrace under its race’s Core Information: “<Subrace> - Subrace Reference”', async () => {
     const r = await dry(
-      race({ kind: 'subrace', name: 'Low Humans', home: 'Humans - Core Information', referenceType: 'Subrace Reference' }),
+      race({
+        kind: 'subrace',
+        name: 'Low Humans',
+        home: 'Humans - Core Information',
+        referenceType: 'Subrace Reference',
+      }),
     );
     expect(r.isError, r.text).toBe(false);
     const page = r.body.pages.find((p: { role: string }) => p.role === 'owner');
@@ -348,10 +365,25 @@ describe('the race roster and the Bestiary (design 1.1a, the owner’s ruling)',
     expect(index.parent).toBe('[INDEX] Beastkin');
     expect(index.notes.join(' ')).toMatch(/character navigation \(createCharacterNavigation\)/);
     // A racial group's navigation is directly under Characters; an existing race's is not made again.
-    const group = await dry(race({ kind: 'racialGroup', name: 'Merfolk', home: 'Races of Arkona', createCharacterNavigation: true }));
-    expect(group.body.pages.find((p: { name: string }) => p.name === '[INDEX] Merfolk').parent).toBe('[INDEX] Characters');
+    const group = await dry(
+      race({
+        kind: 'racialGroup',
+        name: 'Merfolk',
+        home: 'Races of Arkona',
+        createCharacterNavigation: true,
+      }),
+    );
+    expect(group.body.pages.find((p: { name: string }) => p.name === '[INDEX] Merfolk').parent).toBe(
+      '[INDEX] Characters',
+    );
     const subrace = await dry(
-      race({ kind: 'subrace', name: 'Low Humans', home: 'Humans - Core Information', referenceType: 'Subrace Reference', createCharacterNavigation: true }),
+      race({
+        kind: 'subrace',
+        name: 'Low Humans',
+        home: 'Humans - Core Information',
+        referenceType: 'Subrace Reference',
+        createCharacterNavigation: true,
+      }),
     );
     expect(subrace.body.error.code).toBe('NAVIGATION_NOT_FOR_KIND');
   });
@@ -421,9 +453,16 @@ describe('name, facts, text and links (design 1.4)', () => {
   });
 
   it('names “<Subject> - <descriptor>” (the Reference Type by default), dashes replaced, CANON and dates refused', async () => {
-    const byRt = await dry(pkg('Polity', 'Salahad Polities', { name: 'Kingdom of Ophir', descriptor: undefined }));
+    const byRt = await dry(
+      pkg('Polity', 'Salahad Polities', { name: 'Kingdom of Ophir', descriptor: undefined }),
+    );
     expect(byRt.body.pages[0].name).toBe('[BSRC] Kingdom of Ophir - Polity Reference');
-    const split = await dry(pkg('Polity', 'Salahad Polities', { name: 'Kingdom of Ophir — Old Polity Reference', descriptor: undefined }));
+    const split = await dry(
+      pkg('Polity', 'Salahad Polities', {
+        name: 'Kingdom of Ophir — Old Polity Reference',
+        descriptor: undefined,
+      }),
+    );
     expect(split.body.pages[0].name).toBe('[BSRC] Kingdom of Ophir - Old Polity Reference');
     expect(split.body.replacements.length).toBeGreaterThan(0);
     const canon = await dry(pkg('Polity', 'Salahad Polities', { name: 'CANON Kingdom' }));
@@ -434,7 +473,10 @@ describe('name, facts, text and links (design 1.4)', () => {
 
   it('refuses a sibling of the same name', async () => {
     const r = await dry(
-      pkg('Polity', 'Salahad Polities', { name: 'Sultanate of Tarim', descriptor: 'Historical Polity Reference' }),
+      pkg('Polity', 'Salahad Polities', {
+        name: 'Sultanate of Tarim',
+        descriptor: 'Historical Polity Reference',
+      }),
     );
     expect(r.body.error.code).toBe('OWNER_EXISTS');
     expect(r.body.error.existing.id).toBe(O.tarim);
@@ -443,7 +485,9 @@ describe('name, facts, text and links (design 1.4)', () => {
   it('text: Purpose first, no empty or placeholder section', async () => {
     const r = await dry(pkg('Polity', 'Salahad Polities', { markdown: '## Overview\n\nA kingdom.\n' }));
     expect(r.body.error.code).toBe('PURPOSE_NOT_FIRST');
-    const empty = await dry(pkg('Polity', 'Salahad Polities', { markdown: '## Purpose\n\nA kingdom.\n\n## Military\n\n' }));
+    const empty = await dry(
+      pkg('Polity', 'Salahad Polities', { markdown: '## Purpose\n\nA kingdom.\n\n## Military\n\n' }),
+    );
     expect(empty.body.error.code).toBe('EMPTY_SECTION');
     const none = await dry(pkg('Polity', 'Salahad Polities', { markdown: undefined }));
     expect(none.body.error.code).toBe('BODY_REQUIRED');
@@ -513,7 +557,9 @@ describe('the lifecycle and the AU rule (design 1.4, 1.5)', () => {
         { key: 'Continuity', value: 'Shattered Sky' },
       ]),
     );
-    const wk = await dry(pkg('Polity', 'Salahad Polities', { continuity: 'Shattered Sky', status: 'working' }));
+    const wk = await dry(
+      pkg('Polity', 'Salahad Polities', { continuity: 'Shattered Sky', status: 'working' }),
+    );
     expect(wk.body.pages[0].tags).toEqual(['Working', 'Polity']);
     expect(wk.body.pages[0].facts).toContainEqual({ key: 'Continuity Type', value: 'AU' });
     const main = await dry(pkg('Polity', 'Salahad Polities', { continuity: 'Main' }));
