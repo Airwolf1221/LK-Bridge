@@ -251,6 +251,26 @@ export const registerSnapshots: Register = (api, ctx) => {
   });
 
   /** "Propose a restore": always a proposal, approved as normal on the Proposals page. `dryRun`: the plan only. */
+  /**
+   * v3 F2 (ADR 0049 decision 6): "Finish" a recreate that stopped part-way: the same request proposed again, planning
+   * only what the page it made still lacks. Audited `snapshots.finish_recreate`.
+   */
+  api.post('/snapshots/restores/:id/finish', async (req) => {
+    const q = parseInput(projectQuery, req.query);
+    const { id } = parseInput(z.object({ id: z.string().regex(/^rst_[0-9a-f]{16}$/) }), req.params);
+    const project = ctx.project(q.project);
+    const { restores } = services();
+    try {
+      const r = await restores.finish(project.id, id, ORIGIN('snapshots.finish_recreate'), 'owner');
+      if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', summary: r.plan.summary };
+      audit('snapshots.finish_recreate', r.proposalId, { project: project.id, restoreId: id });
+      return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary };
+    } catch (e) {
+      if (e instanceof RestoreError) throw new AdminHttpError(409, e.code, e.message, e.details);
+      throw e;
+    }
+  });
+
   api.post('/snapshots/restore', async (req) => {
     const q = parseInput(projectQuery, req.query);
     const b = parseInput(

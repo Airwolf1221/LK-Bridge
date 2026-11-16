@@ -971,6 +971,12 @@ export interface RestoreDeps {
   readonly assetLive: (projectId: string, assetId: string) => boolean;
   /** When the bridge saw the page deleted (its change snapshot, or the last snapshot that had it), or null. */
   readonly now: () => number;
+  /**
+   * v3 F2 (ADR 0049 decision 6): the page an earlier recreate of this page from this snapshot made (its id, minted when
+   * that proposal was captured), or null. A second run of the same request, or "Finish" on the dashboard, then finishes
+   * it instead of making another page.
+   */
+  readonly recreatedTarget?: (projectId: string, pageId: string, snapshotId: string) => string | null;
 }
 
 export async function planRestore(d: RestoreDeps, input: RestoreInput): Promise<RestorePlan> {
@@ -1005,6 +1011,19 @@ export async function planRestore(d: RestoreDeps, input: RestoreInput): Promise<
   const journal = { tool: 'restore_snapshot', page, snapshot: snap.id, scope: input.scope };
 
   if (input.scope === 'deleted') {
+    // v3 F2 (ADR 0049 decision 6): a recreate of this page from this snapshot that already made its page (and stopped
+    // part-way, or not): finish it, writing only what is missing. Never a second page.
+    const target =
+      input.mode === 'undelete'
+        ? null
+        : (d.recreatedTarget?.(input.projectId, input.pageId, snap.id) ?? null);
+    if (target) {
+      const live =
+        target === input.pageId
+          ? res
+          : ((await read('getResource', { path: { resourceId: target } })) as Obj | undefined);
+      if (live) return planFinish(d, input, { snap, targetId: target, live, read, reads: () => reads });
+    }
     if (res)
       throw new RestoreError(
         'NOT_DELETED',
@@ -1186,6 +1205,8 @@ function finish(o: {
   idMap?: Record<string, string>;
   followUp?: 'content';
   reads: number;
+  /** v3 F2: the plan finishes a recreate that stopped part-way. */
+  finishing?: boolean;
 }): RestorePlan {
   const empty = !o.steps.some((s) => !s.op.startsWith('bridge.'));
   const when = new Date(o.snap.takenAt).toISOString();
@@ -1193,7 +1214,9 @@ function finish(o: {
     o.scope === 'deleted'
       ? o.mode === 'undelete'
         ? 'undelete'
-        : 'recreate'
+        : o.finishing
+          ? 'finish the recreate (only what is missing)'
+          : 'recreate'
       : o.scope === 'sidebar'
         ? 'sidebar'
         : o.scope === 'document'
@@ -1687,85 +1710,17 @@ async function planDeleted(
   for (const t of targets) {
     const ref = t.row.ref;
     const type = str(t.piece.settings.type) ?? 'blank';
-    const p = { resourceId: newId, documentId: ref };
-    const set: Obj = {};
-    for (const k of ['isHidden', 'isFullWidth'] as const) if (t.piece.settings[k] === true) set[k] = true;
-    if (type === 'map') {
-      const create = featureCreate();
-      const docName = str(t.piece.settings.name) ?? t.row.name ?? ref;
-      const byId = new Map(((t.piece.features ?? []) as Obj[]).map((f) => [String(f.id), f]));
-      const depth = (f: Obj) => {
-        let n = 0;
-        for (let q = str(f.parentId); q && n < 50; q = str(byId.get(q)?.parentId)) n++;
-        return n;
-      };
-      const dropped = { n: 0 };
-      for (const f of [...byId.values()].sort((a, b) => depth(a) - depth(b)))
-        steps.push({
-          op: 'createFeature',
-          params: { path: p, body: featureBody(f, create, dropped) },
-          ...ICON_DROP,
-          bindFrom: bound(ref),
-          journalOperation: {
-            ...journal,
-            document: { id: ref, name: docName },
-            write: `feature ${featureLabel(f)}`,
-            feature: { id: String(f.id), name: str(f.name) ?? '' },
-          },
-        });
-      labelSizeNote(notRestored, docName, dropped);
-      const img = isObj(t.piece.settings.mapImage) ? str(t.piece.settings.mapImage.assetId) : null;
-      if (img) {
-        if (d.assetLive(input.projectId, img)) set.mapImage = { assetId: img };
-        else
-          notRestored.push({
-            what: `the image of map ${str(t.piece.settings.name) ?? ref}`,
-            why: `its asset ${img} is no longer in the library`,
-          });
-      }
-    }
-    if (type === 'time') {
-      const laneCreate = bodyFields('createLane');
-      const evCreate = EVENT_FIELDS();
-      for (const l of (t.piece.lanes ?? []) as Obj[])
-        steps.push({
-          op: 'createLane',
-          params: { path: p, body: { size: 'sm', ...pick(l, laneCreate) } },
-          bindFrom: bound(ref),
-          journalOperation: { ...journal, write: `lane ${String(l.name ?? l.id)}` },
-        });
-      for (const e of (t.piece.events ?? []) as Obj[])
-        steps.push({
-          op: 'createEvent',
-          params: { path: p, body: withWriteIcon(pick(e, evCreate)) },
-          ...ICON_DROP,
-          bindFrom: bound(ref),
-          journalOperation: { ...journal, write: `event ${String(e.name ?? e.id)}` },
-        });
-    }
-    if (type === 'board') {
-      const c = t.piece.content ?? {};
-      steps.push({
-        op: 'replaceBoardContent',
-        params: {
-          path: p,
-          body: { shapes: c.shapes ?? [], bindings: c.bindings ?? [], assets: c.assets ?? [] },
-        },
-        bindFrom: bound(ref),
-        journalOperation: { ...journal, write: 'board content' },
-      });
-      notRestored.push({
-        what: `the pages of board ${str(t.piece.settings.name) ?? ref}`,
-        why: 'the API cannot write a board’s pages; a new board has one page, which its shapes must name',
-      });
-    }
-    if (Object.keys(set).length > 0)
-      steps.push({
-        op: 'updateDocument',
-        params: { path: p, body: set },
-        bindFrom: bound(ref),
-        journalOperation: { ...journal, write: 'document settings' },
-      });
+    steps.push(
+      ...documentContentSteps(
+        d,
+        input,
+        journal,
+        t,
+        { resourceId: newId, documentId: ref },
+        bound(ref),
+        notRestored,
+      ),
+    );
     pieceAfter.push({
       label: `${str(t.piece.settings.name) ?? ref} (${type})`,
       before: '(deleted)',
@@ -1839,6 +1794,305 @@ async function planDeleted(
     },
     reads: o.reads(),
   });
+}
+
+/**
+ * The content writes of one document of a recreated page (a map's features, a timeline's lanes and events, a board's
+ * content, its settings), into `p` (the new page and document; `bind` when the document's id is bound in the job).
+ * v3 F2 (ADR 0049 decision 6): `have` lists what the live document already holds (a finish of a recreate that stopped
+ * part-way), which is skipped: never written twice.
+ */
+
+/**
+ * v3 F2 (ADR 0049 decision 6; E4-OPEN-1): finishes a recreate that stopped part-way. The page the recreate made (its
+ * id minted when that proposal was captured) is compared with the snapshot, and only what is missing is planned: a
+ * document of that type and name it lacks (created, with its content), the blocks of a page document that is still
+ * empty, a map's features, a timeline's lanes and events, a board's content it lacks, and the sidebar's properties it
+ * lacks. Nothing is written twice, and no second page or document is made.
+ */
+async function planFinish(
+  d: RestoreDeps,
+  input: RestoreInput,
+  o: {
+    snap: { id: string; takenAt: number; kind: string };
+    targetId: string;
+    live: Obj;
+    read: Reader;
+    reads: () => number;
+  },
+): Promise<RestorePlan> {
+  const svc = d.svc;
+  const lost: PlanNote[] = [];
+  const kept: PlanNote[] = [];
+  const notRestored: PlanNote[] = [];
+  const warnings: string[] = [
+    'This finishes a recreate that stopped part-way: only what the page lacks is written; nothing is written twice.',
+  ];
+  const targetId = o.targetId;
+  const name = str(o.live.name) ?? targetId;
+  const journal = {
+    tool: 'restore_snapshot',
+    page: { id: targetId, name },
+    snapshot: o.snap.id,
+    scope: 'deleted',
+    mode: 'recreate',
+    finish: true,
+  };
+  const liveDocs = (Array.isArray(o.live.documents) ? (o.live.documents as Obj[]) : []).filter(
+    (x) => typeof x.id === 'string' && x.deletedAt == null,
+  );
+  const used = new Set<string>();
+  const steps: StepSpec[] = [];
+  const parts: string[] = [];
+  const docs = documentsAt(svc, input.projectId, input.pageId, o.snap);
+  for (const r of docs) {
+    const t = { row: r, piece: await load<DocumentPiece>(svc, r, `document ${r.name ?? r.ref}`) };
+    const type = str(t.piece.settings.type) ?? 'blank';
+    const dname = str(t.piece.settings.name) ?? r.name ?? 'Document';
+    const match = liveDocs.find(
+      (l) => !used.has(String(l.id)) && (str(l.type) ?? 'blank') === type && str(l.name) === dname,
+    );
+    if (!match) {
+      const b: Obj = { type, name: dname };
+      if (type === 'time' && typeof t.piece.settings.calendarId === 'string')
+        b.calendarId = t.piece.settings.calendarId;
+      steps.push({
+        op: 'createDocument',
+        params: { path: { resourceId: targetId }, body: b },
+        journalOperation: { ...journal, write: `document ${dname}` },
+      });
+      const docStep = steps.length;
+      const bind = { step: docStep, to: 'path.documentId' as const };
+      if (type === 'page')
+        steps.push({
+          op: 'replaceDocumentBlocks',
+          params: {
+            path: { resourceId: targetId, documentId: r.ref },
+            body: { blocks: writeFormBlocks(t.piece.blocks ?? [], null, lost, dname) },
+          },
+          bindFrom: bind,
+          journalOperation: { ...journal, write: `blocks of ${dname}` },
+        });
+      steps.push(
+        ...documentContentSteps(
+          d,
+          input,
+          journal,
+          t,
+          { resourceId: targetId, documentId: r.ref },
+          bind,
+          notRestored,
+        ),
+      );
+      parts.push(`document ${dname}`);
+      continue;
+    }
+    used.add(String(match.id));
+    const p = { resourceId: targetId, documentId: String(match.id) };
+    const before = steps.length;
+    if (type === 'page' && (t.piece.blocks ?? []).length > 0) {
+      const got = (await o.read('getDocumentBlocks', { path: p })) as
+        { blocks?: unknown[]; version?: unknown } | undefined;
+      const blank = (got?.blocks ?? []).every(
+        (b) =>
+          isObj(b) &&
+          b.kind === 'paragraph' &&
+          (!Array.isArray(b.content) || (b.content as Obj[]).every((x) => !str(x.text))),
+      );
+      if (got && blank)
+        steps.push({
+          op: 'replaceDocumentBlocks',
+          params: {
+            path: p,
+            ...(typeof got.version === 'string' ? { ifMatch: got.version } : {}),
+            body: { blocks: writeFormBlocks(t.piece.blocks ?? [], null, lost, dname) },
+          },
+          journalOperation: { ...journal, write: `blocks of ${dname}` },
+        });
+    }
+    const have: { features?: Set<string>; lanes?: Set<string>; events?: Set<string>; board?: boolean } = {};
+    if (type === 'map') {
+      const f = (await o.read('listFeatures', { path: p })) as { data?: Obj[] } | Obj[] | undefined;
+      const list = Array.isArray(f) ? f : (f?.data ?? []);
+      have.features = new Set(list.flatMap((x) => [txt(x.id), `${txt(x.type)}:${txt(x.name)}`]));
+    }
+    if (type === 'time') {
+      const l = (await o.read('listLanes', { path: p })) as { data?: Obj[] } | undefined;
+      const e = (await o.read('listEvents', { path: p, query: { limit: 100 } })) as
+        { data?: Obj[] } | undefined;
+      have.lanes = new Set((l?.data ?? []).map((x) => txt(x.name)));
+      have.events = new Set((e?.data ?? []).map((x) => `${txt(x.name)}@${txt(x.start)}`));
+    }
+    if (type === 'board') {
+      const c = (await o.read('getBoardContent', { path: p })) as { shapes?: unknown[] } | undefined;
+      have.board = (c?.shapes ?? []).length > 0;
+    }
+    steps.push(
+      ...documentContentSteps(d, input, journal, t, p, undefined, notRestored, have).filter(
+        (x) => x.op !== 'updateDocument',
+      ),
+    );
+    if (steps.length > before) parts.push(`the content of ${dname}`);
+  }
+  // The sidebar: the properties the page lacks (property ids are the page's own: ADR 0037).
+  const sbRow = stateAt(svc, input.projectId, input.pageId, 'sidebar', '', o.snap);
+  if (sbRow) {
+    const sb = await load<SidebarPiece>(svc, sbRow, 'sidebar');
+    const now = (await o.read('listProperties', { path: { resourceId: targetId } })) as
+      { data?: Obj[] } | undefined;
+    const ids = new Set((now?.data ?? []).map((x) => txt(x.id)));
+    const titles = new Set((now?.data ?? []).map((x) => `${txt(x.kind)}:${txt(x.title)}`));
+    let prevProp: string | null = null;
+    let added = 0;
+    for (const prop of sb.properties) {
+      const id = txt(prop.id);
+      if (ids.has(id) || titles.has(`${txt(prop.kind)}:${txt(prop.title)}`)) {
+        prevProp = id || prevProp;
+        continue;
+      }
+      if (prop.kind === 'unsupported') {
+        lost.push({
+          what: `unsupported property ${txt(prop.title) || id}`,
+          why: 'the API cannot recreate it',
+        });
+        continue;
+      }
+      const b = Object.fromEntries(Object.entries(prop).filter(([k]) => !['rank', 'version'].includes(k)));
+      if (prevProp) b.after = prevProp;
+      steps.push({
+        op: 'createProperty',
+        params: { path: { resourceId: targetId }, body: b },
+        journalOperation: { ...journal, write: `property ${txt(prop.title) || id}` },
+      });
+      added++;
+      if (id) prevProp = id;
+    }
+    if (added > 0) parts.push('sidebar');
+  }
+  if (steps.length > 0)
+    steps.push(verifyStep([{ kind: 'resource', label: name, resourceId: targetId, fields: { name } }]));
+  return finish({
+    scope: 'deleted',
+    mode: 'recreate',
+    finishing: true,
+    page: { id: targetId, name },
+    snap: o.snap,
+    steps,
+    lost,
+    kept,
+    notRestored,
+    warnings,
+    pieces: [],
+    parts: ['finish the recreate', ...parts],
+    reads: o.reads(),
+  });
+}
+
+/** A value as text for a comparison key (a string or a number; anything else is empty). */
+const txt = (v: unknown): string => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+
+function documentContentSteps(
+  d: RestoreDeps,
+  input: RestoreInput,
+  journal: Obj,
+  t: { row: PieceRow; piece: DocumentPiece },
+  p: { resourceId: string; documentId: string },
+  bind: StepSpec['bindFrom'] | undefined,
+  notRestored: PlanNote[],
+  have: {
+    readonly features?: ReadonlySet<string>;
+    readonly lanes?: ReadonlySet<string>;
+    readonly events?: ReadonlySet<string>;
+    readonly board?: boolean;
+  } = {},
+): StepSpec[] {
+  const steps: StepSpec[] = [];
+  const ref = t.row.ref;
+  const bound = () => bind;
+  const type = str(t.piece.settings.type) ?? 'blank';
+  const set: Obj = {};
+  for (const k of ['isHidden', 'isFullWidth'] as const) if (t.piece.settings[k] === true) set[k] = true;
+  if (type === 'map') {
+    const create = featureCreate();
+    const docName = str(t.piece.settings.name) ?? t.row.name ?? ref;
+    const byId = new Map(((t.piece.features ?? []) as Obj[]).map((f) => [String(f.id), f]));
+    const depth = (f: Obj) => {
+      let n = 0;
+      for (let q = str(f.parentId); q && n < 50; q = str(byId.get(q)?.parentId)) n++;
+      return n;
+    };
+    const dropped = { n: 0 };
+    for (const f of [...byId.values()].sort((a, b) => depth(a) - depth(b)))
+      if (!have.features?.has(txt(f.id)) && !have.features?.has(`${txt(f.type)}:${txt(f.name)}`))
+        steps.push({
+          op: 'createFeature',
+          params: { path: p, body: featureBody(f, create, dropped) },
+          ...ICON_DROP,
+          ...(bound() ? { bindFrom: bound()! } : {}),
+          journalOperation: {
+            ...journal,
+            document: { id: ref, name: docName },
+            write: `feature ${featureLabel(f)}`,
+            feature: { id: String(f.id), name: str(f.name) ?? '' },
+          },
+        });
+    labelSizeNote(notRestored, docName, dropped);
+    const img = isObj(t.piece.settings.mapImage) ? str(t.piece.settings.mapImage.assetId) : null;
+    if (img) {
+      if (d.assetLive(input.projectId, img)) set.mapImage = { assetId: img };
+      else
+        notRestored.push({
+          what: `the image of map ${str(t.piece.settings.name) ?? ref}`,
+          why: `its asset ${img} is no longer in the library`,
+        });
+    }
+  }
+  if (type === 'time') {
+    const laneCreate = bodyFields('createLane');
+    const evCreate = EVENT_FIELDS();
+    for (const l of (t.piece.lanes ?? []) as Obj[])
+      if (!have.lanes?.has(txt(l.name)))
+        steps.push({
+          op: 'createLane',
+          params: { path: p, body: { size: 'sm', ...pick(l, laneCreate) } },
+          ...(bound() ? { bindFrom: bound()! } : {}),
+          journalOperation: { ...journal, write: `lane ${String(l.name ?? l.id)}` },
+        });
+    for (const e of (t.piece.events ?? []) as Obj[])
+      if (!have.events?.has(`${txt(e.name)}@${txt(e.start)}`))
+        steps.push({
+          op: 'createEvent',
+          params: { path: p, body: withWriteIcon(pick(e, evCreate)) },
+          ...ICON_DROP,
+          ...(bound() ? { bindFrom: bound()! } : {}),
+          journalOperation: { ...journal, write: `event ${String(e.name ?? e.id)}` },
+        });
+  }
+  if (type === 'board' && have.board !== true) {
+    const c = t.piece.content ?? {};
+    steps.push({
+      op: 'replaceBoardContent',
+      params: {
+        path: p,
+        body: { shapes: c.shapes ?? [], bindings: c.bindings ?? [], assets: c.assets ?? [] },
+      },
+      ...(bound() ? { bindFrom: bound()! } : {}),
+      journalOperation: { ...journal, write: 'board content' },
+    });
+    notRestored.push({
+      what: `the pages of board ${str(t.piece.settings.name) ?? ref}`,
+      why: 'the API cannot write a board’s pages; a new board has one page, which its shapes must name',
+    });
+  }
+  if (Object.keys(set).length > 0)
+    steps.push({
+      op: 'updateDocument',
+      params: { path: p, body: set },
+      ...(bound() ? { bindFrom: bound()! } : {}),
+      journalOperation: { ...journal, write: 'document settings' },
+    });
+
+  return steps;
 }
 
 /** A short random id (for rehearsal and tests). */

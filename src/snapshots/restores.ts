@@ -103,7 +103,14 @@ export class Restores {
   ) {}
 
   async plan(input: RestoreInput): Promise<RestorePlan> {
-    const plan = await planRestore(this.o.deps(input.projectId), input);
+    const plan = await planRestore(
+      {
+        ...this.o.deps(input.projectId),
+        recreatedTarget: (projectId, pageId, snapshotId) =>
+          this.recreatedTarget(projectId, pageId, snapshotId),
+      },
+      input,
+    );
     return plan.empty ? plan : { ...plan, estimate: this.estimate(input.projectId, plan) };
   }
 
@@ -122,6 +129,51 @@ export class Restores {
     }
     if (!est) return null;
     return { reads: c.reads, writes: c.writes, ...sequentialEstimate(est, c) };
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 6): the page an earlier recreate of this page from this snapshot made, by its record: its
+   * own id (`ids: original`) or the new one minted when that proposal was captured (its id map). Null when none was
+   * proposed (or every one was closed).
+   */
+  recreatedTarget(projectId: string, pageId: string, snapshotId: string): string | null {
+    const r = this.o.db
+      .prepare(
+        `SELECT plan FROM snapshot_restores WHERE project_id = ? AND page_id = ? AND snapshot_id = ? AND scope = 'deleted'
+           AND mode = 'recreate' AND state <> 'closed' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(projectId, pageId, snapshotId) as { plan: string } | undefined;
+    if (!r) return null;
+    try {
+      const plan = JSON.parse(r.plan) as { idMap?: Record<string, string> | null };
+      return plan.idMap?.[pageId] ?? pageId;
+    } catch {
+      return pageId;
+    }
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 6): "Finish" on a recreate that stopped part-way: the same request proposed again, which
+   * now plans only what the page it made still lacks.
+   */
+  async finish(projectId: string, restoreId: string, origin: JobOrigin, by: string): Promise<ProposeResult> {
+    const r = this.o.db
+      .prepare(
+        'SELECT page_id, snapshot_id, scope, mode FROM snapshot_restores WHERE project_id = ? AND id = ?',
+      )
+      .get(projectId, restoreId) as
+      { page_id: string; snapshot_id: string; scope: string; mode: string | null } | undefined;
+    if (!r) throw new RestoreError('NOT_FOUND', `No restore ${restoreId} in this project.`);
+    if (r.scope !== 'deleted' || r.mode !== 'recreate')
+      throw new RestoreError(
+        'NOT_A_RECREATE',
+        'Only a recreate can be finished; propose the restore again instead.',
+      );
+    return this.propose(
+      { projectId, pageId: r.page_id, snapshotId: r.snapshot_id, scope: 'deleted', mode: 'recreate' },
+      origin,
+      by,
+    );
   }
 
   /**

@@ -63,6 +63,8 @@ describe('a page deleted in the app', () => {
     const r = await call('restore_snapshot', { page: 'newpage1', snapshot: snap, scope: 'deleted' });
     expect(r.isError).toBe(true);
     // The bridge has never seen it: no snapshot holds it, so it cannot even be named.
-    expect(['NOT_IN_SNAPSHOT', 'NOT_IN_REPOSITORY']).toContain(r.body.error?.code);
+    expect(['NOT_IN_SNAPSHOT', 'NOT_IN_REPOSITORY']).toContain(
+      (r.body.error as { code?: string } | undefined)?.code,
+    );
   });
 });

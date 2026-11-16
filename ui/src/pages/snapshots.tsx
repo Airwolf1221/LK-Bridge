@@ -907,6 +907,23 @@ function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => v
 // ------------------------------------------------------------------------------------------ the page
 
 function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: string }) {
+  const projectApi = useProjectApi();
+  const { run, busy } = useAction();
+  const [finished, setFinished] = useState<Record<string, string>>({});
+  /** v3 F2 (ADR 0049 decision 6): a recreate that stopped part-way, proposed again for only what is missing. */
+  const finish = (id: string) =>
+    void run(() =>
+      projectApi.post<{ status: string; proposalId?: string; summary?: string }>(
+        `/snapshots/restores/${encodeURIComponent(id)}/finish`,
+        {},
+      ),
+    ).then((r) => {
+      if (r)
+        setFinished((f) => ({
+          ...f,
+          [id]: r.proposalId ? `Proposed: ${r.proposalId}` : 'Nothing is missing: the page is complete.',
+        }));
+    });
   return (
     <div className="table-wrap">
       <h3>{title}</h3>
@@ -953,6 +970,21 @@ function RestoresTable({ rows, title }: { rows: RestoreRecordView[]; title: stri
                     <Link to={`/proposals${qs({ id: r.followUpProposalId })}`}>{r.followUpProposalId}</Link>
                   </>
                 )}
+                {r.scope === 'deleted' &&
+                  r.mode === 'recreate' &&
+                  r.state === 'failed' &&
+                  !finished[r.id] && (
+                    <div>
+                      <Button className="small" busy={busy} onClick={() => finish(r.id)}>
+                        Finish
+                      </Button>
+                      <span className="muted small-text">
+                        {' '}
+                        writes only what the recreated page still lacks
+                      </span>
+                    </div>
+                  )}
+                {finished[r.id] && <div className="small-text">{finished[r.id]}</div>}
               </td>
             </tr>
           ))}
