@@ -35,6 +35,10 @@ export interface WriteJobSpec {
   readonly holdDocuments?: readonly string[];
   /** v2 C2c: the lifecycle change the job makes (the lifecycle guard allows exactly that). */
   readonly lifecycle?: LifecycleMarker | undefined;
+  /** v3 F3a (ADR 0050): ONE proposal for the owner whatever the caller's scope (a setting pack's first weeks). */
+  readonly forceProposal?: boolean;
+  /** v3 F3a: the batch places images staged on the bridge's server (a proposal at scope propose, not a refusal). */
+  readonly stagedPlacement?: boolean;
   readonly proposal: ProposalExtras;
   /** The plan, as every answer shows it. */
   readonly head: Record<string, unknown>;
@@ -80,6 +84,8 @@ export async function runWriteJob(
       ...(spec.pageScope ? { pageScope: spec.pageScope } : {}),
       ...(spec.holdDocuments && spec.holdDocuments.length > 0 ? { holdDocuments: spec.holdDocuments } : {}),
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
+      ...(spec.forceProposal ? { forceProposal: true } : {}),
+      ...(spec.stagedPlacement ? { stagedPlacement: true } : {}),
       internal: true,
       proposal: spec.proposal,
     });

@@ -1,3 +1,5 @@
+import { createPacks, type Packs } from './packs/service.js';
+import { registerPackEngine } from './packs/engine/checks.js';
 import { deletedPageRecord } from './lifecycle/deleted.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
 import { BlockwiseUndo } from './pages/undo.js';
@@ -135,6 +137,8 @@ export interface Runtime {
   readonly rehearsals: Rehearsals;
   /** v2 E1b (ADR 0043): the off-site copy to Google Drive (its settings, the Google connection, the runner's requests). */
   readonly offsite: OffsiteService;
+  /** v3 F3a (ADR 0050): the setting packs (rules, attachments, governance, the owner's approval). */
+  readonly packs: Packs;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -327,6 +331,26 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachRegistry = registry.attach();
+  // v3 F3a (ADR 0050): the setting packs (rules as data, attachments, governance, approval) and their engine hooks.
+  const packs = createPacks({
+    db: o.db,
+    engine,
+    projects,
+    registry,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  try {
+    packs.ensureSeeded();
+  } catch (err) {
+    log.warn({ err }, 'the setting packs could not be seeded');
+  }
+  const unregisterPackEngine = registerPackEngine(engine, {
+    packs,
+    registry,
+    setTemplate: (projectId, resourceId, templateId) => tree.store.setTemplate(projectId, resourceId, templateId),
+  });
   // v2 C1: the bridge's memory of recent page versions, and write_page's in-lock re-planner (section edits whose section
   // is unchanged). Registered before any job can run: the scheduler starts in a microtask, after createRuntime returns.
   const versions = new DocumentVersions(o.db, () => (o.clock ?? systemClock).now());
@@ -722,6 +746,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         audits,
         // v2 E4: the undo of a block-by-block write that stopped part-way.
         blockwiseUndo,
+        // v3 F3a (ADR 0050): the setting packs.
+        packs,
       },
     },
     { exposePerOpTools: config.mcp.exposePerOpTools },
@@ -760,6 +786,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const ready = projects.verifyAll().catch((err: unknown) => log.error({ err }, 'project checks failed'));
   // v2 E1a: a full snapshot a restart interrupted continues once the projects are served.
   void ready.then(() => snapshots.resumeInterrupted());
+  // v3 F3a: a pack attaches to its projects once their keys have proved which projects they are.
+  void ready.then(() => {
+    try {
+      packs.ensureSeeded();
+    } catch (err) {
+      log.warn({ err }, 'the setting packs could not be seeded');
+    }
+  });
 
   return {
     projects,
@@ -783,6 +817,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     restores,
     rehearsals,
     offsite,
+    packs,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -818,6 +853,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       for (const off of detachAuditCheckers) off();
       detachBlockwiseUndo();
       detachRestores();
+      unregisterPackEngine();
       await tree.stop();
       detachRegistry();
       await assets.stop();

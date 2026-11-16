@@ -110,6 +110,12 @@ export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
    * attachment (it fills in a download URL and file id). Other clients ignore it.
    */
   readonly meta?: Readonly<Record<string, unknown>>;
+  /**
+   * v3 F3a (ADR 0050): asked at every `tools/list`; the tool is listed only while it answers true (a setting pack's tool,
+   * while its pack is attached to a project served now). Like `lowLevel`, it changes the list only: a call is still
+   * answered (the tool itself refuses a project its pack is not attached to).
+   */
+  readonly listed?: () => boolean;
   handler(input: z.output<S>, ctx: McpToolContext): McpToolResult | Promise<McpToolResult>;
 }
 
@@ -310,7 +316,8 @@ export function createMcpServerFactory(
           (t) =>
             t.retired !== true &&
             toolVisible(toolAccess(t), policy?.scope) &&
-            (t.lowLevel !== true || showLow),
+            (t.lowLevel !== true || showLow) &&
+            (t.listed === undefined || safeListed(t)),
         )
         .map((t) => t.name),
     );
@@ -343,6 +350,15 @@ export function createMcpServerFactory(
     observe(strict, callerOf(policy));
     return strict;
   };
+}
+
+/** v3 F3a: a tool's `listed()`, never failing the list (a predicate that throws hides the tool). */
+function safeListed(t: McpToolProvider): boolean {
+  try {
+    return t.listed?.() !== false;
+  } catch {
+    return false;
+  }
 }
 
 type RequestHandler = (request: unknown, ctx: unknown) => Promise<unknown>;

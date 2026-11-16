@@ -460,6 +460,56 @@ function resolveRace(
   return { node: hit.node, entry: hit.entry, matchedBy: hit.by };
 }
 
+/**
+ * v3 F3a (ADR 0050): the race index a DECLARED race resolves to (the same rules as `create_character`: the type root's
+ * children and grandchildren, by plural, singular or alias; refused when ambiguous, waiting for review or gone), or the
+ * one unknown-race index for an unknown or omitted race. A declared race that does not resolve throws `RACE_NOT_FOUND`;
+ * the caller decides whether to fall back (a setting pack does, with a warning). No request, no write.
+ */
+export function resolveRaceIndex(
+  tree: ProjectTree,
+  store: RegistryStore,
+  input: { readonly race: string | null | undefined; readonly type?: string | undefined },
+): {
+  readonly unknown: boolean;
+  readonly node: NodeRef;
+  readonly entry: { readonly id: string; readonly plural: string; readonly singular: string } | null;
+  readonly matchedBy: 'plural' | 'singular' | 'alias' | null;
+} {
+  tree.requireUsable();
+  const type = characterType(store, input.type);
+  const p = type.placement!;
+  const root = type.rootIndexId ? tree.node(type.rootIndexId) : null;
+  if (!root) {
+    throw new RegistryError(
+      'TYPE_ROOT_MISSING',
+      `The type ${type.singular} has no root index in the repository tree${type.rootIndexId ? ` (${type.rootIndexId} is not in it)` : ''}.`,
+      { typeId: type.id },
+    );
+  }
+  if (isUnknownRace(input.race, p)) {
+    const want = key(p.unknownIndexName);
+    const hits = tree.children(root.id).filter((c) => c.kind === 'index' && key(c.displayName) === want);
+    if (hits.length !== 1) {
+      throw new RegistryError(
+        hits.length === 0 ? 'UNKNOWN_INDEX_MISSING' : 'UNKNOWN_INDEX_AMBIGUOUS',
+        hits.length === 0
+          ? `There is no “[INDEX] ${p.unknownIndexName}” directly under ${root.displayName}; it is never made automatically.`
+          : `There are ${hits.length} “[INDEX] ${p.unknownIndexName}” indexes directly under ${root.displayName}; exactly one is expected.`,
+        hits.length > 1 ? { candidates: hits.map((h) => tree.ref(h)) } : {},
+      );
+    }
+    return { unknown: true, node: tree.ref(hits[0]!), entry: null, matchedBy: null };
+  }
+  const r = resolveRace(tree, store, type, root, input.race!);
+  return {
+    unknown: false,
+    node: tree.ref(r.node),
+    entry: { id: r.entry.id, plural: r.entry.plural, singular: r.entry.singular },
+    matchedBy: r.matchedBy,
+  };
+}
+
 /** v2 D3 (ADR 0041): a character's race as the image pipeline needs it, by the same rules as `create_character`. */
 export type CharacterRaceFolders =
   | { readonly unknown: true; readonly type: string }

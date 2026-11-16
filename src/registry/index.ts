@@ -28,6 +28,7 @@ import { outOfOrder, placementFor, type OutOfOrderParent } from './ordering.js';
 import {
   planCharacterPlacement,
   resolveCharacterRaceFolders,
+  resolveRaceIndex,
   type CharacterPlacementInput,
   type CharacterPlacementPlan,
   type CharacterRaceFolders,
@@ -66,6 +67,8 @@ export interface ProjectTypes {
   planCharacterPlacement(input: CharacterPlacementInput): CharacterPlacementPlan;
   /** v2 D3 (ADR 0041): a declared race's asset folder names (`[group, race]` or `[race]`), or unknown. */
   raceFolders(race: string | null | undefined, type?: string): CharacterRaceFolders;
+  /** v3 F3a (ADR 0050): the race index a race resolves to (or the unknown-race index), with no write. */
+  raceIndex(race: string | null | undefined, type?: string): ReturnType<typeof resolveRaceIndex>;
 }
 
 export interface Registry {
@@ -158,6 +161,8 @@ export function createRegistry(o: RegistryOptions): Registry {
         planCharacterPlacement(tree(), store, input),
       raceFolders: (race: string | null | undefined, type?: string) =>
         resolveCharacterRaceFolders(tree(), store, { race, type }),
+      raceIndex: (race: string | null | undefined, type?: string) =>
+        resolveRaceIndex(tree(), store, { race, type }),
     });
     cache.set(projectId, p);
     return p;
@@ -207,6 +212,7 @@ export {
 export {
   planCharacterPlacement,
   resolveCharacterRaceFolders,
+  resolveRaceIndex,
   type CharacterRaceFolders,
   type CharacterPlacementInput,
   type CharacterPlacementPlan,

@@ -560,8 +560,8 @@ export const recordParamsSchema = z
         // C2d: `begin_set` / `complete_set`, a whole set's record and its pages' records together.
         action: z.enum(['begin', 'complete', 'begin_set', 'complete_set']),
         record: z.record(z.string(), z.unknown()),
-        /** v2 D1: which record (`lifecycle`, the default, or `chronology`). */
-        store: z.enum(['lifecycle', 'chronology']).optional(),
+        /** v2 D1: which record (`lifecycle`, the default, or `chronology`); v3 F3a: `pack` (a setting pack's). */
+        store: z.enum(['lifecycle', 'chronology', 'pack']).optional(),
       })
       .strict(),
   })

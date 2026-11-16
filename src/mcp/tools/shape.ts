@@ -8,6 +8,7 @@
  *   below that;
  * - failures become typed `{ error: { code, message, … } }` results, never thrown exceptions.
  */
+import type { Packs } from '../../packs/service.js';
 import type { BlockwiseUndo } from '../../pages/undo.js';
 import * as z from 'zod';
 import type { ImageService } from '../../images/service.js';
@@ -86,6 +87,8 @@ export interface DiscoverServices {
   readonly audits?: Audits;
   /** v2 E4 (ADR 0046): the undo of a block-by-block page write that stopped part-way. */
   readonly blockwiseUndo?: BlockwiseUndo;
+  /** v3 F3a (ADR 0050): the setting packs (their rules, attachments, governance and approval). */
+  readonly packs?: Packs;
 }
 
 /** What every tool handler needs. */
