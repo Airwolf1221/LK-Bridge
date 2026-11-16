@@ -9,6 +9,10 @@ export interface Read {
   readonly anchor: string;
   readonly approximate?: boolean;
   readonly open?: 'start' | 'end';
+  /** v3 F2.1: the bound is included (`On or after X`, `Before or during X`). */
+  readonly inclusive?: boolean;
+  /** v3 F2.1: a range whose ends differ in precision, its ends as written (the event takes the coarser detail). */
+  readonly endsText?: string;
   readonly qualifier: string;
   /** The ParsedDate's form: what the timeline event is stored as. */
   readonly detail: 1 | 2 | 3;
@@ -43,6 +47,8 @@ export const READ: readonly Read[] = [
     cell: 'Late 4A 565; exact date unresolved',
     shape: 'year',
     anchor: '4A 565',
+    // v3 F2.1 (the owner, 16 November 2026): Early, Mid and Late on a year make it approximate.
+    approximate: true,
     qualifier: 'Late …; exact date unresolved',
     detail: 1,
   },
@@ -202,6 +208,116 @@ export const READ: readonly Read[] = [
   },
 ];
 
+/**
+ * v3 F2.1 (ADR 0048, F2.1 amendments): the six more certain forms the owner listed on 16 November 2026, with the Arkona
+ * rows they come from. Read only when unambiguous.
+ */
+export const READ_F21: readonly Read[] = [
+  {
+    // Arkona row 443.
+    cell: 'On or after Selaphos 9th, 4A 643',
+    shape: 'day',
+    anchor: 'Selaphos 9th, 4A 643',
+    open: 'end',
+    inclusive: true,
+    qualifier: 'On or after …',
+    detail: 3,
+  },
+  {
+    cell: 'On or before Selaphos 9th, 4A 643; exact day unresolved',
+    shape: 'day',
+    anchor: 'Selaphos 9th, 4A 643',
+    open: 'start',
+    inclusive: true,
+    qualifier: 'On or before …; exact day unresolved',
+    detail: 3,
+  },
+  {
+    // Arkona row 288: the bound is the end of the month the week is in (never a day the reader invents).
+    cell: 'Before or during the third week of Isar, 4A 566; exact day unresolved',
+    shape: 'month',
+    anchor: 'Isar 4A 566',
+    open: 'start',
+    inclusive: true,
+    qualifier: 'Before or during the third week of …; exact day unresolved',
+    detail: 2,
+  },
+  {
+    cell: 'During or after Isar 4A 566',
+    shape: 'month',
+    anchor: 'Isar 4A 566',
+    open: 'end',
+    inclusive: true,
+    qualifier: 'During or after …',
+    detail: 2,
+  },
+  {
+    cell: '4A 614-617',
+    shape: 'range',
+    anchor: '4A 614 - 4A 617',
+    qualifier: '…',
+    detail: 1,
+  },
+  {
+    // Arkona row 340: "Across" is a qualifier, as "From" and "In" are.
+    cell: 'Across 4A 614-617; exact years of each session unresolved',
+    shape: 'range',
+    anchor: '4A 614 - 4A 617',
+    qualifier: 'Across …; exact years of each session unresolved',
+    detail: 1,
+  },
+  {
+    cell: 'Early 4A 621',
+    shape: 'year',
+    anchor: '4A 621',
+    approximate: true,
+    qualifier: 'Early …',
+    detail: 1,
+  },
+  {
+    // Arkona row 358.
+    cell: 'Late 4A 621 onward',
+    shape: 'year',
+    anchor: '4A 621',
+    approximate: true,
+    open: 'end',
+    qualifier: 'Late … onward',
+    detail: 1,
+  },
+  {
+    cell: 'Camue 1st, 5A 1 (4A 950)',
+    shape: 'day',
+    anchor: 'Camue 1st, 5A 1',
+    qualifier: '… (4A 950)',
+    detail: 3,
+  },
+  {
+    cell: 'Camue 4A 624 - Kumikas 25th, 4A 630',
+    shape: 'range',
+    anchor: 'Camue 4A 624 - Kumikas 4A 630',
+    endsText: 'Camue 4A 624 - Kumikas 25th, 4A 630',
+    qualifier: '… - …',
+    detail: 2,
+  },
+  {
+    cell: 'Camue 4A 624 to Kumikas 25th, 4A 630; reign of the regency council',
+    shape: 'range',
+    anchor: 'Camue 4A 624 - Kumikas 4A 630',
+    endsText: 'Camue 4A 624 - Kumikas 25th, 4A 630',
+    qualifier: '… to …; reign of the regency council',
+    detail: 2,
+  },
+  {
+    // Left unread before v3 F2.1 (a month to a day); now each end at its own precision, the event by month.
+    cell: 'From Isar 4A 566 to Selaphos 3rd, 4A 566',
+    shape: 'range',
+    anchor: 'Isar - Selaphos, 4A 566',
+    endsText: 'Isar 4A 566 - Selaphos 3rd, 4A 566',
+    qualifier: 'From … to …',
+    detail: 2,
+  },
+];
+
 /** Forms deliberately NOT read: the owner's relative offset, and what strictness refuses. */
 export const UNREAD: readonly { readonly cell: string; readonly code: string; readonly why: RegExp }[] = [
   {
@@ -213,7 +329,15 @@ export const UNREAD: readonly { readonly cell: string; readonly code: string; re
   { cell: 'Shortly before the coronation; undated', code: 'DATE_NO_ANCHOR', why: /no date/ },
   { cell: 'c. 563; exact date unresolved', code: 'DATE_NO_ANCHOR', why: /no date/ },
   { cell: 'Late Isar 3rd, 4A 619', code: 'DATE_QUALIFIER_ON_DAY', why: /on a day/ },
-  { cell: 'From Isar 4A 566 to Selaphos 3rd, 4A 566', code: 'DATE_RANGE_MIXED', why: /precision/ },
+  // v3 F2.1: still never read: a relative offset, an event used as a date, a gloss that disagrees, a range reversed
+  // or inside one unit, an open month made "late".
+  { cell: 'Nine months after Isar 1st, 4A 623', code: 'DATE_RELATIVE', why: /relative offset/ },
+  { cell: 'After the Altun Sahra War in 4A 633', code: 'DATE_UNKNOWN_MONTH', why: /not a month/ },
+  { cell: 'Camue 1st, 5A 1 (4A 949)', code: 'DATE_AMBIGUOUS', why: /same instant/ },
+  { cell: 'Isar 3rd, 4A 619 (4A 619)', code: 'DATE_AMBIGUOUS', why: /inside and outside/ },
+  { cell: '4A 617-614', code: 'DATE_RANGE_REVERSED', why: /ends before/ },
+  { cell: 'Isar 4A 566 to Isar 3rd, 4A 566', code: 'DATE_RANGE_REVERSED', why: /ends in the month/ },
+  { cell: 'Late Isar 4A 566 onward', code: 'DATE_AMBIGUOUS', why: /open date/ },
   { cell: 'Between Azah 27th and Isar 30th, 4A 607', code: 'DATE_RANGE_REVERSED', why: /ends before/ },
   {
     cell: 'After the Isar road and before Selyros 40th, 4A 605',

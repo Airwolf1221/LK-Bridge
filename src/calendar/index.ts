@@ -20,6 +20,7 @@ export { CalendarError, type CalendarErrorCode } from './errors.js';
 export {
   DEFAULT_KCY_STYLE,
   formatKcy,
+  kcyWrittenAlike,
   parseKcyCell,
   readQualifiedKcy,
   type KcyCell,

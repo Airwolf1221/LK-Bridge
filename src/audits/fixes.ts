@@ -614,6 +614,7 @@ export async function proposeFix(
     case 'chronology_sync':
     case 'chronology_count':
     case 'chronology_orphan':
+    case 'chronology_pair':
       throw new AuditError('USE_CHRONOLOGY', 'This fix goes through the chronology module.');
     case 'merge_asset_folders':
       return fixMergeFolders(d, projectId, f);

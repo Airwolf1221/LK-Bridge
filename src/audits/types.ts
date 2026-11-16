@@ -58,6 +58,11 @@ export type FixKind =
   | 'chronology_count'
   /** v2 E6 (ADR 0048): an event without a table row deleted (only the event), through the chronology module likewise. */
   | 'chronology_orphan'
+  /**
+   * v3 F2.1: an event in a tie paired with the row the owner picks ("Pair with this row", one per candidate):
+   * `sync_timeline_event` with that row and the event, through the chronology module likewise. Never a delete.
+   */
+  | 'chronology_pair'
   /** v3 F2 (ADR 0049 decision 9): duplicate asset folders merged into the earliest, the emptied ones deleted. */
   | 'merge_asset_folders';
 
@@ -348,6 +353,12 @@ export const CODES = {
     severity: 'warning',
     title: 'A timeline event has no table row',
     fix: 'chronology_orphan',
+  },
+  chronology_event_in_tie: {
+    category: 'chronology',
+    severity: 'warning',
+    title: 'Event in a tie: rows of the table could be its own',
+    fix: 'chronology_pair',
   },
   chronology_date_mismatch: {
     category: 'chronology',

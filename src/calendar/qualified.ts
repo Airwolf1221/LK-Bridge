@@ -25,6 +25,19 @@
  * 8. `In X`, `During X` read X; trailing words after a full date (`Camue 10th, 4A 624 departure`) are qualifier, as
  *    long as they hold no other date.
  *
+ * v3 F2.1 (ADR 0048, F2.1 amendments; the owner, 16 November 2026), six more certain forms:
+ *
+ * 9. `On or after X` and `On or before X` read like `After X` and `Before X` (an open end or start at X).
+ * 10. `Before or during X` is an open start ending at the end of X; `During or after X` an open end starting at the
+ *     start of X. X is any form the reader knows (`the third week of Isar, 4A 566`), one date.
+ * 11. `4A 614-617` is the years 4A 614 to 4A 617 (the second part a bare number greater than the first, the same era);
+ *     `Across X` reads X, as `In X` does.
+ * 12. `Early`, `Mid` and `Late` on a year make it an approximate year; `Late 4A 621 onward` is an open end from it.
+ * 13. A bracketed gloss in another era that names the same instant (`Camue 1st, 5A 1 (4A 950)`: the same KCY at a
+ *     year's precision, the same minutes at a finer one) is qualifier; one that does not agree leaves the cell unread.
+ * 14. A range whose ends differ in precision (`Camue 4A 624` to `Kumikas 25th, 4A 630`) is read with each end at its own
+ *     precision; its event takes the coarser detail.
+ *
  * Nothing about Arkona is hard-coded: months and eras are the calendar's, the anchor is read by the calendar's own
  * forms. A month or era word the reader cannot place is never guessed: the cell stays unreadable.
  */
@@ -48,6 +61,16 @@ export interface QualifiedReading {
   readonly approximate: boolean;
   /** Before the bound: the start is not known (`Before Y`, `By Y`). */
   readonly openStart?: true;
+  /**
+   * v3 F2.1: the bound itself is included (`On or before Y`, `Before or during Y`, `During or after X`): the reading
+   * and the event are the same as without it; only the words differ.
+   */
+  readonly inclusive?: true;
+  /**
+   * v3 F2.1: a range whose ends differ in precision, its ends as written, each at its own precision (`Camue 4A 624 -
+   * Kumikas 25th, 4A 630`). `start` and `end` are those ends' minutes; `date` (the event) takes the coarser detail.
+   */
+  readonly endsText?: string;
   /** After the bound: the end is not known (`After X`, `From X through the reign`). */
   readonly openEnd?: true;
   /** Everything outside the anchor, verbatim, the anchor's own text replaced by `…`. */
@@ -109,10 +132,15 @@ const UNITS_FOLLOWING = new RegExp(
 );
 const POSITIONAL =
   /^((?:late|early|mid)(?:\s*-\s*|\s+)|(?:the\s+)?(?:first|second|third|fourth|fifth|last|final|closing|opening)\s+(?:week|fortnight|days|months|quarter)\s+of\s+|(?:the\s+)?(?:first|second|last|latter|earlier|later)\s+half\s+of\s+|(?:the\s+)?(?:end|start|beginning|middle|close)\s+of\s+)(.+)$/iu;
-const IN_PREFIX = /^((?:sometime|some\s+time)?\s*(?:in|during)\s+)(.+)$/iu;
+const IN_PREFIX = /^((?:sometime|some\s+time)?\s*(?:in|during|across)\s+)(.+)$/iu;
 const OPEN_END =
-  /^((?:(?:shortly|soon|immediately|just|directly)\s+)?(?:after|following|since|from|no\s+earlier\s+than|not\s+before)\s+)(.+)$/iu;
-const OPEN_START = /^((?:before|by|prior\s+to|no\s+later\s+than|not\s+after)\s+)(.+)$/iu;
+  /^((?:(?:shortly|soon|immediately|just|directly)\s+)?(?:on\s+or\s+after|after|following|since|from|no\s+earlier\s+than|not\s+before)\s+)(.+)$/iu;
+const OPEN_START = /^((?:on\s+or\s+before|before|by|prior\s+to|no\s+later\s+than|not\s+after)\s+)(.+)$/iu;
+/** v3 F2.1: `Before or during X` (an open start to the end of X) and `During or after X` (an open end from its start). */
+const BEFORE_OR_DURING = /^before\s+or\s+during\s+(.+)$/iu;
+const DURING_OR_AFTER = /^during\s+or\s+after\s+(.+)$/iu;
+/** v3 F2.1: `Early`, `Mid` and `Late`: on a year they make it approximate (rule 12). */
+const EARLY_MID_LATE = /^(?:late|early|mid)\b/iu;
 const ONWARD = /^(?:onwards?|and\s+after|and\s+later|and\s+beyond)\b/iu;
 
 // ============================================================================================ the reader
@@ -135,6 +163,12 @@ interface Core {
   readonly slices: readonly string[];
   readonly openStart?: boolean;
   readonly openEnd?: boolean;
+  /** v3 F2.1: `Early`, `Mid` or `Late` on a year. */
+  readonly approximate?: boolean;
+  /** v3 F2.1: the bound is included (`On or after X`, `Before or during X`). */
+  readonly inclusive?: boolean;
+  /** v3 F2.1: a range of mixed precision: its ends at their own precision. */
+  readonly exact?: { readonly start: number; readonly end: number; readonly text: string };
 }
 
 type Step =
@@ -234,14 +268,22 @@ export class QualifiedReader {
     if (dated.length === 1) {
       const m = dated[0]!;
       const outside = part.slice(0, m.index) + part.slice(m.index + m[0].length);
-      if (this.hasDateToken(outside))
-        return fail(
-          'DATE_AMBIGUOUS',
-          `“${part}” has a date both inside and outside its brackets; which one is the anchor is not certain.`,
-        );
       let inner = m[1]!.trim();
       const im = APPROX.exec(inner);
       if (im) inner = inner.slice(im[0].length).trim();
+      if (this.hasDateToken(outside)) {
+        // v3 F2.1 (rule 13): a gloss in another era naming the same instant is qualifier; anything else stays unread.
+        const main = this.core(outside.replace(/[\s.,]+$/u, '').trim());
+        const gloss = this.core(inner.replace(/[\s.,]+$/u, ''));
+        if (main?.ok && gloss?.ok && sameInstant(main.core, gloss.core))
+          return { ok: true, core: main.core, approximate: false, part };
+        return fail(
+          'DATE_AMBIGUOUS',
+          main?.ok && gloss?.ok
+            ? `“${part}” has a date both inside and outside its brackets, and they do not name the same instant; which one is the anchor is not certain.`
+            : `“${part}” has a date both inside and outside its brackets; which one is the anchor is not certain.`,
+        );
+      }
       const step = this.core(inner.replace(/[\s.,]+$/u, ''));
       if (step === null) {
         const why = this.strictReason(inner);
@@ -277,6 +319,11 @@ export class QualifiedReader {
       );
     let m = LESS_THAN_AFTER.exec(s) ?? UNITS_FOLLOWING.exec(s);
     if (m) return this.open(m[1]!, 'end');
+    // v3 F2.1 (rule 10): `Before or during X`, `During or after X`.
+    m = BEFORE_OR_DURING.exec(s);
+    if (m) return this.during(m[1]!, 'start');
+    m = DURING_OR_AFTER.exec(s);
+    if (m) return this.during(m[1]!, 'end');
     // Rule 5: ranges with bounds.
     m =
       /^(?:after|following|since)\s+(.+?)(?:\s*,\s*|\s+and\s+|\s+but\s+)(?:before|by|prior\s+to|no\s+later\s+than)\s+(.+)$/iu.exec(
@@ -289,7 +336,7 @@ export class QualifiedReader {
     if (m) return this.bounds(m[1]!, m[2]!);
     // Rule 6: an open start.
     m = OPEN_START.exec(s);
-    if (m) return this.open(m[2]!, 'start');
+    if (m) return this.open(m[2]!, 'start', /^on\s/iu.test(m[1]!));
     // `X through … Y` (and `From X through …`).
     m = /^(?:from\s+)?(.+?)\s+through\s+(.+)$/iu.exec(s);
     if (m) {
@@ -298,7 +345,7 @@ export class QualifiedReader {
     }
     // Rule 6: an open end.
     m = OPEN_END.exec(s);
-    if (m) return this.open(m[2]!, 'end');
+    if (m) return this.open(m[2]!, 'end', /^on\s/iu.test(m[1]!));
     // `X to Y`: both ends full dates.
     m = /^(.+?)\s+(?:to|until|till)\s+(.+)$/iu.exec(s);
     if (m) {
@@ -309,25 +356,62 @@ export class QualifiedReader {
     }
     // Rule 7: a qualifier on a year or month.
     m = POSITIONAL.exec(s);
-    if (m) {
-      const a = this.anchor(m[2]!);
-      if (a === null || !a.ok) return a;
-      if (a.core.openStart || a.core.openEnd)
-        return fail(
-          'DATE_AMBIGUOUS',
-          `“${s}” qualifies an open date; the reader does not guess what it means.`,
-        );
-      if (a.core.date.detail === 3)
-        return fail(
-          'DATE_QUALIFIER_ON_DAY',
-          `“${m[1]!.trim()}” qualifies a year or a month; on a day (“${m[2]}”) its meaning is not certain.`,
-        );
-      return a;
-    }
-    // Rule 8: `In X`, `During X`.
+    if (m) return this.positional(s, m[1]!, m[2]!);
+    // Rule 8: `In X`, `During X` (v3 F2.1: `Across X`).
     m = IN_PREFIX.exec(s);
     if (m) return this.anchor(m[2]!);
     return this.anchor(s);
+  }
+
+  /**
+   * Rule 7: `Late`, `Early`, `Mid`, `Third week of` and the like on a year or a month (never a day, never an open date).
+   * v3 F2.1 (rule 12): `Early`, `Mid` and `Late` on one year make it approximate, and `Late 4A 621 onward` is an open
+   * end from that year.
+   */
+  private positional(s: string, prefix: string, rest: string): Step {
+    const a = this.anchor(rest);
+    if (a === null || !a.ok) return a;
+    const eml = EARLY_MID_LATE.test(prefix.trim());
+    const oneYear = a.core.date.detail === 1 && a.core.date.end === null;
+    if (a.core.openStart || a.core.openEnd) {
+      if (eml && oneYear && a.core.openEnd && !a.core.openStart)
+        return { ok: true, core: { ...a.core, approximate: true } };
+      return fail(
+        'DATE_AMBIGUOUS',
+        `“${s}” qualifies an open date; the reader does not guess what it means.`,
+      );
+    }
+    if (a.core.date.detail === 3)
+      return fail(
+        'DATE_QUALIFIER_ON_DAY',
+        `“${prefix.trim()}” qualifies a year or a month; on a day (“${rest}”) its meaning is not certain.`,
+      );
+    return eml && oneYear ? { ok: true, core: { ...a.core, approximate: true } } : a;
+  }
+
+  /**
+   * v3 F2.1 (rule 10): `Before or during X` (an open start whose bound is the end of X) and `During or after X` (an
+   * open end from the start of X). X is one date in any form the reader knows (`the third week of Isar, 4A 566`).
+   */
+  private during(xs: string, side: 'start' | 'end'): Step {
+    const t = xs.trim().replace(/[\s.,]+$/u, '');
+    const pm = POSITIONAL.exec(t);
+    const x = pm ? this.positional(t, pm[1]!, pm[2]!) : this.anchor(t);
+    if (x === null)
+      return this.hasDateToken(t)
+        ? fail('DATE_BOUND_UNREADABLE', `“${t}” looks like a date but cannot be read.`)
+        : null;
+    if (!x.ok) return x;
+    if (x.core.date.end !== null || x.core.openStart || x.core.openEnd)
+      return fail('DATE_AMBIGUOUS', `“${t}” is itself a range or open; the bound must be one date.`);
+    return {
+      ok: true,
+      core: {
+        ...x.core,
+        inclusive: true,
+        ...(side === 'start' ? { openStart: true } : { openEnd: true }),
+      },
+    };
   }
 
   /** One date, a compressed year range, or a date with trailing words that hold no other date. */
@@ -341,6 +425,13 @@ export class QualifiedReader {
     if (!lead) return side.kind === 'fail' ? fail(side.code, side.message) : null;
     const rest = lead.rest.replace(/^[\s,]+/u, '').trim();
     if (rest === '') return { ok: true, core: { date: lead.date, slices: [lead.match] } };
+    // v3 F2.1 (rule 14): `X - Y` whose ends differ in precision (the plain forms read only same-precision ranges).
+    const dash = /^[-–—]\s*(.+)$/u.exec(rest);
+    if (dash) {
+      const y = this.side(dash[1]!);
+      if (y.kind === 'date' && y.found.date.end === null && y.found.date.detail !== lead.date.detail)
+        return this.range({ date: lead.date, slices: [lead.match] }, y.found);
+    }
     if (ONWARD.test(rest)) {
       const after = rest.replace(ONWARD, '').trim();
       if (this.hasDateToken(after))
@@ -444,7 +535,7 @@ export class QualifiedReader {
   }
 
   /** `After X` (open end) or `Before Y` (open start): the bound, a single date, with words after it allowed. */
-  private open(s: string, side: 'start' | 'end'): Step {
+  private open(s: string, side: 'start' | 'end', inclusive = false): Step {
     const a = this.anchor(s);
     if (a === null)
       return this.hasDateToken(s)
@@ -453,7 +544,8 @@ export class QualifiedReader {
     if (!a.ok) return a;
     if (a.core.date.end !== null || a.core.openStart || a.core.openEnd)
       return fail('DATE_AMBIGUOUS', `“${s}” is itself a range or open; an open bound must be one date.`);
-    return this.single({ date: a.core.date, slices: a.core.slices }, side);
+    const one = this.single({ date: a.core.date, slices: a.core.slices }, side);
+    return inclusive && one?.ok ? { ok: true, core: { ...one.core, inclusive: true } } : one;
   }
 
   private single(f: Found, open: 'start' | 'end'): Step {
@@ -476,11 +568,36 @@ export class QualifiedReader {
         'DATE_AMBIGUOUS',
         'An end of the range is itself a range; the reader does not guess which bound applies.',
       );
-    if (a.date.detail !== b.date.detail)
-      return fail(
-        'DATE_RANGE_MIXED',
-        `The range runs from a ${word(a.date.detail)} (“${a.date.input}”) to a ${word(b.date.detail)} (“${b.date.input}”); its precision is not certain.`,
-      );
+    const p = this.parser;
+    const input = `${a.date.input} - ${b.date.input}`;
+    if (a.date.detail !== b.date.detail) {
+      // v3 F2.1 (rule 14): each end at its own precision; the event takes the coarser detail (its ends the first
+      // minute of each end's year or month, as LegendKeeper stores a range of that detail).
+      const coarse = Math.min(a.date.detail, b.date.detail) as 1 | 2;
+      const unit = (minute: number) =>
+        p.parse(p.render(coarse === 1 ? 'year' : 'month', minute, null, this.style), this.style).start;
+      const from = unit(a.date.start);
+      const to = unit(b.date.start);
+      if (b.date.start <= a.date.start || to <= from)
+        return fail(
+          'DATE_RANGE_REVERSED',
+          to <= from && b.date.start > a.date.start
+            ? `The range “${a.date.input}” to “${b.date.input}” ends in the ${word(coarse)} it begins; its precision is not certain.`
+            : `The range “${a.date.input}” to “${b.date.input}” ends before it begins.`,
+        );
+      return {
+        ok: true,
+        core: {
+          date: p.result(p.formFor(from, to, coarse), from, to, input, this.style),
+          slices: [...a.slices, ...b.slices],
+          exact: {
+            start: a.date.start,
+            end: b.date.start,
+            text: `${a.date.text}${this.style.rangeSeparator}${b.date.text}`,
+          },
+        },
+      };
+    }
     if (b.date.start <= a.date.start)
       return fail(
         'DATE_RANGE_REVERSED',
@@ -488,9 +605,7 @@ export class QualifiedReader {
           ? `The range “${a.date.input}” to “${b.date.input}” ends where it begins.`
           : `The range “${a.date.input}” to “${b.date.input}” ends before it begins.`,
       );
-    const p = this.parser;
     const form = p.formFor(a.date.start, b.date.start, a.date.detail);
-    const input = `${a.date.input} - ${b.date.input}`;
     return {
       ok: true,
       core: {
@@ -511,17 +626,21 @@ export class QualifiedReader {
       from = at + 1;
     }
     const precision: ReadingPrecision = d.detail === 1 ? 'year' : d.detail === 2 ? 'month' : 'day';
+    const start = core.exact?.start ?? d.start;
+    const end = core.exact?.end ?? d.end;
     return {
       ok: true,
       reading: {
         text,
         shape: d.end !== null ? 'range' : precision,
         precision,
-        start: d.start,
-        ...(d.end !== null ? { end: d.end } : {}),
-        approximate,
+        start,
+        ...(end !== null ? { end } : {}),
+        approximate: approximate || core.approximate === true,
         ...(core.openStart ? { openStart: true as const } : {}),
         ...(core.openEnd ? { openEnd: true as const } : {}),
+        ...(core.inclusive ? { inclusive: true as const } : {}),
+        ...(core.exact ? { endsText: core.exact.text } : {}),
         qualifier,
         anchorText: d.text,
         anchors: [...core.slices],
@@ -532,6 +651,23 @@ export class QualifiedReader {
 }
 
 const word = (detail: number) => (detail === 1 ? 'year' : detail === 2 ? 'month' : 'day');
+
+/**
+ * v3 F2.1 (rule 13): a bracketed gloss names the same instant as the date outside it: in another era, and at the
+ * gloss's precision the same (a year: the same KCY at each end; a month or a day: the same minutes and detail). Open
+ * dates never agree.
+ */
+function sameInstant(main: Core, gloss: Core): boolean {
+  if (main.openStart || main.openEnd || gloss.openStart || gloss.openEnd || main.exact || gloss.exact)
+    return false;
+  const a = main.date;
+  const g = gloss.date;
+  if (a.era.id === g.era.id) return false;
+  if ((a.end === null) !== (g.end === null)) return false;
+  if (g.detail === 1)
+    return a.kcy.start === g.kcy.start && (a.kcy.end ?? a.kcy.start) === (g.kcy.end ?? g.kcy.start);
+  return a.detail === g.detail && a.start === g.start && a.end === g.end;
+}
 
 /** Reads one cell (a reader per call; use `QualifiedReader` to read many). */
 export function parseQualified(
@@ -545,11 +681,13 @@ export function parseQualified(
 /** A reading in plain words, for findings, proposals and the dashboard: `year 4A 563, approximate`. */
 export function describeReading(r: QualifiedReading): string {
   const what = r.openStart
-    ? `before ${r.anchorText} (an open start)`
+    ? `${r.inclusive ? 'up to and including' : 'before'} ${r.anchorText} (an open start)`
     : r.openEnd
-      ? `after ${r.anchorText} (an open end)`
-      : r.shape === 'range'
-        ? `${r.precision === 'year' ? 'years' : r.precision === 'month' ? 'months' : 'range'} ${r.anchorText}`
-        : `${r.shape} ${r.anchorText}`;
+      ? `${r.inclusive ? 'from' : 'after'} ${r.anchorText} (an open end)`
+      : r.endsText
+        ? `range ${r.endsText} (the event by ${r.precision})`
+        : r.shape === 'range'
+          ? `${r.precision === 'year' ? 'years' : r.precision === 'month' ? 'months' : 'range'} ${r.anchorText}`
+          : `${r.shape} ${r.anchorText}`;
   return r.approximate ? `${what}, approximate` : what;
 }

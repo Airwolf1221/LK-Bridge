@@ -14,6 +14,7 @@ import {
   DEFAULT_KCY_STYLE,
   LK_DATE_STYLE,
   formatKcy,
+  kcyWrittenAlike,
   parseKcyCell,
   type DateForm,
 } from '../../src/calendar/index.js';
@@ -353,10 +354,19 @@ describe('KCY cells', () => {
     expect(formatKcy({ start: 1_250_308, end: null }, s)).toBe('1,250,308');
     expect(formatKcy({ start: -1_988_119, end: null }, s)).toBe('-1,988,119');
     expect(formatKcy({ start: 1_250_407, end: 1_250_409 }, s)).toBe('1,250,407 - 1,250,409');
-    expect(formatKcy({ start: 1_250_731, end: 1_250_731 }, s)).toBe('1,250,731 - 1,250,731');
-    expect(formatKcy({ start: 1_250_731, end: 1_250_731 }, { ...s, sameYearRange: 'single' })).toBe(
-      '1,250,731',
+    // v3 F2.1 (the owner, 16 November 2026): a range inside one KCY is the single value by default.
+    expect(formatKcy({ start: 1_250_731, end: 1_250_731 }, s)).toBe('1,250,731');
+    expect(formatKcy({ start: 1_250_731, end: 1_250_731 }, { ...s, sameYearRange: 'range' })).toBe(
+      '1,250,731 - 1,250,731',
     );
+    // Either way of writing it is accepted (never "written differently"); a different value is not.
+    const v = { start: 1_250_918, end: 1_250_918 };
+    expect(kcyWrittenAlike('1,250,918', v, s)).toBe(true);
+    expect(kcyWrittenAlike('1,250,918 - 1,250,918', v, s)).toBe(true);
+    expect(kcyWrittenAlike('1,250,918 - 1,250,918', v, { ...s, sameYearRange: 'range' })).toBe(true);
+    expect(kcyWrittenAlike('1,250,918', v, { ...s, sameYearRange: 'range' })).toBe(true);
+    expect(kcyWrittenAlike('1,250,919', v, s)).toBe(false);
+    expect(kcyWrittenAlike('1,250,918', { start: 1_250_918, end: 1_250_919 }, s)).toBe(false);
     expect(formatKcy({ start: 1_250_407, end: 1_250_409 }, { ...s, grouping: '', rangeSeparator: '-' })).toBe(
       '1250407-1250409',
     );

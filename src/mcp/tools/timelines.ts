@@ -420,6 +420,10 @@ function remaining(
         // v2 E6 (ADR 0048): the "no row for this event" compare-and-swap, likewise of a first run only.
         if (!rec) writes.push(w);
         break;
+      case 'event.assert':
+        // v3 F2.1: the chosen event's compare-and-swap (a link), likewise of a first run only.
+        if (!rec) writes.push(w);
+        break;
       case 'row.insert': {
         const r = rowOf(w.documentId, w.rowId);
         if (!r) writes.push(w);
@@ -564,6 +568,10 @@ interface Submit {
   readonly head: Obj;
   readonly markdown: { before: string; after: string };
   readonly dryRun: boolean | undefined;
+  /** v3 F2.1: a proposal whatever the gate says (a link at scope `propose`: no LegendKeeper write to gate). */
+  readonly forceProposal?: boolean;
+  /** v3 F2.1: what a finished job answers instead of `written` (`linked`). */
+  readonly writtenStatus?: string;
 }
 
 async function submit(pd: ProjectDeps, mctx: McpToolContext, s: Submit): Promise<CreateOutcome> {
@@ -612,10 +620,16 @@ async function submit(pd: ProjectDeps, mctx: McpToolContext, s: Submit): Promise
       operations: [{ tool: s.tool, page, pageParts: steps, summaryLabel: s.summary, chronology: s.head }],
       summary: s.summary,
     },
-    head: { ...s.head, steps },
+    head: { ...s.head, steps, ...(s.writtenStatus ? { writtenStatus: s.writtenStatus } : {}) },
     preview: () => ({ summary: s.summary }),
+    ...(s.forceProposal === true ? { forceProposal: true } : {}),
   });
-  return { kind: 'job', head: { ...s.head, steps }, labels: built.labels, ...out };
+  return {
+    kind: 'job',
+    head: { ...s.head, steps, ...(s.writtenStatus ? { writtenStatus: s.writtenStatus } : {}) },
+    labels: built.labels,
+    ...out,
+  };
 }
 
 // ============================================================================================ calendar_date
@@ -1144,6 +1158,7 @@ async function findEvent(
   const marks = currentTableOnly(rows, store.tableOnly(ch.ctx.projectId, age.tableDocumentId));
   const paired = matchRowsAndEvents(rows, events, store.links(ch.ctx.projectId, age.tableDocumentId), age, {
     tableOnly: marks.current,
+    kcyOf: (m) => cal.engine.kcyOf(m),
   });
   const pairs = paired.pairs;
   let row: AgeRow | null = null;
@@ -1920,7 +1935,9 @@ const syncRowArg = z
       .min(1)
       .max(20_000)
       .optional()
-      .describe('The row’s description, as the table shows it (with its date).'),
+      .describe(
+        'The row’s description, as the table shows it (with its date), or its opening words: a prefix of exactly one row of that date, at least 20 characters.',
+      ),
     row_id: z.string().min(1).max(64).optional().describe('The row’s block id, instead of a date and text.'),
     age: z
       .string()
@@ -1939,7 +1956,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Repair the timeline event of a chronology table row',
     access: 'write',
     description:
-      'Repairs drift for ONE chronology table row, with the TABLE as the authority: creates the row’s missing timeline event, or corrects the paired event’s minutes, detail, shape and link to match. It never touches the table or the Main count, and renames an event only to keep a date tail the bridge wrote in step with the row’s Date cell. Name the row with `row` (its date plus its description, or its row_id). Use it for what the chronology check reports (row_without_event, date_mismatch) or CHRONOLOGY_DRIFT. A row whose event already agrees answers "nothing to do"; if several events could be its pair it is refused with the candidates (pass `event_id`). dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 6 to 7 reads and 1 write.',
+      'Repairs drift for ONE chronology table row, with the TABLE as the authority: creates the row’s missing timeline event, or corrects the paired event’s minutes, detail, shape and link to match. It never touches the table or the Main count, and renames an event only to keep a date tail the bridge wrote in step with the row’s Date cell. Name the row with `row` (its date plus its description or its opening words, at least 20 characters; or its row_id). Use it for what the chronology check reports (row_without_event, date_mismatch, event_in_tie) or CHRONOLOGY_DRIFT. A row whose event already agrees answers "nothing to do". If several events could be its pair it is refused (PAIRING_AMBIGUOUS) with every candidate’s name, date and id: pass `event_id` to pair it with one (an event that already agrees is then linked to the row, answer "linked", no LegendKeeper write), or `create_new: true` to make a new event instead. dryRun shows the plan. At scope propose it becomes a proposal (a link too): nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 6 to 7 reads and 1 write (a link: no write).',
     inputSchema: z.object({
       row: syncRowArg,
       event_id: z
@@ -1947,7 +1964,15 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
         .min(1)
         .max(64)
         .optional()
-        .describe('Only to choose among the candidate events of a refused, ambiguous pairing.'),
+        .describe(
+          'Only to choose among the candidate events of a refused, ambiguous pairing (or an event in a tie). The choice is remembered: an event that already agrees is linked to the row.',
+        ),
+      create_new: z
+        .boolean()
+        .optional()
+        .describe(
+          '“None of these: make a new event”: creates the row’s event although candidates exist (the proposal names those passed over). Never with event_id.',
+        ),
       name: z
         .string()
         .min(1)
@@ -1983,6 +2008,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
             ...(args.row.age !== undefined ? { age: args.row.age } : {}),
             ...(args.event_id !== undefined ? { eventId: args.event_id } : {}),
             ...(args.name !== undefined ? { name: args.name } : {}),
+            ...(args.create_new === true ? { createNew: true } : {}),
           };
           const requestKey = syncRequestKey(ref);
           const store = pd.services!.chronology!.store;
@@ -2042,6 +2068,11 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
             head: plan.head,
             markdown: plan.markdown,
             dryRun: args.dryRun,
+            // v3 F2.1: a link is a bridge-side record with no LegendKeeper write; at scope propose it is still a
+            // proposal (it changes what the check reports), and done it answers `linked`.
+            ...(plan.action === 'link'
+              ? { writtenStatus: 'linked', ...(mctx.scope === 'propose' ? { forceProposal: true } : {}) }
+              : {}),
           });
         });
       }),

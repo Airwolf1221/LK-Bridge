@@ -39,6 +39,11 @@ export interface WriteJobSpec {
   /** The plan, as every answer shows it. */
   readonly head: Record<string, unknown>;
   readonly preview: () => unknown;
+  /**
+   * v3 F2.1: a proposal whatever the gate says for the job's own operations (a change the bridge only records, such as a
+   * chronology link, has no LegendKeeper write the gate would propose at scope `propose`).
+   */
+  readonly forceProposal?: boolean;
 }
 
 export interface WriteJobOutcome {
@@ -81,6 +86,7 @@ export async function runWriteJob(
       ...(spec.holdDocuments && spec.holdDocuments.length > 0 ? { holdDocuments: spec.holdDocuments } : {}),
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
       internal: true,
+      ...(spec.forceProposal === true ? { forceProposal: true } : {}),
       proposal: spec.proposal,
     });
   } catch (e) {
@@ -120,13 +126,16 @@ export function describeJob(
   labels: readonly string[],
   head: Record<string, unknown>,
 ): { readonly body: Record<string, unknown>; readonly result: McpToolResult; readonly error: boolean } {
+  // v3 F2.1: a change with no LegendKeeper write answers in its own word (a chronology link: `linked`).
+  const { writtenStatus, ...shown } = head;
+  head = shown;
   if (view.status === 'succeeded') {
     const res = (view.result ?? {}) as { verified?: unknown; verification?: Record<string, unknown> };
     const verified = typeof res.verified === 'boolean' ? res.verified : null;
     const ver = res.verification ?? {};
     const body = {
       ...head,
-      status: 'written',
+      status: typeof writtenStatus === 'string' ? writtenStatus : 'written',
       verified,
       jobId: view.id,
       ...(factsVersions(ver) ?? {}),

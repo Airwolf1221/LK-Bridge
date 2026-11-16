@@ -157,6 +157,17 @@ export type TargetWrite =
       readonly block: Obj;
     }
   | {
+      /**
+       * v3 F2.1. Not a write: the event, as the plan read it, must still be exactly so inside the lock (the
+       * compare-and-swap of a link the caller chose: `sync_timeline_event` with `event_id` on an event that agrees).
+       */
+      readonly kind: 'event.assert';
+      readonly age: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly eventId: string;
+    }
+  | {
       readonly kind: 'event.create';
       readonly age: string;
       readonly resourceId: string;
@@ -273,6 +284,8 @@ export interface CheckFinding {
   readonly kind:
     | 'row_without_event'
     | 'event_without_row'
+    /** v3 F2.1: an unpaired event that unpaired rows could own: paired by the owner, never deleted. */
+    | 'event_in_tie'
     | 'date_mismatch'
     | 'name_drift'
     | 'row_out_of_order'

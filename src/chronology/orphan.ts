@@ -17,10 +17,12 @@
 import { createHash } from 'node:crypto';
 import type { Calendar } from '../calendar/index.js';
 import {
+  candidateRowView,
+  couldBeRowOf,
   dateOfEvent,
   eventText,
+  listRows,
   matchRowsAndEvents,
-  namesMatch,
   nearestRows,
   openingWords,
   readEvents,
@@ -37,7 +39,7 @@ import {
   type TargetWrite,
 } from './store.js';
 import type { SyncRefusal } from './sync.js';
-import { readAgeTable, sameDate, type AgeRow, type AgeTable } from './table.js';
+import { readAgeTable, type AgeRow, type AgeTable } from './table.js';
 
 type Obj = Record<string, unknown>;
 
@@ -82,18 +84,8 @@ export function orphanRequestKey(ref: OrphanRef): string {
     .slice(0, 32);
 }
 
-/** A row that could be this event's own: the same date, the same start, or the event names it. */
-export function couldBeRowOf(
-  r: AgeRow,
-  e: { start: number; end: number | null; detail: number; name: string },
-): boolean {
-  if (namesMatch(e.name, r.description)) return true;
-  if (!r.eventDate) return false;
-  return (
-    sameDate(r.eventDate, { start: e.start, end: e.end, detail: e.detail as 1 | 2 | 3 }) ||
-    r.eventDate.start === e.start
-  );
-}
+/** A row that could be this event's own: the same date, the same start, or the event names it (in check.ts since v3 F2.1). */
+export { couldBeRowOf } from './check.js';
 
 const rowView = (r: AgeRow) => ({
   id: r.id,
@@ -156,7 +148,10 @@ export async function planOrphanDelete(o: {
     (o.tableOnly ?? []).filter((m) => m.tableDocumentId === age.tableDocumentId),
   );
   const links = o.links.filter((l) => l.tableDocumentId === age.tableDocumentId);
-  const pairing = matchRowsAndEvents(table.rows, events, links, age, { tableOnly: marks.current });
+  const pairing = matchRowsAndEvents(table.rows, events, links, age, {
+    tableOnly: marks.current,
+    kcyOf: (m) => o.calendar.engine.kcyOf(m),
+  });
   const pair = pairing.pairs.find((p) => p.event === event);
   if (pair)
     return refuse(
@@ -178,10 +173,12 @@ export async function planOrphanDelete(o: {
   if (candidates.length > 0)
     return refuse(
       'PAIRING_AMBIGUOUS',
-      `The event “${event.name.slice(0, 80)}” (${eventText(event)}) has no paired row, but ${candidates.length} unpaired row${candidates.length === 1 ? '' : 's'} could be its own. Nothing was done: pair them with sync_timeline_event (row and event_id), or fix the table first.`,
+      // v3 F2.1: the event is caught in a tie (the check reports it as "Event in a tie"), not an orphan.
+      `This event is not an orphan: ${candidates.length} row${candidates.length === 1 ? '' : 's'} of the table could be its own (${listRows(candidates)}). Pair it with one instead of deleting it: sync_timeline_event with the row and event_id ${event.id}. The event is “${event.name.slice(0, 80)}” (${eventText(event)}). Nothing was done.`,
       {
         event: { id: event.id, name: event.name, date: eventText(event) },
         candidates: candidates.map(rowView),
+        candidateRows: candidates.map(candidateRowView),
       },
     );
   // Rows that look like its own but belong elsewhere (paired with another event, or table-only): they may stay as they

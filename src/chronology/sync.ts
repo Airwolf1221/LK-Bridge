@@ -25,8 +25,11 @@ import {
 import { mintClientId } from '../jobs/ids.js';
 import {
   eventText,
+  listEvents,
   matchRowsAndEvents,
   namesMatch,
+  openingWords,
+  PAIRED_BY_WORDS,
   readEvents,
   shapeChange,
   tableUri,
@@ -58,8 +61,16 @@ export interface SyncRef {
   readonly description?: string;
   readonly rowId?: string;
   readonly age?: string;
-  /** Only to choose among the candidate events of a row the pairing could not settle (it names one of them). */
+  /**
+   * Only to choose among the candidate events of a row the pairing could not settle (it names one of them). v3 F2.1:
+   * the choice is remembered: an event that already agrees is linked to the row (`link`).
+   */
   readonly eventId?: string;
+  /**
+   * v3 F2.1: "None of these: make a new event": the row's event is created even though candidates exist (the proposal
+   * names the candidates passed over). Never with `eventId`.
+   */
+  readonly createNew?: boolean;
   /** The new event's short name (default: the row's description, cut short with an ellipsis when long). */
   readonly name?: string;
 }
@@ -82,9 +93,12 @@ export interface SyncPlan {
   /**
    * `nothing`: the row and its event already agree; `create`: no event, one is made; `correct`: the paired event is
    * updated; `recreate`: the row has no end but the event has one, which LegendKeeper cannot take away, so the event is
-   * made again (same lane, link and name).
+   * made again (same lane, link and name); v3 F2.1 `link`: the caller chose an event that already agrees, and the
+   * bridge records the row–event link (no LegendKeeper write).
    */
-  readonly action: 'nothing' | 'create' | 'correct' | 'recreate';
+  readonly action: 'nothing' | 'create' | 'correct' | 'recreate' | 'link';
+  /** v3 F2.1: with `createNew`, the candidate events passed over (named in the proposal). */
+  readonly passedOver: readonly { readonly eventId: string; readonly name: string; readonly date: string }[];
   readonly age: AgeConfig;
   readonly row: AgeRow;
   readonly table: AgeTable;
@@ -131,6 +145,7 @@ export function syncRequestKey(ref: SyncRef): string {
     age: ref.age !== undefined ? norm(ref.age) : null,
     eventId: ref.eventId ?? null,
     name: ref.name ?? null,
+    ...(ref.createNew === true ? { createNew: true } : {}),
   });
 }
 
@@ -203,6 +218,30 @@ const ageNamed = (c: ChronologyConfig, cal: Calendar, name: string): AgeConfig |
   );
 };
 
+/** v3 F2.1: the shortest description prefix a row is found by (after trimming and collapsing whitespace). */
+export const ROW_PREFIX_MIN = 20;
+
+/**
+ * v3 F2.1: the rows of a date whose description the given text names: an exact match first (`sameText`), then a
+ * description it is a prefix of (at least `ROW_PREFIX_MIN` characters, compared after trimming and collapsing
+ * whitespace). `short`: a prefix too short to look for.
+ */
+export function rowsByDescription(
+  rows: readonly AgeRow[],
+  description: string,
+): { readonly rows: AgeRow[]; readonly by: 'exact' | 'prefix' | 'short' } {
+  const exact = rows.filter((r) => sameText(r.description, description));
+  if (exact.length > 0) return { rows: exact, by: 'exact' };
+  const flat = (t: string) => t.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  const want = flat(description)
+    .replace(/(\.\.\.|…)$/u, '')
+    .trimEnd();
+  const starts = want === '' ? [] : rows.filter((r) => flat(r.description).startsWith(want));
+  // Too short to be certain: refused only when it is the start of a row (anything else is simply not found).
+  if (want.length < ROW_PREFIX_MIN) return { rows: [], by: starts.length > 0 ? 'short' : 'prefix' };
+  return { rows: starts, by: 'prefix' };
+}
+
 const rowView = (r: AgeRow) => ({
   id: r.id,
   date: r.dateText,
@@ -235,6 +274,11 @@ export async function planSync(o: {
 }): Promise<SyncResult> {
   const { config: c, calendar: cal, ref } = o;
   const resourceId = c.resourceId!;
+  if (ref.createNew === true && ref.eventId !== undefined)
+    return refuse(
+      'INVALID_PARAMS',
+      'create_new and event_id cannot be given together: event_id pairs the row with that event, create_new makes it a new one. Nothing was done.',
+    );
   if (ref.rowId === undefined && (ref.date === undefined || ref.description === undefined))
     return refuse(
       'INVALID_PARAMS',
@@ -299,13 +343,13 @@ export async function planSync(o: {
       }
     }
     if (!age || !table)
-      return refuse('EVENT_NOT_FOUND', `No table of the chronology has a row ${String(ref.rowId)}.`, {
+      return refuse('ROW_NOT_FOUND', `No table of the chronology has a row ${String(ref.rowId)}.`, {
         ages: c.ages.map((a) => a.name),
       });
   }
   if (ref.rowId !== undefined) {
     row = table.rows.find((r) => r.id === ref.rowId) ?? null;
-    if (!row) return refuse('EVENT_NOT_FOUND', `The ${age.name} table has no row ${ref.rowId}.`);
+    if (!row) return refuse('ROW_NOT_FOUND', `The ${age.name} table has no row ${ref.rowId}.`);
     if (date && (!row.eventDate || !sameDate(row.eventDate, date)))
       return refuse(
         'ROW_MISMATCH',
@@ -313,27 +357,32 @@ export async function planSync(o: {
         { row: rowView(row) },
       );
   } else {
-    const hits = table.rows.filter(
-      (r) =>
-        r.eventDate !== null &&
-        sameDate(r.eventDate, date!) &&
-        sameText(r.description, ref.description ?? ''),
-    );
+    // v3 F2.1: the description may be the row's opening words (a prefix of exactly one row of that date).
+    const onDate = table.rows.filter((r) => r.eventDate !== null && sameDate(r.eventDate, date!));
+    const found = rowsByDescription(onDate, ref.description ?? '');
+    const hits = found.rows;
+    const listed = onDate
+      .slice(0, 10)
+      .map((r) => `${r.dateText}: ${openingWords(r.description)} (row ${r.id ?? '?'})`)
+      .join('; ');
+    if (found.by === 'short')
+      return refuse(
+        'ROW_PREFIX_TOO_SHORT',
+        `No row of ${age.name} on ${date!.text} has exactly this description, and “${(ref.description ?? '').trim()}” is too short to find one by its opening words (at least ${ROW_PREFIX_MIN} characters). ${onDate.length > 0 ? `The rows of that date: ${listed}.` : 'No row has that date.'} Nothing was done.`,
+        { sameDate: onDate.slice(0, 10).map(rowView) },
+      );
     if (hits.length === 0)
       return refuse(
-        'EVENT_NOT_FOUND',
-        `The ${age.name} table has no row on ${date!.text} with this description. Check it with the table, or pass row_id.`,
-        {
-          sameDate: table.rows
-            .filter((r) => r.eventDate && sameDate(r.eventDate, date!))
-            .slice(0, 10)
-            .map(rowView),
-        },
+        'ROW_NOT_FOUND',
+        `The ${age.name} table has no row on ${date!.text} with this description or beginning with it. ${onDate.length > 0 ? `The rows of that date: ${listed}.` : 'No row has that date.'} Check it with the table, or pass row_id. Nothing was done.`,
+        { sameDate: onDate.slice(0, 10).map(rowView) },
       );
     if (hits.length > 1)
-      return refuse('EVENT_AMBIGUOUS', `${hits.length} rows of ${age.name} match; pass row_id.`, {
-        rows: hits.map(rowView),
-      });
+      return refuse(
+        found.by === 'prefix' ? 'ROW_AMBIGUOUS' : 'EVENT_AMBIGUOUS',
+        `${hits.length} rows of ${age.name} on ${date!.text} ${found.by === 'prefix' ? 'begin with this description' : 'match'}: ${hits.map((r) => `${openingWords(r.description)} (row ${r.id ?? '?'})`).join('; ')}. Pass row_id, or more of the description. Nothing was done.`,
+        { rows: hits.map(rowView) },
+      );
     row = hits[0]!;
   }
   if (!row.id)
@@ -366,18 +415,30 @@ export async function planSync(o: {
     events,
     o.links.filter((l) => l.tableDocumentId === age.tableDocumentId),
     age,
-    { tableOnly: marks.current },
+    { tableOnly: marks.current, kcyOf: (m) => cal.engine.kcyOf(m) },
   );
   let event: TimelineEvent | null = null;
   let pairedBy: string | null = null;
+  let passedOver: TimelineEvent[] = [];
+  /** v3 F2.1: the caller named the event (not the pairing): the link is recorded even when it already agrees. */
+  let chosen = false;
   const pair = pairing.pairs.find((p) => p.row === row);
   const mismatch = pairing.mismatches.find((m) => m.row === row);
+  if ((pair || mismatch) && ref.createNew === true) {
+    const e = (pair ?? mismatch)!.event;
+    return refuse(
+      'ROW_HAS_EVENT',
+      `The row “${row.dateText}” (${openingWords(row.description)}) is already paired with the event “${openingWords(e.name, 12)}” (${eventText(e)}, ${e.id}); create_new makes an event only for a row that has none. Nothing was done.`,
+      { row: rowView(row), event: eventView(e) },
+    );
+  }
   if (pair) {
     event = pair.event;
-    pairedBy = pair.how;
+    pairedBy = PAIRED_BY_WORDS[pair.how] ?? pair.how;
+    chosen = ref.eventId === pair.event.id && pair.how !== 'link';
   } else if (mismatch) {
     event = mismatch.event;
-    pairedBy = `date mismatch (by ${mismatch.by})`;
+    pairedBy = `date mismatch (by ${PAIRED_BY_WORDS[mismatch.by] ?? mismatch.by})`;
   } else {
     // Unpaired: a candidate is a leftover event that names the row's description, begins where it begins or has its
     // date. Any candidate makes the pairing ambiguous: never made a second event beside it.
@@ -402,23 +463,30 @@ export async function planSync(o: {
           namesMatch(e.name, row.description)),
     );
     if (ref.eventId !== undefined) {
-      const chosen = events.find((e) => e.id === ref.eventId);
-      if (!chosen)
-        return refuse('EVENT_NOT_FOUND', `The ${age.name} timeline has no event ${ref.eventId}.`, {
-          candidates: candidates.map(eventView),
-        });
-      if (!free.includes(chosen))
+      const pick = events.find((e) => e.id === ref.eventId);
+      if (!pick)
+        return refuse(
+          'EVENT_NOT_FOUND',
+          `The ${age.name} timeline has no event ${ref.eventId}.${candidates.length > 0 ? ` The candidates are: ${listEvents(candidates)}.` : ''}`,
+          { candidates: candidates.map(eventView) },
+        );
+      if (!free.includes(pick))
         return refuse(
           'EVENT_TAKEN',
-          `The event ${chosen.id} already belongs to another row of ${age.name}; nothing was done.`,
-          { event: eventView(chosen) },
+          `The event ${pick.id} already belongs to another row of ${age.name}; nothing was done.`,
+          { event: eventView(pick) },
         );
-      event = chosen;
-      pairedBy = 'chosen by the caller';
+      event = pick;
+      pairedBy = PAIRED_BY_WORDS.chosen!;
+      chosen = true;
+    } else if (candidates.length > 0 && ref.createNew === true) {
+      // v3 F2.1: "None of these: make a new event". The proposal names the candidates passed over.
+      passedOver = candidates;
     } else if (candidates.length > 0) {
+      // v3 F2.1: every candidate named in the message itself (name, date and id), not only in the details.
       return refuse(
         'PAIRING_AMBIGUOUS',
-        `The row “${row.dateText}” (${row.description.slice(0, 80)}) has no event the check can pair it with, but ${candidates.length} unpaired event${candidates.length === 1 ? '' : 's'} of ${age.name} could be its own. Nothing was done: pass event_id to name the one to correct, or fix the table or timeline by hand.`,
+        `The row “${row.dateText}” (${openingWords(row.description)}, row ${row.id}) has no event the check can pair it with, but ${candidates.length} unpaired event${candidates.length === 1 ? '' : 's'} of ${age.name} could be its own: ${listEvents(candidates)}. Nothing was done: pass event_id to pair the row with one of them (an event that already agrees is linked), or create_new: true to make it a new event instead.`,
         { row: rowView(row), candidates: candidates.map(eventView) },
       );
     }
@@ -455,6 +523,7 @@ export async function planSync(o: {
   const eventName = rename ?? event?.name ?? eventNameFor(row, ref.name);
   const requestKey = syncRequestKey(ref);
   const shape = event ? shapeChange(event, want) : null;
+  const passed = passedOver.map((e) => ({ eventId: e.id, name: e.name.slice(0, 200), date: eventText(e) }));
   const common = {
     ok: true as const,
     age,
@@ -466,6 +535,7 @@ export async function planSync(o: {
     shapeChange: shape,
     eventName,
     requestKey,
+    passedOver: passed,
   };
   const lanes: Record<string, { id: string; name: string }> = {
     [age.timelineDocumentId]: { id: age.laneId, name: age.laneName },
@@ -508,6 +578,12 @@ export async function planSync(o: {
     ...(pairedBy ? { pairedBy } : {}),
     changes,
     ...(renameText ? { rename: renameText } : {}),
+    ...(passed.length > 0
+      ? {
+          passedOver: passed,
+          passedOverNote: `Made as a new event although ${passed.length} unpaired event${passed.length === 1 ? '' : 's'} could have been its own (create_new): ${passed.map((p) => `“${p.name.slice(0, 80)}” (${p.date}, ${p.eventId})`).join('; ')}.`,
+        }
+      : {}),
     ...(shape
       ? {
           shapeChange: shape,
@@ -516,6 +592,50 @@ export async function planSync(o: {
       : {}),
     note: 'The table is the authority: only the timeline event is created or corrected. The table and the Main count are not touched.',
   });
+
+  if (event && changes.length === 0 && chosen) {
+    // v3 F2.1: the caller's choice is remembered: a bridge-side record (the link), no LegendKeeper write, audited as a
+    // chronology change. The check then pairs them by the link first.
+    const writes: TargetWrite[] = [
+      assertRow,
+      {
+        kind: 'event.assert',
+        age: age.name,
+        resourceId: rid,
+        documentId: age.timelineDocumentId,
+        eventId: event.id,
+      },
+    ];
+    const summary = `${SYNC_TOOL}: link row “${row.dateText}” (${openingWords(row.description, 8)}) to event “${openingWords(event.name, 8)}” (${event.id}) in ${age.name}`;
+    return {
+      ...common,
+      action: 'link',
+      writes,
+      target: { writes, link: { ...link, eventId: event.id, nameTail: tailAfter(event.name) } },
+      ctx: baseCtx({ [event.id]: event.raw }),
+      summary,
+      head: {
+        ...head('link'),
+        note: 'The row and the event already agree: only the bridge’s link between them is recorded (no LegendKeeper write), so the check pairs them from now on. The table, the timeline and the Main count are not touched.',
+      },
+      markdown: {
+        before: [
+          `## ${age.name} - Table`,
+          line,
+          '',
+          lane,
+          `- ${eventText(event)}: **${event.name}** (not paired)`,
+        ].join('\n'),
+        after: [
+          `## ${age.name} - Table`,
+          line,
+          '',
+          lane,
+          `- ${eventText(event)}: **${event.name}** (linked to the row)`,
+        ].join('\n'),
+      },
+    };
+  }
 
   if (event && changes.length === 0) {
     const target: ChronologyTarget = {
@@ -563,7 +683,11 @@ export async function planSync(o: {
       writes,
       target: { writes, link: { ...link, eventId: id, nameTail: tailOfNewName(eventName, row) } },
       ctx: baseCtx({}),
-      summary: `${SYNC_TOOL}: add the missing ${age.name} event for “${row.dateText}”`,
+      summary:
+        `${SYNC_TOOL}: add the missing ${age.name} event for “${row.dateText}”` +
+        (passed.length > 0
+          ? ` (a new event, passing over ${passed.length} candidate${passed.length === 1 ? '' : 's'}: ${passed.map((p) => `“${openingWords(p.name, 8)}” (${p.eventId})`).join('; ')})`
+          : ''),
       head: { ...head('create'), event: { id, name: eventName, date: wantText, ...body } },
       markdown: {
         before: [`## ${age.name} - Table`, line, '', lane, '- (no event)'].join('\n'),
