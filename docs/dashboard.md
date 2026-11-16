@@ -117,6 +117,43 @@ and check, stale rows, failed re-reads, the correction log, a folder browser, **
 panel that shows where a character's images would go. Its routes and behaviour are in
 [assets.md](assets.md#dashboard-and-admin-api).
 
+## Packs (v3 F3a)
+
+The **Packs** page (in the navigation after Repository Mappings) shows each setting pack the bridge holds: today the
+Arkona pack, whose tool is `arkona_create_character` ([packs.md](packs.md), [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)).
+For each pack:
+
+- its **state**: approved and current, not approved yet, rules changed since approval, governance changed since
+  approval (with the changed sources named, as an alert), or governance unreadable. Anything but "approved and
+  current" means the pack's tools compute no tags and refuse every package (`PACK_NOT_CURRENT`): they fail closed;
+- its **tools**, the approval (version, by whom, when), and whether every package is a proposal (the pack's
+  `alwaysPropose`, on for its first weeks);
+- the **governance sources**: each page the rules were derived from (for Arkona: Character Architecture, Source
+  Formatting, and the Controlled Native Tagging Standard v1.8, all on the AI REPOSITORY page), with the document version
+  approved and, after **Check governance now** (one read per source), the version now;
+- the **projects** it is attached to, whether the bridge serves each, and the template ids it uses there (worked out
+  from the home project's template names by exact name, or unset with a note);
+- the **token maps** (Race / Species and Naming Culture: a fact value and the tag token it becomes), editable: add,
+  change or remove rows, then **Save token maps**;
+- the **rules**, read-only: the status tags, what is never in a page name, and per type its tool, placement, gated
+  fields, roles (template, name, Reference Type, tags, facts, text) and specialist tags;
+- its **versions**, newest first, each with its reason and whether it was approved.
+
+Two changes, each confirmed and then re-authenticated (your password, and the TOTP code if you use one), and each
+audited:
+
+- **Approve this pack version** records the current rules' version with each governance source's document version, read
+  now (`pack.approve`). A source that cannot be read cannot be approved (`GOVERNANCE_UNREADABLE`). Approve after you have
+  checked the rules against the governance pages; approve again after a governance page changes.
+- **Save token maps** makes a new version (`pack.set_tokens`), which waits for your approval: until then the tools fail
+  closed. A token is never one of the never-tags (Unknown, Unestablished, None), and no value or token has an em or
+  en dash in it (`INVALID_TOKEN`).
+
+The pack is seeded once from the bridge's data and attached to the projects the seed names (`pack.seed`,
+`pack.attach`); a governance check that finds a changed source records the drift (`pack.drift`). A pack's tools are
+listed to agents only while it is attached to a project the bridge serves; if an agent's client does not show a pack's
+tool, refresh its tool list (ChatGPT: Plugins, the bridge, Refresh).
+
 ## Admin API
 
 All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "message" } }`. Routes marked † take
@@ -142,6 +179,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Lifecycle † | `GET /lifecycle/records` (`limit`, `offset`; the lifecycle record, newest first, and the link index's freshness; v2 C2c). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Tool calls  | `GET /tool-calls` (filters `principalId`, `profile`, `tool`, `outcome=success\|error\|proposal\|waiting\|queued\|not_success`, `code`, `project`, `sinceMinutes`; paging `limit` (≤ 500) and `before`, answered with `nextBefore`; also the filter choices and the retention), `PUT /tool-calls/retention` (`{ days: 0-90, confirm: true }`; audited). Owner only; view only (v2 E3, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md))                                                                                                                                                                                                                                                                           |
 | Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                                                                              |
+| Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md))                                                                                                                                                                                                                                                                                                             |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409
@@ -774,6 +812,9 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
   with the real dashboard code in jsdom while a mock job runs.
 - `test/e2e/`: Chromium against the built dashboard under the real CSP (sign-in and return, live pages, proposal diff, a
   token, a phone-sized dark layout).
+- `test/admin/packs.test.ts` and `test/ui/packs.test.tsx` (v3 F3a): the Packs page's routes (listed as stored, the
+  governance read on request, approve and token maps refused without a fresh re-authentication, audited, drift and
+  re-approval) and the page (navigation, state, sources, projects, rules, the drift alert, the two confirmations).
 
 ## v3 F2 (ADR 0049)
 
@@ -794,3 +835,13 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
   first).
 - **Jobs**: a job's result lists `foldersUsed` (each folder found or created) and `followUps` (a Last Major Revision write
   that failed after the edit: `lmr_failed`; the job itself succeeded and the edit stayed written).
+
+## v3 F3a (ADR 0050)
+
+- **Packs**: a new page, after Repository Mappings ([above](#packs-v3-f3a)): each setting pack's state, governance
+  sources, projects and template ids, token maps, read-only rules and versions; **Approve this pack version** and
+  **Save token maps**, each re-authenticated and audited (`pack.approve`, `pack.set_tokens`; also `pack.seed`,
+  `pack.attach`, `pack.drift`, `pack.replace_rules`).
+- **Proposals**: a package from `arkona_create_character` is one proposal, shown page by page (each new page with its
+  facts and tags, each change to an existing page, each image and the folders it creates). It is canonical ("Approve and
+  accept as canon") when it makes canon.
