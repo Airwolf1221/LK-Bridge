@@ -68,7 +68,7 @@ export type IdentityValue = string | { readonly value: string; readonly reason?:
 export interface PackageImage {
   readonly staged_id: string;
   readonly label: string;
-  readonly interpretation: string;
+  readonly interpretation?: string | undefined;
   readonly subfolder?: string | null | undefined;
 }
 
@@ -290,7 +290,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         ...im,
         label: replaceDashes(im.label.trim(), `${where} images[${j}]`, 'label', replacements),
         interpretation: replaceDashesInMarkdown(
-          im.interpretation.trim(),
+          (im.interpretation ?? '').trim(),
           `${where} images[${j}]`,
           replacements,
         ),
@@ -1092,6 +1092,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   }
 
   // ---------------------------------------------------------------------------------- automatic relationship links
+  const partnerLinks = new Map<string, { node: NodeRef; links: LinkTarget[] }>();
   const identityPage = pages.find((p) => p.rule.facts === 'identity') ?? null;
   for (const rel of pages.filter((p) => type.relationship && p.role === type.relationship.role)) {
     const d = drafts.find((x) => x.id === rel.id);
@@ -1113,7 +1114,6 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       } else queuePartnerLink(d.partner.node, link);
     }
   }
-  const partnerLinks = new Map<string, { node: NodeRef; links: LinkTarget[] }>();
   function queuePartnerLink(node: NodeRef, link: LinkTarget) {
     const had = partnerLinks.get(node.id);
     if (had) had.links.push(link);

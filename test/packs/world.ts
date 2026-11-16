@@ -107,8 +107,11 @@ function identityRows(v: Partial<Record<string, string>>): Rows {
 export async function packWorld(
   o: Parameters<typeof imagesWorld>[0] & { readonly approve?: boolean } = {},
 ): Promise<PackWorld> {
+  // As the chronology tests do, this world's per-minute limits are raised: its files make many calls in a minute.
   const w = (await imagesWorld({
     ...o,
+    env: { LK_TIER_LIMITS: JSON.stringify({ 'key-min': 5000, 'write-min': 2000 }), ...(o.env ?? {}) },
+    limits: { 'key-min': 5000, 'write-min': 2000, ...(o.limits ?? {}) },
     seed: (world) => {
       const r = world.repo;
       const page = (
@@ -233,7 +236,7 @@ export async function packWorld(
     SidebarModel.kv(`kv${prefix}`, 'PROPERTIES', blank(keys)),
     SidebarModel.links(`dp${prefix}`, 'Dependencies', []),
     SidebarModel.links(`rl${prefix}`, 'Related Sources', []),
-    { id: `tg${prefix}`, kind: 'unsupported', title: 'TAGS' },
+    { id: `tg${prefix}`, kind: 'unsupported' as const, title: 'TAGS' },
   ];
   sb.page(TPL.core, contentSidebar('tcore', IDENTITY_KEYS));
   sb.page(TPL.compact, contentSidebar('tcomp', IDENTITY_KEYS));
@@ -271,6 +274,7 @@ export async function packWorld(
     { id: TPL.art, name: '[BSRC] AI Character Art Template' },
     { id: TPL.relationship, name: '[BSRC] AI Relationship Template' },
   ];
+  for (const re of [...w.overrides.keys()]) if (re.source === '\\/templates$') w.overrides.delete(re);
   w.overrides.set(/\/templates$/, (req) =>
     req.method === 'GET'
       ? {
@@ -315,7 +319,7 @@ export async function packWorld(
       SidebarModel.kv(`kv${id}`.slice(0, 8), 'PROPERTIES', identityRows(v)),
       SidebarModel.links(`dp${id}`.slice(0, 8), 'Dependencies', []),
       SidebarModel.links(`rl${id}`.slice(0, 8), 'Related Sources', related),
-      { id: `tg${id}`.slice(0, 8), kind: 'unsupported', title: 'TAGS' },
+      { id: `tg${id}`.slice(0, 8), kind: 'unsupported' as const, title: 'TAGS' },
     ]);
   const canon = { Status: 'Authoritative', 'Continuity Type': 'CANON', Continuity: 'Main', Inheritance: 'None' };
   props(C.mehrana1, {
@@ -482,7 +486,7 @@ export async function approve(
   for (let i = 0; i < 500; i++) {
     const p = policy.proposals.get(proposalId)!;
     if (['executed', 'failed', 'conflicted'].includes(p.state)) {
-      const job = p.jobId ? w.stack.runtime.engine.queries.getJob(PROJECT, p.jobId) : null;
+      const job = p.jobId ? w.stack.runtime.engine.queries.getJob(PROJECT, p.jobId) : undefined;
       if (job && !['succeeded', 'failed', 'cancelled'].includes(job.status)) {
         await new Promise((r) => setTimeout(r, 20));
         continue;

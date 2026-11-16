@@ -30,7 +30,7 @@ const image = z
       .min(1)
       .max(300)
       .describe('“{Visual Role} - {Descriptor}”, e.g. “Primary Reference - Character Portrait”; no file extension.'),
-    interpretation: z.string().min(1).max(5000).describe('What this reference establishes (required).'),
+    interpretation: z.string().max(5000).optional().describe('What this reference establishes (required).'),
     subfolder: z
       .string()
       .max(300)

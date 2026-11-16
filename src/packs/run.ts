@@ -178,7 +178,15 @@ export function previewOf(
     if (own) return own.rawName;
     return nodeOf(projectId, id).data?.rawName ?? id;
   };
-  const tree = plan.pages.map((p) => {
+  // Indexes first, then pages, each alphabetical (the sibling order the bridge places them in).
+  const ordered = [...plan.pages].sort((a, b) =>
+    a.kind === 'index' && b.kind !== 'index'
+      ? -1
+      : b.kind === 'index' && a.kind !== 'index'
+        ? 1
+        : a.displayName.localeCompare(b.displayName, 'en', { sensitivity: 'base', numeric: true }),
+  );
+  const tree = ordered.map((p) => {
     const where = job?.placement.get(p.id);
     return {
       page: p.rawName,
