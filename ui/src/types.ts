@@ -152,6 +152,11 @@ export interface ProjectsResponse {
   canManageKeys?: boolean;
   /** OPS2: start-up notes about the env file's project lines. */
   notes?: string[];
+  /** v3 F2: the default the dashboard stored ("Make default"). */
+  storedDefault?: string | null;
+  /** v3 F2: LK_DEFAULT_PROJECT, when it is set and disagrees with the stored default (it then overrides it). */
+  envOverride?: string | null;
+  overrideNote?: string;
 }
 
 /** Every project's status, as the Overview lists it. */
@@ -1463,6 +1468,20 @@ export interface SnapshotRowView {
   trigger: Record<string, unknown>;
   summary: string;
   damaged: string | null;
+  /** v3 F2: a partial snapshot's missing pieces, from its manifest (null: the manifest could not be read). */
+  missingPieces?: SnapshotMissingPiece[] | null;
+  /** v3 F2: how many more there are than listed. */
+  missingMore?: number;
+}
+
+/** v3 F2: one missing piece of a partial snapshot. */
+export interface SnapshotMissingPiece {
+  /** The page's (or template's) id; null for the asset library. */
+  pageId: string | null;
+  pageName: string | null;
+  piece: string;
+  ref?: string;
+  reason: string;
 }
 
 export interface SnapshotRunView {

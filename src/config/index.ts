@@ -244,10 +244,10 @@ export function projectsFrom(env: NodeJS.ProcessEnv): {
         'LK_API_KEY and LK_PROJECT_ID are ignored because LK_PROJECTS is set; remove them from the env file.',
       );
     }
+    // v3 F2 (ADR 0049 decision 3): with several projects, LK_DEFAULT_PROJECT is optional: the default the dashboard
+    // stored ("Make default") applies, and the line only overrides it (env-sync's --retire-default-project removes it).
     let defaultProject = wantedDefault ?? (seen.size === 1 ? [...seen][0]! : '');
-    if (wantedDefault === undefined && seen.size > 1) {
-      issues.push('LK_DEFAULT_PROJECT: required when LK_PROJECTS lists more than one project');
-    } else if (wantedDefault !== undefined && !seen.has(wantedDefault)) {
+    if (wantedDefault !== undefined && !seen.has(wantedDefault)) {
       issues.push(`LK_DEFAULT_PROJECT: "${wantedDefault.slice(0, 40)}" is not listed in LK_PROJECTS`);
       defaultProject = '';
     }

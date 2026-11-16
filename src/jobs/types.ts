@@ -176,6 +176,18 @@ export interface StepOptions {
      */
     readonly from?: 'id' | `documents.${number}.id`;
   };
+  /**
+   * v3 F2 (ADR 0049 decision 2), set by bridge code only: this write's path and body come from the decision the named
+   * `bridge.lmr` step made when it ran (its result's `lmr`), and when that step decided to skip it (or did not succeed),
+   * this step is not sent: it is recorded as succeeded with `{ skipped }`. Bound once, before anything is sent.
+   */
+  readonly decisionFrom?: { readonly step: number };
+  /**
+   * v3 F2, set by bridge code only: this step can never fail the job. A failure is recorded on the step, in the errors
+   * table and in the job's result as a follow-up of this kind (for the dashboard), and the job carries on and ends as
+   * if the step had not been needed. The work before it stays written: nothing is rolled back.
+   */
+  readonly followUp?: 'lmr_failed';
 }
 
 export interface StepSpec extends StepOptions {

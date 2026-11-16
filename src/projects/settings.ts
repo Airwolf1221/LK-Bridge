@@ -56,12 +56,27 @@ export const projectSettingsSchema = z
     useEtagVersions: z.boolean().optional(),
     /** v2 D3 (ADR 0041): the name of the asset folder (in the library's root) staged images go to. */
     imageStagingFolder: label.optional(),
+    /**
+     * v3 F2 (ADR 0049 decision 2): which edits set a page's Last Major Revision, one switch per category (src/lmr/),
+     * and the housekeeping keys a set_facts change of which alone is not an edit (`;`-separated).
+     */
+    lmrWritePage: z.boolean().optional(),
+    lmrBlockEdits: z.boolean().optional(),
+    lmrChronologyTable: z.boolean().optional(),
+    lmrRestore: z.boolean().optional(),
+    lmrPackTools: z.boolean().optional(),
+    lmrFacts: z.boolean().optional(),
+    lmrNamesTagsMoves: z.boolean().optional(),
+    lmrLinkCollections: z.boolean().optional(),
+    lmrTimelineMap: z.boolean().optional(),
+    lmrAuditSplit: z.boolean().optional(),
+    lmrHousekeepingKeys: z.string().max(2000).optional(),
   })
   .loose();
 
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>;
 
-export type SettingKind = 'resource id' | 'name' | 'on/off' | 'role → template id' | 'rules';
+export type SettingKind = 'resource id' | 'name' | 'names' | 'on/off' | 'role → template id' | 'rules';
 
 /** The settings the dashboard and later sessions may rely on, by key, with what each is for. */
 export const PROJECT_SETTING_KEYS: readonly {
@@ -176,6 +191,93 @@ export const PROJECT_SETTING_KEYS: readonly {
     editable: true,
     help: 'The asset folder, in the library’s root, that staged images go to (hidden until placed). Found by name, or created on first use.',
   },
+  {
+    key: 'lmrWritePage',
+    label: 'Last Major Revision: write_page',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'On: a write_page edit (any mode) also sets the page’s Last Major Revision to today, in the same job or proposal.',
+  },
+  {
+    key: 'lmrBlockEdits',
+    label: 'Last Major Revision: block edits',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'Block edits through lk_api_write and lk_api_batch (insert, replace, update or delete a block; replaceDocumentBlocks), and the dashboard’s own fixes that edit text.',
+  },
+  {
+    key: 'lmrChronologyTable',
+    label: 'Last Major Revision: chronology tables',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'A chronology table row created, changed or deleted, and the Main count fix (on the chronology page).',
+  },
+  {
+    key: 'lmrRestore',
+    label: 'Last Major Revision: restores',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'A restore that changes a page’s text.',
+  },
+  {
+    key: 'lmrPackTools',
+    label: 'Last Major Revision: setting-pack tools',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+  },
+  {
+    key: 'lmrFacts',
+    label: 'Last Major Revision: set_facts',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'A sidebar fact’s value changed through set_facts, except the housekeeping keys below.',
+  },
+  {
+    key: 'lmrHousekeepingKeys',
+    label: 'Last Major Revision: housekeeping keys',
+    kind: 'names',
+    default: 'Last Major Revision; Reference Type; Supersedes; Status',
+    editable: true,
+    help: 'Fact keys, separated by “;”, whose change alone through set_facts does not set Last Major Revision. The lifecycle tools set it themselves.',
+  },
+  {
+    key: 'lmrNamesTagsMoves',
+    label: 'Last Major Revision: names, tags and moves',
+    kind: 'on/off',
+    default: false,
+    editable: true,
+    help: 'Tag, alias, icon or name changes; moves and re-orders (of pages and blocks).',
+  },
+  {
+    key: 'lmrLinkCollections',
+    label: 'Last Major Revision: link collections',
+    kind: 'on/off',
+    default: false,
+    editable: true,
+    help: 'Link-collection-only changes (Dependencies, Related Sources).',
+  },
+  {
+    key: 'lmrTimelineMap',
+    label: 'Last Major Revision: timeline events and map features',
+    kind: 'on/off',
+    default: false,
+    editable: true,
+    help: 'Timeline events and map features on their own (they are not the page’s text).',
+  },
+  {
+    key: 'lmrAuditSplit',
+    label: 'Last Major Revision: an audit’s paragraph split',
+    kind: 'on/off',
+    default: false,
+    editable: true,
+    help: 'The audits’ paragraph split leaves the content unchanged.',
+  },
 ];
 
 export interface ParsedSettings {
@@ -249,6 +351,15 @@ export function parseSettingValue(key: string, value: unknown): string | boolean
       );
     }
     return t;
+  }
+  if (def.kind === 'names') {
+    if (t.length === 0 || t.length > 2000)
+      throw new SettingValueError(`"${key}" must be 1 to 2,000 characters.`);
+    return t
+      .split(';')
+      .map((x) => x.trim())
+      .filter((x) => x !== '')
+      .join('; ');
   }
   if (t.length === 0 || t.length > 256) throw new SettingValueError(`"${key}" must be 1 to 256 characters.`);
   return t;

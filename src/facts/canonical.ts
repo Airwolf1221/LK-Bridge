@@ -348,6 +348,9 @@ export class CanonicalGuard implements WriteGuard {
     if (rules.length === 0) return { decision: 'allow' };
     const guarded = input.items
       .map((it, i) => ({ ...it, i }))
+      // v3 F2 (ADR 0049): the Last Major Revision write is not a protected fact; its row and date are bound when the job
+      // runs, and the guard judges it then, inside the lock, like any row write.
+      .filter((it) => it.options.decisionFrom === undefined)
       .filter(
         (it) =>
           SIDEBAR_WRITE_OPS.has(it.op) ||

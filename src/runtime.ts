@@ -59,6 +59,8 @@ import { CanonicalGuard } from './facts/index.js';
 import { combineGuards } from './jobs/write-guard.js';
 import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
+import { lifecycleFrom } from './lifecycle/settings.js';
+import { createLmrPlanner } from './lmr/index.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
 import { mapCheckers } from './maps/index.js';
@@ -343,6 +345,22 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }
   };
   policy.proposals.setPageNames(pageName);
+  // v3 F2 (ADR 0049 decision 2): a substantial edit also sets its page's Last Major Revision, in the same job and
+  // proposal. The planner reads nothing: the tree's sidebar summary says where the row is.
+  const unregisterLmr = engine.setLmrPlanner(
+    createLmrPlanner({
+      settings: (projectId) => projectStore.byId(projectId)?.settings,
+      lmrKey: (projectId) => lifecycleFrom(projectStore.byId(projectId)?.settings).fields.lastMajorRevision,
+      sidebar: (projectId, pageId) => {
+        try {
+          return tree.queries.sidebars(projectId, [pageId]).data.get(pageId);
+        } catch {
+          return undefined;
+        }
+      },
+      pageName,
+    }),
+  );
   // v2 E6 (ADR 0048): a low-level proposal names the document it touches, from the tree.
   policy.proposals.setDocumentNames((projectId, resourceId, documentId) => {
     try {
@@ -774,6 +792,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       await engine.stop();
       unregisterPlanner();
       unregisterGuard();
+      unregisterLmr();
       detachLifecycle();
       detachChronology();
       for (const off of detachMaps) off();

@@ -70,6 +70,11 @@ export function ProjectsPage() {
           {n}
         </p>
       ))}
+      {data.overrideNote && (
+        <p className="note note-warn small-text" data-testid="default-override">
+          {data.overrideNote}
+        </p>
+      )}
       <AddProjectCard canManage={data.canManageKeys !== false} onChanged={reload} />
       {data.projects.length === 0 ? (
         <Empty>No projects yet. Add one above with its LegendKeeper API key.</Empty>
@@ -95,7 +100,13 @@ export function ProjectsPage() {
               </thead>
               <tbody>
                 {data.projects.map((p) => (
-                  <ProjectRow key={p.name} project={p} now={now} onChanged={reload} />
+                  <ProjectRow
+                    key={p.name}
+                    project={p}
+                    now={now}
+                    onChanged={reload}
+                    storedDefault={data.storedDefault ?? null}
+                  />
                 ))}
               </tbody>
             </table>
@@ -113,10 +124,13 @@ function ProjectRow({
   project: p,
   now,
   onChanged,
+  storedDefault,
 }: {
   project: ProjectInfo;
   now: number;
   onChanged: () => void;
+  /** v3 F2: the default the dashboard stored (the env file may override it). */
+  storedDefault: string | null;
 }) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
@@ -175,6 +189,30 @@ function ProjectRow({
         ).then(onChanged);
     });
   };
+  /** v3 F2 (ADR 0049 decision 3): stores this project as the default (re-authentication; audited). No restart. */
+  const makeDefault = () =>
+    void confirm({
+      title: `Make ${p.name} the default project?`,
+      message: (
+        <>
+          <p>
+            Tools and dashboard pages that name no project use <strong>{p.name}</strong> from now on. No
+            restart is needed.
+          </p>
+          <p className="muted small-text">
+            If the env file sets LK_DEFAULT_PROJECT to another project, that line still overrides this choice
+            until it is removed. The change is audited.
+          </p>
+        </>
+      ),
+      confirmLabel: 'Make default',
+    }).then((ok) => {
+      if (ok)
+        void run(
+          () => withReauth(() => api.post(`/projects/${name}/default`, { confirm: true })),
+          `${p.name} is now the stored default.`,
+        ).then(onChanged);
+    });
   const setReadOnly = (value: boolean) => {
     void confirm(
       value
@@ -255,7 +293,12 @@ function ProjectRow({
         </td>
         <td>{p.displayName ?? <span className="muted">–</span>}</td>
         <td>{p.id ? <span className="mono">{p.id}</span> : <span className="muted">not known yet</span>}</td>
-        <td>{p.isDefault ? <Badge tone="info">default</Badge> : <span className="muted">no</span>}</td>
+        <td>
+          {p.isDefault ? <Badge tone="info">default</Badge> : <span className="muted">no</span>}
+          {storedDefault === p.name && !p.isDefault && (
+            <div className="muted small-text">stored default (overridden by the env file)</div>
+          )}
+        </td>
         <td>{p.isSandbox ? <Badge>sandbox</Badge> : <span className="muted">no</span>}</td>
         <td>
           <div className="stack">
@@ -327,6 +370,16 @@ function ProjectRow({
                 onClick={() => drain(!p.draining)}
               >
                 {p.draining ? 'Resume' : 'Pause and drain'}
+              </Button>
+            )}
+            {p.configured && !archived && storedDefault !== p.name && (
+              <Button
+                className="small"
+                busy={busy}
+                aria-label={`Make ${p.name} the default`}
+                onClick={makeDefault}
+              >
+                Make default
               </Button>
             )}
             {p.id !== null && (

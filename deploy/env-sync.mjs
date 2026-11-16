@@ -487,6 +487,53 @@ function rotateMasterKey(live, o) {
 }
 
 /**
+ * v3 F2 (ADR 0049 decision 3): comments out LK_DEFAULT_PROJECT once the default the dashboard stored ("Make default")
+ * agrees with it, so the dashboard's choice applies from then on. `stored` is the name the bridge's own database holds
+ * (`npm run projects -- stored-default`, run by env-sync.sh as the service user), or '' when none is stored. A line that
+ * disagrees is refused: press Make default on the Projects page first (it would otherwise change the default).
+ * @param {LiveFile} live
+ * @param {{ stored: string, release: string, date: string }} o
+ * @returns {{ steps: string[], refusal?: string, notes: string[] }}
+ */
+function retireDefaultProject(live, o) {
+  /** @type {string[]} */
+  const steps = [];
+  /** @type {string[]} */
+  const notes = [];
+  const at = live.activeAt('LK_DEFAULT_PROJECT');
+  if (at.length === 0) {
+    notes.push('LK_DEFAULT_PROJECT is not set in the file: nothing to retire.');
+    return { steps, notes };
+  }
+  const wanted = (live.value('LK_DEFAULT_PROJECT') ?? '').trim().toLowerCase();
+  if (!/^[a-z][a-z0-9_]{0,31}$/.test(o.stored)) {
+    return {
+      steps,
+      notes,
+      refusal:
+        'the bridge has no stored default project yet. Press Make default on the Projects page first, then run this again.',
+    };
+  }
+  if (wanted !== o.stored) {
+    return {
+      steps,
+      notes,
+      refusal: `LK_DEFAULT_PROJECT=${wanted.slice(0, 32)} differs from the dashboard's stored default (${o.stored}). Press Make default on ${wanted.slice(0, 32)} on the Projects page first (or keep the line), then run this again.`,
+    };
+  }
+  const stamp = `${o.release}, ${o.date}`;
+  for (const i of at.reverse()) {
+    const old = live.lines[i]?.text ?? '';
+    live.replace(i, [
+      `# retired by env-sync (${stamp}): the dashboard stores the default project (${o.stored}); Make default on the Projects page changes it.`,
+      `# ${old.trimStart()}`,
+    ]);
+  }
+  steps.push(`LK_DEFAULT_PROJECT (the dashboard's stored default, ${o.stored}, agrees)`);
+  return { steps, notes };
+}
+
+/**
  * Works out the new env file.
  * @param {object} o
  * @param {string} o.template           deploy/env.template's text
@@ -495,6 +542,7 @@ function rotateMasterKey(live, o) {
  * @param {boolean} [o.placeholdersOnly] only add the commented-out secret-marked placeholders (inert in any release)
  * @param {string[]} [o.retireEqual]    OPS2: names the bridge found equal to its encrypted store, to comment out
  * @param {string[]} [o.retireSuperseded] OPS2: names holding a value the dashboard has since replaced, to comment out
+ * @param {string} [o.retireDefaultProject] v3 F2: the stored default project ('' for none): retire LK_DEFAULT_PROJECT
  * @param {boolean} [o.rotateMasterKey] OPS2: move SECRETS_MASTER_KEY to SECRETS_MASTER_KEY_PREVIOUS and make a new one
  * @param {string} [o.release]          the release the template belongs to, for the notes in the file
  * @param {string} [o.date]             YYYY-MM-DD, for the notes in the file
@@ -534,6 +582,12 @@ export function planSync(o) {
     });
     if (r.refusal) return { error: `refusing to retire: ${r.refusal}` };
     plan.retire = r.steps;
+    plan.notes.push(...r.notes);
+  }
+  if (all && o.retireDefaultProject !== undefined) {
+    const r = retireDefaultProject(live, { stored: o.retireDefaultProject, release, date });
+    if (r.refusal) return { error: `refusing to retire: ${r.refusal}` };
+    plan.retire.push(...r.steps);
     plan.notes.push(...r.notes);
   }
   if (all && o.rotateMasterKey) {
@@ -801,6 +855,7 @@ function main(argv) {
         '--label',
         '--retire',
         '--retire-superseded',
+        '--retire-default-project',
       ].includes(k)
     )
       a[k] = argv[++i] ?? '';
@@ -836,6 +891,12 @@ function main(argv) {
       rotateMasterKey: a['--rotate-master-key'] === true,
       retireEqual: names(a['--retire']),
       retireSuperseded: names(a['--retire-superseded']),
+      ...(typeof a['--retire-default-project'] === 'string'
+        ? {
+            retireDefaultProject:
+              a['--retire-default-project'] === '-' ? '' : a['--retire-default-project'].trim().toLowerCase(),
+          }
+        : {}),
       ...(typeof a['--release'] === 'string' ? { release: a['--release'] } : {}),
       ...(typeof a['--date'] === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(a['--date'])
         ? { date: a['--date'] }

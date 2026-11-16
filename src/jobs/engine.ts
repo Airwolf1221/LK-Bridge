@@ -46,10 +46,12 @@ import {
   internalReads,
   internalStepIssues,
   isInternalStep,
+  LMR_STEP,
   type DocumentChecker,
   type MapChecker,
 } from './internal-steps.js';
 import type { WriteGuard } from './write-guard.js';
+import type { LmrPlan, LmrPlanInput, LmrPlanner } from './lmr-hook.js';
 import {
   ALLOW_ALL_GATE,
   DENY_PROPOSALS_SINK,
@@ -220,6 +222,8 @@ export class JobEngine {
   private readonly planners = new Map<string, StepPlanner>();
   /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
   private writeGuard: WriteGuard | undefined;
+  /** v3 F2: the Last Major Revision planner (src/lmr/), asked about every caller's write request. */
+  private lmrPlanner: LmrPlanner | undefined;
   private assetDeleteKeeper: AssetDeleteKeeper | undefined;
   /** v2 C2c: the lifecycle record's handler (`bridge.record` steps). */
   /** v2 C2c: the `bridge.record` handlers by store (`lifecycle`; v2 D1 `chronology`). */
@@ -349,14 +353,46 @@ export class JobEngine {
     const origin = normaliseOrigin(opts.origin);
     const title = opts.title ?? def.operationId;
     const priority = opts.priority ?? 'P1';
-    const proposal = await this.authorize([authItem(def, params, options)], origin, 'single_op', project, {
-      title,
-      priority,
-      ...(opts.proposal ? { extras: opts.proposal } : {}),
+    // v3 F2 (ADR 0049 decision 2): a substantial edit also sets its page's Last Major Revision, in the same job.
+    const lmr = isWriteOp(def)
+      ? this.planLmr({
+          project,
+          origin,
+          jobKind: 'single_op',
+          steps: [{ op: def.operationId, params, options }],
+          ...(opts.proposal?.prefetched ? { prefetched: opts.proposal.prefetched } : {}),
+        })
+      : null;
+    const lmrItems: AuthItem[] = (lmr?.steps ?? []).map((s) => {
+      const p = s.params ?? {};
+      const o = stepOptions(s);
+      return isInternalStep(s.op)
+        ? { opId: s.op, def: null, meta: internalPolicyMeta(s.op, o), params: p, options: o }
+        : authItem(this.validate(s.op, p), p, o);
     });
+    const proposal = await this.authorize(
+      [authItem(def, params, options), ...lmrItems],
+      origin,
+      'single_op',
+      project,
+      {
+        title,
+        priority,
+        ...(opts.proposal || lmr
+          ? { extras: { ...opts.proposal, ...(lmr ? { lmrNote: lmr.note } : {}) } }
+          : {}),
+        ...(lmr ? { jobOptions: { internal: true } } : {}),
+      },
+    );
     if (proposal) return proposal;
     checkSubmitGuards(def, params, options, this.guardContext(project));
-    const estimate = this.estimateFor(project, [{ def, params }], priority);
+    for (const it of lmrItems)
+      if (it.def) checkSubmitGuards(it.def, it.params, it.options, this.guardContext(project));
+    const estimate = this.estimateFor(
+      project,
+      [{ def, params }, ...lmrItems.flatMap((it) => (it.def ? [{ def: it.def, params: it.params }] : []))],
+      priority,
+    );
     const slow = estimate.wallClockMs > this.settings.inlineMaxEstimateMs;
 
     if (!isWriteOp(def) && !slow) {
@@ -364,10 +400,17 @@ export class JobEngine {
     }
     if (this.draining) throw new DrainingError();
 
-    const prepared = this.prepare(def, params, options);
+    const prepared = [
+      this.prepare(def, params, options),
+      ...lmrItems.map((it) =>
+        it.def
+          ? this.prepare(it.def, it.params, it.options)
+          : this.prepareInternal(it.opId, it.params, it.options),
+      ),
+    ];
     const hold = isWriteOp(def) ? this.writeHold(project) : null;
     if (slow || hold) {
-      const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', [prepared], 'queued');
+      const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', prepared, 'queued');
       this.pump();
       return {
         status: 'queued',
@@ -378,7 +421,7 @@ export class JobEngine {
     }
 
     // Inline write: recorded as a one-step job and run now, through the same slots, locks and guards.
-    const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', [prepared], 'running');
+    const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', prepared, 'running');
     const onAbort = () => this.cancelJob(job.id);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     let result: RunnerResult;
@@ -389,6 +432,12 @@ export class JobEngine {
     }
     const final = this.repo.job(job.id)!;
     const last = result.last;
+    // v3 F2: with the Last Major Revision steps appended, the answer is the edit's own (step 1), and a follow-up of
+    // theirs (a tolerated failure) never makes the edit fail.
+    if (lmr && final.status === 'succeeded' && (result.values?.length ?? 0) > 0) {
+      const requestIds = this.repo.steps(job.id).flatMap((s) => s.requestIds);
+      return { status: 'succeeded', jobId: job.id, result: result.values![0], requestIds };
+    }
     if (last?.kind === 'succeeded' && final.status === 'succeeded') {
       // A createManyResources recovered part-way ran a continuation step: return every resource it created.
       const values = result.values ?? [];
@@ -471,6 +520,31 @@ export class JobEngine {
     return () => {
       if (this.assetDeleteKeeper === keeper) this.assetDeleteKeeper = undefined;
     };
+  }
+
+  /** v3 F2 (ADR 0049 decision 2): sets the Last Major Revision planner (src/lmr/). Returns an unregister. */
+  setLmrPlanner(planner: LmrPlanner): () => void {
+    this.lmrPlanner = planner;
+    return () => {
+      if (this.lmrPlanner === planner) this.lmrPlanner = undefined;
+    };
+  }
+
+  /**
+   * v3 F2: the Last Major Revision steps to append to a caller's write request, or null. Never for approved work (its
+   * token covers exactly the stored steps, which already hold them when they were planned), never twice, and never
+   * fatal: a planner that throws plans nothing (the edit goes ahead; it is logged).
+   */
+  private planLmr(input: LmrPlanInput): LmrPlan | null {
+    if (!this.lmrPlanner || input.origin.approval !== undefined) return null;
+    if (input.steps.some((s) => s.op === LMR_STEP || s.options.decisionFrom !== undefined)) return null;
+    try {
+      const plan = this.lmrPlanner(input);
+      return plan && plan.steps.length > 0 ? plan : null;
+    } catch (e) {
+      this.log.warn({ err: e, project: input.project }, 'the Last Major Revision planner failed');
+      return null;
+    }
   }
 
   setWriteGuard(guard: WriteGuard): () => void {
@@ -722,16 +796,29 @@ export class JobEngine {
     return this.submitPaginate(req);
   }
 
-  private async submitBatch(req: BatchSubmit): Promise<SubmitResult | ProposalCaptured> {
-    const project = this.requireAdmission(this.requireProject(req.project));
-    if (req.steps.length === 0)
+  private async submitBatch(given: BatchSubmit): Promise<SubmitResult | ProposalCaptured> {
+    const project = this.requireAdmission(this.requireProject(given.project));
+    if (given.steps.length === 0)
       throw new InvalidParamsError('batch_ops', [{ path: 'steps', message: 'Empty' }]);
-    const origin = normaliseOrigin(req.origin);
+    const origin = normaliseOrigin(given.origin);
+    // v3 F2 (ADR 0049 decision 2): a substantial edit also sets its page's Last Major Revision, in the same job and the
+    // same proposal: the engine appends the planner's steps (the request's own internal-step rule still applies to the
+    // request's own steps). A job that holds job-level locks also holds each such page's.
+    const base = given.steps.length;
+    const lmr = this.planLmr({
+      project,
+      origin,
+      jobKind: 'batch_ops',
+      steps: given.steps.map((s) => ({ op: s.op, params: s.params ?? {}, options: stepOptions(s) })),
+      ...(given.lifecycle ? { lifecycle: given.lifecycle } : {}),
+      ...(given.proposal?.prefetched ? { prefetched: given.proposal.prefetched } : {}),
+    });
+    const req: BatchSubmit = lmr ? withLmr(given, lmr) : given;
     const validated: AuthItem[] = req.steps.map((s: StepSpec, i) => {
       const params = s.params ?? {};
       const options = stepOptions(s);
       // v2 C2a: the bridge's own check and verify steps, only when bridge code asks for them (never lk_api_batch).
-      if (req.internal === true && isInternalStep(s.op)) {
+      if ((given.internal === true || (lmr !== null && i >= base)) && isInternalStep(s.op)) {
         const issues = internalStepIssues(s.op, params);
         if (issues.length > 0) {
           throw new InvalidParamsError(
@@ -1091,6 +1178,50 @@ export class JobEngine {
    * created from that template, from the `ids` map the named `bridge.expect` step returned (see `StepOptions.bindIds`).
    * Done once, before anything is sent, and stored; a step being recovered keeps what it was sent with.
    */
+  /**
+   * v3 F2 (ADR 0049 decision 2): a step with `options.decisionFrom` takes its path and body from what the named
+   * `bridge.lmr` step decided when it ran (`lmr: { path, body }`; its If-Match is bound by `ifMatchFrom`), or is not
+   * sent at all: recorded as succeeded with `{ skipped }` when that step decided to skip it, did not succeed (its own
+   * failure is already the follow-up) or gave no decision. Returns true when the step was skipped. A step that may
+   * already have been sent keeps what it was sent with.
+   */
+  private bindDecision(job: JobView, step: StepView): boolean {
+    const from = step.options.decisionFrom;
+    if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return false;
+    const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
+    const result =
+      source?.status === 'succeeded'
+        ? (this.repo.stepResult(source) as {
+            skip?: unknown;
+            lmr?: { path?: unknown; body?: unknown };
+          } | null)
+        : null;
+    const path = result?.lmr?.path;
+    const body = result?.lmr?.body;
+    const skip =
+      source?.status !== 'succeeded'
+        ? 'the decision before it did not succeed (see its follow-up)'
+        : typeof result?.skip === 'string'
+          ? result.skip
+          : !path || typeof path !== 'object' || !body || typeof body !== 'object'
+            ? 'no decision was made'
+            : null;
+    if (skip !== null) {
+      const now = this.clock.now();
+      this.repo.updateStep(job.id, step.stepNo, {
+        status: 'succeeded',
+        resultSummary: { skipped: skip },
+        startedAt: step.startedAt ?? now,
+        finishedAt: now,
+      });
+      return true;
+    }
+    const params = this.repo.stepParams(step);
+    const next: OpParams = { ...params, path: path as Record<string, string>, body };
+    if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
+    return false;
+  }
+
   private bindIds(job: JobView, step: StepView): JobsError | null {
     const from = step.options.bindIds;
     if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
@@ -1799,6 +1930,14 @@ export class JobEngine {
       this.repo.updateJob(jobId, { currentStep: step.stepNo });
       // v2 C2b: a write to a page this job created from a template gets the copy's ids now; v2 C2a: a write that chains
       // its If-Match from an earlier step gets it now (both stored before anything is sent).
+      // v3 F2 (ADR 0049): a write an earlier `bridge.lmr` step decided: bound to its decision now, or skipped.
+      if (this.bindDecision(job, step)) {
+        this.emitStep(job, step.stepNo);
+        this.refreshProgress(jobId);
+        this.emitJob(jobId, 'updated');
+        continue;
+      }
+      step = this.repo.step(jobId, step.stepNo) ?? step;
       let bound = this.bindIds(job, step);
       if (!bound) {
         step = this.repo.step(jobId, step.stepNo) ?? step; // the params as just bound
@@ -1822,6 +1961,11 @@ export class JobEngine {
         this.emitStep(job, step.stepNo);
         this.recordStepFailure(job, step.opId, step.stepNo, bound);
         this.refreshProgress(jobId);
+        // v3 F2: a step that can never fail the job (the Last Major Revision write) is a follow-up, not the job's error.
+        if (step.options.followUp) {
+          this.emitJob(jobId, 'updated');
+          continue;
+        }
         this.repo.updateJob(jobId, { lastError: errorToJson(bound) });
         this.emitJob(jobId, 'updated');
         if (job.onError === 'stop') {
@@ -1853,6 +1997,12 @@ export class JobEngine {
           this.emitStep(job, step.stepNo);
           this.recordStepFailure(job, step.opId, step.stepNo, outcome.error);
           this.refreshProgress(jobId);
+          // v3 F2: a follow-up (the Last Major Revision write failed after the edit was written): the job goes on, and
+          // the edit stays written (nothing is rolled back).
+          if (step.options.followUp) {
+            this.emitJob(jobId, 'updated');
+            continue;
+          }
           this.repo.updateJob(jobId, {
             lastError: errorToJson(outcome.error),
             ...(outcome.uncertain ? { uncertain: true } : {}),
@@ -1952,11 +2102,30 @@ export class JobEngine {
   private finish(jobId: string): void {
     const counts = this.repo.stepCounts(jobId);
     const job = this.requireJob(jobId);
-    const failed = counts.failed + counts.uncertain;
+    // v3 F2: steps that can never fail the job (the Last Major Revision write) are follow-ups when they fail.
+    const followUps = this.repo
+      .steps(jobId)
+      .filter((s) => s.options.followUp !== undefined && (s.status === 'failed' || s.status === 'uncertain'));
+    const failed = counts.failed + counts.uncertain - followUps.length;
     const status: JobStatus = failed > 0 ? 'failed' : 'succeeded';
     let result = job.result ?? {};
     if (job.kind !== 'paginate_all') {
       result = { stepsSucceeded: counts.succeeded, stepsFailed: failed, stepsNotRun: counts.pending };
+      if (followUps.length > 0)
+        result = {
+          ...result,
+          followUps: followUps.map((s) => ({
+            kind: s.options.followUp,
+            stepNo: s.stepNo,
+            ...(typeof s.params?.path?.resourceId === 'string'
+              ? { pageId: s.params.path.resourceId }
+              : typeof (s.params?.body as { resourceId?: unknown } | undefined)?.resourceId === 'string'
+                ? { pageId: (s.params!.body as { resourceId: string }).resourceId }
+                : {}),
+            reason: s.error?.message ?? 'failed',
+            ...(s.error?.code ? { code: s.error.code } : {}),
+          })),
+        };
       if (job.kind === 'single_op') {
         const s = this.repo.step(jobId, 1);
         if (s) result = { ...result, step: s.resultSummary, resultArtifactId: s.resultArtifactId };
@@ -2629,6 +2798,34 @@ export class JobEngine {
   }
 }
 
+/**
+ * v3 F2: the request with the Last Major Revision steps appended, the note added to its proposal, and each such page's
+ * lock added to the job-level locks when it holds any (a chronology job holds only documents: the page becomes its
+ * page lock; a page job holds its page already).
+ */
+function withLmr(req: BatchSubmit, lmr: LmrPlan): BatchSubmit {
+  const holds = req.holdLock !== undefined || (req.holdDocuments?.length ?? 0) > 0;
+  let holdLock = req.holdLock;
+  let more = req.holdMore?.resources ?? [];
+  if (holds) {
+    for (const page of lmr.pages) {
+      if (holdLock === undefined) holdLock = { resourceId: page };
+      else if (holdLock.resourceId !== page && req.holdAlso?.resourceId !== page && !more.includes(page))
+        more = [...more, page];
+    }
+  }
+  return {
+    ...req,
+    steps: [...req.steps, ...lmr.steps],
+    internal: true,
+    proposal: { ...req.proposal, lmrNote: lmr.note },
+    ...(holdLock ? { holdLock } : {}),
+    ...(more.length > (req.holdMore?.resources?.length ?? 0)
+      ? { holdMore: { ...req.holdMore, resources: more } }
+      : {}),
+  };
+}
+
 /** Fills in the default principal (`system`) and checks a supplied one is usable. */
 function normaliseOrigin(origin: JobOrigin): JobOrigin {
   const p = origin.principal;
@@ -2684,6 +2881,11 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(Array.isArray(o.dropIfRefused) && o.dropIfRefused.every((k) => typeof k === 'string')
       ? { dropIfRefused: [...o.dropIfRefused] }
       : {}),
+    // v3 F2: set by bridge code only.
+    ...(o.decisionFrom && Number.isInteger(o.decisionFrom.step)
+      ? { decisionFrom: { step: o.decisionFrom.step } }
+      : {}),
+    ...(o.followUp === 'lmr_failed' ? { followUp: 'lmr_failed' as const } : {}),
     // v2 D3: set by bridge code only.
     ...(o.bindFrom &&
     Number.isInteger(o.bindFrom.step) &&

@@ -130,6 +130,11 @@ export interface ProposalExtras {
   /** A one-line summary to show instead of the generic one. */
   readonly summary?: string;
   /**
+   * v3 F2 (ADR 0049 decision 2): added to the summary when the engine appended the `Last Major Revision` steps
+   * (`+ Last Major Revision → date of approval`).
+   */
+  readonly lmrNote?: string;
+  /**
    * Reads the tool made in this same call, so capture does not repeat them: the target read's operation, path and the
    * body it returned. Used only when the target matches exactly.
    */

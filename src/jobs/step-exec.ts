@@ -24,6 +24,9 @@ import {
 import {
   EXPECT_STEP,
   RECORD_STEP,
+  LMR_STEP,
+  londonDate,
+  type LmrParams,
   SIDEBAR_IGNORED_FIELDS,
   VERIFY_STEP,
   isInternalStep,
@@ -428,6 +431,10 @@ export class StepExecutor {
           throw new JobsError('BRIDGE_ERROR', `The ${name} record is not available; nothing was written.`);
         return this.succeed(job, step, stats, await handler(job, step, params));
       }
+      if (step.opId === LMR_STEP) {
+        // v3 F2 (ADR 0049 decision 2): the Last Major Revision decision (reads only).
+        return this.succeed(job, step, stats, await this.runLmr(job, step, params, stats));
+      }
       if (step.opId !== VERIFY_STEP) throw new JobsError('BRIDGE_ERROR', `Unknown bridge step ${step.opId}`);
       const verification = await this.runVerify(job, step, params, stats);
       if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
@@ -435,6 +442,101 @@ export class StepExecutor {
     } catch (e) {
       return this.fail(job, step, stats, e);
     }
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 2): `bridge.lmr`. Today on the bridge's clock (Europe/London) is worked out NOW, when the
+   * job runs (an approved proposal: the day it is applied). Skipped when none of the edit's writes wrote anything (an
+   * unchanged write), when the page has no such row, or when the row already says today. The If-Match is the new
+   * version of an earlier row write of the same property in this job (its ETag, when `useEtagVersions` is on), or the
+   * version one read of the rows gives, inside the job (and its locks).
+   */
+  private async runLmr(
+    job: JobView,
+    step: StepView,
+    params: OpParams,
+    stats: CallStats,
+  ): Promise<Record<string, unknown>> {
+    const b = (params.body ?? {}) as unknown as LmrParams;
+    const today = londonDate(this.d.now());
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    // The edit itself: a write that found nothing to change (an unchanged page) is not an edit.
+    const wrote = b.after.some((n) => {
+      const s = this.d.repo.step(job.id, n);
+      if (s?.status !== 'succeeded') return false;
+      const r = (s.resultSummary ?? {}) as { unchanged?: unknown; skipped?: unknown };
+      return r.unchanged !== true && r.skipped === undefined;
+    });
+    if (!wrote) return { skip: 'the edit wrote nothing', date: today };
+    let rowId = b.rowId;
+    let value = b.value;
+    let version: string | undefined;
+    if (b.chainFrom !== undefined && rowId !== undefined) {
+      const s = this.d.repo.step(job.id, b.chainFrom);
+      const r =
+        s?.status === 'succeeded'
+          ? ((this.d.repo.stepResult(s) ?? {}) as { version?: unknown; etag?: unknown })
+          : {};
+      version = str(r.version) ?? (this.d.etagVersions?.(job.projectId) === false ? undefined : str(r.etag));
+    }
+    const chained = version !== undefined;
+    let propertyId = b.propertyId;
+    if (!chained && propertyId === undefined) {
+      // The plan did not know the page's sidebar (the tree had not read it): find the key-value property with the row.
+      const r = await this.readOp(job, step, 'listProperties', { path: { resourceId: b.resourceId } }, stats);
+      if (!r.exists) return { skip: 'the page is gone', date: today };
+      const body = (r.body ?? {}) as { data?: unknown; properties?: unknown };
+      const props = (
+        Array.isArray(body.data) ? body.data : Array.isArray(body.properties) ? body.properties : []
+      ) as Record<string, unknown>[];
+      const k = b.key.normalize('NFKC').trim().toLowerCase();
+      const holder = props.find(
+        (p) =>
+          p?.kind === 'keyValue' &&
+          Array.isArray(p.rows) &&
+          (p.rows as Record<string, unknown>[]).some(
+            (x) => typeof x?.key === 'string' && x.key.normalize('NFKC').trim().toLowerCase() === k,
+          ),
+      );
+      if (!holder || typeof holder.id !== 'string')
+        return { skip: `the page has no ${b.key} row`, date: today };
+      propertyId = holder.id;
+    }
+    if (!chained) {
+      const r = await this.readOp(
+        job,
+        step,
+        'listPropertyRows',
+        { path: { resourceId: b.resourceId, propertyId: propertyId! } },
+        stats,
+      );
+      if (!r.exists) return { skip: 'the sidebar property is gone', date: today };
+      const body = (r.body ?? {}) as { data?: unknown; version?: unknown };
+      const key = b.key.normalize('NFKC').trim().toLowerCase();
+      const row = (Array.isArray(body.data) ? (body.data as Record<string, unknown>[]) : []).find(
+        (x) => typeof x?.key === 'string' && x.key.normalize('NFKC').trim().toLowerCase() === key,
+      );
+      if (!row || typeof row.id !== 'string') return { skip: `the page has no ${b.key} row`, date: today };
+      rowId = row.id;
+      value = runsText(row.content) ?? (typeof row.text === 'string' ? row.text : '');
+      version = str(body.version);
+    }
+    if ((value ?? '').trim() === today) return { skip: `${b.key} already says ${today}`, date: today };
+    if (version === undefined)
+      throw new JobsError(
+        'BRIDGE_ERROR',
+        `No version to set ${b.key} with (If-Match); nothing was sent.`,
+        ref,
+      );
+    return {
+      date: today,
+      chained,
+      versions: { lmr: version },
+      lmr: {
+        path: { resourceId: b.resourceId, propertyId: propertyId!, rowId: rowId! },
+        body: { content: [{ text: today }] },
+      },
+    };
   }
 
   /** `bridge.expect`: each property as the plan saw it, or a conflict. Returns the version each read gave. */
@@ -2340,4 +2442,16 @@ export function refusedFields(
     return text.includes(k) || (/^icon/i.test(k) && /\bicon\b/i.test(text));
   });
   return hit.length > 0 ? hit : undefined;
+}
+
+/** v3 F2: a row value's plain text from its runs (null when it has none). */
+function runsText(content: unknown): string | null {
+  if (!Array.isArray(content)) return null;
+  return (content as unknown[])
+    .map((r) =>
+      r && typeof r === 'object' && typeof (r as { text?: unknown }).text === 'string'
+        ? (r as { text: string }).text
+        : '',
+    )
+    .join('');
 }

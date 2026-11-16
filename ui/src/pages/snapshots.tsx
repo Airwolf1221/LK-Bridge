@@ -1207,6 +1207,7 @@ function SnapshotList({ d }: { d: SnapshotsResponse }) {
                   ) : (
                     <Badge tone="ok">complete</Badge>
                   )}
+                  {s.missing > 0 && <MissingPieces s={s} />}
                 </td>
               </tr>
             ))}
@@ -1214,6 +1215,49 @@ function SnapshotList({ d }: { d: SnapshotsResponse }) {
         </table>
       )}
     </section>
+  );
+}
+
+/**
+ * v3 F2 (ADR 0049 decision 4): a partial snapshot's missing pieces, from its manifest: the page (a link to it in the
+ * tree), the piece, its reference and why it is missing. Collapsed until asked for.
+ */
+function MissingPieces({ s }: { s: SnapshotRowView }) {
+  if (s.missingPieces === null)
+    return <div className="muted small-text">Its manifest could not be read to list them.</div>;
+  const list = s.missingPieces ?? [];
+  if (list.length === 0) return null;
+  return (
+    <details className="small-text" data-testid="missing-pieces">
+      <summary>Show what is missing</summary>
+      <table aria-label={`Missing pieces of ${s.id}`}>
+        <thead>
+          <tr>
+            <th>Page</th>
+            <th>Piece</th>
+            <th>Reference</th>
+            <th>Reason</th>
+          </tr>
+        </thead>
+        <tbody>
+          {list.map((x, i) => (
+            <tr key={i}>
+              <td>
+                {x.pageId === null ? (
+                  <span className="muted">the asset library</span>
+                ) : (
+                  <Link to={`/tree?node=${encodeURIComponent(x.pageId)}`}>{x.pageName ?? x.pageId}</Link>
+                )}
+              </td>
+              <td>{x.piece}</td>
+              <td className="mono">{x.ref ?? ''}</td>
+              <td>{x.reason}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {s.missingMore ? <div className="muted">and {fmtInt(s.missingMore)} more.</div> : null}
+    </details>
   );
 }
 

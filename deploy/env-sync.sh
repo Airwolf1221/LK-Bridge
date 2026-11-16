@@ -21,6 +21,9 @@
 #                        value first imported that the dashboard has since replaced or removed, is retired; anything
 #                        else is refused and named. LK_PROJECTS goes too once no listed project keeps a key here.
 #                        Nothing is ever printed but names.
+#   --retire-default-project  (v3 F2) comment out LK_DEFAULT_PROJECT once the default the dashboard stored ("Make
+#                        default" on the Projects page) agrees with it; refused (and named) when it disagrees. The
+#                        bridge itself (as the service user) says which default it stored. No restart is needed.
 #   --rotate-master-key  (OPS2) start a rotation of the secret store's key: SECRETS_MASTER_KEY moves to
 #                        SECRETS_MASTER_KEY_PREVIOUS and a new one is generated. Stop the bridge first, then run
 #                        `npm run secrets -- rotate-master-key` (runbook, "Rotating the master key").
@@ -63,6 +66,7 @@ check=0
 yes=0
 boot_check=1
 retire=0
+retire_default=0
 rotate=0
 template=""
 release=""
@@ -74,6 +78,7 @@ while (($# > 0)); do
     --migrate-projects) core_args+=(--migrate-projects) ;;
     --placeholders-only) core_args+=(--placeholders-only) ;;
     --retire-imported-keys) retire=1 ;;
+    --retire-default-project) retire_default=1 ;;
     --rotate-master-key)
       rotate=1
       core_args+=(--rotate-master-key)
@@ -176,6 +181,20 @@ if ((retire)); then
   if ((${#equal_names[@]} + ${#superseded_names[@]} == 0)); then
     log "Nothing to retire: no env value is safely in the bridge's encrypted store yet."
   fi
+fi
+
+# v3 F2: --retire-default-project. The bridge reads its stored default from its own database (as the service user, one
+# project name only); the planner comments LK_DEFAULT_PROJECT out only when it agrees.
+if ((retire_default)); then
+  ((check == 0)) || die "--retire-default-project changes the file; it has no --check form. Run it without --check."
+  [[ -f "${LKB_APP_DIR}/dist/projects/cli.js" ]] || die "The built bridge in ${LKB_APP_DIR} cannot say which default it stored. Deploy this release first. Nothing was changed."
+  set +e
+  stored_out="$(lkb_stored_default 2>/dev/null)"
+  src=$?
+  set -e
+  ((src == 0)) || die "The bridge could not read its stored default project. Nothing was changed."
+  stored_default="$(sed -n 's/^stored-default=\([a-z][a-z0-9_]*\)$/\1/p' <<<"$stored_out" | head -n1)"
+  core_args+=(--retire-default-project "${stored_default:--}")
 fi
 
 if ((check)); then

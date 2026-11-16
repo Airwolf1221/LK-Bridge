@@ -32,6 +32,7 @@ export default defineConfig({
       'test/audits/**/*.test.ts', // v2 E2: the audits (findings only, read from the snapshots)
       'test/evaluation/**/*.test.ts', // v2 E3: the Evaluation helper (scenarios, windows, grading, results table, compare)
       'test/e4/**/*.test.ts', // v2 E4: the second independent review's regression tests (docs/reviews/E4-2026-11.md)
+      'test/lmr/**/*.test.ts', // v3 F2: Last Major Revision on every substantial edit (ADR 0049)
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',
