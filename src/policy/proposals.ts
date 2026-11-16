@@ -1781,6 +1781,7 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.followUp ? { followUp: o.followUp } : {}),
     // v3 F2 (ADR 0049 decision 9): a planned folder is found or created when the approved job runs.
     ...(o.findOrCreate === true ? { findOrCreate: true } : {}),
+    ...(o.onlyIfEmpty === true ? { onlyIfEmpty: true } : {}),
   };
 }
 

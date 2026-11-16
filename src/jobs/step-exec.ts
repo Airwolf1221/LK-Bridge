@@ -294,9 +294,11 @@ export class StepExecutor {
     // v3 F2 (ADR 0049 decision 9): a folder the bridge planned is found or created when the job runs, under the
     // project's asset-folder lock (held for this step only), so two jobs placing into one missing chain make one chain.
     const findOrCreate = op.operationId === 'createAssetFolder' && step.options.findOrCreate === true;
-    const lockKey = findOrCreate
-      ? projectLockKey(job.projectId, ASSET_FOLDER_LOCK)
-      : projectLockKey(job.projectId, lockKeyFor(op, params));
+    const emptyOnly = op.operationId === 'deleteAsset' && step.options.onlyIfEmpty === true;
+    const lockKey =
+      findOrCreate || emptyOnly
+        ? projectLockKey(job.projectId, ASSET_FOLDER_LOCK)
+        : projectLockKey(job.projectId, lockKeyFor(op, params));
     // v2 C2a: the job already holds this lock for its whole run (BatchSubmit.holdLock); it is not taken again. v2 C2c:
     // a job may hold two (the page's and one of its documents').
     const held: readonly string[] =
@@ -306,7 +308,7 @@ export class StepExecutor {
           ? [opts.heldLock]
           : opts.heldLock;
     const ownLock = lockKey !== null && !held.includes(lockKey);
-    if (ownLock && held.length > 0 && !findOrCreate) {
+    if (ownLock && held.length > 0 && !findOrCreate && !emptyOnly) {
       return this.fail(
         job,
         step,
@@ -335,6 +337,13 @@ export class StepExecutor {
         if (found) {
           releaseLock?.();
           return found;
+        }
+      }
+      if (emptyOnly && step.status !== 'running' && !step.maybeSent && step.firstSentAt === null) {
+        const kept = await this.folderNotEmpty(job, step, params);
+        if (kept) {
+          releaseLock?.();
+          return kept;
         }
       }
       releaseSlot = await this.d.writers.acquire(
@@ -371,6 +380,25 @@ export class StepExecutor {
       releaseSlot();
       releaseLock?.();
     }
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 9): a folder delete planned "only if empty": its contents read now, inside the asset-folder
+   * lock. Anything in it: the delete is not sent, and the step succeeds with `{ skipped }`; empty (or not readable as a
+   * folder): null, and the delete goes ahead as planned (LegendKeeper answers for a folder that is gone).
+   */
+  private async folderNotEmpty(job: JobView, step: StepView, params: OpParams): Promise<StepOutcome | null> {
+    const id = params.path?.assetId;
+    if (typeof id !== 'string') return null;
+    const stats = newCallStats();
+    const r = await this.readOp(job, step, 'listAssets', { query: { limit: 1, folderId: id } }, stats);
+    const b = (r.body ?? {}) as { data?: unknown };
+    const n = Array.isArray(b.data) ? b.data.length : 0;
+    if (!r.exists || n === 0) return null;
+    return this.succeed(job, step, stats, {
+      skipped: 'the folder is not empty when the job runs: it was not deleted',
+      folderId: id,
+    });
   }
 
   /**

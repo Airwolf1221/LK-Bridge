@@ -194,6 +194,12 @@ export interface StepOptions {
    * used (its id bound by the steps after it) instead of creating another. A raw createAssetFolder keeps its meaning.
    */
   readonly findOrCreate?: boolean;
+  /**
+   * v3 F2 (ADR 0049 decision 9), set by bridge code only, on a `deleteAsset` of a folder: the folder's contents are read
+   * when the job runs (under the asset-folder lock) and, when anything is in it, the delete is not sent (the step is
+   * recorded as succeeded with `{ skipped }`): a duplicate folder is deleted only when the merge has emptied it.
+   */
+  readonly onlyIfEmpty?: boolean;
 }
 
 export interface StepSpec extends StepOptions {

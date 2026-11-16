@@ -16,6 +16,7 @@ import { treeSettingsFrom } from '../tree/classify.js';
 import type { ProjectSettings } from '../projects/settings.js';
 import { auditConfigInputSchema, effectiveRules, type AuditConfig, type AuditRule } from './config.js';
 import { chronologyCheck, keepRegionsCheck, lifecycleCheck } from './checks/lifecycle.js';
+import { duplicateFoldersCheck, type AssetLibrary } from './checks/assets.js';
 import { orderingCheck, referencesCheck, unclassifiedCheck } from './checks/references.js';
 import { rulesCheck, tagDefinitionOf } from './checks/rules.js';
 import { factsCheck, taxonomyCheck } from './checks/taxonomy.js';
@@ -62,6 +63,7 @@ export const CHECKS: readonly { readonly id: string; readonly run: Check }[] = [
   { id: 'lifecycle', run: lifecycleCheck },
   { id: 'keep-regions', run: keepRegionsCheck },
   { id: 'chronology', run: chronologyCheck },
+  { id: 'assets', run: duplicateFoldersCheck },
 ];
 
 export interface AuditDeps {
@@ -85,6 +87,8 @@ export interface AuditDeps {
   ) => void;
   readonly now: () => number;
   readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
+  /** v3 F2: the asset library from the bridge's asset tree (null when it is not built), for duplicate folders. */
+  readonly assetLibrary?: (projectId: string) => AssetLibrary | null;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -585,6 +589,13 @@ export class Audits {
       chronologyConfigured: ready.ok,
       chronologyResourceId: ready.ok ? (chron.config(projectId).resourceId ?? null) : null,
       chronology: lastGood,
+      assetLibrary: (() => {
+        try {
+          return this.d.assetLibrary?.(projectId) ?? null;
+        } catch {
+          return null;
+        }
+      })(),
       tombstone: (id) => {
         try {
           return this.d.tree.queries.tombstone(projectId, id);

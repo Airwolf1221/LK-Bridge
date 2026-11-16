@@ -54,6 +54,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   lifecycle: 'Lifecycle',
   keep_regions: 'Keep regions',
   chronology: 'Chronology',
+  assets: 'Asset library',
   audit: 'The audit itself',
 };
 

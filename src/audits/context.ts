@@ -13,6 +13,7 @@ import { nameKey, type AuditPage } from './model.js';
 import type { AuditModel } from './reader.js';
 import { SnapshotTree } from './snapshot-tree.js';
 import type { FindingDraft, FindingSource } from './types.js';
+import type { AssetLibrary } from './checks/assets.js';
 
 /** A lifecycle record or set record that stopped part-way (the audit reports it with its pages). */
 export interface IncompleteRecord {
@@ -60,6 +61,8 @@ export interface AuditContext {
   /** Pages of the snapshot as a registry tree (for `classifyType`, `computeDrift`, `outOfOrder`). */
   readonly tree: ProjectTree;
   readonly snapshotTree: SnapshotTree;
+  /** v3 F2: the asset library as the bridge's asset tree holds it (null when it is not built). */
+  readonly assetLibrary?: AssetLibrary | null;
 }
 
 export function makeContext(o: Omit<AuditContext, 'tree' | 'snapshotTree'>): AuditContext {

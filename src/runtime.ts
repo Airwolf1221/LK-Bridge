@@ -61,6 +61,7 @@ import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
 import { lifecycleFrom } from './lifecycle/settings.js';
 import { createLmrPlanner } from './lmr/index.js';
+import { assetLibraryOf } from './assets/library.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
 import { mapCheckers } from './maps/index.js';
@@ -560,6 +561,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
+    // v3 F2 (ADR 0049 decision 9): duplicate asset folders, from the bridge's asset tree (no LegendKeeper read).
+    assetLibrary: (projectId) => assetLibraryOf(assets, projectId),
   });
   audits.start();
   const detachAuditCheckers = [

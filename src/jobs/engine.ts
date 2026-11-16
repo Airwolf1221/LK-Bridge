@@ -2914,6 +2914,7 @@ function stepOptions(o: StepOptions): StepOptions {
       : {}),
     ...(o.followUp === 'lmr_failed' ? { followUp: 'lmr_failed' as const } : {}),
     ...(o.findOrCreate === true ? { findOrCreate: true } : {}),
+    ...(o.onlyIfEmpty === true ? { onlyIfEmpty: true } : {}),
     // v2 D3: set by bridge code only.
     ...(o.bindFrom &&
     Number.isInteger(o.bindFrom.step) &&
