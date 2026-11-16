@@ -123,7 +123,23 @@ export function buildJob(o: {
     lastWriteTo.set(doc, writeSteps.length);
     writeSteps.push({ step, label, doc });
   };
-  const journal = (w: TargetWrite) => ({ tool: o.tool, chronology: { write: w.kind, age: w.age } });
+  // v3 F3c (ADR 0051 decision 1): each table write carries what it changes for the Last Major Revision rule (a row's
+  // date or description cell counts; its KCY cell alone and the Main count do not).
+  const lmr = (w: TargetWrite) =>
+    w.kind === 'row.insert'
+      ? { lmr: { kind: 'chronologyRow', before: null, after: w.texts } }
+      : w.kind === 'row.delete'
+        ? { lmr: { kind: 'chronologyRow', before: w.texts, after: null } }
+        : w.kind === 'row.replace'
+          ? { lmr: { kind: 'chronologyRow', before: w.before, after: w.texts } }
+          : w.kind === 'count'
+            ? { lmr: { kind: 'chronologyCount' } }
+            : {};
+  const journal = (w: TargetWrite) => ({
+    tool: o.tool,
+    chronology: { write: w.kind, age: w.age },
+    ...lmr(w),
+  });
 
   // The table writes first, then the events, then the counts (the table is the authority).
   const order = (w: TargetWrite) => (w.kind.startsWith('row.') ? 0 : w.kind.startsWith('event.') ? 1 : 2);

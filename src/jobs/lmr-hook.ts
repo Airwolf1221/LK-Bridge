@@ -10,6 +10,14 @@
 import type { ProposalExtras } from './policy.js';
 import type { JobOrigin, LifecycleMarker, OpParams, StepOptions, StepSpec } from './types.js';
 
+/**
+ * v3 F3c (ADR 0051 decision 1): a caller's override of the rule, on every tool that can set the row. `auto` (the
+ * default): the rule decides (a major revision sets it); `set`: set it although the rule would not; `skip`: leave it
+ * although the rule would set it.
+ */
+export type LmrMode = 'auto' | 'set' | 'skip';
+export const LMR_MODES: readonly LmrMode[] = ['auto', 'set', 'skip'];
+
 export interface LmrPlanInput {
   readonly project: string;
   readonly origin: JobOrigin;
@@ -22,14 +30,22 @@ export interface LmrPlanInput {
   }[];
   readonly lifecycle?: LifecycleMarker;
   readonly prefetched?: ProposalExtras['prefetched'];
+  /** v3 F3c: the caller's override (absent: `auto`). */
+  readonly mode?: LmrMode;
 }
 
 export interface LmrPlan {
-  /** Appended after the request's own steps; their step numbers continue from them. */
+  /**
+   * Appended after the request's own steps; their step numbers continue from them. Empty when the rule (or the caller)
+   * decided not to set the row: the plan then only says why (`note`), for the proposal and the answer.
+   */
   readonly steps: readonly StepSpec[];
   /** The pages whose `Last Major Revision` is set (their locks are added when the job holds job-level locks). */
   readonly pages: readonly string[];
-  /** For the proposal's summary: `+ Last Major Revision → date of approval`. */
+  /**
+   * For the proposal's summary and the answer: `+ Last Major Revision → date of approval (auto: 12 words of page text
+   * changed)`, or `Last Major Revision skipped: a trimmed value, not a major revision`.
+   */
   readonly note: string;
 }
 

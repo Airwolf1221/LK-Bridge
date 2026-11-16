@@ -536,7 +536,16 @@ describe('list_snapshots and snapshot_diff', () => {
 });
 
 describe('restore_snapshot: a deleted image', () => {
-  it('comes back as a new asset (staged now, placed by the proposal), and the pages that showed it are updated when asked', async () => {
+  /** v3 F3c (ADR 0051 decision 3): nothing is ever written to the old staging folder, and no asset is ever hidden. */
+  const noStagingFolder = () => {
+    expect(w!.assets.byName('LK-Bridge staging')).toEqual([]);
+    expect([...w!.assets.assets.values()].filter((a) => a.isHidden)).toEqual([]);
+  };
+  const restoredIn = (folderId: string | null) => w!.assets.byName('Weeping Sea', folderId);
+  const restoreOf = (proposalId: string) =>
+    w!.stack.runtime.restores.list(PROJECT).find((x) => x.proposalId === proposalId)!;
+
+  it('the bytes wait on the bridge’s server; approved, ONE job uploads it into its folder and relinks the page (v3 F3c)', async () => {
     const snap = await setup();
     const oldUrl = w!.url(S.imgSea);
     const del = await call('lk_api_write', {
@@ -553,6 +562,7 @@ describe('restore_snapshot: a deleted image', () => {
     expect(dry.body).toMatchObject({
       status: 'dry_run',
       old: { assetId: S.imgSea, name: 'Weeping Sea', url: oldUrl },
+      image: { name: 'Weeping Sea', path: ['Characters'], creates: [] },
     });
     expect(dry.body.references).toEqual([
       expect.objectContaining({
@@ -560,6 +570,7 @@ describe('restore_snapshot: a deleted image', () => {
         documents: [expect.objectContaining({ what: 'image blocks' }) as unknown],
       }) as unknown,
     ]);
+    const mutations = w!.assets.mutations.length;
     const r = await call('restore_snapshot', {
       snapshot: snap,
       scope: 'image',
@@ -567,20 +578,123 @@ describe('restore_snapshot: a deleted image', () => {
       updateReferences: true,
     });
     expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
-    const newId = r.body.newAsset.id as string;
-    expect(newId).not.toBe(S.imgSea);
-    // Staged: in the library, hidden, until the owner approves.
-    expect(w!.assets.assets.get(newId)).toMatchObject({ isHidden: true });
-    expect((await approve(r)).state).toBe('executed');
-    expect(w!.assets.assets.get(newId)).toMatchObject({
-      isHidden: false,
-      name: 'Weeping Sea',
-      folderId: S.folderA,
+    // The proposal describes the image, its folder and its name; nothing has been sent to LegendKeeper yet.
+    expect(r.body.image).toMatchObject({ name: 'Weeping Sea', path: ['Characters'], creates: [] });
+    expect(r.body.newAsset).toBeUndefined();
+    expect(r.body.summary).toContain('image “Weeping Sea” back as a new asset in Characters');
+    expect(w!.assets.mutations.length).toBe(mutations);
+    expect(restoredIn(S.folderA)).toEqual([]);
+    const staged = w!.stack.runtime.images.staged(PROJECT, String(r.body.image.stagedId))!;
+    expect(staged).toMatchObject({
+      staged: true,
+      assetId: null,
+      placementProposalId: String(r.body.proposalId),
     });
+    expect(staged.serverSha256).toMatch(/^[0-9a-f]{64}$/);
+
+    expect((await approve(r)).state).toBe('executed');
+    const [made] = restoredIn(S.folderA);
+    expect(made).toMatchObject({ isHidden: false, name: 'Weeping Sea', folderId: S.folderA });
+    expect(made!.id).not.toBe(S.imgSea);
     const img = mainBlocks().find((b) => b.id === 'aimg') as unknown as { url: string };
-    expect(img.url).toBe(w!.url(newId));
+    expect(img.url).toBe(w!.url(made!.id));
     // The same bytes: the snapshot store's object.
-    expect(w!.sha(newId)).toBe(w!.sha(S.imgSea));
+    expect(w!.sha(made!.id)).toBe(w!.sha(S.imgSea));
+    // The staged copy is placed (its server copy gone); the restore's record has the new asset.
+    expect(w!.stack.runtime.images.staged(PROJECT, staged.id)).toMatchObject({
+      staged: false,
+      assetId: made!.id,
+      serverSha256: null,
+    });
+    expect(restoreOf(String(r.body.proposalId)).plan).toMatchObject({
+      newAsset: { id: made!.id, url: w!.url(made!.id) },
+    });
+    expect(restoreOf(String(r.body.proposalId)).followUp).toBeNull();
+    noStagingFolder();
+  });
+
+  it('a page that changed in the meantime: the job stops after the upload, the asset stays, image_relink_failed, no retry', async () => {
+    const snap = await setup();
+    const oldUrl = w!.url(S.imgSea);
+    await call('lk_api_write', { operationId: 'deleteAsset', params: { path: { assetId: S.imgSea } } });
+    const r = await call('restore_snapshot', {
+      snapshot: snap,
+      scope: 'image',
+      asset: S.imgSea,
+      updateReferences: true,
+    });
+    expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
+    // The owner edits the page in the app before approving.
+    const doc = w!.repo.blocks.get(w!.d.main)!;
+    w!.repo.blocks.set(w!.d.main, {
+      version: Number(doc.version) + 1,
+      blocks: [...doc.blocks, { id: 'aedit', kind: 'paragraph', content: [{ text: 'Edited.' }] }],
+    });
+    const puts = () =>
+      w!.stack.mock.calls.filter((x) => x.method === 'PUT' && x.path.endsWith(`/docs/${w!.d.main}/blocks`))
+        .length;
+    const before = puts();
+    const a = await approve(r);
+    expect(a.state).toBe('executed');
+    expect(a.job?.status).toBe('succeeded');
+    // Uploaded into its folder; left there.
+    const [made] = restoredIn(S.folderA);
+    expect(made).toMatchObject({ isHidden: false, name: 'Weeping Sea' });
+    // The page keeps the owner's edit and the old URL; the relink was sent once, refused, and never retried.
+    expect(mainBlocks().some((b) => b.id === 'aedit')).toBe(true);
+    expect((mainBlocks().find((b) => b.id === 'aimg') as unknown as { url: string }).url).toBe(oldUrl);
+    // The relink's If-Match (the version read when the restore was proposed) no longer matches inside the lock: refused
+    // before anything is sent, and never retried.
+    expect(puts() - before).toBe(0);
+    const jobId = String(w!.stack.runtime.policy.proposals.get(String(r.body.proposalId))!.jobId);
+    const job = w!.stack.runtime.engine.queries.getJob(PROJECT, jobId)!;
+    expect((job.result as { followUps?: unknown[] }).followUps).toEqual([
+      expect.objectContaining({ kind: 'image_relink_failed', pageId: S.atlas, code: 'VERSION_CONFLICT' }),
+    ]);
+    expect(w!.stack.runtime.engine.stepResults(PROJECT, jobId)!.map((x) => x.status)).toEqual([
+      'succeeded', // createImageUpload
+      'succeeded', // the PUT of the server's bytes
+      'succeeded', // createImageAsset
+      'succeeded', // the stored file checked
+      'succeeded', // the asset read back
+      'failed', // the relink: refused once, not retried
+    ]);
+    const rec = restoreOf(String(r.body.proposalId));
+    expect(rec.followUp).toMatch(/^image_relink_failed: the image was restored, but 1 page\(s\) changed/);
+    expect(rec.plan).toMatchObject({
+      newAsset: { id: made!.id },
+      notRelinked: [expect.objectContaining({ pageId: S.atlas })],
+    });
+    noStagingFolder();
+  });
+
+  it('its folder deleted since the snapshot: made again by its path when approved (find-or-create)', async () => {
+    const snap = await setup();
+    for (const id of [S.imgSea, S.imgCrest, S.folderA]) {
+      const del = await call('lk_api_write', {
+        operationId: 'deleteAsset',
+        params: { path: { assetId: id } },
+      });
+      expect(del.isError, JSON.stringify(del.body)).toBe(false);
+    }
+    expect(w!.assets.byName('Characters')).toEqual([]);
+    const r = await call('restore_snapshot', { snapshot: snap, scope: 'image', asset: S.imgSea });
+    expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
+    expect(r.body.image).toMatchObject({
+      name: 'Weeping Sea',
+      path: ['Characters'],
+      creates: ['Characters'],
+    });
+    expect(r.body.notes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ what: 'its folder' }) as unknown]),
+    );
+    expect(w!.assets.byName('Characters')).toEqual([]); // nothing made before approval
+    expect((await approve(r)).state).toBe('executed');
+    const [folder] = w!.assets.byName('Characters', null);
+    expect(folder).toMatchObject({ type: 'FOLDER' });
+    expect(folder!.id).not.toBe(S.folderA);
+    expect(restoredIn(folder!.id)).toEqual([expect.objectContaining({ isHidden: false })]);
+    noStagingFolder();
   });
 
   it('without updateReferences, the pages are listed and left as they are', async () => {

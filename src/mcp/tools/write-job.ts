@@ -11,6 +11,7 @@
  *   journal entries, so a retry is a new, smaller request.
  */
 import type { BatchSubmit, JobView, LifecycleMarker, StepSpec } from '../../jobs/index.js';
+import type { LmrMode } from '../../jobs/lmr-hook.js';
 import type { ProposalExtras } from '../../jobs/policy.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
 import { finish } from './repo.js';
@@ -44,6 +45,8 @@ export interface WriteJobSpec {
   /** v3 F3a: the batch places images staged on the bridge's server (a proposal at scope propose, not a refusal). */
   readonly stagedPlacement?: boolean;
   readonly proposal: ProposalExtras;
+  /** v3 F3c (ADR 0051): the caller's Last Major Revision override. */
+  readonly lastMajorRevision?: LmrMode | undefined;
   /** The plan, as every answer shows it. */
   readonly head: Record<string, unknown>;
   readonly preview: () => unknown;
@@ -90,6 +93,7 @@ export async function runWriteJob(
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
       ...(spec.forceProposal === true ? { forceProposal: true } : {}),
       ...(spec.stagedPlacement ? { stagedPlacement: true } : {}),
+      ...(spec.lastMajorRevision ? { lastMajorRevision: spec.lastMajorRevision } : {}),
       internal: true,
       proposal: spec.proposal,
     });
@@ -115,12 +119,24 @@ export async function runWriteJob(
       ? (pd.engine.queries.getJob(pd.project.id, r.jobId) ??
         (await pd.engine.wait(pd.project.id, r.jobId, 0)))
       : await pd.engine.wait(pd.project.id, r.jobId, WAIT_MS);
-  const out = describeJob(pd, view, spec.labels, spec.head);
+  const described = describeJob(pd, view, spec.labels, spec.head);
+  // v3 F3c (ADR 0051): what the Last Major Revision rule decided (when it ran, else when it was planned).
+  const lmr = lmrSaid(view) ?? r.lastMajorRevision;
+  const out =
+    lmr !== undefined && !described.error
+      ? { ...described, body: { ...described.body, lastMajorRevision: lmr } }
+      : described;
   return {
     result: out.error ? out.result : finish(pd, mctx, tool, out.body, spec.preview),
     body: out.body,
     jobId: view.id,
   };
+}
+
+/** v3 F3c: what a job's Last Major Revision decision said, from its result (undefined: none ran). */
+export function lmrSaid(view: JobView): string | undefined {
+  const v = (view.result as { lastMajorRevision?: unknown } | null | undefined)?.lastMajorRevision;
+  return typeof v === 'string' ? v : undefined;
 }
 
 /** The answer for a job as it stands now (also used to answer an `operation_id` repeat). */

@@ -210,6 +210,8 @@ test('v2 C1: a write_page proposal shows its Markdown diff, keep regions as plac
   expect(problems).toEqual([]);
 });
 
+// v3 F3c (ADR 0051 decision 4): the proposal is promote_page's (Working → Authoritative), the only way the C2c
+// lifecycle guard lets a page become canon; the fixture used to write the Status row directly, which the guard refuses.
 test('v2 C2a: a proposal that touches protected canon is approved only with "Approve and accept as canon"', async ({
   page,
   request,
@@ -220,7 +222,9 @@ test('v2 C2a: a proposal that touches protected canon is approved only with "App
   };
   expect(proposalId).toMatch(/^prop_/);
   await signIn(page, `/ui/proposals?id=${proposalId}`);
-  await expect(page.getByRole('region', { name: 'Pages affected' })).toContainText('sidebar, 1 fact changed');
+  const affected = page.getByRole('region', { name: 'Pages affected' });
+  await expect(affected).toContainText('[BWRK] Inae Mikumo: renamed to [BSRC] Inae Mikumo');
+  await expect(affected).toContainText('moved under [INDEX] Characters');
   const banner = page.getByRole('alert', { name: 'Protected canon' });
   await expect(banner).toContainText('This changes protected canon.');
   await expect(banner).toContainText('Status would be set to Authoritative');

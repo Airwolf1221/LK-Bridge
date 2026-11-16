@@ -19,6 +19,7 @@
  * be written whole at all: refused, as write_page refuses it); board pages; properties other than the facts property and
  * the link collections.
  */
+import type { LmrMode } from '../jobs/lmr-hook.js';
 import { ICON_FIELDS, withWriteIcon } from '../lk/icons.js';
 import {
   comparableFeature,
@@ -85,6 +86,8 @@ export interface RestoreInput {
   readonly ids?: 'original' | 'new';
   /** For a recreated page whose snapshot parent is gone: where it goes instead. */
   readonly parentId?: string;
+  /** v3 F3c (ADR 0051): the caller's Last Major Revision override (`auto`: the rule decides when the restore runs). */
+  readonly lastMajorRevision?: LmrMode;
 }
 
 export interface PlanNote {

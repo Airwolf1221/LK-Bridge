@@ -30,4 +30,8 @@ jobs:
         run: npx vitest run test/tools/spike-v2-dryrun.test.ts test/tools/spike-wrapper.test.ts
       - name: Unit and contract tests (sandbox tests are opt-in and never run here)
         run: npm test
+      # v3 F3c (ADR 0051 decision 4): the one browser test made stable (5 of 5 fresh runs): a canon proposal, made by
+      # promote_page, approved only with "Approve and accept as canon". The rest of the browser suite stays manual.
+      - name: Browser test of canon approval (mock LegendKeeper)
+        run: npx playwright install --with-deps chromium && npm run test:e2e -- -g "v2 C2a" --trace off
       - run: npm run build

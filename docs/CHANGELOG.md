@@ -40,6 +40,38 @@ live system: every test uses the mock LegendKeeper and fixtures built from the s
   the character part), with tested owner examples; tools.md (costs measured against the mock), packs.md, dashboard.md;
   four new evaluation scenarios (35 to 38, marked `pack: "arkona"`).
 
+## Unreleased: v3 F3c (16 November 2026): Last Major Revision only for real revisions, same-day ties, image restore without the staging folder
+
+[ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) (Proposed; the owner approves decision 1's
+rule as worded there). No migration. Nothing was run against a live system: every test uses the mock LegendKeeper and
+fixtures. Nothing in `src/packs/`, the pack tools or the Packs page was touched (F3b's).
+
+- **Last Major Revision only for real revisions** (the owner: "Tiny edits like this aren't enough for a major
+  revision"). F2's "substantial" test is replaced by the owner's rule: 8 words or more of page text in the whole edit; a
+  heading's wording; a real change to a fact other than the housekeeping keys; a Dependency added or removed; a
+  chronology row's date or description. A trimmed value (a prefix, a descriptive tail or a parenthetical removed),
+  punctuation, dashes, whitespace or capitalisation, a typo fix (at most 2 characters in at most 3 words, never a
+  number), a KCY alone, tags, aliases, the name or a move do not count. Measured when the edit is planned from what the
+  tool read (`write_page`, `set_facts`, the chronology tools), or when the job runs from the journal's pre-images
+  (`lk_api_*`, restores, the dashboard's fixes). The two Arkona cases (a trimmed Subject, a KCY fix) no longer set it;
+  Nezrin's seven-fact rewrite does. F2's per-project switches stay; Dependencies moved from the link-collection switch to
+  the set_facts one ([docs/tools.md](tools.md#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c)).
+- **`lastMajorRevision: "auto" | "set" | "skip"`** on `write_page`, `set_facts`, `lk_api_write`, `lk_api_batch`, the four
+  chronology tools and `restore_snapshot`. The answer (`lastMajorRevision`) and the proposal say which applied and why
+  (`Last Major Revision skipped: Subject: a trimmed value, not a major revision`).
+- **Same-day pairing without guessing** ([docs/chronology.md](chronology.md#same-day-pairing-without-guessing-v3-f3c)):
+  a day with two or more rows and as many events pairs by unique names and stored links only; what is left pairs by the
+  date only when it is one row and one event, and otherwise is a tie shown with F2.1's buttons. Never paired by order.
+- **A deleted image is restored without `LK-Bridge staging`** ([docs/snapshots.md](snapshots.md)): its bytes wait on the
+  bridge's server; the proposal names the image, its folder and its name; approval uploads it straight into its folder
+  (found, or made again by its path) and rewrites the pages that showed it in the same job, with If-Match. A page edited
+  meanwhile stops the job after the upload with an `image_relink_failed` follow-up (on the restore's record too), never
+  retried. The upload steps of a server-staged placement are shared (`ImageService.serverPlacementSteps`); `bindAssetUrls`
+  can bind an asset's id (`field: "id"`, a map image).
+- **The C2a browser test passes again**: its fixture makes Inae canon through `promote_page` (the C2c lifecycle guard
+  rightly refuses a raw Status write). Stable across 5 fresh runs, so CI now runs it in a step of its own; `npm run ci`
+  stays browser-free.
+
 ## Unreleased: v3 F3c (16 November 2026): a grouped sidebar
 
 A UI change only: no ADR, no migration. Nothing was run against a live system.

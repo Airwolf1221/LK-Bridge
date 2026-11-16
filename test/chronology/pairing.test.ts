@@ -215,3 +215,110 @@ describe('scored pairing (v2 E6, ADR 0048): the Divan Heirage case', () => {
     expect(p.events.map((e) => e.id)).toEqual(['e']);
   });
 });
+
+describe('same-day pairing without guessing (v3 F3c, ADR 0051 decision 2)', () => {
+  const t = table([
+    ['Isar 3rd, 4A 619', 'The Menkheti Viziers vote to admit Mehrana to active Divan Heirage', '1,250,926'],
+    ['Isar 3rd, 4A 619', 'The Divan sends its envoys to the Hollow Court', '1,250,926'],
+  ]);
+  const link = (rowId: string, eventId: string) => ({
+    tableDocumentId: 'tab',
+    timelineDocumentId: 'tl',
+    rowId,
+    eventId,
+    age: age.name,
+  });
+
+  it('two rows and two events with distinct names pair by name, whatever their order', () => {
+    const p = matchRowsAndEvents(
+      t.rows,
+      [
+        ev('envoys', 'The Divan sends its envoys to the Hollow Court', 'Isar 3rd, 4A 619'),
+        ev('vote', 'The Menkheti Viziers vote to admit Mehrana to active Divan Heirage', 'Isar 3rd, 4A 619'),
+      ],
+      [],
+      age,
+    );
+    expect(p.pairs.map((x) => [x.row.id, x.event.id, x.how])).toEqual([
+      ['r0', 'vote', 'date+name'],
+      ['r1', 'envoys', 'date+name'],
+    ]);
+    expect(p.rows).toEqual([]);
+    expect(p.events).toEqual([]);
+  });
+
+  it('two rows and two events with indistinct names are a tie: never paired by table order', () => {
+    const p = matchRowsAndEvents(
+      t.rows,
+      [
+        ev('a', 'An event of that day', 'Isar 3rd, 4A 619'),
+        ev('b', 'Another event of that day', 'Isar 3rd, 4A 619'),
+      ],
+      [],
+      age,
+    );
+    expect(p.pairs).toEqual([]);
+    expect(p.mismatches).toEqual([]);
+    expect(p.rows.map((r) => r.id)).toEqual(['r0', 'r1']);
+    expect(p.events.map((e) => e.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('one stored link plus one leftover: the leftover pairs, because it is unique', () => {
+    const p = matchRowsAndEvents(
+      t.rows,
+      [
+        ev('a', 'An event of that day', 'Isar 3rd, 4A 619'),
+        ev('b', 'Another event of that day', 'Isar 3rd, 4A 619'),
+      ],
+      [link('r1', 'a')],
+      age,
+    );
+    expect(p.pairs.map((x) => [x.row.id, x.event.id, x.how])).toEqual([
+      ['r1', 'a', 'link'],
+      ['r0', 'b', 'date'],
+    ]);
+  });
+
+  it('one stored link plus two leftovers of each: the leftovers tie', () => {
+    const three = table([
+      ['Isar 3rd, 4A 619', 'First of the day', '1,250,926'],
+      ['Isar 3rd, 4A 619', 'Second of the day', '1,250,926'],
+      ['Isar 3rd, 4A 619', 'Third of the day', '1,250,926'],
+    ]);
+    const p = matchRowsAndEvents(
+      three.rows,
+      [
+        ev('a', 'One', 'Isar 3rd, 4A 619'),
+        ev('b', 'Two', 'Isar 3rd, 4A 619'),
+        ev('c', 'Three', 'Isar 3rd, 4A 619'),
+      ],
+      [link('r0', 'a')],
+      age,
+    );
+    expect(p.pairs.map((x) => [x.row.id, x.event.id, x.how])).toEqual([['r0', 'a', 'link']]);
+    expect(p.rows.map((r) => r.id)).toEqual(['r1', 'r2']);
+    expect(p.events.map((e) => e.id).sort()).toEqual(['b', 'c']);
+  });
+
+  it('one name decides one pair; the one row and one event left then pair by the date', () => {
+    const p = matchRowsAndEvents(
+      t.rows,
+      [
+        ev('vote', 'The Menkheti Viziers vote to admit Mehrana to active Divan Heirage', 'Isar 3rd, 4A 619'),
+        ev('other', 'Something else that day', 'Isar 3rd, 4A 619'),
+      ],
+      [],
+      age,
+    );
+    expect(p.pairs.map((x) => [x.row.id, x.event.id, x.how])).toEqual([
+      ['r0', 'vote', 'date+name'],
+      ['r1', 'other', 'date'],
+    ]);
+  });
+
+  it('a day with exactly one row and one event is unchanged', () => {
+    const one = table([['Isar 3rd, 4A 619', 'The vote', '1,250,926']]);
+    const p = matchRowsAndEvents(one.rows, [ev('e', 'Something else', 'Isar 3rd, 4A 619')], [], age);
+    expect(p.pairs.map((x) => [x.row.id, x.event.id, x.how])).toEqual([['r0', 'e', 'date']]);
+  });
+});

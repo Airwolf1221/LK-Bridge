@@ -81,6 +81,8 @@ import {
   type ToolDeps,
 } from './shape.js';
 import { runWriteJob } from './write-job.js';
+import { lastMajorRevisionArg } from './schemas.js';
+import type { LmrMode } from '../../jobs/lmr-hook.js';
 
 type Obj = Record<string, unknown>;
 type Answer = { kind: 'answer'; result: McpToolResult };
@@ -572,6 +574,8 @@ interface Submit {
   readonly forceProposal?: boolean;
   /** v3 F2.1: what a finished job answers instead of `written` (`linked`). */
   readonly writtenStatus?: string;
+  /** v3 F3c (ADR 0051): the caller's Last Major Revision override. */
+  readonly lastMajorRevision?: LmrMode | undefined;
 }
 
 async function submit(pd: ProjectDeps, mctx: McpToolContext, s: Submit): Promise<CreateOutcome> {
@@ -623,6 +627,7 @@ async function submit(pd: ProjectDeps, mctx: McpToolContext, s: Submit): Promise
     head: { ...s.head, steps, ...(s.writtenStatus ? { writtenStatus: s.writtenStatus } : {}) },
     preview: () => ({ summary: s.summary }),
     ...(s.forceProposal === true ? { forceProposal: true } : {}),
+    ...(s.lastMajorRevision ? { lastMajorRevision: s.lastMajorRevision } : {}),
   });
   return {
     kind: 'job',
@@ -803,6 +808,7 @@ function createTimelineEventTool(deps: ToolDeps): McpToolProvider {
         .describe('The age (its name or era abbreviation), to confirm the date’s.'),
       dryRun: z.boolean().optional().describe('Show the plan; write nothing.'),
       operation_id: operationIdArg,
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: CREATE_ANNOTATIONS,
@@ -1022,6 +1028,7 @@ function createTimelineEventTool(deps: ToolDeps): McpToolProvider {
             `- ${date.formattedStart}${date.formattedEnd ? ` – ${date.formattedEnd}` : ''}: **${name}**`,
           ].join('\n');
           return submit(pd, mctx, {
+            lastMajorRevision: args.lastMajorRevision,
             tool,
             ch,
             target,
@@ -1268,6 +1275,7 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
       description: descriptionArg.optional(),
       dryRun: z.boolean().optional(),
       operation_id: operationIdArg,
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: CHANGE_ANNOTATIONS,
@@ -1291,7 +1299,8 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
           });
           const store = pd.services!.chronology!.store;
           const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
-          if (resume) return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun);
+          if (resume)
+            return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun, args.lastMajorRevision);
           const f = await findEvent(pd, mctx, tool, ch, cal, args.event);
           if (!f.ok) return { kind: 'answer', result: f.result };
           const { age, row, event, table } = f.value;
@@ -1599,6 +1608,7 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
             ].join('\n'),
           };
           return submit(pd, mctx, {
+            lastMajorRevision: args.lastMajorRevision,
             tool,
             ch,
             target,
@@ -1637,6 +1647,7 @@ function deleteTimelineEventTool(deps: ToolDeps): McpToolProvider {
       confirm: z.literal(true).describe('Required: true.'),
       dryRun: z.boolean().optional(),
       operation_id: operationIdArg,
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: { ...CHANGE_ANNOTATIONS, destructiveHint: true },
@@ -1649,11 +1660,13 @@ function deleteTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const fc = await freshCalendar(pd, mctx, tool, ch.config.calendarId!);
           if (!fc.ok) return { kind: 'answer', result: fc.result };
           const cal = fc.cal;
-          if (args.orphan === true) return deleteOrphan(pd, mctx, ch, cal, args.event, args.dryRun);
+          if (args.orphan === true)
+            return deleteOrphan(pd, mctx, ch, cal, args.event, args.dryRun, args.lastMajorRevision);
           const requestKey = sha({ tool, event: args.event });
           const store = pd.services!.chronology!.store;
           const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
-          if (resume) return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun);
+          if (resume)
+            return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun, args.lastMajorRevision);
           const f = await findEvent(pd, mctx, tool, ch, cal, args.event);
           if (!f.ok) return { kind: 'answer', result: f.result };
           const { age, row, event, table } = f.value;
@@ -1713,6 +1726,7 @@ function deleteTimelineEventTool(deps: ToolDeps): McpToolProvider {
             },
           };
           return submit(pd, mctx, {
+            lastMajorRevision: args.lastMajorRevision,
             tool,
             ch,
             target,
@@ -1761,6 +1775,7 @@ async function deleteOrphan(
   cal: Calendar,
   ref: z.infer<typeof eventRefArg>,
   dryRun: boolean | undefined,
+  lastMajorRevision?: LmrMode,
 ): Promise<CreateOutcome> {
   const tool = ORPHAN_TOOL;
   if (ref.event_id === undefined || ref.row_id !== undefined)
@@ -1773,7 +1788,7 @@ async function deleteOrphan(
   const orphanRef = { eventId: ref.event_id, ...(ref.age !== undefined ? { age: ref.age } : {}) };
   const requestKey = orphanRequestKey(orphanRef);
   const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
-  if (resume) return resumeChange(pd, mctx, tool, ch, cal, resume, dryRun);
+  if (resume) return resumeChange(pd, mctx, tool, ch, cal, resume, dryRun, lastMajorRevision);
   let plan;
   try {
     plan = await planOrphanDelete({
@@ -1796,6 +1811,7 @@ async function deleteOrphan(
   const stopped = stoppedChange(pd, ch, requestKey, [plan.age.name]);
   if (stopped.refusal) return stopped.refusal;
   return submit(pd, mctx, {
+    lastMajorRevision: lastMajorRevision,
     tool,
     ch,
     target: plan.target,
@@ -1819,6 +1835,7 @@ async function resumeChange(
   cal: Calendar,
   rec: ChronologyRecord,
   dryRun: boolean | undefined,
+  lastMajorRevision?: LmrMode,
 ): Promise<CreateOutcome> {
   const job = rec.jobId ? pd.engine.queries.getJob(ch.ctx.projectId, rec.jobId) : null;
   if (job && !['succeeded', 'failed', 'cancelled'].includes(job.status))
@@ -1898,6 +1915,7 @@ async function resumeChange(
     }
   }
   return submit(pd, mctx, {
+    lastMajorRevision: lastMajorRevision,
     tool,
     ch,
     target: rec.target,
@@ -1989,6 +2007,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
         ),
       dryRun: z.boolean().optional().describe('Show the plan; write nothing and propose nothing.'),
       operation_id: operationIdArg,
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: CHANGE_ANNOTATIONS,
@@ -2013,7 +2032,8 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const requestKey = syncRequestKey(ref);
           const store = pd.services!.chronology!.store;
           const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
-          if (resume) return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun);
+          if (resume)
+            return resumeChange(pd, mctx, tool, ch, cal, resume, args.dryRun, args.lastMajorRevision);
           let plan;
           try {
             plan = await planSync({
@@ -2057,6 +2077,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const stopped = stoppedChange(pd, ch, requestKey, [plan.age.name]);
           if (stopped.refusal) return stopped.refusal;
           return submit(pd, mctx, {
+            lastMajorRevision: args.lastMajorRevision,
             tool,
             ch,
             target: plan.target,

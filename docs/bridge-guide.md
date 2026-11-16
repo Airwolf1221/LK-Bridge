@@ -135,7 +135,9 @@ Pages are changed with `write_page`, in Markdown (read `get_markdown_guide` firs
 document; the bridge turns it into LegendKeeper blocks, keeps everything you did not change exactly as it was (ids,
 styling, keep regions), and checks what it wrote.
 
-Substantial edits update Last Major Revision automatically; don't set it yourself.
+Major revisions update Last Major Revision automatically (8 words or more of text, a heading, a real fact change, a
+Dependency, a chronology row's date or description; not trims, punctuation or typo fixes); don't set it yourself. Pass
+`lastMajorRevision: "set"` or `"skip"` only when the person asks; the answer says what was decided.
 
 1. **Read first.** `read_document` gives the page's Markdown and its `version`. Change the Markdown you read.
 2. **Pass `baseVersion`.** If the page changed since, a whole-page edit is refused, and a section edit goes ahead only if

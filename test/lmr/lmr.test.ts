@@ -79,7 +79,8 @@ const append = (client: Client, page: string, text: string) =>
 
 describe('counting edits', () => {
   it('write_page sets the row to today, after the content write, with the rows’ version as If-Match', async () => {
-    const r = await append(writer, RHEASHIRA.page, 'A new paragraph about the envoy.');
+    // v3 F3c (ADR 0051): a major revision is 8 words or more of page text; this paragraph has 11.
+    const r = await append(writer, RHEASHIRA.page, 'A new paragraph about the envoy and her years at court.');
     expect(r.body.status, r.text).toBe('written');
     expect(lmr()).toBe(londonDate(Date.now()));
     expect(lmr()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
@@ -175,7 +176,11 @@ describe('proposals and failures', () => {
       status: 400,
       code: 'VALIDATION_ERROR',
     });
-    const r = await append(writer, RHEASHIRA.page, 'Written even though the date is not.');
+    const r = await append(
+      writer,
+      RHEASHIRA.page,
+      'Written even though the date is not, and long enough to count.',
+    );
     expect(r.body.status, r.text).toBe('written');
     const job = w.stack.runtime.engine.queries.getJob(PROJECT, String(r.body.jobId))!;
     expect(job.status).toBe('succeeded');
@@ -184,16 +189,22 @@ describe('proposals and failures', () => {
     ]);
     expect(lmr()).toBe('9 November 2026');
     const doc = w.repo.liveDocs(w.repo.live(RHEASHIRA.page)!)[0]!;
-    expect(JSON.stringify(w.repo.blocks.get(doc.id))).toContain('Written even though the date is not.');
+    expect(JSON.stringify(w.repo.blocks.get(doc.id))).toContain('Written even though the date is not');
   });
 
   // Last in the file: it moves the clock forward (the governor's windows must never see time go backwards).
   it('a proposal says so, and is dated the day it is approved', async () => {
-    const r = await append(proposer, RHEASHIRA.page, 'Proposed paragraph.');
+    const r = await append(
+      proposer,
+      RHEASHIRA.page,
+      'A proposed paragraph about the envoy’s return to the court.',
+    );
     expect(r.body.status, r.text).toBe('proposal_captured');
     const id = String(r.body.proposalId);
     const pol = w.stack.runtime.policy;
-    expect(pol.proposals.get(id)!.summary).toContain('+ Last Major Revision → date of approval');
+    expect(pol.proposals.get(id)!.summary).toContain(
+      '+ Last Major Revision → date of approval (auto: 10 words of page text changed)',
+    );
     expect(lmrWrites()).toEqual([]);
     // Approved three days later: the date is the approval's.
     const later = Date.now() + 3 * 86_400_000;

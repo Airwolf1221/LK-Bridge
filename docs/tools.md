@@ -152,8 +152,9 @@ budget (arkona): writes 0/120·min …
 
 ### Low-level layer
 
-Last Major Revision (v3 F2): a block edit through `lk_api_write` or `lk_api_batch` sets it on the page, in the same job or
-proposal ([below](#last-major-revision-on-every-substantial-edit-v3-f2)).
+Last Major Revision (v3 F2, v3 F3c): a block edit through `lk_api_write` or `lk_api_batch` that is a major revision sets it
+on the page, in the same job or proposal, measured when the job runs; `lastMajorRevision` overrides
+([below](#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c)).
 
 **`lk_api_list_operations`** `{ tag?, kind?, risk? }`: the 89 operations with kind (`read` / `write` / `upload`), risk (`safe` / `destructive` / `admin`), cost class, one-line summary, `versioned`, `paged`.
 
@@ -167,7 +168,7 @@ proposal ([below](#last-major-revision-on-every-substantial-edit-v3-f2)).
 
 `params` is `{ path?, query?, ifMatch?, body? }`; `projectId` is supplied by the bridge, from the `project` argument (every tool below also takes `project`, which these signatures leave out).
 
-**`lk_api_write`** `{ operationId, params?, allowUnsupportedLoss?, confirm?, detail? }`: runs ONE operation whose kind is not `read`, including the raw `createImageUpload` and `createImageAsset`. A read operation is refused with `useTool: "lk_api_read"`. Every engine guard applies:
+**`lk_api_write`** `{ operationId, params?, allowUnsupportedLoss?, confirm?, detail?, lastMajorRevision? }`: runs ONE operation whose kind is not `read`, including the raw `createImageUpload` and `createImageAsset`. A read operation is refused with `useTool: "lk_api_read"`. Every engine guard applies:
 
 - versioned writes always send `If-Match`: your `params.ifMatch` if you give it (a stale one is refused with the current version), otherwise the version the bridge reads just before writing;
 - a replace that would delete `unsupported` blocks, or a `deleteBlock` whose block or subtree holds one, is refused unless `allowUnsupportedLoss: true` (an `unsupported` block without an id can never be kept: run `assignBlockIds` first);
@@ -186,7 +187,7 @@ proposal ([below](#last-major-revision-on-every-substantial-edit-v3-f2)).
 }
 ```
 
-**`lk_api_batch`** `{ calls: [{ operationId, params?, allowUnsupportedLoss?, confirm? }], onError?, title? }`: one persisted `batch_ops` job. `onError` is `stop` (stop on error, default) or `continue`. Every step is validated and checked against the guards and policy before anything is queued. Returns `{ jobId, status: "queued", eta }`.
+**`lk_api_batch`** `{ calls: [{ operationId, params?, allowUnsupportedLoss?, confirm? }], onError?, title?, lastMajorRevision? }`: one persisted `batch_ops` job. `onError` is `stop` (stop on error, default) or `continue`. Every step is validated and checked against the guards and policy before anything is queued. Returns `{ jobId, status: "queued", eta }`.
 
 **`lk_api_paginate_all`** `{ operationId, params?, maxItems?, maxPages? }`: a `paginate_all` job over a paged read (`listResources`, `listTemplates`, `listEvents`, `listAssets`, `listProjects`). Each page is its own governed read at job priority. Returns `{ jobId, handle }`; the items are readable through `bridge_result_page` while the job runs.
 
@@ -325,26 +326,58 @@ result is a handle.
 
 **Forgiving sections (v2 E3b).** A heading is matched exactly first (case does not matter). A miss is matched loosely, and the evaluation showed why: agents guess names such as "find pages", "Promote" or a label copied from the which-tool table, and six exact-match misses wasted calls. The loose match ignores case, punctuation and spacing; counts the key words of a heading (a word found in few headings counts for more than "page" or "text"); knows a few synonyms ("promote", "promotion" and "lifecycle" lead to the page lifecycle; "find", "search" and "read" to finding and reading; "canon" and "approval", "image" and "upload", "date" and "timeline", and so on); and takes the labels of the "Which tool?" table as aliases of the section they point to. One clear match returns that section with `matched` naming the exact name to ask for next time; several return `SECTION_AMBIGUOUS` with the `candidates`; none returns `SECTION_NOT_FOUND` with `sections`, every exact section name. The bridge guide's "How to decide" lists the exact names. The code is `src/mcp/tools/guide-sections.ts`.
 
-## Last Major Revision on every substantial edit (v3 F2)
+## Last Major Revision only for real revisions (v3 F2, v3 F3c)
 
-[ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 2 (the owner's decision of 16
-November 2026). A **substantial edit** of a page also sets the page's `Last Major Revision` row to today on the bridge's
-clock (Europe/London, `YYYY-MM-DD`), **in the same job and the same proposal** as the edit, as one more step after the
-content write. Agents never set it themselves.
+[ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 2, narrowed by
+[ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 1 (the owner, 16 November 2026:
+"Tiny edits like this aren't enough for a major revision"). An edit that is a **major revision** of a page also sets the
+page's `Last Major Revision` row to today on the bridge's clock (Europe/London, `YYYY-MM-DD`), **in the same job and the
+same proposal** as the edit, as one more step after the content write. Agents never set it themselves.
 
-| Counts (each a per-project switch, on by default)                                                                                                                       | Does not count (switches, off by default)                                          |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `write_page`, any mode (`lmrWritePage`)                                                                                                                                 | tag, alias, icon or name changes; moves and re-orders (`lmrNamesTagsMoves`)        |
-| block edits through `lk_api_write` / `lk_api_batch`: insert, replace, update, delete a block, `replaceDocumentBlocks`; the dashboard's own text fixes (`lmrBlockEdits`) | link-collection-only changes: Dependencies, Related Sources (`lmrLinkCollections`) |
-| a chronology table's rows (`create_` / `update_` / `delete_timeline_event` on the table) and the count fix (`lmrChronologyTable`)                                       | timeline events and map features on their own (`lmrTimelineMap`)                   |
-| a restore that changes text (`lmrRestore`)                                                                                                                              | an audit's paragraph split (`lmrAuditSplit`)                                       |
-| setting-pack tools (`lmrPackTools`)                                                                                                                                     | whitespace-only or unchanged writes (no write happens anyway)                      |
-| a fact's value through `set_facts`, except the housekeeping keys (`lmrFacts`; `lmrHousekeepingKeys`, default `Last Major Revision; Reference Type; Supersedes; Status`) |                                                                                    |
+**What is a major revision** (ADR 0051 has the exact wording):
 
-- **How.** A `bridge.lmr` decision step, then `updatePropertyRow` of the row. The date is worked out when the job runs (a
-  proposal: the day it is approved and applied; its summary says `+ Last Major Revision → date of approval`). Its own
-  If-Match: chained on the edit's own row write's version or ETag (`useEtagVersions`) when there is one (`set_facts`),
-  otherwise the version one read of the rows gives inside the job.
+| Counts                                                                                                                               | Does not count                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| page text: paragraphs, list items, headings or table rows added, removed or rewritten, **8 words or more** changed in the whole edit | a value trimmed to a prefix of itself, or with a descriptive tail or a parenthetical removed                     |
+| a heading added, removed or reworded (any number of words)                                                                           | only punctuation, dashes, whitespace or capitalisation changed                                                   |
+| a sidebar fact added, removed or changed, other than the housekeeping keys (Status, Reference Type, Last Major Revision, Supersedes) | a typo fix: at most 2 characters changed per word, in at most 3 words (a changed word with a digit is never one) |
+| a page added to or removed from **Dependencies**                                                                                     | Related Sources (or any other link collection) alone                                                             |
+| a chronology row added or removed, or its Date or description cell changed                                                           | a KCY-only change in a chronology row; the Main count                                                            |
+|                                                                                                                                      | tags, resource aliases, the page name, a move; an empty fact added                                               |
+
+**`lastMajorRevision`** (`"auto"` | `"set"` | `"skip"`, default `"auto"`) on `write_page`, `set_facts`, `lk_api_write`,
+`lk_api_batch`, `create_timeline_event`, `update_timeline_event`, `delete_timeline_event`, `sync_timeline_event` and
+`restore_snapshot`: `"auto"` lets the rule decide; `"set"` sets the row although the rule would not; `"skip"` leaves it
+although the rule would set it. The answer's `lastMajorRevision` and any proposal's summary say which applied and why:
+
+- `+ Last Major Revision → date of approval (auto: 12 words of page text changed)`
+- `+ Last Major Revision → date of approval (set: lastMajorRevision "set" was asked)`
+- `Last Major Revision skipped: Subject: a trimmed value, not a major revision`
+- `Last Major Revision skipped: lastMajorRevision "skip" was asked`
+- after a job: `Last Major Revision set to 2026-11-16 (auto: Subject: a fact changed)`, or
+  `Last Major Revision not set: 1 word of page text changed (fewer than 8), not a major revision`
+
+**The per-project switches** (Projects page) still say which kinds of write are considered at all; a switched-off one
+never sets it under `"auto"`:
+
+| On by default                                                                                                                                                           | Off by default (the rule never counts these; switched on, they count as in F2)   |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `write_page`, any mode (`lmrWritePage`)                                                                                                                                 | tag, alias, icon or name changes; moves and re-orders (`lmrNamesTagsMoves`)      |
+| block edits through `lk_api_write` / `lk_api_batch`: insert, replace, update, delete a block, `replaceDocumentBlocks`; the dashboard's own text fixes (`lmrBlockEdits`) | link collections other than Dependencies: Related Sources (`lmrLinkCollections`) |
+| a chronology table's rows (`create_` / `update_` / `delete_timeline_event` on the table) and the count fix (`lmrChronologyTable`)                                       | timeline events and map features on their own (`lmrTimelineMap`)                 |
+| a restore that changes text (`lmrRestore`)                                                                                                                              | an audit's paragraph split (`lmrAuditSplit`)                                     |
+| setting-pack tools (`lmrPackTools`; they plan their own date, not yet through the rule)                                                                                 |                                                                                  |
+| `set_facts` facts and Dependencies, except the housekeeping keys (`lmrFacts`; `lmrHousekeepingKeys`, default `Last Major Revision; Reference Type; Supersedes; Status`) |                                                                                  |
+
+- **When it is measured.** When the edit is planned, from what the calling tool already read (`write_page`'s blocks,
+  `set_facts`' sidebar, a chronology row's cells): no extra read, and an edit that is not a major revision gets no
+  steps at all. A block write whose old text the request did not hold (`lk_api_write`, `lk_api_batch`, a restore, the
+  dashboard's fixes) is measured when the job runs, from its journal pre-image; the proposal says `(auto: if the edit is
+a major revision, measured when it runs)`. A raw `updateBlock` keeps no pre-image and counts.
+- **How it is set.** A `bridge.lmr` decision step, then `updatePropertyRow` of the row. The date is worked out when the
+  job runs (a proposal: the day it is approved and applied). Its own If-Match: chained on the edit's own row write's
+  version or ETag (`useEtagVersions`) when there is one (`set_facts`), otherwise the version one read of the rows gives
+  inside the job.
 - **Only on pages with the row** (the repository tree's sidebar says where it is; indexes and AI REPOSITORY tabs usually
   have none and are skipped silently, with no request). Already today: nothing is written. The lifecycle tools set it
   themselves, as before; a restore rehearsal never does; a page created in the same request is left alone.
@@ -359,9 +392,10 @@ LegendKeeper blocks by B1's converter, written as ONE `replaceDocumentBlocks` un
 to check it. Design: [ADR 0031](adr/0031-write-page.md). The agent guide's "Writing pages" section
 ([bridge-guide.md](bridge-guide.md)) is the short version.
 
-Last Major Revision: a `write_page` edit sets it, in the same job or proposal ([above](#last-major-revision-on-every-substantial-edit-v3-f2)).
+Last Major Revision: a `write_page` edit that is a major revision (8 words or more, or a heading's wording) sets it, in the
+same job or proposal; `lastMajorRevision` overrides ([above](#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c)).
 
-**`write_page`** `{ page, document?, mode, section?, markdown, baseVersion?, dropRegions?, dryRun?, detail?, project }`:
+**`write_page`** `{ page, document?, mode, section?, markdown, baseVersion?, dropRegions?, dryRun?, detail?, lastMajorRevision?, project }`:
 `access: write`, annotations `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`,
 `openWorldHint: false`. A `read` profile neither sees nor may call it. `project` follows A1's rule: required while the
 bridge serves several projects.
@@ -496,12 +530,13 @@ The tools a profile sees:
 Changes a page's sidebar **facts** (the key-value rows of its `PROPERTIES` property) and its relationship **links** (the
 link collections, such as Dependencies and Related Sources), as ONE job under the page's lock, checked inside the
 lock, chained version by version, and read back. Design: [ADR 0032](adr/0032-set-facts-and-canon.md). Last Major
-Revision: a changed fact's value sets it (chained on the job's own row write), except the housekeeping keys
-([above](#last-major-revision-on-every-substantial-edit-v3-f2)). The agent
+Revision: a fact really changed (not trimmed, punctuated or typo-fixed), or a Dependency added or removed, sets it
+(chained on the job's own row write), except the housekeeping keys
+([above](#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c)). The agent
 guide's "Editing facts and links" and "Canon and approval" sections ([bridge-guide.md](bridge-guide.md)) are the short
 version.
 
-**`set_facts`** `{ page, facts?, links?, property?, baseFactsVersion?, dryRun?, project }`: `access: write`, annotations
+**`set_facts`** `{ page, facts?, links?, property?, baseFactsVersion?, dryRun?, lastMajorRevision?, project }`: `access: write`, annotations
 `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`, `openWorldHint: false`. A `read` profile
 neither sees nor may call it. `project` follows A1's rule: required while the bridge serves several projects.
 
@@ -1386,8 +1421,10 @@ sidebars and pages to plan, and the job writes both participants' Related Source
 
 ## The calendar and the timelines (v2 D1)
 
-Last Major Revision (v3 F2): a change to a chronology table's rows (`create_timeline_event`, `update_timeline_event`,
-`delete_timeline_event`) and the count fix set it on the chronology page; a timeline event on its own does not.
+Last Major Revision (v3 F2, v3 F3c): a chronology row added or removed, or its Date or description cell changed
+(`create_timeline_event`, `update_timeline_event`, `delete_timeline_event`, `sync_timeline_event`) sets it on the
+chronology page; punctuation, a typo or the KCY alone does not, nor does the count fix or a timeline event on its own.
+Each of the four takes `lastMajorRevision` ([the rule](#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c)).
 `sync_timeline_event` renames an event only to keep a date tail the bridge wrote in step with its row's Date cell (ADR
 0049 decision 1; the proposal says `name: "… – old" → "… – new"`).
 
@@ -1759,7 +1796,8 @@ photo, one at a time.
 
 ## Snapshots and restores (v2 E1a)
 
-v3 F2 (ADR 0049): a restore that changes a page's text sets its Last Major Revision; `list_snapshots` gives a partial
+v3 F2 (ADR 0049): a restore that changes a page's text sets its Last Major Revision (v3 F3c: when the change is a major
+revision, measured when it runs; `lastMajorRevision` overrides); `list_snapshots` gives a partial
 snapshot's missing pieces in summary (`missing: { total, thisPage, otherPages }`); a page deleted in the app is restored
 when a full or change snapshot holds it, judged by that snapshot's state; a recreate that stopped part-way is finished by
 the same request again (only what is missing). Details: [snapshots.md](snapshots.md).
@@ -1780,7 +1818,7 @@ settings from snapshot `from` to snapshot `to` (free), or to the page now (`to` 
 reads). Keep regions show as one placeholder line each; `-` lines are the older state, `+` the newer.
 
 **`restore_snapshot`** `{ page?, snapshot, scope, document?, mode?, ids?, parent?, asset?, updateReferences?, dryRun?,
-project }` (write). **Always a proposal, whatever the scope (`write` included):** nothing is written until the owner
+lastMajorRevision?, project }` (write). **Always a proposal, whatever the scope (`write` included):** nothing is written until the owner
 approves it on the dashboard; follow it with `bridge_proposal_status`. `dryRun: true` shows the plan and its diff and
 proposes nothing. Scopes:
 
@@ -1794,10 +1832,15 @@ proposes nothing. Scopes:
   (`ids: "original"`, the default) where LegendKeeper takes them, else new ones (`ids: "new"`); the result maps old ids
   to new;
 - `image` (with `asset`: the deleted image's old asset id; no `page`): the image comes back as a **new asset with a new
-  URL**. It is staged (uploaded, verified, hidden) at once, and the proposal puts it back in its folder under its name;
-  `updateReferences: true` also updates, in the same proposal, the page documents and map images that showed the old URL
-  (the result lists them; anything else is listed for a hand change). Call again with the same arguments once a
-  `staging` answer's job has ended; it is not uploaded twice.
+  URL**. v3 F3c ([ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 3): its bytes
+  wait on the bridge's server (nothing goes to LegendKeeper, and nothing ever to `LK-Bridge staging`), and the proposal
+  describes the image, its folder and its name (`image: { name, path, creates, stagedId }`; no new asset id or URL yet).
+  Approved, ONE job finds or creates the folder by its path (a folder deleted since is made again), uploads the image
+  straight into it, checks it, and with `updateReferences: true` rewrites the page documents and map images that showed
+  the old URL to the new asset (the result lists them; anything else is listed for a hand change). A page that changed
+  in the meantime is not rewritten: the job stops after the upload, the asset stays, and the job and the restore's record
+  carry an `image_relink_failed` follow-up naming the pages to relink by hand; nothing is retried. The restore's record
+  keeps the new asset (`plan.newAsset`).
 
 What a restore cannot bring back is in its result and on the proposal, never hidden:
 
