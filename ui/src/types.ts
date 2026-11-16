@@ -1739,11 +1739,14 @@ export interface ImageReferenceView {
 }
 
 export interface ImageRestoreResponse {
-  status: 'dry_run' | 'staging' | 'proposal_captured';
+  status: 'dry_run' | 'proposal_captured';
   proposalId?: string;
-  stagedId?: string;
   old: Record<string, unknown>;
-  newAsset?: { id: string; url: string | null };
+  /**
+   * v3 F3c (ADR 0051): where the image goes back once approved: its name, the folder's path from the library's root, and
+   * the folders made on the way. The new asset exists only after approval.
+   */
+  image?: { name: string; path: string[]; creates: string[]; stagedId?: string };
   references: ImageReferenceView[];
   updated?: boolean;
   notes?: PlanNoteView[];

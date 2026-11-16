@@ -34,6 +34,8 @@ import {
   type ProjectDeps,
   type ToolDeps,
 } from './shape.js';
+import { lastMajorRevisionArg } from './schemas.js';
+import { lmrSaid } from './write-job.js';
 
 export const SET_FACTS_ANNOTATIONS = {
   readOnlyHint: false,
@@ -177,6 +179,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
           'The factsVersion get_resource (or an earlier set_facts) gave when you read the page. Pass it whenever a value is based on what you read: if ANY sidebar fact or link changed since, nothing is written (VERSION_CONFLICT, with what changed).',
         ),
       dryRun: z.boolean().optional().describe('Show the plan; write nothing.'),
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: SET_FACTS_ANNOTATIONS,
@@ -372,6 +375,7 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
             title: job.summary.slice(0, 300),
             holdLock: { resourceId: node.id },
             internal: true,
+            ...(args.lastMajorRevision ? { lastMajorRevision: args.lastMajorRevision } : {}),
             proposal: {
               operation: job.operation,
               operations: [job.operation],
@@ -431,6 +435,9 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
               verified,
               jobId: view.id,
               factsVersion: { before: before.version, ...(after ? { after } : {}) },
+              ...((lmrSaid(view) ?? r.lastMajorRevision)
+                ? { lastMajorRevision: lmrSaid(view) ?? r.lastMajorRevision }
+                : {}),
               ...(verified === false
                 ? {
                     warning:

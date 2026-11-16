@@ -4,6 +4,7 @@
  * guard (versions, unsupported blocks, cascade confirmation, member admin, read-only, policy) applies.
  */
 import * as z from 'zod';
+import type { LmrMode } from '../../jobs/lmr-hook.js';
 import type { JobEngine, OpParams } from '../../jobs/index.js';
 import { getOperation, operations, type OperationDef } from '../../lk/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
@@ -13,6 +14,7 @@ import { canonicalBody } from './shape.js';
 import {
   costClass,
   detailSchema,
+  lastMajorRevisionArg,
   paramsSchema,
   rateCostText,
   referencedDefs,
@@ -47,6 +49,8 @@ export interface ExecuteInput {
   readonly detail: 'summary' | 'full';
   readonly allowUnsupportedLoss?: boolean | undefined;
   readonly confirm?: 'cascade' | undefined;
+  /** v3 F3c (ADR 0051): the caller's Last Major Revision override (writes only). */
+  readonly lastMajorRevision?: LmrMode | undefined;
 }
 
 /**
@@ -89,8 +93,17 @@ export async function executeOne(
       signal: ctx.signal,
       ...(input.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
       ...(input.confirm ? { confirm: input.confirm } : {}),
+      ...(input.lastMajorRevision ? { lastMajorRevision: input.lastMajorRevision } : {}),
     });
-    if (r.status !== 'succeeded') return render(runResultBody(op.operationId, r, input.detail), deps);
+    if (r.status !== 'succeeded') {
+      const body = runResultBody(op.operationId, r, input.detail);
+      return render(
+        r.status !== 'proposal_captured' && r.lastMajorRevision
+          ? { ...body, lastMajorRevision: r.lastMajorRevision }
+          : body,
+        deps,
+      );
+    }
     const shaped = shapeRead(deps, {
       opId: op.operationId,
       params: input.params,
@@ -106,11 +119,20 @@ export async function executeOne(
           ...(r.jobId ? { jobId: r.jobId } : {}),
           result: shaped.inline,
           requestIds: r.requestIds,
+          ...(r.lastMajorRevision ? { lastMajorRevision: r.lastMajorRevision } : {}),
         },
         deps,
       );
     }
-    return render({ operationId: op.operationId, ...(r.jobId ? { jobId: r.jobId } : {}), ...shaped }, deps);
+    return render(
+      {
+        operationId: op.operationId,
+        ...(r.jobId ? { jobId: r.jobId } : {}),
+        ...shaped,
+        ...(r.lastMajorRevision ? { lastMajorRevision: r.lastMajorRevision } : {}),
+      },
+      deps,
+    );
   } catch (e) {
     return errorFromThrown(e, deps);
   }
@@ -273,10 +295,14 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         .optional()
         .describe('Required on deleteResource with query.cascade = true.'),
       detail: detailSchema,
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-    handler: ({ operationId, params, allowUnsupportedLoss, confirm, detail, project }, ctx) =>
+    handler: (
+      { operationId, params, allowUnsupportedLoss, confirm, detail, lastMajorRevision, project },
+      ctx,
+    ) =>
       withProject(deps, project, 'write', (pd) =>
         executeOne(
           pd,
@@ -288,6 +314,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             detail: detail ?? 'summary',
             allowUnsupportedLoss,
             confirm,
+            lastMajorRevision,
           },
           ctx,
         ),
@@ -314,10 +341,11 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         .max(500),
       onError: z.enum(['stop', 'stopOnError', 'continue']).optional().describe('Default "stop".'),
       title: z.string().max(200).optional(),
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-    handler: ({ calls, onError, title, project }, ctx) =>
+    handler: ({ calls, onError, title, lastMajorRevision, project }, ctx) =>
       withProject(deps, project, 'write', async (pd) => {
         // An unknown operation anywhere in the batch refuses the whole batch up front (nothing is queued or spent),
         // with the same suggestions and hint a single call would get.
@@ -345,6 +373,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             origin: mcpOrigin(ctx, 'lk_api_batch'),
             priority: 'P2',
             ...(title ? { title } : {}),
+            ...(lastMajorRevision ? { lastMajorRevision } : {}),
           });
           return render(submitBody(r, calls.length), pd);
         } catch (e) {
@@ -433,6 +462,7 @@ export function submitBody(
     status: r.status,
     eta: r.eta === null ? null : new Date(r.eta).toISOString(),
     steps,
+    ...(r.lastMajorRevision ? { lastMajorRevision: r.lastMajorRevision } : {}),
     hint: 'Do not submit it again. Follow it with bridge_job_status({ jobId, wait_seconds: 20 }).',
   };
 }

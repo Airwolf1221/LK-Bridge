@@ -21,6 +21,8 @@ import { LkModel } from '../jobs/lk-model.js';
 import { mintClientId } from '../../src/jobs/index.js';
 import { getSection, toMarkdown } from '../../src/markdown/index.js';
 import { planPageWrite, sha256 } from '../../src/pages/index.js';
+import { observationFromResource } from '../../src/tree/classify.js';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 
 const PORT = Number(process.env.E2E_PORT ?? 8799);
 export const OWNER_PASSWORD = 'e2e-password-not-a-secret';
@@ -48,7 +50,17 @@ model.seedResource('res2', {
   ],
 });
 // v2 C2a: a page whose sidebar is modelled (versions, If-Match, rows), for a proposal that touches protected canon.
-model.seedResource('res3', { name: 'Inae Mikumo', blocks: [] });
+// v3 F3c (ADR 0051 decision 4): a Working page, made canon the only way the lifecycle guard allows (C2c): promote_page.
+// So the fixture has the smallest AI REPOSITORY promote_page needs: its root, the two lifecycle indexes and a
+// destination index, with Inae as a [BWRK] page under [INDEX] Working.
+const ROOT = 'airoot01';
+const INDEXES = { working: 'working1', archived: 'archive1', characters: 'charidx1' } as const;
+model.seedResource(ROOT, { name: 'AI REPOSITORY', blocks: [] });
+model.seedResource(INDEXES.working, { name: '[INDEX] Working', parentId: ROOT, blocks: [] });
+model.seedResource(INDEXES.archived, { name: '[INDEX] Archived', parentId: ROOT, blocks: [] });
+model.seedResource(INDEXES.characters, { name: '[INDEX] Characters', parentId: ROOT, blocks: [] });
+model.seedResource('res3', { name: '[BWRK] Inae Mikumo', parentId: INDEXES.working, blocks: [] });
+model.resources.get('res3')!.tags = ['Working'];
 const sidebars = new SidebarModel(() => undefined);
 sidebars.page('res3', [
   SidebarModel.kv('kvres301', 'PROPERTIES', [
@@ -60,10 +72,20 @@ sidebars.page('res3', [
 type Route = (req: MockRequest, parts: string[]) => MockResponse | undefined;
 const lkRouter = model as unknown as { route: Route };
 const ownRoute: Route = lkRouter.route.bind(model);
-lkRouter.route = (req, parts) =>
-  sidebars.respond(req, (id) =>
-    id === 'res3' ? { id, name: 'Inae Mikumo', tags: [], documents: [] } : undefined,
-  ) ?? ownRoute(req, parts);
+/** A resource as the model holds it now (its name, tags and parent change as promote_page writes them). */
+const viewOf = (id: string) => {
+  const r = model.resources.get(id);
+  return r
+    ? {
+        id,
+        name: r.name,
+        tags: r.tags,
+        ...(r.parentId ? { parentId: r.parentId } : {}),
+        documents: r.documents.map((d) => ({ id: d, name: 'Main', type: 'page' })),
+      }
+    : undefined;
+};
+lkRouter.route = (req, parts) => sidebars.respond(req, viewOf) ?? ownRoute(req, parts);
 const mock = new MockLk({ clock: systemClock, apiKey: API_KEY, respond: model.respond });
 const lkUrl = await mock.start();
 
@@ -114,13 +136,52 @@ const profile =
   runtime.policy.commands.createProfile('owner', { label: 'Scribe', kind: 'claude', scope: 'propose' });
 
 // The proposer is a real personal access token on the "Scribe" profile: the policy gate only knows real principals.
-const proposer = runtime.policy.store.getProfileByLabel('Scribe')
+const proposerPat = runtime.policy.store.getProfileByLabel('Scribe')
   ? new (await import('../../src/auth/pats.js')).PatService({
       store: new (await import('../../src/auth/store.js')).AuthStore(db),
       event: () => undefined,
       now: () => Math.floor(Date.now() / 1000),
-    }).create({ name: 'e2e proposer', profileId: profile.id }).pat
+    }).create({ name: 'e2e proposer', profileId: profile.id })
   : undefined;
+const proposer = proposerPat?.pat;
+
+// v3 F3c (ADR 0051 decision 4): the repository tree of the small AI REPOSITORY above, built as the tests' worlds build
+// it (one observation per page), and the two lifecycle indexes confirmed as the owner does on the dashboard.
+runtime.projects.setSetting(PROJECT, 'aiRepositoryRootId', ROOT);
+let observedAt = Date.now() * 1000;
+/** The tree observes these pages as the model holds them now. */
+const observe = (ids: readonly string[]) => {
+  const tree = runtime.tree;
+  const ctx = { projectId: PROJECT, rootId: ROOT, settings: tree.settings(PROJECT), by: 'build' as const };
+  observedAt = Math.max(observedAt, Date.now() * 1000);
+  for (const id of ids) {
+    const obs = observationFromResource(id === 'res3' ? { ...viewOf(id), properties: [] } : viewOf(id));
+    if (obs) tree.store.applyObservation(ctx, obs, ++observedAt);
+  }
+  tree.store.recomputePaths(PROJECT, ROOT);
+};
+/** Inae back to Working ([BWRK] under [INDEX] Working, Status Working), so each run of the test promotes her afresh. */
+const resetInae = () => {
+  const r = model.resources.get('res3')!;
+  r.name = '[BWRK] Inae Mikumo';
+  r.parentId = INDEXES.working;
+  r.tags = ['Working'];
+  const status = sidebars.pages.get('res3')!.props[0]!.rows!.find((x) => x.key === 'Status')!;
+  status.content = [{ text: 'Working' }];
+  observe(['res3']);
+};
+{
+  runtime.tree.store.ensureRoot(PROJECT, ROOT);
+  observe([ROOT, INDEXES.working, INDEXES.archived, INDEXES.characters, 'res3']);
+  runtime.tree.store.setConfirmed(PROJECT, Date.now(), 'build');
+  const found = runtime.lifecycle.find(PROJECT);
+  if (found.working.status !== 'found' || found.archived.status !== 'found')
+    throw new Error(`e2e: lifecycle indexes not found: ${JSON.stringify(found)}`);
+  runtime.lifecycle.update('owner', PROJECT, {
+    workingIndexId: found.working.node!.id,
+    archiveIndexId: found.archived.node!.id,
+  });
+}
 
 async function propose(text: string): Promise<string> {
   const r = await engine.run(
@@ -202,24 +263,37 @@ async function proposePageWrite(): Promise<string> {
   return r.status === 'proposal_captured' ? r.proposalId : 'none';
 }
 
-/** v2 C2a: an agent at scope propose sets Inae's Status to Authoritative: a proposal only "accept as canon" can run. */
+/**
+ * v2 C2a: an agent at scope propose makes Inae canon (Status Working → Authoritative): a proposal only "accept as canon"
+ * can run. v3 F3c (ADR 0051 decision 4): through promote_page, over MCP with the proposer's token, as an agent does.
+ * Writing the Status row directly is refused by the C2c lifecycle guard (a lifecycle change goes through its tools).
+ */
 async function proposeCanon(): Promise<string> {
-  const r = await engine.run(
-    'updatePropertyRow',
-    {
-      path: { resourceId: 'res3', propertyId: 'kvres301', rowId: 'kvres301r2' },
-      body: { content: [{ text: 'Authoritative' }] },
-    },
-    {
-      project: PROJECT,
-      origin: {
-        kind: 'mcp',
-        tool: 'lk_api_write',
-        principal: { principalId: proposer?.id ?? 'unknown', profile: profile.label, label: 'e2e proposer' },
-      },
-    },
+  if (!proposerPat) return 'none';
+  resetInae();
+  const client = new Client({ name: 'lk-bridge-e2e', version: '1.0.0' });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(`${publicUrl}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${proposerPat.token}` } },
+    }),
   );
-  return r.status === 'proposal_captured' && r.canonical ? r.proposalId : 'none';
+  try {
+    const res = await client.callTool({
+      name: 'promote_page',
+      arguments: { page: 'res3', destination: INDEXES.characters, project: 'test' },
+    });
+    const text = (res.content as { type: string; text?: string }[])[0]?.text ?? '';
+    const body = JSON.parse(text.split('\n').slice(0, -1).join('\n')) as {
+      status?: string;
+      proposalId?: string;
+      requiresCanonicalApproval?: boolean;
+    };
+    return body.status === 'proposal_captured' && typeof body.proposalId === 'string'
+      ? body.proposalId
+      : `none: ${text.slice(0, 500)}`;
+  } finally {
+    await client.close();
+  }
 }
 
 // Control server: the test starts work here. Loopback only.

@@ -2,7 +2,9 @@
 
 - Status: **Proposed** (v3 F2, 16 November 2026). Every decision is implemented and tested against the mock
   LegendKeeper and fixtures. The owner's decisions it carries out are quoted; the choices this session made where the
-  brief left room are marked **chosen**.
+  brief left room are marked **chosen**. Amended by [ADR 0051](0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md)
+  (v3 F3c): decision 2's "substantial" test is replaced by the owner's major-revision rule (the switches stay), and
+  decision 10's image restore no longer uses LegendKeeper's staging folder.
 - Builds on: [ADR 0048](0048-chronology-ii.md) (accepted with this session), [ADR 0035](0035-page-lifecycle.md) (the
   lifecycle tools already set Last Major Revision), [ADR 0032](0032-set-facts-and-canon.md) (facts, canon, the job
   model), [ADR 0041](0041-image-pipeline.md) (images; decision 7's staging folder is superseded here),
@@ -204,7 +206,7 @@ staging image folder there. This supersedes ADR 0041 decision 7 and the owner's 
   `imageStagingFolder` setting retires once the folder is gone.
 - **Left in LegendKeeper (chosen, for now)**: the image restore of E1a still stages its image hidden in LegendKeeper,
   because its proposal rewrites page references to the new asset's URL, which only exists once uploaded. A later session
-  can move it to upload-on-approval with the URL bound in the job.
+  can move it to upload-on-approval with the URL bound in the job. (Done by ADR 0051 decision 3.)
 
 **The Visual References upload order, checked against D3's code:**
 

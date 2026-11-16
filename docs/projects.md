@@ -146,11 +146,12 @@ optional. `npm run projects -- stored-default` prints the stored default (env-sy
 
 ## Last Major Revision and image settings (v3 F2)
 
-Each project has a switch per category of substantial edit that sets a page's Last Major Revision (`lmrWritePage`,
+Each project has a switch per category of edit considered for a page's Last Major Revision (only a major revision sets it,
+v3 F3c; `lmrWritePage`,
 `lmrBlockEdits`, `lmrChronologyTable`, `lmrRestore`, `lmrPackTools`, `lmrFacts`: on by default; `lmrNamesTagsMoves`,
 `lmrLinkCollections`, `lmrTimelineMap`, `lmrAuditSplit`: off) and its housekeeping keys (`lmrHousekeepingKeys`, a
 `;`-separated list, default `Last Major Revision; Reference Type; Supersedes; Status`); see
-[tools.md](tools.md#last-major-revision-on-every-substantial-edit-v3-f2). `imageStagingMaxDays` (default
+[tools.md](tools.md#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c). `imageStagingMaxDays` (default
 `IMAGE_STAGING_MAX_DAYS`, 90) is how long an unplaced staged image is kept on the server. `imageStagingFolder` now only
 names the old LegendKeeper staging folder for `npm run images -- migrate-staging`, and can be cleared once that folder is
 gone. All are edited on the Projects page (audited `project.set_setting`).

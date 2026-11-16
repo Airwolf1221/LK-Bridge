@@ -4,7 +4,8 @@ const PORT = Number(process.env.E2E_PORT ?? 8799);
 
 /**
  * A small browser smoke test of the real dashboard against the real bridge (`npm run test:e2e`). It is not part of
- * `npm run ci`, which must not need a browser; run it when the dashboard changes.
+ * `npm run ci`, which must not need a browser; run it when the dashboard changes. Since v3 F3c (ADR 0051 decision 4)
+ * the GitHub workflow runs one of its tests, the canon approval ("v2 C2a"), in a step of its own.
  */
 export default defineConfig({
   testDir: '.',

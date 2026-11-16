@@ -186,7 +186,9 @@ collections by item, and every other key-value property row by row (matched by p
   block (`RESTORE_NOT_WRITABLE`: writing the document would drop it); block-by-block restore is left to E4.
 - **A restored image is a new asset with a new URL** (LegendKeeper cannot undelete an asset). Its bytes come from the store;
   it is staged (uploaded, verified, hidden) first, because a proposal cannot hold bytes (ADR 0041 decision 7), and the
-  proposal places it back in its folder under its name. The result lists every page the snapshots show referring to the
+  proposal places it back in its folder under its name. (Amended by
+  [ADR 0051](0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 3: the bytes wait on the bridge's
+  server and approval uploads them straight into the folder, found or created, then relinks the pages in the same job.) The result lists every page the snapshots show referring to the
   old URL, and **when the owner ticks it**, the same proposal updates their page documents and map images; anything else
   (a banner, an event's image) is listed for a hand change.
 - **Map features and timeline events have no versions** (ADR 0040): their restore is checked inside the lock against the

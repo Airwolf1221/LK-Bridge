@@ -211,7 +211,7 @@ export const PROJECT_SETTING_KEYS: readonly {
     kind: 'on/off',
     default: true,
     editable: true,
-    help: 'On: a write_page edit (any mode) also sets the page’s Last Major Revision to today, in the same job or proposal.',
+    help: 'On: a write_page edit (any mode) that is a major revision (8 words or more of page text, or a heading’s wording; ADR 0051) also sets the page’s Last Major Revision to today, in the same job or proposal.',
   },
   {
     key: 'lmrBlockEdits',
@@ -250,7 +250,7 @@ export const PROJECT_SETTING_KEYS: readonly {
     kind: 'on/off',
     default: true,
     editable: true,
-    help: 'A sidebar fact’s value changed through set_facts, except the housekeeping keys below.',
+    help: 'A sidebar fact’s value changed through set_facts, except the housekeeping keys below and the minor cases (a trim, punctuation, a typo fix); and a Dependency added or removed.',
   },
   {
     key: 'lmrHousekeepingKeys',
@@ -274,7 +274,7 @@ export const PROJECT_SETTING_KEYS: readonly {
     kind: 'on/off',
     default: false,
     editable: true,
-    help: 'Link-collection-only changes (Dependencies, Related Sources).',
+    help: 'Changes only to link collections other than Dependencies (Related Sources). Adding or removing a Dependency is a sidebar change the rule counts (under set_facts).',
   },
   {
     key: 'lmrTimelineMap',

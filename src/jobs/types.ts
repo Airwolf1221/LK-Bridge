@@ -1,6 +1,7 @@
 /** Shared types of the job engine (PLAN §6). */
 import type { PriorityClass } from '../config/lk.js';
 import type { OperationKind } from '../lk/registry-types.js';
+import type { LmrMode } from './lmr-hook.js';
 import type { ProposalExtras } from './policy.js';
 
 export type { PriorityClass } from '../config/lk.js';
@@ -185,7 +186,12 @@ export interface StepOptions {
    * image blocks, written in the same job that uploads the images, name each new asset by its real address. Done once,
    * checked against the schema and stored before anything is sent; a step being recovered keeps what it was sent with.
    */
-  readonly bindAssetUrls?: readonly { readonly step: number; readonly placeholder: string }[];
+  readonly bindAssetUrls?: readonly {
+    readonly step: number;
+    readonly placeholder: string;
+    /** v3 F3c (ADR 0051 decision 3): `id` puts the asset's id in place of the placeholder (a map image); default `url`. */
+    readonly field?: 'url' | 'id';
+  }[];
   /**
    * v3 F3a (ADR 0050), set by bridge code only, on a `replaceDocumentBlocks` of a page the same job made from a template
    * (whose copy already holds the template's content): inside the lock, after the read that gives the If-Match, the
@@ -205,7 +211,7 @@ export interface StepOptions {
    * table and in the job's result as a follow-up of this kind (for the dashboard), and the job carries on and ends as
    * if the step had not been needed. The work before it stays written: nothing is rolled back.
    */
-  readonly followUp?: 'lmr_failed';
+  readonly followUp?: 'lmr_failed' | 'image_relink_failed';
   /**
    * v3 F2 (ADR 0049 decision 9), set by bridge code only, on a `createAssetFolder` the bridge planned: when the job runs,
    * under the project's asset-folder lock, the parent's children are read fresh and a folder with exactly this name is
@@ -235,6 +241,8 @@ export interface RunOptions extends StepOptions {
   readonly signal?: AbortSignal;
   /** v2 C1: added to the proposal when the policy gate turns this write into one (src/jobs/policy.ts). */
   readonly proposal?: ProposalExtras;
+  /** v3 F3c (ADR 0051 decision 1): the caller's Last Major Revision override (absent: `auto`, the rule decides). */
+  readonly lastMajorRevision?: LmrMode;
 }
 
 export interface BatchSubmit {
@@ -302,6 +310,8 @@ export interface BatchSubmit {
    * it into its final folder). At scope `propose` the policy gate makes it a proposal, where any other upload is refused.
    */
   readonly stagedPlacement?: boolean;
+  /** v3 F3c (ADR 0051 decision 1): the caller's Last Major Revision override (absent: `auto`, the rule decides). */
+  readonly lastMajorRevision?: LmrMode;
 }
 
 /** C2d: one entry of `BatchSubmit.pageScope` (src/policy/page-scope.ts has the logic). */
@@ -398,6 +408,8 @@ export interface SubmitResult {
   readonly status: JobStatus;
   /** Projected completion (ms since epoch) from governor.estimate, or null when unknown (writes paused, etc.). */
   readonly eta: number | null;
+  /** v3 F3c (ADR 0051): what the Last Major Revision rule decided for this request, in words (when it applied). */
+  readonly lastMajorRevision?: string;
 }
 
 export type RunResult =
@@ -407,12 +419,15 @@ export type RunResult =
       readonly jobId: string | null;
       readonly result: unknown;
       readonly requestIds: readonly string[];
+      /** v3 F3c (ADR 0051): what the Last Major Revision rule decided for this write, in words (when it applied). */
+      readonly lastMajorRevision?: string;
     }
   | {
       readonly status: 'queued' | 'waiting_budget';
       readonly jobId: string;
       readonly eta: number | null;
       readonly reason: 'estimate' | 'budget' | 'writes_paused' | 'read_only' | 'project_unavailable';
+      readonly lastMajorRevision?: string;
     }
   | ProposalCaptured;
 

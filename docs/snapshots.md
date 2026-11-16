@@ -91,4 +91,26 @@ A rehearsal restores a full snapshot into a throwaway root of a sandbox project,
   their content), a page document still blank, a map's features, a timeline's lanes and events, a board's content, and
   sidebar properties. When nothing is missing the answer is "nothing to do".
 - Staged images (on the bridge's server since v3 F2) are unapproved: they are in no snapshot and no off-site copy.
-- A restore that changes a page's text sets its Last Major Revision (the restore category; a rehearsal never does).
+- A restore that changes a page's text sets its Last Major Revision (the restore category; a rehearsal never does). Since
+  v3 F3c only when the change is a major revision (8 words or more of text, or a heading), measured when it runs;
+  `restore_snapshot` takes `lastMajorRevision` to override.
+
+## v3 F3c: a deleted image comes back without LegendKeeper's staging folder
+
+[ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 3.
+
+- **Until approval, the image is only on the bridge's server.** `restore_snapshot` (scope `image`) and the Snapshots
+  page's image restore stage the snapshot store's bytes on the server, exactly as stored (a PNG stays a PNG). Nothing is
+  sent to LegendKeeper, nothing is hidden, and nothing is ever written to `LK-Bridge staging`.
+- **The proposal says what will happen:** the image's name, the folder it goes back to (its path from the library's
+  root) and any folder that has to be made on the way, and the pages that showed it. There is no new asset id or URL yet.
+- **Approving it runs one job:** the folder is found, or made again by its path if it was deleted since the snapshot;
+  the image is uploaded straight into it under its name and checked; then, with "update references", each page
+  document that showed the old URL is rewritten to the new one, and each map image is set to the new asset.
+- **A page edited in the meantime is not overwritten.** Its rewrite carries the page's version from when the restore
+  was proposed; if the page has changed, the rewrite is refused and the job stops there, after the upload. The image
+  stays in its folder. The restore's row on the Snapshots page says `image_relink_failed: the image was restored, but N
+page(s) changed since the proposal and still show the old URL (…); relink them by hand to the new asset`, and the
+  bridge never retries it. The new asset's id and URL are in the restore's record.
+- An image that was at the library's root goes back to the root. One whose folder is gone and whose path the snapshot
+  does not hold goes to the root too, and the proposal says so.

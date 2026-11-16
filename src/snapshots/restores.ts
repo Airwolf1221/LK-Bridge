@@ -199,6 +199,7 @@ export class Restores {
       ...(plan.holdLock ? { holdLock: plan.holdLock } : {}),
       ...(plan.holdDocuments ? { holdDocuments: plan.holdDocuments } : {}),
       ...(plan.lifecycle ? { lifecycle: plan.lifecycle } : {}),
+      ...(input.lastMajorRevision ? { lastMajorRevision: input.lastMajorRevision } : {}),
       internal: true,
       forceProposal: true,
       proposal: {
@@ -268,6 +269,7 @@ export class Restores {
       if (e.state === 'executed') {
         this.setState(rec.id, 'executed');
         this.noteDropped(rec, e.jobId);
+        if (rec.scope === 'image') this.noteImage(rec, e.jobId);
         if (rec.followUp === 'content')
           void this.followUp(rec).catch((err: unknown) =>
             this.o.log?.warn({ err, restore: rec.id }, 'the restore’s second proposal failed'),
@@ -341,6 +343,48 @@ export class Restores {
         .run(JSON.stringify({ ...rec.plan, couldntRestoreExactly: dropped }), this.o.now(), rec.id);
     } catch (err) {
       this.o.log?.warn({ err, restore: rec.id }, 'could not note what a restore left out');
+    }
+  }
+
+  /**
+   * v3 F3c (ADR 0051 decision 3): an image restore's job has run. Its record gains the new asset (id and URL, which
+   * exist only now) and, when a page that showed the old URL changed after the proposal and its relink was refused, an
+   * `image_relink_failed` follow-up naming the pages left to relink by hand (never retried; the asset stays).
+   */
+  private noteImage(rec: RestoreRecord, jobId: string | null): void {
+    if (!jobId) return;
+    try {
+      const plan = rec.plan as { assetStep?: unknown };
+      const steps = this.o.engine.stepResults(rec.projectId, jobId) ?? [];
+      const made = steps.find((x) => x.stepNo === plan.assetStep && x.status === 'succeeded')?.value as
+        { id?: unknown; url?: unknown } | undefined;
+      const job = this.o.engine.queries.getJob(rec.projectId, jobId);
+      const followUps = (
+        ((job?.result ?? {}) as { followUps?: { kind?: unknown; pageId?: unknown; reason?: unknown }[] })
+          .followUps ?? []
+      ).filter((f) => f.kind === 'image_relink_failed');
+      const pages = [...new Set(followUps.map((f) => (typeof f.pageId === 'string' ? f.pageId : '?')))];
+      this.o.db
+        .prepare('UPDATE snapshot_restores SET plan = ?, follow_up = ?, updated_at = ? WHERE id = ?')
+        .run(
+          JSON.stringify({
+            ...rec.plan,
+            ...(typeof made?.id === 'string' ? { newAsset: { id: made.id, url: made.url ?? null } } : {}),
+            ...(followUps.length > 0
+              ? { notRelinked: followUps.map((f) => ({ pageId: f.pageId, reason: f.reason })) }
+              : {}),
+          }),
+          followUps.length > 0
+            ? `image_relink_failed: the image was restored, but ${pages.length} page(s) changed since the proposal and still show the old URL (${pages.join(', ')}); relink them by hand to the new asset`.slice(
+                0,
+                1000,
+              )
+            : rec.followUp,
+          this.o.now(),
+          rec.id,
+        );
+    } catch (err) {
+      this.o.log?.warn({ err, restore: rec.id }, 'could not note what an image restore did');
     }
   }
 

@@ -728,3 +728,64 @@ describe('a caller’s choice is remembered; create_new makes a new event', () =
     expect(about(wrong.id).sort()).toEqual(['row_without_event', 'wrong_kcy']);
   });
 });
+
+/** The Fourth Age's pairs as a check stored them. */
+const fourthPairs = (c: { ages: readonly Obj[] }) =>
+  (c.ages.find((a) => a.age === FOURTH)?.pairs ?? []) as { rowId: string; eventId: string }[];
+
+describe('same-day pairing without guessing (v3 F3c, ADR 0051 decision 2)', () => {
+  let w: ChronologyWorld;
+  let client: Client;
+  const h = helpers(() => w);
+  const call = (tool: string, args: Record<string, unknown>) =>
+    w.stack.call(client, tool, { project: 'test', ...args });
+  const day = 'Zarzakh 29th, 4A 610';
+  const R1 = {
+    id: 'rsam0001',
+    date: day,
+    description: 'The council of the north meets at dawn',
+    kcy: '1,250,917',
+  };
+  const R2 = { id: 'rsam0002', date: day, description: 'The southern envoys are received', kcy: '1,250,917' };
+  const E1 = { id: 'esam0001', name: 'A day of meetings', date: day };
+  const E2 = { id: 'esam0002', name: 'Another account of the day', date: day };
+
+  beforeAll(async () => {
+    w = await chronologyWorld(budget);
+    client = await w.stack.connect();
+    for (const r of [R1, R2]) h.addRow(r);
+    h.syncCount();
+    h.addEvent(E1.id, E1.name, E1.date);
+    h.addEvent(E2.id, E2.name, E2.date);
+  });
+  afterAll(() => w?.close());
+
+  it('two rows and two events with indistinct names are a tie, shown with F2.1’s candidates; never paired by order', async () => {
+    const c = await h.check();
+    const pairsOf = (rowId: string) => fourthPairs(c).filter((p) => p.rowId === rowId);
+    expect(pairsOf(R1.id)).toEqual([]);
+    expect(pairsOf(R2.id)).toEqual([]);
+    const ties = c.findings.filter((f) => f.kind === 'event_in_tie');
+    expect(ties.map((f) => f.detail?.eventId).sort()).toEqual([E1.id, E2.id]);
+    for (const t of ties)
+      expect((t.detail?.candidates as { rowId: string }[]).map((x) => x.rowId).sort()).toEqual([
+        R1.id,
+        R2.id,
+      ]);
+    expect(c.findings.filter((f) => f.kind === 'event_without_row')).toEqual([]);
+    const r = await call('sync_timeline_event', { row: { row_id: R1.id, age: FOURTH } });
+    expect(r.body.error.code, r.text).toBe('PAIRING_AMBIGUOUS');
+    expect(r.body.error.message).toContain(E1.name);
+    expect(r.body.error.message).toContain(E2.name);
+  });
+
+  it('once the owner picks one (a stored link), the one row and one event left pair by the date', async () => {
+    const r = await call('sync_timeline_event', { row: { row_id: R1.id, age: FOURTH }, event_id: E2.id });
+    expect(r.body.status, r.text).toBe('linked');
+    const c = await h.check();
+    const pairs = fourthPairs(c);
+    expect(pairs.find((p) => p.rowId === R1.id)).toMatchObject({ eventId: E2.id });
+    expect(pairs.find((p) => p.rowId === R2.id)).toMatchObject({ eventId: E1.id });
+    expect(c.findings.filter((f) => f.kind === 'event_in_tie')).toEqual([]);
+  });
+});

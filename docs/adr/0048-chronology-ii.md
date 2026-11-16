@@ -5,7 +5,8 @@
   unchanged; **(B)** an unreadable row is reported once; **(C)** table-only rows take no part in pairing. Amended by
   [ADR 0049](0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 1: the date tail the bridge wrote
   into a linked event's name now follows the row's Date cell (decision 3's "never renames" no longer holds for that
-  tail). Amended by the **F2.1 amendments** below (v3 F2.1, 16 November 2026: ties, links by choice, `create_new`,
+  tail). Amended by [ADR 0051](0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 2 (same-day
+  pairing without guessing). Amended by the **F2.1 amendments** below (v3 F2.1, 16 November 2026: ties, links by choice, `create_new`,
   events in a tie, six more date forms, the KCY of a range inside one year).
 - Builds on: [ADR 0038](0038-calendar-engine-and-chronology-sync.md) (the engine, the chronology jobs),
   [ADR 0039](0039-date-styles-timeline-repair-and-etag-versions.md) (the two date styles, `sync_timeline_event`, the
@@ -274,7 +275,8 @@ is `ROW_NOT_FOUND` too.
 qualified) row anchored on the same day (F2.1-1); ranges of the same start (F2.1-1, `start+year`). Still refused, with the
 candidates shown (F2.1-4): two or more plain rows and fewer events with no deciding name; qualified rows alone on a day
 with fewer events; ranges of the same start ending in the same year. Kept from ADR 0039 (not a refusal): a day with as
-many rows as events is paired one to one in table and timeline order.
+many rows as events is paired one to one in table and timeline order. (Amended by [ADR 0051](0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 2: two or
+more rows and as many events left on a day after the links and unique names are a tie, never paired by order.)
 
 **F2.1-7. Six more certain forms** (decision 1, amended; the owner, 16 November 2026). Each reads only when unambiguous:
 `On or after X` / `On or before X` (as `After X` / `Before X`; Arkona row 443); `Before or during X` (an open start ending

@@ -1,19 +1,26 @@
 /**
- * Restoring a deleted image (v2 E1a, ADR 0042). LegendKeeper cannot undelete an asset, so a restored image becomes a NEW
- * asset with a NEW URL. Its bytes come from the snapshot store (a snapshot's library, or the bytes kept before the
- * delete: one store). A proposal cannot hold image bytes (ADR 0041 decision 7), so the image is STAGED first (uploaded,
- * verified and hidden in the staging folder, as an upload at scope `propose` is), and the proposal places it back in
- * its folder, unhidden, under its name. The pages the snapshots show referring to the old URL are listed, and, when the
- * caller asks (`updateReferences`: the owner's tick on the dashboard), the same proposal updates them: a page document's
- * image blocks (one whole-document write each, with If-Match) and a map's image. Any other place (a banner, an event's or
- * a lane's image, a board asset) is listed for the owner to change by hand.
+ * Restoring a deleted image (v2 E1a, ADR 0042; moved onto v3 F2's server staging by v3 F3c, ADR 0051 decision 3).
+ * LegendKeeper cannot undelete an asset, so a restored image becomes a NEW asset with a NEW URL. Its bytes come from the
+ * snapshot store (a snapshot's library, or the bytes kept before the delete: one store) and stay on the bridge's server
+ * (staged there, as any unapproved image is: ADR 0049 decision 10). Nothing is sent to LegendKeeper until the owner
+ * approves, and nothing ever goes to the old `LK-Bridge staging` folder.
+ *
+ * The proposal describes the image, its folder and its name. Approval runs ONE job: the folder found or created by its
+ * path (ADR 0049 decision 9: a folder deleted since the snapshot is made again), the upload straight into it under its
+ * name, the stored file checked, and then, when the caller asked (`updateReferences`: the owner's tick on the
+ * dashboard), each page document that showed the old URL rewritten to the new one (its image blocks, one whole-document
+ * write with the If-Match read when the restore was proposed; the new URL is bound in the job) and each map image set to
+ * the new asset. If such a page changed in the meantime, its write is refused (412) and the job stops there, after the
+ * upload: the asset stays where it was put, the job records an `image_relink_failed` follow-up (and the restore's record
+ * says so), and nothing is retried. Any other place (a banner, an event's or a lane's image, a board asset) is listed for
+ * the owner to change by hand.
  */
 import { asStoredImage } from '../images/convert.js';
 import { randomBytes } from 'node:crypto';
 import type { AssetService } from '../assets/index.js';
+import type { AssetPlan } from '../assets/plan.js';
 import type { ImageService } from '../images/service.js';
 import type { TreeService } from '../tree/index.js';
-import { verifyStep } from '../jobs/internal-steps.js';
 import type { JobEngine, JobOrigin, StepSpec } from '../jobs/index.js';
 import { replaceUrls, stripVersions, type LibraryPiece } from './canonical.js';
 import type { Reader } from './capture.js';
@@ -80,25 +87,27 @@ export interface ImageReference {
   readonly byHand: string[];
 }
 
-export type ImageRestoreResult =
-  | {
-      readonly status: 'staging';
-      readonly stagedId: string;
-      readonly jobId: string | null;
-      readonly old: Obj;
-      readonly references: ImageReference[];
-    }
-  | {
-      readonly status: 'proposal_captured';
-      readonly proposalId: string;
-      readonly canonical?: { readonly reason: string };
-      readonly old: Obj;
-      readonly newAsset: { readonly id: string; readonly url: string | null };
-      readonly references: ImageReference[];
-      readonly updated: boolean;
-      readonly notes: PlanNote[];
-      readonly summary: string;
-    };
+export type ImageRestoreResult = {
+  readonly status: 'proposal_captured';
+  readonly proposalId: string;
+  readonly canonical?: { readonly reason: string };
+  readonly old: Obj;
+  /**
+   * v3 F3c: the image the proposal uploads when approved (on the bridge's server until then): its name, the folder it
+   * goes to (`path`, from the library's root; `creates`: the folders made on the way) and its staged id. The new
+   * asset's id and URL exist only once it is approved (the job's result and the restore's record give them).
+   */
+  readonly image: {
+    readonly stagedId: string;
+    readonly name: string;
+    readonly path: readonly string[];
+    readonly creates: readonly string[];
+  };
+  readonly references: ImageReference[];
+  readonly updated: boolean;
+  readonly notes: PlanNote[];
+  readonly summary: string;
+};
 
 /** Where the image was and what it held, from the snapshot (its library) or the kept bytes. */
 async function findOld(d: ImageRestoreDeps, input: ImageRestoreInput) {
@@ -115,8 +124,10 @@ async function findOld(d: ImageRestoreDeps, input: ImageRestoreInput) {
     .find((r) => r.ref === input.assetId && r.takenAt <= snap.takenAt && r.sha256);
   let name: string | null = null;
   let folderId: string | null = null;
+  let folderPath: string[] | null = null;
+  let piece: LibraryPiece | null = null;
   if (lib?.sha256) {
-    const piece = await svc.store.getJson<LibraryPiece>(lib.sha256);
+    piece = await svc.store.getJson<LibraryPiece>(lib.sha256);
     const a = piece?.assets.find((x) => x.id === input.assetId);
     if (a) {
       name = a.name;
@@ -144,7 +155,59 @@ async function findOld(d: ImageRestoreDeps, input: ImageRestoreInput) {
       'SNAPSHOT_PIECE_DAMAGED',
       `The stored image ${sha.slice(0, 12)}… is missing or damaged in the snapshot store.`,
     );
-  return { sha, bytes, url, name: name ?? input.assetId, folderId };
+  // v3 F3c: the folder's path as the snapshot's library knew it (names from the root), so a folder deleted since can be
+  // found or made again by its path when the restore is approved.
+  if (folderId !== null && piece) {
+    const byId = new Map(piece.folders.map((f) => [f.id, f]));
+    const names: string[] = [];
+    let at: string | null = folderId;
+    for (let i = 0; at !== null && i < 64; i++) {
+      const f = byId.get(at);
+      if (!f || f.name === null) {
+        names.length = 0;
+        break;
+      }
+      names.unshift(f.name);
+      at = f.folderId;
+    }
+    if (names.length > 0 && at === null) folderPath = names;
+  }
+  return { sha, bytes, url, name: name ?? input.assetId, folderId, folderPath };
+}
+
+/**
+ * v3 F3c (ADR 0051 decision 3): where the image goes back: its folder while it is still there; else that folder's path
+ * from the snapshot, found or created when the restore is approved; the library's root when it was there (or when its
+ * folder is gone and its path is not known, which the notes say).
+ */
+function destinationFor(
+  d: ImageRestoreDeps,
+  projectId: string,
+  old: { readonly folderId: string | null; readonly folderPath: readonly string[] | null },
+  notes: PlanNote[],
+): Pick<AssetPlan, 'wouldCreate' | 'destination'> {
+  const root = { wouldCreate: [], destination: { path: [], folderId: null, exists: true } };
+  const planned = (folder: string | readonly string[]) => {
+    const r = d.images.plan(projectId, { folder });
+    if (!r.ok) throw new RestoreError(r.error.code, r.error.message, r.error.details ?? {});
+    return r.plan;
+  };
+  if (old.folderId !== null && d.folderLive(projectId, old.folderId)) return planned(old.folderId);
+  if (old.folderId !== null && old.folderPath && old.folderPath.length > 0) {
+    const plan = planned(old.folderPath);
+    if (plan.wouldCreate.length > 0)
+      notes.push({
+        what: 'its folder',
+        why: `the folder ${old.folderPath.join(' / ')} is gone; it is made again (or found, if it is there by then) when the restore is approved`,
+      });
+    return plan;
+  }
+  if (old.folderId !== null)
+    notes.push({
+      what: 'its folder',
+      why: `the folder ${old.folderId} is gone and the snapshot does not hold its path; the image goes to the library’s root`,
+    });
+  return root;
 }
 
 /** The pages the snapshots show referring to the old URL, and what of them the proposal can update. */
@@ -195,8 +258,17 @@ export async function restoreImage(
   d: ImageRestoreDeps,
   input: ImageRestoreInput,
   origin: JobOrigin,
-  o: { readonly waitMs?: number; readonly dryRun?: boolean } = {},
-): Promise<ImageRestoreResult | { status: 'dry_run'; old: Obj; references: ImageReference[] }> {
+  o: { readonly dryRun?: boolean } = {},
+): Promise<
+  | ImageRestoreResult
+  | {
+      status: 'dry_run';
+      old: Obj;
+      references: ImageReference[];
+      image: { name: string; path: readonly string[]; creates: readonly string[] };
+      notes: PlanNote[];
+    }
+> {
   if (d.asset(input.projectId, input.assetId))
     throw new RestoreError(
       'IMAGE_NOT_DELETED',
@@ -212,90 +284,90 @@ export async function restoreImage(
     sha256: old.sha,
     bytes: old.bytes.length,
   };
-  if (o.dryRun) return { status: 'dry_run', old: oldView, references: refs };
 
-  // ---- stage it (or reuse the one a previous call staged: the same original)
+  const notes: PlanNote[] = [];
+  const dest = destinationFor(d, input.projectId, old, notes);
+  const path = dest.destination.path;
+  const creates = dest.wouldCreate.map((c) => c.path.join(' / '));
+  if (o.dryRun)
+    return {
+      status: 'dry_run',
+      old: oldView,
+      references: refs,
+      image: { name: old.name, path, creates },
+      notes,
+    };
+
+  // ---- the bytes wait on the bridge's server (or the copy a previous call staged there: the same original)
+  // v2 E4 (RV3-4): the snapshot store's bytes, exactly (never re-encoded: a PNG or JPEG would come back as lossy WebP).
+  const image = await asStoredImage(old.bytes);
   let row = d.images.findDuplicate(input.projectId, old.sha);
-  if (!row || !row.staged) {
-    const plan = d.images.planStaging(input.projectId);
-    if (!plan.ok) throw new RestoreError(plan.error.code, plan.error.message);
-    // v2 E4 (RV3-4): the snapshot store's bytes, exactly (never re-encoded: a PNG or JPEG would come back as lossy WebP).
-    const image = await asStoredImage(old.bytes);
-    const started = await d.images.startUpload({
+  if (!row || !row.staged || !row.serverSha256 || row.assetId !== null) {
+    row = await d.images.stageOnServer({
       projectId: input.projectId,
       image,
       name: old.name,
-      plan: plan.plan,
-      staged: true,
       intended: { restoreOf: input.assetId, folderId: old.folderId },
       source: 'restore',
       origin,
       priority: 'P1',
-      // v3 F2 (ADR 0049 decision 10): the restore's proposal names the new asset's URL, so it is staged in LegendKeeper.
-      stageIn: 'legendkeeper',
     });
-    if (!started.row)
-      throw new RestoreError('NOT_STAGED', 'The image could not be staged; nothing was proposed.');
-    row = started.row;
   }
-  if (row.state === 'uploading' && row.jobId) {
-    await d.engine.wait(input.projectId, row.jobId, o.waitMs ?? 25_000);
-    row = d.images.settle(row);
-  }
-  if (row.state !== 'uploaded' || !row.assetId)
-    return { status: 'staging', stagedId: row.id, jobId: row.jobId, old: oldView, references: refs };
-  const newAsset = d.asset(input.projectId, row.assetId);
-  const newUrl = newAsset?.url ?? null;
+  if (row.placementProposalId || row.placementJobId)
+    throw new RestoreError(
+      'RESTORE_PENDING',
+      `This image is already waiting to be placed (${row.placementProposalId ? `proposal ${row.placementProposalId}` : `job ${row.placementJobId}`}); approve or reject that first.`,
+      { stagedId: row.id },
+    );
 
-  // ---- the proposal: place it back (unhidden, its name, its folder when it is still there), and the references
-  const notes: PlanNote[] = [];
-  const folderOk = old.folderId !== null && d.folderLive(input.projectId, old.folderId);
-  if (old.folderId && !folderOk)
-    notes.push({
-      what: 'its folder',
-      why: `the folder ${old.folderId} is gone; the image goes to the library’s root`,
-    });
-  const steps: StepSpec[] = [
-    {
-      op: 'updateAsset',
-      params: {
-        path: { assetId: row.assetId },
-        body: { isHidden: false, name: old.name, folderId: folderOk ? old.folderId : null },
-      },
-      journalOperation: { tool: 'restore_snapshot', scope: 'image', restoreOf: input.assetId },
-    },
-  ];
+  // ---- the proposal: the upload into its folder under its name, then (when asked) the pages that showed it
+  const placed = d.images.serverPlacementSteps({
+    row,
+    destination: dest,
+    name: old.name,
+    tool: 'restore_snapshot',
+    contentType: image.output.contentType,
+    journal: { scope: 'image', restoreOf: input.assetId },
+  });
+  const steps: StepSpec[] = [...placed.steps];
+  const urlPlaceholder = `https://lk-bridge.invalid/restored/${input.assetId}`;
+  const idPlaceholder = `lk-bridge-restored-${input.assetId}`;
   let updated = false;
-  if (input.updateReferences && old.url && newUrl) {
-    const map = new Map([[old.url, newUrl]]);
+  if (input.updateReferences && old.url) {
+    const map = new Map([[old.url, urlPlaceholder]]);
     for (const ref of refs) {
       for (const doc of ref.documents) {
-        const path = { resourceId: ref.pageId, documentId: doc.id };
+        const docPath = { resourceId: ref.pageId, documentId: doc.id };
+        // Bound in the job (its URL exists only once uploaded); judged by its own If-Match when it runs, so a page that
+        // changed since does not stop the upload, only its own relink (a follow-up), and the job after it.
+        const relink = {
+          judgedInLock: true,
+          followUp: 'image_relink_failed' as const,
+          journalOperation: {
+            tool: 'restore_snapshot',
+            scope: 'image',
+            restoreOf: input.assetId,
+            page: { id: ref.pageId, name: ref.page },
+            write: doc.what === 'image blocks' ? 'image URL' : 'map image',
+          },
+        };
         if (doc.what === 'image blocks') {
-          const b = (await d.read('getDocumentBlocks', { path })) as Obj | undefined;
+          const b = (await d.read('getDocumentBlocks', { path: docPath })) as Obj | undefined;
           if (!b) continue;
           const blocks = replaceUrls(stripVersions(b.blocks ?? []) as unknown[], map);
           steps.push({
             op: 'replaceDocumentBlocks',
-            params: { path, ifMatch: str(b.version) ?? '', body: { blocks } },
+            params: { path: docPath, ifMatch: str(b.version) ?? '', body: { blocks } },
             verifyAfterWrite: true,
-            journalOperation: {
-              tool: 'restore_snapshot',
-              scope: 'image',
-              page: { id: ref.pageId, name: ref.page },
-              write: 'image URL',
-            },
+            bindAssetUrls: [{ step: placed.assetStep, placeholder: urlPlaceholder }],
+            ...relink,
           });
         } else {
           steps.push({
             op: 'updateDocument',
-            params: { path, body: { mapImage: { assetId: row.assetId } } },
-            journalOperation: {
-              tool: 'restore_snapshot',
-              scope: 'image',
-              page: { id: ref.pageId, name: ref.page },
-              write: 'map image',
-            },
+            params: { path: docPath, body: { mapImage: { assetId: idPlaceholder } } },
+            bindAssetUrls: [{ step: placed.assetStep, placeholder: idPlaceholder, field: 'id' }],
+            ...relink,
           });
         }
         updated = true;
@@ -312,17 +384,9 @@ export async function restoreImage(
       why: 'not updated (not asked); they show a broken image until changed to the new URL',
     });
   }
-  steps.push(
-    verifyStep([
-      {
-        kind: 'asset',
-        label: `image “${old.name}”`,
-        assetId: row.assetId,
-        fields: { isHidden: false, name: old.name, ...(folderOk ? { folderId: old.folderId } : {}) },
-      },
-    ]),
-  );
-  const summary = `restore_snapshot: image “${old.name}” back as a new asset${updated ? `, and ${refs.reduce((n, r) => n + r.documents.length, 0)} reference(s) updated to its new URL` : ''}`;
+  const where = path.length > 0 ? path.join(' / ') : 'the library’s root';
+  const summary = `restore_snapshot: image “${placed.name}” back as a new asset in ${where}${creates.length ? ` (making ${creates.join(', ')})` : ''}, uploaded from the bridge’s server when approved${updated ? `, and ${refs.reduce((n, r) => n + r.documents.length, 0)} reference(s) updated to its new URL` : ''}`;
+  const imageView = { stagedId: row.id, name: placed.name, path, creates };
   const r = await d.engine.submit({
     kind: 'batch_ops',
     project: input.projectId,
@@ -333,13 +397,14 @@ export async function restoreImage(
     title: summary.slice(0, 300),
     internal: true,
     forceProposal: true,
+    stagedPlacement: true,
     proposal: {
-      summary,
+      summary: summary.slice(0, 500),
       operation: {
         tool: 'restore_snapshot',
         scope: 'image',
         old: oldView,
-        newAsset: { id: row.assetId, url: newUrl },
+        image: imageView,
         references: refs,
         updateReferences: input.updateReferences,
         notes,
@@ -348,8 +413,12 @@ export async function restoreImage(
         {
           tool: 'restore_snapshot',
           page: { id: '*', name: 'asset library' },
-          pageParts: ['image', ...(updated ? ['references'] : [])],
-          summaryLabel: summary,
+          pageParts: [
+            `image “${placed.name}” uploaded to ${where}`,
+            ...creates.map((c) => `folder ${c} made`),
+            ...(updated ? ['references'] : []),
+          ],
+          summaryLabel: summary.slice(0, 500),
         },
         ...refs
           .filter((x) => updated && x.documents.length > 0)
@@ -363,6 +432,16 @@ export async function restoreImage(
   });
   if (!('proposalId' in r) || typeof r.proposalId !== 'string')
     throw new RestoreError('NOT_PROPOSED', 'The restore was not captured as a proposal; nothing was done.');
+  // The staged image follows its placement (ADR 0049 decision 10): placed, and its server copy removed, once the job has
+  // made its asset, even when a relink after it failed.
+  d.images.store.updateUpload(input.projectId, row.id, {
+    placementProposalId: r.proposalId,
+    intended: {
+      ...(row.intended ?? {}),
+      placing: { name: placed.name, path, folderId: dest.destination.folderId, assetStep: placed.assetStep },
+    },
+    error: null,
+  });
   const now = d.svc.o.now();
   d.svc.o.db
     .prepare(
@@ -379,7 +458,7 @@ export async function restoreImage(
       r.proposalId,
       origin.principal?.principalId ?? 'owner',
       summary,
-      JSON.stringify({ newAsset: row.assetId, references: refs.length, updated }),
+      JSON.stringify({ stagedId: row.id, assetStep: placed.assetStep, references: refs.length, updated }),
       now,
       now,
     );
@@ -389,7 +468,7 @@ export async function restoreImage(
     proposalId: r.proposalId,
     ...(canonical ? { canonical } : {}),
     old: oldView,
-    newAsset: { id: row.assetId, url: newUrl },
+    image: imageView,
     references: refs,
     updated,
     notes,
