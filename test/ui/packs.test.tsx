@@ -77,15 +77,20 @@ function needsReauth(then: (c: Call) => unknown) {
 }
 
 describe('the Packs page', () => {
-  it('is in the navigation, after Repository Mappings, and shows the pack: state, sources, projects, rules', async () => {
+  it('is in the navigation under Setup, and shows the pack: state, sources, projects, rules', async () => {
     installApi({ ...baseRoutes(), 'GET /packs': { packs: [pack()] } });
-    renderApp('/ui/packs');
+    // v3 F3c: from another page, the Packs link is reached by opening the Setup group first.
+    const user = userEvent.setup();
+    renderApp('/ui');
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    const setup = within(nav).getByRole('button', { name: 'Setup' });
+    expect(setup).toHaveAttribute('aria-expanded', 'false');
+    expect(within(nav).queryByRole('link', { name: 'Packs' })).toBeNull();
+    await user.click(setup);
+    expect(setup).toHaveAttribute('aria-expanded', 'true');
+    await user.click(within(nav).getByRole('link', { name: 'Packs' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Packs' })).toBeInTheDocument();
-    const nav = screen.getByRole('navigation', { name: 'Main' });
-    const labels = within(nav)
-      .getAllByRole('link')
-      .map((a) => a.textContent);
-    expect(labels.indexOf('Packs')).toBe(labels.indexOf('Repository Mappings') + 1);
+    expect(within(nav).getByRole('link', { name: 'Packs' })).toHaveAttribute('aria-current', 'page');
     const card = screen.getByRole('heading', { name: /Arkona/ }).closest('section')!;
     expect(within(card).getByText('rules changed since approval')).toBeInTheDocument();
     expect(within(card).getAllByText('arkona_create_character').length).toBeGreaterThan(0);

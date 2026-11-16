@@ -15,7 +15,28 @@ only. Code: `src/admin/` (API, stream, static files), `ui/` (the React app), `sr
 | Unit, component, API  | `npm test` (part of `npm run ci`)                                                                                                                                                            |
 | Browser smoke test    | `npm run test:e2e` (builds the UI, starts a real bridge on a mock LegendKeeper, drives Chromium). Not in CI. If Playwright cannot find its browser, set `CHROMIUM_PATH` to a Chromium binary |
 
-## Security model
+## The sidebar (v3 F3c)
+
+Overview, Jobs and Proposals (with its pending count) are always at the top. Every other page is in an expandable group;
+the code sorts the groups by name and their pages by label (locale-aware, ignoring case), so a new page only needs its
+group named in `NAV` (`ui/src/app.tsx`):
+
+| Group              | Pages                                                                |
+| ------------------ | -------------------------------------------------------------------- |
+| Access & Account   | Account · Clients & Access                                           |
+| Assets             | Asset Tree · Staging                                                 |
+| Backups & Recovery | Off-site copy · Snapshots                                            |
+| Limits             | Concurrent Writers · Request Budgets                                 |
+| Monitoring         | Errors · Journal · Tool calls                                        |
+| Quality            | Audits · Evaluation                                                  |
+| Repository         | Archive and lifecycle · Chronology · Repository Tree                 |
+| Setup              | Maintenance Jobs · Packs · Projects · Repository Mappings · Settings |
+
+The current page's group opens whenever the page changes. The owner's open and closed choices are kept in this browser
+(`localStorage`, key `lkb-nav-open`); on a first visit only the current page's group is open. A closed group shows the
+sum of its pages' counts. Each group header is a button (`aria-expanded`, `aria-controls`); the chevron does not
+animate when reduced motion is asked for. Pages reached only from a parent page are listed in `SUB_PAGES`; a test fails
+when a page module is neither routed nor listed there.
 
 - **Only the owner session.** The credential is the cookie set by the owner sign-in (chunk 4). OAuth access tokens and
   personal access tokens are never read on `/api/admin` (the `Authorization` header is ignored), so a token that works at
@@ -119,7 +140,7 @@ panel that shows where a character's images would go. Its routes and behaviour a
 
 ## Packs (v3 F3a)
 
-The **Packs** page (in the navigation after Repository Mappings) shows each setting pack the bridge holds: today the
+The **Packs** page (navigation: Setup) shows each setting pack the bridge holds: today the
 Arkona pack, whose tool is `arkona_create_character` ([packs.md](packs.md), [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)).
 For each pack:
 
@@ -405,7 +426,7 @@ since the proposal makes it conflicted (ADR 0036 decision 5).
 
 ## Archive and lifecycle (v2 C2c)
 
-The **Archive and lifecycle** page (navigation: Archive and lifecycle) lists the selected project's lifecycle record,
+The **Archive and lifecycle** page (navigation: Repository) lists the selected project's lifecycle record,
 newest first, read-only and never pruned: one row per change (archived, unarchived, moved to Working, promoted) with the
 page (id and name before the change), the date, the state it was in, its name after, whether the change is
 **complete** or **incomplete** (and "not as planned" when the verify step found a difference), and its job ids, each
@@ -436,7 +457,7 @@ refused.
 
 ## Chronology (v2 D1)
 
-The **Chronology** page (navigation: Chronology, after Archive and lifecycle; ADR 0038) has four cards for the selected
+The **Chronology** page (navigation: Repository; ADR 0038) has four cards for the selected
 project.
 
 - **Settings.** Whether the chronology is confirmed (and if not, why: `CHRONOLOGY_NOT_CONFIGURED` or
@@ -513,7 +534,7 @@ one proposal, or `nothing_to_do`), `GET /chronology/table-only` and `POST /chron
 
 ## Staging (v2 D3)
 
-The **Staging** page (navigation: Staging, after Asset Tree; [ADR 0041](adr/0041-image-pipeline.md)) shows the selected
+The **Staging** page (navigation: Assets; [ADR 0041](adr/0041-image-pipeline.md)) shows the selected
 project's staged images: uploaded, converted to WebP, checked, and hidden in the project's staging folder
 (`imageStagingFolder`, default `LK-Bridge staging`), not yet placed.
 
@@ -560,7 +581,7 @@ API: `GET /api/admin/staging`, `POST /api/admin/staging/upload?name=…` (`appli
 
 ## Snapshots (v2 E1a)
 
-The **Snapshots** page (navigation: Snapshots, after Staging; [ADR 0042](adr/0042-snapshots-restore-rehearsal.md)) shows
+The **Snapshots** page (navigation: Backups & Recovery; [ADR 0042](adr/0042-snapshots-restore-rehearsal.md)) shows
 the bridge's own copies of the selected project's pages.
 
 - **The store**: its size on disk (pieces and manifests), the **deduplication** ratio (what the snapshots hold over what
@@ -622,7 +643,7 @@ refusal is a 409 with its code. Audited as `snapshots.full`, `snapshots.abandon`
 
 ## Audits (v2 E2)
 
-The **Audits** page (navigation: Audits, after Snapshots; [ADR 0044](adr/0044-audits.md)) shows what the audits found in
+The **Audits** page (navigation: Quality; [ADR 0044](adr/0044-audits.md)) shows what the audits found in
 the newest full snapshot and the change snapshots since. **Findings only: nothing on this page changes your world.** An audit
 reads the snapshot store and the bridge's own database, never LegendKeeper, so it costs no request; one runs by itself after
 each nightly full snapshot completes, and **Run an audit now** runs one at once.
@@ -663,7 +684,7 @@ maintenance job `audit-run` (off by default) is on the Maintenance Jobs page.
 
 ## Off-site copy (v2 E1b)
 
-The **Off-site copy** page (navigation: after Snapshots; [ADR 0043](adr/0043-google-drive-offsite-copy.md), the one-off
+The **Off-site copy** page (navigation: Backups & Recovery; [ADR 0043](adr/0043-google-drive-offsite-copy.md), the one-off
 Google set-up in [drive-setup.md](drive-setup.md)) sets up and watches the encrypted copy of the snapshot store and the
 nightly database copies on Google Drive. The copy is made by a separate service on the server
 (`lk-bridge-offsite.service`, with rclone); the page writes its requests and shows what it recorded, refreshing itself
