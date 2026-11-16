@@ -5,9 +5,29 @@
  * nothing is used until the owner approves the version. Derived from Arkona's own governance pages (listed below), never
  * competing with them: a changed source stops tag computation until the owner approves again.
  */
-import { packRulesSchema, type PackRules, type PackSeed } from './types.js';
+import { packRulesSchema, type HomeRule, type PackRules, type PackSeed } from './types.js';
 
 const STATUS = '$status';
+
+// v3 F3b (ADR 0052): the homes of the owner type table (docs/design/F3b-owner-tools.md, section 1.1), as data.
+const continent = (category: string): HomeRule => ({ kind: 'category', level: 'continent', category });
+const nationCategory = (category: string): HomeRule => ({ kind: 'category', level: 'nation', category });
+const world = (category: string): HomeRule => ({ kind: 'category', level: 'world', category });
+const NATION: HomeRule = { kind: 'nation' };
+const BESTIARY: HomeRule = { kind: 'index', id: 'bb9fa6cf7acf8f62565d0d31', name: 'Bestiary' };
+const MAGIC_AND_TECHNOLOGY: HomeRule[] = [
+  continent('Unique Magic & Technologies'),
+  nationCategory('Unique Magic & Technologies'),
+  NATION,
+];
+/** Religion, Law, Programme, Education, Ceremony and Condition: the matching category index, or a nation index. */
+const primaryOwner = (name: string, category: string, worldToo = false) => ({
+  name,
+  template: 'general',
+  primary: name,
+  specialist: [],
+  homes: [continent(category), nationCategory(category), ...(worldToo ? [world(category)] : []), NATION],
+});
 
 const rules: PackRules = packRulesSchema.parse({
   schema: 1,
@@ -16,6 +36,8 @@ const rules: PackRules = packRulesSchema.parse({
     authoritative: 'CANON',
     working: 'Working',
     never: ['Unknown', 'Unestablished', 'None'],
+    // v3 F3b (ADR 0052): the owner's ruling of 16 November 2026 (design 1.5; `rulings` below).
+    au: { continuityType: 'AU', tag: 'AU' },
     // The Controlled Native Tagging Standard's own examples (v1.8). Keys are fact values (compared without case).
     race: {
       Human: 'Human',
@@ -240,13 +262,233 @@ const rules: PackRules = packRulesSchema.parse({
       relationship: { role: 'relationship', subject: '{A} & {B}', defaultLabel: 'Relationship' },
     },
   ],
+  // v3 F3b (ADR 0052): every non-character owner, one tool typed by this table (design section 1).
+  owners: {
+    tool: 'create_owner',
+    facts: {
+      required: ['Reference Type', 'Scope', 'Temporal Scope'],
+      // The ten rows the five non-character templates share, in their rank order (the template gives the order).
+      keys: [
+        'Status',
+        'Continuity Type',
+        'Continuity',
+        'Inheritance',
+        'Subject',
+        'Reference Type',
+        'Scope',
+        'Temporal Scope',
+        'Last Major Revision',
+        'Supersedes',
+      ],
+      fixed: { 'Continuity Type': 'CANON', Continuity: 'Main', Inheritance: 'None' },
+      supersedes: 'None',
+    },
+    unestablished: 'Unestablished',
+    placeholders: [
+      'tbd',
+      'tbc',
+      'todo',
+      'n/a',
+      'na',
+      'unknown',
+      '?',
+      '??',
+      '-',
+      '--',
+      '…',
+      '...',
+      'placeholder',
+      'fill in',
+      'to be decided',
+      'to be confirmed',
+    ],
+    // Design 1.4: CANON, the primary tag, optionally the specialist; a Working page: Working and the primary tag.
+    tags: { authoritative: [STATUS, '$primary', '$specialist'], working: [STATUS, '$primary'] },
+    worldPrefix: 'Arkonan',
+    nations: 'Polities',
+    text: {
+      firstHeading: 'Purpose',
+      unresolved: 'Unresolved Material',
+      warnMissing: ['Source Boundaries', 'Unresolved Material'],
+    },
+    index: {
+      template: 'index',
+      purpose: 'Routes to the sources of {Name}. This index holds no material of its own.',
+      navigationPurpose:
+        'Routes to the characters of {Name}. This index holds no character material of its own.',
+      routing: 'How to Use This Index',
+      collection: 'Subpages',
+      boundaries: 'Index Boundaries',
+      boundariesText:
+        'Each page below owns its own subject. This index only routes to them and repeats none of their material.',
+      emptyRouting: 'Each page made here gets a line in this section.',
+    },
+    races: { root: { id: 'rraces01', name: 'Races of Arkona' }, navigation: 'Characters' },
+    types: [
+      {
+        name: 'Polity',
+        template: 'polity',
+        primary: 'Polity',
+        specialist: ['Government'],
+        homes: [continent('Polities'), NATION],
+      },
+      {
+        name: 'Institution',
+        template: 'polity',
+        primary: 'Institution',
+        specialist: ['Government', 'Religion'],
+        homes: [
+          continent('Institutions'),
+          NATION,
+          nationCategory('Institutions'),
+          nationCategory('Government & Administration'),
+        ],
+      },
+      {
+        name: 'Military',
+        template: 'polity',
+        primary: 'Military',
+        specialist: [],
+        homes: [NATION, nationCategory('Institutions')],
+        note: 'The owner confirmed (16 November 2026): Military uses AI Polity and Institution.',
+      },
+      {
+        name: 'Culture',
+        template: 'general',
+        primary: 'Culture',
+        specialist: ['Language', 'Naming'],
+        homes: [
+          continent('Cultures'),
+          nationCategory('Cultures'),
+          world('Cultures'),
+          { kind: 'named', name: 'Divine Realm Cultures' },
+        ],
+      },
+      {
+        name: 'Event',
+        template: 'general',
+        primary: 'Event',
+        specialist: ['Conflict'],
+        homes: [
+          continent('Historical Events'),
+          continent('Conflicts'),
+          world('Historical Events'),
+          world('Conflicts'),
+          nationCategory('Historical Events'),
+          nationCategory('History'),
+        ],
+      },
+      {
+        name: 'Place',
+        template: 'place',
+        primary: 'Place',
+        specialist: ['Continent', 'Region', 'Settlement', 'Divine Realm'],
+        homes: [
+          continent('Regions'),
+          continent('Settlements & Locations'),
+          nationCategory('Settlements & Locations'),
+          { kind: 'under', parent: 'Divine Realms', label: 'a Divine Realm index' },
+        ],
+      },
+      {
+        name: 'Technology',
+        template: 'magictech',
+        primary: 'Technology',
+        specialist: [],
+        homes: MAGIC_AND_TECHNOLOGY,
+      },
+      { name: 'Magic', template: 'magictech', primary: 'Magic', specialist: [], homes: MAGIC_AND_TECHNOLOGY },
+      {
+        name: 'Material',
+        template: 'magictech',
+        primary: 'Material',
+        specialist: [],
+        homes: MAGIC_AND_TECHNOLOGY,
+        note: 'The owner confirmed (16 November 2026): Material uses AI Magic and Technology.',
+      },
+      {
+        name: 'Equipment',
+        template: 'magictech',
+        primary: 'Equipment',
+        specialist: ['Sacred Blade'],
+        homes: MAGIC_AND_TECHNOLOGY,
+        note: 'The owner confirmed (16 November 2026): Equipment uses AI Magic and Technology.',
+      },
+      {
+        name: 'Species',
+        template: 'creature',
+        primary: 'Species',
+        specialist: [],
+        homes: [BESTIARY],
+        kinds: {
+          race: {
+            homes: [
+              { kind: 'races', as: 'group' },
+              { kind: 'races', as: 'root' },
+            ],
+            name: '{Name} - Core Information',
+            referenceType: 'Race Core Reference',
+            specialist: null,
+            navigation: 'race',
+          },
+          racialGroup: {
+            homes: [{ kind: 'races', as: 'root' }],
+            name: '{Name} - Racial Group Reference',
+            referenceType: 'Racial Group Reference',
+            specialist: 'Racial Group',
+            navigation: 'group',
+          },
+          subrace: {
+            homes: [{ kind: 'races', as: 'race' }],
+            name: '{Name} - Subrace Reference',
+            referenceType: null,
+            specialist: null,
+            navigation: null,
+          },
+        },
+        note: 'The owner ruled (16 November 2026): a race, racial group or subrace lives on the race roster (Races of Arkona); any other species, and every creature, in the Bestiary.',
+      },
+      {
+        name: 'Creature',
+        template: 'creature',
+        primary: 'Creature',
+        specialist: [],
+        homes: [BESTIARY],
+      },
+      primaryOwner('Religion', 'Religions', true),
+      primaryOwner('Law', 'Laws'),
+      primaryOwner('Programme', 'Programmes'),
+      primaryOwner('Education', 'Education'),
+      primaryOwner('Ceremony', 'Ceremonies'),
+      primaryOwner('Condition', 'Conditions'),
+      {
+        name: 'Relationship',
+        template: 'general',
+        primary: 'Relationship',
+        specialist: [],
+        homes: [continent('Institutions')],
+        note: 'An inter-polity relationship: AI General Source, the approved exception for crown relationships.',
+      },
+    ],
+  },
+  rulings: [
+    {
+      key: 'au-status-tag',
+      date: '2026-11-16',
+      by: 'owner',
+      summary:
+        'An AU page carries the status tag AU in place of CANON, and Continuity Type AU stays in its facts; everything after the status tag follows the same grammar. A Working or Archived AU page leads with Working or Archived, so neither CANON nor AU appears on it. For every pack tool. Not yet recorded in the Controlled Native Tagging Standard: when it is, the pack sees governance drift and is approved again.',
+    },
+  ],
 });
 
 export const ARKONA_PACK: PackSeed = Object.freeze({
   id: 'arkona',
   name: 'Arkona',
   prefix: 'arkona_',
-  seed: 'arkona-2026-11-16',
+  // v3 F3b (ADR 0052): the owner tools' seed. A pack stored from F3a's seed is offered these rules as a new version.
+  seed: 'arkona-2026-11-16-f3b',
+  supersedes: ['arkona-2026-11-16'],
   rules,
   governance: [
     {
@@ -262,6 +504,13 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
       resourceId: 'cn8v87hh',
       documentId: 'l41y28c8',
       name: 'Source Formatting',
+      // v3 F3b: the sections the owner tools are derived from (design, header).
+      sections: [
+        'Page Names and Templates',
+        'Nation-Centred Territorial Navigation',
+        'Approved Hierarchy',
+        'Active Template Suite',
+      ],
     },
     {
       key: 'tagging-standard',
@@ -270,8 +519,16 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
       documentId: 'bfrv43jr',
       name: 'Controlled Native Tagging Standard',
       label: 'v1.8',
+      sections: ['Exact Tag Grammar', 'Closed Primary Categories'],
     },
   ],
+  // v3 F3b: the four templates the owner types add, by name (their ids are worked out in each project, Arkona included).
+  templateNames: {
+    polity: 'AI Polity and Institution',
+    place: 'AI Place and Divine Realm',
+    magictech: 'AI Magic and Technology',
+    creature: 'AI Creature and Species',
+  },
   projects: [
     {
       name: 'arkona',

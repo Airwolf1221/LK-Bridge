@@ -153,15 +153,38 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'page from a template',
       'template',
     ],
-    // v3 F3a (ADR 0050): the setting packs' tools, the Arkona character tool first.
-    'Setting packs (Arkona characters)': [
+    // v3 F3a (ADR 0050) and F3b (ADR 0052): the setting packs' tools. The section has a part per tool; F3a's section name
+    // leads to the character part.
+    'Setting packs (Arkona)': ['setting pack', 'Arkona', 'Arkona pack', 'pack tools'],
+    'Arkona characters': [
       'Make an Arkona character, or add pages to one',
+      'Setting packs (Arkona characters)',
       'arkona_create_character',
-      'Arkona character',
       'create an Arkona character',
-      'setting pack',
       'character package',
       'completion gate',
+    ],
+    'Arkona owners': [
+      'Make any other Arkona owner page (polity, race…)',
+      'Make any other Arkona owner page',
+      'arkona_create_owner',
+      'Arkona owner',
+      'create an Arkona owner',
+      'owner page',
+      'promoteNation',
+      'race roster',
+    ],
+    'Arkona relationships, art and the brief': [
+      'Relate two Arkona characters, or add art to one',
+      'Relate two existing Arkona characters',
+      'Add art to an existing Arkona character',
+      'Recall who an Arkona character is',
+      'Recall who an Arkona character is (free, no read)',
+      'arkona_create_relationship',
+      'arkona_add_character_art',
+      'arkona_character_brief',
+      'character brief',
+      'character art',
     ],
     'Rename, move, delete and restore': [
       'Rename, tag, alias, hide, lock',
@@ -203,7 +226,9 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
 /** Key words added to a heading's own (by the heading's text), where its words alone would not be asked for. */
 const KEYWORDS: Readonly<Record<string, string>> = {
   'How to decide': 'rules choose overview start',
-  'Setting packs (Arkona characters)': 'package gate identity',
+  'Setting packs (Arkona)': 'package',
+  'Arkona characters': 'package gate identity',
+  'Arkona owners': 'home nation polity institution place species race',
 };
 
 interface Entry {

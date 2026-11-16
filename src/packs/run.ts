@@ -1,21 +1,29 @@
 /**
- * Running one package (v3 F3a, ADR 0050): the pack and type looked up, the governance read, the plan made, then a
- * preview (a dry run, or any refusal with everything the plan found) or ONE job, which is a proposal whatever the
- * caller's scope while the pack's `alwaysPropose` is on (its first weeks), and a canonical one when it makes canon.
- * Every pack tool is this function with its own input schema; tests call it directly for a type defined only in test
- * data (the dummy Polity), through exactly the same engine.
+ * Running one package (v3 F3a, ADR 0050; v3 F3b, ADR 0052): the pack looked up and its attachment checked, the
+ * governance read, the plan made, then a preview (a dry run, or any refusal with everything the plan found) or ONE job,
+ * which is a proposal whatever the caller's scope while the pack's `alwaysPropose` is on (its first weeks), and a
+ * canonical one when it makes canon or moves an Authoritative page. Every pack tool plans its own way (a character
+ * package, an owner, a relationship, art) and finishes here, through exactly the same engine; tests call these functions
+ * directly for a type defined only in test data (the dummy type).
  */
 import { londonDate } from '../jobs/internal-steps.js';
 import { lifecycleFrom } from '../lifecycle/settings.js';
-import { lmrConfigFrom } from '../lmr/index.js';
+import type { LmrMode } from '../jobs/lmr-hook.js';
+import { lmrConfigFrom, type LmrConfig } from '../lmr/index.js';
 import type { McpToolContext, McpToolResult } from '../mcp/server.js';
-import { createCtx, withRequest, type CreateOutcome } from '../mcp/tools/create-support.js';
-import { finish, repoContext } from '../mcp/tools/repo.js';
-import { errorResult, type ProjectDeps } from '../mcp/tools/shape.js';
+import { createCtx, withRequest, type CreateCtx, type CreateOutcome } from '../mcp/tools/create-support.js';
+import { finish, repoContext, type RepoCtx } from '../mcp/tools/repo.js';
+import { errorResult, render, type ProjectDeps } from '../mcp/tools/shape.js';
 import { runWriteJob } from '../mcp/tools/write-job.js';
+import type { LifecycleConfig } from '../lifecycle/settings.js';
 import { buildPackJob, type PackJob } from './engine/job.js';
+import { lmrSummary } from './engine/lmr.js';
+import { planOwner, type OwnerInput } from './engine/owner.js';
 import { planPackage, type PackageInput, type PackPlan, type PlanEnv } from './engine/plan.js';
-import { hookFor } from './hooks.js';
+import { textKey } from './engine/text.js';
+import { GENERIC_HOOK, hookFor } from './hooks.js';
+import type { GovernanceStatus } from './service.js';
+import type { Pack, PackAttachment } from './types.js';
 
 type Obj = Record<string, unknown>;
 
@@ -30,6 +38,134 @@ export interface RunPackageOptions {
   readonly operationId?: string | undefined;
   /** The raw arguments, for `operation_id`'s request hash. */
   readonly args: Obj;
+  /** v3 F3b with ADR 0051: the caller's override for the existing pages the package changes (default `auto`). */
+  readonly lastMajorRevision?: LmrMode | undefined;
+}
+
+/** What every pack tool needs before it plans: the pack, its attachment, the tree, the settings, the governance. */
+export interface PackBasis {
+  readonly pack: Pack;
+  readonly attachment: PackAttachment;
+  readonly ctx: RepoCtx;
+  readonly cc: CreateCtx;
+  readonly lifecycle: LifecycleConfig;
+  readonly governance: GovernanceStatus;
+  readonly lmrOnChanges: boolean;
+  /** v3 F3b with ADR 0051: the project's Last Major Revision configuration (its key, switches, housekeeping keys). */
+  readonly lmrConfig: LmrConfig;
+}
+
+/** The pack and the project, checked (v3 F3b: shared by every pack tool). */
+export async function packBasis(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  packId: string,
+  tool: string,
+): Promise<
+  { readonly ok: true; readonly value: PackBasis } | { readonly ok: false; readonly result: McpToolResult }
+> {
+  const packs = pd.services?.packs;
+  if (!packs)
+    return {
+      ok: false,
+      result: errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Setting packs are not available here.' }, pd),
+    };
+  const pack = packs.get(packId);
+  if (!pack)
+    return { ok: false, result: errorResult({ code: 'PACK_NOT_FOUND', message: `No pack ${packId}.` }, pd) };
+  const attachment = packs.attachment(pack.id, pd.project.id);
+  if (!attachment) {
+    const attached = packs.view(pack.id)?.attachments.map((a) => a.projectName) ?? [];
+    return {
+      ok: false,
+      result: errorResult(
+        {
+          code: 'PACK_NOT_ATTACHED',
+          message: `The ${pack.name} pack is not attached to the project ${pd.project.name}; its tools work only on ${attached.join(', ') || 'no project yet'}. Name one of those as project.`,
+          attachedTo: attached,
+        },
+        pd,
+      ),
+    };
+  }
+  const rc = repoContext(pd);
+  if (!rc.ok) return { ok: false, result: rc.result };
+  const ctx = rc.ctx;
+  const settings = pd.services?.projectSettings?.(ctx.projectId) ?? {};
+  const lifecycle = lifecycleFrom(settings);
+  const cc = createCtx(pd, mctx, ctx, tool);
+  const governance = await packs.governance(pack.id, { signal: mctx.signal });
+  const lmrConfig = lmrConfigFrom(settings, lifecycle.fields.lastMajorRevision);
+  return {
+    ok: true,
+    value: {
+      pack,
+      attachment,
+      ctx,
+      cc,
+      lifecycle,
+      governance,
+      lmrOnChanges: lmrConfig.categories.packTools,
+      lmrConfig,
+    },
+  };
+}
+
+/** The planning environment of a pack tool, without its type (an owner's is made by its planner). */
+export function envOf(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  tool: string,
+  b: PackBasis,
+  lastMajorRevision: LmrMode = 'auto',
+): Omit<PlanEnv, 'type' | 'hook'> {
+  return {
+    pd,
+    mctx,
+    ctx: b.ctx,
+    cc: b.cc,
+    tool,
+    pack: b.pack,
+    templates: b.attachment.templates,
+    lifecycle: b.lifecycle,
+    governance: b.governance,
+    today: londonDate(Date.now()),
+    lmrOnChanges: b.lmrOnChanges,
+    lmr: { config: b.lmrConfig, mode: lastMajorRevision },
+  };
+}
+
+/** The Character type's environment (the character tool, and v3 F3b's relationship and art tools). */
+export function characterEnv(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  tool: string,
+  b: PackBasis,
+  typeName: string,
+  lastMajorRevision: LmrMode = 'auto',
+): { readonly ok: true; readonly env: PlanEnv } | { readonly ok: false; readonly result: McpToolResult } {
+  const type = b.pack.rules.types.find((t) => t.name.toLowerCase() === typeName.toLowerCase());
+  if (!type)
+    return {
+      ok: false,
+      result: errorResult(
+        { code: 'PACK_TYPE_NOT_FOUND', message: `The ${b.pack.name} pack has no type ${typeName}.` },
+        pd,
+      ),
+    };
+  const hook = hookFor(type);
+  if (!hook)
+    return {
+      ok: false,
+      result: errorResult(
+        {
+          code: 'PACK_HOOK_MISSING',
+          message: `The ${type.name} type names the hook “${type.hook ?? ''}”, which this bridge does not have.`,
+        },
+        pd,
+      ),
+    };
+  return { ok: true, env: { ...envOf(pd, mctx, tool, b, lastMajorRevision), type, hook } };
 }
 
 export async function runPackage(
@@ -37,74 +173,75 @@ export async function runPackage(
   mctx: McpToolContext,
   o: RunPackageOptions,
 ): Promise<McpToolResult> {
-  const packs = pd.services?.packs;
-  if (!packs)
-    return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Setting packs are not available here.' }, pd);
-  const pack = packs.get(o.packId);
-  if (!pack) return errorResult({ code: 'PACK_NOT_FOUND', message: `No pack ${o.packId}.` }, pd);
-  const attachment = packs.attachment(pack.id, pd.project.id);
-  if (!attachment) {
-    const attached = packs.view(pack.id)?.attachments.map((a) => a.projectName) ?? [];
+  const b = await packBasis(pd, mctx, o.packId, o.tool);
+  if (!b.ok) return b.result;
+  const e = characterEnv(pd, mctx, o.tool, b.value, o.type, o.lastMajorRevision);
+  if (!e.ok) return e.result;
+  const plan = await planPackage(e.env, o.input);
+  return finishPackage(pd, mctx, o, e.env, plan);
+}
+
+/** v3 F3b (ADR 0052): `arkona_create_owner`'s run: the owner type looked up, planned, then finished as every package. */
+export async function runOwner(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  o: {
+    readonly packId: string;
+    readonly tool: string;
+    readonly input: OwnerInput;
+    readonly dryRun: boolean;
+    readonly operationId?: string | undefined;
+    readonly args: Obj;
+    readonly lastMajorRevision?: LmrMode | undefined;
+  },
+): Promise<McpToolResult> {
+  const b = await packBasis(pd, mctx, o.packId, o.tool);
+  if (!b.ok) return b.result;
+  const owners = b.value.pack.rules.owners;
+  const types = owners?.types.map((t) => t.name) ?? [];
+  if (!owners || !owners.types.some((t) => textKey(t.name) === textKey(o.input.type)))
     return errorResult(
       {
-        code: 'PACK_NOT_ATTACHED',
-        message: `The ${pack.name} pack is not attached to the project ${pd.project.name}; its tools work only on ${attached.join(', ') || 'no project yet'}. Name one of those as project.`,
-        attachedTo: attached,
+        code: 'PACK_TYPE_NOT_FOUND',
+        message: `${o.tool} makes ${types.join(', ') || 'no type now'}; not “${o.input.type}”.`,
+        types,
       },
       pd,
     );
-  }
-  const type = pack.rules.types.find((t) => t.name.toLowerCase() === o.type.toLowerCase());
-  if (!type)
-    return errorResult(
-      { code: 'PACK_TYPE_NOT_FOUND', message: `The ${pack.name} pack has no type ${o.type}.` },
-      pd,
-    );
-  const hook = hookFor(type);
-  if (!hook)
-    return errorResult(
-      {
-        code: 'PACK_HOOK_MISSING',
-        message: `The ${type.name} type names the hook “${type.hook ?? ''}”, which this bridge does not have.`,
-      },
-      pd,
-    );
-  const rc = repoContext(pd);
-  if (!rc.ok) return rc.result;
-  const ctx = rc.ctx;
-  const settings = pd.services?.projectSettings?.(ctx.projectId) ?? {};
-  const lifecycle = lifecycleFrom(settings);
-  const cc = createCtx(pd, mctx, ctx, o.tool);
-  const governance = await packs.governance(pack.id, { signal: mctx.signal });
-  const env: PlanEnv = {
-    pd,
-    mctx,
-    ctx,
-    cc,
-    tool: o.tool,
-    pack,
-    type,
-    hook,
-    templates: attachment.templates,
-    lifecycle,
-    governance,
-    today: londonDate(Date.now()),
-    lmrOnChanges: lmrConfigFrom(settings, lifecycle.fields.lastMajorRevision).categories.packTools,
-  };
-  const plan = await planPackage(env, o.input);
-  if (
-    !env.lmrOnChanges &&
-    plan.existing.some((c) => c.kind === 'rename' || (c.kind === 'facts' && c.substantial))
-  ) {
-    plan.notes.push(
-      `${lifecycle.fields.lastMajorRevision} is not changed on the existing pages this package changes: the project's switch for setting-pack tools (lmrPackTools) is off. The pages it creates get it.`,
-    );
-  }
+  const base = envOf(pd, mctx, o.tool, b.value, o.lastMajorRevision);
+  const plan = await planOwner(base, o.input);
+  return finishPackage(pd, mctx, o, { ...base, type: plan.type, hook: GENERIC_HOOK }, plan);
+}
+
+/**
+ * Finishes any package (v3 F3b: shared by the four write tools): the Last Major Revision note, the job, the preview,
+ * then a refusal, a dry run, or ONE proposal; then the staged images it places, and (design section 6) a staged image's
+ * own pending placement proposal it takes over, withdrawn as "superseded by package prop_…".
+ */
+export async function finishPackage(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  o: {
+    readonly packId: string;
+    readonly tool: string;
+    readonly dryRun: boolean;
+    readonly operationId?: string | undefined;
+    readonly args: Obj;
+    readonly lastMajorRevision?: LmrMode | undefined;
+  },
+  env: PlanEnv,
+  plan: PackPlan,
+): Promise<McpToolResult> {
+  const { pack, ctx, type } = env;
   let job: PackJob | null = null;
   if (plan.refusals.length === 0) {
     const built = buildPackJob(env, plan);
     if (!built.ok) return built.result;
     job = built.value;
+    if (job.lmr.existing.some((d) => !d.set && d.why.includes('lmrPackTools')))
+      plan.notes.push(
+        `${env.lifecycle.fields.lastMajorRevision} is not changed on the existing pages this package changes: the project's switch for setting-pack tools (lmrPackTools) is off. The pages it creates get it.`,
+      );
   }
   const preview = previewOf(plan, job, ctx.tree.node.bind(ctx.tree), ctx.projectId);
   if (plan.refusals.length > 0) {
@@ -163,6 +300,7 @@ export async function runPackage(
         ...(plan.replacements.length ? { replacements: plan.replacements } : {}),
         ...(plan.held.length ? { heldTags: plan.held } : {}),
         ...(plan.notes.length ? { notes: plan.notes } : {}),
+        lastMajorRevision: lmrView(j),
       };
       const out = await runWriteJob(pd, mctx, o.tool, {
         steps: j.steps,
@@ -171,11 +309,15 @@ export async function runPackage(
         ...(j.marker ? { lifecycle: j.marker } : {}),
         forceProposal: pack.rules.settings.alwaysPropose,
         stagedPlacement: plan.images.length > 0,
+        // v3 F3b with ADR 0051: the same override reaches the engine (whose own planner leaves this job alone while
+        // it has Last Major Revision steps of its own).
+        lastMajorRevision: j.lmr.mode,
         proposal: {
           operations: j.operations,
           summary: j.summary,
+          ...(j.lmr.existing.length > 0 ? { lmrNote: lmrSummary(j.lmr.existing) } : {}),
           operation: { tool: o.tool, pack: pack.id, preview },
-          prefetched: [...cc.sidebars.entries()].map(([resourceId, sb]) => ({
+          prefetched: [...env.cc.sidebars.entries()].map(([resourceId, sb]) => ({
             op: 'listProperties',
             path: { resourceId },
             body: { data: sb.map((p) => p.raw) },
@@ -186,7 +328,25 @@ export async function runPackage(
       });
       // The staged images: the job (or proposal) that places them, and where each one's asset step is.
       const images = pd.services?.images;
+      let result = out.result;
+      let body = out.body;
       if (images && (out.jobId || out.proposalId)) {
+        // v3 F3b (design section 6): a staged image's own pending placement is withdrawn first, naming this package.
+        const by = out.proposalId ?? out.jobId!;
+        const takeovers: Obj[] = [];
+        for (const tk of plan.takeovers ?? []) {
+          const done = images.supersedePlacement(pd.project.id, tk.stagedId, tk.proposalId, by);
+          takeovers.push({
+            staged_id: tk.stagedId,
+            proposalId: tk.proposalId,
+            withdrawn: done,
+            ...(done
+              ? { note: `superseded by package ${by}` }
+              : {
+                  note: `its placement proposal ${tk.proposalId} was decided meanwhile; this package's job checks the image is still unplaced before it writes anything`,
+                }),
+          });
+        }
         for (const im of plan.images) {
           const assetStep = j.assetSteps.get(im.stagedId);
           if (!assetStep) continue;
@@ -199,8 +359,12 @@ export async function runPackage(
             error: null,
           });
         }
+        if (takeovers.length > 0) {
+          body = { ...out.body, takenOver: takeovers };
+          result = render(body, pd);
+        }
       }
-      return { kind: 'job', head, labels: j.labels, ...out };
+      return { kind: 'job', head, labels: j.labels, ...out, result, body };
     },
   );
 }
@@ -242,6 +406,7 @@ export function previewOf(
     subject: plan.subject,
     mode: plan.mode,
     lifecycleStatus: plan.status,
+    ...(plan.extra ?? {}),
     ...(plan.target
       ? {
           target: {
@@ -261,6 +426,7 @@ export function previewOf(
         state: s.state,
         approved: s.approved,
         current: s.current,
+        ...(s.sections ? { sections: s.sections } : {}),
       })),
     },
     tree,
@@ -286,6 +452,7 @@ export function previewOf(
       text: p.blocks ? { blocks: p.blocks.length, headings: p.headings } : null,
       ...(p.kind === 'index' && p.markdown ? { indexText: p.markdown } : {}),
       ...(p.images.length ? { images: p.images.map((i) => i.name) } : {}),
+      ...(p.notes?.length ? { notes: p.notes } : {}),
     })),
     existing: plan.existing.map((c) =>
       c.kind === 'move'
@@ -297,7 +464,13 @@ export function previewOf(
             }
           : c.kind === 'facts'
             ? { page: c.page.rawName, change: c.why.join('; ') }
-            : { page: c.page.rawName, change: `${c.section}: +${c.lines.length} line(s)`, lines: c.lines },
+            : c.kind === 'images'
+              ? {
+                  page: c.page.rawName,
+                  change: `${c.section}: +${c.images.length} image(s), each with its label and interpretation`,
+                  images: c.images.map((i) => i.name),
+                }
+              : { page: c.page.rawName, change: `${c.section}: +${c.lines.length} line(s)`, lines: c.lines },
     ),
     assets: plan.images.map((i) => ({
       staged_id: i.stagedId,
@@ -305,11 +478,33 @@ export function previewOf(
       folder: i.path.join(' / '),
       ...(i.creates.length ? { createsFolders: i.creates.map((c) => c.name) } : {}),
     })),
+    ...(plan.takeovers?.length
+      ? {
+          takesOver: plan.takeovers.map((t) => ({
+            staged_id: t.stagedId,
+            proposalId: t.proposalId,
+            note: 'its own pending placement proposal is withdrawn when this package is proposed (“superseded by package …”)',
+          })),
+        }
+      : {}),
+    ...(job ? { lastMajorRevision: lmrView(job) } : {}),
     replacements: plan.replacements,
     heldTags: plan.held,
     refusals: plan.refusals,
     warnings: plan.warnings,
     notes: plan.notes,
     ...(job ? { steps: job.labels.filter((l) => l !== 'check' && l !== 'verify'), writes: job.writes } : {}),
+  };
+}
+
+/**
+ * v3 F3b with ADR 0051 (ADR 0052 decision 14): what the package does to Last Major Revision, for the preview and the
+ * answer: the mode, the new pages (always dated), and each existing page it changes, set or skipped, and why.
+ */
+function lmrView(j: PackJob): Obj {
+  return {
+    mode: j.lmr.mode,
+    newPages: j.lmr.newPages,
+    existing: j.lmr.existing.map((d) => ({ page: d.page, set: d.set, why: d.why })),
   };
 }

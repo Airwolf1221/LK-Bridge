@@ -55,11 +55,24 @@ describe('the misses of the owner’s evaluation (14 to 15 November 2026)', () =
     ['lifecycle', 'The page lifecycle'],
     ['promote_page', 'The page lifecycle'],
     ['Canon', 'Canon and approval'],
-    ['arkona_create_character', 'Setting packs (Arkona characters)'], // v3 F3a
-    ['Make an Arkona character, or add pages to one', 'Setting packs (Arkona characters)'],
-    ['pack', 'Setting packs (Arkona characters)'],
-    ['Arkona', 'Setting packs (Arkona characters)'],
-    ['completion gate', 'Setting packs (Arkona characters)'],
+    ['arkona_create_character', 'Setting packs (Arkona) > Arkona characters'], // v3 F3a
+    ['Make an Arkona character, or add pages to one', 'Setting packs (Arkona) > Arkona characters'],
+    ['pack', 'Setting packs (Arkona)'],
+    ['Arkona', 'Setting packs (Arkona)'],
+    ['completion gate', 'Setting packs (Arkona) > Arkona characters'],
+    // v3 F3b (ADR 0052): a part per tool; F3a's section name leads to the character part.
+    ['Setting packs (Arkona characters)', 'Setting packs (Arkona) > Arkona characters'],
+    ['arkona_create_owner', 'Setting packs (Arkona) > Arkona owners'],
+    ['Make any other Arkona owner page (polity, race…)', 'Setting packs (Arkona) > Arkona owners'],
+    ['promoteNation', 'Setting packs (Arkona) > Arkona owners'],
+    ['Arkona owners', 'Setting packs (Arkona) > Arkona owners'],
+    ['arkona_create_relationship', 'Setting packs (Arkona) > Arkona relationships, art and the brief'],
+    ['arkona_add_character_art', 'Setting packs (Arkona) > Arkona relationships, art and the brief'],
+    ['arkona_character_brief', 'Setting packs (Arkona) > Arkona relationships, art and the brief'],
+    [
+      'Relate two Arkona characters, or add art to one',
+      'Setting packs (Arkona) > Arkona relationships, art and the brief',
+    ],
     ['Make a character', 'Create a page or a character (Working first)'],
     ['set_facts', 'Change facts and links'],
     ['write_page', "Edit a page's text"],
@@ -122,7 +135,8 @@ describe('several matches and none', () => {
   });
 
   it('every alias belongs to a real section of its guide', () => {
-    const real = new Set(sectionNames(bridge));
+    // Keyed by the heading's own text (a part such as "Arkona owners" too), as matchSection reads them.
+    const real = new Set([...sectionNames(bridge), ...bridge.filter((h) => h.level >= 2).map((h) => h.text)]);
     for (const heading of Object.keys(SECTION_ALIASES.bridge!)) expect(real.has(heading), heading).toBe(true);
     const mdReal = new Set(sectionNames(markdown));
     for (const heading of Object.keys(SECTION_ALIASES.markdown!))

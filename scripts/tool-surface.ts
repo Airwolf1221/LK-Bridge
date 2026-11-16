@@ -186,6 +186,26 @@ export const NOTES: Readonly<Record<string, Note>> = {
     'create_character; create_resource; set_facts (one package instead)',
     'Separate creates on an Arkona project; a guessed identity value instead of asking the owner; typed tags; resubmitting the proposal.',
   ),
+  arkona_create_owner: N(
+    'Packs',
+    'create_resource; set_facts; create_index (one package instead)',
+    'A home the type does not live in; homeOverride without the owner’s decision; an invented Reference Type, Scope or Temporal Scope; resubmitting the proposal.',
+  ),
+  arkona_create_relationship: N(
+    'Packs',
+    'arkona_create_character relationship page (a new character); create_resource',
+    'A character that does not exist yet; a second page for a pair that has one; resubmitting the proposal.',
+  ),
+  arkona_add_character_art: N(
+    'Packs',
+    'upload_image with a destination; arkona_create_character art page (a new character)',
+    'Staging with a destination at scope propose (a second proposal); an image with no interpretation.',
+  ),
+  arkona_character_brief: N(
+    'Packs',
+    'get_resource; read_document; search (one free answer instead)',
+    'Reading every page of a set instead; live: true when the tree is fresh enough.',
+  ),
   archive_page: N(
     'Lifecycle',
     'delete_resource; move_resource',

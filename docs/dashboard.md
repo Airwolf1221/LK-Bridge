@@ -140,8 +140,10 @@ panel that shows where a character's images would go. Its routes and behaviour a
 
 ## Packs (v3 F3a)
 
-The **Packs** page (navigation: Setup) shows each setting pack the bridge holds: today the
-Arkona pack, whose tool is `arkona_create_character` ([packs.md](packs.md), [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)).
+The **Packs** page (navigation: Setup) shows each setting pack the bridge holds: today the Arkona pack, whose tools are
+`arkona_create_character` and, since v3 F3b, `arkona_create_owner`, `arkona_create_relationship`,
+`arkona_add_character_art` and `arkona_character_brief` ([packs.md](packs.md),
+[ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md), [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md)).
 For each pack:
 
 - its **state**: approved and current, not approved yet, rules changed since approval, governance changed since
@@ -151,27 +153,35 @@ For each pack:
   `alwaysPropose`, on for its first weeks);
 - the **governance sources**: each page the rules were derived from (for Arkona: Character Architecture, Source
   Formatting, and the Controlled Native Tagging Standard v1.8, all on the AI REPOSITORY page), with the document version
-  approved and, after **Check governance now** (one read per source), the version now;
+  approved and, after **Check governance now** (one read per source), the version now; since v3 F3b also the **pinned
+  sections** each source's rules come from, with their state after a check (unchanged, changed, missing, or not approved
+  yet), so a drift alert says which section changed;
 - the **projects** it is attached to, whether the bridge serves each, and the template ids it uses there (worked out
   from the home project's template names by exact name, or unset with a note);
 - the **token maps** (Race / Species and Naming Culture: a fact value and the tag token it becomes), editable: add,
   change or remove rows, then **Save token maps**;
-- the **rules**, read-only: the status tags, what is never in a page name, and per type its tool, placement, gated
-  fields, roles (template, name, Reference Type, tags, facts, text) and specialist tags;
+- the **rules**, read-only: the status tags (and, since v3 F3b, the AU rule: `AU` in place of `CANON` on an AU page),
+  the owner's **rulings** with their dates, what is never in a page name, and per type its tool, placement, gated
+  fields, roles (template, name, Reference Type, tags, facts, text) and specialist tags; since v3 F3b the **owner
+  table** (each owner type's template, primary and specialist tags and allowed homes, and the race roster's kinds);
 - its **versions**, newest first, each with its reason and whether it was approved.
 
 Two changes, each confirmed and then re-authenticated (your password, and the TOTP code if you use one), and each
 audited:
 
 - **Approve this pack version** records the current rules' version with each governance source's document version, read
-  now (`pack.approve`). A source that cannot be read cannot be approved (`GOVERNANCE_UNREADABLE`). Approve after you have
-  checked the rules against the governance pages; approve again after a governance page changes.
+  now (`pack.approve`), and a digest of each pinned section. A source that cannot be read cannot be approved
+  (`GOVERNANCE_UNREADABLE`), nor one whose pinned section is not on the page (`GOVERNANCE_SECTION_MISSING`, listing the
+  page's headings). Approve after you have checked the rules against the governance pages; approve again after a
+  governance page changes.
 - **Save token maps** makes a new version (`pack.set_tokens`), which waits for your approval: until then the tools fail
   closed. A token is never one of the never-tags (Unknown, Unestablished, None), and no value or token has an em or
   en dash in it (`INVALID_TOKEN`).
 
 The pack is seeded once from the bridge's data and attached to the projects the seed names (`pack.seed`,
-`pack.attach`); a governance check that finds a changed source records the drift (`pack.drift`). A pack's tools are
+`pack.attach`); a governance check that finds a changed source records the drift (`pack.drift`). A newer seed (v3 F3b's
+owner tools) reaches a stored pack as a new version at start, waiting for your approval (`pack.seed_upgrade`; your token
+maps are kept): approve it here before the new tools compute anything. A pack's tools are
 listed to agents only while it is attached to a project the bridge serves; if an agent's client does not show a pack's
 tool, refresh its tool list (ChatGPT: Plugins, the bridge, Refresh).
 

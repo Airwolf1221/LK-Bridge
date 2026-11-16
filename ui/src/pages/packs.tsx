@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { api } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { useApi } from '../hooks';
 import { useReauth } from '../reauth';
-import type { PackGovernance, PackView, PacksResponse } from '../types';
+import type { PackGovernance, PackHomeRule, PackOwners, PackView, PacksResponse } from '../types';
 
 /**
  * Packs (v3 F3a, ADR 0050): each setting pack's rules, read-only (they are data, versioned; the token
@@ -145,6 +145,7 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
               <th>Approved version</th>
               <th>Current version</th>
               <th>State</th>
+              <th>Pinned sections</th>
             </tr>
           </thead>
           <tbody>
@@ -163,6 +164,16 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
                   <td className="mono">{was ?? '-'}</td>
                   <td className="mono">{s ? (s.current ?? '-') : 'not checked'}</td>
                   <td>{s ? s.state + (s.reason ? ` (${s.reason})` : '') : '-'}</td>
+                  <td className="small-text" data-sections={g.key}>
+                    {(g.sections ?? []).length === 0
+                      ? 'the whole page'
+                      : (g.sections ?? [])
+                          .map((h) => {
+                            const st = s?.sections?.find((x) => x.heading === h)?.state;
+                            return st && st !== 'same' ? `${h} (${st})` : h;
+                          })
+                          .join('; ')}
+                  </td>
                 </tr>
               );
             })}
@@ -333,7 +344,23 @@ function Rules({ pack }: { pack: PackView }) {
         <dd>{pack.rules.names.forbiddenWords.join(', ')}, a date, an em dash (replaced by a hyphen)</dd>
         <dt>Exceptional identity kinds</dt>
         <dd>{pack.rules.tags.exceptional.join(', ')}</dd>
+        {pack.rules.tags.au ? (
+          <>
+            <dt>AU pages</dt>
+            <dd>
+              {pack.rules.tags.au.tag} in place of {pack.rules.tags.authoritative} (Continuity Type{' '}
+              {pack.rules.tags.au.continuityType}); a Working page leads with {pack.rules.tags.working}
+            </dd>
+          </>
+        ) : null}
+        {(pack.rules.rulings ?? []).map((r) => (
+          <Fragment key={r.key}>
+            <dt>Ruling ({r.date})</dt>
+            <dd>{r.summary}</dd>
+          </Fragment>
+        ))}
       </dl>
+      {pack.rules.owners ? <Owners pack={pack} owners={pack.rules.owners} /> : null}
       {pack.rules.types.map((t) => (
         <details key={t.name} data-type={t.name}>
           <summary>
@@ -384,5 +411,81 @@ function Rules({ pack }: { pack: PackView }) {
         </details>
       ))}
     </>
+  );
+}
+
+/** v3 F3b (ADR 0052): the owner table, read-only. */
+function Owners({ pack, owners }: { pack: PackView; owners: PackOwners }) {
+  const home = (r: PackHomeRule): string => {
+    switch (r.kind) {
+      case 'category':
+        return r.level === 'world'
+          ? `${owners.worldPrefix} ${r.category}`
+          : `<${r.level === 'continent' ? 'Continent' : 'Nation'}> ${r.category}`;
+      case 'nation':
+        return 'a nation index';
+      case 'named':
+        return r.name;
+      case 'under':
+        return r.label;
+      case 'index':
+        return `[INDEX] ${r.name}`;
+      case 'races':
+        return r.as === 'root'
+          ? owners.races.root.name
+          : r.as === 'group'
+            ? 'a Racial Group Reference'
+            : 'a race’s Core Information';
+    }
+  };
+  return (
+    <details data-owners>
+      <summary>
+        Owners: <span className="mono">{pack.prefix + owners.tool}</span>
+      </summary>
+      <p className="small-text">
+        Tags: {owners.tags.authoritative.join(', ')} (a Working page: {owners.tags.working.join(', ')}).
+        Required facts: Subject (the name), {owners.facts.required.join(', ')}.
+      </p>
+      <div className="table-wrap">
+        <table aria-label="Owner types">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Template</th>
+              <th>Tags</th>
+              <th>Allowed homes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {owners.types.map((t) => (
+              <tr key={t.name} data-owner-type={t.name}>
+                <td>
+                  {t.name}
+                  {t.note ? <div className="muted small-text">{t.note}</div> : null}
+                </td>
+                <td>{t.template}</td>
+                <td className="mono small-text">
+                  {t.primary}
+                  {t.specialist.length ? ` [+ ${t.specialist.join(' | ')}]` : ''}
+                </td>
+                <td className="small-text">
+                  {t.homes.map(home).join('; ')}
+                  {t.kinds
+                    ? Object.entries(t.kinds).map(([k, v]) =>
+                        v ? (
+                          <div key={k}>
+                            {k}: {v.name} in {v.homes.map(home).join(' or ')}
+                          </div>
+                        ) : null,
+                      )
+                    : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }

@@ -74,7 +74,14 @@ describe('the Packs page API', () => {
     expect(r.status, JSON.stringify(r.json)).toBe(200);
     const p = r.json.packs[0];
     expect(p).toMatchObject({ id: 'arkona', name: 'Arkona', prefix: 'arkona_', version: 1, approved: null });
-    expect(p.tools).toEqual(['arkona_create_character']);
+    // v3 F3b (ADR 0052): the Character type's tools, then the owner table's.
+    expect(p.tools).toEqual([
+      'arkona_create_character',
+      'arkona_create_relationship',
+      'arkona_add_character_art',
+      'arkona_character_brief',
+      'arkona_create_owner',
+    ]);
     expect(p.rules.tags.culture['Draconic (True Dragons)']).toBe('Draconic');
     expect(p.governance.map((g: { name: string }) => g.name)).toEqual([
       'Character Architecture',

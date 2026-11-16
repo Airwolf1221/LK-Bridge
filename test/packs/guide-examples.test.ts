@@ -1,5 +1,5 @@
 /**
- * v3 F3a (ADR 0050): the bridge guide's Arkona examples (docs/bridge-guide.md › Setting packs (Arkona characters)) are
+ * v3 F3a (ADR 0050): the bridge guide's Arkona examples (docs/bridge-guide.md › Setting packs (Arkona) › Arkona characters) are
  * valid packages, because agents copy them: each, dry-run against the mock world exactly as the guide gives it (only the
  * staged image's id swapped for a real one), plans with no refusal.
  */
@@ -10,7 +10,7 @@ import { fixture } from '../images/world.js';
 import { packWorld, type PackWorld } from './world.js';
 
 const guide = readFileSync(new URL('../../docs/bridge-guide.md', import.meta.url), 'utf8');
-const section = getSection(guide, 'Setting packs (Arkona characters)').markdown;
+const section = getSection(guide, 'Setting packs (Arkona) > Arkona characters').markdown;
 type Example = Record<string, unknown> & {
   depth: string;
   pages: { images?: { staged_id: string }[] }[];

@@ -322,10 +322,12 @@ Format: **Assistant** (Both, or only one; _approvals_ where ChatGPT needs them) 
 - Watch for: a made-up approval tool; `lk_api_write` against the proposals; saying it is approved.
 - Tool calls: none, or `bridge_proposal_status` only.
 
-### H. Setting packs (Arkona, v3 F3a)
+### H. Setting packs (Arkona, v3 F3a and F3b)
 
-These four are marked `pack: "arkona"` in scenarios.json. Every package of the Arkona pack is a proposal, whatever the
-assistant's scope, so ChatGPT and Claude behave the same. Approve the Arkona pack on the Packs page first.
+These eight are marked `pack: "arkona"` in scenarios.json. Every package of the Arkona pack is a proposal, whatever the
+assistant's scope, so ChatGPT and Claude behave the same. Approve the Arkona pack on the Packs page first (after deploying
+v3 F3b, approve its new version: the owner tools, the AU ruling and the pinned governance sections). Scenarios 35 to 38
+(v3 F3b) cover the owner tool, a nation given its own index, a relationship and art for an existing character.
 
 **31. A compact background character in one package** · Both (approve it: scenario 34 builds on it)
 
@@ -359,6 +361,38 @@ assistant's scope, so ChatGPT and Claude behave the same. Approve the Arkona pac
 - Watch for: a second character for the same name (a package without `target` is refused with `CHARACTER_EXISTS`: one such refusal followed by `target` is fine); renaming or moving her pages by hand; a new Core made beside the Reference; resubmitting.
 - Tool calls: `arkona_create_character` (`target`, `upgradeToCore`) twice: the dry run, then Proposal captured, once.
 
+**35. A compact polity in its continent's Polities index** · Both (approve it as canon: scenario 36 builds on it)
+
+- Prompt: _Using Arkona's own rules for non-character pages, add the Kingdom of Saba to Salahad's polities as canon: a compact polity, its page a Historical Polity Reference for a highland kingdom of southern Salahad, from 3A 410 to 4A 12, ruled by a hereditary queenship advised by a council of terrace-holders. Show me the preview before you propose it._
+- Expect: `arkona_create_owner` with `type` "Polity", `name` "Kingdom of Saba", `home` "Salahad Polities" (or its id or path), `status` "authoritative", `referenceType` "Historical Polity Reference", `scope`, `temporalScope` and `markdown` starting with `## Purpose`, first with `dryRun: true`, then the same package without it: `proposal_captured` (a canonical one), once. The preview shows one page, `[BSRC] Kingdom of Saba - Historical Polity Reference`, directly under `[INDEX] Salahad Polities`, its sidebar rows in template order and the tags `CANON, Polity`.
+- Watch for: `create_resource` and `set_facts` instead of the package; tags typed by the assistant; a home invented, or an `[INDEX] Kingdom of Saba` made for a compact polity; a Working page when canon was asked for; proposing before showing the preview; resubmitting after `proposal_captured`.
+- Tool calls: `arkona_create_owner` twice: the dry run (success), then Proposal captured, once.
+- Setup: Needs Salahad's Polities index in the test world, as in Arkona (if it is missing, substitute another continent's Polities index and note it). Approve it as canon on the Proposals page: scenario 36 builds on it.
+
+**36. An institution of a compact polity: the nation gets its own index in the same proposal** · Both (after 35; reject it, or approve it as canon to look at the result)
+
+- Prompt: _The Kingdom of Saba, the compact polity we added to Salahad, now has a second developed page: its Terrace Council, the royal council of terrace-holders, an Institution Reference from 3A 500 to 4A 12, as canon. Use Arkona's own rules, give the kingdom whatever structure that needs, and show me the preview before you propose it._
+- Expect: `arkona_create_owner` with `type` "Institution", `nation` "Kingdom of Saba", `promoteNation: true`, `home` "Kingdom of Saba" (the new index; the Polities index is taken for it too), `status` "authoritative" and the facts and text, `dryRun: true` first (one `NATION_NEEDS_INDEX` refusal before it, when the first try had no `promoteNation`, is fine), then the same package without it: `proposal_captured` (canonical), once. The preview shows `[INDEX] Kingdom of Saba` made in `[INDEX] Salahad Polities`, `[BSRC] Kingdom of Saba - Historical Polity Reference` moved under it (id kept) and `[BSRC] Terrace Council - Institution Reference` beside it.
+- Watch for: the Reference moved by hand (`move_resource`) or the index made separately (`create_index`); the institution placed in Salahad Polities or Salahad Institutions without the nation's index; a national subindex made unasked; resubmitting.
+- Tool calls: `arkona_create_owner`: perhaps one `NATION_NEEDS_INDEX`, then the dry run with `promoteNation`, then Proposal captured, once.
+- Setup: Needs scenario 35's polity, approved. Read the preview, then reject the proposal (or approve it as canon, to look at the result: the new [INDEX] Kingdom of Saba in Salahad Polities, the Reference moved into it with the same id, and the Terrace Council beside it).
+
+**37. A joint relationship of two existing characters** · Both (reject it afterwards)
+
+- Prompt: _Asagiri Miyabi and Mehrana al-Khalid corresponded for years about the shrine archives. Using Arkona's own character rules, give the two of them one joint relationship page, as canon and kept with Asagiri Miyabi, and show me the preview before you propose it._
+- Expect: `arkona_create_relationship` with `a` "Asagiri Miyabi", `b` "Mehrana al-Khalid" (host `a`, the default), `scope` and `markdown` starting with `## Purpose`, `dryRun: true` first, then the same package without it: `proposal_captured` (canonical), once. The preview shows `[BSRC] Asagiri Miyabi & Mehrana al-Khalid - Relationship` under `[INDEX] Asagiri Miyabi`, the tags `CANON, Character, Relationship`, and both characters' Related Sources gaining the page.
+- Watch for: a character made again (`arkona_create_character` for an existing one); separate creates and `set_facts` for the links; a second relationship page for the pair (`RELATIONSHIP_EXISTS` names the one there); resubmitting.
+- Tool calls: `arkona_create_relationship` twice: the dry run, then Proposal captured, once.
+- Setup: Read the preview, then reject the proposal (or approve it as canon, to look at the page under [INDEX] Asagiri Miyabi and the new line in both characters' Related Sources).
+
+**38. Art for an existing character, staged first** · Both (reject it afterwards)
+
+- Prompt: _Here is a reference image of Asagiri Miyabi's ceremonial robes: the white-and-vermilion robes she wears for the lantern rites. Add it to her art as an outfit reference, by Arkona's own rules, and show me the preview before you propose it. The image (PNG, base64): iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQI12M4IaeBFTEMLQkAiE5DgdTZD4AAAAAASUVORK5CYII=_
+- Expect: `upload_image` with the base64 and `stage: true` and no destination (a staged image whose only activity is its own placement proposal, as ChatGPT's upload with a destination makes, is taken over by the package: its proposal is withdrawn, "superseded by package"); then `arkona_add_character_art` with `character` "Asagiri Miyabi" and one image: its `staged_id`, a `label` such as "Outfit Reference - Ceremonial Robes", its `interpretation` and `subfolder` "Outfits / Ceremonial Robes", `dryRun: true` first, then the same without it: `proposal_captured`, once. The preview shows the image as `Asagiri Miyabi - Outfit Reference - Ceremonial Robes` in `Characters / Beastkin / Foxians / Asagiri Miyabi / Outfits / Ceremonial Robes` (folders made when the job runs) and her Art page made (or extended under Reference Images).
+- Watch for: the image uploaded straight into the library; `write_page` to put it on a page; an image with no interpretation; a label with a file extension; `STAGED_IMAGE_BUSY` worked around by uploading again; resubmitting.
+- Tool calls: `upload_image` (staged), `arkona_add_character_art` dry run, then Proposal captured, once.
+- Setup: Reject the proposal afterwards (or approve it, to look at the image in Characters / Beastkin / Foxians / Asagiri Miyabi / Outfits / Ceremonial Robes and on her Art page). On a repeat run the image may come back `deduplicated` and still staged: that staged id is the one to use.
+
 ### Not run here
 
 - **Fixing drift with "Propose a fix"** is a dashboard action (the Chronology and Audits pages), not a tool, so no assistant
@@ -366,9 +400,10 @@ assistant's scope, so ChatGPT and Claude behave the same. Approve the Arkona pac
 
 ## After the run: clean up
 
-1. Reject any proposals left pending (scenarios 8, 16, 22, 26, 27, and 32 and 34 of the Arkona pack).
+1. Reject any proposals left pending (scenarios 8, 16, 22, 26, 27, and 32, 34, 36, 37 and 38 of the Arkona pack).
 2. Remove the test pages: ask Claude to _"delete every page whose name starts with E3 Eval in the test project"_, or delete
-   them in the LegendKeeper app (and Hoshino Sae's pages, from scenarios 31 and 34). (That is itself a check: `delete_resource` with `confirm` and `cascade`.) Restore, if needed,
+   them in the LegendKeeper app (and Hoshino Sae's pages, from scenarios 31 and 34, and the Kingdom of Saba's, from scenarios
+   35 and 36: move its Reference back into Salahad Polities if scenario 36 was approved). (That is itself a check: `delete_resource` with `confirm` and `cascade`.) Restore, if needed,
    with `restore_resource`.
 3. If scenario 18 was left in place, run scenario 19.
 4. Nothing needs undoing in `arkona`; it was never used.

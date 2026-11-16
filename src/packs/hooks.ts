@@ -27,6 +27,11 @@ export interface TypeHook {
   readonly relationships: boolean;
   readonly upgrade: { readonly from: string; readonly to: string } | null;
   readonly routing: boolean;
+  /**
+   * v3 F3b (ADR 0052): the hook's own tools besides the type's creation tool, without the pack's prefix (Character:
+   * a standalone relationship, art for an existing character, the read-only brief).
+   */
+  readonly tools?: readonly string[];
 }
 
 /** The roles of a type that hold its identity facts. */
@@ -103,6 +108,7 @@ export const CHARACTER_HOOK: TypeHook = Object.freeze({
   relationships: true,
   upgrade: { from: 'compact', to: 'core' },
   routing: true,
+  tools: ['create_relationship', 'add_character_art', 'character_brief'],
 });
 
 const HOOKS: Readonly<Record<string, TypeHook>> = { character: CHARACTER_HOOK };

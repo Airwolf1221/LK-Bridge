@@ -49,6 +49,12 @@ export const roleRuleSchema = z
      * else: its status tag comes first. An empty list: no tags (an index).
      */
     tags: z.array(text(100)).max(12),
+    /**
+     * v3 F3b (ADR 0052): the tags of a Working page when they differ from `tags` (an owner page: `Working` and its
+     * primary tag only, per the Tagging Standard v1.8 as the F3b design quotes it). A slot of `tags` it leaves out is
+     * held and reported, never silently dropped. Absent: a Working page has `tags` with `Working` as its status tag.
+     */
+    workingTags: z.array(text(100)).max(12).optional(),
     /** Which facts the page gets: `identity` (every fact), `general` (the type's general keys only), `none`. */
     facts: z.enum(['identity', 'general', 'none']),
     /** Whether the package must give the page a body (an index's body may be drafted instead). */
@@ -178,6 +184,145 @@ export const typeRulesSchema = z
   .strict();
 export type TypeRules = z.infer<typeof typeRulesSchema>;
 
+// ============================================================================================ v3 F3b: owners
+
+const roleName = z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/);
+
+/**
+ * v3 F3b (ADR 0052; the owner-approved design docs/design/F3b-owner-tools.md, section 1): where an owner page may live,
+ * recognised by the index's own name and place, never invented:
+ * - `category`: `<Continent> <Category>` (an index named so beneath its continent's own `[INDEX] <Continent>`),
+ *   `<Nation> <Category>` (beneath a nation index), or `<worldPrefix> <Category>` (`Arkonan Cultures`);
+ * - `nation`: a nation index (an index directly in a `<Continent> Polities` index);
+ * - `named`: an index of exactly this name (`Divine Realm Cultures`);
+ * - `under`: an index directly beneath an index of this name (a Divine Realm index, under `Divine Realms`);
+ * - `index`: one index by id, else by name (the Bestiary);
+ * - `races`: the race roster's own pages (owner ruling, design 1.1a): `root` Races of Arkona itself, `group` a Racial
+ *   Group Reference in it, `race` a race's Core Information page.
+ */
+export const homeRuleSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('category'),
+      level: z.enum(['continent', 'nation', 'world']),
+      category: text(100),
+    })
+    .strict(),
+  z.object({ kind: z.literal('nation') }).strict(),
+  z.object({ kind: z.literal('named'), name: text(200) }).strict(),
+  z.object({ kind: z.literal('under'), parent: text(200), label: text(200) }).strict(),
+  z.object({ kind: z.literal('index'), id: text(64), name: text(200) }).strict(),
+  z.object({ kind: z.literal('races'), as: z.enum(['root', 'group', 'race']) }).strict(),
+]);
+export type HomeRule = z.infer<typeof homeRuleSchema>;
+
+/** A kind of the Species type on the race roster (design 1.1a): its homes, name, Reference Type and tags. */
+export const ownerKindSchema = z
+  .object({
+    homes: z.array(homeRuleSchema).min(1).max(10),
+    /** The page name without its prefix (`{Name} - Core Information`). */
+    name: text(200),
+    /** The Reference Type it always gets, or null when the package gives it. */
+    referenceType: z.string().trim().max(200).nullable(),
+    /** The one specialist tag it always gets (`Racial Group`), or null: none. */
+    specialist: z.string().trim().max(100).nullable(),
+    /** Its character navigation (`Characters / <Group> / <Race>`): `race`, `group`, or null for none. */
+    navigation: z.enum(['race', 'group']).nullable(),
+  })
+  .strict();
+export type OwnerKind = z.infer<typeof ownerKindSchema>;
+export const OWNER_KINDS = ['race', 'racialGroup', 'subrace'] as const;
+export type OwnerKindName = (typeof OWNER_KINDS)[number];
+
+/** One row of the design's type table (section 1.1). */
+export const ownerTypeSchema = z
+  .object({
+    /** The `type` argument (`Polity`). */
+    name: text(100),
+    /** The template role it is made from (mapped to a template id per project). */
+    template: roleName,
+    /** Its primary tag from the closed list (`Polity`). */
+    primary: text(100),
+    /** The specialist tags it may carry, at most one per page (`Government`). */
+    specialist: z.array(text(100)).max(10),
+    homes: z.array(homeRuleSchema).min(1).max(20),
+    /** Species only: the race roster's kinds; a Species with no `kind` uses `homes` (the Bestiary). */
+    kinds: z.partialRecord(z.enum(OWNER_KINDS), ownerKindSchema).optional(),
+    /** For people: why the row is as it is (the owner's ★ confirmations). */
+    note: z.string().max(500).optional(),
+  })
+  .strict();
+export type OwnerType = z.infer<typeof ownerTypeSchema>;
+
+/** The shared rules of every non-character owner (design section 1): one tool, typed by `types`. */
+export const ownersRulesSchema = z
+  .object({
+    /** The tool, without the pack's prefix (`create_owner`). */
+    tool: z.string().regex(/^[a-z][a-z0-9_]{0,40}$/),
+    facts: z
+      .object({
+        /** The facts a package must give (besides Subject, which is its name). */
+        required: z.array(key).max(10),
+        /** The sidebar rows an owner page may get, in no particular order (the template gives the order). */
+        keys: z.array(key).min(1).max(40),
+        /** Facts every owner page gets unless the package says otherwise (Continuity Type, Continuity, Inheritance). */
+        fixed: z.record(key, z.string().max(500)),
+        /** Supersedes when the package gives none. */
+        supersedes: z.string().max(200),
+      })
+      .strict(),
+    unestablished: text(100),
+    placeholders: z.array(z.string().max(100)).max(50),
+    /** The tags of an owner page: slots `$status`, `$primary`, `$specialist`; a Working page's own list. */
+    tags: z.object({ authoritative: z.array(text(100)).max(6), working: z.array(text(100)).max(6) }).strict(),
+    /** The prefix of the world-level category indexes (`Arkonan Cultures`). */
+    worldPrefix: text(100),
+    /** The category whose indexes hold the nations (`Polities`). */
+    nations: text(100),
+    text: z
+      .object({
+        firstHeading: text(200),
+        unresolved: text(200),
+        warnMissing: z.array(text(200)).max(10),
+      })
+      .strict(),
+    /** The indexes a package may create (a nation, a national subindex, character navigation): drafted text. */
+    index: z
+      .object({
+        template: roleName,
+        purpose: text(1000),
+        navigationPurpose: text(1000),
+        routing: text(200),
+        collection: text(200),
+        boundaries: text(200),
+        boundariesText: text(1000),
+        /** The routing section of an index made with no page in it yet (character navigation). */
+        emptyRouting: text(300),
+      })
+      .strict(),
+    /** The race roster (design 1.1a): Races of Arkona, and the Characters navigation a new race needs. */
+    races: z
+      .object({
+        root: z.object({ id: text(64), name: text(200) }).strict(),
+        navigation: text(200),
+      })
+      .strict(),
+    types: z.array(ownerTypeSchema).min(1).max(40),
+  })
+  .strict();
+export type OwnersRules = z.infer<typeof ownersRulesSchema>;
+
+/** An owner's ruling the pack follows that its governance pages do not record yet (design 1.5: the AU tag). */
+export const rulingSchema = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/),
+    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    by: text(100),
+    summary: text(2000),
+  })
+  .strict();
+export type Ruling = z.infer<typeof rulingSchema>;
+
 export const packRulesSchema = z
   .object({
     schema: z.literal(1),
@@ -199,6 +344,15 @@ export const packRulesSchema = z
         culture: z.record(text(200), text(100)),
         /** Exceptional identity kinds accepted as race tokens as they are (`Kami`, `Heavenly Beast`). */
         exceptional: z.array(text(100)).max(30),
+        /**
+         * v3 F3b (ADR 0052; the owner's ruling of 16 November 2026, design 1.5): an Authoritative page whose Continuity
+         * Type is `continuityType` carries `tag` as its status tag in place of `authoritative`. A Working or Archived
+         * page leads with its lifecycle tag instead, so it carries neither. Absent (an older pack): `authoritative`.
+         */
+        au: z
+          .object({ continuityType: text(100), tag: text(100) })
+          .strict()
+          .optional(),
       })
       .strict(),
     /** Page names: words and date forms a name may never hold, and the dash rule. */
@@ -218,9 +372,28 @@ export const packRulesSchema = z
       })
       .strict(),
     types: z.array(typeRulesSchema).min(1).max(40),
+    /** v3 F3b (ADR 0052): the non-character owners (one tool, `{prefix}{owners.tool}`, typed by `owners.types`). */
+    owners: ownersRulesSchema.optional(),
+    /** v3 F3b: the owner's rulings the rules follow that the governance pages do not record yet, with their dates. */
+    rulings: z.array(rulingSchema).max(20).optional(),
   })
   .strict()
   .superRefine((r, ctx) => {
+    if (r.owners) {
+      const seen = new Set<string>();
+      for (const t of r.owners.types) {
+        const k = t.name.toLowerCase();
+        if (seen.has(k)) ctx.addIssue({ code: 'custom', message: `owner type ${t.name} twice` });
+        seen.add(k);
+        if (t.kinds && t.name.toLowerCase() !== 'species')
+          ctx.addIssue({ code: 'custom', message: `${t.name}: only Species has kinds` });
+      }
+      if (r.types.some((t) => t.tool === r.owners!.tool))
+        ctx.addIssue({
+          code: 'custom',
+          message: `${r.owners.tool} is both a type's tool and the owners' tool`,
+        });
+    }
     const names = new Set<string>();
     for (const t of r.types) {
       const k = t.name.toLowerCase();
@@ -256,9 +429,22 @@ export const governanceSourceSchema = z
     name: text(200),
     /** The version the standard calls itself by, for people (`v1.8`); the approval records the document's version. */
     label: z.string().max(100).optional(),
+    /**
+     * v3 F3b (ADR 0052): the sections (headings) of the document the rules depend on, pinned one by one: the approval
+     * records each one's digest and refuses when one cannot be found. The whole document's version still decides
+     * drift (fail closed, as F3a); the sections say which pinned part changed.
+     */
+    sections: z.array(text(200)).max(20).optional(),
   })
   .strict();
 export type GovernanceSource = z.infer<typeof governanceSourceSchema>;
+
+/** v3 F3b: a pinned section as an approval records it. */
+export interface PinnedSection {
+  readonly heading: string;
+  /** SHA-256 of the section's blocks (its heading and everything up to the next heading of its level or higher). */
+  readonly digest: string;
+}
 
 /** What an approval records. */
 export interface PackApproval {
@@ -266,8 +452,12 @@ export interface PackApproval {
   readonly version: number;
   readonly at: number;
   readonly by: string;
-  /** Each governance source's document version at that moment. */
-  readonly sources: readonly { readonly key: string; readonly version: string }[];
+  /** Each governance source's document version at that moment (and, v3 F3b, each pinned section's digest). */
+  readonly sources: readonly {
+    readonly key: string;
+    readonly version: string;
+    readonly sections?: readonly PinnedSection[];
+  }[];
 }
 
 export interface PackDrift {
@@ -278,6 +468,8 @@ export interface PackDrift {
     readonly approved: string | null;
     readonly current: string | null;
     readonly reason?: string;
+    /** v3 F3b: the pinned sections that changed (or are gone); empty when only unpinned text changed. */
+    readonly sections?: readonly string[];
   }[];
 }
 
@@ -324,4 +516,16 @@ export interface PackSeed {
   }[];
   /** The project whose template ids are the reference for working out another project's (by template name). */
   readonly home: string;
+  /**
+   * v3 F3b (ADR 0052): template roles whose home id is not known, by the template's name (`AI Polity and Institution`):
+   * worked out in every project, the home one included, from its templates as last read (exactly, ignoring the word
+   * "Template" and the prefix), as another project's ids always are.
+   */
+  readonly templateNames?: Readonly<Record<string, string>>;
+  /**
+   * v3 F3b: the seeds this one replaces. A stored pack seeded from one of them is offered this seed's rules as a NEW
+   * version (never approved by the bridge): the owner's token maps are kept, the governance sources keep their stored
+   * places and gain this seed's pinned sections, and the owner approves it on the Packs page.
+   */
+  readonly supersedes?: readonly string[];
 }

@@ -34,6 +34,9 @@ tasks come first and the reference after. The last section, **Operations**, list
 | Rename, tag, alias, hide, lock                      | `update_resource`                                                       | `lk_api_write`                                    |
 | Make a character                                    | `create_character` (Working), then `create_resource` for its pages      | `create_many_resources`                           |
 | Make an Arkona character, or add pages to one       | `arkona_create_character` (one package; projects with the pack)         | `create_character` and `create_resource` calls    |
+| Make any other Arkona owner page (polity, race…)    | `arkona_create_owner` (one package; its home checked)                   | `create_resource` and `set_facts` calls           |
+| Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`                | separate creates; `upload_image` to a destination |
+| Recall who an Arkona character is                   | `arkona_character_brief` (free: the bridge's own records)               | many `get_resource` and `read_document` calls     |
 | Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` (rare: see Create a page)  |
 | Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                     |
 | Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                              | `delete_resource`, `move_resource` to the archive |
@@ -63,7 +66,8 @@ loosely, but only a clear match is returned, and each miss costs a call):
 - `Edit a page's text`
 - `Change facts and links`
 - `Create a page or a character (Working first)`
-- `Setting packs (Arkona characters)` (the Arkona character tool)
+- `Setting packs (Arkona)` (the Arkona pack's five tools), and under it `Arkona characters`, `Arkona owners`,
+  `Arkona relationships, art and the brief`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -294,12 +298,50 @@ sure it went through, send the SAME request with the SAME `operation_id`: you ge
 Read the pages, then make a new, smaller request for what is missing. `OUTCOME_UNKNOWN` lists under `uncertain` a write
 whose answer was lost: it may have been made, so read the pages before anything else and never repeat it blindly.
 
-## Setting packs (Arkona characters)
+## Setting packs (Arkona)
 
-A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates and tags, taken
-from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list only
-when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`, naming
-the projects they work on). The first is **`arkona_create_character`**, the Arkona pack's character tool.
+A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates, homes and tags,
+taken from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list
+only when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`,
+naming the projects they work on). The Arkona pack has five tools. Ask for the part you need:
+
+| You want                                          | Use                          | Part to ask for                           |
+| ------------------------------------------------- | ---------------------------- | ----------------------------------------- |
+| Make an Arkona character, or add pages to one     | `arkona_create_character`    | `Arkona characters`                       |
+| Make any other Arkona owner page                  | `arkona_create_owner`        | `Arkona owners`                           |
+| Relate two existing Arkona characters             | `arkona_create_relationship` | `Arkona relationships, art and the brief` |
+| Add art to an existing Arkona character           | `arkona_add_character_art`   | `Arkona relationships, art and the brief` |
+| Recall who an Arkona character is (free, no read) | `arkona_character_brief`     | `Arkona relationships, art and the brief` |
+
+**What every pack tool does the same way.**
+
+- **Preview first, then one proposal.** `dryRun: true` (or `preview: true`) writes nothing and returns the whole plan:
+  pages, places, templates, facts, tags, links, images, warnings and refusals. Fix what it refuses, tell the person about
+  any warning that is a judgement call, then call again without `dryRun`. That call is **one proposal** for the owner,
+  whatever your scope. Never resubmit it: follow it with `bridge_proposal_status`. Once approved it runs as one job,
+  which checks again before its first write that nothing it relies on changed meanwhile, and verifies what it wrote.
+- **Tags are computed, never typed.** A canon page leads with `CANON`, or with `AU` when it belongs to an alternate
+  universe (Continuity Type AU: the owner's ruling of 16 November 2026); a Working page leads with `Working`. A tag you
+  type is refused (`TAG_NOT_ALLOWED`); one the rules hold back is reported (`heldTags`).
+- **Ask the owner, don't guess.** A required fact that is missing is refused, naming it. Never invent a value or borrow
+  one from a similar page: ask, then call again. Only when the owner says a fact is deliberately left open, give
+  `{ "value": "Unestablished", "reason": "…" }`; the reason is written into the page's Unresolved Material.
+- **Images: stage them with no destination.** `upload_image` with `stage: true` and NO destination stages an image on the
+  bridge's server and proposes nothing; give its `staged_id` to the pack tool, which places it. An image you already
+  uploaded with a destination at scope `propose` is taken over: its own placement proposal is withdrawn ("superseded by
+  package prop_…"). An image in another package's proposal is refused (`STAGED_IMAGE_BUSY`).
+- **Last Major Revision.** Every page a pack tool makes is dated the day its job runs. An existing page it changes is dated
+  only for a major revision by the owner's rule: 8 or more words of new or rewritten text, a heading, a real fact change,
+  a Dependency. A move, a new name or Related Sources alone are not, so a relationship's links and a nation's moved
+  Reference keep their date, while new images on an Art page and a filled-in fact set it. `lastMajorRevision: "set"` or
+  `"skip"` overrides that for the existing pages (only when the person asks); the preview's `lastMajorRevision` says what
+  applies to each page and why.
+- **When the pack is not current.** The pack records the versions of Arkona's governance pages that the owner approved
+  (and of the sections its rules come from). If one has changed since, or the pack's rules were edited, nothing is
+  computed and every call is refused with `PACK_NOT_CURRENT`, naming what changed, until the owner checks the rules and
+  approves again on the dashboard. Tell the person; there is nothing to retry.
+
+### Arkona characters
 
 **Use it instead of separate creates.** On a project with the Arkona pack, make every new character with
 `arkona_create_character`, and add new pages to an existing character with it too (`target`, below). One package
@@ -332,7 +374,7 @@ one, the tags in order, every template row, each page's place, each link and eac
   identity page, exactly one for a new character; `specialist`, with a `title` such as `"Biography"` (the page is
   `{name} - {title}`), an optional `referenceType` (one is suggested) and at most one `specialistTag` (Biography,
   Personality, Relationship, Character Art, Visual Reference, Wardrobe, Magic or Equipment); `art`, with `images` (each a
-  `staged_id` from `upload_image` with `stage: true`, a `label` `"{Visual Role} - {Descriptor}"`, its `interpretation`,
+  `staged_id` from `upload_image` with `stage: true` and no destination, a `label` `"{Visual Role} - {Descriptor}"`, its `interpretation`,
   what the image establishes, and an optional `subfolder` such as `"Outfits / Court Dress"`); and `relationship`, with
   `with` (the other character), an optional `label` and `host` (`"self"`, the default, or `"other"`). The relationship
   is added to both characters' Related Sources (a Working relationship
@@ -344,8 +386,8 @@ Every page's text starts with `## Purpose`: no title and no metadata header (Leg
 holds the facts), no empty or placeholder section. A Core, Reference or Relationship page should end with
 `## Source Boundaries` and `## Unresolved Material` (a warning names a missing one). Page names come from the rules, so
 never write a prefix. An em dash or en dash used as a separator anywhere in the package is replaced by an ASCII hyphen,
-and each replacement is listed (`replacements`); "CANON" or a date in a page name is refused. Last Major Revision is set to
-the day the job runs on every page the tool makes or substantially changes.
+and each replacement is listed (`replacements`); "CANON" or a date in a page name is refused. Last Major Revision: see the
+shared rules above.
 
 A compact background character:
 
@@ -438,7 +480,7 @@ and a typed one is refused (`TAG_NOT_ALLOWED`).
 refused (`CHARACTER_EXISTS`, naming it), and so is a job that finds the character was made by another request in the
 meantime. To add pages, pass `target` (its name, an alias or its id) with only the new pages; `depth` is ignored and the
 identity page is not given again. The new pages take the character's standing: Working beside a Working character,
-canon beside a canon one, its continuity kept (an AU character's pages stay AU). `status: "working"` instead drafts them
+canon beside a canon one, its continuity kept (an AU character's pages stay AU and carry `AU` in place of `CANON`). `status: "working"` instead drafts them
 flat under `[INDEX] Working`, to promote into the character's place later. A Compact Reference that gains sibling pages
 gets its own index in its place (the Reference moves under it and keeps its id); `upgradeToCore: true` renames the
 Compact Reference to its Character Core (its text kept). New pages are announced in the index's "How to Use This Index"
@@ -448,10 +490,144 @@ id), an Archived character (`TARGET_ARCHIVED`: it is unarchived first, by the ow
 Blank gated fields on the existing character are a warning (`IDENTITY_DEBT`): ask the owner, then give the values in
 `identity` to fix them in the same proposal.
 
-**When the pack is not current.** The pack records the versions of Arkona's governance pages that the owner approved. If
-one has changed since, or the pack's rules were edited, nothing is computed and every call is refused with
-`PACK_NOT_CURRENT` until the owner checks the rules and approves again on the dashboard. Tell the person; there is nothing
-to retry.
+### Arkona owners
+
+**Use it for every owner page that is not a character.** On a project with the Arkona pack, make a polity, institution,
+military, culture, event, place, technology, magic, material, equipment, species (a race too), creature, religion, law,
+programme, education, ceremony, condition or inter-polity relationship with `arkona_create_owner`: ONE page, its
+template, name, home, sidebar (in template order), computed tags and links by Arkona's rules, verified after the write.
+`create_resource` followed by `set_facts` does part of this and none of the checks. The tool never rewrites a page that
+exists: edit those with `write_page` and `set_facts`.
+
+**The package.**
+
+- `type`: one of the types below. `kind` is for the race roster only (below).
+- `name`: the Subject, without a prefix; the page is `{name} - {descriptor}`, the `descriptor` defaulting to the
+  Reference Type. A sibling of the same name is refused (`OWNER_EXISTS`).
+- `home`: **required**, the index the page goes in, by name, id or path (`"Salahad / Salahad Polities"`). See below.
+- `status`: `"working"` (the default) drafts `[BWRK] …` under `[INDEX] Working`, to promote into its home later;
+  `"authoritative"` makes canon in its home (a canonical proposal).
+- `referenceType`, `scope` and `temporalScope`: **required** (`OWNER_FACTS_INCOMPLETE` names a missing one: ask the
+  owner). Subject is the name; Status, Continuity Type, Continuity and Inheritance follow from `status` and `continuity`
+  (`"Main"`, the default, or an alternate universe's name, which makes the page AU); `supersedes` is "None" unless given;
+  Last Major Revision is set when the job runs.
+- `specialistTag`: at most one of the type's specialist tags (a Working page carries `Working` and its primary tag only:
+  a specialist tag is held until promotion and reported).
+- `markdown`: `## Purpose` first, then its sections, then `## Source Boundaries` and `## Unresolved Material`. The
+  template's own placeholder headings you do not fill are left out.
+- `dependencies`: current Authoritative owners only (`DEPENDENCY_NOT_AUTHORITATIVE` for a Working or Archived page or an
+  index). `related`: any current pages.
+- `nation`, `promoteNation`, `createSubindex`, `createCharacterNavigation`, `homeOverride`: below. `operation_id` and
+  `project` as for every create.
+
+**The types and their homes.** `<Continent>` is a continent's name (`Salahad Polities`), `<Nation>` a nation's
+(`Menkhet Institutions`); a nation index is a nation's own `[INDEX]` in its continent's Polities index.
+
+| `type`                                         | Template                  | Homes                                                                                                                                          | Specialist tags                             |
+| ---------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
+| Polity                                         | AI Polity and Institution | `<Continent> Polities`; a nation index                                                                                                         | Government                                  |
+| Institution                                    | AI Polity and Institution | `<Continent> Institutions`; a nation index; `<Nation> Institutions`; `<Nation> Government & Administration`                                    | Government, Religion                        |
+| Military                                       | AI Polity and Institution | a nation index; `<Nation> Institutions`                                                                                                        |                                             |
+| Culture                                        | AI General Source         | `<Continent> Cultures`; `<Nation> Cultures`; `Arkonan Cultures`; `Divine Realm Cultures`                                                       | Language, Naming                            |
+| Event                                          | AI General Source         | `<Continent> Historical Events` or `Conflicts`; `Arkonan Historical Events` or `Conflicts`; `<Nation> Historical Events` or `<Nation> History` | Conflict                                    |
+| Place                                          | AI Place and Divine Realm | `<Continent> Regions`; `<Continent> Settlements & Locations`; `<Nation> Settlements & Locations`; a Divine Realm index                         | Continent, Region, Settlement, Divine Realm |
+| Technology, Magic, Material, Equipment         | AI Magic and Technology   | `<Continent> Unique Magic & Technologies`; `<Nation> Unique Magic & Technologies`; a nation index                                              | Equipment: Sacred Blade                     |
+| Species                                        | AI Creature and Species   | the Bestiary; with `kind`, the race roster (below)                                                                                             | a racial group: Racial Group                |
+| Creature                                       | AI Creature and Species   | the Bestiary                                                                                                                                   |                                             |
+| Religion                                       | AI General Source         | `<Continent> Religions`; `<Nation> Religions`; `Arkonan Religions`; a nation index                                                             |                                             |
+| Law, Programme, Education, Ceremony, Condition | AI General Source         | the matching continental or national index (`Laws`, `Programmes`, `Education`, `Ceremonies`, `Conditions`); a nation index                     |                                             |
+| Relationship (between polities)                | AI General Source         | `<Continent> Institutions`                                                                                                                     |                                             |
+
+**Homes.** The tool checks `home` against the type's homes. A home that does not fit is refused (`HOME_NOT_ALLOWED`),
+listing the allowed homes and up to five suitable indexes nearby: choose one. Only when the owner has decided on another
+home, give `homeOverride: { "reason": "…" }` with the owner's reason: the page goes there with a warning, and the reason
+is printed in the proposal. A home in the Working or Archived area is always refused (`HOME_IN_LIFECYCLE_AREA`). The tool
+never makes a category index (`<Continent> Laws`, say): if the right one is missing, tell the person.
+
+**Nations.** `nation` names the nation an owner belongs to. A nation that is still only a compact Reference in its
+Polities index (`[BSRC] Kingdom of Saba - Historical Polity Reference`, say) has no index to hold its owners, and the tool
+refuses (`NATION_NEEDS_INDEX`), describing the change. With `promoteNation: true` (and the nation as `home`) the same
+proposal makes `[INDEX] <Nation>` in that Polities index, moves the Reference into it (its id, links and tags kept) and
+places the new owner beside it. Moving canon makes the proposal canonical. `createSubindex: "<Nation> <Category>"` makes
+one national subindex for the owner (`"Kingdom of Saba Institutions"`, its name also as `home`), only for a category the
+type lives in; subindexes are never made otherwise.
+
+**The race roster.** A race, racial group or subrace is a `Species` with `kind`:
+
+- `racialGroup`: home Races of Arkona; the page is `<Group> - Racial Group Reference`.
+- `race`: home its group's `<Group> - Racial Group Reference` (or Races of Arkona for a race of no group); the page is
+  `<Race> - Core Information`.
+- `subrace`: home its race's `<Race> - Core Information`; the page is `<Subrace> - Subrace Reference`; give its
+  `referenceType`.
+
+Any other species, and every creature, goes in the Bestiary. A new race or racial group has no character navigation yet
+(`Characters / <Group> / <Race>`), so `arkona_create_character` cannot place its characters: the tool warns
+(`CHARACTER_NAVIGATION_MISSING`), and `createCharacterNavigation: true` adds its index in the same proposal. When the
+bridge has to guess the race's singular (`TAXONOMY_SINGULAR_GUESS`), the owner checks it on Repository Mappings before a
+character of that race can be placed.
+
+A compact polity in its continent's Polities index:
+
+```json
+{
+  "type": "Polity",
+  "name": "Kingdom of Saba",
+  "descriptor": "Historical Polity Reference",
+  "home": "Salahad Polities",
+  "referenceType": "Historical Polity Reference",
+  "scope": "A highland kingdom of southern Salahad",
+  "temporalScope": "3A 410 - 4A 12",
+  "markdown": "## Purpose\n\nThe reference for the Kingdom of Saba, a compact polity of southern Salahad.\n\n## Government\n\nA hereditary queenship advised by a council of terrace-holders.\n\n## Source Boundaries\n\nThe polity only; its institutions have their own pages.\n\n## Unresolved Material\n\nThe date of its founding is not settled.\n",
+  "dryRun": true,
+  "project": "test"
+}
+```
+
+An institution of a nation that is still a compact Reference, giving the nation its index in the same proposal:
+
+```json
+{
+  "type": "Institution",
+  "name": "Diwan of Tarim",
+  "descriptor": "Institution Reference",
+  "nation": "Sultanate of Tarim",
+  "promoteNation": true,
+  "home": "Sultanate of Tarim",
+  "status": "authoritative",
+  "referenceType": "Institution Reference",
+  "scope": "The council of the sultan's ministers",
+  "temporalScope": "4A 100 - 4A 400",
+  "markdown": "## Purpose\n\nThe reference for the Diwan, the council of the Sultanate of Tarim.\n\n## Membership\n\nThe sultan's ministers, sitting each new moon.\n\n## Source Boundaries\n\nThe council only.\n\n## Unresolved Material\n\nNone yet.\n",
+  "dryRun": true,
+  "project": "test"
+}
+```
+
+### Arkona relationships, art and the brief
+
+**A relationship of two existing characters: `arkona_create_relationship`.** `{ "a": "…", "b": "…", "scope": "…",
+"markdown": "…" }` makes `<a> & <b> - <label>` (`label` defaults to "Relationship") from AI Relationship under `a`'s
+index (`host: "b"` for b's), with both names as their indexes give them, Working or canon as its host is (or `status`), and adds it to both characters' Related
+Sources in the same proposal (a Working relationship is linked from a canon character only after promotion:
+`PARTNER_LINK_DEFERRED` says so). Both characters must exist (`CHARACTER_NOT_FOUND`: make the character first with
+`arkona_create_character`); a pair that already has a relationship page, under any label and in either order, is refused
+(`RELATIONSHIP_EXISTS`, naming it: edit that page with `write_page`). For a relationship of a character you are making
+now, give a `relationship` page in its `arkona_create_character` package instead.
+
+**Art for an existing character: `arkona_add_character_art`.** `{ "character": "…", "images": [{ "staged_id": "…",
+"label": "Outfit Reference - Ceremonial Robes", "interpretation": "…", "subfolder": "Outfits / Ceremonial Robes" }] }`.
+Each image goes in the character's asset folder (`Characters / <race path> / <name>`, with `Forms / <form>`,
+`Outfits / <outfit>` or `Details` subfolders, found or made when the job runs) as `<name> - <label>` (no file extension;
+numbered when the name is taken), and on the character's Art page with its label and interpretation: the Art page is
+made when it is missing, or extended under its "Reference Images" section, nothing else on it changed. Every image needs
+its `interpretation`, what it establishes (`BARE_IMAGE` otherwise). Sources: `staged_id` (staged with no destination),
+`upload_id` (from `prepare_image_upload`), or in ChatGPT the attached `file` for one image; an upload or file is staged
+first, even on a dry run, and its `staged_id` is in the answer.
+
+**Recall who a character is: `arkona_character_brief`.** `{ "character": "…" }` answers from the bridge's own records,
+free: the six identity fields, every page of their set with its Reference Type and Scope, their relationships, their Art
+pages with image counts, open audit findings and Unresolved Material, each with how fresh it is. `live: true` re-reads the
+identity fields (one read). Use it before you write about a character, and tell the person who is under discussion.
 
 ## Rename, move, delete and restore
 

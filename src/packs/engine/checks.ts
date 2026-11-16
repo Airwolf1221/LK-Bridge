@@ -28,7 +28,7 @@ import { KEEP_KINDS } from '../../markdown/model.js';
 import type { Registry } from '../../registry/index.js';
 import { cleanPrefixes, key as nameKey } from '../../registry/names.js';
 import type { Packs } from '../service.js';
-import { PACK_CHECKS, PACK_FILLER, PACK_RECORD_STORE } from './job.js';
+import { PACK_ART_FILLER, PACK_CHECKS, PACK_FILLER, PACK_RECORD_STORE } from './job.js';
 import { blockText, sectionsOf, textKey } from './text.js';
 
 type Obj = Record<string, unknown>;
@@ -40,6 +40,31 @@ export interface PackEngineDeps {
   readonly registry: Pick<Registry, 'forProject'>;
   /** Records the template a page was made from on its tree node (an upgraded Reference). */
   readonly setTemplate: (projectId: string, resourceId: string, templateId: string) => void;
+  /**
+   * v3 F3b (ADR 0052): a staged image as the image service has it now (settled), for the job's check that every image
+   * it places is still staged, still on the bridge's server and placed by nothing else.
+   */
+  readonly stagedImage?: (
+    projectId: string,
+    stagedId: string,
+  ) =>
+    | {
+        readonly staged: boolean;
+        readonly state: string;
+        readonly serverSha256: string | null;
+        readonly placementJobId: string | null;
+        readonly placementProposalId: string | null;
+        readonly discardJobId: string | null;
+      }
+    | undefined;
+  /** v3 F3b: the job a proposal ran as (null while it waits), for the staged images' check. */
+  readonly proposalJob?: (proposalId: string) => string | null;
+  /** v3 F3b (design 1.1a): records ONE Character taxonomy entry for a navigation index a package made. */
+  readonly addTaxonomyEntry?: (
+    projectId: string,
+    r: { readonly resourceId: string; readonly plural: string; readonly parentNodeId: string },
+    actor: string,
+  ) => Record<string, unknown>;
 }
 
 /** Registers the pack's checkers, filler and record handler with the engine. Returns an unregister. */
@@ -52,11 +77,25 @@ export function registerPackEngine(
     engine.registerAsyncChecker(PACK_CHECKS.absent, (ctx) => absentCheck(d, ctx)),
     engine.registerAsyncChecker(PACK_CHECKS.page, (ctx) => pageCheck(ctx)),
     engine.registerFiller(PACK_FILLER, fillBody),
+    engine.registerFiller(PACK_ART_FILLER, appendImages),
     engine.registerRecordHandler((job, _step, params) => {
       const r = ((params.body ?? {}) as { record?: Obj }).record ?? {};
       if (r.kind === 'set_template' && typeof r.resourceId === 'string' && typeof r.templateId === 'string') {
         d.setTemplate(job.projectId, r.resourceId, r.templateId);
         return { recorded: 'set_template', resourceId: r.resourceId, templateId: r.templateId };
+      }
+      if (
+        r.kind === 'taxonomy_entry' &&
+        typeof r.resourceId === 'string' &&
+        typeof r.plural === 'string' &&
+        typeof r.parentNodeId === 'string' &&
+        d.addTaxonomyEntry
+      ) {
+        return d.addTaxonomyEntry(
+          job.projectId,
+          { resourceId: r.resourceId, plural: r.plural, parentNodeId: r.parentNodeId },
+          job.approvedBy ?? job.principalId,
+        );
       }
       return { recorded: null };
     }, PACK_RECORD_STORE),
@@ -111,10 +150,15 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
     subject?: string;
     mode?: 'new' | 'extend';
     type?: string;
-    under?: { parentId: string; names: string[] }[];
+    under?: { parentId: string; names: string[]; prefixes?: string[]; code?: string }[];
+    reservations?: string[];
+    present?: { resourceId: string; parentId: string; name: string; code: string }[];
+    kind?: 'character' | 'owner' | 'relationship' | 'art';
+    images?: string[];
   };
   const subject = input.subject ?? '?';
   const what = (input.type ?? 'character').toLowerCase();
+  const kind = input.kind ?? 'character';
   if (input.reservation) {
     const r = d.packs.store.reserve(ctx.projectId, input.reservation, ctx.jobId);
     if (!r.ok) {
@@ -128,8 +172,66 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
       };
     }
   }
+  // v3 F3b (ADR 0052): more names reserved (an owner's name in its home, a nation index, a relationship's pair).
+  for (const key of input.reservations ?? []) {
+    const r = d.packs.store.reserve(ctx.projectId, key, ctx.jobId);
+    if (!r.ok) {
+      const code = key.startsWith('nation:')
+        ? 'NATION_INDEX_EXISTS'
+        : key.startsWith('relationship:')
+          ? 'RELATIONSHIP_EXISTS'
+          : 'OWNER_EXISTS';
+      return {
+        differences: [],
+        refusal: {
+          code,
+          message: `Another approved package is making “${subject}” (or the index it needs) now (job ${r.holder}). Nothing was written. Once it has finished, look at what it made before planning again.`,
+          details: { job: r.holder },
+        },
+      };
+    }
+  }
+  // v3 F3b: an existing page the job moves or relies on is still where the plan saw it.
+  for (const p of input.present ?? []) {
+    const r = await ctx.read('getResource', { path: { resourceId: p.resourceId } });
+    const body = (r.body ?? {}) as Obj;
+    const parent = str(body.parentId);
+    if (!r.exists || typeof body.deletedAt === 'string' || parent !== p.parentId) {
+      return {
+        differences: [],
+        refusal: {
+          code: p.code,
+          message: `${p.name} is no longer where this package was planned (${!r.exists ? 'it is gone' : `it is under ${parent ?? 'no parent'} now`}). Nothing was written: plan the package again.`,
+          details: { page: { id: p.resourceId, name: p.name }, expectedParent: p.parentId, parent },
+        },
+      };
+    }
+  }
+  // v3 F3b (design section 6): every staged image the job places is still staged, on the server, placed by nothing else.
+  for (const id of input.images ?? []) {
+    const row = d.stagedImage?.(ctx.projectId, id);
+    const mine = (pid: string | null) => pid === null || d.proposalJob?.(pid) === ctx.jobId;
+    const busy =
+      !row ||
+      !row.staged ||
+      row.state !== 'uploaded' ||
+      !row.serverSha256 ||
+      row.discardJobId !== null ||
+      (row.placementJobId !== null && row.placementJobId !== ctx.jobId) ||
+      !mine(row.placementProposalId);
+    if (busy)
+      return {
+        differences: [],
+        refusal: {
+          code: 'STAGED_IMAGE_BUSY',
+          message: `The staged image ${id} is no longer this package's to place (${!row ? 'it is gone' : !row.staged ? 'it was placed or discarded' : 'something else is placing or discarding it'}). Nothing was written.`,
+          details: { stagedId: id },
+        },
+      };
+  }
   for (const u of input.under ?? []) {
     const names = new Set(u.names.map((n) => nameKey(n)));
+    const prefixes = (u.prefixes ?? []).map((p) => nameKey(p));
     let cursor: string | undefined;
     for (let page = 0; page < 20; page++) {
       const r = await ctx.read('listResources', {
@@ -140,7 +242,16 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
         const raw = str(x.name) ?? '';
         if (typeof x.deletedAt === 'string') continue;
         const display = cleanPrefixes(raw).name;
-        if (names.has(nameKey(display))) {
+        if (names.has(nameKey(display)) || prefixes.some((p) => nameKey(display).startsWith(p))) {
+          if (u.code)
+            return {
+              differences: [],
+              refusal: {
+                code: u.code,
+                message: `${raw} appeared since this package was planned, so what it makes would be a duplicate. Nothing was written. Look at ${raw} and plan again.`,
+                details: { existing: { id: str(x.id), name: raw } },
+              },
+            };
           const extend = input.mode === 'extend';
           return {
             differences: [],
@@ -161,7 +272,7 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
       cursor = body.nextCursor;
     }
   }
-  if (input.mode === 'new' && input.subject) {
+  if (input.mode === 'new' && input.subject && kind === 'character') {
     // The tree, after the earlier job's re-read: a character of this name anywhere (an alias, a Canonical Display Name).
     const types = d.registry.forProject(ctx.projectId);
     let r;
@@ -331,7 +442,18 @@ export function fillBody(ctx: FillContext): FillResult {
   const planned = ctx.planned as LkBlock[];
   const current = ctx.current.blocks as LkBlock[];
   const keepKind = (b: unknown) => isObj(b) && typeof b.kind === 'string' && b.kind in KEEP_KINDS;
-  if (!current.some(keepKind)) return { blocks: planned, note: { kept: 0 } };
+  // v3 F3b (ADR 0052): the template copy's own headings the plan does not fill are left out (design 1.4: placeholder
+  // headings are removed, not left empty); the note names them.
+  const plannedTitles = new Set(
+    sectionsOf(planned)
+      .filter((x) => x.heading)
+      .map((x) => textKey(x.title)),
+  );
+  const dropped = sectionsOf(current)
+    .filter((x) => x.heading && !plannedTitles.has(textKey(x.title)) && !x.blocks.some(keepKind))
+    .map((x) => x.title);
+  const droppedNote = dropped.length ? { droppedHeadings: dropped } : {};
+  if (!current.some(keepKind)) return { blocks: planned, note: { kept: 0, ...droppedNote } };
   const input = (ctx.input ?? {}) as { keepSections?: string[] };
   const out = [...planned];
   const plannedSections = () => sectionsOf(out);
@@ -365,7 +487,46 @@ export function fillBody(ctx: FillContext): FillResult {
     note: {
       kept,
       ...(keptSections.length ? { keptSections } : {}),
+      ...droppedNote,
       what: current.filter(keepKind).map((b) => blockText(b) || String((b as Obj).kind)),
     },
   };
+}
+
+/**
+ * v3 F3b (ADR 0052; design section 3): the Art page filler. The planned blocks are the images section's heading, then
+ * per image its label (level 3), the image block (its address bound in the job) and its interpretation. On the page as
+ * it is now: appended at the end of its images section (after any image already there), or, when it has none, the
+ * section with its heading placed before the first boundary section (Source Boundaries, Unresolved Material), else at
+ * the end. Nothing else on the page is touched, so every `unsupported` block stays where it is.
+ */
+export function appendImages(ctx: FillContext): FillResult {
+  const input = (ctx.input ?? {}) as { section?: string; boundaries?: string[] };
+  const section = input.section ?? 'Reference Images';
+  const boundaries = (input.boundaries ?? []).map(textKey);
+  const current = [...(ctx.current.blocks as LkBlock[])];
+  const planned = ctx.planned as LkBlock[];
+  const head = planned[0];
+  const isHead =
+    head !== undefined && (head as Obj).kind === 'heading' && textKey(blockText(head)) === textKey(section);
+  const add = isHead ? planned.slice(1) : planned;
+  const secs = sectionsOf(current);
+  const offset = (upTo: number) => {
+    let n = 0;
+    for (let i = 0; i < upTo; i++) n += (secs[i]!.heading ? 1 : 0) + secs[i]!.blocks.length;
+    return n;
+  };
+  const at = secs.findIndex((x) => x.heading && textKey(x.title) === textKey(section));
+  if (at >= 0) {
+    const level = secs[at]!.level;
+    let end = at + 1;
+    while (end < secs.length && secs[end]!.heading && secs[end]!.level > level) end++;
+    current.splice(offset(end), 0, ...add);
+    return { blocks: current, note: { appendedTo: secs[at]!.title, blocks: add.length } };
+  }
+  const withHead = isHead ? planned : planned;
+  const b = secs.findIndex((x) => x.heading && boundaries.includes(textKey(x.title)));
+  if (b >= 0) current.splice(offset(b), 0, ...withHead);
+  else current.push(...withHead);
+  return { blocks: current, note: { madeSection: section, blocks: withHead.length } };
 }

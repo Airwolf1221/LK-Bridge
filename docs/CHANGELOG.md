@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased: v3 F3b (16 November 2026): Arkona pack: owners, relationships, art and the brief
+
+[ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md) (Proposed), carrying out the owner-approved
+[F3b design](design/F3b-owner-tools.md) (now with an "as built" section). No migration: the additions live in the
+pack's rules, which reach the stored Arkona pack as a new version for the owner to approve. Nothing was run against a
+live system: every test uses the mock LegendKeeper and fixtures built from the shapes the design quotes.
+
+- **`arkona_create_owner`**: one non-character owner page by Arkona's rules, typed by the pack's new **owner table**
+  (19 types, from Polity to Condition and the inter-polity Relationship: template, primary and specialist tags, allowed
+  homes). `home` is required and checked: a home the type does not live in is refused with the allowed homes and up to
+  five suitable indexes nearby; `homeOverride` with the owner's reason places it anyway, the reason in the proposal.
+  Reference Type, Scope and Temporal Scope are required (ask the owner). The template's unfilled placeholder headings
+  are left out.
+- **Nations.** A nation that is only a compact Reference is refused (`NATION_NEEDS_INDEX`) until `promoteNation: true`
+  makes its `[INDEX]`, moves the Reference in (id kept) and places the owner beside it, in one canonical proposal;
+  `createSubindex` makes one national subindex as its own step.
+- **The race roster** (the owner's ruling): a race, racial group or subrace (`type: "Species"` with `kind`) lives on
+  Races of Arkona and its racial group and race pages; any other species and every creature in the Bestiary.
+  `createCharacterNavigation` adds a new race's Characters index and its taxonomy entry so characters can be placed.
+- **`arkona_create_relationship`**: a joint relationship page for two existing characters, added to both Related
+  Sources in one proposal; a missing character or an existing pair is refused, naming what exists.
+- **`arkona_add_character_art`**: art for an existing character (staged id, prepared upload or ChatGPT file), placed in
+  its folders (found or made when the job runs) under semantic names, on its Art page, made or extended under
+  "Reference Images" with each image's interpretation.
+- **`arkona_character_brief`** (read): who a character is, from the bridge's own records: free, or one read with
+  `live: true`.
+- **The AU ruling** for every pack tool: an AU page carries `AU` in place of `CANON` (`arkona_create_character`
+  changed with it); recorded in the pack with its date.
+- **The staged-image takeover**: a package that names an image whose only pending activity is its own placement
+  proposal (what `upload_image` with a destination does at scope `propose`) withdraws that proposal ("superseded by
+  package prop_…") and places the image itself; anything else is still `STAGED_IMAGE_BUSY`, now with the hint to stage
+  with no destination.
+- **Governance**: the approval pins six sections of Source Formatting and the Tagging Standard by digest and is refused
+  when one is missing; drift still fails closed, and now names the section. The job re-checks before it writes: a
+  same-named sibling, an existing relationship, a nation index made meanwhile, a moved Reference, a staged image taken.
+- **Last Major Revision by ADR 0051's rule** (F3c, merged in): every pack tool that changes an existing page
+  (`arkona_create_character` with `target`, a relationship's Related Sources, an Art page extended, `promoteNation`'s
+  move) dates it only for a major revision by the owner's rule, and takes `lastMajorRevision: "auto" | "set" | "skip"`;
+  pages a package makes are always dated. The preview, the answer and the proposal say which applied and why.
+- **The Packs page** shows the owner table, the AU rule and rulings, and each source's pinned sections with their state.
+- **Docs**: the agents' guide's pack section is now "Setting packs (Arkona)", a part per tool (F3a's name still leads to
+  the character part), with tested owner examples; tools.md (costs measured against the mock), packs.md, dashboard.md;
+  four new evaluation scenarios (35 to 38, marked `pack: "arkona"`).
+
 ## Unreleased: v3 F3c (16 November 2026): Last Major Revision only for real revisions, same-day ties, image restore without the staging folder
 
 [ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) (Proposed; the owner approves decision 1's
