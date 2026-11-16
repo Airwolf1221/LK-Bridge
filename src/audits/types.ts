@@ -53,7 +53,9 @@ export type FixKind =
   /** D1.1's `sync_timeline_event`, through the chronology module's own "Propose a fix". */
   | 'chronology_sync'
   /** v2 E5 hotfix: the age's Main count set to its table's row count, through the chronology module likewise. */
-  | 'chronology_count';
+  | 'chronology_count'
+  /** v2 E6 (ADR 0048): an event without a table row deleted (only the event), through the chronology module likewise. */
+  | 'chronology_orphan';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -61,6 +63,11 @@ export interface FixSpec {
   readonly args: Readonly<Record<string, unknown>>;
   /** One line for the button's tooltip and the proposal's title. */
   readonly summary: string;
+  /**
+   * v2 E6 (ADR 0048): the fix is not one click: the owner confirms what it changes first (a date mismatch whose repair
+   * turns a range into a single date, or the reverse: `shapeChange` says so in plain words).
+   */
+  readonly confirm?: { readonly shapeChange: string };
 }
 
 export interface CodeInfo {
@@ -336,6 +343,7 @@ export const CODES = {
     category: 'chronology',
     severity: 'warning',
     title: 'A timeline event has no table row',
+    fix: 'chronology_orphan',
   },
   chronology_date_mismatch: {
     category: 'chronology',

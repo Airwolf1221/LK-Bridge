@@ -11,10 +11,12 @@ import {
   DEFAULT_DATE_STYLE,
   DEFAULT_KCY_STYLE,
   parseKcyCell,
+  QualifiedReader,
   type DateParser,
   type DateTextStyle,
   type KcyStyle,
   type ParsedDate,
+  type QualifiedReading,
 } from '../calendar/index.js';
 import { CalendarError } from '../calendar/errors.js';
 
@@ -158,8 +160,21 @@ export interface AgeRow {
   readonly descriptionRuns: readonly Obj[];
   readonly dateText: string;
   readonly kcyText: string;
-  /** The Date cell read by the calendar engine, or why it could not be. */
+  /**
+   * The Date cell read by the calendar engine in one of the owner's plain forms, or null. Only this orders rows, places
+   * new ones and is written back: a qualified cell is never rewritten (ADR 0048).
+   */
   readonly date: ParsedDate | null;
+  /**
+   * v2 E6 (ADR 0048): a qualified Date cell (`c. 4A 563; exact date unresolved`) read by its anchor, when the plain
+   * forms cannot read it and the reading is certain; null otherwise.
+   */
+  readonly reading: QualifiedReading | null;
+  /**
+   * The date the row's timeline event has: the plain date, or the qualified reading's anchor. What pairing, the
+   * timeline repair and the KCY check use; null when neither reads (`dateError` says why).
+   */
+  readonly eventDate: ParsedDate | null;
   readonly dateError: { readonly code: string; readonly message: string } | null;
   readonly row: Row;
 }
@@ -180,16 +195,28 @@ export function readAgeTable(
   const found = findTable(blocks, { event: columns.event, date: columns.date, kcy: columns.kcy });
   if (!found) return null;
   const c = found.columns;
+  let qualified: QualifiedReader | null = null;
   const rows = found.table.rows.map((row, index): AgeRow => {
     const cell = (i: number) => row.cells[i];
     const dateText = cell(c.date)?.text ?? '';
     let date: ParsedDate | null = null;
+    let reading: QualifiedReading | null = null;
     let dateError: AgeRow['dateError'] = null;
     try {
       date = parser.parse(dateText, style);
     } catch (e) {
-      if (e instanceof CalendarError) dateError = { code: e.code, message: e.message };
-      else throw e;
+      if (!(e instanceof CalendarError)) throw e;
+      // v2 E6 (ADR 0048): a qualified date, read by its anchor when the reading is certain.
+      qualified ??= new QualifiedReader(parser, style);
+      const q = qualified.read(dateText);
+      if (q.ok) reading = q.reading;
+      // The plain parser's own reason when it is more precise (`Unknown` alone, an empty cell); the qualified reader's
+      // otherwise (it says why a qualified cell stays unread: a relative offset, an ambiguous bound, …).
+      else
+        dateError =
+          (q.code === 'DATE_NO_ANCHOR' || q.code === 'DATE_EMPTY') && e.code !== 'DATE_UNRECOGNISED'
+            ? { code: e.code, message: e.message }
+            : { code: q.code, message: q.message };
     }
     return {
       id: row.id,
@@ -199,6 +226,8 @@ export function readAgeTable(
       dateText,
       kcyText: cell(c.kcy)?.text ?? '',
       date,
+      reading,
+      eventDate: date ?? reading?.date ?? null,
       dateError,
       row,
     };

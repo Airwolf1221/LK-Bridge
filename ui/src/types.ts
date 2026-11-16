@@ -555,6 +555,8 @@ export interface MarkdownDiff {
 export interface ProposalOp {
   index: number;
   op: string;
+  /** v2 E6 (ADR 0048): the operation in plain words (page, document, entity), or the ids. */
+  label?: string;
   opKind: string;
   params: unknown;
   targetExists: boolean | null;
@@ -1262,6 +1264,28 @@ export interface ChronologyFinding {
   detail?: Record<string, unknown>;
 }
 
+/** One age as the last check saw it (v2 E6, ADR 0048: how its dates were read and how each pair was made). */
+export interface ChronologyAgeSummary {
+  age: string;
+  rows: number;
+  events: number;
+  count: string | null;
+  /** Rows read by their qualified date's anchor, rows whose date stays unreadable, rows marked table-only. */
+  dates?: { qualified: number; unreadable: number; tableOnly: number };
+  /** Table-only marks that no longer hold (the row changed or is gone): the row is back in the check. */
+  tableOnlyLapsed?: { rowId: string; date: string }[];
+  /** How many pairs each way made (`link`, `date+name`, `date`, `mismatch:start+shape`, …). */
+  pairedBy?: Record<string, number>;
+  pairs?: {
+    rowId: string | null;
+    eventId: string;
+    by: string;
+    date: string;
+    mismatch?: boolean;
+    qualified?: boolean;
+  }[];
+}
+
 export interface ChronologyCheckRun {
   id: number;
   projectId: string;
@@ -1270,9 +1294,27 @@ export interface ChronologyCheckRun {
   requests: number;
   summary: string | null;
   findings: ChronologyFinding[];
+  ages?: ChronologyAgeSummary[];
   error: string | null;
   startedAt: number;
   finishedAt: number | null;
+}
+
+/** v2 E6 (ADR 0048): a row the owner never wants on the timeline (`GET /chronology/table-only`). */
+export interface ChronologyTableOnlyMark {
+  tableDocumentId: string;
+  rowId: string;
+  age: string;
+  textsHash: string;
+  texts: { description: string; date: string; kcy: string };
+  reason: string | null;
+  markedBy: string;
+  markedAt: number;
+}
+
+export interface ChronologyTableOnlyResponse {
+  project: ProjectRef;
+  marks: ChronologyTableOnlyMark[];
 }
 
 /** `POST /chronology/propose-fix` (v2 D1.1): the proposal made for one finding, or why there is nothing to propose. */
@@ -1718,6 +1760,8 @@ export interface AuditFixView {
   kind: string;
   summary: string;
   args: Record<string, unknown>;
+  /** v2 E6 (ADR 0048): the owner confirms what the fix changes first (`range → single day`). */
+  confirm?: { shapeChange: string };
 }
 
 export interface AuditSourceView {

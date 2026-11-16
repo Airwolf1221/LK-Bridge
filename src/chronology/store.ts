@@ -3,9 +3,64 @@
  * chronology change (for resuming one that stopped part-way), the links between the bridge's own rows and events, and
  * the chronology check's runs. Synchronous, like every other store.
  */
+import { createHash } from 'node:crypto';
 import type { Db } from '../db/open.js';
 
 type Obj = Record<string, unknown>;
+
+/** A row's three cells as the chronology compares them (spaces collapsed; nothing else changed). */
+export interface RowCells {
+  readonly description: string;
+  readonly date: string;
+  readonly kcy: string;
+}
+
+const cellText = (s: string) => s.normalize('NFKC').replace(/\s+/g, ' ').trim();
+
+/** v2 E6 (ADR 0048): the fingerprint of a row's cells: a table-only mark holds while it is unchanged. */
+export function rowCellsHash(t: RowCells): string {
+  return createHash('sha256')
+    .update(JSON.stringify([cellText(t.description), cellText(t.date), cellText(t.kcy)]))
+    .digest('hex')
+    .slice(0, 32);
+}
+
+/** v2 E6 (ADR 0048): a row the owner never wants on the timeline. */
+export interface TableOnlyMark {
+  readonly tableDocumentId: string;
+  readonly rowId: string;
+  readonly age: string;
+  readonly textsHash: string;
+  readonly texts: RowCells;
+  readonly reason: string | null;
+  readonly markedBy: string;
+  readonly markedAt: number;
+}
+
+/**
+ * The marks that hold for a table as it is now: by row id, those whose row is still there with the cells it had when
+ * marked. A mark whose row changed or is gone is `lapsed` (the row is back in the check).
+ */
+export function currentTableOnly(
+  rows: readonly {
+    readonly id: string | null;
+    readonly description: string;
+    readonly dateText: string;
+    readonly kcyText: string;
+  }[],
+  marks: readonly TableOnlyMark[],
+): { readonly current: ReadonlySet<string>; readonly lapsed: readonly TableOnlyMark[] } {
+  const byId = new Map(rows.filter((r) => r.id !== null).map((r) => [r.id!, r]));
+  const current = new Set<string>();
+  const lapsed: TableOnlyMark[] = [];
+  for (const m of marks) {
+    const r = byId.get(m.rowId);
+    if (r && rowCellsHash({ description: r.description, date: r.dateText, kcy: r.kcyText }) === m.textsHash)
+      current.add(m.rowId);
+    else lapsed.push(m);
+  }
+  return { current, lapsed };
+}
 const json = (v: unknown) => JSON.stringify(v ?? null);
 const parse = <T>(s: string | null | undefined, fallback: T): T => {
   if (s === null || s === undefined) return fallback;
@@ -50,6 +105,27 @@ export type TargetWrite =
       readonly resourceId: string;
       readonly documentId: string;
       readonly rows: number;
+    }
+  | {
+      /**
+       * v2 E6 (ADR 0048). Not a write: the age table must still have no row that could be this event's own (the same
+       * date, the same start, or its name), other than the rows in `ignore` as they were (paired elsewhere or
+       * table-only when the delete was planned). The compare-and-swap of deleting an event without a row.
+       */
+      readonly kind: 'row.orphan';
+      readonly age: string;
+      readonly resourceId: string;
+      readonly documentId: string;
+      readonly event: {
+        readonly start: number;
+        readonly end: number | null;
+        readonly detail: 1 | 2 | 3;
+        readonly name: string;
+      };
+      readonly ignore: readonly {
+        readonly rowId: string;
+        readonly texts: { readonly description: string; readonly date: string; readonly kcy: string };
+      }[];
     }
   | {
       readonly kind: 'row.insert';
@@ -247,6 +323,28 @@ const checkOf = (r: CheckRow): CheckRun => ({
   error: r.error,
   startedAt: r.started_at,
   finishedAt: r.finished_at,
+});
+
+interface TableOnlyRow {
+  table_document_id: string;
+  row_id: string;
+  age: string;
+  texts_hash: string;
+  texts: string;
+  reason: string | null;
+  marked_by: string;
+  marked_at: number;
+}
+
+const tableOnlyOf = (r: TableOnlyRow): TableOnlyMark => ({
+  tableDocumentId: r.table_document_id,
+  rowId: r.row_id,
+  age: r.age,
+  textsHash: r.texts_hash,
+  texts: parse<RowCells>(r.texts, { description: '', date: '', kcy: '' }),
+  reason: r.reason,
+  markedBy: r.marked_by,
+  markedAt: r.marked_at,
 });
 
 export interface ChronologyLink {
@@ -464,6 +562,78 @@ export class ChronologyStore {
       eventId: r.event_id,
       age: r.age,
     }));
+  }
+
+  // ------------------------------------------------------------------------------------------ table-only marks
+
+  /** v2 E6 (ADR 0048): marks a row table-only, with its cells as they are now (replacing an earlier mark). */
+  markTableOnly(
+    projectId: string,
+    m: {
+      readonly tableDocumentId: string;
+      readonly rowId: string;
+      readonly age: string;
+      readonly texts: RowCells;
+      readonly reason: string | null;
+      readonly by: string;
+    },
+  ): TableOnlyMark {
+    this.db
+      .prepare(
+        `INSERT INTO chronology_table_only (project_id, table_document_id, row_id, age, texts_hash, texts, reason, marked_by, marked_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (project_id, table_document_id, row_id) DO UPDATE SET age = excluded.age,
+           texts_hash = excluded.texts_hash, texts = excluded.texts, reason = excluded.reason,
+           marked_by = excluded.marked_by, marked_at = excluded.marked_at`,
+      )
+      .run(
+        projectId,
+        m.tableDocumentId,
+        m.rowId,
+        m.age,
+        rowCellsHash(m.texts),
+        json(m.texts),
+        m.reason,
+        m.by,
+        this.now(),
+      );
+    return this.tableOnlyMark(projectId, m.tableDocumentId, m.rowId)!;
+  }
+
+  /** Clears a row's table-only mark; returns the mark it removed, or null. */
+  unmarkTableOnly(projectId: string, tableDocumentId: string, rowId: string): TableOnlyMark | null {
+    const before = this.tableOnlyMark(projectId, tableDocumentId, rowId);
+    this.db
+      .prepare(
+        'DELETE FROM chronology_table_only WHERE project_id = ? AND table_document_id = ? AND row_id = ?',
+      )
+      .run(projectId, tableDocumentId, rowId);
+    return before;
+  }
+
+  tableOnlyMark(projectId: string, tableDocumentId: string, rowId: string): TableOnlyMark | null {
+    const r = this.db
+      .prepare(
+        'SELECT * FROM chronology_table_only WHERE project_id = ? AND table_document_id = ? AND row_id = ?',
+      )
+      .get(projectId, tableDocumentId, rowId) as TableOnlyRow | undefined;
+    return r ? tableOnlyOf(r) : null;
+  }
+
+  /** Every table-only mark of a project (or of one table), oldest first. */
+  tableOnly(projectId: string, tableDocumentId?: string): TableOnlyMark[] {
+    const rows = (
+      tableDocumentId
+        ? this.db
+            .prepare(
+              'SELECT * FROM chronology_table_only WHERE project_id = ? AND table_document_id = ? ORDER BY marked_at, row_id',
+            )
+            .all(projectId, tableDocumentId)
+        : this.db
+            .prepare('SELECT * FROM chronology_table_only WHERE project_id = ? ORDER BY marked_at, row_id')
+            .all(projectId)
+    ) as TableOnlyRow[];
+    return rows.map(tableOnlyOf);
   }
 
   // ------------------------------------------------------------------------------------------ checks

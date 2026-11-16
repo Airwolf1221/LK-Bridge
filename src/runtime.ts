@@ -343,6 +343,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }
   };
   policy.proposals.setPageNames(pageName);
+  // v2 E6 (ADR 0048): a low-level proposal names the document it touches, from the tree.
+  policy.proposals.setDocumentNames((projectId, resourceId, documentId) => {
+    try {
+      const doc = tree.queries.node(projectId, resourceId).data?.documents.find((d) => d.id === documentId);
+      return doc?.name ?? null;
+    } catch {
+      return null;
+    }
+  });
   // Read live, so a rule the owner changes on the dashboard applies to the next write.
   const projectStore = new ProjectStore(o.db, () => (o.clock ?? systemClock).now());
   // v2 C2c (ADR 0035): the lifecycle guard beside it: lifecycle changes only through the lifecycle tools (Part 3).

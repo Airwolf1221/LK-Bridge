@@ -126,7 +126,13 @@ interface FormDef {
   readonly segments: readonly Segment[];
   strict?: RegExp;
   loose?: RegExp;
+  /** v2 E6 (ADR 0048): a single date (day, month, year) at the start, and at the end, of a longer text. */
+  lead?: RegExp;
+  tail?: RegExp;
 }
+
+/** The single-date forms: what a qualified cell's anchor, or one end of its range, is read as (ADR 0048). */
+const SINGLE_FORMS: ReadonlySet<DateForm> = new Set(['day', 'month', 'year']);
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const alt = (names: readonly string[]) =>
@@ -207,9 +213,66 @@ export class DateParser {
     add('month-range-full', [one(month), R, one(month, 2)]);
     add('year-range', [one(year), R, one(year, 2)]);
     for (const f of this.forms) {
-      f.strict = new RegExp(`^${this.source(f.segments, false)}$`, 'iu');
+      const src = this.source(f.segments, false);
+      f.strict = new RegExp(`^${src}$`, 'iu');
       f.loose = new RegExp(`^${this.source(f.segments, true)}$`, 'iu');
+      if (SINGLE_FORMS.has(f.form)) {
+        f.lead = new RegExp(`^(?:${src})`, 'iu');
+        f.tail = new RegExp(`(?:${src})$`, 'iu');
+      }
     }
+  }
+
+  /**
+   * v2 E6 (ADR 0048): the longest single date (a day, a month or a year) that a text begins with, read strictly, and
+   * the text after it; null when the text does not begin with one. The date must end at a word boundary, so `4A 56`
+   * is never read out of `4A 563`. Used only by the qualified reader (qualified.ts): a strict cell is read by `parse`.
+   */
+  leadingDate(
+    text: string,
+    style: DateTextStyle = DEFAULT_DATE_STYLE,
+  ): { readonly date: ParsedDate; readonly match: string; readonly rest: string } | null {
+    return this.edgeDate(text, style, 'lead');
+  }
+
+  /** v2 E6 (ADR 0048): the longest single date a text ends with, read strictly, and the text before it; or null. */
+  trailingDate(
+    text: string,
+    style: DateTextStyle = DEFAULT_DATE_STYLE,
+  ): { readonly date: ParsedDate; readonly match: string; readonly rest: string } | null {
+    return this.edgeDate(text, style, 'tail');
+  }
+
+  private edgeDate(
+    text: string,
+    style: DateTextStyle,
+    edge: 'lead' | 'tail',
+  ): { date: ParsedDate; match: string; rest: string } | null {
+    const t = text.normalize('NFKC').replace(/\s+/g, ' ').trim();
+    let best: { date: ParsedDate; match: string; rest: string } | null = null;
+    for (const f of this.forms) {
+      const re = f[edge];
+      if (!re) continue;
+      const m = re.exec(t);
+      if (!m) continue;
+      // A year written with grouping commas may swallow a comma that ends the date (`4A 624, departure`).
+      const raw = edge === 'lead' ? m[0].replace(/[\s,]+$/, '') : m[0].replace(/^[\s,]+/, '');
+      const at = edge === 'lead' ? 0 : t.length - raw.length;
+      const before = t.slice(0, at);
+      const after = t.slice(at + raw.length);
+      if (edge === 'lead' && /^[\p{L}\p{N}]/u.test(after)) continue;
+      if (edge === 'tail' && /[\p{L}\p{N}]$/u.test(before)) continue;
+      let date: ParsedDate;
+      try {
+        date = this.parse(raw, style);
+      } catch {
+        continue;
+      }
+      if (date.end !== null) continue;
+      if (!best || raw.length > best.match.length)
+        best = { date, match: raw, rest: edge === 'lead' ? after : before };
+    }
+    return best;
   }
 
   /** The forms this calendar accepts, each with an example built from the calendar (for refusals and the guide). */

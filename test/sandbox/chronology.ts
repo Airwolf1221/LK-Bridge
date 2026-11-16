@@ -20,7 +20,13 @@
  * Two date styles (ADR 0039): LegendKeeper's, for everything compared with its event text; the table's, for the Date and
  * KCY cells. The report says what the owner sends back; anything it finds becomes a follow-up.
  */
-import { createCalendar, formatKcy, parseKcyCell, type Calendar } from '../../src/calendar/index.js';
+import {
+  createCalendar,
+  describeReading,
+  formatKcy,
+  parseKcyCell,
+  type Calendar,
+} from '../../src/calendar/index.js';
 import {
   AGE_COLUMNS,
   MAIN_COLUMNS,
@@ -184,6 +190,7 @@ export async function runChronologySandbox(o: {
   out('## 1. Every row of every age table');
   const dateShapes = new Map<string, number>();
   const kcyShapes = new Map<string, number>();
+  const qualified: string[] = [];
   for (const t of tables) {
     let ok = 0;
     for (const r of t.table.rows) {
@@ -192,6 +199,11 @@ export async function runChronologySandbox(o: {
       const ks = cellShape(r.kcyText);
       kcyShapes.set(ks, (kcyShapes.get(ks) ?? 0) + 1);
       const where = `${t.name} row ${r.index + 1}`;
+      // v2 E6 (ADR 0048): a qualified date is read by its anchor, on purpose: not an engine failure.
+      if (!r.date && r.reading) {
+        qualified.push(`${where}: ${JSON.stringify(r.dateText)} read as ${describeReading(r.reading)}`);
+        continue;
+      }
       if (!r.date) {
         fail(
           `${where}: Date ${JSON.stringify(r.dateText)} does not parse (${r.dateError?.code}: ${r.dateError?.message})`,
@@ -230,6 +242,9 @@ export async function runChronologySandbox(o: {
       .map(([s, n]) => `${JSON.stringify(s)} ×${n}`)
       .join(', ')}`,
   );
+  // v2 E6 (ADR 0048): qualified dates, read by their anchor (the table is never rewritten).
+  out(`- Qualified dates read by their anchor: ${qualified.length}`);
+  for (const q of qualified.slice(0, 100)) out(`  - ${q}`);
 
   // 2. Every event.
   out();
@@ -323,7 +338,7 @@ export async function runChronologySandbox(o: {
     for (const m of paired.mismatches)
       drifts.push(
         `${where}: row ${m.row.index + 1} ${JSON.stringify(m.row.dateText)} (${JSON.stringify(m.row.description.slice(0, 60))}) says ` +
-          `${m.row.date!.end !== null ? 'a range' : 'one date'} but its event ${JSON.stringify(m.event.name.slice(0, 60))} is ` +
+          `${m.row.eventDate!.end !== null ? 'a range' : 'one date'} but its event ${JSON.stringify(m.event.name.slice(0, 60))} is ` +
           `${m.event.end !== null ? 'a range' : 'one date'} (${eventText(m.event)}; paired by ${m.by}).`,
       );
     for (const r of paired.rows)

@@ -142,6 +142,11 @@ export function buildJob(o: {
         pushTableOp(w.documentId, { op: 'rows', count: w.rows });
         break;
       }
+      case 'row.orphan': {
+        // v2 E6 (ADR 0048): not a write: the table is locked and must still have no row for the event to delete.
+        pushTableOp(w.documentId, { op: 'orphan', event: w.event, ignore: w.ignore });
+        break;
+      }
       case 'row.insert': {
         const r = o.ctx.rows[w.rowId]!;
         const key = `row:${w.rowId}`;

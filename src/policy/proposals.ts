@@ -63,6 +63,15 @@ import { markdownDiff, type MarkdownDiff } from '../pages/diff.js';
 import { canonicalJson, hashJson, issueApprovalToken } from './approval.js';
 import { buildPageSummary, type PageSummaryEntry } from './page-summary.js';
 import {
+  describeNamed,
+  nameFromState,
+  nameOperation,
+  NO_NAMES,
+  pagePart,
+  type NameLookups,
+  type OpNames,
+} from './op-names.js';
+import {
   PAGE_SCOPE_LIMIT,
   compareScope,
   implicitSubtrees,
@@ -130,6 +139,12 @@ interface Snapshot {
 }
 
 export interface ProposalOpDetail extends ProposalOpView {
+  /**
+   * v2 E6 (ADR 0048): the operation in plain words (`deleteEvent: event “X” (date) in “Doc” on “Page” (ids)`), from
+   * its captured pre-image and the tree's names; the ids alone when nothing could be named. Absent for the bridge's
+   * own check and verify steps.
+   */
+  readonly label?: string;
   /** The target as captured (capped; `preStateTruncated` says so). */
   readonly preState: unknown;
   readonly preStateTruncated: boolean;
@@ -307,25 +322,16 @@ export function readerTarget(opId: string, params: OpParams): CapturedTarget | n
   return { op: reader.op, path, ...(selectId !== undefined ? { selectId } : {}) };
 }
 
-function describe(opId: string, params: OpParams): string {
-  const p = params.path ?? {};
-  const id =
-    p.blockId ??
-    p.rowId ??
-    p.propertyId ??
-    p.laneId ??
-    p.eventId ??
-    p.featureId ??
-    p.documentId ??
-    p.resourceId;
-  // C2d (ADR 0037): a row, property or block id is unique only within its page, so it is named with the page.
-  const on = id && p.resourceId && id !== p.resourceId ? `${p.resourceId} › ${id}` : id;
-  const name = (params.body as { name?: unknown } | undefined)?.name;
-  return `${opId}${on ? ` on ${on}` : ''}${typeof name === 'string' ? ` ("${name.slice(0, 40)}")` : ''}`;
-}
-
-export function proposalSummary(ops: readonly { op: string; params: OpParams }[]): string {
-  const parts = ops.map((o) => describe(o.op, o.params));
+/**
+ * The summary of a proposal: each operation in plain words. v2 E6 (ADR 0048): with `names` (a low-level proposal's
+ * page, document and entity, found at capture), `deleteEvent: event “X” (date) in “Doc” on “Page” (ids)`; without, the
+ * ids as before.
+ */
+export function proposalSummary(
+  ops: readonly { op: string; params: OpParams }[],
+  names?: readonly (OpNames | null)[],
+): string {
+  const parts = ops.map((o, i) => describeNamed(o.op, o.params, names?.[i] ?? NO_NAMES));
   const text =
     ops.length === 1 ? `Proposed ${parts[0]}` : `Proposed ${ops.length} operations: ${parts.join('; ')}`;
   return text.length > SUMMARY_MAX ? `${text.slice(0, SUMMARY_MAX - 1)}…` : text;
@@ -564,16 +570,31 @@ export class ProposalService implements ProposalSink {
     }
     const pageScope: PageScope | null = scopeEntries.length > 0 ? { subtrees: scopeEntries } : null;
 
+    // 2c. v2 E6 (ADR 0048): a low-level proposal (lk_api_write, lk_api_batch) names what each operation touches: the
+    // page and document (the tree), the entity (the pre-image just captured; a sidebar row's property by one cheap
+    // read). A high-level tool gives its own summary and pays nothing here. A name that cannot be found is left out.
+    const lowLevel = !meta.extras?.summary && !meta.extras?.operation && !meta.extras?.operations;
+    const names: (OpNames | null)[] = lowLevel
+      ? await this.nameOps(engine, meta, readOrigin, ops, captured)
+      : ops.map(() => null);
+
     // 3. Store the ordered operations as one proposal.
     const id = newProposalId();
     const now = this.now();
-    const summary = meta.extras?.summary ? meta.extras.summary.slice(0, SUMMARY_MAX) : proposalSummary(ops);
+    const summary = meta.extras?.summary
+      ? meta.extras.summary.slice(0, SUMMARY_MAX)
+      : proposalSummary(ops, names);
     const origin = sanitiseOrigin(meta.origin);
     const operation = meta.extras?.operation ? JSON.stringify(capOperation(meta.extras.operation)) : null;
     // v2 C2a: the list of high-level operations, the page-level summary, canonical approval and the job's shape.
     const opList = meta.extras?.operations ?? (meta.extras?.operation ? [meta.extras.operation] : undefined);
     const operations = opList ? JSON.stringify(opList.map(capOperation)) : null;
-    const pages = buildPageSummary(ops, opList, (rid) => this.pageName(meta.project, rid));
+    const pages = buildPageSummary(
+      ops,
+      opList,
+      (rid) => this.pageName(meta.project, rid),
+      names.map((n, i) => (n ? pagePart(ops[i]!.op, n) : null)),
+    );
     const jobOptions: StoredJobOptions | null =
       (meta.jobOptions &&
         (meta.jobOptions.holdLock ||
@@ -670,6 +691,85 @@ export class ProposalService implements ProposalSink {
       jobId: null,
     });
     return { proposalId: id, summary };
+  }
+
+  /**
+   * v2 E6 (ADR 0048): the page, document and entity each operation of a low-level proposal touches. Never throws: a
+   * name that cannot be found is null (the summary then gives the ids).
+   */
+  private async nameOps(
+    engine: JobEngine,
+    meta: ProposalMeta,
+    origin: JobOrigin,
+    ops: readonly ProposedOp[],
+    captured: readonly { target: CapturedTarget | null; snap: Snapshot | null }[],
+  ): Promise<(OpNames | null)[]> {
+    const titles = new Map<string, Promise<string | null>>();
+    const lookups: NameLookups = {
+      page: (rid) => this.pageName(meta.project, rid),
+      document: (rid, did) => this.documentName(meta.project, rid, did),
+      propertyTitle: (params) => {
+        const p = params.path ?? {};
+        const block = p.blockId !== undefined && p.documentId !== undefined;
+        const op = block ? 'getBlockProperty' : 'getProperty';
+        const path: Record<string, string> = block
+          ? {
+              resourceId: p.resourceId ?? '',
+              documentId: p.documentId!,
+              blockId: p.blockId!,
+              propertyId: p.propertyId ?? '',
+            }
+          : { resourceId: p.resourceId ?? '', propertyId: p.propertyId ?? '' };
+        if (!path.resourceId || !path.propertyId) return Promise.resolve(null);
+        const key = canonicalJson({ op, path });
+        let t = titles.get(key);
+        if (!t) {
+          t = engine
+            .run(
+              op,
+              { path },
+              { origin, priority: meta.priority, title: 'proposal name', project: meta.project },
+            )
+            .then((r) => {
+              const v = (r.status === 'succeeded' ? r.result : null) as { title?: unknown } | null;
+              return typeof v?.title === 'string' && v.title.trim() !== '' ? v.title : null;
+            })
+            .catch(() => null);
+          titles.set(key, t);
+        }
+        return t;
+      },
+    };
+    const out: (OpNames | null)[] = [];
+    for (let i = 0; i < ops.length; i++) {
+      const o = ops[i]!;
+      if (isInternalStep(o.op)) {
+        out.push(null);
+        continue;
+      }
+      try {
+        out.push(await nameOperation(o.op, o.params, captured[i]?.snap?.state ?? null, lookups));
+      } catch {
+        out.push(null);
+      }
+    }
+    return out;
+  }
+
+  private documentNames:
+    ((projectId: string, resourceId: string, documentId: string) => string | null) | undefined;
+
+  /** v2 E6 (ADR 0048): where a low-level proposal gets document names (the repository tree; set once the tree exists). */
+  setDocumentNames(fn: (projectId: string, resourceId: string, documentId: string) => string | null): void {
+    this.documentNames = fn;
+  }
+
+  private documentName(projectId: string, resourceId: string, documentId: string): string | null {
+    try {
+      return this.documentNames?.(projectId, resourceId, documentId) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** Reads one target through the engine and fingerprints what the operation would act on. */
@@ -1407,6 +1507,12 @@ export class ProposalService implements ProposalSink {
         };
       }
       const meta = opMeta(base.op);
+      // v2 E6 (ADR 0048): the operation in plain words, from its captured pre-image and the tree's names.
+      const named = nameFromState(base.op, params, truncated ? null : pre, {
+        page: (rid) => this.pageName(p.projectId, rid),
+        document: (rid, did) => this.documentName(p.projectId, rid, did),
+      });
+      const label = describeNamed(base.op, params, named);
       const proposed = meta.intent ? meta.intent(params) : params.body;
       const before = !truncated && meta.actual && pre !== null ? meta.actual(pre, pre) : pre;
       const sides =
@@ -1415,6 +1521,7 @@ export class ProposalService implements ProposalSink {
           : null;
       return {
         ...base,
+        label,
         preState: pre,
         preStateTruncated: truncated,
         proposed: proposed ?? null,

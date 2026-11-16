@@ -71,4 +71,33 @@ describe('the chronology admin routes', () => {
     const recs = await stack.get('/api/admin/chronology/records');
     expect(recs.json).toMatchObject({ total: 0, incomplete: 0, records: [] });
   });
+
+  it('v2 E6: the orphan fix needs its event, the table-only mark needs confirm, and both refuse until confirmed', async () => {
+    const name = stack.runtime.projects.defaultProject().name;
+    const noEvent = await stack.post('/api/admin/chronology/propose-fix', {
+      confirm: true,
+      project: name,
+      age: 'Fourth Arkonan Age',
+      kind: 'orphan',
+    });
+    expect(noEvent.status).toBe(400);
+    const orphan = await stack.post('/api/admin/chronology/propose-fix', {
+      confirm: true,
+      project: name,
+      age: 'Fourth Arkonan Age',
+      kind: 'orphan',
+      eventId: 'evorph01',
+    });
+    expect(orphan.status).toBe(409);
+    expect(orphan.json.error.code).toBe('CHRONOLOGY_NOT_CONFIGURED');
+    const body = { project: name, age: 'Fourth Arkonan Age', rowId: 'r0000001', tableOnly: true };
+    expect((await stack.post('/api/admin/chronology/table-only', body)).status).toBe(400);
+    const mark = await stack.post('/api/admin/chronology/table-only', { confirm: true, ...body });
+    expect(mark.status).toBe(409);
+    expect(mark.json.error.code).toBe('CHRONOLOGY_NOT_CONFIGURED');
+    const list = await stack.get('/api/admin/chronology/table-only');
+    expect(list.status).toBe(200);
+    expect(list.json.marks).toEqual([]);
+    expect(stack.audit('chronology.table_only')).toHaveLength(0);
+  });
 });

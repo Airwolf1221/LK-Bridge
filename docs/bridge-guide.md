@@ -397,6 +397,14 @@ writes a year with no thousands separator on events (`AA 1988119`), the tables w
 `calendar_date` gives both (`formatted` and `tableFormatted`) and reads either, and the tools always write the table's
 style into a table cell.
 
+**Qualified dates.** Some rows give their date with its declared precision: `c. 4A 563; exact date unresolved`,
+`After Isar 6th and before Zarzakh 29th, 4A 610; …`, `By 4A 623; …`, `Approximately House Year 8 (c. 4A 578); …`. They
+are the owner's on purpose: **never rewrite one into a plain date**. The bridge reads such a cell by its **anchor** (the
+calendar date it is pinned to) for pairing and for the row's timeline event, and keeps the rest as the qualifier; a
+cell it cannot read with certainty (a relative offset such as `about nine months after Isar 1st, 4A 623`) stays
+unreadable, and the check says why. Name such a row by its `row_id`, or by its Date cell exactly as the table shows it.
+The full list of forms is in docs/chronology.md.
+
 **The tools.**
 
 - `create_timeline_event { date, name, description }`: `name` is short (the timeline), `description` is the full text
@@ -406,12 +414,22 @@ style into a table cell.
 - `update_timeline_event { event, date?, name?, description? }`: `event` names it by its `date` with its `description`
   or `name`, or by `row_id` / `event_id`. A date in another age moves it there (both counts change).
 - `delete_timeline_event { event, confirm: true }`.
+- `delete_timeline_event { event: { event_id, age? }, orphan: true, confirm: true }` deletes ONLY a timeline event that
+  no table row accounts for (the check's "event without a row"): no row is deleted and the count does not change. It
+  is refused when the event has a row after all (`EVENT_HAS_ROW`) or an unpaired row could be its own
+  (`PAIRING_AMBIGUOUS`: pair them with `sync_timeline_event` and `event_id` instead). `dryRun` shows the event and the
+  three rows nearest it by date. The journal keeps the event.
 - `sync_timeline_event { row: { date, description } | { row_id, age } }` repairs the timeline for ONE table row, the
   table being the authority: it creates the row's missing event, or corrects the paired event's minutes, `detail`, shape
   and `uri` to match the row. It never touches the table or the count and never renames an event; a row whose event
   already agrees answers `nothing_to_do`. If several events could be the row's it refuses with the candidates
   (`PAIRING_AMBIGUOUS`): tell the person, or pass `event_id` to choose one. Use it for what the chronology check
-  reports (a row without an event, a row and event that disagree about the date).
+  reports (a row without an event, a row and event that disagree about the date). A repair that turns a range event
+  into a single date, or the reverse, is refused (`SHAPE_CHANGE_UNCONFIRMED`, saying `range → single day`) until you
+  have checked with the person and repeat it with `confirm_shape_change: true`. A qualified row's event takes its
+  anchor (a year, a month, a range, or one point at the known bound of `After …` / `Before …`) and its name is the
+  row's opening words, then `–` and the Date cell as written. A row the owner marked **table-only** is never given
+  an event (`ROW_TABLE_ONLY`).
 - `create_timeline_lane` adds a lane to an ordinary timeline; the chronology's age timelines have exactly one lane and
   refuse more.
 

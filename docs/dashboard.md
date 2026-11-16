@@ -284,6 +284,15 @@ Every proposal opens with **Pages affected**: its operations grouped by the page
 shows the first lines under each proposal's summary. Below it come the high-level panels (a page write's Markdown diff;
 a set_facts change's **Facts and links**), then each operation's diff as before.
 
+**Low-level proposals named** (v2 E6, [ADR 0048](adr/0048-chronology-ii.md)). A proposal made by `lk_api_write` or
+`lk_api_batch` names what each operation touches, from what the proposal read anyway: the page and the document (the
+repository tree), and the entity (an event's name and date, a map feature's type and name, a lane's name, a block's
+first words, a property's title, a sidebar row's key and value with its property's title, which costs one more read).
+The summary reads `Proposed deleteEvent: event “The Long Winter” (Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102) in
+“Fourth Arkonan Age - Timeline” on “Universal Chronology” (chrono01 › efour001)`; **Pages affected** lists the named
+entities (up to five per page, the rest counted as before); each operation's card shows the same line. A name that
+cannot be found is left out, and the ids stand in for it: naming never blocks a proposal.
+
 **Facts and links** (a `set_facts` proposal): a table of the facts asked for, before and after, each marked added,
 changed, removed, no change or not there; for each link collection the pages added and removed, those already linked,
 and whether the collection's filter is kept. Once it has run, the panel says whether the sidebar read back after the
@@ -389,7 +398,7 @@ refused.
 
 ## Chronology (v2 D1)
 
-The **Chronology** page (navigation: Chronology, after Archive and lifecycle; ADR 0038) has three cards for the selected
+The **Chronology** page (navigation: Chronology, after Archive and lifecycle; ADR 0038) has four cards for the selected
 project.
 
 - **Settings.** Whether the chronology is confirmed (and if not, why: `CHRONOLOGY_NOT_CONFIGURED` or
@@ -423,6 +432,29 @@ project.
   example `Fourth Arkonan Age: Main 337 → 336 (table rows 336; timeline events 335)`. A Main document changed before you
   approve, or a row added to or removed from the table, makes it conflict, and nothing is written; a count that already
   matches says "nothing to fix"; a Main table with no row for the age has no fix (add the row by hand).
+- **Chronology II** (v2 E6, [ADR 0048](adr/0048-chronology-ii.md)).
+  - **Qualified dates** (`c. 4A 563; exact date unresolved`, `After Isar 6th and before Zarzakh 29th, 4A 610; …`) are
+    read by their anchor and never rewritten (the forms: [chronology.md](chronology.md)). A row read that way shows
+    **Read as …** (`year 4A 563, approximate`, `before 4A 623 (an open start)`) on its finding, and its **Propose a
+    fix** makes its event. A date that stays unreadable is reported once, as **Date the engine cannot read**, with why
+    (a relative offset, an ambiguous bound, …); it is no longer also a row without an event.
+  - **Ages**, below the findings: each age's rows, events and Main count; its dates (how many were read by their
+    anchor, how many stay unreadable, how many are table-only, and any table-only mark that no longer holds); and how
+    its rows and events were **paired** (by the bridge's link, by date and name, by date alone, or, for a row and an
+    event that disagree, by the same start and end, the same start and shape, the name, or the same start), with
+    **Every pair** on request. A date mismatch says how it was paired.
+  - A date mismatch whose fix would turn a range into a single day (or the reverse) carries a warning (**A fix would
+    change the event: range → single day**); its **Propose a fix** asks for a confirmation that names the change, and
+    the proposal's summary says it too. Without the confirmation nothing is proposed (`SHAPE_CHANGE_UNCONFIRMED`).
+  - An **Event without a row** has **Propose deleting the event**, and its finding lists the three rows nearest it by
+    date with their opening words, so you can see what replaced it. The proposal deletes only the event (no row, no
+    count change; journalled with the event); it is refused when the event has a row after all, or an unpaired row
+    could be its own.
+  - **Table-only** on a row's finding (a row without an event, or an unreadable date) marks a row you never want on the
+    timeline (asks for a confirmation; audited `chronology.table_only`). The check stops reporting it while its text is
+    unchanged; if the row changes, it comes back. The **Table-only rows** card lists the marks (age, date, row,
+    reason, who and when, and any that no longer holds) with **Clear the mark**. The Main count stays the table's row
+    count, table-only rows included.
 - **Changes.** The record of every chronology change, newest first: the tool and summary, the ages, the writes, who made
   it (and who approved it), its state (**complete**, **incomplete**, **resolved**) and its jobs linked to the Journal
   page. A change that stopped part-way is finished by the same request again; **Mark resolved** (asks for a
@@ -431,7 +463,9 @@ project.
 Admin API: `GET /projects/:name/chronology`, `POST /projects/:name/chronology/lookup`, `PUT /projects/:name/chronology`
 (`{ confirm: true, settings }` or `{ confirm: true, reset: true }`), `GET /chronology/records`, `POST
 /chronology/records/:id/resolve`, `GET /chronology/check`, `POST /chronology/check` (`{ confirm: true, project }`), `POST /chronology/propose-fix`
-(`{ confirm: true, project, age, rowId }`: one proposal, or `nothing_to_do`).
+(`{ confirm: true, project, age, rowId, confirmShapeChange? }`, `{ …, kind: 'count' }` or `{ …, kind: 'orphan', eventId }`:
+one proposal, or `nothing_to_do`), `GET /chronology/table-only` and `POST /chronology/table-only`
+(`{ confirm: true, project, age, rowId, tableOnly, reason? }`).
 
 ## Staging (v2 D3)
 

@@ -21,10 +21,22 @@ export {
   DEFAULT_KCY_STYLE,
   formatKcy,
   parseKcyCell,
+  readQualifiedKcy,
   type KcyCell,
   type KcyStyle,
   type KcyValue,
+  type QualifiedKcy,
 } from './kcy.js';
+export {
+  QualifiedReader,
+  parseQualified,
+  describeReading,
+  type QualifiedReading,
+  type QualifiedResult,
+  type QualifiedCode,
+  type ReadingShape,
+  type ReadingPrecision,
+} from './qualified.js';
 export type { CalendarDefinition, Era, EraRef } from './definition.js';
 export { eraRef } from './definition.js';
 export { ordinal, groupDigits } from './template.js';

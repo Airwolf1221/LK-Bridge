@@ -418,6 +418,15 @@ normal); and a row write's **ETag** as its new version for the next chained If-M
 setting `useEtagVersions` (default on) until the owner's next sandbox run confirms it. **Before E5:** run
 `chronology-check` on Arkona and propose fixes for what it finds, before the move is called done.
 
+**E6 "Chronology II" notes (built 16 November 2026; [ADR 0048](adr/0048-chronology-ii.md); migration `2700`), after
+Arkona's first checks:** qualified dates (`c. 4A 563; exact date unresolved`, `After X and before Y, …`) read by their
+anchor for pairing, events and the KCY check, never rewritten and never used for ordering (25 of the owner's 26 example
+forms read; relative offsets stay unreadable with the reason); an unreadable row reported once; scored pairing with the
+Divan Heirage guard and `pairedBy` shown; a fix that turns a range into a single date needs a confirmation; the
+table-only mark (per row, audited, holds while the row is unchanged); "Propose a fix" for an event without a row
+(deleted, only the event, naming the nearest rows) and `delete_timeline_event` with `orphan: true`; low-level proposals
+named (page, document, entity). The forms: [chronology.md](chronology.md).
+
 **D2 notes (built 12 November 2026; [ADR 0040](adr/0040-map-feature-tools.md); no migration; what built differs from the table):**
 `create_map_feature`, `update_map_feature` and `delete_map_feature` take `page` plus `document` (optional when the page has one
 map) and coordinates as `latlng` **or** `pixel` (never both; a region takes `points` or `polygons`, a path `points`; pixels

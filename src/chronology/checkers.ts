@@ -18,6 +18,7 @@
 import type { DocumentCheckContext, DocumentCheckResult } from '../jobs/internal-steps.js';
 import type { StateDifference } from '../jobs/sidebar-state.js';
 import type { Calendar } from '../calendar/index.js';
+import { couldBeRowOf } from './orphan.js';
 import {
   anchorFor,
   compareKeys,
@@ -57,6 +58,15 @@ export type TableOp =
   | { readonly op: 'assert'; readonly rowId: string; readonly texts: RowTexts }
   /** v2 E5 hotfix: the table must still have exactly this many rows (the count fix's compare-and-swap). */
   | { readonly op: 'rows'; readonly count: number }
+  /**
+   * v2 E6 (ADR 0048): no row of the table could be this event's own, but the rows in `ignore` as they were (deleting
+   * an event without a row).
+   */
+  | {
+      readonly op: 'orphan';
+      readonly event: DateRef & { readonly name: string };
+      readonly ignore: readonly { readonly rowId: string; readonly texts: RowTexts }[];
+    }
   | {
       readonly op: 'replace';
       readonly rowId: string;
@@ -153,6 +163,21 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
     for (const op of input.ops) {
       if (op.op === 'rows') {
         if (t.rows.length !== op.count) differences.push(diff(`${ctx.label} rows`, op.count, t.rows.length));
+        continue;
+      }
+      if (op.op === 'orphan') {
+        for (const r of t.rows) {
+          if (!couldBeRowOf(r, op.event)) continue;
+          const ok = op.ignore.find((i) => i.rowId === r.id);
+          if (ok && same(r, ok.texts)) continue;
+          differences.push(
+            diff(
+              `${ctx.label} row ${r.id ?? r.index + 1}`,
+              'no row for the event',
+              `${r.dateText} | ${r.description}`,
+            ),
+          );
+        }
         continue;
       }
       if (op.op === 'insert') {

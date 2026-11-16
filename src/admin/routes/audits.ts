@@ -13,6 +13,7 @@
  */
 import * as z from 'zod';
 import { AuditError, CATEGORIES, CODES, SEVERITIES, type Audits } from '../../audits/index.js';
+import { ChronologyError } from '../../chronology/index.js';
 import { requireReauth } from '../guard.js';
 import { AdminHttpError } from '../http.js';
 import { csv, limitSchema, parseInput, projectParam, type Register } from './util.js';
@@ -45,6 +46,10 @@ export const registerAudits: Register = (api, ctx) => {
     } catch (e) {
       if (e instanceof AuditError)
         throw new AdminHttpError(STATUS[e.code] ?? 400, e.code, e.message, { details: e.details });
+      // v2 E6 (ADR 0048): a chronology fix's refusal (an ambiguous pairing, a shape change to confirm, an event that
+      // has a row after all), with its reason, as the Chronology page gives it.
+      if (e instanceof ChronologyError)
+        throw new AdminHttpError(409, e.code, e.message, { details: e.details });
       throw e;
     }
   };
@@ -180,9 +185,21 @@ export const registerAudits: Register = (api, ctx) => {
   /** "Propose a fix": re-reads the target live, then one ordinary proposal for the owner to approve. */
   api.post('/audits/findings/:id/propose-fix', async (req) => {
     const { id } = parseInput(idParam, req.params);
-    const b = parseInput(z.object({ confirm: z.literal(true), project: projectParam }), req.body);
+    const b = parseInput(
+      z.object({
+        confirm: z.literal(true),
+        project: projectParam,
+        // v2 E6 (ADR 0048): a chronology repair that turns a range into a single date (or the reverse).
+        confirmShapeChange: z.boolean().optional(),
+      }),
+      req.body,
+    );
     const p = ctx.project(b.project);
-    return wrap(() => audits().proposeFix('owner', p.id, id));
+    return wrap(() =>
+      audits().proposeFix('owner', p.id, id, {
+        ...(b.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+      }),
+    );
   });
 
   /** "Re-check now": reads the finding's page live and runs its check again. */

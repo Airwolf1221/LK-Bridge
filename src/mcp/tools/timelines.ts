@@ -19,9 +19,19 @@ import { defs } from '../../lk/registry.defs.generated.js';
 import { withWriteIcon } from '../../lk/icons.js';
 import { createHash } from 'node:crypto';
 import * as z from 'zod';
-import { CalendarError, formatKcy, type Calendar, type ParsedDate } from '../../calendar/index.js';
+import {
+  CalendarError,
+  formatKcy,
+  parseQualified,
+  type Calendar,
+  type ParsedDate,
+} from '../../calendar/index.js';
 import {
   buildRow,
+  currentTableOnly,
+  ORPHAN_TOOL,
+  orphanRequestKey,
+  planOrphanDelete,
   readAgeTable,
   readMainTable,
   sameDate,
@@ -404,6 +414,10 @@ function remaining(
         break;
       case 'row.count':
         // The count fix's compare-and-swap (v2 E5 hotfix), likewise of a first run only.
+        if (!rec) writes.push(w);
+        break;
+      case 'row.orphan':
+        // v2 E6 (ADR 0048): the "no row for this event" compare-and-swap, likewise of a first run only.
         if (!rec) writes.push(w);
         break;
       case 'row.insert': {
@@ -846,7 +860,7 @@ function createTimelineEventTool(deps: ToolDeps): McpToolProvider {
           if (resume) target = resume.target;
           else {
             const twin = t.rows.find(
-              (r) => r.date && sameDate(r.date, date) && sameText(r.description, desc.text),
+              (r) => r.eventDate && sameDate(r.eventDate, date) && sameText(r.description, desc.text),
             );
             if (twin)
               return refuse(
@@ -1078,7 +1092,10 @@ async function findEvent(
     try {
       date = cal.parser.parse(ref.date, ch.config.style.date);
     } catch (e) {
-      return { ok: false, result: calendarError(pd, e) };
+      // v2 E6 (ADR 0048): a qualified Date cell, as the table shows it, is read by its anchor.
+      const q = parseQualified(cal.parser, ref.date, ch.config.style.date);
+      if (!q.ok) return { ok: false, result: calendarError(pd, e) };
+      date = q.reading.date;
     }
   }
   let age: AgeConfig | null = null;
@@ -1122,7 +1139,10 @@ async function findEvent(
   if (!er.ok) return er;
   const rows = tr.value.table.rows;
   const events = er.value;
-  const paired = matchRowsAndEvents(rows, events, store.links(ch.ctx.projectId, age.tableDocumentId), age);
+  const marks = currentTableOnly(rows, store.tableOnly(ch.ctx.projectId, age.tableDocumentId));
+  const paired = matchRowsAndEvents(rows, events, store.links(ch.ctx.projectId, age.tableDocumentId), age, {
+    tableOnly: marks.current,
+  });
   const pairs = paired.pairs;
   let row: AgeRow | null = null;
   let event: TimelineEvent | null = null;
@@ -1137,8 +1157,8 @@ async function findEvent(
   if (!row && !event && date) {
     const hits = rows.filter(
       (r) =>
-        r.date &&
-        sameDate(r.date, date) &&
+        r.eventDate &&
+        sameDate(r.eventDate, date) &&
         ((ref.description !== undefined && sameText(r.description, ref.description)) ||
           (ref.name !== undefined && pairs.some((p) => p.row === r && sameText(p.event.name, ref.name!)))),
     );
@@ -1199,8 +1219,8 @@ async function findEvent(
   }
   if (!row || !event) return bad('EVENT_NOT_FOUND', 'The event was not found.');
   if (
-    !row.date ||
-    !sameDate(row.date, { start: event.start, end: event.end, detail: event.detail as 1 | 2 | 3 })
+    !row.eventDate ||
+    !sameDate(row.eventDate, { start: event.start, end: event.end, detail: event.detail as 1 | 2 | 3 })
   )
     return drift(
       `The row says “${row.dateText}” but the event is at ${event.formattedStart ?? event.start}.`,
@@ -1258,7 +1278,8 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const f = await findEvent(pd, mctx, tool, ch, cal, args.event);
           if (!f.ok) return { kind: 'answer', result: f.result };
           const { age, row, event, table } = f.value;
-          let newDate: ParsedDate = row.date!;
+          // A qualified row keeps its own Date cell unless a new date is given (ADR 0048: never rewritten).
+          let newDate: ParsedDate = row.date ?? row.eventDate!;
           if (args.date !== undefined) {
             try {
               newDate = cal.parser.parse(args.date, ch.config.style.date);
@@ -1282,7 +1303,7 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const name = args.name?.trim() ?? event.name;
           const dateChanged =
             args.date !== undefined &&
-            !(sameDate(newDate, row.date!) && newDate.text === row.dateText.trim());
+            !(sameDate(newDate, row.eventDate!) && newDate.text === row.dateText.trim());
           const descChanged = args.description !== undefined && !sameText(desc.text, row.description);
           const nameChanged = name !== event.name;
           if (!dateChanged && !descChanged && !nameChanged)
@@ -1317,7 +1338,8 @@ function updateTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const kcyText = formatKcy(newDate.kcy, ch.config.style.kcy);
           const texts = {
             description: desc.text,
-            date: newDate.text,
+            // The cell as it stands unless the date changes (it is only written then).
+            date: dateChanged ? newDate.text : row.dateText,
             kcy: dateChanged ? kcyText : row.kcyText,
           };
           const before = { description: row.description, date: row.dateText, kcy: row.kcyText };
@@ -1586,9 +1608,15 @@ function deleteTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Delete an event of the chronology',
     access: 'write',
     description:
-      'Deletes a chronology event as ONE job: its table row, its timeline event and one from the age’s count. `confirm: true` is required. Name it with `event` as update_timeline_event does. Refused when its row and event have drifted apart: sync_timeline_event first. The journal keeps the row and the event. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 12 reads and 3 writes.',
+      'Deletes a chronology event as ONE job: its table row, its timeline event and one from the age’s count. `confirm: true` is required. Name it with `event` as update_timeline_event does. Refused when its row and event have drifted apart: sync_timeline_event first. With `orphan: true` and `event.event_id`, it deletes ONLY a timeline event that has no table row (the check’s event_without_row): no row, no count change; refused if a row could be its own. The journal keeps the row and the event. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 12 reads and 3 writes (orphan: about 5 reads and 1 write).',
     inputSchema: z.object({
       event: eventRefArg,
+      orphan: z
+        .boolean()
+        .optional()
+        .describe(
+          'true: delete only this timeline event (event.event_id), which has no table row. No row is deleted and the count does not change.',
+        ),
       confirm: z.literal(true).describe('Required: true.'),
       dryRun: z.boolean().optional(),
       operation_id: operationIdArg,
@@ -1604,6 +1632,7 @@ function deleteTimelineEventTool(deps: ToolDeps): McpToolProvider {
           const fc = await freshCalendar(pd, mctx, tool, ch.config.calendarId!);
           if (!fc.ok) return { kind: 'answer', result: fc.result };
           const cal = fc.cal;
+          if (args.orphan === true) return deleteOrphan(pd, mctx, ch, cal, args.event, args.dryRun);
           const requestKey = sha({ tool, event: args.event });
           const store = pd.services!.chronology!.store;
           const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
@@ -1700,6 +1729,67 @@ function deleteTimelineEventTool(deps: ToolDeps): McpToolProvider {
           });
         });
       }),
+  });
+}
+
+/**
+ * v2 E6 (ADR 0048): `delete_timeline_event` with `orphan: true`: ONE timeline event that has no table row, deleted
+ * (src/chronology/orphan.ts). Only the event: no row, no count change. Refused when the event is paired with a row
+ * after all, or an unpaired row could be its own.
+ */
+async function deleteOrphan(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  ch: Chrono,
+  cal: Calendar,
+  ref: z.infer<typeof eventRefArg>,
+  dryRun: boolean | undefined,
+): Promise<CreateOutcome> {
+  const tool = ORPHAN_TOOL;
+  if (ref.event_id === undefined || ref.row_id !== undefined)
+    return refuse(
+      pd,
+      'INVALID_PARAMS',
+      'With orphan: true, name the timeline event by its event_id (and its age if you know it); it has no row.',
+    );
+  const store = pd.services!.chronology!.store;
+  const orphanRef = { eventId: ref.event_id, ...(ref.age !== undefined ? { age: ref.age } : {}) };
+  const requestKey = orphanRequestKey(orphanRef);
+  const resume = store.incomplete(ch.ctx.projectId).find((r) => r.requestKey === requestKey) ?? null;
+  if (resume) return resumeChange(pd, mctx, tool, ch, cal, resume, dryRun);
+  let plan;
+  try {
+    plan = await planOrphanDelete({
+      config: ch.config,
+      calendar: cal,
+      links: store.links(ch.ctx.projectId),
+      tableOnly: store.tableOnly(ch.ctx.projectId),
+      ref: orphanRef,
+      read: async (op, params) => {
+        const r = await liveRead(pd, mctx, tool, op, params);
+        if (!r.ok) throw new ReadStopped(r.result);
+        return r.value;
+      },
+    });
+  } catch (e) {
+    if (e instanceof ReadStopped) return { kind: 'answer', result: e.result };
+    return { kind: 'answer', result: errorFromThrown(e, pd) };
+  }
+  if (!plan.ok) return refuse(pd, plan.code, plan.message, plan.details);
+  const stopped = stoppedChange(pd, ch, requestKey, [plan.age.name]);
+  if (stopped.refusal) return stopped.refusal;
+  return submit(pd, mctx, {
+    tool,
+    ch,
+    target: plan.target,
+    writes: plan.writes,
+    ctx: plan.ctx,
+    requestKey,
+    ages: [plan.age.name],
+    summary: plan.summary,
+    head: plan.head,
+    markdown: plan.markdown,
+    dryRun,
   });
 }
 
@@ -1864,6 +1954,12 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
         .describe(
           'The short name of an event that is created (default: the row’s description, cut short when long).',
         ),
+      confirm_shape_change: z
+        .boolean()
+        .optional()
+        .describe(
+          'Required when the repair turns a range event into a single date or the reverse (the plan says “range → single day”): check with the person first.',
+        ),
       dryRun: z.boolean().optional().describe('Show the plan; write nothing and propose nothing.'),
       operation_id: operationIdArg,
       project: projectArg,
@@ -1896,6 +1992,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
               config: ch.config,
               calendar: cal,
               links: store.links(ch.ctx.projectId),
+              tableOnly: store.tableOnly(ch.ctx.projectId),
               ref,
               read: async (op, params) => {
                 const r = await liveRead(pd, mctx, tool, op, params);
@@ -1921,6 +2018,14 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
                 pd,
               ),
             };
+          // v2 E6 (ADR 0048): a range made a single date (or the reverse) only when the caller confirms it.
+          if (plan.shapeChange && args.confirm_shape_change !== true && args.dryRun !== true)
+            return refuse(
+              pd,
+              'SHAPE_CHANGE_UNCONFIRMED',
+              `This repair changes the event “${plan.event?.name.slice(0, 80) ?? ''}”: ${plan.shapeChange} (the row says “${plan.row.dateText}”). Check with the person that the row and the event are the same chronology event, then repeat with confirm_shape_change: true. Nothing was done.`,
+              { ...plan.head },
+            );
           const stopped = stoppedChange(pd, ch, requestKey, [plan.age.name]);
           if (stopped.refusal) return stopped.refusal;
           return submit(pd, mctx, {

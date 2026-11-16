@@ -173,9 +173,21 @@ describe('sync_timeline_event: an event that disagrees with its row', () => {
     const id = eventNamed('The Week of Lanterns')[0]!.id;
 
     const rowBefore = tableJson();
+    // v2 E6 (ADR 0048): a single day made a range is never one call: the caller confirms it, after a refusal that says so.
+    expect(c.findings[0]!.detail).toMatchObject({ shapeChange: 'single day → range' });
+    const unconfirmed = await call('sync_timeline_event', {
+      row: { date: 'Jehet 11th - 18th, 4A 424', description: 'The Week of Lanterns' },
+    });
+    expect(unconfirmed.body.error).toMatchObject({
+      code: 'SHAPE_CHANGE_UNCONFIRMED',
+      shapeChange: 'single day → range',
+    });
+    expect(tableJson()).toBe(rowBefore);
+    expect(eventNamed('The Week of Lanterns')[0]!.end).toBeUndefined();
     const done = w.mark();
     const r = await call('sync_timeline_event', {
       row: { date: 'Jehet 11th - 18th, 4A 424', description: 'The Week of Lanterns' },
+      confirm_shape_change: true,
     });
     costs.correct = (({ reads, writes }) => ({ reads, writes }))(done());
     expect(r.body, r.text).toMatchObject({ status: 'written', verified: true, action: 'correct' });
@@ -220,8 +232,10 @@ describe('sync_timeline_event: an event that disagrees with its row', () => {
     expect((await check()).findings.map((f) => f.kind)).toEqual(['date_mismatch']);
     const r = await call('sync_timeline_event', {
       row: { date: 'Kumikas 3rd, 4A 881', description: 'Ashgate falls to the Isar host' },
+      confirm_shape_change: true,
     });
     expect(r.body, r.text).toMatchObject({ status: 'written', verified: true, action: 'recreate' });
+    expect(r.body.shapeChange).toBe('range → single day');
     const made = eventNamed('Ashgate falls to the Isar host');
     expect(made).toHaveLength(1);
     expect(made[0]!.id).not.toBe(harvest!.id);
@@ -338,7 +352,10 @@ describe('sync_timeline_event: stopped part-way', () => {
     const [harvest] = eventNamed('Ashgate falls to the Isar host');
     editEvent(String(harvest!.id), { end: (harvest!.start as number) + 1800 * 3 });
     w.failAt('createEvent', 0);
-    const ref = { row: { date: 'Kumikas 3rd, 4A 881', description: 'Ashgate falls to the Isar host' } };
+    const ref = {
+      row: { date: 'Kumikas 3rd, 4A 881', description: 'Ashgate falls to the Isar host' },
+      confirm_shape_change: true,
+    };
     const first = await call('sync_timeline_event', ref);
     expect(first.body.error, first.text).toBeDefined();
     // The old event is gone and the new one was not made: the row has no event now.
@@ -410,11 +427,22 @@ describe('propose scope and the dashboard’s "Propose a fix"', () => {
     costs.proposeFix = (({ reads, writes }) => ({ reads, writes }))(done());
     expect(first).toMatchObject({ status: 'proposal_captured' });
     expect(done().writes).toBe(0);
+    // v2 E6 (ADR 0048): a single day made a range is not one click: refused until the owner confirms it.
+    await expect(
+      chronology.proposeFix('owner', PROJECT, { age: FOURTH, rowId: String(mismatch.detail!.rowId) }),
+    ).rejects.toMatchObject({
+      code: 'SHAPE_CHANGE_UNCONFIRMED',
+      details: { shapeChange: 'single day → range' },
+    });
     const second = await chronology.proposeFix('owner', PROJECT, {
       age: FOURTH,
       rowId: String(mismatch.detail!.rowId),
+      confirmShapeChange: true,
     });
     expect(second).toMatchObject({ status: 'proposal_captured' });
+    expect(
+      w.stack.runtime.policy.proposals.get((second as { proposalId: string }).proposalId)!.summary,
+    ).toMatch(/single day → range/);
     // Nothing was written until the owner approves; the proposals are ordinary ones, proposed by the system.
     expect(events().length).toBe(eventsBefore);
     expect(tableJson()).toBe(tableBefore);
