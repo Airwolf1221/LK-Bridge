@@ -17,6 +17,7 @@ import { writePageTool } from './write-page.js';
 import { setFactsTool } from './set-facts.js';
 import { resourceTools } from './resources.js';
 import { createCharacterTool } from './create-character.js';
+import { packTools } from './packs.js';
 import { lifecycleTools } from './lifecycle.js';
 import { documentTools } from './documents.js';
 import { timelineTools } from './timelines.js';
@@ -52,6 +53,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     setFactsTool(deps),
     ...resourceTools(deps),
     createCharacterTool(deps),
+    // v3 F3a (ADR 0050): the setting packs' tools (listed while their pack is attached to a served project).
+    ...packTools(deps),
     // v2 C2c (ADR 0035): the page lifecycle.
     ...lifecycleTools(deps),
     ...documentTools(deps),

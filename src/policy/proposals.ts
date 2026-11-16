@@ -1782,6 +1782,10 @@ function stepOptions(o: StepOptions): StepOptions {
     // v3 F2 (ADR 0049 decision 9): a planned folder is found or created when the approved job runs.
     ...(o.findOrCreate === true ? { findOrCreate: true } : {}),
     ...(o.onlyIfEmpty === true ? { onlyIfEmpty: true } : {}),
+    // v3 F3a (ADR 0050): a new page's image blocks name the assets the same approved job uploads, and its text is
+    // fitted into the template copy's content inside the lock (keeping only what Markdown cannot express there).
+    ...(o.bindAssetUrls ? { bindAssetUrls: o.bindAssetUrls } : {}),
+    ...(o.fill ? { fill: o.fill } : {}),
   };
 }
 

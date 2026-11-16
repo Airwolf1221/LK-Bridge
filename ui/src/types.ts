@@ -1999,6 +1999,8 @@ export interface EvaluationScenario {
   section: string;
   title: string;
   shortTitle: string;
+  /** v3 F3a: the setting pack the scenario exercises (`arkona`). */
+  pack?: string;
   assistants: EvaluationAssistant[];
   needsApproval: boolean;
   alwaysProposal: boolean;
@@ -2134,4 +2136,110 @@ export interface EvaluationComparison {
   commonScenarios: number;
   errorCodeChanges: { code: string; from: number; to: number }[];
   summary: string[];
+}
+
+// ============================================================================================ v3 F3a: setting packs
+
+export interface PackRoleRule {
+  role: string;
+  template: string;
+  name: string;
+  referenceType: string | null;
+  tags: string[];
+  facts: 'identity' | 'general' | 'none';
+  body: 'required' | 'optional' | 'drafted';
+  warnMissing: string[];
+  max: number;
+}
+
+export interface PackTypeRules {
+  name: string;
+  tool: string;
+  hook: string | null;
+  placement:
+    | { kind: 'taxonomy'; registryType: string; field: string; fallbackIndex: string }
+    | { kind: 'fixed'; index: string };
+  roles: PackRoleRule[];
+  identity: { field: string; key: string; gated: boolean }[];
+  unestablished: string;
+  fixedFacts: Record<string, string>;
+  generalKeys: string[];
+  specialistTags: string[];
+  suggestedReferenceTypes: Record<string, string>;
+  assets: { subfolders: Record<string, string>; displayName: string; section: string; role: string };
+}
+
+export interface PackRules {
+  schema: 1;
+  settings: { alwaysPropose: boolean };
+  tags: {
+    authoritative: string;
+    working: string;
+    never: string[];
+    race: Record<string, string>;
+    culture: Record<string, string>;
+    exceptional: string[];
+  };
+  names: { forbiddenWords: string[]; datePatterns: string[] };
+  sidebar: { property: string; dependencies: string; related: string };
+  types: PackTypeRules[];
+}
+
+export interface PackSourceStatus {
+  key: string;
+  name: string;
+  label?: string;
+  project: string;
+  resourceId: string;
+  documentId: string;
+  approved: string | null;
+  current: string | null;
+  digest: string | null;
+  state: 'same' | 'changed' | 'unreadable' | 'unapproved';
+  reason?: string;
+}
+
+export interface PackGovernance {
+  state: 'current' | 'changed' | 'unapproved' | 'rules_changed' | 'unreadable';
+  message: string;
+  sources: PackSourceStatus[];
+  version: number;
+  approvedVersion: number | null;
+}
+
+export interface PackView {
+  id: string;
+  name: string;
+  prefix: string;
+  rules: PackRules;
+  version: number;
+  governance: {
+    key: string;
+    project: string;
+    resourceId: string;
+    documentId: string;
+    name: string;
+    label?: string;
+  }[];
+  approved: { version: number; at: number; by: string; sources: { key: string; version: string }[] } | null;
+  drift: {
+    at: number;
+    changed: { key: string; name: string; approved: string | null; current: string | null }[];
+  } | null;
+  seed: string | null;
+  attachments: {
+    projectId: string;
+    projectName: string;
+    served: boolean;
+    templates: Record<string, string | null>;
+    notes: string[];
+    attachedAt: number;
+    attachedBy: string;
+  }[];
+  tools: string[];
+  versions: { version: number; reason: string; approved: unknown; createdAt: number }[];
+}
+
+export interface PacksResponse {
+  packs: PackView[];
 }

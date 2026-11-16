@@ -104,7 +104,9 @@ function withPolicyTools(
   extra: readonly McpToolProvider[],
 ): McpToolProvider[] {
   const have = new Set(tools.map((t) => t.name));
-  return [...tools, ...extra.filter((t) => !have.has(t.name))];
+  const missing = extra.filter((t) => !have.has(t.name));
+  // v3 F3a (ADR 0050): the runtime's own list (which has them) is kept as it is, so the pack tools it adds later show.
+  return missing.length === 0 ? (tools as McpToolProvider[]) : [...tools, ...missing];
 }
 
 /** Strips query strings from logged URLs: no code, state or stray token ever reaches the log. */

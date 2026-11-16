@@ -1,3 +1,6 @@
+import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
+import { createPacks, type Packs } from './packs/service.js';
+import { registerPackEngine } from './packs/engine/checks.js';
 import { deletedPageRecord } from './lifecycle/deleted.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
 import { BlockwiseUndo } from './pages/undo.js';
@@ -31,6 +34,7 @@ import {
   createUploadVerifyHandler,
   guideResources,
   createUploadTransport,
+  type ToolDeps,
 } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
 import { footerFor } from './mcp/tools/shape.js';
@@ -135,6 +139,8 @@ export interface Runtime {
   readonly rehearsals: Rehearsals;
   /** v2 E1b (ADR 0043): the off-site copy to Google Drive (its settings, the Google connection, the runner's requests). */
   readonly offsite: OffsiteService;
+  /** v3 F3a (ADR 0050): the setting packs (rules, attachments, governance, the owner's approval). */
+  readonly packs: Packs;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -327,6 +333,27 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachRegistry = registry.attach();
+  // v3 F3a (ADR 0050): the setting packs (rules as data, attachments, governance, approval) and their engine hooks.
+  const packs = createPacks({
+    db: o.db,
+    engine,
+    projects,
+    registry,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  try {
+    packs.ensureSeeded();
+  } catch (err) {
+    log.warn({ err }, 'the setting packs could not be seeded');
+  }
+  const unregisterPackEngine = registerPackEngine(engine, {
+    packs,
+    registry,
+    setTemplate: (projectId, resourceId, templateId) =>
+      tree.store.setTemplate(projectId, resourceId, templateId),
+  });
   // v2 C1: the bridge's memory of recent page versions, and write_page's in-lock re-planner (section edits whose section
   // is unchanged). Registered before any job can run: the scheduler starts in a microtask, after createRuntime returns.
   const versions = new DocumentVersions(o.db, () => (o.clock ?? systemClock).now());
@@ -685,50 +712,64 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
   });
 
-  const bridgeTools = createBridgeTools(
-    {
-      engine,
-      projects,
-      selector,
-      settings: o.toolsSettings,
-      version: o.version,
-      principalNames: (ids) => policy.store.describePrincipals(ids),
-      configuredReadOnly: config.lk.readOnly,
-      publicUrl: config.server.publicUrl,
-      uploadGuard,
-      services: {
-        tree,
-        registry,
-        assets,
-        versions,
-        projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
-        templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
-        // v2 C2b: factsVersion's memory, and the create tools' operation ids and duplicate-request claims (kept at
-        // least as long as the journal).
-        factsVersions: new FactsVersions(o.db, () => (o.clock ?? systemClock).now()),
-        requests: new RequestRegistry(
-          o.db,
-          () => (o.clock ?? systemClock).now(),
-          Math.max(30, config.journal.retentionDays + 1) * 24 * 3_600_000,
-        ),
-        // v2 C2c: the page lifecycle (settings, records, the link index).
-        lifecycle,
-        // v2 D1: chronology sync.
-        chronology,
-        images,
-        snapshots,
-        restores,
-        // v2 E2: the audits (audit_findings).
-        audits,
-        // v2 E4: the undo of a block-by-block write that stopped part-way.
-        blockwiseUndo,
-      },
+  const toolDeps: ToolDeps = {
+    engine,
+    projects,
+    selector,
+    settings: o.toolsSettings,
+    version: o.version,
+    principalNames: (ids) => policy.store.describePrincipals(ids),
+    configuredReadOnly: config.lk.readOnly,
+    publicUrl: config.server.publicUrl,
+    uploadGuard,
+    services: {
+      tree,
+      registry,
+      assets,
+      versions,
+      projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+      templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
+      // v2 C2b: factsVersion's memory, and the create tools' operation ids and duplicate-request claims (kept at
+      // least as long as the journal).
+      factsVersions: new FactsVersions(o.db, () => (o.clock ?? systemClock).now()),
+      requests: new RequestRegistry(
+        o.db,
+        () => (o.clock ?? systemClock).now(),
+        Math.max(30, config.journal.retentionDays + 1) * 24 * 3_600_000,
+      ),
+      // v2 C2c: the page lifecycle (settings, records, the link index).
+      lifecycle,
+      // v2 D1: chronology sync.
+      chronology,
+      images,
+      snapshots,
+      restores,
+      // v2 E2: the audits (audit_findings).
+      audits,
+      // v2 E4: the undo of a block-by-block write that stopped part-way.
+      blockwiseUndo,
+      // v3 F3a (ADR 0050): the setting packs.
+      packs,
     },
-    { exposePerOpTools: config.mcp.exposePerOpTools },
-  );
+  };
+  const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.
-  const tools = [...bridgeTools, ...policy.tools];
+  const tools: McpToolProvider[] = [...bridgeTools, ...policy.tools];
+  // v3 F3a (ADR 0050): a pack's tools follow its data: every tool name its types name besides the explicit ones gets the
+  // generic pack tool, added (and removed) in this same list when the pack's rules change, so a new type needs no code.
+  const syncPackTools = () => {
+    const want = genericPackToolNames(packs.list(), EXPLICIT_PACK_TOOLS);
+    for (let i = tools.length - 1; i >= 0; i--) {
+      const t = tools[i] as McpToolProvider & { packGeneric?: boolean };
+      if (t.packGeneric === true && !want.some((x) => x.name === t.name)) tools.splice(i, 1);
+    }
+    for (const x of want)
+      if (!tools.some((t) => t.name === x.name))
+        tools.push(genericPackTool(toolDeps, x.packId, x.prefix, x.tool));
+  };
+  syncPackTools();
+  const detachPackTools = packs.onChange(syncPackTools);
   // v2 E3 (ADR 0045): the tool-call log. Its budget probe sums every project's hourly request and write counters, so a
   // call's budget use is how far they moved while it ran (approximate: another call in the same moment counts too).
   const toolCalls = new ToolCallLog({
@@ -760,6 +801,14 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const ready = projects.verifyAll().catch((err: unknown) => log.error({ err }, 'project checks failed'));
   // v2 E1a: a full snapshot a restart interrupted continues once the projects are served.
   void ready.then(() => snapshots.resumeInterrupted());
+  // v3 F3a: a pack attaches to its projects once their keys have proved which projects they are.
+  void ready.then(() => {
+    try {
+      packs.ensureSeeded();
+    } catch (err) {
+      log.warn({ err }, 'the setting packs could not be seeded');
+    }
+  });
 
   return {
     projects,
@@ -783,6 +832,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     restores,
     rehearsals,
     offsite,
+    packs,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -818,6 +868,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       for (const off of detachAuditCheckers) off();
       detachBlockwiseUndo();
       detachRestores();
+      unregisterPackEngine();
+      detachPackTools();
       await tree.stop();
       detachRegistry();
       await assets.stop();

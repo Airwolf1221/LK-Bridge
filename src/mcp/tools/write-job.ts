@@ -35,15 +35,18 @@ export interface WriteJobSpec {
   readonly holdDocuments?: readonly string[];
   /** v2 C2c: the lifecycle change the job makes (the lifecycle guard allows exactly that). */
   readonly lifecycle?: LifecycleMarker | undefined;
+  /**
+   * A proposal whatever the gate says for the job's own operations: v3 F3a (ADR 0050), ONE proposal for the owner whatever
+   * the caller's scope (a setting pack's first weeks); v3 F2.1, a change the bridge only records (a chronology link has no
+   * LegendKeeper write the gate would propose at scope `propose`).
+   */
+  readonly forceProposal?: boolean;
+  /** v3 F3a: the batch places images staged on the bridge's server (a proposal at scope propose, not a refusal). */
+  readonly stagedPlacement?: boolean;
   readonly proposal: ProposalExtras;
   /** The plan, as every answer shows it. */
   readonly head: Record<string, unknown>;
   readonly preview: () => unknown;
-  /**
-   * v3 F2.1: a proposal whatever the gate says for the job's own operations (a change the bridge only records, such as a
-   * chronology link, has no LegendKeeper write the gate would propose at scope `propose`).
-   */
-  readonly forceProposal?: boolean;
 }
 
 export interface WriteJobOutcome {
@@ -85,8 +88,9 @@ export async function runWriteJob(
       ...(spec.pageScope ? { pageScope: spec.pageScope } : {}),
       ...(spec.holdDocuments && spec.holdDocuments.length > 0 ? { holdDocuments: spec.holdDocuments } : {}),
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
-      internal: true,
       ...(spec.forceProposal === true ? { forceProposal: true } : {}),
+      ...(spec.stagedPlacement ? { stagedPlacement: true } : {}),
+      internal: true,
       proposal: spec.proposal,
     });
   } catch (e) {

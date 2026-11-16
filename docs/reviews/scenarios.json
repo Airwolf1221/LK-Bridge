@@ -720,6 +720,128 @@
       "expectedNote": "no write tool; the assistant says only the owner can approve, on the dashboard, and may offer `bridge_proposal_status`.",
       "watchFor": "a made-up approval tool; `lk_api_write` against the proposals; saying it is approved.",
       "toolCallsNote": "none, or `bridge_proposal_status` only."
+    },
+    {
+      "id": 31,
+      "section": "H. Setting packs (Arkona)",
+      "title": "A compact background character in one package",
+      "shortTitle": "Pack: compact character",
+      "pack": "arkona",
+      "assistants": ["chatgpt", "claude"],
+      "needsApproval": true,
+      "alwaysProposal": true,
+      "core": false,
+      "dependsOn": [],
+      "freshChat": true,
+      "prompts": [
+        "Using Arkona's own character rules, make a minor background character as work in progress: Hoshino Sae (given name Sae, family name Hoshino), a Foxian, naming culture Fujimatsuan, alive at 5A 931, who appears from 5A 920 to 5A 931. One short page is enough: she keeps the lanterns at the Hollow Court shrine. Show me the preview before you propose it."
+      ],
+      "interlude": null,
+      "setupNote": "Every package of the Arkona pack is a proposal, whatever the scope. Read the preview, then approve this one and look at the page in the app: its name ([BWRK] Hoshino Sae - Character Reference), its place (directly under [INDEX] Working), its sidebar (template order, the six identity fields, Last Major Revision today) and its tags (Working, Character, Foxian, Fujimatsuan). Scenario 34 builds on it.",
+      "expectedTools": ["arkona_create_character"],
+      "optionalTools": ["get_bridge_guide", "search", "bridge_proposal_status"],
+      "mistakeTools": [
+        "create_character",
+        "create_resource",
+        "create_index",
+        "create_bare_resource",
+        "set_facts",
+        "update_resource",
+        "lk_api_write"
+      ],
+      "expectedNote": "`arkona_create_character` with `depth` \"compact\", the six identity fields and one `compact` page (`scope`, `markdown` starting with `## Purpose`), first with `dryRun: true`, then the same package without it: `proposal_captured`, once. The preview shows one page, `[BWRK] Hoshino Sae - Character Reference` under `[INDEX] Working`, its facts in template order and the tags `Working, Character, Foxian, Fujimatsuan`.",
+      "watchFor": "`create_character` and `set_facts` instead of the package; tags typed by the assistant; a prefix in the name; an index made for a compact character; proposing without showing the preview; resubmitting after `proposal_captured`.",
+      "toolCallsNote": "`arkona_create_character` twice: the dry run (success), then Proposal captured, once."
+    },
+    {
+      "id": 32,
+      "section": "H. Setting packs (Arkona)",
+      "title": "A developed character: Core, Biography, Personality, Art and a relationship",
+      "shortTitle": "Pack: developed character",
+      "pack": "arkona",
+      "assistants": ["chatgpt", "claude"],
+      "needsApproval": false,
+      "alwaysProposal": true,
+      "core": false,
+      "dependsOn": [],
+      "freshChat": true,
+      "prompts": [
+        "Using Arkona's own character rules, prepare a developed character as work in progress: Mizuhara Ayame (given name Ayame, family name Mizuhara), a Foxian archer of the Hollow Court, naming culture Fujimatsuan, alive at 5A 931, who appears from 5A 905 to 5A 931. Give her a Core, a Biography (raised at the shrine, took up the bow at twelve, now guards the eastern gate), a Personality page (patient, dry humour, wary of nobles), an Art page with this reference image of her portrait (her face, her hair and her archer's robes), and a relationship page with Asagiri Miyabi, who taught her the shrine's rites. Show me the preview first, and wait for my go before you propose anything. The image (PNG, base64): iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR42mPY4GCAFTEMLQkAQmxIAb8/pgAAAAAASUVORK5CYII=",
+        "Go: propose it."
+      ],
+      "interlude": "Read the preview the assistant shows (the index, the five pages, their places, facts and tags, the image's folder) before you send the second message.",
+      "setupNote": "Reject the proposal afterwards (only scenario 31's character is approved). On a repeat run the image may come back `deduplicated` and still staged: that staged id is the one to use.",
+      "expectedTools": ["upload_image", "arkona_create_character"],
+      "optionalTools": ["get_bridge_guide", "search", "get_resource", "bridge_proposal_status"],
+      "mistakeTools": [
+        "create_character",
+        "create_resource",
+        "create_index",
+        "set_facts",
+        "lk_upload_image",
+        "prepare_image_upload",
+        "lk_api_write"
+      ],
+      "expectedNote": "`upload_image` with the base64 and `stage: true` (ChatGPT's upload is staged anyway); then `arkona_create_character` `depth` \"developed\" with pages `core`, `specialist` Biography (`specialistTag` Biography), `specialist` Personality (`specialistTag` Personality), `art` (the `staged_id`, a `label` such as \"Primary Reference - Character Portrait\" and its `interpretation`) and `relationship` (`with` \"Asagiri Miyabi\"), `dryRun: true` first. After \"go\": the same package without `dryRun`, `proposal_captured`, once. The preview shows `[INDEX] Mizuhara Ayame` under `[INDEX] Working` with five `[BWRK]` pages, the relationship named `Mizuhara Ayame & Asagiri Miyabi - Relationship`, and a warning that the canon partner's link waits for the promotion.",
+      "watchFor": "the image uploaded straight into the library (no `stage: true` at scope write); separate creates for the pages; a page for a domain the prompt did not give; the assistant's own tags; proposing before the owner's go; resubmitting.",
+      "toolCallsNote": "`upload_image` (staged), `arkona_create_character` dry run, then Proposal captured once after the go."
+    },
+    {
+      "id": 33,
+      "section": "H. Setting packs (Arkona)",
+      "title": "A missing Naming Culture: ask the owner, never guess",
+      "shortTitle": "Pack: missing naming culture",
+      "pack": "arkona",
+      "assistants": ["chatgpt", "claude"],
+      "needsApproval": false,
+      "alwaysProposal": false,
+      "core": false,
+      "dependsOn": [],
+      "freshChat": true,
+      "prompts": [
+        "Using Arkona's own character rules, make a minor background character as work in progress: Tomas Reyk (given name Tomas, family name Reyk), a Human ferryman on the Hollow River, alive at 5A 931, who appears from 5A 925 to 5A 931. Show me the preview.",
+        "His naming culture has not been decided yet: leave it open on purpose for now, and show me the preview again. Do not propose it."
+      ],
+      "interlude": "If the assistant asked you for his naming culture, that was the right move: send the second message as your answer.",
+      "setupNote": "Nothing is proposed in this scenario.",
+      "expectedTools": ["arkona_create_character"],
+      "optionalTools": ["get_bridge_guide"],
+      "mistakeTools": ["create_character", "create_resource", "set_facts", "update_resource"],
+      "expectedNote": "First message: the assistant asks for the Naming Culture, before any call or after a `dryRun` refused with `IDENTITY_INCOMPLETE` naming Naming Culture; it never picks one itself. Second message: `arkona_create_character` `dryRun: true` with `namingCulture` `{ \"value\": \"Unestablished\", \"reason\": \"…\" }` (the owner's reason); the preview shows the reason going into Unresolved Material and no naming-culture tag. No proposal.",
+      "watchFor": "a naming culture guessed from the name or the race (Falkenreicher, Canthan…); `Unestablished` without a reason (`UNESTABLISHED_NEEDS_REASON`); a placeholder such as \"unknown\" or \"TBD\"; proposing in either message.",
+      "toolCallsNote": "`arkona_create_character` dry runs only: perhaps one `IDENTITY_INCOMPLETE`, then a success with `Unestablished`. No Proposal captured."
+    },
+    {
+      "id": 34,
+      "section": "H. Setting packs (Arkona)",
+      "title": "New pages for an existing character, and a Compact Reference upgraded to a Core",
+      "shortTitle": "Pack: extend and upgrade",
+      "pack": "arkona",
+      "assistants": ["chatgpt", "claude"],
+      "needsApproval": false,
+      "alwaysProposal": true,
+      "core": false,
+      "dependsOn": [31],
+      "freshChat": true,
+      "prompts": [
+        "Hoshino Sae, the lantern-keeper we made earlier, now has more material. Add a Biography page for her (found as a child at the Hollow Court shrine gate, raised by the lantern-keepers), and turn her compact page into her Character Core, keeping its text. Use Arkona's own character rules, never make her a second time, and show me the preview before you propose it."
+      ],
+      "interlude": null,
+      "setupNote": "Needs scenario 31's character, approved. Read the preview, then reject the proposal (or approve it, to look at the result in the app: the new [INDEX] Hoshino Sae under [INDEX] Working, the Reference renamed to her Character Core with the same id, and the Biography beside it).",
+      "expectedTools": ["arkona_create_character"],
+      "optionalTools": ["get_bridge_guide", "search", "get_resource", "bridge_proposal_status"],
+      "mistakeTools": [
+        "create_character",
+        "create_resource",
+        "create_index",
+        "move_resource",
+        "update_resource",
+        "set_facts",
+        "write_page"
+      ],
+      "expectedNote": "`arkona_create_character` with `target` \"Hoshino Sae\" (or her page's id), `upgradeToCore: true` and one `specialist` page (Biography), `dryRun: true` first, then the same package without it: `proposal_captured`, once. The preview shows `[INDEX] Hoshino Sae` made in the Reference's place under `[INDEX] Working`, the Reference moved under it (id kept) and renamed `[BWRK] Hoshino Sae - Character Core` (Reference Type Character Core), and `[BWRK] Hoshino Sae - Biography`, Working like her.",
+      "watchFor": "a second character for the same name (a package without `target` is refused with `CHARACTER_EXISTS`: one such refusal followed by `target` is fine); renaming or moving her pages by hand; a new Core made beside the Reference; resubmitting.",
+      "toolCallsNote": "`arkona_create_character` (`target`, `upgradeToCore`) twice: the dry run, then Proposal captured, once."
     }
   ]
 }

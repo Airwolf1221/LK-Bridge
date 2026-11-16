@@ -13,6 +13,7 @@ import type { CustomStepHandler, CustomStepHandlers } from './custom-steps.js';
 import type { StepPlanner } from './planners.js';
 import { compareStoredBlocks, VERIFY_IGNORED_FIELDS } from './verify-blocks.js';
 import {
+  CheckRefusedError,
   JobsError,
   LkOperationError,
   StateConflictError,
@@ -34,7 +35,9 @@ import {
   type ChildrenCheck,
   type DocumentChecker,
   type ExpectCheck,
+  type Filler,
   type MapChecker,
+  type RegisteredChecker,
   type ResourceCheck,
   type SubtreeCheck,
   type TargetVerification,
@@ -117,6 +120,10 @@ export interface StepExecDeps {
   readonly checker?: (name: string) => DocumentChecker | undefined;
   /** v2 D2: the map checkers of `bridge.expect` (`kind: 'map'`) and `bridge.verify` (`kind: 'mapChecked'`), by name. */
   readonly mapChecker?: (name: string) => MapChecker | undefined;
+  /** v3 F3a (ADR 0050): the asynchronous checkers of `bridge.expect` and `bridge.verify` (`kind: 'registered'`). */
+  readonly asyncChecker?: (name: string) => RegisteredChecker | undefined;
+  /** v3 F3a (ADR 0050): the fillers of `StepOptions.fill`. */
+  readonly filler?: (name: string) => Filler | undefined;
   /** v2 D1.1 (ADR 0039): whether a project uses a write's `ETag` as its new version (`useEtagVersions`, default on). */
   readonly etagVersions?: (projectId: string) => boolean;
   /** v2 D3 (ADR 0041): keeps an asset's bytes before any `deleteAsset` (see `AssetDeleteKeeper`). */
@@ -691,6 +698,60 @@ export class StepExecutor {
     const bodies: Record<string, unknown> = {};
     const observed: Record<string, unknown> = {};
     for (const c of checks) {
+      // v3 F3a (ADR 0050): a setting pack's check, judged by a registered asynchronous checker that reads in the job.
+      if (c.kind === 'registered') {
+        const checker = this.d.asyncChecker?.(c.checker);
+        if (!checker)
+          throw new JobsError(
+            'BRIDGE_ERROR',
+            `The check ${c.checker} is not available; nothing was written.`,
+            ref,
+          );
+        let out;
+        try {
+          out = await checker({
+            projectId: job.projectId,
+            jobId: job.id,
+            stepNo: step.stepNo,
+            label: c.label,
+            phase: 'expect',
+            input: c.input,
+            from: {},
+            read: (op, p) => this.readOp(job, step, op, p, stats),
+          });
+        } catch (e) {
+          if (e instanceof JobsError) throw e;
+          throw new StateConflictError(
+            EXPECT_STEP,
+            c.label,
+            [
+              {
+                path: c.label,
+                expected: 'the plan’s state',
+                actual: e instanceof Error ? e.message : String(e),
+              },
+            ],
+            null,
+            null,
+            ref,
+          );
+        }
+        if (out.refusal) {
+          throw new CheckRefusedError(
+            EXPECT_STEP,
+            out.refusal.code,
+            out.refusal.message,
+            { label: c.label, ...(out.refusal.details ?? {}) },
+            ref,
+          );
+        }
+        if (out.differences.length > 0)
+          throw new StateConflictError(EXPECT_STEP, c.label, [...out.differences], null, null, ref);
+        Object.assign(bodies, out.bodies ?? {});
+        if (out.observed !== undefined) observed[c.label] = out.observed;
+        if (c.resourceId) keep(c.resourceId, c.label, null);
+        continue;
+      }
       // v2 D1: a whole document judged by a registered checker (the chronology's tables), one event, one lane.
       if (c.kind === 'document') {
         const checker = this.d.checker?.(c.checker);
@@ -1103,6 +1164,8 @@ export class StepExecutor {
     let count = 0;
     const resources = new Map<string, { exists: boolean; body: unknown }>();
     const siblings = new Map<string, SiblingItem[] | null>();
+    // v3 F3a: the reads registered checkers make, once per verify step.
+    const cachedReads = new Map<string, Promise<{ exists: boolean; body: unknown }>>();
     const resource = async (id: string) => {
       let r = resources.get(id);
       if (!r) {
@@ -1182,6 +1245,36 @@ export class StepExecutor {
                 diffs.push({ path: `${t.label} ${k}`, expected: v, actual: actual ?? null });
             }
           }
+          n = diffs.length;
+        } else if (t.kind === 'registered') {
+          // v3 F3a (ADR 0050): a setting pack's page check, by a registered asynchronous checker. Its reads are made once
+          // per verify step, so several targets on one page (one per gated field) cost one read.
+          const checker = this.d.asyncChecker?.(t.checker);
+          if (!checker) throw new Error(`the check ${t.checker} is not available`);
+          const from: Record<string, unknown> = {};
+          for (const f of t.inputFrom ?? []) {
+            const src = f.step < step.stepNo ? this.d.repo.step(job.id, f.step) : undefined;
+            from[f.as] = src?.status === 'succeeded' ? (this.d.repo.stepResult(src) ?? null) : null;
+          }
+          const out = await checker({
+            projectId: job.projectId,
+            jobId: job.id,
+            stepNo: step.stepNo,
+            label: t.label,
+            phase: 'verify',
+            input: t.input,
+            from,
+            read: (op, p) => {
+              const key = `${op} ${stableJson(p)}`;
+              let hit = cachedReads.get(key);
+              if (!hit) {
+                hit = this.readOp(job, step, op, p, stats);
+                cachedReads.set(key, hit);
+              }
+              return hit;
+            },
+          });
+          diffs.push(...out.differences);
           n = diffs.length;
         } else if (t.kind === 'checked') {
           // v2 D1: a document read back and judged by a registered checker.
@@ -1648,6 +1741,65 @@ export class StepExecutor {
           callerVersion = current.version;
           ifMatch = current.version;
         }
+      }
+
+      // v3 F3a (ADR 0050): a page the job made from a template already holds the template's content: the registered
+      // filler works out what to send from the document as it is now (read just above, inside the lock), once. The
+      // result is stored with the version read as its If-Match, so a later attempt compares with it.
+      const fill = step.options.fill;
+      if (fill && op.operationId === 'replaceDocumentBlocks' && !resend && callerVersion === undefined) {
+        if (!current?.exists || !current.version) {
+          throw new StateConflictError(
+            op.operationId,
+            'the new page’s document',
+            [{ path: 'document', expected: 'present', actual: '(gone)' }],
+            null,
+            null,
+            ref,
+          );
+        }
+        const filler = this.d.filler?.(fill.filler);
+        if (!filler)
+          throw new JobsError(
+            'BRIDGE_ERROR',
+            `The filler ${fill.filler} is not available; nothing was sent.`,
+            ref,
+          );
+        let r;
+        try {
+          r = filler({
+            projectId: job.projectId,
+            jobId: job.id,
+            stepNo: step.stepNo,
+            input: fill.input,
+            planned: (((params.body ?? {}) as { blocks?: unknown }).blocks ?? []) as unknown[],
+            current: {
+              version: current.version,
+              blocks: (((current.body ?? {}) as { blocks?: unknown }).blocks ?? []) as unknown[],
+            },
+          });
+        } catch (e) {
+          if (e instanceof JobsError) throw e;
+          throw new StateConflictError(
+            op.operationId,
+            'the new page’s document',
+            [
+              {
+                path: 'document',
+                expected: 'a template copy the plan can fill',
+                actual: e instanceof Error ? e.message : String(e),
+              },
+            ],
+            null,
+            current.version,
+            ref,
+          );
+        }
+        params = { ...params, ifMatch: current.version, body: { blocks: [...r.blocks] } };
+        this.d.repo.setStepParams(job.id, step.stepNo, params);
+        callerVersion = current.version;
+        ifMatch = current.version;
+        replanned = { filled: true, ...(r.note ?? {}) };
       }
 
       if (meta.guard && current?.exists) {

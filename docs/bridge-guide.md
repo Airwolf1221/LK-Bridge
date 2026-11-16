@@ -33,6 +33,7 @@ tasks come first and the reference after. The last section, **Operations**, list
 | Change facts or links                               | `set_facts` (all changes in one call)                                   | `lk_api_write` on properties                      |
 | Rename, tag, alias, hide, lock                      | `update_resource`                                                       | `lk_api_write`                                    |
 | Make a character                                    | `create_character` (Working), then `create_resource` for its pages      | `create_many_resources`                           |
+| Make an Arkona character, or add pages to one       | `arkona_create_character` (one package; projects with the pack)         | `create_character` and `create_resource` calls    |
 | Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` (rare: see Create a page)  |
 | Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                     |
 | Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                              | `delete_resource`, `move_resource` to the archive |
@@ -62,6 +63,7 @@ loosely, but only a clear match is returned, and each miss costs a call):
 - `Edit a page's text`
 - `Change facts and links`
 - `Create a page or a character (Working first)`
+- `Setting packs (Arkona characters)` (the Arkona character tool)
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -289,6 +291,165 @@ sure it went through, send the SAME request with the SAME `operation_id`: you ge
 **A failed job is never replayed.** `WRITTEN_IN_PART` lists what was written, what was not, and the journal entries.
 Read the pages, then make a new, smaller request for what is missing. `OUTCOME_UNKNOWN` lists under `uncertain` a write
 whose answer was lost: it may have been made, so read the pages before anything else and never repeat it blindly.
+
+## Setting packs (Arkona characters)
+
+A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates and tags, taken
+from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list only
+when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`, naming
+the projects they work on). The first is **`arkona_create_character`**, the Arkona pack's character tool.
+
+**Use it instead of separate creates.** On a project with the Arkona pack, make every new character with
+`arkona_create_character`, and add new pages to an existing character with it too (`target`, below). One package
+describing the character becomes the right set of linked pages: only the pages you give, each from its template, named
+and placed by Arkona's Character Architecture, its sidebar filled in template order, its tags **computed** from the facts
+(never typed), every link resolved to an exact page, staged images placed in the character's asset folder, and the whole
+set verified after the write. `create_character` followed by `create_resource` and `set_facts` calls does part of this,
+page by page, and none of the checks. The tool never rewrites a page that exists: edit those with `write_page` and
+`set_facts`.
+
+**Preview first, then one proposal.** `dryRun: true` (or `preview: true`) writes nothing and returns the whole plan: the
+page tree (names, parents, positions), each page's template, facts, tags, Dependencies and Related Sources, the asset
+folders, every dash replaced, the tag slots held back, the warnings and the refusals. Fix what it refuses, tell the person
+about any warning that is a judgement call, then call again without `dryRun`. That call is **one proposal** for the owner,
+whatever your scope (`status: "authoritative"` makes it a canonical one). Never resubmit it: follow it with
+`bridge_proposal_status`. Once approved it runs as one job, and the verify reads back the six identity fields one by
+one, the tags in order, every template row, each page's place, each link and each image.
+
+**The package.**
+
+- `name`: the Canonical Display Name, without a prefix.
+- `depth`: `"compact"` makes one Compact Character Reference (a minor character, directly under its race index);
+  `"developed"` makes an `[INDEX] {name}` with a Character Core and one page per domain you give.
+- `status`: `"working"` (the default) makes `[BWRK]` pages under `[INDEX] Working`, to promote later as one set
+  (`promote_page` with `subtree: true`); `"authoritative"` makes canon in the character's place under its race.
+- `identity`: the six gated fields `givenName`, `surname`, `race`, `namingCulture`, `lifeState` and `temporalScope`,
+  and, if you have them, `subject`, `canonicalDisplayName`, `aliases` and `supersedes`.
+- `pages`: only the domains with real content. Each has a `role`, a one-line `scope`, its `markdown`, and optional
+  `dependencies` and `related` (names or ids of current pages). The roles: `core` (developed) or `compact` (compact), the
+  identity page, exactly one for a new character; `specialist`, with a `title` such as `"Biography"` (the page is
+  `{name} - {title}`), an optional `referenceType` (one is suggested) and at most one `specialistTag` (Biography,
+  Personality, Relationship, Character Art, Visual Reference, Wardrobe, Magic or Equipment); `art`, with `images` (each a
+  `staged_id` from `upload_image` with `stage: true`, a `label` `"{Visual Role} - {Descriptor}"`, its `interpretation`,
+  what the image establishes, and an optional `subfolder` such as `"Outfits / Court Dress"`); and `relationship`, with
+  `with` (the other character), an optional `label` and `host` (`"self"`, the default, or `"other"`). The relationship
+  is added to both characters' Related Sources (a Working relationship
+  is linked from a canon character only after promotion: the warning `PARTNER_LINK_DEFERRED` says to add it then).
+- `index`: `{ "markdown": "…" }`, the index text. Left out, a minimal one is drafted and shown in the preview.
+- `operation_id`: as for every create; `project`: the project's name.
+
+Every page's text starts with `## Purpose`: no title and no metadata header (LegendKeeper shows the name, the sidebar
+holds the facts), no empty or placeholder section. A Core, Reference or Relationship page should end with
+`## Source Boundaries` and `## Unresolved Material` (a warning names a missing one). Page names come from the rules, so
+never write a prefix. An em dash or en dash used as a separator anywhere in the package is replaced by an ASCII hyphen,
+and each replacement is listed (`replacements`); "CANON" or a date in a page name is refused. Last Major Revision is set to
+the day the job runs on every page the tool makes or substantially changes.
+
+A compact background character:
+
+```json
+{
+  "name": "Asagiri Ren",
+  "depth": "compact",
+  "identity": {
+    "givenName": "Ren",
+    "surname": "Asagiri",
+    "race": "Foxian",
+    "namingCulture": "Fujimatsuan",
+    "lifeState": "Alive at 5A 931",
+    "temporalScope": "5A 900 - 5A 931"
+  },
+  "pages": [
+    {
+      "role": "compact",
+      "scope": "Shrine guard of the Hollow Court",
+      "markdown": "## Purpose\n\nThe compact reference for Asagiri Ren, a shrine guard.\n\n## Identity\n\nA Foxian guard of the Hollow Court shrine.\n\n## Source Boundaries\n\nIdentity and role only.\n\n## Unresolved Material\n\nNone yet.\n"
+    }
+  ],
+  "dryRun": true,
+  "project": "test"
+}
+```
+
+A developed character, with a Biography, an Art page and a relationship with an existing character:
+
+```json
+{
+  "name": "Kurosawa Aoi",
+  "depth": "developed",
+  "identity": {
+    "givenName": "Aoi",
+    "surname": "Kurosawa",
+    "race": "Foxian",
+    "namingCulture": "Fujimatsuan",
+    "lifeState": "Alive at 5A 931",
+    "temporalScope": "5A 902 - 5A 931",
+    "aliases": "The Gate Archer"
+  },
+  "pages": [
+    {
+      "role": "core",
+      "scope": "Identity and routing",
+      "markdown": "## Purpose\n\nThe identity of Kurosawa Aoi and the way to her sources.\n\n## Identity\n\nA Foxian archer of the Hollow Court.\n\n## Source Boundaries\n\nIdentity only; her life is in her Biography.\n\n## Unresolved Material\n\nHer teacher is not decided.\n"
+    },
+    {
+      "role": "specialist",
+      "title": "Biography",
+      "specialistTag": "Biography",
+      "scope": "Her life to 5A 931",
+      "markdown": "## Purpose\n\nThe life of Kurosawa Aoi.\n\n## Early Life\n\nRaised at the Hollow Court, she took the bow at twelve.\n"
+    },
+    {
+      "role": "art",
+      "scope": "Her approved visual references",
+      "markdown": "## Purpose\n\nThe approved visual references for Kurosawa Aoi.\n",
+      "images": [
+        {
+          "staged_id": "the id upload_image gave",
+          "label": "Primary Reference - Character Portrait",
+          "interpretation": "Establishes her face, her hair and her court robes."
+        }
+      ]
+    },
+    {
+      "role": "relationship",
+      "with": "Asagiri Miyabi",
+      "scope": "Their bond at the shrine",
+      "markdown": "## Purpose\n\nThe bond of Kurosawa Aoi and Asagiri Miyabi.\n\n## Bond\n\nMiyabi taught Aoi the shrine's rites.\n\n## Source Boundaries\n\nThe relationship only.\n\n## Unresolved Material\n\nNone yet.\n"
+    }
+  ],
+  "dryRun": true,
+  "project": "test"
+}
+```
+
+**The gate: ask the owner, don't guess.** A new character needs all six gated fields, never blank and never a
+placeholder ("TBD", "unknown", "?"). If one is missing the tool refuses with `IDENTITY_INCOMPLETE`, naming the fields.
+**Do not invent a value or borrow one from a similar character: ask the owner**, then call again with the answer. Only
+when the owner says a field is deliberately left open, give `{ "value": "Unestablished", "reason": "…" }` with the owner's
+reason; the reason is written into the page's Unresolved Material. The race decides the place: a race with no race index
+puts the character under `[INDEX] Undetermined / Unknown`, with a warning (`RACE_FALLBACK`). A race or naming culture
+with no approved tag token leaves that tag out and reports it (`heldTags`). Never add a tag yourself: tags are computed,
+and a typed one is refused (`TAG_NOT_ALLOWED`).
+
+**An existing character: `target`.** A character is never made twice: a new package with an existing character's name is
+refused (`CHARACTER_EXISTS`, naming it), and so is a job that finds the character was made by another request in the
+meantime. To add pages, pass `target` (its name, an alias or its id) with only the new pages; `depth` is ignored and the
+identity page is not given again. The new pages take the character's standing: Working beside a Working character,
+canon beside a canon one, its continuity kept (an AU character's pages stay AU). `status: "working"` instead drafts them
+flat under `[INDEX] Working`, to promote into the character's place later. A Compact Reference that gains sibling pages
+gets its own index in its place (the Reference moves under it and keeps its id); `upgradeToCore: true` renames the
+Compact Reference to its Character Core (its text kept). New pages are announced in the index's "How to Use This Index"
+section. The tool refuses a name that matches several characters (`TARGET_AMBIGUOUS`, with the candidates: pass the
+id), an Archived character (`TARGET_ARCHIVED`: it is unarchived first, by the owner), a domain the character already has
+(`DOMAIN_EXISTS`: edit that page with `write_page`) and splitting an existing page (`MONOLITH_SPLIT_UNSUPPORTED`).
+Blank gated fields on the existing character are a warning (`IDENTITY_DEBT`): ask the owner, then give the values in
+`identity` to fix them in the same proposal.
+
+**When the pack is not current.** The pack records the versions of Arkona's governance pages that the owner approved. If
+one has changed since, or the pack's rules were edited, nothing is computed and every call is refused with
+`PACK_NOT_CURRENT` until the owner checks the rules and approves again on the dashboard. Tell the person; there is nothing
+to retry.
 
 ## Rename, move, delete and restore
 

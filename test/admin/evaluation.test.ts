@@ -125,7 +125,7 @@ describe('the Evaluation API', () => {
   it('serves the scenarios with the preamble and what to copy', async () => {
     const r = await stack.get('/api/admin/evaluation/scenarios');
     expect(r.status).toBe(200);
-    expect(r.json.scenarios).toHaveLength(30);
+    expect(r.json.scenarios).toHaveLength(34);
     expect(r.json.coreIds).toHaveLength(17);
     expect(r.json.scenarios[0].copy[0]).toBe(`${r.json.preamble}\n\n${r.json.scenarios[0].prompts[0]}`);
   });

@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased: v3 F3a (16 November 2026): setting packs and the Arkona character tool
+
+[ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md) (Proposed), carrying out the owner-approved
+[character pack design](design/F3-character-pack.md) (now with an "as built" section). Migration `3000` (packs, their
+projects, versions and reservations). Nothing was run against a live system: every test uses the mock LegendKeeper and
+Arkona-shaped fixtures.
+
+- **Setting packs** ([docs/packs.md](packs.md)): a setting's rules held as data (types, roles, templates by role, names,
+  placement, sidebar facts, the closed tag grammar with its token maps, text rules), versioned, attached to projects
+  (template ids worked out per project from the home project's template names), and approved by the owner against the
+  governance pages they were derived from. A changed governance page, or rules edited since the approval, fails closed:
+  no tags are computed and every package is refused until the owner approves again. A pack's tools carry its prefix and
+  are listed only for a project it is attached to.
+- **`arkona_create_character`**: one package becomes a character's whole set of linked pages (a Compact Character
+  Reference, or an index with a Character Core and one page per domain given; Art pages with staged images; joint
+  relationships), each from its template, named, placed under its race, its sidebar filled in template order, its tags
+  computed, links resolved, then verified. A full preview first (`dryRun`); then one proposal for the owner, whatever
+  the agent's scope, in the pack's first weeks. The completion gate refuses a new character without its six identity
+  fields and tells the agent to ask the owner. Em dashes (and en dashes used as separators) are replaced by hyphens and
+  listed; CANON or a date in a page name is refused. Last Major Revision is set on every page it creates or
+  substantially changes.
+- **Existing characters** (`target`): found by id, name or alias, never duplicated; new pages take the character's
+  standing (Working, canon, its AU continuity); a Compact Reference that gains pages gets its own index (its id kept),
+  and `upgradeToCore` makes it a Core; the index's routing section gains a line per page; blank gated fields are warned
+  about and fixed when given; an Archived character, a domain it already has and a monolith split are refused. Two
+  approved packages for one new character: the second job stops before writing.
+- **Type-driven**: the engine reads the pack's rules; small hooks hold what data cannot say. A type defined only as data
+  (a test's dummy "Polity") plans, previews, proposes and verifies through the same engine, served by a generic pack
+  tool. The extension points for F3b are named in the ADR.
+- **The Packs page** (dashboard, after Repository Mappings): each pack's state, governance sources and versions, projects
+  and template ids, token maps, rules and versions; **Approve this pack version** and **Save token maps**, each
+  re-authenticated and audited.
+- **The general bridge** gained registered checks in a job's lock and verify step, a filler for a template copy's text,
+  image-address binding, a tool's `listed` predicate with a live tool list, and a lifecycle guard that judges a move into
+  a page made earlier in the same request.
+- **Docs**: the agents' guide has a "Setting packs (Arkona characters)" section (when to use the tool, a compact and a
+  developed example, the gate, `target`); tools.md, dashboard.md and four new evaluation scenarios (31 to 34, marked
+  `pack: "arkona"`).
+
 ## Unreleased: v3 F2.1 (16 November 2026): chronology ties settled
 
 [ADR 0048](adr/0048-chronology-ii.md)'s F2.1 amendments (no new ADR, no migration). From the owner's Arkona run of 16

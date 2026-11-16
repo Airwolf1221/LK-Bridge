@@ -31,8 +31,8 @@ beforeAll(async () => {
 afterAll(() => stack.close());
 
 describe('docs/reviews/scenarios.json', () => {
-  it('loads and is valid: the 30 scenarios of the E3 script, numbered 1 to 30', () => {
-    expect(file.scenarios.map((s) => s.id)).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
+  it('loads and is valid: the 30 scenarios of the E3 script and v3 F3a’s four, numbered 1 to 34', () => {
+    expect(file.scenarios.map((s) => s.id)).toEqual(Array.from({ length: 34 }, (_, i) => i + 1));
     expect(file.preamble).toMatch(/^I am testing a LegendKeeper connector called LK-Bridge/);
     expect(file.preamble).toContain('Work only in the project named `test`');
     for (const s of file.scenarios) {
@@ -141,7 +141,7 @@ describe('docs/reviews/scenarios.json', () => {
   });
 
   it('lists the scenarios of a set for an assistant', () => {
-    expect(scenariosFor(file, 'all', 'chatgpt')).toHaveLength(30);
+    expect(scenariosFor(file, 'all', 'chatgpt')).toHaveLength(34);
     expect(scenariosFor(file, 'core', 'claude')).toHaveLength(17);
   });
 
@@ -161,6 +161,28 @@ describe('docs/reviews/scenarios.json', () => {
     for (const note of [s.expectedNote, s.toolCallsNote, s.setupNote ?? ''])
       expect(note, note).toMatch(/deduplicated/);
     expect(s.watchFor).toMatch(/deduplicate: false/);
+  });
+
+  it('v3 F3a: the four Arkona pack scenarios are marked with their pack and expect the pack tool', () => {
+    const pack = file.scenarios.filter((s) => s.pack !== undefined);
+    expect(pack.map((s) => [s.id, s.pack])).toEqual([
+      [31, 'arkona'],
+      [32, 'arkona'],
+      [33, 'arkona'],
+      [34, 'arkona'],
+    ]);
+    for (const s of pack) {
+      expect(s.expectedTools.flat(), `scenario ${s.id}`).toContain('arkona_create_character');
+      expect(s.mistakeTools, `scenario ${s.id}`).toContain('create_character');
+      expect(s.core, `scenario ${s.id}`).toBe(false);
+    }
+    // The developed character stages its image first; the missing culture proposes nothing; the extension needs 31.
+    expect(byId(32).expectedTools).toEqual(['upload_image', 'arkona_create_character']);
+    expect(byId(33).alwaysProposal).toBe(false);
+    expect(byId(34).dependsOn).toEqual([31]);
+    // The human copy lists them too, with the same prompts.
+    const md = readFileSync(new URL('../../docs/reviews/E3-evaluation.md', import.meta.url), 'utf8');
+    for (const s of pack) for (const p of s.prompts) expect(md, `scenario ${s.id}`).toContain(p);
   });
 
   it('is pointed to from the human copy', () => {

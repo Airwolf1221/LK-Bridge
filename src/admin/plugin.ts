@@ -2,6 +2,7 @@
  * The dashboard's HTTP side (chunk 5): the admin JSON API at `/api/admin`, the live stream, and the static app at `/ui`.
  * Register it with a plain `app.register` after the auth plugin (it needs the same services). See docs/dashboard.md.
  */
+import { registerPacks } from './routes/packs.js';
 import fastifyCookie from '@fastify/cookie';
 import type { FastifyInstance } from 'fastify';
 import { createAdminActions } from './actions.js';
@@ -113,6 +114,7 @@ export async function adminPlugin(app: FastifyInstance, deps: AdminDeps): Promis
       registerAudits(api, ctx); // v2 E2
       registerToolCalls(api, ctx); // v2 E3
       registerEvaluation(api, ctx); // v2 E3: the Evaluation helper
+      registerPacks(api, ctx); // v3 F3a: setting packs
 
       /** The one live stream (docs/dashboard.md › Stream). */
       api.get('/stream', (req, reply) => {

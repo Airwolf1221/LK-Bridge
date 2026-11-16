@@ -153,6 +153,16 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'page from a template',
       'template',
     ],
+    // v3 F3a (ADR 0050): the setting packs' tools, the Arkona character tool first.
+    'Setting packs (Arkona characters)': [
+      'Make an Arkona character, or add pages to one',
+      'arkona_create_character',
+      'Arkona character',
+      'create an Arkona character',
+      'setting pack',
+      'character package',
+      'completion gate',
+    ],
     'Rename, move, delete and restore': [
       'Rename, tag, alias, hide, lock',
       'Move a page',
@@ -193,6 +203,7 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
 /** Key words added to a heading's own (by the heading's text), where its words alone would not be asked for. */
 const KEYWORDS: Readonly<Record<string, string>> = {
   'How to decide': 'rules choose overview start',
+  'Setting packs (Arkona characters)': 'package gate identity',
 };
 
 interface Entry {

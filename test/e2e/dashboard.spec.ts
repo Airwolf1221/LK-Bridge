@@ -48,6 +48,7 @@ test('signs in, comes back to where it was going, and every page renders under t
     ['Settings', 'Settings'],
     ['Maintenance Jobs', 'Maintenance Jobs'],
     ['Repository Mappings', 'Repository Mappings'],
+    ['Packs', 'Packs'], // v3 F3a
     ['Projects', 'Projects'],
     ['Repository Tree', 'Repository Tree'], // v2 A2
     ['Asset Tree', 'Asset Tree'], // v2 A4

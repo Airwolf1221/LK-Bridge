@@ -58,6 +58,7 @@ describe('the MCP surface with the official client', () => {
         'write_page', // v2 C1
         // v2 C2b
         'create_character',
+        'arkona_create_character',
         'create_document',
         'create_index',
         'create_many_resources',
