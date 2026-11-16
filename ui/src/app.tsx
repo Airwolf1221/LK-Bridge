@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ConfirmProvider, Loading, ToastProvider } from './components';
 import { PROJECT_STATUS_LABELS } from './format';
 import { Link, Router, useRoute } from './router';
+import { Sidebar, type NavItem } from './sidebar';
 import { StreamProvider, useStream, useStreamEvent, type SourceFactory } from './stream';
 import { useReloadOn } from './hooks';
 import { ProjectProvider, useProject, useScopedApi } from './project';
@@ -30,6 +31,7 @@ import { LifecyclePage } from './pages/lifecycle';
 import { ChronologyPage } from './pages/chronology';
 import { WritersPage } from './pages/writers';
 import { PacksPage } from './pages/packs';
+import { EvaluationPanel } from './pages/evaluation';
 
 type Theme = 'system' | 'light' | 'dark';
 
@@ -50,31 +52,90 @@ async function signOut(session: SessionInfo): Promise<void> {
   }
 }
 
-const NAV: { to: string; label: string; later?: boolean }[] = [
+/** Always at the top of the sidebar, in this order (v3 F3c). Proposals carries the pending count. */
+export const TOP_NAV: NavItem[] = [
   { to: '/', label: 'Overview' },
   { to: '/jobs', label: 'Jobs' },
-  { to: '/errors', label: 'Errors' },
-  { to: '/budgets', label: 'Request Budgets' },
-  { to: '/writers', label: 'Concurrent Writers' },
   { to: '/proposals', label: 'Proposals' },
-  { to: '/clients', label: 'Clients & Access' },
-  { to: '/journal', label: 'Journal' },
-  { to: '/tool-calls', label: 'Tool calls' },
-  { to: '/projects', label: 'Projects' },
-  { to: '/tree', label: 'Repository Tree' },
-  { to: '/lifecycle', label: 'Archive and lifecycle' },
-  { to: '/chronology', label: 'Chronology' },
-  { to: '/assets', label: 'Asset Tree' },
-  { to: '/staging', label: 'Staging' },
-  { to: '/snapshots', label: 'Snapshots' },
-  { to: '/audits', label: 'Audits' },
-  { to: '/offsite', label: 'Off-site copy' },
-  { to: '/settings', label: 'Settings' },
-  { to: '/account', label: 'Account' },
-  { to: '/maintenance', label: 'Maintenance Jobs' },
-  { to: '/mappings', label: 'Repository Mappings' },
-  { to: '/packs', label: 'Packs' },
 ];
+
+/**
+ * Every other page, filed under its group. The sidebar sorts groups by name and pages by label, so the order here does
+ * not matter: a new page only needs its group named.
+ */
+export const NAV: NavItem[] = [
+  { to: '/account', label: 'Account', group: 'Access & Account' },
+  { to: '/clients', label: 'Clients & Access', group: 'Access & Account' },
+  { to: '/assets', label: 'Asset Tree', group: 'Assets' },
+  { to: '/staging', label: 'Staging', group: 'Assets' },
+  { to: '/offsite', label: 'Off-site copy', group: 'Backups & Recovery' },
+  { to: '/snapshots', label: 'Snapshots', group: 'Backups & Recovery' },
+  { to: '/writers', label: 'Concurrent Writers', group: 'Limits' },
+  { to: '/budgets', label: 'Request Budgets', group: 'Limits' },
+  { to: '/errors', label: 'Errors', group: 'Monitoring' },
+  { to: '/journal', label: 'Journal', group: 'Monitoring' },
+  { to: '/tool-calls', label: 'Tool calls', group: 'Monitoring' },
+  { to: '/audits', label: 'Audits', group: 'Quality' },
+  { to: '/evaluation', label: 'Evaluation', group: 'Quality' },
+  { to: '/lifecycle', label: 'Archive and lifecycle', group: 'Repository' },
+  { to: '/chronology', label: 'Chronology', group: 'Repository' },
+  { to: '/tree', label: 'Repository Tree', group: 'Repository' },
+  { to: '/maintenance', label: 'Maintenance Jobs', group: 'Setup' },
+  { to: '/packs', label: 'Packs', group: 'Setup' },
+  { to: '/projects', label: 'Projects', group: 'Setup' },
+  { to: '/mappings', label: 'Repository Mappings', group: 'Setup' },
+  { to: '/settings', label: 'Settings', group: 'Setup' },
+];
+
+/**
+ * Page modules with no sidebar entry of their own, on purpose: each is reached from its parent page. A test fails when a
+ * page module is neither routed from here nor listed below.
+ */
+export const SUB_PAGES: { module: string; parent: string }[] = [
+  { module: 'evaluation-run', parent: '/evaluation' },
+  { module: 'evaluation-compare', parent: '/evaluation' },
+  { module: 'evaluation-shared', parent: '/evaluation' },
+  { module: 'chronology-ties', parent: '/chronology' },
+  { module: 'registry', parent: '/mappings' },
+];
+
+/** The router's table: a path, whether its sub-paths (`/jobs/abc`) are served too, and the page. */
+export const ROUTES: { path: string; prefix?: boolean; render: (session: SessionInfo) => ReactNode }[] = [
+  { path: '/', render: () => <OverviewPage /> },
+  { path: '/jobs', prefix: true, render: () => <JobsPage /> },
+  { path: '/errors', render: () => <ErrorsPage /> },
+  { path: '/budgets', render: () => <BudgetsPage /> },
+  { path: '/writers', render: () => <WritersPage /> },
+  { path: '/proposals', render: () => <ProposalsPage /> },
+  { path: '/clients', render: (session) => <ClientsPage session={session} /> },
+  { path: '/journal', render: () => <JournalPage /> },
+  { path: '/packs', render: () => <PacksPage /> },
+  { path: '/tool-calls', render: () => <ToolCallsPage /> },
+  { path: '/evaluation', render: () => <EvaluationPage /> },
+  { path: '/projects', render: () => <ProjectsPage /> },
+  { path: '/tree', render: () => <TreePage /> },
+  { path: '/lifecycle', render: () => <LifecyclePage /> },
+  { path: '/chronology', render: () => <ChronologyPage /> },
+  { path: '/assets', render: () => <AssetsPage /> },
+  { path: '/staging', render: () => <StagingPage /> },
+  { path: '/snapshots', render: () => <SnapshotsPage /> },
+  { path: '/audits', render: () => <AuditsPage /> },
+  { path: '/offsite', render: () => <OffsitePage /> },
+  { path: '/settings', render: () => <SettingsPage /> },
+  { path: '/account', render: () => <AccountPage /> },
+  { path: '/maintenance', render: () => <MaintenancePage /> },
+  { path: '/mappings', prefix: true, render: () => <MappingsPage /> },
+];
+
+/** The Evaluation helper on a page of its own (it is also a panel on Tool calls), open from the start. */
+function EvaluationPage() {
+  return (
+    <>
+      <h1>Evaluation</h1>
+      <EvaluationPanel defaultOpen />
+    </>
+  );
+}
 
 const readTheme = (): Theme => {
   try {
@@ -103,29 +164,8 @@ function useTheme(): [Theme, () => void] {
 
 function Routes({ session }: { session: SessionInfo }) {
   const { path } = useRoute();
-  if (path === '/') return <OverviewPage />;
-  if (path === '/jobs' || path.startsWith('/jobs/')) return <JobsPage />;
-  if (path === '/errors') return <ErrorsPage />;
-  if (path === '/budgets') return <BudgetsPage />;
-  if (path === '/writers') return <WritersPage />;
-  if (path === '/proposals') return <ProposalsPage />;
-  if (path === '/clients') return <ClientsPage session={session} />;
-  if (path === '/journal') return <JournalPage />;
-  if (path === '/packs') return <PacksPage />;
-  if (path === '/tool-calls') return <ToolCallsPage />;
-  if (path === '/projects') return <ProjectsPage />;
-  if (path === '/tree') return <TreePage />;
-  if (path === '/lifecycle') return <LifecyclePage />;
-  if (path === '/chronology') return <ChronologyPage />;
-  if (path === '/assets') return <AssetsPage />;
-  if (path === '/staging') return <StagingPage />;
-  if (path === '/snapshots') return <SnapshotsPage />;
-  if (path === '/audits') return <AuditsPage />;
-  if (path === '/offsite') return <OffsitePage />;
-  if (path === '/settings') return <SettingsPage />;
-  if (path === '/account') return <AccountPage />;
-  if (path === '/maintenance') return <MaintenancePage />;
-  if (path === '/mappings' || path.startsWith('/mappings/')) return <MappingsPage />;
+  const route = ROUTES.find((r) => path === r.path || (r.prefix === true && path.startsWith(`${r.path}/`)));
+  if (route) return <>{route.render(session)}</>;
   return (
     <>
       <h1>Page not found</h1>
@@ -208,22 +248,7 @@ function Shell({ session }: { session: SessionInfo }) {
           <small>Owner dashboard · v{session.version}</small>
         </div>
         <ProjectSwitcher counts={counts.data} />
-        <nav className="nav" aria-label="Main">
-          {NAV.map((n) => {
-            const current = n.to === '/' ? path === '/' : path === n.to || path.startsWith(`${n.to}/`);
-            return (
-              <Link key={n.to} to={n.to} {...(current ? { 'aria-current': 'page' as const } : {})}>
-                <span>{n.label}</span>
-                {n.to === '/proposals' && pending > 0 && (
-                  <span className="count" aria-label={`${pending} pending`}>
-                    {pending}
-                  </span>
-                )}
-                {n.later && <span className="later">later</span>}
-              </Link>
-            );
-          })}
-        </nav>
+        <Sidebar top={TOP_NAV} items={NAV} path={path} badges={{ '/proposals': pending }} />
         <div className="sidebar-foot">
           <span className="live" role="status" aria-label={`Live updates: ${live}`}>
             <span className={`dot dot-${status}`} aria-hidden="true" /> {live}

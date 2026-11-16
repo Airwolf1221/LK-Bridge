@@ -19,6 +19,22 @@ function watch(page: Page) {
   return problems;
 }
 
+/**
+ * Clicks a link in the main navigation (v3 F3c). If its sidebar group is closed, the group's button is clicked first,
+ * as the owner would.
+ */
+async function goTo(page: Page, name: string | RegExp, exact = false) {
+  const nav = page.getByRole('navigation', { name: 'Main' });
+  const link = nav.getByRole('link', { name, exact, includeHidden: true });
+  if (!(await link.isVisible())) {
+    const inGroup = page.getByRole('link', { name, exact, includeHidden: true });
+    const toggle = nav.locator('li.nav-group', { has: inGroup }).locator('button.nav-group-toggle');
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  }
+  await link.click();
+}
+
 async function signIn(page: Page, path = '/ui') {
   await page.goto(path);
   await expect(page).toHaveURL(/\/oauth\/login\?return_to=/);
@@ -48,16 +64,14 @@ test('signs in, comes back to where it was going, and every page renders under t
     ['Settings', 'Settings'],
     ['Maintenance Jobs', 'Maintenance Jobs'],
     ['Repository Mappings', 'Repository Mappings'],
-    ['Packs', 'Packs'], // v3 F3a
+    ['Packs', 'Packs'], // v3 F3a; under Setup since v3 F3c
+    ['Evaluation', 'Evaluation'], // v3 F3c: its own page
     ['Projects', 'Projects'],
     ['Repository Tree', 'Repository Tree'], // v2 A2
     ['Asset Tree', 'Asset Tree'], // v2 A4
     ['Account', 'Account'], // OPS2
   ] as const) {
-    await page
-      .getByRole('navigation', { name: 'Main' })
-      .getByRole('link', { name: new RegExp(`^${name}`) })
-      .click();
+    await goTo(page, new RegExp(`^${name}`));
     await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
   }
   await expect(page.getByRole('status', { name: /Live updates: Live/ })).toBeVisible();
@@ -88,10 +102,7 @@ test('OPS2: the Account page asks for the password again, then draws the authent
   await page.getByRole('button', { name: 'Cancel' }).click();
   await expect(qr).toBeHidden();
   // The Projects page offers to add a project with a write-only key field.
-  await page
-    .getByRole('navigation', { name: 'Main' })
-    .getByRole('link', { name: /^Projects/ })
-    .click();
+  await goTo(page, /^Projects/);
   await page.getByRole('button', { name: 'Add a project…' }).click();
   await expect(page.getByLabel('API key')).toHaveAttribute('type', 'password');
   // The one refusal is the bridge asking for the password again (403 REAUTH_REQUIRED), which opened the dialog.
@@ -117,10 +128,7 @@ test('a job runs while the Jobs, Budgets and Writers pages update live', async (
   await expect(row.getByText(/[1-4] \/ 5 steps/)).toBeVisible({ timeout: 15_000 });
 
   // Writers: a slot is busy with the job while it runs.
-  await page
-    .getByRole('navigation', { name: 'Main' })
-    .getByRole('link', { name: 'Concurrent Writers', exact: true })
-    .click();
+  await goTo(page, 'Concurrent Writers', true);
   await expect(page.locator('[data-slot][data-state="busy"]')).toBeVisible({ timeout: 10_000 });
   await expect(page.locator('[data-slot][data-state="busy"]')).toContainText('replaceDocumentBlocks');
   await expect(page.getByTestId('writes-per-minute')).not.toHaveText('0', { timeout: 10_000 });
@@ -131,18 +139,12 @@ test('a job runs while the Jobs, Budgets and Writers pages update live', async (
   await expect(page.locator('[data-slot]')).toHaveCount(3);
 
   // Budgets: the writes gauge has moved.
-  await page
-    .getByRole('navigation', { name: 'Main' })
-    .getByRole('link', { name: 'Request Budgets', exact: true })
-    .click();
+  await goTo(page, 'Request Budgets', true);
   const gauge = page.locator('[data-tier="write-min"] .gauge-figure');
   await expect(gauge).not.toContainText(/^0 \//, { timeout: 10_000 });
 
   // The job finishes; it moves to history.
-  await page
-    .getByRole('navigation', { name: 'Main' })
-    .getByRole('link', { name: 'Jobs', exact: true })
-    .click();
+  await goTo(page, 'Jobs', true);
   await page.getByRole('button', { name: 'History' }).click();
   await expect(page.locator(`tr[data-job="${jobId}"]`)).toContainText('Succeeded', { timeout: 30_000 });
   expect(problems).toEqual([]);
@@ -170,10 +172,7 @@ test('reviews a proposal as a readable diff and approves it; a token is shown on
     timeout: 15_000,
   });
 
-  await page
-    .getByRole('navigation', { name: 'Main' })
-    .getByRole('link', { name: 'Clients & Access', exact: true })
-    .click();
+  await goTo(page, 'Clients & Access', true);
   await page.getByLabel('Name', { exact: true }).fill('Playwright laptop');
   await page.getByRole('button', { name: 'Create token' }).click();
   const token = (await page.getByTestId('pat-token').textContent()) ?? '';
