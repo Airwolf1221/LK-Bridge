@@ -312,7 +312,7 @@ export interface PackSeed {
   readonly id: string;
   readonly name: string;
   readonly prefix: string;
-  /** A version name for the seed itself (a newer seed of the same pack is offered, never applied by itself). */
+  /** A version name for the seed itself (a seed is stored once; it never overwrites a stored pack). */
   readonly seed: string;
   readonly rules: PackRules;
   readonly governance: readonly GovernanceSource[];

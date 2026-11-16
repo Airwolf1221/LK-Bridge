@@ -23,6 +23,7 @@ Connecting Claude, the OAuth endpoints and personal access tokens are described 
 
 Several LegendKeeper projects in one bridge: [`docs/projects.md`](docs/projects.md). The repository tree (each project's
 AI REPOSITORY, kept current by the bridge): [`docs/tree.md`](docs/tree.md). The asset tree (each project's asset
-library, and where a character's images go): [`docs/assets.md`](docs/assets.md).
+library, and where a character's images go): [`docs/assets.md`](docs/assets.md). Setting packs (a setting's rules as
+data, and the Arkona character tool): [`docs/packs.md`](docs/packs.md).
 
 Never commit secrets. Copy `.env.example` for local values; `.env` is git-ignored.

@@ -207,6 +207,7 @@ function ScenarioCard({
             <Badge tone="info">needs your approval</Badge>
           )}
           {scenario?.alwaysProposal && <Badge tone="info">always a proposal</Badge>}
+          {scenario?.pack && <Badge tone="info">{scenario.pack} pack</Badge>}
           <Badge tone={result.state === 'done' ? 'ok' : result.state === 'recording' ? 'warn' : 'neutral'}>
             {result.state === 'done'
               ? 'Recorded'

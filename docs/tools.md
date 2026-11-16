@@ -1180,10 +1180,11 @@ token when they are the same), `{status tag}, Character, {specialist tag}` on a 
 `{status tag}, Character, Character Art` and `{status tag}, Character, Relationship`; a race or culture with no approved
 token leaves its slot out and is reported (`heldTags`); `Unknown`, `Unestablished` and `None` are never tags; an index has
 none. Dependencies and Related Sources are resolved to exact pages (a CANON page links only current `[BSRC]` pages). A
-relationship is added to both participants' Related Sources (for a Working relationship, the canon partner's link waits
-for the promotion: `PARTNER_LINK_DEFERRED`). Images are placed from the bridge's staging (v3 F2) into the character's
-asset folder, which mirrors the race path (`Assets › Characters › … › {name}`, then `Forms`, `Outfits` or `Details`),
-named `{Subject} - {Label}`, found or created folder by folder, and shown in the Art page's "Reference Images" section.
+relationship is added to both participants' Related Sources (for a Working relationship, a canon partner's link is
+left until the set is promoted: `PARTNER_LINK_DEFERRED` says to add it then with `set_facts`). Images are placed
+from the bridge's staging (v3 F2) into the character's asset folder, which mirrors the race path
+(`Assets › Characters › … › {name}`, then `Forms`, `Outfits` or `Details`), named `{Subject} - {Label}`, found or
+created folder by folder, and shown in the Art page's "Reference Images" section.
 
 **Text rules.** An em dash or en dash used as a separator in a name, heading or text is replaced by an ASCII hyphen, and
 each replacement is listed (`replacements`, with where it was). A page name with `CANON` or a date in it is refused

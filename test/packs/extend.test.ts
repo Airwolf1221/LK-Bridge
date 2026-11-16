@@ -179,6 +179,8 @@ describe('targeting an existing character', () => {
         { key: 'Continuity', value: 'Shattered Sky' },
       ]),
     );
+    // The status tag is the lifecycle's (Authoritative: CANON); the continuity is in the facts.
+    expect(r.body.pages[0].tags).toEqual(['CANON', 'Character', 'Biography']);
   });
 
   it('a Working target: its new pages go inside its Working set', async () => {

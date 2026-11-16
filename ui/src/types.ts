@@ -1997,6 +1997,8 @@ export interface EvaluationScenario {
   section: string;
   title: string;
   shortTitle: string;
+  /** v3 F3a: the setting pack the scenario exercises (`arkona`). */
+  pack?: string;
   assistants: EvaluationAssistant[];
   needsApproval: boolean;
   alwaysProposal: boolean;

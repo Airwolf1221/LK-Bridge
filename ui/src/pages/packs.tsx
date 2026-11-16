@@ -6,7 +6,7 @@ import { useReauth } from '../reauth';
 import type { PackGovernance, PackView, PacksResponse } from '../types';
 
 /**
- * Packs (v3 F3a, ADR 0050): each setting pack's rules, read-only (they are data, versioned; a newer seed or the token
+ * Packs (v3 F3a, ADR 0050): each setting pack's rules, read-only (they are data, versioned; the token
  * maps below make a new version), the governance sources the rules were derived from with the versions the owner
  * approved, the projects the pack is attached to (and its template ids there), and its versions. Two changes, each asking
  * for your password again: **Approve this pack version** (records every governance source's document version, read now)

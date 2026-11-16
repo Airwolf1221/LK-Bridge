@@ -109,15 +109,18 @@ export async function runPackage(
   const preview = previewOf(plan, job, ctx.tree.node.bind(ctx.tree), ctx.projectId);
   if (plan.refusals.length > 0) {
     const first = plan.refusals[0]!;
+    // The first refusal's details (its fields, candidates, the existing page, a hint) on the error itself, as other
+    // tools' errors carry theirs; every refusal is in `refusals`.
+    const { code: _code, message: _message, ...details } = first;
     return errorResult(
       {
+        ...details,
         code: first.code,
         message:
           plan.refusals.length === 1
             ? first.message
             : `${first.message} (and ${plan.refusals.length - 1} more refusal${plan.refusals.length === 2 ? '' : 's'}: see refusals)`,
         refusals: plan.refusals,
-        ...(first.hint ? { hint: first.hint } : {}),
         preview,
       },
       pd,

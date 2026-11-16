@@ -113,3 +113,50 @@ It is the first tool of the **Arkona pack** (PLAN-v2 section 10). The pack's rul
 - The other pack tools: outfits, species, institutions and nations.
 - Selective approval (approving parts of a package) and resuming a part-built package (PLAN-v2 10.5).
 - Naming-culture **research**. The tool checks that the fields are filled in and consistent; deciding the culture stays with the agent and you, as Arkona's rules require.
+
+---
+
+## 7. As built in F3a (16 Nov 2026): decisions and differences
+
+Everything above is the approved design, kept as approved. This section records how session F3a built it; the full
+record is [ADR 0050](../adr/0050-setting-packs-and-the-arkona-character-tool.md), and the tool's reference is in
+[tools.md](../tools.md#setting-packs-arkona_create_character-v3-f3a).
+
+**The ten answers, as built.** (1) A Core always gets an index; a Compact Reference only with a sibling page. (2) Specialist
+pages use AI General Source, Art pages AI Character Art, relationships AI Relationship. (3) The package gives a
+specialist page's Reference Type; when it does not, one is suggested from its title from your short list (and refused,
+with the list, when nothing fits). (4) A character's `[INDEX]` gets no tags. (5) Working is the default;
+`"authoritative"` is a canonical proposal. (6) The relationship is added to both participants' Related Sources (one
+exception below). (7) A missing gated field is refused, telling the agent to ask you; `Unestablished` needs a reason,
+which goes into Unresolved Material. (8) The agent writes the index text, or a minimal one is drafted and shown in the
+preview. (9) The asset folder mirrors the race path, with `Forms`, `Outfits` and `Details` subfolders. (10) Last Major
+Revision is set on every page the tool creates or substantially changes.
+
+**Your two changes, as built.** Every em dash, and every en dash used as a separator (a space on at least one side), is
+replaced by an ASCII hyphen everywhere in the package and listed in the preview; an en dash inside a range (`1990–1995`)
+is kept. CANON or a date in a page name is refused. Last Major Revision is dated the day the job runs, which for a
+proposal is the day you approve it (as F2 does for every proposal); existing pages follow F2's `lmrPackTools` switch,
+which is on unless you turn it off.
+
+**Where the package or the rules differ from the draft above, and why:**
+
+- An identity value is a string or `{ "value": …, "reason": … }`: answer 7's reason for `Unestablished` needed a place.
+- Each image has `interpretation`: section 2 refuses a bare image, so the package carries the text.
+- `target` (an existing character), `upgradeToCore` (a Compact Reference becomes its Core) and `preview` (the same as
+  `dryRun`) were added for extending existing characters; `split` is refused by name (a monolith split is F3b's).
+- A **Working** relationship is not added to a **canon** partner's Related Sources until the set is promoted (Source
+  Formatting: no Working page as a current link); the preview warns and says to add it then. A Working relationship is
+  hosted under its own character (`host: "other"` is refused for it).
+- `status: "working"` on an existing canon character drafts the new pages flat under `[INDEX] Working`, to promote into
+  place later (a Working page cannot sit under a canon index).
+- The Art page holds its images in a "Reference Images" section: per image its label, the image and its interpretation.
+- The pack's rules are one versioned document attached to both projects (Arkona and the test world), not a copy per
+  project; each project has its own template ids, worked out from Arkona's template names.
+- The governance pages are compared by their document version: your approval records each one; every preview and every
+  job checks them again, and a change stops the tool until you approve again on the Packs page.
+- Two proposals for the same new character can both be made; the second one's job stops before writing anything
+  (`CHARACTER_EXISTS`).
+- The example in section 3 starts the Core's text with `# Purpose`; any heading named Purpose is accepted first, and the
+  agents' guide shows `## Purpose`.
+- An AU character's new Authoritative pages carry `CANON` as their status tag, with Continuity Type `AU` and its
+  Continuity copied in their facts.

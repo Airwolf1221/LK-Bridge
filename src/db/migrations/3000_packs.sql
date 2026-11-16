@@ -3,10 +3,10 @@
 -- text rules), the governance sources it was derived from, the projects it is attached to, and each version the owner
 -- approved. The bridge's own code holds only the engine and small per-type hooks.
 --
--- `version` goes up by one on every change of the rules (a token map edited on the Packs page, a newer seed). A version
--- is usable only once the owner has approved it (`approved`), which also records each governance source's document
--- version at that moment; when a source's current version differs, tag computation fails closed until the owner
--- approves again (`drift` records what was seen).
+-- `version` goes up by one on every change of the rules (a token map edited on the Packs page, rules replaced by the
+-- owner's command; a seed never overwrites a stored pack). A version is usable only once the owner has approved it
+-- (`approved`), which also records each governance source's document version at that moment; when a source's current
+-- version differs, tag computation fails closed until the owner approves again (`drift` records what was seen).
 CREATE TABLE packs (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,

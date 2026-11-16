@@ -333,7 +333,8 @@ one, the tags in order, every template row, each page's place, each link and eac
   `staged_id` from `upload_image` with `stage: true`, a `label` `"{Visual Role} - {Descriptor}"`, its `interpretation`,
   what the image establishes, and an optional `subfolder` such as `"Outfits / Court Dress"`); and `relationship`, with
   `with` (the other character), an optional `label` and `host` (`"self"`, the default, or `"other"`). The relationship
-  is added to both characters' Related Sources.
+  is added to both characters' Related Sources (a Working relationship
+  is linked from a canon character only after promotion: the warning `PARTNER_LINK_DEFERRED` says to add it then).
 - `index`: `{ "markdown": "…" }`, the index text. Left out, a minimal one is drafted and shown in the preview.
 - `operation_id`: as for every create; `project`: the project's name.
 

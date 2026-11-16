@@ -122,7 +122,7 @@ export interface Packs {
       projectId: string,
       templates?: Readonly<Record<string, string | null>>,
     ): PackAttachment;
-    /** Replaces a pack's rules (tests and a newer seed; never an agent). A new version. Audited. */
+    /** Replaces a pack's rules (the owner's command, used by the tests; never an agent). A new version. Audited. */
     replaceRules(actor: string, packId: string, rules: PackRules, reason: string): Pack;
   };
 }

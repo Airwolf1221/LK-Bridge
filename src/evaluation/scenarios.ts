@@ -26,6 +26,14 @@ const scenarioSchema = z
     title: text,
     /** The short name the results table uses ("Partial name"). */
     shortTitle: z.string().min(1).max(60),
+    /**
+     * v3 F3a (ADR 0050): the setting pack the scenario exercises (`arkona`); its tools are listed only where the pack is
+     * attached, and the owner approves the pack on the Packs page before running it.
+     */
+    pack: z
+      .string()
+      .regex(/^[a-z][a-z0-9_-]{0,39}$/)
+      .optional(),
     assistants: z.array(z.enum(ASSISTANTS)).min(1),
     /** ChatGPT (scope `propose`) needs the owner to approve or reject on the Proposals page before the next step. */
     needsApproval: z.boolean(),
