@@ -3,6 +3,7 @@
  * call, the tree-status line every answer carries, name resolution with typed errors, confinement to the AI REPOSITORY
  * root, and the size rule for results.
  */
+import { isLabelSizeListError, LABEL_SIZE_UNLISTABLE, MAP_FEATURES_UNREADABLE } from '../../maps/features.js';
 import type { ProjectTypes } from '../../registry/index.js';
 import { RegistryError, ROLE_LABEL, type CharacterRole } from '../../registry/index.js';
 import type { NodeRef } from '../../registry/index.js';
@@ -285,6 +286,15 @@ export async function liveRead(
       ),
     };
   } catch (e) {
+    // v2 E5.4: LegendKeeper refuses to list a map's features when one holds a label size it will not return.
+    if (opId === 'listFeatures' && isLabelSizeListError(e))
+      return {
+        ok: false,
+        result: errorResult(
+          { code: MAP_FEATURES_UNREADABLE, message: `${LABEL_SIZE_UNLISTABLE}.`, retryable: false },
+          pd,
+        ),
+      };
     return { ok: false, result: errorFromThrown(e, pd) };
   }
 }

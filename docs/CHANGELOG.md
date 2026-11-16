@@ -1,5 +1,54 @@
 # Changelog
 
+## Unreleased: E5.4 (15 November 2026): label sizes are never sent, unreadable maps, and faster sampled rehearsals
+
+[ADR 0046](adr/0046-e4-owner-decisions.md) decision 14 (it supersedes decision 11's label-size mapping); notes in ADR 0040
+and ADR 0042; new [docs/snapshots.md](snapshots.md) and the bug report for LegendKeeper,
+[docs/reviews/lk-bug-labelsize.md](reviews/lk-bug-labelsize.md). No migration. Nothing was run against a live system:
+every test uses the mock LegendKeeper, which now reproduces the bug. The sandbox check LS1 is for the owner to run.
+
+- **The finding (Arkona's second rehearsal).** E5.2 mapped the app's label sizes on write (`small` → `sm`). The rehearsal
+  then wrote all 1,066 writes and failed at the comparison: `listFeatures 400 VALIDATION_ERROR`, issue `labelSize`,
+  "Invalid enum value. Expected 'small' | 'medium' | 'large', received 'md'". LegendKeeper's writes take only `xs` to
+  `3xl`, but `listFeatures` returns only `small`, `medium` or `large` and refuses to list a map holding anything else. So
+  writing any label size makes the whole map unreadable through the API.
+- **`labelSize` is never sent.** Restores (creates and updates), recreated pages and rehearsals leave it out, so a feature
+  takes LegendKeeper's default. Each lists it once per map with a count: "label size not restorable: LegendKeeper's API
+  can't write the app's values (small/medium/large) and can't read its own (xs–3xl)". This is neither a failure nor a
+  difference. The engine refuses any `createFeature` or `updateFeature` that carries one (`lk_api_write` too), before
+  anything is sent. `iconSize` is untouched.
+- **The map tools refuse it.** `create_map_feature` and `update_map_feature` refuse a caller's `style.labelSize`, whatever
+  the value, with `LABEL_SIZE_UNSUPPORTED`. The message gives the reason, and says to set the size in the app. Nothing
+  is read or written. One constant, `LABEL_SIZE_WRITABLE` in `src/maps/features.ts`, lifts all of this when LegendKeeper
+  fixes the API.
+- **Comparisons ignore it:** the restore plan's same-check, the checks and verify inside the lock, the rehearsal's
+  comparison, and the map tools' `holds` and compare-and-swap hash. E5.2's `small` = `sm` equivalence is removed: with
+  nothing written, nothing needs it.
+- **A map LegendKeeper cannot list.** In a full snapshot, that map document is the missing piece, with the reason "its
+  features: LegendKeeper can't list this map's features: a feature holds a label size its API refuses to return (set its
+  label size in the app)". The page and the snapshot carry on, and the snapshot is partial. A restore from it refuses
+  that map rather than read it as empty. In `read_document`, `update_document`, the map tools and a restore plan, it is
+  `MAP_FEATURES_UNREADABLE`, with the same advice.
+- **A rehearsal never fails on one read.** Any read error in its comparison is a difference naming the page and the
+  piece. The comparison carries on, and the run finishes and deletes its root as usual.
+- **Faster sampled rehearsals.** A sample now copies at most 25 events of each timeline (spread over it, with every lane
+  they use) and at most 40 features of each map (with their folders; a region and a path kept first). The plan's new
+  `cuts` say what was left out, and the dashboard lists them under the estimate. Full mode is unchanged. The owner's
+  sampled run took over two hours against an estimate of about 20 minutes, with about 730 chronology event writes.
+- **A realistic estimate.** The time shown is at least the writes one after another at P3's write rate, plus the reads at
+  its request rate. The rates come from the governor's own estimate (the spacing, or P3's share of a tier once the work
+  needs more than a window's share). The plan shows them (`estimate.pacing`), and the dashboard says "Paced at about …
+  a write and … a read".
+- **The newest complete full snapshot by default.** The rehearsal picker preselects it and marks a partial one
+  "(partial)".
+- **The sandbox assumption LS1** (`npm run test:sandbox`, the assumptions file). It writes one label with `labelSize: 'md'`
+  and expects `listFeatures` to refuse the map. If it does not, it reports NOTED: LegendKeeper has fixed it. It then
+  deletes that feature by id, even after a failure, and checks that the map lists again. The dry run against the mock
+  checks it passes. The error parser now also reads an issue path given as a list.
+- **Docs.** ADR 0046 decision 14 (with a note on decision 11), ADR 0040 and ADR 0042 notes, the E4 review's assumptions
+  (E5.2's mapping note replaced), `docs/snapshots.md` (new), `docs/dashboard.md`, `docs/tools.md`, the bridge guide's
+  maps section, `test/sandbox/README.md`, and the bug report.
+
 ## Unreleased: E5.3 (15 November 2026): Arkona's first audit; Reference Types that resemble, race values by their anchor, and areas without CANON
 
 [ADR 0046](adr/0046-e4-owner-decisions.md) decisions 12 and 13; [ADR 0044](adr/0044-audits.md)'s note of 15 November; new

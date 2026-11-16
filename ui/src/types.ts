@@ -1498,7 +1498,13 @@ export interface RehearsalView {
   startedAt: number;
   finishedAt: number | null;
   estimate: { reads?: number; writes?: number; uploads?: number; wallClockMs?: number | null } | null;
-  plan: { pages?: string[]; coverage?: Record<string, string[]>; images?: number } | null;
+  plan: {
+    pages?: string[];
+    coverage?: Record<string, string[]>;
+    images?: number;
+    /** v2 E5.4: what a sampled rehearsal left out. */
+    cuts?: { page: string; document: string; what: string; kept: number; of: number }[];
+  } | null;
   progress: Record<string, unknown>;
   result: {
     pagesCompared?: number;
@@ -1628,12 +1634,22 @@ export interface RehearsalPlanResponse {
     pages: string[];
     coverage: Record<string, string[]>;
     images: number;
+    /** v2 E5.4: what a sampled rehearsal leaves out (older servers send none). */
+    cuts?: {
+      page: string;
+      document: string;
+      what: 'events' | 'features';
+      kept: number;
+      of: number;
+      lanes?: { kept: number; of: number };
+    }[];
     estimate: {
       reads: number;
       writes: number;
       uploads: number;
       wallClockMs: number | null;
       fitsToday: boolean | null;
+      pacing?: { msPerWrite: number; msPerRead: number } | null;
     };
   };
 }

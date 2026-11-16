@@ -9,6 +9,7 @@ import { formatAssumptionsReport, runAssumptions } from '../sandbox/assumptions.
 import { SandboxGuardError, type SmokeTarget } from '../sandbox/smoke.js';
 import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
 import { lifecycleWorld, type LifecycleWorld } from '../lifecycle/world.js';
+import { labelSizeListRefusal, labelSizeWriteRefusal } from '../maps/label-size-bug.js';
 import { API_KEY, PROJECT } from './helpers.js';
 
 let w: LifecycleWorld;
@@ -40,6 +41,30 @@ beforeAll(async () => {
     if (sb) w.sidebars.pages.set(id, structuredClone(sb));
     return { status: 201, body: w.repo.resourceView(t) };
   });
+  // v2 E5.4 (LS1): a map's features, with LegendKeeper's label-size bug (test/maps/label-size-bug.ts): a write takes
+  // xs–3xl, and listFeatures refuses a map holding anything but small/medium/large.
+  const features = new Map<string, Record<string, unknown>[]>();
+  w.overrides.set(/\/resources\/[^/]+\/docs\/[^/]+\/features(\/[^/]+)?$/, (req): MockResponse | undefined => {
+    const m = /\/docs\/([^/]+)\/features(?:\/([^/]+))?$/.exec(req.path.replace(/\/$/, ''))!;
+    const list = features.get(m[1]!) ?? [];
+    features.set(m[1]!, list);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (!m[2] && req.method === 'GET')
+      return labelSizeListRefusal(list) ?? { status: 200, body: { data: list } };
+    if (!m[2] && req.method === 'POST') {
+      const refused = labelSizeWriteRefusal(body);
+      if (refused) return refused;
+      list.push({ ...body });
+      return { status: 201, body };
+    }
+    if (m[2] && req.method === 'DELETE') {
+      const at = list.findIndex((f) => f.id === m[2]);
+      if (at < 0) return { status: 404, body: { code: 'NOT_FOUND', message: 'not found' } };
+      list.splice(at, 1);
+      return { status: 204 };
+    }
+    return undefined;
+  });
 });
 afterAll(async () => w.close());
 
@@ -66,8 +91,9 @@ describe('sandbox assumptions script (dry run)', () => {
     // about 100 writes and up to about 500 reads. The reads here include the test world's repository tree re-reading
     // every page the script writes (the sandbox runtime has no tree), and the clean-up's guard reads: the canon guard
     // lists and reads every page of a cascade at entry and again inside the lock (CR-09).
-    expect(writes).toBeLessThanOrEqual(110);
-    expect(reads).toBeLessThanOrEqual(530); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
+    // v2 E5.4: LS1 adds two writes (the label and its delete) and two reads.
+    expect(writes).toBeLessThanOrEqual(115);
+    expect(reads).toBeLessThanOrEqual(540); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
     const ids = findings.map((f) => f.id);
     for (const id of [
       'A1',
@@ -97,9 +123,17 @@ describe('sandbox assumptions script (dry run)', () => {
       'E27',
       'G30a',
       'H1',
+      'LS1',
       'F29',
     ])
       expect(ids, report).toContain(id);
+    // v2 E5.4: the mock reproduces the label-size bug, so LS1 confirms it, and its clean-up makes the map listable.
+    const ls1 = findings.find((f) => f.id === 'LS1')!;
+    expect(ls1.verdict, report).toBe('pass');
+    expect(ls1.detail).toMatch(
+      /confirmed: listFeatures answered 400 VALIDATION_ERROR \(labelSize: Invalid enum value/,
+    );
+    expect(ls1.detail).toMatch(/listFeatures answers 200 again/);
     expect(
       findings.filter((f) => f.id === 'cleanup').map((f) => f.verdict),
       report,

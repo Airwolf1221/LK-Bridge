@@ -193,6 +193,9 @@ through the API, so the sandbox never saw it. **Implemented:**
 Tests: `test/snapshots/e5-2.test.ts` (restore, recreate, unknown value, plan, rehearsal; `iconSize`),
 `test/maps/update.test.ts` (a caller's `small` refused; a stored `small` holds `sm`), `test/jobs/named-step.test.ts`.
 
+**Superseded in part by decision 14 (E5.4, 15 November 2026).** The mapping of old label sizes was wrong: a written `md`
+makes `listFeatures` refuse the whole map. The label size is now never sent. The named refused write stands.
+
 ## Decision 12: Arkona's first audit: "resembles" for Reference Types, and race values read by their anchor (implemented; E5.3, 15 November 2026)
 
 Arkona's first audit gave 1,609 findings. Two checks of ADR 0044 decision 17 and 18 were too loose or too strict for a
@@ -259,6 +262,65 @@ al-Mizan, is a real mistake the owner is fixing.) No migration: the setting live
 Tests: `test/lifecycle/canon-exempt.test.ts`, `test/audits/checks.test.ts` (the Design References block),
 `test/secrets/canon-lifecycle-reauth.test.ts`, `test/ui/lifecycle.test.tsx`.
 
+## Decision 14: LegendKeeper's label sizes cannot be round-tripped: never send `labelSize` (implemented; E5.4, 15 November 2026)
+
+**The finding** (the owner's second rehearsal of Arkona). With decision 11's mapping, the rehearsal wrote all 1,066 writes
+without an error, and then failed at the comparison. The bridge's error log has `listFeatures 400 VALIDATION_ERROR
+"Validation error"`, `issues: [{"path":"labelSize","message":"Invalid enum value. Expected 'small' | 'medium' | 'large',
+received 'md'"}]`. LegendKeeper's API contradicts itself:
+
+- `createFeature` and `updateFeature` take only `xs` to `3xl`, and refuse `small`, `medium` and `large` (the first
+  rehearsal's failure);
+- `listFeatures` validates what it RETURNS against `small | medium | large` only. Once any feature of a map holds a
+  new-style value, LegendKeeper refuses to list any of that map's features.
+
+So writing any label size through the API makes the map unreadable through the API. Every feature write in the test
+world's sandbox and D2 tests left `labelSize` out, so this never showed. Arkona itself was never written to. The bug report
+for LegendKeeper is [docs/reviews/lk-bug-labelsize.md](../reviews/lk-bug-labelsize.md).
+
+**Decided and implemented:**
+
+- **One switch,** `LABEL_SIZE_WRITABLE = false` in `src/maps/features.ts`, to be set to true when LegendKeeper fixes
+  `listFeatures` (the sandbox assumption LS1 reports it as NOTED then).
+- **Never sent.** `normaliseFeatureBody` now leaves `labelSize` out of every feature body built from a stored or read
+  feature: a restore's creates and updates, a recreated page's features and the rehearsal's. Such a feature takes
+  LegendKeeper's default. The restore plan (`notRestored`) and the rehearsal (`cannotRestore`) list it once per map, with a
+  count: "label size not restorable: LegendKeeper's API can't write the app's values (small/medium/large) and can't read
+  its own (xs–3xl)". That is neither a failure nor a difference. `iconSize` is untouched.
+- **The backstop:** the engine refuses any `createFeature` or `updateFeature` that carries a `labelSize`, whoever built it
+  (`lk_api_write` included), before anything is sent.
+- **The map tools** refuse a caller's `labelSize`, whatever the value, with `LABEL_SIZE_UNSUPPORTED`. The message says why,
+  and that the size can be set in the app. Nothing is read or written.
+- **Comparisons ignore it:** the restore plan's same-check and `featureState` (the checks and verify inside the lock), the
+  rehearsal's comparison, and the map tools' `holds` and compare-and-swap hash (`featureHash`). Decision 11's equivalence
+  (`small` = `sm`) is removed: with nothing written, it is needed nowhere.
+- **A map whose features cannot be listed.** The 400 (`listFeatures`, issue path `labelSize`, an invalid enum value) is
+  recognised by `isLabelSizeListError`:
+  - In a snapshot, that map document is the missing piece, with the reason "its features: LegendKeeper can't list this
+    map's features: a feature holds a label size its API refuses to return (set its label size in the app)". The page and
+    the snapshot carry on, and the snapshot is partial. The document stays the missing piece (not "features" beside a
+    stored document) so that the index records the gap, and a restore from that snapshot refuses the map rather than read
+    it as having no features.
+  - In a rehearsal's comparison it is a difference for that map. **A rehearsal never fails as a whole on one read:** any
+    read error in the comparison is a difference naming the page and the piece, and the run finishes and deletes its root
+    as usual.
+  - In the map tools, `read_document` and `update_document` it is `MAP_FEATURES_UNREADABLE`, with the same advice. A
+    restore planned against such a map is refused with the same code.
+- **Faster sampled rehearsals.** A sample copies at most 25 events of each timeline (with every lane they use, and no
+  other) and at most 40 features of each map (a kept feature brings its folders; a region and a path are kept first if
+  there are any). The plan's `cuts` say what was left out. Full mode is unchanged. The owner's sampled run took over two
+  hours against an estimate of about 20 minutes, because every chronology event (about 730 writes) and every map feature
+  went in at P3.
+- **A realistic estimate.** The time shown is the governor's P3 estimate, and at least the writes one after another at
+  P3's write rate (the spacing, or the P3 share of a write tier once the work needs more than one window's share) plus the
+  reads at P3's share of the request tiers. The rehearsal's jobs run one at a time. The plan shows the rates it assumed.
+- **The newest complete full snapshot by default.** The dashboard preselects it, and a partial one is marked "(partial)".
+  The owner's second run used an older partial snapshot by mistake.
+
+Tests: `test/snapshots/e5-4.test.ts`, `test/maps/update.test.ts`, `test/tools/assumptions-dryrun.test.ts` (LS1),
+`test/ui/snapshots.test.tsx`. The mock LegendKeeper reproduces the bug (`test/maps/label-size-bug.ts`), in the maps and
+snapshot worlds and in the assumptions dry run.
+
 ## Consequences
 
 - No migration. Two documented behaviours change: `write_page` and restores on icon pages (decision 1), and promoting a
@@ -268,5 +330,8 @@ Tests: `test/lifecycle/canon-exempt.test.ts`, `test/audits/checks.test.ts` (the 
 - The owner's sandbox commands gain the concurrency probe and the maps M6e probe (the review, section 6).
 - Decision 12: an Arkona audit should drop from 589 Facts warnings to about 2 and from 11 Taxonomy warnings to about 3;
   no request is needed to see it (the audit reads the newest snapshot).
+- Decision 14: no label size can be set or restored through the bridge until LegendKeeper fixes `listFeatures`. A map
+  that already holds a new-style size (only one written outside the bridge) is unreadable through the API until its label
+  size is set again in the app.
 - Decision 13: until the owner lists `[INDEX] Design References`, its two pages stay `lifecycle_inconsistent`; listing it
   is a dashboard change (with re-authentication), not a deploy.

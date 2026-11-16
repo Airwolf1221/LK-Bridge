@@ -1223,9 +1223,18 @@ neighbours.
 **Styles** go in `style` with LegendKeeper's names (`iconGlyph`, `iconColor`, `iconShape`, `iconSize`, `pinImage`, `color`,
 `fillOpacity`, `fillStyle`, `borderStyle`, `strokeWidth`, `strokeStyle`, `strokeOpacity`, `textColor`, `textEffect`,
 `textEffectColor`, `labelSize`, `labelVisibility`, `visibilityRange`), checked against its enums and `#RRGGBB` formats; one that
-does not apply to the type is refused (`STYLE_NOT_FOR_TYPE`). `labelSize` is `xs` to `3xl`: the old `small`, `medium` and
-`large`, which features drawn in the app may hold, are refused from a caller with the hint to use `sm`, `md` or `lg`, and a
-feature holding one compares as its new name (E5.2).
+does not apply to the type is refused (`STYLE_NOT_FOR_TYPE`).
+
+**`labelSize` is refused** (v2 E5.4, [ADR 0046](adr/0046-e4-owner-decisions.md) decision 14), whatever its value, with
+`LABEL_SIZE_UNSUPPORTED` and the reason: LegendKeeper's `createFeature` and `updateFeature` take only `xs` to `3xl` (and
+refuse the app's `small`, `medium`, `large`), while `listFeatures` returns only `small`, `medium` or `large` and refuses
+(400 `VALIDATION_ERROR`, issue path `labelSize`) to list a map holding anything else. Writing any label size therefore makes
+the map unreadable through the API. Set label sizes in the app. The refusal is behind one constant, `LABEL_SIZE_WRITABLE` in
+`src/maps/features.ts`, to be lifted when LegendKeeper fixes the API (the sandbox assumption LS1 says when). While it is
+off, the engine refuses any `createFeature` or `updateFeature` carrying a `labelSize` (from `lk_api_write` too), and the map
+tools' checks, verify and compare-and-swap hash ignore it. A map LegendKeeper refuses to list is refused by the map tools,
+`read_document` and `update_document` with `MAP_FEATURES_UNREADABLE` and the advice to set that feature's label size in the
+app.
 
 **The compare-and-swap.** LegendKeeper does not version features, so the bridge's own check inside the document's lock reads the
 map again and judges the plan's resolved request against it; a feature edited, a folder gone, a sibling gone, a replaced image

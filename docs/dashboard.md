@@ -509,8 +509,12 @@ the bridge's own copies of the selected project's pages.
   URL; tick **Also update the pages that referred to the old URL** to include them; **Stage it and propose** uploads it
   hidden (it comes back as a new asset with a new URL) and makes the proposal.
 - **Restore rehearsal**: a full snapshot of this project, a sandbox project to rehearse into (never this one), sampled
-  (about 50 pages) or every page, and whether to keep the copy. **Estimate** first (pages, images, reads, writes and the
-  time at background priority), then **Start the rehearsal** after a confirmation. The list shows each rehearsal's state
+  (about 50 pages) or every page, and whether to keep the copy. The picker starts on the **newest complete** full snapshot
+  and marks a partial one **(partial)** (v2 E5.4). A sample copies at most 25 events of each timeline (with the lanes they
+  use) and 40 features of each map (with their folders, and a region and a path if there are any); the estimate lists what
+  it leaves out. **Estimate** first (pages, images, reads, writes and the time at background priority, paced as the
+  governor will pace it: about a second a write and under half a second a read at the default limits), then **Start the
+  rehearsal** after a confirmation. The list shows each rehearsal's state
   and stage, and its results: pages restored exactly, the differences with their reasons, what a restore cannot bring
   back, the cost and the time; **Delete its root** for a kept copy.
 - **Snapshots**: every snapshot (taken, kind and the tool that made a change snapshot, pages, new pieces and bytes,

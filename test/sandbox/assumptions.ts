@@ -11,7 +11,9 @@
  * `lk-bridge assumptions <time>`, plus two templates (`lk-bridge assumptions template A1` and `… H1`), and all three are
  * deleted at the end, even after a failure (the report names any id to delete by hand). Plain names only: no `[BSRC]`,
  * `[BWRK]`, `[BARC]` or `[INDEX]` prefix, and no Status, Continuity Type or Continuity row, so the canon and lifecycle
- * guards never stand in the way. Cost: about 75 writes and 85 reads (plus up to 12 search polls), about 2 minutes at
+ * guards never stand in the way. LS1 (v2 E5.4) writes one label with `labelSize: 'md'` RAW (the engine would refuse it),
+ * expects `listFeatures` to refuse the map, then deletes that feature by id even if the check fails and checks the map
+ * lists again. Cost: about 78 writes and 88 reads (plus up to 12 search polls), about 2 minutes at
  * the bridge's write pacing.
  */
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
@@ -71,7 +73,7 @@ export async function runAssumptions(
     method: string,
     suffix: string,
     x: { body?: unknown; ifMatch?: string; idempotencyKey?: string } = {},
-  ): Promise<{ status: number; code?: string; headers?: Headers; body?: any }> => {
+  ): Promise<{ status: number; code?: string; headers?: Headers; body?: any; errors?: readonly Obj[] }> => {
     for (let attempt = 0; ; attempt++) {
       try {
         return await rawOnce(operationId, method, suffix, x);
@@ -86,7 +88,7 @@ export async function runAssumptions(
     method: string,
     suffix: string,
     x: { body?: unknown; ifMatch?: string; idempotencyKey?: string },
-  ): Promise<{ status: number; code?: string; headers?: Headers; body?: any }> => {
+  ): Promise<{ status: number; code?: string; headers?: Headers; body?: any; errors?: readonly Obj[] }> => {
     try {
       const res = await t.lk.call<Response>({
         operationId,
@@ -108,7 +110,12 @@ export async function runAssumptions(
       return { status: res.status, headers: res.headers, body: text ? JSON.parse(text) : undefined };
     } catch (e) {
       if (e instanceof BudgetWaitError) throw e;
-      if (e instanceof BridgeLkError) return { status: e.status ?? 0, ...(e.code ? { code: e.code } : {}) };
+      if (e instanceof BridgeLkError)
+        return {
+          status: e.status ?? 0,
+          ...(e.code ? { code: e.code } : {}),
+          ...(e.errors.length > 0 ? { errors: e.errors } : {}),
+        };
       throw e;
     }
   };
@@ -1125,6 +1132,78 @@ export async function runAssumptions(
       },
     );
 
+    // ---- LS1: LegendKeeper's label-size contradiction (v2 E5.4, ADR 0046 decision 14) -------------------------------
+    // Writes take only xs–3xl; listFeatures returns only small/medium/large, so a map holding `md` cannot be listed.
+    // Sent RAW through the governor (the bridge's engine refuses any label size: LABEL_SIZE_WRITABLE is false). The
+    // feature is deleted by its id whatever happens, and the map must then list again.
+    {
+      const id = 'LS1';
+      const title =
+        'a label written with labelSize md makes listFeatures refuse the map (400, issue path labelSize); deleting it makes the map listable again';
+      let page: Obj | null = null;
+      let featureId: string | null = null;
+      let verdict: Verdict = 'inconclusive';
+      let detail = '';
+      const docPath = () => `/resources/${page!.id as string}/docs/${page!.documents[0].id as string}`;
+      const issueOf = (r: { errors?: readonly Obj[] }) =>
+        (r.errors ?? []).find((x) => /(^|[.\]])labelSize$/.test(String(x.path ?? '')));
+      try {
+        page = await mk('LS1 map');
+        if (!page.documents?.[0]?.id) throw new Unclear('the new page has no first document');
+        const fid = mintClientId(24);
+        const made = await raw('createFeature', 'POST', `${docPath()}/features`, {
+          body: { id: fid, type: 'label', name: 'LS1 label', pos: [0, 0], labelSize: 'md' },
+          idempotencyKey: `lkb.sandbox.ls1.${fid}`,
+        });
+        if (made.status !== 201 && made.status !== 200)
+          throw new Unclear(
+            `createFeature with labelSize md answered ${made.status} ${made.code ?? ''} ${JSON.stringify(made.errors ?? made.body ?? null).slice(0, 300)}`,
+          );
+        featureId = String(made.body?.id ?? fid);
+        const listed = await raw('listFeatures', 'GET', `${docPath()}/features`);
+        const issue = issueOf(listed);
+        if (listed.status === 400 && issue && /invalid enum value/i.test(String(issue.message ?? ''))) {
+          verdict = 'pass';
+          detail = `confirmed: listFeatures answered 400 ${listed.code ?? ''} (${String(issue.path)}: ${String(issue.message)})`;
+        } else if (listed.status === 200) {
+          verdict = 'noted';
+          const back = ((listed.body?.data ?? []) as Obj[]).find((f) => f.id === featureId);
+          detail = `LegendKeeper HAS FIXED IT: listFeatures answered 200 with the md label (labelSize read back as ${JSON.stringify(back?.labelSize ?? null)}). Set LABEL_SIZE_WRITABLE in src/maps/features.ts to true (ADR 0046 decision 14) once confirmed.`;
+        } else {
+          verdict = 'fail';
+          detail = `listFeatures answered ${listed.status} ${listed.code ?? ''} ${JSON.stringify(listed.errors ?? null).slice(0, 300)}, neither the known 400 nor a fix`;
+        }
+      } catch (e) {
+        verdict = e instanceof Fails ? 'fail' : 'inconclusive';
+        detail =
+          e instanceof Unclear || e instanceof Fails
+            ? e.message
+            : `the check could not complete: ${(e as Error).message}`;
+      } finally {
+        // Clean up by id, even after a failed assertion, then check the map lists again.
+        if (page && featureId) {
+          try {
+            const del = await raw('deleteFeature', 'DELETE', `${docPath()}/features/${featureId}`);
+            const again =
+              del.status === 204 || del.status === 200 || del.status === 404
+                ? await raw('listFeatures', 'GET', `${docPath()}/features`)
+                : null;
+            if (!again) {
+              verdict = 'fail';
+              detail += `; clean-up failed: deleteFeature answered ${del.status} ${del.code ?? ''}. Delete feature ${featureId} of ${page.id as string} by hand (its page goes with the root).`;
+            } else if (again.status !== 200) {
+              verdict = 'fail';
+              detail += `; after deleting the feature, listFeatures still answered ${again.status} ${again.code ?? ''}`;
+            } else detail += '; the feature was deleted and listFeatures answers 200 again';
+          } catch (e) {
+            verdict = 'fail';
+            detail += `; clean-up failed: ${(e as Error).message}. Delete feature ${featureId} of ${page.id as string} by hand (its page goes with the root).`;
+          }
+        }
+        record(id, title, verdict, detail);
+      }
+    }
+
     // ---- F29: content search --------------------------------------------------------------------------------------
     await check(
       'F29',
@@ -1256,7 +1335,7 @@ export function formatAssumptionsReport(findings: readonly Finding[]): string {
     '=============================================================================================================',
     ...findings.map((f) => `[${mark[f.verdict]}] (${f.id}) ${f.title}\n        ${f.detail}`),
     '',
-    `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE`,
+    `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE${count('noted') > 0 ? `, ${count('noted')} NOTED` : ''}`,
     '',
   ].join('\n');
 }

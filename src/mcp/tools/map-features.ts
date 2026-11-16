@@ -15,6 +15,9 @@ import * as z from 'zod';
 import { mintClientId } from '../../jobs/ids.js';
 import {
   FEATURE_TYPES,
+  LABEL_SIZE_REFUSAL,
+  LABEL_SIZE_UNSUPPORTED,
+  LABEL_SIZE_WRITABLE,
   buildCreate,
   buildUpdate,
   createJob,
@@ -60,6 +63,15 @@ import {
 } from './map-support.js';
 import { runWriteJob } from './write-job.js';
 
+/**
+ * v2 E5.4: a caller's `labelSize`, whatever its value, is refused while LegendKeeper's API cannot round-trip it
+ * (LABEL_SIZE_WRITABLE is the one switch). Null when there is none, or when it may be written.
+ */
+function labelSizeRefusal(pd: ProjectDeps, style: { labelSize?: unknown } | undefined) {
+  if (LABEL_SIZE_WRITABLE || style?.labelSize === undefined) return null;
+  return refuse(pd, LABEL_SIZE_UNSUPPORTED, LABEL_SIZE_REFUSAL, { field: 'style.labelSize' }).result;
+}
+
 /** Answers list at most this many removed features by name; the count is always exact. */
 const LIST_MAX = 200;
 
@@ -101,7 +113,7 @@ function createMapFeatureTool(deps: ToolDeps): McpToolProvider {
     title: 'Add a pin, label, region, path or folder to a map',
     access: 'write',
     description:
-      'Adds one feature to a MAP document: a pin, label, region, path or folder. Give coordinates in ONE system per request: `pixel` { x, y }, counted from the image’s TOP-LEFT corner (use these when working from the image: read_document shows each position and the map’s size), or `latlng` [lat, lng]. A pin or label takes one position; a region `points` (3 or more) or `polygons`; a path `points` (2 or more); a folder none. Pixels need a map with an image (not a legacy tiled map); anything outside the image is refused unless allowOutside. `link` is a page by name or id (an ambiguous name is refused with the candidates), `folder` the parent folder, `style` LegendKeeper’s style fields. A feature goes at the END of its parent unless `after` or `before` names a sibling: maps are never sorted. `page` plus `document` identify the map (document is optional when the page has one). A blank document is not a map yet: give it an image with update_document. An ordinary edit, not canon-gated. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 7 reads and 1 write.',
+      'Adds one feature to a MAP document: a pin, label, region, path or folder. Give coordinates in ONE system per request: `pixel` { x, y }, counted from the image’s TOP-LEFT corner (use these when working from the image: read_document shows each position and the map’s size), or `latlng` [lat, lng]. A pin or label takes one position; a region `points` (3 or more) or `polygons`; a path `points` (2 or more); a folder none. Pixels need a map with an image (not a legacy tiled map); anything outside the image is refused unless allowOutside. `link` is a page by name or id (an ambiguous name is refused with the candidates), `folder` the parent folder, `style` LegendKeeper’s style fields (not `labelSize`: refused with LABEL_SIZE_UNSUPPORTED, as LegendKeeper’s API cannot round-trip it; set label sizes in the app). A feature goes at the END of its parent unless `after` or `before` names a sibling: maps are never sorted. `page` plus `document` identify the map (document is optional when the page has one). A blank document is not a map yet: give it an image with update_document. An ordinary edit, not canon-gated. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 7 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: refArg
@@ -127,6 +139,8 @@ function createMapFeatureTool(deps: ToolDeps): McpToolProvider {
         if (!rc.ok) return rc.result;
         const ctx = rc.ctx;
         return withRequest(pd, mctx, tool, args, null, async (): Promise<CreateOutcome> => {
+          const ls = labelSizeRefusal(pd, args.style);
+          if (ls) return answer(ls);
           const gp = parseGeometry(pd, args);
           if (!gp.ok) return answer(gp.result);
           if (args.after !== undefined && args.before !== undefined) {
@@ -237,7 +251,7 @@ function updateMapFeatureTool(deps: ToolDeps): McpToolProvider {
     title: 'Change a map feature',
     access: 'write',
     description:
-      'Changes one feature of a MAP document: its name, coordinates, link, folder, place, style or hidden flag; only what you give changes. Name it with `feature` (its id, or its name; add `featureFolder` when a name occurs more than once, or null for the top level). Coordinates, link and folder work as in create_map_feature (`pixel` or `latlng`, never both); `link: null` clears the link and `folder: null` moves it to the top level. A feature’s type cannot change (delete and add instead). An ordinary edit, not canon-gated. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 7 reads and 1 write.',
+      'Changes one feature of a MAP document: its name, coordinates, link, folder, place, style or hidden flag; only what you give changes. Name it with `feature` (its id, or its name; add `featureFolder` when a name occurs more than once, or null for the top level). Coordinates, link and folder work as in create_map_feature (`pixel` or `latlng`, never both); `link: null` clears the link and `folder: null` moves it to the top level. A feature’s type cannot change (delete and add instead). `style.labelSize` is refused (LABEL_SIZE_UNSUPPORTED): set label sizes in the app. An ordinary edit, not canon-gated. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 7 reads and 1 write.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       document: refArg
@@ -270,6 +284,8 @@ function updateMapFeatureTool(deps: ToolDeps): McpToolProvider {
         if (!rc.ok) return rc.result;
         const ctx = rc.ctx;
         return withRequest(pd, mctx, tool, args, null, async (): Promise<CreateOutcome> => {
+          const ls = labelSizeRefusal(pd, args.style);
+          if (ls) return answer(ls);
           const gp = parseGeometry(pd, args);
           if (!gp.ok) return answer(gp.result);
           if (args.after !== undefined && args.before !== undefined) {

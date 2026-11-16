@@ -245,3 +245,10 @@ API; sandbox M6c asserts `""` works and M6c-null records the refusal as a noted 
 - The live checks on the test world are in the session summary (a test map, a pin by pixel linked to a page, a region by
   pixels, a folder with a label, moving the label out, a cascade delete and the journal). **Moving the label out with
   `folder: null` is to be redone after the fix** (12 November 2026: the first attempt failed on `null`, see "Notes: root moves").
+
+## Note (v2 E5.4, 15 November 2026): `labelSize` is refused
+
+Decision 11's `labelSize` enum is suspended: [ADR 0046](0046-e4-owner-decisions.md) decision 14. LegendKeeper's writes take
+only `xs` to `3xl`, but `listFeatures` refuses to list a map holding one, so `create_map_feature` and `update_map_feature`
+refuse any `style.labelSize` with `LABEL_SIZE_UNSUPPORTED`. `holds` and `featureHash` ignore the field, and a map that
+cannot be listed is `MAP_FEATURES_UNREADABLE`. `LABEL_SIZE_WRITABLE` in `src/maps/features.ts` lifts it.
