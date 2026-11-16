@@ -36,6 +36,8 @@ export interface StackOptions {
   readonly opTiers?: ConstructorParameters<typeof MockLk>[0]['opTiers'];
   /** Scope of the default token's profile (`tools-test`). Default `write`, so every tool is exercised. */
   readonly scope?: Scope;
+  /** v3 F2: every log line, at trace level (to assert what is never logged). Default: silent. */
+  readonly logStream?: import('node:stream').Writable;
 }
 
 export interface Stack {
@@ -108,7 +110,8 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     toolsSettings,
     db,
     version: '0.0.0-test',
-    logLevel: 'silent',
+    logLevel: o.logStream ? 'trace' : 'silent',
+    ...(o.logStream ? { logStream: o.logStream } : {}),
     pruneIntervalMs: 0,
     // The mock LK is plain http on loopback; everything else (the upload host) goes through the real guard.
     lkTransport: (input, init) => fetch(input, init),

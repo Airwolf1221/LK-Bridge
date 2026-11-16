@@ -44,6 +44,8 @@ export class UploadHttpError extends Error {
   constructor(
     readonly reason: UploadHttpFailure,
     message: string,
+    /** v3 F2: the HTTP status, for `bad_status` (a ChatGPT file link that expired answers 401, 403, 404 or 410). */
+    readonly status?: number,
   ) {
     super(message);
     this.name = 'UploadHttpError';
@@ -458,6 +460,11 @@ export interface FetchImageOptions extends GuardOptions {
   /** Redirects followed (each hop is checked like the first). Default 3. */
   readonly maxRedirects?: number;
   readonly signal?: AbortSignal | undefined;
+  /**
+   * v3 F2 (ADR 0049 decision 12): any declared content type is accepted (a file store may answer
+   * `application/octet-stream`); the magic bytes alone decide whether it is an image.
+   */
+  readonly anyContentType?: boolean;
 }
 
 const IMAGE_CONTENT_TYPE = /^image\/(?:png|jpe?g|gif|webp)$/;
@@ -487,7 +494,8 @@ export async function fetchImage(
       accept: (status, headers) => {
         if (status >= 300 && status < 400) return null; // handled below
         if (status !== 200)
-          return new UploadHttpError('bad_status', `The image host answered HTTP ${status}`);
+          return new UploadHttpError('bad_status', `The image host answered HTTP ${status}`, status);
+        if (o.anyContentType === true) return null;
         const type = (headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase() ?? '';
         if (!IMAGE_CONTENT_TYPE.test(type)) {
           return new UploadHttpError(

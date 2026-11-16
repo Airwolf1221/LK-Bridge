@@ -104,6 +104,12 @@ export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
   readonly retired?: boolean;
   /** Scopes the caller must hold (checked before the handler). Default: none beyond `/mcp` access. */
   readonly requiredScopes?: readonly string[];
+  /**
+   * v3 F2 (ADR 0049 decision 12): the tool descriptor's `_meta` in `tools/list`, passed through as it is (the SDK keeps
+   * it): for example `{ "openai/fileParams": ["file"] }`, which tells ChatGPT that input `file` takes a conversation
+   * attachment (it fills in a download URL and file id). Other clients ignore it.
+   */
+  readonly meta?: Readonly<Record<string, unknown>>;
   handler(input: z.output<S>, ctx: McpToolContext): McpToolResult | Promise<McpToolResult>;
 }
 
@@ -193,6 +199,7 @@ export function registerTools(server: McpServerLike, deps: RegisterToolsDeps): v
         description: tool.description,
         inputSchema: tool.inputSchema,
         ...(annotations !== undefined ? { annotations } : {}),
+        ...(tool.meta !== undefined ? { _meta: { ...tool.meta } } : {}),
       },
       async (args, ctx): Promise<CallToolResult> => {
         const caller = ctx.http?.authInfo?.extra?.caller as CallerIdentity | undefined;
