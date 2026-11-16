@@ -55,6 +55,12 @@ describe('the misses of the owner’s evaluation (14 to 15 November 2026)', () =
     ['lifecycle', 'The page lifecycle'],
     ['promote_page', 'The page lifecycle'],
     ['Canon', 'Canon and approval'],
+    ['arkona_create_character', 'Setting packs (Arkona characters)'], // v3 F3a
+    ['Make an Arkona character, or add pages to one', 'Setting packs (Arkona characters)'],
+    ['pack', 'Setting packs (Arkona characters)'],
+    ['Arkona', 'Setting packs (Arkona characters)'],
+    ['completion gate', 'Setting packs (Arkona characters)'],
+    ['Make a character', 'Create a page or a character (Working first)'],
     ['set_facts', 'Change facts and links'],
     ['write_page', "Edit a page's text"],
     ['upload_image', 'Images'],
