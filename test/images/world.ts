@@ -170,7 +170,14 @@ export async function imagesWorld(
     tools: {
       ...DEFAULT_TOOLS_SETTINGS,
       ...o.tools,
-      images: { ...DEFAULT_IMAGE_SETTINGS, assetHosts: ['assets.test'], dataDir, ...o.images },
+      images: {
+        ...DEFAULT_IMAGE_SETTINGS,
+        assetHosts: ['assets.test'],
+        dataDir,
+        // v3 F2: a test container's disk may be small; the low-disk refusal has its own test.
+        stagingMinFreeBytes: 0,
+        ...o.images,
+      },
     },
   })) as ImagesWorld;
   let n = 0;

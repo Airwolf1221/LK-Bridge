@@ -1161,6 +1161,9 @@ export class JobEngine {
     const first = this.repo
       .steps(jobId)
       .find((s) => s.opId === 'createImageUpload' && s.stepNo < step.stepNo);
+    // v3 F2: outside an upload job, only a batch that made its own upload binds its key (a raw createImageAsset keeps
+    // the key it was given).
+    if (!first && this.repo.job(jobId)?.kind !== 'upload_image') return false;
     const created = first ? (this.repo.stepResult(first) as { uploadKey?: unknown } | null) : null;
     if (typeof created?.uploadKey !== 'string' || created.uploadKey.length === 0) {
       throw new JobsError('BRIDGE_ERROR', 'createImageUpload returned no uploadKey', {

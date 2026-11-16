@@ -163,7 +163,7 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   idleTimeoutMs: 15_000,
   stagingReportDays: 30,
   stagingMaxDays: 90,
-  stagingMinFreeBytes: 0,
+  stagingMinFreeBytes: 5 * 1_073_741_824,
   keptBytesRetentionDays: 90,
   assetHosts: [...DEFAULT_LK_ASSET_HOSTS],
 };
