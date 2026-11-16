@@ -11,7 +11,7 @@ import {
   parseQualified,
   readQualifiedKcy,
 } from '../../src/calendar/index.js';
-import { ARKONA_QUALIFIED, READ, UNREAD } from '../fixtures/chronology/qualified-forms.js';
+import { ARKONA_QUALIFIED, READ, READ_F21, UNREAD } from '../fixtures/chronology/qualified-forms.js';
 
 const oracle = JSON.parse(
   readFileSync(new URL('../fixtures/calendar/oracle.json', import.meta.url), 'utf8'),
@@ -19,7 +19,7 @@ const oracle = JSON.parse(
 const { parser } = createCalendar(oracle.calendar);
 
 describe('qualified dates are read by their anchor (ADR 0048)', () => {
-  it.each(READ)('$cell', (f) => {
+  it.each([...READ, ...READ_F21])('$cell', (f) => {
     const r = parseQualified(parser, f.cell);
     if (!r.ok) throw new Error(`${f.cell}: ${r.code} ${r.message}`);
     const q = r.reading;
@@ -30,6 +30,8 @@ describe('qualified dates are read by their anchor (ADR 0048)', () => {
       open: q.openStart ? 'start' : q.openEnd ? 'end' : undefined,
       qualifier: q.qualifier,
       detail: q.date.detail,
+      inclusive: q.inclusive === true,
+      endsText: q.endsText,
     }).toEqual({
       shape: f.shape,
       anchor: f.anchor,
@@ -37,12 +39,22 @@ describe('qualified dates are read by their anchor (ADR 0048)', () => {
       open: f.open,
       qualifier: f.qualifier,
       detail: f.detail,
+      inclusive: f.inclusive ?? false,
+      endsText: f.endsText,
     });
     // The anchor is an ordinary date the engine writes and reads back: what the timeline event takes.
     const again = parser.parse(q.anchorText);
     expect([again.start, again.end, again.detail]).toEqual([q.date.start, q.date.end, q.date.detail]);
-    expect(q.start).toBe(q.date.start);
-    expect(q.end ?? null).toBe(q.date.end);
+    if (f.endsText) {
+      // v3 F2.1: each end at its own precision; the event (q.date) by the coarser one, starting at the same unit.
+      const [a, b] = f.endsText.split(' - ');
+      expect([q.start, q.end]).toEqual([parser.parse(a!).start, parser.parse(b!).start]);
+      expect(q.date.start).toBeLessThanOrEqual(q.start);
+      expect(q.date.end).toBeLessThanOrEqual(q.end!);
+    } else {
+      expect(q.start).toBe(q.date.start);
+      expect(q.end ?? null).toBe(q.date.end);
+    }
     expect(q.text).toBe(f.cell);
   });
 
@@ -72,6 +84,22 @@ describe('qualified dates are read by their anchor (ADR 0048)', () => {
   it('a plain date reads as itself, with nothing but the anchor', () => {
     const r = parseQualified(parser, 'Kumikas 19th, 4A 100 - Meshaph 10th, 4A 102');
     expect(r.ok && [r.reading.shape, r.reading.qualifier]).toEqual(['range', '…']);
+  });
+
+  it('v3 F2.1: describes an inclusive bound and a range of mixed precision in plain words', () => {
+    const say = (c: string) => {
+      const r = parseQualified(parser, c);
+      if (!r.ok) throw new Error(r.message);
+      return describeReading(r.reading);
+    };
+    expect(say('On or after Selaphos 9th, 4A 643')).toBe('from Selaphos 9th, 4A 643 (an open end)');
+    expect(say('Before or during the third week of Isar, 4A 566')).toBe(
+      'up to and including Isar 4A 566 (an open start)',
+    );
+    expect(say('Late 4A 621 onward')).toBe('after 4A 621 (an open end), approximate');
+    expect(say('Camue 4A 624 - Kumikas 25th, 4A 630')).toBe(
+      'range Camue 4A 624 - Kumikas 25th, 4A 630 (the event by month)',
+    );
   });
 
   it('describes a reading in plain words', () => {

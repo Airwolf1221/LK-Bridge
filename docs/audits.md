@@ -104,6 +104,15 @@ An asset whose name the earliest folder already holds is moved anyway, never del
 duplicate that would still hold something (a subfolder with no match) is never deleted. Pre-images are journalled as for
 any move and delete (a deleted folder's bytes are kept).
 
+## Chronology: an event in a tie (`chronology_event_in_tie`; v3 F2.1)
+
+ADR 0048's F2.1 amendments. An unpaired timeline event that unpaired rows of its age's table could own (the same date, the
+same start, or its name). It is never reported as `chronology_event_without_row` and never offered for deletion. Its fix
+(`chronology_pair`) lists the candidate rows (date and opening words) with **Pair with this row** for each: one
+`sync_timeline_event` proposal for that row with the event's id (`POST /audits/findings/:id/propose-fix` with `rowId`).
+A chronology fix refused because several events could be a row's own shows them with **Use this event** (`eventId`) and
+**Make a new event** (`createNew: true`).
+
 ## Chronology: an event's date tail out of step (`chronology_name_drift`; v3 F2)
 
 ADR 0049 decision 1. A linked qualified event whose name ends with a date tail the bridge wrote, which no longer says what

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { api, qs } from '../api';
+import { api, ApiError, qs } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtAgo, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useReauth } from '../reauth';
 import { Link } from '../router';
+import { rowCandidates, tieFromError, TieChoices, type TieCandidate } from './chronology-ties';
 import type {
   AuditCodeInfo,
   AuditConfigResponse,
@@ -547,6 +548,48 @@ function FindingRow({
   const [reason, setReason] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const colspan = hidePage ? 4 : 5;
+  // v3 F2.1: a chronology tie: the candidates of a refused fix, or of an event in a tie (`chronology_pair`).
+  const [tie, setTie] = useState<TieCandidate[] | null>(null);
+  const pairRows = f.fix?.kind === 'chronology_pair' ? rowCandidates(f.fix.args.candidates) : [];
+  const choose = (choice: { eventId?: string; createNew?: true; rowId?: string }) => {
+    const send = (confirmShapeChange: boolean) =>
+      api.post<AuditProposeFixResponse>(`/audits/findings/${f.id}/propose-fix`, {
+        confirm: true,
+        project,
+        ...choice,
+        ...(confirmShapeChange ? { confirmShapeChange: true } : {}),
+      });
+    void run(async () => {
+      try {
+        return await send(false);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.code === 'SHAPE_CHANGE_UNCONFIRMED')) {
+          const t = tieFromError(e);
+          if (t && t.length > 0) setTie(t);
+          throw e;
+        }
+        const yes = await confirm({
+          title: 'This choice changes the event’s shape',
+          message: (
+            <p>
+              The timeline event would change. Check that the row and the event are the same chronology event
+              before you propose it.
+            </p>
+          ),
+          confirmLabel: 'Propose the change',
+        });
+        return yes ? send(true) : undefined;
+      }
+    }).then((r) => {
+      if (!r) return;
+      setTie(null);
+      setNote(
+        r.status === 'proposal_captured'
+          ? `Proposed (${r.proposalId}). Nothing is changed until you approve it.`
+          : r.message,
+      );
+    });
+  };
   const propose = async () => {
     // v2 E6 (ADR 0048): a chronology repair that turns a range into a single date (or the reverse) is never one click.
     const shape = f.fix?.confirm?.shapeChange;
@@ -563,13 +606,20 @@ function FindingRow({
       });
       if (!yes) return;
     }
-    void run(() =>
-      api.post<AuditProposeFixResponse>(`/audits/findings/${f.id}/propose-fix`, {
-        confirm: true,
-        project,
-        ...(shape ? { confirmShapeChange: true } : {}),
-      }),
-    ).then((r) => {
+    void run(async () => {
+      try {
+        return await api.post<AuditProposeFixResponse>(`/audits/findings/${f.id}/propose-fix`, {
+          confirm: true,
+          project,
+          ...(shape ? { confirmShapeChange: true } : {}),
+        });
+      } catch (e) {
+        // v3 F2.1: a refused chronology fix shows its candidates, each with a button.
+        const t = tieFromError(e);
+        if (t && t.length > 0) setTie(t);
+        throw e;
+      }
+    }).then((r) => {
       if (!r) return;
       setNote(
         r.status === 'proposal_captured'
@@ -657,7 +707,7 @@ function FindingRow({
             <button type="button" className="small" aria-expanded={open} onClick={toggle}>
               {open ? 'Hide evidence' : 'Evidence'}
             </button>
-            {f.state === 'open' && f.fix && (
+            {f.state === 'open' && f.fix && f.fix.kind !== 'chronology_pair' && (
               <Button
                 className="small"
                 busy={busy}
@@ -691,6 +741,15 @@ function FindingRow({
                 </button>
               ))}
           </div>
+          {f.state === 'open' && !note && (tie ?? (pairRows.length > 0 ? pairRows : null)) && (
+            <TieChoices
+              candidates={tie ?? pairRows}
+              busy={busy}
+              disabled={busy || !project}
+              onUse={(c) => choose(c.kind === 'event' ? { eventId: c.eventId } : { rowId: c.rowId })}
+              onCreateNew={() => choose({ createNew: true })}
+            />
+          )}
           {note && <div className="small-text note note-ok">{note}</div>}
         </td>
       </tr>

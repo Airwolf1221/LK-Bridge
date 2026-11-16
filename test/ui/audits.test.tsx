@@ -452,6 +452,118 @@ describe('the Audits page', () => {
     expect(await screen.findByText(/Re-checked live: this finding is gone\./)).toBeInTheDocument();
   });
 
+  it('a chronology event in a tie offers “Pair with this row” per candidate, never a delete (v3 F2.1)', async () => {
+    const tie = finding({
+      id: 5,
+      code: 'chronology_event_in_tie',
+      category: 'chronology',
+      message: 'Fourth Arkonan Age: Event “Mehrana returns…” is in a tie.',
+      evidence: { eventId: 'n4nl9rud' },
+      fix: {
+        kind: 'chronology_pair',
+        summary: 'Propose pairing the event with the row you pick.',
+        args: {
+          age: 'Fourth Arkonan Age',
+          eventId: 'n4nl9rud',
+          candidates: [
+            {
+              rowId: 'w26f230j',
+              date: 'After … before Selyros 40th, 4A 605',
+              words: 'In the final House period…',
+            },
+            { rowId: 'kvqam7yc', date: 'Before Selyros 40th, 4A 605', words: 'Following Mehrana’s return…' },
+          ],
+        },
+      },
+    });
+    const api = installApi(
+      routes({
+        'GET /audits/findings': findings([tie]),
+        'POST /audits/findings/5/propose-fix': {
+          status: 'proposal_captured',
+          proposalId: 'prop_80',
+          summary: 'x',
+          fix: 'chronology_pair',
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/audits');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    const r = table.querySelector('[data-finding="5"]') as HTMLElement;
+    expect(within(r).queryByRole('button', { name: 'Propose a fix' })).toBeNull();
+    const choices = within(r).getByTestId('tie-choices');
+    expect(within(choices).getAllByRole('button', { name: 'Pair with this row' })).toHaveLength(2);
+    const second = choices.querySelector('[data-candidate="kvqam7yc"]') as HTMLElement;
+    await user.click(within(second).getByRole('button', { name: 'Pair with this row' }));
+    await waitFor(() => expect(api.find('POST', '/audits/findings/5/propose-fix')).toHaveLength(1));
+    expect(api.find('POST', '/audits/findings/5/propose-fix')[0]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      rowId: 'kvqam7yc',
+    });
+    expect(await within(r).findByText(/Proposed \(prop_80\)/)).toBeInTheDocument();
+  });
+
+  it('a chronology fix refused for a tie shows “Use this event” per candidate and “Make a new event” (v3 F2.1)', async () => {
+    const row = finding({
+      id: 6,
+      code: 'chronology_row_without_event',
+      category: 'chronology',
+      message: 'Fourth Arkonan Age: Row 9 has no timeline event.',
+      evidence: { rowId: 'kvqam7yc' },
+      fix: {
+        kind: 'chronology_sync',
+        summary: 'Propose sync_timeline_event.',
+        args: { age: 'Fourth Arkonan Age', rowId: 'kvqam7yc' },
+      },
+    });
+    let posts = 0;
+    const api = installApi(
+      routes({
+        'GET /audits/findings': findings([row]),
+        'POST /audits/findings/6/propose-fix': () =>
+          ++posts === 1
+            ? {
+                status: 409,
+                body: {
+                  error: {
+                    code: 'PAIRING_AMBIGUOUS',
+                    message:
+                      'The row … could be its own: “Mehrana returns…” (Selyros 40th, 4A 605, n4nl9rud).',
+                    details: {
+                      row: { id: 'kvqam7yc' },
+                      candidates: [
+                        { id: 'n4nl9rud', name: 'Mehrana returns…', date: 'Selyros 40th, 4A 605' },
+                      ],
+                    },
+                  },
+                },
+              }
+            : {
+                status: 'proposal_captured',
+                proposalId: `prop_9${posts}`,
+                summary: 'x',
+                fix: 'chronology_sync',
+              },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/audits');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    const r = table.querySelector('[data-finding="6"]') as HTMLElement;
+    await user.click(within(r).getByRole('button', { name: 'Propose a fix' }));
+    const choices = await within(r).findByTestId('tie-choices');
+    expect(choices).toHaveTextContent('“Mehrana returns…” (Selyros 40th, 4A 605, n4nl9rud)');
+    await user.click(within(choices).getByRole('button', { name: 'Make a new event' }));
+    await waitFor(() => expect(api.find('POST', '/audits/findings/6/propose-fix')).toHaveLength(2));
+    expect(api.find('POST', '/audits/findings/6/propose-fix')[1]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      createNew: true,
+    });
+  });
+
   it('the rules editor: seeded defaults, then the owner’s own rules, saved with the tag source and settings', async () => {
     const api = installApi(routes({ 'PUT /audits/config': { ...config, seeded: false } }));
     const user = userEvent.setup();

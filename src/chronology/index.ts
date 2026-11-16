@@ -227,6 +227,13 @@ export type ChronologyFix =
       readonly rowId: string;
       /** v2 E6 (ADR 0048): a repair that changes the event's shape (`range → single day`) needs this. */
       readonly confirmShapeChange?: boolean;
+      /**
+       * v3 F2.1: "Use this event" (a refused, ambiguous pairing) or "Pair with this row" (an event in a tie): the row is
+       * paired with this event; one that already agrees is linked (a bridge-side record, still a proposal).
+       */
+      readonly eventId?: string;
+      /** v3 F2.1: "Make a new event": the row's event is created although candidates exist. Never with `eventId`. */
+      readonly createNew?: boolean;
     }
   | { readonly kind: 'count'; readonly age: string }
   | { readonly kind: 'orphan'; readonly age: string; readonly eventId: string };
@@ -841,7 +848,12 @@ export function createChronology(d: ChronologyDeps): Chronology {
       read,
       links: store.links(projectId),
       tableOnly: store.tableOnly(projectId),
-      ref: { rowId: fix.rowId, age: age.name },
+      ref: {
+        rowId: fix.rowId,
+        age: age.name,
+        ...(fix.eventId !== undefined ? { eventId: fix.eventId } : {}),
+        ...(fix.createNew === true ? { createNew: true } : {}),
+      },
     });
     if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
     if (plan.action === 'nothing')
@@ -865,6 +877,10 @@ export function createChronology(d: ChronologyDeps): Chronology {
       audit: {
         rowId: fix.rowId,
         action: plan.action,
+        ...(fix.eventId !== undefined ? { eventId: fix.eventId, chosen: true } : {}),
+        ...(plan.passedOver.length > 0
+          ? { createNew: true, passedOver: plan.passedOver.map((p) => p.eventId) }
+          : {}),
         ...(plan.shapeChange ? { shapeChange: plan.shapeChange, confirmed: true } : {}),
       },
     });

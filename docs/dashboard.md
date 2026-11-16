@@ -488,6 +488,12 @@ project.
     date with their opening words, so you can see what replaced it. The proposal deletes only the event (no row, no
     count change; journalled with the event); it is refused when the event has a row after all, or an unpaired row
     could be its own.
+  - **Ties** (v3 F2.1, [chronology.md](chronology.md#ties-v3-f21)). An **Event in a tie** (rows of the table could be its
+    own) lists its candidate rows (date and opening words), each with **Pair with this row**; it is never offered for
+    deletion. A **Propose a fix** refused because several events could be a row's own shows each candidate (name, date,
+    id) with **Use this event**, and one **Make a new event** button. Each makes one proposal; an event that already
+    agrees is linked to the row (no LegendKeeper write). A pair made because the plain row of a day beats the qualified
+    rows anchored on it says **plain row preferred over qualified anchor**.
   - **Table-only** on a row's finding (a row without an event, or an unreadable date) marks a row you never want on the
     timeline (asks for a confirmation; audited `chronology.table_only`). The check stops reporting it while its text is
     unchanged; if the row changes, it comes back. The **Table-only rows** card lists the marks (age, date, row,

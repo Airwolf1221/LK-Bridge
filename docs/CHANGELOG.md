@@ -39,6 +39,31 @@ Arkona-shaped fixtures.
   developed example, the gate, `target`); tools.md, dashboard.md and four new evaluation scenarios (31 to 34, marked
   `pack: "arkona"`).
 
+## Unreleased: v3 F2.1 (16 November 2026): chronology ties settled
+
+[ADR 0048](adr/0048-chronology-ii.md)'s F2.1 amendments (no new ADR, no migration). From the owner's Arkona run of 16
+November 2026. Nothing was run against a live system: every test uses the mock LegendKeeper and fixtures.
+
+- **A plain row beats a qualified anchor.** An event of a plain row's exact date and shape is that row's, before any
+  qualified row anchored on the same day (`pairedBy`: "plain row preferred over qualified anchor"); the qualified rows
+  are offered new events. A name decides between two plain rows only when it names exactly one; ranges of the same start
+  are told apart by the year they end in.
+- **A caller's choice is remembered.** `sync_timeline_event` with `event_id` on an agreeing event records the link and
+  answers `linked` (no LegendKeeper write; still a proposal at scope `propose`, "link row … to event …").
+- **`create_new: true`** makes a new event although candidates exist, naming those passed over.
+- **Refusals name their candidates** (name, date, id) in the message; the Chronology and Audits pages show **Use this
+  event** for each and **Make a new event**.
+- **A row by its opening words** (a unique prefix of 20 characters or more); `ROW_NOT_FOUND`, `ROW_AMBIGUOUS`,
+  `ROW_PREFIX_TOO_SHORT`, `ROW_HAS_EVENT`.
+- **Event in a tie.** An unpaired event that unpaired rows could own is `event_in_tie` (audits:
+  `chronology_event_in_tie`) with **Pair with this row** per candidate, never a delete; the orphan refusal says "This
+  event is not an orphan".
+- **Six more date forms:** `On or after / On or before X`, `Before or during X`, `During or after X`, `4A 614-617` and
+  `Across`, `Early / Mid / Late <year>` (approximate; `… onward`), a same-instant gloss in another era, ranges of mixed
+  precision.
+- **KCY of a range inside one year:** the single value by default; the range form is accepted too, never "written
+  differently".
+
 ## Unreleased: v3 F2 (16 November 2026): Last Major Revision, Make default, snapshot follow-ups, server-side staging, ChatGPT files, folders found at run time
 
 [ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) (Proposed); [ADR 0048](adr/0048-chronology-ii.md)

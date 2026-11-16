@@ -35,7 +35,11 @@ export interface WriteJobSpec {
   readonly holdDocuments?: readonly string[];
   /** v2 C2c: the lifecycle change the job makes (the lifecycle guard allows exactly that). */
   readonly lifecycle?: LifecycleMarker | undefined;
-  /** v3 F3a (ADR 0050): ONE proposal for the owner whatever the caller's scope (a setting pack's first weeks). */
+  /**
+   * A proposal whatever the gate says for the job's own operations: v3 F3a (ADR 0050), ONE proposal for the owner whatever
+   * the caller's scope (a setting pack's first weeks); v3 F2.1, a change the bridge only records (a chronology link has no
+   * LegendKeeper write the gate would propose at scope `propose`).
+   */
   readonly forceProposal?: boolean;
   /** v3 F3a: the batch places images staged on the bridge's server (a proposal at scope propose, not a refusal). */
   readonly stagedPlacement?: boolean;
@@ -84,7 +88,7 @@ export async function runWriteJob(
       ...(spec.pageScope ? { pageScope: spec.pageScope } : {}),
       ...(spec.holdDocuments && spec.holdDocuments.length > 0 ? { holdDocuments: spec.holdDocuments } : {}),
       ...(spec.lifecycle ? { lifecycle: spec.lifecycle } : {}),
-      ...(spec.forceProposal ? { forceProposal: true } : {}),
+      ...(spec.forceProposal === true ? { forceProposal: true } : {}),
       ...(spec.stagedPlacement ? { stagedPlacement: true } : {}),
       internal: true,
       proposal: spec.proposal,
@@ -126,13 +130,16 @@ export function describeJob(
   labels: readonly string[],
   head: Record<string, unknown>,
 ): { readonly body: Record<string, unknown>; readonly result: McpToolResult; readonly error: boolean } {
+  // v3 F2.1: a change with no LegendKeeper write answers in its own word (a chronology link: `linked`).
+  const { writtenStatus, ...shown } = head;
+  head = shown;
   if (view.status === 'succeeded') {
     const res = (view.result ?? {}) as { verified?: unknown; verification?: Record<string, unknown> };
     const verified = typeof res.verified === 'boolean' ? res.verified : null;
     const ver = res.verification ?? {};
     const body = {
       ...head,
-      status: 'written',
+      status: typeof writtenStatus === 'string' ? writtenStatus : 'written',
       verified,
       jobId: view.id,
       ...(factsVersions(ver) ?? {}),

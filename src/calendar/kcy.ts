@@ -19,15 +19,16 @@ export interface KcyStyle {
 
 /**
  * The style used until the owner confirms the one learned from the tables: thousands commas and a hyphen-minus (the
- * owner's own example, `-1,988,119`), ` - ` between the ends (as the date forms), and a range for every dated range
- * (the Jehet 4A 424 row has the same KCY at both ends). Each of these is checked against every row by the opt-in
- * sandbox test.
+ * owner's own example, `-1,988,119`), ` - ` between the ends (as the date forms), and, for a range whose two ends fall
+ * in the same KCY, the single value (v3 F2.1, the owner, 16 November 2026: `Kumikas 17th - 24th, 4A 611` is
+ * `1,250,918`; it was a range, after the Jehet 4A 424 row). Either way of writing such a range is accepted by the
+ * check (`kcyWrittenAlike`).
  */
 export const DEFAULT_KCY_STYLE: KcyStyle = {
   grouping: ',',
   minus: '-',
   rangeSeparator: ' - ',
-  sameYearRange: 'range',
+  sameYearRange: 'single',
 };
 
 export interface KcyValue {
@@ -46,6 +47,21 @@ export function formatKcy(v: KcyValue, s: KcyStyle): string {
   if (v.end === null) return one(v.start, s);
   if (v.end === v.start && s.sameYearRange === 'single') return one(v.start, s);
   return `${one(v.start, s)}${s.rangeSeparator}${one(v.end, s)}`;
+}
+
+/**
+ * v3 F2.1 (the owner, 16 November 2026): whether a KCY cell is written as the style writes this value. A range whose
+ * two ends fall in the same KCY may be written either way, the single value (`1,250,918`) or the range (`1,250,918 -
+ * 1,250,918`): neither is "written differently".
+ */
+export function kcyWrittenAlike(cell: string, v: KcyValue, s: KcyStyle): boolean {
+  const t = cell.trim();
+  if (t === formatKcy(v, s)) return true;
+  if (v.end === null || v.end !== v.start) return false;
+  return (
+    t === formatKcy(v, { ...s, sameYearRange: 'single' }) ||
+    t === formatKcy(v, { ...s, sameYearRange: 'range' })
+  );
 }
 
 /** A KCY cell read back: its values and how it is written (for style detection and the check). */

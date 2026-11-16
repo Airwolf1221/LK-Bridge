@@ -48,6 +48,7 @@ import {
   isBridgeStep,
   isInternalStep,
   LMR_STEP,
+  RECORD_STEP,
   type DocumentChecker,
   type Filler,
   type MapChecker,
@@ -2732,7 +2733,10 @@ export class JobEngine {
       if (decision.decision === 'propose') propose = true;
     }
     // v2 D1.1 (ADR 0039): bridge code asked for a proposal whatever the gate said (the dashboard's "Propose a fix").
-    if (forceProposal && items.some((it) => it.meta.kind !== 'read')) propose = true;
+    // v3 F2.1 (ADR 0048): so is a change the bridge only records (a chronology link the caller chose: no LegendKeeper
+    // write, but it changes what the check reports).
+    if (forceProposal && items.some((it) => it.meta.kind !== 'read' || it.opId === RECORD_STEP))
+      propose = true;
     // v2 C2a (ADR 0032): the write guard sees the whole request, once the gate has let every operation through.
     let canonical: ProposalMeta['canonical'];
     if (this.writeGuard && items.some((it) => it.meta.kind !== 'read')) {

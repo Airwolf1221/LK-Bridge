@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api } from '../api';
+import { api, ApiError } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtAgo, fmtInt, fmtTime, principalText } from '../format';
 import { useApi, useNow, type Resource } from '../hooks';
 import { useProject, useScopedApi } from '../project';
 import { Link } from '../router';
+import { rowCandidates, tieFromError, TieChoices, type TieCandidate } from './chronology-ties';
 import type {
   ChronologyAgeSummary,
   ChronologyCheckResponse,
@@ -538,6 +539,7 @@ const KIND: Record<ChronologyFindingKind, string> = {
   count_mismatch: 'Count mismatch',
   wrong_uri: 'Event link not to its table',
   unreadable_date: 'Date the engine cannot read',
+  event_in_tie: 'Event in a tie',
   date_text_differs: 'Written differently',
   not_found: 'Not found',
 };
@@ -555,11 +557,20 @@ const PAIRED_BY: Record<string, string> = {
   link: 'the bridge’s link',
   'date+name': 'date and name',
   date: 'date alone',
+  // v3 F2.1
+  plain: 'plain row preferred over qualified anchor',
+  'start+year': 'the same start and final year',
   'start+end': 'the same start and end',
   'start+shape': 'the same start and shape',
   name: 'the name',
   start: 'the same start',
 };
+
+/** v3 F2.1: the owner's choice in a tie (decision 2 and 3 of the F2.1 amendments). */
+type TieChoice =
+  | { readonly eventId: string; readonly rowId?: string }
+  | { readonly createNew: true }
+  | { readonly rowId: string; readonly eventId: string };
 
 function CheckCard({
   project,
@@ -590,7 +601,10 @@ function CheckCard({
   // setting the age's Main count to its table's row count; the owner approves it as normal.
   const [proposing, setProposing] = useState<string | null>(null);
   const [proposed, setProposed] = useState<Record<string, string>>({});
-  const propose = async (f: ChronologyFinding, key: string) => {
+  // v3 F2.1: a refused fix's candidates, by finding: each with "Use this event" (or "Pair with this row").
+  const [ties, setTies] = useState<Record<string, TieCandidate[]>>({});
+  const propose = async (f: ChronologyFinding, key: string, choice?: TieChoice) => {
+    if (choice) return proposeChoice(f, key, choice);
     const rowId = typeof f.detail?.rowId === 'string' ? f.detail.rowId : null;
     const count = f.kind === 'count_mismatch';
     // v2 E6 (ADR 0048): an event without a row: the proposal deletes only the event.
@@ -620,28 +634,99 @@ function CheckCard({
     }
     setProposing(key);
     void run(() =>
-      api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
-        confirm: true,
-        project,
-        age: f.age,
-        ...(count
-          ? { kind: 'count' }
-          : eventId
-            ? { kind: 'orphan', eventId }
-            : { rowId, ...(shape ? { confirmShapeChange: true } : {}) }),
-      }),
+      withTie(key, () =>
+        api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
+          confirm: true,
+          project,
+          age: f.age,
+          ...(count
+            ? { kind: 'count' }
+            : eventId
+              ? { kind: 'orphan', eventId }
+              : { rowId, ...(shape ? { confirmShapeChange: true } : {}) }),
+        }),
+      ),
     )
-      .then((res) => {
-        if (!res) return;
-        setProposed((p) => ({
-          ...p,
-          [key]:
-            res.status === 'proposal_captured'
-              ? `Proposal ${res.proposalId} is waiting on the Proposals page.`
-              : res.message,
-        }));
-      })
+      .then((res) => done(key, res))
       .finally(() => setProposing(null));
+  };
+
+  /** A refused fix's candidates are kept for the finding (the error is still shown). */
+  const withTie = async <T,>(key: string, fn: () => Promise<T>): Promise<T> => {
+    try {
+      return await fn();
+    } catch (e) {
+      const t = tieFromError(e);
+      if (t && t.length > 0) setTies((x) => ({ ...x, [key]: t }));
+      throw e;
+    }
+  };
+  const done = (key: string, res: ChronologyProposeFixResponse | undefined) => {
+    if (!res) return;
+    setTies((x) => {
+      const { [key]: _gone, ...rest } = x;
+      return rest;
+    });
+    setProposed((p) => ({
+      ...p,
+      [key]:
+        res.status === 'proposal_captured'
+          ? `Proposal ${res.proposalId} is waiting on the Proposals page.`
+          : res.message,
+    }));
+  };
+
+  /**
+   * v3 F2.1: "Use this event", "Make a new event" or "Pair with this row": ONE sync proposal for the row with the
+   * owner's choice (an event that already agrees is linked). A choice that changes the event's shape asks first.
+   */
+  const proposeChoice = async (f: ChronologyFinding, key: string, choice: TieChoice) => {
+    const rowId = 'rowId' in choice && choice.rowId ? choice.rowId : text(f.detail?.rowId);
+    if (!rowId) return;
+    const body = {
+      confirm: true,
+      project,
+      age: f.age,
+      rowId,
+      ...('createNew' in choice ? { createNew: true } : { eventId: choice.eventId }),
+    };
+    setProposing(key);
+    const send = (confirmShapeChange: boolean) =>
+      api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
+        ...body,
+        ...(confirmShapeChange ? { confirmShapeChange: true } : {}),
+      });
+    try {
+      let res: ChronologyProposeFixResponse | undefined;
+      try {
+        res = await send(false);
+      } catch (e) {
+        if (!(e instanceof ApiError && e.code === 'SHAPE_CHANGE_UNCONFIRMED')) throw e;
+        const shape = text((e.extra.details as Record<string, unknown> | undefined)?.shapeChange);
+        const yes = await confirm({
+          title: 'This choice changes the event’s shape',
+          message: (
+            <p>
+              The timeline event would change: <strong>{shape || 'its shape'}</strong>. Check that the row and
+              the event are the same chronology event before you propose it.
+            </p>
+          ),
+          confirmLabel: 'Propose the change',
+        });
+        if (!yes) return;
+        res = await run(() => withTie(key, () => send(true)));
+      }
+      done(key, res);
+    } catch (e) {
+      // Shown as every refusal is (with its candidates kept for the finding).
+      await run(() =>
+        withTie(key, () => {
+          throw e;
+        }),
+      );
+    } finally {
+      setProposing(null);
+    }
   };
 
   /** v2 E6 (ADR 0048): the owner never wants this row on the timeline (audited; holds while the row is unchanged). */
@@ -692,9 +777,11 @@ function CheckCard({
         Compares each age’s table with its timeline and the Main counts. The check itself only reads and never
         repairs anything; “Propose a fix” on a row without an event, a row and event that disagree about the
         date, an event without a row (deleted: only the event), or a Main count that differs from its table
-        makes ONE proposal (the table is the authority) for you to approve on the Proposals page. A qualified
-        date (“c. 4A 563; exact date unresolved”) is read by its anchor and never rewritten. It also runs
-        weekly (Maintenance Jobs page).
+        makes ONE proposal (the table is the authority) for you to approve on the Proposals page. An event in
+        a tie (rows of the table could be its own) is never deleted: pair it with one of its rows. A fix
+        refused because several events could be a row’s own shows them, each with “Use this event”, and “Make
+        a new event”. A qualified date (“c. 4A 563; exact date unresolved”) is read by its anchor and never
+        rewritten. It also runs weekly (Maintenance Jobs page).
       </p>
       {last && state ? (
         <dl className="kv">
@@ -767,6 +854,13 @@ function CheckCard({
                   const nearest = Array.isArray(f.detail?.nearest)
                     ? (f.detail.nearest as { date: string; words: string }[])
                     : [];
+                  // v3 F2.1: an event in a tie offers each candidate row; a refused fix its candidates.
+                  const tieRows =
+                    f.kind === 'event_in_tie' && typeof f.detail?.eventId === 'string'
+                      ? rowCandidates(f.detail.candidates)
+                      : [];
+                  const tie = ties[key] ?? (tieRows.length > 0 ? tieRows : null);
+                  const tieEventId = text(f.detail?.eventId);
                   return (
                     <tr key={i} data-kind={f.kind}>
                       <td>{KIND[f.kind] ?? f.kind}</td>
@@ -816,6 +910,23 @@ function CheckCard({
                           >
                             Table-only
                           </Button>
+                        )}
+                        {tie && !proposed[key] && (
+                          <TieChoices
+                            candidates={tie}
+                            busy={busy && proposing === key}
+                            disabled={busy || !project}
+                            onUse={(c) =>
+                              void propose(
+                                f,
+                                key,
+                                c.kind === 'event'
+                                  ? { eventId: c.eventId }
+                                  : { rowId: c.rowId, eventId: tieEventId },
+                              )
+                            }
+                            onCreateNew={() => void propose(f, key, { createNew: true })}
+                          />
                         )}
                         {proposed[key] && (
                           <span className="small-text">
