@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
 /**
  * v3 F3a (ADR 0050): the four Arkona evaluation scenarios (docs/reviews/scenarios.json, 31 to 34), each with the package
  * a good run sends, against the mock LegendKeeper in the order the owner runs them: the compact character approved and
