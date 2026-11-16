@@ -3,6 +3,7 @@
  * and the official MCP client connected with a personal access token. Real clock; write spacing is set to 0 so
  * tests do not wait, everything else is the production configuration.
  */
+import type { Writable } from 'node:stream';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,7 +38,7 @@ export interface StackOptions {
   /** Scope of the default token's profile (`tools-test`). Default `write`, so every tool is exercised. */
   readonly scope?: Scope;
   /** v3 F2: every log line, at trace level (to assert what is never logged). Default: silent. */
-  readonly logStream?: import('node:stream').Writable;
+  readonly logStream?: Writable;
 }
 
 export interface Stack {
