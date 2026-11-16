@@ -224,10 +224,31 @@ describe('the job checks again before it writes (design section 5)', () => {
       ...institution({ nation: 'Emirate of Qasr', home: 'Emirate of Qasr', name: 'Qasr Archive', promoteNation: true }),
     });
     expect(p.body.status, p.text).toBe('proposal_captured');
+    // Moved before the approval: the proposal's own re-read finds the change (conflicted), nothing runs.
     w.repo.outside.move(O.qasr, O.salahadInstitutions);
-    const done = await approve(w, String(p.body.proposalId));
-    expect(done.job?.status).toBe('failed');
-    expect(done.job?.lastError?.code).toBe('NATION_REFERENCE_MOVED');
+    const conflicted = await approve(w, String(p.body.proposalId));
+    expect(conflicted.state).toBe('conflicted');
+    expect(pageNamed('[INDEX] Emirate of Qasr')).toBeUndefined();
+    w.repo.outside.move(O.qasr, O.salahadPolities);
+    // Moved after the approval, before the job's first write: the job's own check stops it.
+    const q = await call({
+      ...institution({ nation: 'Emirate of Qasr', home: 'Emirate of Qasr', name: 'Qasr Records', promoteNation: true }),
+    });
+    // The move happens when the job reads the governance (its first check), just before its in-lock re-checks.
+    let moved = false;
+    const hook = new RegExp(`/docs/${w.governanceDocs.formatting}/blocks$`);
+    w.overrides.set(hook, () => {
+      if (!moved) {
+        moved = true;
+        w.repo.outside.move(O.qasr, O.salahadInstitutions);
+      }
+      return undefined;
+    });
+    const done = await approve(w, String(q.body.proposalId));
+    w.overrides.delete(hook);
+    const job = done.job;
+    expect(job?.status).toBe('failed');
+    expect(job?.lastError?.code).toBe('NATION_REFERENCE_MOVED');
     expect(pageNamed('[INDEX] Emirate of Qasr')).toBeUndefined();
     w.repo.outside.move(O.qasr, O.salahadPolities);
   });

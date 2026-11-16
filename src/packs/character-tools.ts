@@ -151,26 +151,27 @@ export async function runRelationship(
       },
       pd,
     );
+  // F3a's hosting rule: the page is named “<a> & <b>” and hosted under a's index (host "a") or b's ("b": F3a's
+  // `host: "other"`, which needs b to have an index and refuses a Working relationship there).
   const host = o.input.host ?? 'a';
-  const [target, partner] = host === 'b' ? [bb.hit, a.hit] : [a.hit, bb.hit];
   const plan = await planPackage(env, {
-    name: host === 'b' ? nameB : nameA,
-    target: target.identity.id,
+    name: nameA,
+    target: a.hit.identity.id,
     ...(o.input.status !== undefined ? { status: o.input.status } : {}),
     identity: {},
     pages: [
       {
         role: 'relationship',
-        with: partner.identity.id,
+        with: bb.hit.identity.id,
         ...(o.input.label !== undefined ? { label: o.input.label } : {}),
-        host: 'self',
+        host: host === 'b' ? 'other' : 'self',
         ...(o.input.scope !== undefined ? { scope: o.input.scope } : {}),
         ...(o.input.markdown !== undefined ? { markdown: o.input.markdown } : {}),
         ...(o.input.dependencies !== undefined ? { dependencies: o.input.dependencies } : {}),
         ...(o.input.related !== undefined ? { related: o.input.related } : {}),
       },
     ],
-    names: { subject: host === 'b' ? nameB : nameA, partner: host === 'b' ? nameA : nameB },
+    names: { subject: nameA, partner: nameB },
   });
   // The job's re-check (design section 5): no relationship of the pair appeared since the plan, under either
   // participant's index or in the Working area, and the pair is reserved while the job runs.
@@ -195,7 +196,7 @@ export async function runRelationship(
       relationship: {
         a: { id: a.hit.identity.id, name: nameA },
         b: { id: bb.hit.identity.id, name: nameB },
-        host: host === 'b' ? nameB : nameA,
+        hostedUnder: host === 'b' ? nameB : nameA,
       },
     },
   };
