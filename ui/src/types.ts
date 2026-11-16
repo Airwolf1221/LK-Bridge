@@ -1249,6 +1249,7 @@ export type ChronologyFindingKind =
   | 'row_without_event'
   | 'event_without_row'
   | 'date_mismatch'
+  | 'name_drift'
   | 'row_out_of_order'
   | 'wrong_kcy'
   | 'count_mismatch'

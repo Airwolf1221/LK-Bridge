@@ -351,6 +351,12 @@ export const CODES = {
     title: 'A row and its event disagree about the date',
     fix: 'chronology_sync',
   },
+  chronology_name_drift: {
+    category: 'chronology',
+    severity: 'info',
+    title: 'An event’s date tail no longer matches its row’s Date cell',
+    fix: 'chronology_sync',
+  },
   chronology_row_out_of_order: {
     category: 'chronology',
     severity: 'warning',

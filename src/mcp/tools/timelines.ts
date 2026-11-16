@@ -930,6 +930,8 @@ function createTimelineEventTool(deps: ToolDeps): McpToolProvider {
                 rowId: ids.row,
                 timelineDocumentId: age.timelineDocumentId,
                 eventId,
+                // v3 F2 (ADR 0049): a plain date: the bridge writes no tail in the name.
+                nameTail: '',
               },
             };
           }
@@ -1937,7 +1939,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
     title: 'Repair the timeline event of a chronology table row',
     access: 'write',
     description:
-      'Repairs drift for ONE chronology table row, with the TABLE as the authority: creates the row’s missing timeline event, or corrects the paired event’s minutes, detail, shape and link to match. It never touches the table or the Main count and never renames an event. Name the row with `row` (its date plus its description, or its row_id). Use it for what the chronology check reports (row_without_event, date_mismatch) or CHRONOLOGY_DRIFT. A row whose event already agrees answers "nothing to do"; if several events could be its pair it is refused with the candidates (pass `event_id`). dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 6 to 7 reads and 1 write.',
+      'Repairs drift for ONE chronology table row, with the TABLE as the authority: creates the row’s missing timeline event, or corrects the paired event’s minutes, detail, shape and link to match. It never touches the table or the Main count, and renames an event only to keep a date tail the bridge wrote in step with the row’s Date cell. Name the row with `row` (its date plus its description, or its row_id). Use it for what the chronology check reports (row_without_event, date_mismatch) or CHRONOLOGY_DRIFT. A row whose event already agrees answers "nothing to do"; if several events could be its pair it is refused with the candidates (pass `event_id`). dryRun shows the plan. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 6 to 7 reads and 1 write.',
     inputSchema: z.object({
       row: syncRowArg,
       event_id: z

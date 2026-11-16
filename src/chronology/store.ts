@@ -5,6 +5,7 @@
  */
 import { createHash } from 'node:crypto';
 import type { Db } from '../db/open.js';
+import { nameWithTail, splitNameTail } from './names.js';
 
 type Obj = Record<string, unknown>;
 
@@ -196,6 +197,8 @@ export interface ChronologyTarget {
     readonly rowId: string;
     readonly timelineDocumentId: string;
     readonly eventId: string;
+    /** v3 F2 (ADR 0049): the tail the bridge wrote in the event's name ('' for none; absent when unknown). */
+    readonly nameTail?: string;
   } | null;
   readonly unlink?: { readonly tableDocumentId: string; readonly rowId: string } | null;
 }
@@ -271,6 +274,7 @@ export interface CheckFinding {
     | 'row_without_event'
     | 'event_without_row'
     | 'date_mismatch'
+    | 'name_drift'
     | 'row_out_of_order'
     | 'wrong_kcy'
     | 'count_mismatch'
@@ -353,6 +357,11 @@ export interface ChronologyLink {
   readonly timelineDocumentId: string;
   readonly eventId: string;
   readonly age: string;
+  /**
+   * v3 F2 (ADR 0049 decision 1): the tail the bridge wrote after the last ` – ` of the event's name (ADR 0048 decision
+   * 3), or '' when it wrote none. Undefined when unknown (a link made before migration 2800, recognised on read).
+   */
+  readonly nameTail?: string;
 }
 
 export class ChronologyStore {
@@ -525,14 +534,24 @@ export class ChronologyStore {
   // ------------------------------------------------------------------------------------------ links
 
   link(projectId: string, l: ChronologyLink): void {
+    // An unknown tail (a record made before migration 2800) is stored as NULL, recognised on the next read.
     this.db
       .prepare(
-        `INSERT INTO chronology_links (project_id, table_document_id, row_id, timeline_document_id, event_id, age, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO chronology_links (project_id, table_document_id, row_id, timeline_document_id, event_id, age, updated_at, name_tail)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (project_id, table_document_id, row_id) DO UPDATE SET timeline_document_id = excluded.timeline_document_id,
-           event_id = excluded.event_id, age = excluded.age, updated_at = excluded.updated_at`,
+           event_id = excluded.event_id, age = excluded.age, updated_at = excluded.updated_at, name_tail = excluded.name_tail`,
       )
-      .run(projectId, l.tableDocumentId, l.rowId, l.timelineDocumentId, l.eventId, l.age, this.now());
+      .run(
+        projectId,
+        l.tableDocumentId,
+        l.rowId,
+        l.timelineDocumentId,
+        l.eventId,
+        l.age,
+        this.now(),
+        l.nameTail ?? null,
+      );
   }
 
   unlink(projectId: string, tableDocumentId: string, rowId: string): void {
@@ -554,14 +573,53 @@ export class ChronologyStore {
       timeline_document_id: string;
       event_id: string;
       age: string;
+      name_tail: string | null;
     }[];
-    return rows.map((r) => ({
-      tableDocumentId: r.table_document_id,
-      rowId: r.row_id,
-      timelineDocumentId: r.timeline_document_id,
-      eventId: r.event_id,
-      age: r.age,
-    }));
+    return rows.map((r) => {
+      const l: ChronologyLink = {
+        tableDocumentId: r.table_document_id,
+        rowId: r.row_id,
+        timelineDocumentId: r.timeline_document_id,
+        eventId: r.event_id,
+        age: r.age,
+      };
+      const tail = r.name_tail ?? this.recogniseTail(projectId, l);
+      return { ...l, nameTail: tail };
+    });
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 1): the tail of a link made before migration 2800, recognised once from the chronology
+   * record that made its event: the bridge wrote a tail only when the event's name, as it created it, equalled
+   * `<opening words> – <Date cell>` with the row's Date cell at the time. Anything else (no record, a plain name, a name
+   * whose ` – ` came from anyone else) is '' and is never rewritten. Stored, so it is worked out once.
+   */
+  private recogniseTail(projectId: string, l: ChronologyLink): string {
+    const recs = this.db
+      .prepare(
+        `SELECT target FROM chronology_records WHERE project_id = ? AND instr(target, ?) > 0 ORDER BY id DESC`,
+      )
+      .all(projectId, l.eventId) as { target: string }[];
+    let tail = '';
+    for (const r of recs) {
+      const t = parse<ChronologyTarget>(r.target, { writes: [] });
+      const ev = t.writes.find((w) => w.kind === 'event.create' && w.eventId === l.eventId);
+      if (!ev || ev.kind !== 'event.create') continue;
+      const name = typeof ev.body.name === 'string' ? ev.body.name : '';
+      const row = t.writes.find(
+        (w) => (w.kind === 'row.assert' || w.kind === 'row.insert') && w.rowId === l.rowId,
+      );
+      const cell = row && (row.kind === 'row.assert' || row.kind === 'row.insert') ? row.texts.date : null;
+      const split = splitNameTail(name);
+      if (cell !== null && split && name === nameWithTail(split.opening, cell)) tail = split.tail;
+      break;
+    }
+    this.db
+      .prepare(
+        'UPDATE chronology_links SET name_tail = ? WHERE project_id = ? AND table_document_id = ? AND row_id = ? AND name_tail IS NULL',
+      )
+      .run(tail, projectId, l.tableDocumentId, l.rowId);
+    return tail;
   }
 
   // ------------------------------------------------------------------------------------------ table-only marks

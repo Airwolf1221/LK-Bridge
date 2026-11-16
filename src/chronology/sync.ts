@@ -5,7 +5,8 @@
  * event, another year, a missing `uri`). This plans the repair of ONE row: it creates the row's event if it is missing,
  * or corrects the paired event's minutes, `detail`, shape (an end or none) and `uri` to match the row. It never touches
  * the table or the Main count (the row was already counted: that is the drift), and it never renames an event (the
- * timeline's short name differs from the table's description by design).
+ * timeline's short name differs from the table's description by design), with one exception (v3 F2, ADR 0049 decision
+ * 1): the date tail the bridge itself wrote into a linked qualified event's name follows the row's Date cell.
  *
  * The plan is pure: it reads through a reader, builds the target (the writes) and the context the job needs, and the
  * caller submits it: the MCP tool as a job or a proposal by the caller's scope, the dashboard's "Propose a fix" always
@@ -37,6 +38,8 @@ import {
 } from './check.js';
 import type { WriteContext } from './plan.js';
 import type { AgeConfig, ChronologyConfig } from './settings.js';
+import { EVENT_NAME_MAX, nameWithTail, renameFor, renameLine, splitNameTail } from './names.js';
+export { renameFor, renameLine } from './names.js';
 import {
   currentTableOnly,
   type ChronologyLink,
@@ -70,7 +73,7 @@ export interface SyncRefusal {
 }
 
 export interface FieldChange {
-  readonly field: 'start' | 'end' | 'detail' | 'uri';
+  readonly field: 'start' | 'end' | 'detail' | 'uri' | 'name';
   readonly from: unknown;
   readonly to: unknown;
 }
@@ -141,26 +144,38 @@ export function shortName(description: string): string {
 }
 
 /** LegendKeeper's longest event name. */
-export const EVENT_NAME_MAX = 500;
+export { EVENT_NAME_MAX } from './names.js';
 
 /**
- * v2 E6 (ADR 0048, owner to confirm): how a qualified row's event shows its qualification on the timeline.
- * LegendKeeper's events have no text field but the name (`detail` is the precision, 1 to 4), so the owner's own
- * wording goes into the name: `with-date`, the row's opening words as now, then ` – ` and the Date cell verbatim
- * (`The House of Menkhet admits Mehrana… – c. 4A 563; exact date unresolved`); `plain`, the opening words alone (the
- * timeline then shows the anchor's precision and nothing else). Plain rows are never affected.
+ * v2 E6 (ADR 0048 decision 3, accepted by the owner as `with-date`): how a qualified row's event shows its
+ * qualification on the timeline. LegendKeeper's events have no text field but the name (`detail` is the precision, 1
+ * to 4), so the owner's own wording goes into the name: the row's opening words as now, then ` – ` and the Date cell
+ * verbatim (`The House of Menkhet admits Mehrana… – c. 4A 563; exact date unresolved`). Plain rows are never affected.
  */
-export const QUALIFIED_EVENT_NAMES: 'with-date' | 'plain' = 'with-date';
+export const QUALIFIED_EVENT_NAMES = 'with-date' as const;
 
 /** The name a new event of this row gets (the caller's `name`, or the row's opening words; see above). */
 export function eventNameFor(row: AgeRow, given?: string): string {
   const base = given?.trim() || shortName(row.description);
-  if (!row.reading || QUALIFIED_EVENT_NAMES === 'plain') return base.slice(0, EVENT_NAME_MAX);
-  const cell = row.dateText.replace(/\s+/g, ' ').trim();
-  const room = EVENT_NAME_MAX - base.length - QUALIFIED_NAME_SEPARATOR.length;
-  if (room < 10) return base.slice(0, EVENT_NAME_MAX);
-  const tail = cell.length <= room ? cell : `${cell.slice(0, room - 3).trimEnd()}...`;
-  return `${base}${QUALIFIED_NAME_SEPARATOR}${tail}`;
+  if (!row.reading) return base.slice(0, EVENT_NAME_MAX);
+  return nameWithTail(base, row.dateText);
+}
+
+/** The tail the bridge writes into a new event's name for this row ('' for a plain row, or no room). */
+export function tailOfNewName(name: string, row: AgeRow): string {
+  if (!row.reading) return '';
+  const split = splitNameTail(name);
+  return split && name === nameWithTail(split.opening, row.dateText) ? split.tail : '';
+}
+
+/** The tail a link keeps when the event is not renamed: the bridge's own, while the name still ends with it. */
+function bridgeTail(
+  event: { readonly id: string },
+  link: ChronologyLink | null | undefined,
+  name: string,
+): string {
+  if (!link || link.eventId !== event.id || !link.nameTail) return '';
+  return splitNameTail(name)?.tail === link.nameTail ? link.nameTail : '';
 }
 
 /** v2 E6 (ADR 0048): a row's qualified reading as every answer and proposal shows it. */
@@ -426,11 +441,19 @@ export async function planSync(o: {
     if (!uriPointsAt(event.uri, resourceId, age.tableDocumentId))
       changes.push({ field: 'uri', from: event.uri, to: uri });
   }
+  // v3 F2 (ADR 0049 decision 1): a tail the bridge wrote follows the row's Date cell, in the same proposal.
+  const rowLink = o.links.find((l) => l.tableDocumentId === age.tableDocumentId && l.rowId === row.id);
+  const rename = event ? renameFor(event, rowLink, row) : null;
+  if (event && rename !== null) changes.push({ field: 'name', from: event.name, to: rename });
+  const renameText = event && rename !== null ? renameLine(event.name, rename) : null;
+  // The tail the link records after this change.
+  const tailAfter = (name: string): string =>
+    rename !== null ? (splitNameTail(rename)?.tail ?? '') : event ? bridgeTail(event, rowLink, name) : '';
   const rowInfo = {
     id: row.id,
     texts: { description: row.description, date: row.dateText, kcy: row.kcyText },
   };
-  const eventName = event?.name ?? eventNameFor(row, ref.name);
+  const eventName = rename ?? event?.name ?? eventNameFor(row, ref.name);
   const requestKey = syncRequestKey(ref);
   const shape = event ? shapeChange(event, want) : null;
   const common = {
@@ -485,6 +508,7 @@ export async function planSync(o: {
     event: event ? eventView(event) : null,
     ...(pairedBy ? { pairedBy } : {}),
     changes,
+    ...(renameText ? { rename: renameText } : {}),
     ...(shape
       ? {
           shapeChange: shape,
@@ -495,7 +519,10 @@ export async function planSync(o: {
   });
 
   if (event && changes.length === 0) {
-    const target: ChronologyTarget = { writes: [], link: { ...link, eventId: event.id } };
+    const target: ChronologyTarget = {
+      writes: [],
+      link: { ...link, eventId: event.id, nameTail: tailAfter(event.name) },
+    };
     return {
       ...common,
       action: 'nothing',
@@ -535,7 +562,7 @@ export async function planSync(o: {
       ...common,
       action: 'create',
       writes,
-      target: { writes, link: { ...link, eventId: id } },
+      target: { writes, link: { ...link, eventId: id, nameTail: tailOfNewName(eventName, row) } },
       ctx: baseCtx({}),
       summary: `${SYNC_TOOL}: add the missing ${age.name} event for “${row.dateText}”`,
       head: { ...head('create'), event: { id, name: eventName, date: wantText, ...body } },
@@ -549,7 +576,7 @@ export async function planSync(o: {
   const before = [`## ${age.name} - Table`, line, '', lane, `- ${eventText(event)}: **${event.name}**`].join(
     '\n',
   );
-  const after = [`## ${age.name} - Table`, line, '', lane, `- ${wantText}: **${event.name}**`].join('\n');
+  const after = [`## ${age.name} - Table`, line, '', lane, `- ${wantText}: **${eventName}**`].join('\n');
   if (event.end !== null && want.end === null) {
     // LegendKeeper cannot take an end away from an event: it is made again (same lane, link and name).
     const id = mintClientId(24);
@@ -557,7 +584,7 @@ export async function planSync(o: {
       id,
       laneId: age.laneId,
       type: 'event',
-      name: event.name,
+      name: eventName,
       start: want.start,
       detail: want.detail,
       uri,
@@ -584,9 +611,9 @@ export async function planSync(o: {
       ...common,
       action: 'recreate',
       writes,
-      target: { writes, link: { ...link, eventId: id } },
+      target: { writes, link: { ...link, eventId: id, nameTail: tailAfter(event.name) } },
       ctx: baseCtx({ [event.id]: event.raw }),
-      summary: `${SYNC_TOOL}: make the ${age.name} event for “${row.dateText}” again as a single date (${shape ?? 'range → single date'})`,
+      summary: `${SYNC_TOOL}: make the ${age.name} event for “${row.dateText}” again as a single date (${shape ?? 'range → single date'})${renameText ? `; ${renameText}` : ''}`,
       head: head('recreate'),
       markdown: { before, after },
     };
@@ -611,9 +638,9 @@ export async function planSync(o: {
     ...common,
     action: 'correct',
     writes,
-    target: { writes, link: { ...link, eventId: event.id } },
+    target: { writes, link: { ...link, eventId: event.id, nameTail: tailAfter(event.name) } },
     ctx: baseCtx({ [event.id]: event.raw }),
-    summary: `${SYNC_TOOL}: correct the ${age.name} event for “${row.dateText}” (${changes.map((x) => x.field).join(', ')}${shape ? `; ${shape}` : ''})`,
+    summary: `${SYNC_TOOL}: correct the ${age.name} event for “${row.dateText}” (${changes.map((x) => x.field).join(', ')}${shape ? `; ${shape}` : ''})${renameText ? `; ${renameText}` : ''}`,
     head: head('correct'),
     markdown: { before, after },
   };

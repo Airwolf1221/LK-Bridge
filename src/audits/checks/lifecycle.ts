@@ -280,6 +280,7 @@ const CHRONOLOGY_CODE: Record<string, FindingCode> = {
   row_without_event: 'chronology_row_without_event',
   event_without_row: 'chronology_event_without_row',
   date_mismatch: 'chronology_date_mismatch',
+  name_drift: 'chronology_name_drift',
   row_out_of_order: 'chronology_row_out_of_order',
   wrong_kcy: 'chronology_wrong_kcy',
   count_mismatch: 'chronology_count_mismatch',
@@ -311,7 +312,8 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
     const d = (f.detail ?? {}) as Record<string, unknown>;
     const id = str(d.rowId) || str(d.eventId);
     const fixable =
-      (f.kind === 'row_without_event' || f.kind === 'date_mismatch') && typeof d.rowId === 'string';
+      (f.kind === 'row_without_event' || f.kind === 'date_mismatch' || f.kind === 'name_drift') &&
+      typeof d.rowId === 'string';
     // v2 E5 hotfix: a count mismatch has a fix when the Main table has a row for the age (it has a count to set).
     const countFixable = f.kind === 'count_mismatch' && typeof d.main === 'string';
     // v2 E6 (ADR 0048): an event without a row has one too: the event deleted (only the event).

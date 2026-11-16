@@ -1,7 +1,11 @@
 # ADR 0048: Chronology II: qualified dates read by their anchor, scored pairing, table-only rows, events without a row, and named low-level proposals
 
-- Status: **Proposed** (v2 E6, "Chronology II", 16 November 2026). Every decision is implemented; the three marked
-  **Owner to decide** are the safe or literal option, for the owner to confirm or change.
+- Status: **Accepted** (v2 E6, "Chronology II", also called v3 F1; built 16 November 2026, accepted by the owner the same
+  day). The owner's decisions on the three questions: **(A)** the `with-date` naming stays, its separator `–`
+  unchanged; **(B)** an unreadable row is reported once; **(C)** table-only rows take no part in pairing. Amended by
+  [ADR 0049](0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 1: the date tail the bridge wrote
+  into a linked event's name now follows the row's Date cell (decision 3's "never renames" no longer holds for that
+  tail).
 - Builds on: [ADR 0038](0038-calendar-engine-and-chronology-sync.md) (the engine, the chronology jobs),
   [ADR 0039](0039-date-styles-timeline-repair-and-etag-versions.md) (the two date styles, `sync_timeline_event`, the
   four-pass pairing, "Propose a fix"), [ADR 0044](0044-audits.md) (the audits' chronology fold-in) and
@@ -83,8 +87,7 @@ approximate date`) is fine; a cell with more numbers than one value or range is 
   means: before, 63 `unreadable_date` and the same 63 rows again as `row_without_event`; after, `unreadable_date` falls
   to the uncertain ones and `row_without_event` becomes exactly the rows whose events "Propose a fix" can make (plus any
   plain row without an event, such as the Viziers' vote below). On the Arkona-shaped fixture of 63 rows: **54 certain,
-  9 unreadable** (`test/chronology/qualified.test.ts`). **Owner to decide** (B): this one-report rule. The alternative
-  keeps the double report.
+  9 unreadable** (`test/chronology/qualified.test.ts`). **Owner decided** (B, 16 November 2026): reported once, as built.
 
 ## Decision 3: a qualified row's timeline event
 
@@ -110,11 +113,11 @@ Date cell. So, inventing no field:
   and its name with the date wording; its link (`uri`) opens the age's table, where the row is.
 - Pairing reads past the tail: `namesMatch` compares the name before `–` with the row's description. The bridge links
   every event it makes, so a pair it made never depends on the name. `sync_timeline_event` still never renames an
-  event, so existing events keep their names.
+  event, so existing events keep their names. (Amended by ADR 0049 decision 1: a tail the bridge wrote follows the
+  row's Date cell; nothing else about a name changes.)
 
-**Owner to decide** (A): this naming, `QUALIFIED_EVENT_NAMES = 'with-date'` in src/chronology/sync.ts. The alternative,
-`'plain'`, keeps the opening words alone (the timeline then shows only the anchor's precision, and an open bound looks
-like an exact date).
+**Owner decided** (A, 16 November 2026): this naming, `with-date`, with the separator `–`, stays. The `'plain'`
+alternative is removed from the code.
 
 ## Decision 4: the table-only mark
 
@@ -125,7 +128,7 @@ three cells as they are then (and an optional reason). Audited `chronology.table
 - **It holds while the row is unchanged**, as an audit acknowledgement does (ADR 0044): the cells' fingerprint must match.
   If the row changes or goes, the mark no longer holds and the row is back in the check (the page shows the lapsed mark).
 - **Hidden from the check**: no finding for that row (unreadable date, row without an event, KCY, order).
-- **Left out of pairing**: a table-only row takes no event (an event only it could own becomes an event without a row,
+- **Left out of pairing** (**owner decided**, C, 16 November 2026): a table-only row takes no event (an event only it could own becomes an event without a row,
   offered for deletion). It still counts as a rival in the shape guard (decision 5). `sync_timeline_event` refuses it
   (`ROW_TABLE_ONLY`).
 - **The Main count is still the table's row count**, table-only rows included.
@@ -208,12 +211,11 @@ through the audits page is now a 409 with its code and reason (it was a 500).
   and 1 per 100 events). Its "Propose a fix" costs the 3 planning reads. Marking a row table-only reads 2 (the calendar,
   the table). A low-level proposal of a sidebar row costs 1 more read per property; nothing else does.
 
-## Open for the owner
+## Owner's decisions (16 November 2026)
 
-- (A) The qualified event's name (decision 3): `with-date` (implemented) or `plain`.
-- (B) An unreadable row reported once (decision 2), or twice as before.
-- (C) Table-only rows left out of pairing (decision 4): an event only such a row could own is then offered for deletion.
-  The alternative keeps them in pairing and hides only their findings.
+- (A) The qualified event's name (decision 3): `with-date`, separator `–` unchanged.
+- (B) An unreadable row reported once (decision 2).
+- (C) Table-only rows take no part in pairing (decision 4).
 - After deploying: the test world's check (nothing should change for its clean rows); Arkona's check and its counts;
   then a few qualified-row events approved one shape at a time (year, range, open start, approximate) and looked at on
   the timeline in the app before the rest; and the Divan Heirage pair (the range row with its event, the vote with its
