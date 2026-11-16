@@ -53,6 +53,7 @@ The work splits into **9 Claude Code sessions (chunks)**. Section 11 gives each 
 | All requests, **per project across all keys** | 1 h | **12,000** |
 | `createManyResources` *items* (≤100 per call, call = 1 write) | 1 min / 1 h | **600 / 6,000** |
 | Upload tier (`UPLOAD_RATE_EXCEEDED`) | ? | **Explicitly unresolved.** The spec names the tier but publishes no numbers. |
+| Asset routes (not in the spec; observed 16 November 2026) | 1 min | **About 20** (asset folders, image uploads, image assets) and **about 60** (asset deletes). Learned per operation group, never applied to other writes (§5.1, ADR 0047); the sandbox probe LIM1 records the exact figures. |
 
 The order in which tiers are consumed is: write-minute → write-hour → key-minute → key-hour → key-day → project-hour. Reads skip the write tiers.
 
@@ -244,6 +245,7 @@ Each entry holds:
 - **Tier limits live in config, not code.** The defaults are the published numbers, so a change by LK is a config edit.
 - Before dispatch, the governor checks every tier the op draws on (§4 `costs`). The call proceeds only if all have room *after* the reserves in §5.2.
 - **Correction from the server:** after every response, the governor reads `X-RateLimit-*` (the tightest tier) and snaps the matching local counter to the server's `Remaining`/`Reset`. On a `429` it marks that tier exhausted until `Retry-After`.
+- **Learned operation limits** (v2 E5.5, [ADR 0047](adr/0047-learned-operation-limits.md)): LegendKeeper's asset routes have tiers the table above does not list (about 20 a minute for uploads and asset creation, about 60 for asset deletes). A header is matched to a documented tier by its limit, as above; a new limit is taken as a documented tier's change only when its reset implies that tier's window, its count is near the bridge's own, and the operation is not one of the asset routes. Any other unrecognised limit becomes a **learned tier of the operation's rate group** (`assets`, or the operation's own id): it paces only that group, a 429 on it blocks only that group, and it expires once its window has passed twice unseen. A header at a documented tier's configured limit clears a limit learned for it. The Budgets page lists the learned limits; the footer adds `blocked <group> <s>s` while a group is blocked.
 - **Shared project tier:** the project-hour tier (12,000) is shared by *every* key on the project, so another client (for example your old ChatGPT bridge, if its key is still live) silently consumes it. The governor's local count will under-estimate. That's why server headers always win, and why the UI shows "observed vs. modelled" drift. **Recommendation:** revoke the old bridge's key once ChatGPT's maintenance finishes.
 
 ### 5.2 Priorities and reserves
@@ -282,6 +284,7 @@ Within a class, the queue is FIFO with fair-share across jobs: round-robin by jo
   `budget: writes 87/120·min 2,410/3,000·h | all 241/300·min 5,102/6,000·h 48k/60k·d | project 9.8k/12k·h | queue P1:0 P2:14`
 - **`bridge_budget`** returns the full table, reset times and queue depths.
 - **`bridge_estimate`** takes a planned workload, such as `{ reads: 3500, writes: 800, createManyItems: 0 }`. It returns the projected wall-clock time, the tightest tier and whether the work fits within today's day cap. Agents call this *before* proposing big operations.
+- **Honest estimates** (v2 E5.5, backlog 16, [ADR 0047](adr/0047-learned-operation-limits.md)): every estimate uses each tier's effective limit, the learned operation limits for the operations it names, and, as the time per write, the project's measured per-write duration (the median wall time of its last 200 write steps) floored at the configured spacing. The rehearsal and restore plans say which figures they used.
 
 ---
 
@@ -572,3 +575,4 @@ Effort levels are `low`, `medium`, `high`, `xhigh` and `max`. The default for Op
 6. 8 November 2026: The bridge stays on the test world while further features are built. ChatGPT continues on Baisheng through the old bridge until this bridge is feature-complete. There is no deadline; the move to Baisheng follows PLAN §9.7 when the owner decides.
 7. (8 November 2026, hotfix v1.0.2) Client ID Metadata Document clients may authenticate with `private_key_jwt` (RFC 7523) as well as `none`, because ChatGPT's document requires it. The method is the one the document names; `none` stays first in the metadata, as §9.6 requires for Claude ([ADR 0021](adr/0021-private-key-jwt-client-authentication.md)).
 8. (9 November 2026, v2 session A1) One bridge serves several LegendKeeper projects: keys in the env file (`LK_PROJECTS`, `LK_PROJECT_<NAME>_API_KEY`, `LK_DEFAULT_PROJECT`), everything else in the `projects` table; one governor per project; a required `project_id` on every LegendKeeper-data row (migration 0600); an optional `project` argument on every tool, required for writes when several projects are registered; exactly one bridge process per project. The sandbox settings of §10 and chunk 7 (`LK_SANDBOX_API_KEY`, `LK_SANDBOX_PROJECT_ID`, `--allow-bridge-project`) are retired: the scripts take `--project` and refuse projects not marked as a sandbox ([ADR 0023](adr/0023-project-model.md), [projects.md](projects.md)).
+9. (16 November 2026, v2 E5.5) Undocumented per-operation tiers (LegendKeeper's asset routes) are learned per operation group and never lower a documented tier; estimates use the effective limits, the learned ones for the operations they plan, and a measured per-write duration (§5.1, §5.4; [ADR 0047](adr/0047-learned-operation-limits.md), migration `2600`).

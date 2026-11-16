@@ -6,7 +6,7 @@ import { LegendKeeper } from '@legendkeeper/sdk';
 import type { LkSettings } from '../config/lk.js';
 import { costSpecFor } from './costs.js';
 import { formatBudgetFooter } from './governor/footer.js';
-import { Governor, type Transport } from './governor/governor.js';
+import { Governor, type GovernorOptions, type Transport } from './governor/governor.js';
 import type { GovernorPersistence } from './governor/persist.js';
 import type { Clock } from './governor/clock.js';
 import type { PriorityClass, VerifyResult } from './governor/types.js';
@@ -24,6 +24,10 @@ export interface LkClientConfig extends LkSettings {
   readonly persistence?: GovernorPersistence;
   /** v2 E5 hotfix: the only operations the governor may send (`GovernorOptions.allowedOperations`). */
   readonly allowedOperations?: ReadonlySet<string>;
+  /** v2 E5.5: the governor's info log (a learned operation limit's first sighting; `GovernorOptions.log`). */
+  readonly log?: GovernorOptions['log'];
+  /** v2 E5.5: the measured per-write duration for estimates (`GovernorOptions.writeDuration`). */
+  readonly writeDuration?: GovernorOptions['writeDuration'];
 }
 
 export interface LkCallRequest<T> {
@@ -69,6 +73,8 @@ export function createLkClient(config: LkClientConfig): LkClient {
       ...(config.random ? { random: config.random } : {}),
       ...(config.persistence ? { persistence: config.persistence } : {}),
       ...(config.allowedOperations ? { allowedOperations: config.allowedOperations } : {}),
+      ...(config.log ? { log: config.log } : {}),
+      ...(config.writeDuration ? { writeDuration: config.writeDuration } : {}),
     });
   const sdk = new LegendKeeper({
     apiKey: config.apiKey,

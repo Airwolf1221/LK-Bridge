@@ -22,6 +22,7 @@ import { safeEqual } from '../auth/crypto.js';
 import { PROJECT_NAME_PATTERN, type Config, type ProjectKeyConfig } from '../config/index.js';
 import { lkSettingsFor } from '../config/lk.js';
 import type { Db } from '../db/open.js';
+import { writeDurationSource } from '../jobs/durations.js';
 import { callOp } from '../jobs/lk-call.js';
 import { BridgeLkError, BudgetWaitError } from '../lk/errors.js';
 import { createLkClient, type LkClient } from '../lk/client.js';
@@ -888,6 +889,12 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
       ...(this.o.transport ? { transport: this.o.transport } : {}),
       ...(this.o.random ? { random: this.o.random } : {}),
       ...(this.o.allowedOperations ? { allowedOperations: this.o.allowedOperations } : {}),
+      // v2 E5.5: a limit LegendKeeper reports for an operation group is logged once, naming the project; estimates
+      // use the project's measured per-write duration (the median of its recent write steps).
+      log: { info: (obj, msg) => this.log.info({ ...obj, project: p.name }, msg) },
+      ...(projectId !== ''
+        ? { writeDuration: writeDurationSource(this.o.db, projectId, () => this.clock.now()) }
+        : {}),
       ...(persist && projectId !== '' && this.o.persistCounters !== false
         ? {
             persistence: {

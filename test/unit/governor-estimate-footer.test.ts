@@ -32,7 +32,15 @@ function snapshot(
       return [tier, t];
     }),
   ) as Record<TierId, TierSnapshot>;
-  return { atMs: NOW, tiers, queues, inFlight: 0, writeSpacingMs: 500, nextWriteAtMs: null };
+  return {
+    atMs: NOW,
+    tiers,
+    operationTiers: [],
+    queues,
+    inFlight: 0,
+    writeSpacingMs: 500,
+    nextWriteAtMs: null,
+  };
 }
 
 describe('estimate', () => {

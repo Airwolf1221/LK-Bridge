@@ -48,7 +48,8 @@ export interface ImagesWorld extends ResourcesWorld {
 
 let certCache: { key: Buffer; cert: string } | null = null;
 
-function certificate(): { key: Buffer; cert: string } {
+/** A throwaway certificate for `storage.test` and `assets.test` (also the assumptions dry run's upload host, LIM1). */
+export function certificate(): { key: Buffer; cert: string } {
   if (certCache) return certCache;
   const dir = mkdtempSync(join(tmpdir(), 'lkb-img-cert-'));
   execFileSync(

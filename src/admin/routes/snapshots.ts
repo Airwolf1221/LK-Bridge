@@ -282,6 +282,8 @@ export const registerSnapshots: Register = (api, ctx) => {
         idMap: plan.idMap ?? null,
         followUp: plan.followUp ?? null,
         reads: plan.reads,
+        // v2 E5.5: how long it should take once approved, and the figures used.
+        estimate: plan.estimate ?? null,
       };
       if (plan.empty) return { status: 'nothing_to_do', plan: view };
       if (b.dryRun) return { status: 'dry_run', plan: view };

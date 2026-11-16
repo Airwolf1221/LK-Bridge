@@ -19,7 +19,20 @@ export {
 } from './persist.js';
 export { decideRetry, backoffMs, INITIAL_RETRY_STATE } from './retry.js';
 export type { RetryDecision, RetryInput, RetryState, RetryReason, WireMethod } from './retry.js';
-export { estimateFrom, CREATE_MANY_MAX_ITEMS } from './estimate.js';
+export { estimateFrom, perWriteFigure, CREATE_MANY_MAX_ITEMS } from './estimate.js';
+export {
+  ASSETS_GROUP,
+  RATE_GROUPS,
+  UPLOAD_PUT_OP,
+  rateGroupOf,
+  isListedGroupOp,
+  drawsLearnedTier,
+  groupTierId,
+  groupOfTierId,
+  windowFromReset,
+  type BudgetTierId,
+  type GroupTierId,
+} from './groups.js';
 export { formatBudgetFooter } from './footer.js';
 export { parseRateHeaders, parseRetryAfter, captureResponse, type RateHeaders } from './headers.js';
 export * from './types.js';

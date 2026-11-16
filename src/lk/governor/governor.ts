@@ -20,6 +20,16 @@ import { getOperation } from '../registry.js';
 import { TIER_IDS, type TierId } from '../registry-types.js';
 import { sleep, systemClock, type Clock, type TimerHandle } from './clock.js';
 import { estimateFrom } from './estimate.js';
+import {
+  drawsLearnedTier,
+  EXPIRY_WINDOWS,
+  groupTierId,
+  isListedGroupOp,
+  rateGroupOf,
+  windowFromReset,
+  type BudgetTierId,
+  type GroupTierId,
+} from './groups.js';
 import { captureResponse, UNCOUNTED_STATUSES, type CapturedResponse, type RateHeaders } from './headers.js';
 import { decideRetry, INITIAL_RETRY_STATE, type RetryState, type WireMethod } from './retry.js';
 import {
@@ -31,6 +41,8 @@ import {
   type EstimateInput,
   type ExecuteRequest,
   type GovernorEvents,
+  type MeasuredWriteDuration,
+  type OperationTierSnapshot,
   type TierSnapshot,
   type VerifyResult,
 } from './types.js';
@@ -67,12 +79,28 @@ export interface GovernorOptions {
    * Markdown round trip sets it (test/sandbox/soak.ts, `createReadOnlyRuntime`); the bridge never does.
    */
   readonly allowedOperations?: ReadonlySet<string>;
+  /**
+   * v2 E5.5: where the info line goes the first time (per process) LegendKeeper reports a limit for an operation group
+   * that the bridge did not know. The project registry binds the project's name.
+   */
+  readonly log?: { info(obj: Record<string, unknown>, msg: string): void };
+  /**
+   * v2 E5.5 (backlog 16): the project's measured per-write duration (the median wall time of its recent write steps),
+   * which `estimate` uses with a floor of the configured spacing. Null when there is nothing to measure yet.
+   */
+  readonly writeDuration?: () => MeasuredWriteDuration | null;
 }
 
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9._-]{1,255}$/;
 const WRITE_TIERS: ReadonlySet<TierId> = new Set(['write-min', 'write-hour']);
 const ITEM_TIERS: ReadonlySet<TierId> = new Set(['items-min', 'items-hour']);
 const STRETCH_RELEASE = 0.8;
+/**
+ * v2 E5.5: how close LegendKeeper's count must be to the bridge's own for a new limit to be taken as a documented tier's
+ * (at least this many units, or this share of the limit LegendKeeper reported).
+ */
+const NEAR_UNITS = 2;
+const NEAR_SHARE = 0.05;
 
 interface TierState {
   readonly id: TierId;
@@ -86,11 +114,43 @@ interface TierState {
   drift: TierSnapshot['drift'];
 }
 
+/** v2 E5.5: a tier learned for an operation group (ADR 0047). Keyed by group and limit. */
+interface OpTierState {
+  readonly id: GroupTierId;
+  readonly group: string;
+  readonly limit: number;
+  readonly ops: Set<string>;
+  windowMs: number;
+  window: SlidingWindow;
+  reportedRemaining: number;
+  serverResetAt: number | null;
+  readonly firstSeenAt: number;
+  lastSeenAt: number;
+  blockedUntil: number;
+  inFlight: number;
+  drift: TierSnapshot['drift'];
+}
+
+/** What `snap` needs of a tier, documented or learned. */
+interface Snappable {
+  readonly window: SlidingWindow | null;
+  readonly windowMs: number | null;
+  inFlight: number;
+  serverResetAt: number | null;
+  drift: TierSnapshot['drift'];
+}
+
 interface Consumption {
-  readonly tier: TierState;
+  readonly tier: TierState | OpTierState;
   readonly n: number;
   readonly event: WindowEvent | null;
+  /** The window the event went into (a learned tier's window is replaced when its inferred window grows). */
+  readonly window: SlidingWindow | null;
 }
+
+/** Where LegendKeeper's headers on a response were attributed (`observe`), kept for a 429's block. */
+type Attribution =
+  { readonly kind: 'tier'; readonly id: TierId } | { readonly kind: 'group'; readonly tier: OpTierState };
 
 interface Ticket {
   readonly consumed: Consumption[];
@@ -119,6 +179,8 @@ interface AttemptContext {
   transportError: unknown;
   timedOut: boolean;
   callerAborted: boolean;
+  /** v2 E5.5: where this response's rate headers went (set by `observe`). */
+  attribution: Attribution | null;
 }
 
 type Listener<E extends keyof GovernorEvents> = (event: GovernorEvents[E]) => void;
@@ -126,6 +188,19 @@ type Listener<E extends keyof GovernorEvents> = (event: GovernorEvents[E]) => vo
 function reserveUnits(limit: number, floor: number): number {
   // Round away float noise first (0.1 * 120 = 12.000000000000002).
   return Math.ceil(Math.round(limit * floor * 1e6) / 1e6);
+}
+
+/** v2 E5.5: what a class may use of a learned tier per window: its share above the floor, and at least one call. */
+function learnedCap(limit: number, floor: number): number {
+  return Math.max(1, limit - reserveUnits(limit, floor));
+}
+
+function opKey(group: string, limit: number): string {
+  return `${group}\u0000${limit}`;
+}
+
+function windowName(ms: number): string {
+  return ms <= 60_000 ? 'minute' : ms <= 3_600_000 ? 'hour' : 'day';
 }
 
 function weightFor(tier: TierId, costs: CostSpec): number {
@@ -180,9 +255,17 @@ export class Governor {
   private readonly persistence: GovernorPersistence | undefined;
   private saveTimer: TimerHandle | null = null;
   private readonly allowedOperations: ReadonlySet<string> | undefined;
+  /** v2 E5.5: learned operation tiers, by `group \0 limit`. In memory only: a restart learns them again. */
+  private readonly opTiers = new Map<string, OpTierState>();
+  /** v2 E5.5: `group \0 limit` pairs already logged by this process (a sighting is logged once). */
+  private readonly logged = new Set<string>();
+  private readonly log: GovernorOptions['log'];
+  private readonly writeDuration: GovernorOptions['writeDuration'];
 
   constructor(options: GovernorOptions) {
     this.current = options.settings;
+    this.log = options.log;
+    this.writeDuration = options.writeDuration;
     this.allowedOperations = options.allowedOperations ? new Set(options.allowedOperations) : undefined;
     this.clock = options.clock ?? systemClock;
     this.transport = options.transport ?? defaultTransport;
@@ -263,6 +346,7 @@ export class Governor {
         transportError: undefined,
         timedOut: false,
         callerAborted: false,
+        attribution: null,
       };
       let error: BridgeLkError;
       try {
@@ -418,6 +502,7 @@ export class Governor {
     return {
       atMs: now,
       tiers,
+      operationTiers: this.operationTierSnapshots(now),
       queues,
       inFlight: this.inFlight,
       writeSpacingMs: spacing,
@@ -425,8 +510,22 @@ export class Governor {
     };
   }
 
+  /**
+   * PLAN §5.4 `bridge_estimate`. v2 E5.5: every tier at its effective limit (`limitOf`), the learned operation tiers for
+   * the operations named in `input.ops`, and the measured per-write duration (floored at the spacing) when the bridge
+   * has one for this project.
+   */
   estimate(input: EstimateInput): Estimate {
-    return estimateFrom(this.snapshot(), this.settings, input);
+    return estimateFrom(this.snapshot(), this.settings, input, this.measuredWriteDuration());
+  }
+
+  /** The measured per-write duration, or null: a measurement that cannot be read never breaks an estimate. */
+  private measuredWriteDuration(): MeasuredWriteDuration | null {
+    try {
+      return this.writeDuration?.() ?? null;
+    } catch {
+      return null;
+    }
   }
 
   on<E extends keyof GovernorEvents>(event: E, cb: Listener<E>): () => void {
@@ -558,9 +657,12 @@ export class Governor {
   }
 
   /** Earliest time this call may be dispatched, and which constraint decides it. */
-  private readyAt(req: ExecuteRequest<unknown>, now: number): { at: number; tier: TierId | 'pacing' | null } {
+  private readyAt(
+    req: ExecuteRequest<unknown>,
+    now: number,
+  ): { at: number; tier: BudgetTierId | 'pacing' | null } {
     let at = now;
-    let tier: TierId | 'pacing' | null = null;
+    let tier: BudgetTierId | 'pacing' | null = null;
     const floor = this.settings.reserveFloors[req.priority];
     for (const id of TIER_ORDER) {
       if (!draws(req.costs, id)) continue;
@@ -576,6 +678,18 @@ export class Governor {
       if (r > at) {
         at = r;
         tier = id;
+      }
+    }
+    // v2 E5.5: the learned tiers of the call's operation group pace it, and a 429 on one blocks it.
+    for (const g of this.learnedTiersFor(req.opId, now)) {
+      if (g.blockedUntil > at) {
+        at = g.blockedUntil;
+        tier = g.id;
+      }
+      const r = g.window.readyAt(now, 1, learnedCap(g.limit, floor));
+      if (r > at) {
+        at = r;
+        tier = g.id;
       }
     }
     if (isWrite(req.costs) && this.lastWriteAt !== null) {
@@ -664,7 +778,12 @@ export class Governor {
       const n = weightFor(id, p.req.costs);
       const event = t.window ? t.window.add(now, n) : null;
       t.inFlight += n;
-      consumed.push({ tier: t, n, event });
+      consumed.push({ tier: t, n, event, window: t.window });
+    }
+    for (const g of this.learnedTiersFor(p.req.opId, now)) {
+      const event = g.window.add(now, 1);
+      g.inFlight += 1;
+      consumed.push({ tier: g, n: 1, event, window: g.window });
     }
     this.countersChanged();
     if (isWrite(p.req.costs)) {
@@ -724,9 +843,9 @@ export class Governor {
     const c = ctx.captured;
     const uncounted =
       ctx.fetchCount === 0 || (c !== undefined && c.rate === null && UNCOUNTED_STATUSES.has(c.status));
-    for (const { tier, n, event } of ticket.consumed) {
+    for (const { tier, n, event, window } of ticket.consumed) {
       tier.inFlight -= n;
-      if (uncounted && event && tier.window) tier.window.refund(now, event);
+      if (uncounted && event && window) window.refund(now, event);
     }
     if (uncounted) this.countersChanged();
     this.pump();
@@ -764,8 +883,14 @@ export class Governor {
 
   // ---------------------------------------------------------------------------------------------- server correction
 
-  /** Which drawn tier LK's headers describe. Limit first, then window consistency, then consumption order. */
-  private matchTier(costs: CostSpec, rate: RateHeaders, now: number): TierId | null {
+  /**
+   * Which tier LK's headers describe (v2 E5.5, ADR 0047). A documented tier the call draws is matched by its limit, as
+   * before. Otherwise the limit is new: it goes to a learned tier of the operation's rate group, unless the operation
+   * is of no listed group and the header is consistent with a documented tier (its window by the reset, and its count
+   * near the bridge's own), which is then a genuine change of LegendKeeper's documented limit. Never mutates.
+   */
+  private attribute(ctx: AttemptContext, rate: RateHeaders, now: number): Attribution | { kind: 'learn' } {
+    const costs = ctx.req.costs;
     const candidates = TIER_ORDER.filter((id) => draws(costs, id) && this.tiers[id].window !== null);
     const resetIn = rate.resetAtMs - now;
     const consistent = (id: TierId) => (this.tiers[id].windowMs ?? 0) + 1000 >= resetIn;
@@ -774,30 +899,61 @@ export class Governor {
       return t.configuredLimit === rate.limit || this.limitOf(t) === rate.limit;
     });
     const pick = byLimit.find(consistent) ?? byLimit[0];
-    if (pick) return pick;
-    // LK changed a limit: match by window instead, shortest window that can hold the reset.
-    const byWindow = candidates
-      .filter((id) => !ITEM_TIERS.has(id) && consistent(id))
-      .sort((a, b) => (this.tiers[a].windowMs ?? 0) - (this.tiers[b].windowMs ?? 0));
-    return byWindow[0] ?? null;
+    if (pick) return { kind: 'tier', id: pick };
+    const known = this.opTiers.get(opKey(rateGroupOf(ctx.req.opId), rate.limit));
+    if (known && !this.expired(known, now)) return { kind: 'group', tier: known };
+    // An operation of a listed group (the asset routes) never teaches a documented tier: its own tiers explain it.
+    // Otherwise a documented tier LK changed: its window is the one the reset implies (as for a learned tier), and
+    // LK's count is near the bridge's own on it. A wrong guess heals itself: the next header at the configured limit
+    // clears it (`observe`).
+    if (!isListedGroupOp(ctx.req.opId)) {
+      const windowMs = windowFromReset(resetIn);
+      const changed = candidates.find(
+        (id) =>
+          !ITEM_TIERS.has(id) &&
+          this.tiers[id].windowMs === windowMs &&
+          this.nearOwnCount(this.tiers[id], rate, ctx, now),
+      );
+      if (changed) return { kind: 'tier', id: changed };
+    }
+    return { kind: 'learn' };
+  }
+
+  /** Whether LK's count (limit − remaining) is near what the bridge counted on the tier, its other calls in flight aside. */
+  private nearOwnCount(t: TierState, rate: RateHeaders, ctx: AttemptContext, now: number): boolean {
+    if (!t.window) return false;
+    const own = ctx.ticket.consumed.find((c) => c.tier === t)?.n ?? 0;
+    const modelled = t.window.used(now) - Math.max(0, t.inFlight - own);
+    const observed = rate.limit - rate.remaining;
+    return Math.abs(observed - modelled) <= Math.max(NEAR_UNITS, Math.ceil(rate.limit * NEAR_SHARE));
   }
 
   private observe(ctx: AttemptContext, captured: CapturedResponse): void {
     const now = this.clock.now();
     const rate = captured.rate;
     if (rate) {
-      const id = this.matchTier(ctx.req.costs, rate, now);
-      let modelledUsed: number | null = null;
-      if (id) {
-        const t = this.tiers[id];
-        if (rate.limit !== t.configuredLimit) t.observedLimit = rate.limit;
+      const found = this.attribute(ctx, rate, now);
+      let modelledUsed: number | null;
+      let attribution: Attribution;
+      if (found.kind === 'tier') {
+        const t = this.tiers[found.id];
+        // A limit back at its configured value clears an earlier observed one.
+        t.observedLimit = rate.limit === t.configuredLimit ? null : rate.limit;
         modelledUsed = this.snap(t, rate, ctx, now);
+        attribution = found;
+      } else {
+        const g = found.kind === 'group' ? found.tier : this.learn(ctx.req.opId, rate, now);
+        this.sighted(g, ctx.req.opId, rate, now);
+        modelledUsed = this.snap(g, rate, ctx, now);
+        attribution = { kind: 'group', tier: g };
       }
+      ctx.attribution = attribution;
       this.emit('sample', {
         atMs: now,
         opId: ctx.req.opId,
         status: captured.status,
-        tier: id,
+        tier: attribution.kind === 'tier' ? attribution.id : null,
+        ...(attribution.kind === 'group' ? { group: attribution.tier.group } : {}),
         limit: rate.limit,
         remaining: rate.remaining,
         resetAtMs: rate.resetAtMs,
@@ -811,8 +967,113 @@ export class Governor {
     }
   }
 
+  /** A new learned tier for the operation's group at this limit (logged once per process). */
+  private learn(opId: string, rate: RateHeaders, now: number): OpTierState {
+    const group = rateGroupOf(opId);
+    const key = opKey(group, rate.limit);
+    const windowMs = windowFromReset(rate.resetAtMs - now);
+    const g: OpTierState = {
+      id: groupTierId(group),
+      group,
+      limit: rate.limit,
+      ops: new Set(),
+      windowMs,
+      window: new SlidingWindow(windowMs),
+      reportedRemaining: rate.remaining,
+      serverResetAt: rate.resetAtMs,
+      firstSeenAt: now,
+      lastSeenAt: now,
+      blockedUntil: 0,
+      inFlight: 0,
+      drift: null,
+    };
+    this.opTiers.set(key, g);
+    if (!this.logged.has(key)) {
+      this.logged.add(key);
+      try {
+        this.log?.info(
+          {
+            op: opId,
+            group,
+            limit: rate.limit,
+            remaining: rate.remaining,
+            resetInSeconds: Math.max(0, Math.round((rate.resetAtMs - now) / 1000)),
+            windowSeconds: windowMs / 1000,
+          },
+          `LegendKeeper reported a limit of ${rate.limit} per ${windowName(windowMs)} on ${opId}, which matches no documented tier; the bridge now paces the "${group}" group by it (and no other call)`,
+        );
+      } catch {
+        // Logging never breaks the governor.
+      }
+    }
+    return g;
+  }
+
+  /** Records a sighting of a learned tier: the op, the latest figures, and a longer window if the reset implies one. */
+  private sighted(g: OpTierState, opId: string, rate: RateHeaders, now: number): void {
+    g.ops.add(opId);
+    g.lastSeenAt = now;
+    g.reportedRemaining = rate.remaining;
+    const windowMs = windowFromReset(rate.resetAtMs - now);
+    if (windowMs > g.windowMs) {
+      const grown = new SlidingWindow(windowMs);
+      for (const e of g.window.liveEvents(now)) grown.add(now, e.n, e.t);
+      g.window = grown;
+      g.windowMs = windowMs;
+    }
+  }
+
+  /** The live learned tiers a call of `opId` draws on (expired ones are dropped first). */
+  private learnedTiersFor(opId: string, now: number): OpTierState[] {
+    if (this.opTiers.size === 0) return [];
+    this.expireLearned(now);
+    const out: OpTierState[] = [];
+    for (const g of this.opTiers.values()) if (drawsLearnedTier(opId, g.group, g.ops)) out.push(g);
+    return out;
+  }
+
+  private expiresAt(g: OpTierState): number {
+    return Math.max(g.lastSeenAt + EXPIRY_WINDOWS * g.windowMs, g.blockedUntil);
+  }
+
+  private expired(g: OpTierState, now: number): boolean {
+    return g.inFlight === 0 && now >= this.expiresAt(g);
+  }
+
+  private expireLearned(now: number): void {
+    for (const [key, g] of this.opTiers) if (this.expired(g, now)) this.opTiers.delete(key);
+  }
+
+  private operationTierSnapshots(now: number): OperationTierSnapshot[] {
+    this.expireLearned(now);
+    return [...this.opTiers.values()]
+      .sort((a, b) => a.group.localeCompare(b.group) || a.limit - b.limit)
+      .map((g) => {
+        const used = g.window.used(now);
+        return {
+          id: g.id,
+          group: g.group,
+          ops: [...g.ops],
+          limit: g.limit,
+          windowMs: g.windowMs,
+          used,
+          remaining: Math.max(0, g.limit - used),
+          reportedRemaining: g.reportedRemaining,
+          resetAtMs:
+            g.serverResetAt !== null && g.serverResetAt > now
+              ? g.serverResetAt
+              : (g.window.nextExpiry(now) ?? g.serverResetAt ?? now),
+          firstSeenAtMs: g.firstSeenAt,
+          lastSeenAtMs: g.lastSeenAt,
+          expiresAtMs: this.expiresAt(g),
+          blockedUntilMs: g.blockedUntil > now ? g.blockedUntil : null,
+          inFlight: g.inFlight,
+        };
+      });
+  }
+
   /** Snaps a tier's local count to the server's. Returns the modelled count it replaced. */
-  private snap(t: TierState, rate: RateHeaders, ctx: AttemptContext, now: number): number | null {
+  private snap(t: Snappable, rate: RateHeaders, ctx: AttemptContext, now: number): number | null {
     if (!t.window || t.windowMs === null) return null;
     const own = ctx.ticket.consumed.find((c) => c.tier === t)?.n ?? 0;
     const othersInFlight = Math.max(0, t.inFlight - own);
@@ -837,24 +1098,26 @@ export class Governor {
     return modelledComparable;
   }
 
-  /** The tiers a 429 applies to: upload for UPLOAD_RATE_EXCEEDED, else the header-matched tier, else all drawn. */
-  private throttledTiers(ctx: AttemptContext, code: string | undefined): TierId[] {
-    if (code === 'UPLOAD_RATE_EXCEEDED') return ['upload'];
-    const rate = ctx.captured?.rate;
-    const matched = rate ? this.matchTier(ctx.req.costs, rate, this.clock.now()) : null;
-    if (matched) return [matched];
-    return TIER_ORDER.filter((id) => draws(ctx.req.costs, id) && id !== 'upload');
+  /**
+   * The tiers a 429 applies to: upload for UPLOAD_RATE_EXCEEDED; else where the headers were attributed (a documented
+   * tier, or a learned operation tier, which blocks only its group); else every documented tier drawn.
+   */
+  private throttledTiers(ctx: AttemptContext, code: string | undefined): (TierState | OpTierState)[] {
+    if (code === 'UPLOAD_RATE_EXCEEDED') return [this.tiers.upload];
+    const a = ctx.attribution;
+    if (a?.kind === 'tier') return [this.tiers[a.id]];
+    if (a?.kind === 'group') return [a.tier];
+    return TIER_ORDER.filter((id) => draws(ctx.req.costs, id) && id !== 'upload').map((id) => this.tiers[id]);
   }
 
-  private throttledTier(ctx: AttemptContext, code: string | undefined): TierId {
-    return this.throttledTiers(ctx, code)[0] ?? 'key-min';
+  private throttledTier(ctx: AttemptContext, code: string | undefined): BudgetTierId {
+    return this.throttledTiers(ctx, code)[0]?.id ?? 'key-min';
   }
 
   private markThrottled(ctx: AttemptContext, code: string | undefined, until: number): void {
     const tiers = this.throttledTiers(ctx, code);
     let changed = false;
-    for (const id of tiers) {
-      const t = this.tiers[id];
+    for (const t of tiers) {
       if (until > t.blockedUntil) {
         t.blockedUntil = until;
         changed = true;
@@ -862,13 +1125,24 @@ export class Governor {
     }
     if (changed) {
       this.countersChanged();
-      this.emit('throttled', { atMs: this.clock.now(), opId: ctx.req.opId, code, tiers, retryAtMs: until });
+      this.emit('throttled', {
+        atMs: this.clock.now(),
+        opId: ctx.req.opId,
+        code,
+        tiers: tiers.map((t) => t.id),
+        retryAtMs: until,
+      });
     }
   }
 
   // ---------------------------------------------------------------------------------------------- helpers
 
-  private budgetWait(req: ExecuteRequest<unknown>, tier: TierId, retryAtMs: number, cause?: BridgeLkError) {
+  private budgetWait(
+    req: ExecuteRequest<unknown>,
+    tier: BudgetTierId,
+    retryAtMs: number,
+    cause?: BridgeLkError,
+  ) {
     const err = new BudgetWaitError({ tier, retryAtMs, opId: req.opId, ...(cause ? { cause } : {}) });
     this.emit('budget-wait', {
       atMs: this.clock.now(),

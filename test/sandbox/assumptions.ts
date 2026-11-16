@@ -13,8 +13,11 @@
  * `[BWRK]`, `[BARC]` or `[INDEX]` prefix, and no Status, Continuity Type or Continuity row, so the canon and lifecycle
  * guards never stand in the way. LS1 (v2 E5.4) writes one label with `labelSize: 'md'` RAW (the engine would refuse it),
  * expects `listFeatures` to refuse the map, then deletes that feature by id even if the check fails and checks the map
- * lists again. Cost: about 78 writes and 88 reads (plus up to 12 search polls), about 2 minutes at
- * the bridge's write pacing.
+ * lists again. LIM1 (v2 E5.5, ADR 0047) runs first, while the key's write minute is nearly unused: it creates an asset
+ * folder, uploads one tiny PNG into it (createImageUpload, the signed PUT, createImageAsset), deletes both by id even
+ * after a failure, and records the X-RateLimit-* headers each answered as NOTED (LegendKeeper's own per-operation
+ * limits on its asset routes, with their windows by the reset, to document). Cost: about 83 writes, 88 reads and one
+ * PUT to the upload host (plus up to 12 search polls), about 2 minutes at the bridge's write pacing.
  */
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { mintClientId } from '../../src/jobs/ids.js';
@@ -26,7 +29,10 @@ import {
   stableJson,
 } from '../../src/jobs/sidebar-state.js';
 import { matchCopy } from '../../src/jobs/step-exec.js';
-import { parseEtag } from '../../src/lk/governor/headers.js';
+import { parseEtag, parseRateHeaders } from '../../src/lk/governor/headers.js';
+import { windowFromReset } from '../../src/lk/governor/groups.js';
+import { UPLOAD_PUT_STEP } from '../../src/jobs/custom-steps.js';
+import { createHash } from 'node:crypto';
 import { compareStoredBlocks } from '../../src/jobs/verify-blocks.js';
 import { fromMarkdown, stubResolver } from '../../src/markdown/index.js';
 import { SandboxGuardError, type Finding, type SmokeTarget, type Verdict } from './smoke.js';
@@ -50,6 +56,11 @@ class Unclear extends Error {}
 const fail = (m: string): never => {
   throw new Fails(m);
 };
+
+/** LIM1: a 1×1 PNG (70 bytes). */
+const TINY_PNG =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+const windowName = (ms: number) => (ms <= 60_000 ? 'minute' : ms <= 3_600_000 ? 'hour' : 'day');
 const same = (a: unknown, b: unknown) => stableJson(a ?? null) === stableJson(b ?? null);
 
 export async function runAssumptions(
@@ -176,6 +187,137 @@ export async function runAssumptions(
   let tplA1: string | null = null;
 
   try {
+    // ---- LIM1: LegendKeeper's own limits on its asset routes (v2 E5.5, ADR 0047) -------------------------------------
+    // LegendKeeper reports the tier with the fewest requests left, and its asset routes evidently have tiers the spec's
+    // table does not list (about 20 a minute for uploads and asset creation, about 60 for asset deletes). Run first, so
+    // the write minute is nearly unused and each answer's headers name the asset route's own tier. Every answer's
+    // X-RateLimit-* headers are recorded as NOTED, with the window its reset implies, to document; the image and the
+    // folder are deleted by id whatever happens.
+    {
+      const id = 'LIM1';
+      const title =
+        'the asset routes’ own rate limits: the X-RateLimit-* headers of an asset folder, a tiny image upload, and their deletes';
+      const seen: string[] = [];
+      let verdict: Verdict = 'noted';
+      let detail = '';
+      let folderId: string | null = null;
+      let imageId: string | null = null;
+      const note = (op: string, r: { status: number; code?: string; headers?: Headers }) => {
+        const h = r.headers ? parseRateHeaders(r.headers) : null;
+        if (!r.headers)
+          seen.push(`${op} ${r.status}${r.code ? ` ${r.code}` : ''} (its headers are not available)`);
+        else if (!h) seen.push(`${op} ${r.status}: no X-RateLimit headers`);
+        else {
+          const resetIn = h.resetAtMs - Date.now();
+          seen.push(
+            `${op} ${r.status}: limit ${h.limit}, remaining ${h.remaining}, reset in ${Math.round(resetIn / 1000)} s (a ${windowName(windowFromReset(resetIn))} window)`,
+          );
+        }
+      };
+      /** The signed PUT, through the governor as the bridge's upload step sends it; the URL is never printed. */
+      const putSigned = async (created: Obj, bytes: Buffer) => {
+        const headers = new Headers();
+        for (const [k, v] of Object.entries((created.headers ?? {}) as Obj))
+          if (typeof v === 'string') headers.set(k, v);
+        if (!headers.has('content-type')) headers.set('content-type', 'image/png');
+        try {
+          const res = await t.lk.governor.execute<Response>({
+            opId: UPLOAD_PUT_STEP,
+            kind: 'upload',
+            costs: { tiers: ['upload'] },
+            priority: 'P1',
+            run: (signal) =>
+              t.lk.fetch(String(created.uploadUrl), {
+                method: 'PUT',
+                headers,
+                body: new Uint8Array(bytes),
+                signal,
+              }),
+          });
+          await res.arrayBuffer().catch(() => undefined);
+          return { status: res.status, headers: res.headers };
+        } catch (e) {
+          if (e instanceof BridgeLkError)
+            return { status: e.status ?? 0, ...(e.code ? { code: e.code } : {}) };
+          throw e;
+        }
+      };
+      const made = (r: { status: number }) => r.status === 200 || r.status === 201;
+      try {
+        const stamp = mintClientId(8);
+        const folder = await raw('createAssetFolder', 'POST', '/assets', {
+          body: { name: `lk-bridge assumptions LIM1 ${new Date().toISOString()}` },
+          idempotencyKey: `lkb.sandbox.lim1.folder.${stamp}`,
+        });
+        note('createAssetFolder', folder);
+        if (!made(folder))
+          throw new Unclear(`createAssetFolder answered ${folder.status} ${folder.code ?? ''}`);
+        folderId = typeof folder.body?.id === 'string' ? folder.body.id : null;
+        const png = Buffer.from(TINY_PNG, 'base64');
+        const up = await raw('createImageUpload', 'POST', '/assets/uploads', {
+          body: {
+            contentType: 'image/png',
+            contentLength: png.length,
+            contentHash: createHash('sha256').update(png).digest('hex'),
+          },
+          idempotencyKey: `lkb.sandbox.lim1.upload.${stamp}`,
+        });
+        note('createImageUpload', up);
+        if (!made(up) || typeof up.body?.uploadUrl !== 'string')
+          throw new Unclear(`createImageUpload answered ${up.status} ${up.code ?? ''} without an upload URL`);
+        const put = await putSigned(up.body as Obj, png);
+        note('upload_image.put (the signed PUT)', put);
+        if (put.status < 200 || put.status >= 300) throw new Unclear(`the signed PUT answered ${put.status}`);
+        const asset = await raw('createImageAsset', 'POST', '/assets/images', {
+          body: { uploadKey: up.body.uploadKey, name: 'LIM1 image', ...(folderId ? { folderId } : {}) },
+          idempotencyKey: `lkb.sandbox.lim1.asset.${stamp}`,
+        });
+        note('createImageAsset', asset);
+        if (!made(asset)) throw new Unclear(`createImageAsset answered ${asset.status} ${asset.code ?? ''}`);
+        imageId = typeof asset.body?.id === 'string' ? asset.body.id : null;
+      } catch (e) {
+        verdict = 'inconclusive';
+        detail = e instanceof Unclear ? e.message : `the check could not complete: ${(e as Error).message}`;
+      } finally {
+        // Deleted by id whatever happened: the image, then its folder (404 counts as gone).
+        const left: string[] = [];
+        for (const [what, assetId] of [
+          ['image', imageId],
+          ['folder', folderId],
+        ] as const) {
+          if (!assetId) continue;
+          try {
+            const del = await raw('deleteAsset', 'DELETE', `/assets/${assetId}`);
+            note(`deleteAsset (the ${what})`, del);
+            if (!(del.status === 204 || del.status === 200 || del.status === 404))
+              left.push(`the ${what} ${assetId} (${del.status} ${del.code ?? ''})`);
+          } catch (e) {
+            left.push(`the ${what} ${assetId} (${(e as Error).message})`);
+          }
+        }
+        const learned = t.lk.governor
+          .snapshot()
+          .operationTiers.map(
+            (g) => `${g.group} ${g.limit} a ${windowName(g.windowMs)} (seen on ${g.ops.join(', ')})`,
+          );
+        const madeNames = [imageId ? 'the image' : null, folderId ? 'the folder' : null].filter(Boolean);
+        detail = [
+          detail,
+          `NOTED: ${seen.join('; ')}`,
+          `the bridge learned: ${learned.length > 0 ? learned.join('; ') : 'nothing (every limit matched a documented tier)'}`,
+          left.length > 0
+            ? `clean-up failed: delete ${left.join(', ')} by hand in the asset library`
+            : madeNames.length > 0
+              ? `${madeNames.join(' and ')} ${madeNames.length > 1 ? 'were' : 'was'} deleted`
+              : 'nothing was made, so nothing to delete',
+        ]
+          .filter((x) => x !== '')
+          .join('. ');
+        if (left.length > 0) verdict = 'fail';
+        record(id, title, verdict, detail);
+      }
+    }
+
     // ---- A1, A2: a template copy keeps the template's sidebar; client ids are kept -------------------------------
     await check(
       'A1',

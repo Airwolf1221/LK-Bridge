@@ -35,6 +35,7 @@ import { requireOperation } from '../lk/registry.js';
 import { defs } from '../lk/registry.defs.generated.js';
 import { expandFacts } from '../facts/expand.js';
 import { planFacts, FactsPlanError, type FactRequest, type LinkRequest } from '../facts/plan.js';
+import type { PlanFigures } from './plan-estimate.js';
 import { sidebarFrom } from '../facts/sidebar.js';
 import { lifecycleFrom } from '../lifecycle/settings.js';
 import { mintClientId } from '../jobs/ids.js';
@@ -119,6 +120,21 @@ export interface RestorePlan {
   readonly followUp?: 'content';
   readonly empty: boolean;
   readonly reads: number;
+  /**
+   * v2 E5.5 (backlog 16): how long the restore should take once approved (at P1, its steps one after another), and the
+   * figures that rest on: the per-write duration (measured or the spacing), the tiers' effective limits, and any learned
+   * operation group its steps belong to. Absent when the project has no governor now.
+   */
+  readonly estimate?: RestoreEstimate | null;
+}
+
+export interface RestoreEstimate {
+  readonly reads: number;
+  readonly writes: number;
+  readonly wallClockMs: number | null;
+  readonly fitsToday: boolean | null;
+  readonly pacing: { readonly msPerWrite: number; readonly msPerRead: number } | null;
+  readonly figures: PlanFigures | null;
 }
 
 // ============================================================================================ writable fields

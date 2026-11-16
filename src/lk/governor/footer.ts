@@ -4,7 +4,8 @@
  *
  * Numbers for tiers whose limit is 10,000 or more are shortened to `k` (one decimal below 10k). P0 and P3 queue
  * depths are only shown when non-zero. When LK is refusing a tier (429), ` | blocked <tier> <seconds>s` is
- * appended so an agent knows not to retry before then.
+ * appended so an agent knows not to retry before then. v2 E5.5: a learned operation group LK is refusing is named the
+ * same way (` | blocked assets 12s`); learned limits are otherwise not in the line (the Budgets page lists them).
  */
 import type { TierId } from '../registry-types.js';
 import type { BudgetSnapshot } from './types.js';
@@ -52,6 +53,12 @@ export function formatBudgetFooter(snapshot: BudgetSnapshot, project?: string): 
   const blocked = Object.values(snapshot.tiers)
     .filter((t) => t.blockedUntilMs !== null && t.blockedUntilMs > snapshot.atMs)
     .map((t) => `${t.tier} ${Math.ceil(((t.blockedUntilMs ?? 0) - snapshot.atMs) / 1000)}s`);
+  // One entry per group (a group may hold more than one learned tier), at its latest block.
+  const groups = new Map<string, number>();
+  for (const g of snapshot.operationTiers ?? [])
+    if (g.blockedUntilMs !== null && g.blockedUntilMs > snapshot.atMs)
+      groups.set(g.group, Math.max(groups.get(g.group) ?? 0, g.blockedUntilMs));
+  for (const [group, until] of groups) blocked.push(`${group} ${Math.ceil((until - snapshot.atMs) / 1000)}s`);
   if (blocked.length > 0) parts.push(`blocked ${blocked.join(', ')}`);
   return parts.join(' | ');
 }

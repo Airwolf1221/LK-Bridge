@@ -4,7 +4,7 @@
  * of the arguments (names and sizes), the outcome, the duration and the budget used; the filters go to the bridge as query
  * parameters; the retention is set on the page.
  */
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { argText, budgetText, durationText } from '../../ui/src/pages/toolcalls';
@@ -134,6 +134,27 @@ describe('the Tool calls page', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.find('PUT', '/tool-calls/retention')).toHaveLength(1));
     expect(api.find('PUT', '/tool-calls/retention')[0]!.body).toEqual({ days: 3, confirm: true });
+  });
+
+  it('keeps an edit made before the retention card’s first effects have run', async () => {
+    // CI on a loaded runner (PR #54): the page mounts outside act once the project list has loaded, and the field can be
+    // edited in the window between that commit and React's flush of its effects. The card used to copy the saved value
+    // into the field in an effect that also ran on mount, so a "3" typed then became "73". The edit is made here from a
+    // MutationObserver callback, which runs right after the commit and before that flush, every time.
+    installApi(routes());
+    let edited = false;
+    const watch = new MutationObserver(() => {
+      const input = document.getElementById('tc-days');
+      if (edited || !(input instanceof HTMLInputElement)) return;
+      edited = true;
+      fireEvent.change(input, { target: { value: '3' } });
+    });
+    watch.observe(document.body, { childList: true, subtree: true });
+    renderApp('/ui/tool-calls');
+    await screen.findByRole('table');
+    watch.disconnect();
+    expect(edited).toBe(true);
+    expect(screen.getByLabelText(/Keep for/)).toHaveValue('3');
   });
 
   it('says so when recording is off', async () => {

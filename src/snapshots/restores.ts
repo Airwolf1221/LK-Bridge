@@ -11,10 +11,17 @@ import {
   planRestore,
   RestoreError,
   type RestoreDeps,
+  type RestoreEstimate,
   type RestoreInput,
   type RestorePlan,
 } from './restore.js';
 import type { SnapshotService } from './service.js';
+import {
+  countSteps,
+  sequentialEstimate,
+  type EstimateLike,
+  type PlanEstimateInput,
+} from './plan-estimate.js';
 
 export interface RestoreRecord {
   readonly id: string;
@@ -88,13 +95,33 @@ export class Restores {
       readonly svc: SnapshotService;
       readonly engine: JobEngine;
       readonly deps: (projectId: string) => RestoreDeps;
+      /** v2 E5.5: the project's governor estimate (undefined when it has no governor now). */
+      readonly estimate?: (projectId: string, input: PlanEstimateInput) => EstimateLike | undefined;
       readonly now: () => number;
       readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
     },
   ) {}
 
-  plan(input: RestoreInput): Promise<RestorePlan> {
-    return planRestore(this.o.deps(input.projectId), input);
+  async plan(input: RestoreInput): Promise<RestorePlan> {
+    const plan = await planRestore(this.o.deps(input.projectId), input);
+    return plan.empty ? plan : { ...plan, estimate: this.estimate(input.projectId, plan) };
+  }
+
+  /**
+   * v2 E5.5 (backlog 16): the restore's time once approved: its steps at P1, one after another, at the measured per-write
+   * duration and the tiers' effective limits, learned operation groups included. The plan's own reads are already done.
+   */
+  private estimate(projectId: string, plan: RestorePlan): RestoreEstimate | null {
+    if (!this.o.estimate) return null;
+    const c = countSteps(plan.steps);
+    let est: EstimateLike | undefined;
+    try {
+      est = this.o.estimate(projectId, { reads: c.reads, writes: c.writes, priority: 'P1', ops: c.ops });
+    } catch {
+      est = undefined; // an estimate never stops a restore being planned
+    }
+    if (!est) return null;
+    return { reads: c.reads, writes: c.writes, ...sequentialEstimate(est, c) };
   }
 
   /**

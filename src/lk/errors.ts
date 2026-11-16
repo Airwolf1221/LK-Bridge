@@ -4,7 +4,7 @@
  * only a fallback for codes this bridge does not know.
  */
 import { ConnectionError, LegendKeeperError } from '@legendkeeper/sdk';
-import type { TierId } from './registry-types.js';
+import type { BudgetTierId } from './governor/groups.js';
 
 export type ErrorClassification = 'user_fixable' | 'conflict' | 'auth' | 'budget' | 'upstream' | 'bridge';
 
@@ -117,11 +117,12 @@ export class BridgeLkError extends Error {
  */
 export class BudgetWaitError extends BridgeLkError {
   override readonly name = 'BudgetWaitError';
-  readonly tier: TierId;
+  /** The documented tier, or a learned operation tier (`group:<name>`, v2 E5.5) that must wait. */
+  readonly tier: BudgetTierId;
   readonly retryAtMs: number;
 
   constructor(init: {
-    tier: TierId;
+    tier: BudgetTierId;
     retryAtMs: number;
     opId?: string | undefined;
     message?: string;

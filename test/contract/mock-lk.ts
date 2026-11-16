@@ -114,8 +114,38 @@ export interface MockResponse {
   readonly headers?: Readonly<Record<string, string>>;
 }
 
+/**
+ * v2 E5.5: an undocumented per-operation tier, as LegendKeeper evidently has on its asset routes (about 20 a minute for
+ * uploads and asset creation, about 60 for asset deletes). It counts and refuses like any tier, and its headers are sent
+ * when it is the one with the fewest requests remaining.
+ */
+export interface MockOpTier {
+  readonly id: string;
+  readonly limit: number;
+  readonly windowMs: number;
+  readonly match: (method: string, path: string) => boolean;
+}
+
+/** The asset routes' tiers as the owner's samples show them (16 November 2026). */
+export const ASSET_ROUTE_TIERS: readonly MockOpTier[] = [
+  {
+    id: 'assets-create',
+    limit: 20,
+    windowMs: 60_000,
+    match: (m, p) => m === 'POST' && /\/assets(\/uploads|\/images)?\/?$/.test(p),
+  },
+  {
+    id: 'assets-delete',
+    limit: 60,
+    windowMs: 60_000,
+    match: (m, p) => m === 'DELETE' && /\/assets\/[^/]+\/?$/.test(p),
+  },
+];
+
 export interface MockLkOptions {
   readonly clock: Clock;
+  /** v2 E5.5: undocumented per-operation tiers (none by default). */
+  readonly opTiers?: readonly MockOpTier[];
   readonly apiKey: string;
   /**
    * v2 A1: the project the key belongs to. `GET /api/v3/projects` (listProjects, the bridge's start-up key check)
@@ -147,6 +177,10 @@ export class MockLk {
     replays: 0,
   };
   private readonly faults: Fault[] = [];
+  /** v2 E5.5: each undocumented tier's window, by id. */
+  readonly opWindows = new Map<string, Window>();
+  /** v2 E5.5: what each undocumented tier counted, and the most it ever held in one window. */
+  readonly opCounted: { at: number; tier: string }[] = [];
   private readonly blockedUntil = new Map<CountedTier, number>();
   private readonly idem = new Map<string, { status: number; body: unknown } | 'running'>();
   private seq = 0;
@@ -158,7 +192,52 @@ export class MockLk {
       CountedTier,
       Window
     >;
+    for (const t of opts.opTiers ?? []) this.opWindows.set(t.id, new Window(t.windowMs));
     this.app.all('/api/v3/*', (req, reply) => this.handle(req, reply));
+  }
+
+  private opTiersFor(method: string, path: string): MockOpTier[] {
+    return (this.opts.opTiers ?? []).filter((t) => t.match(method, path));
+  }
+
+  private opHeaders(t: MockOpTier, now: number, remaining?: number) {
+    const w = this.opWindows.get(t.id)!;
+    return {
+      'x-ratelimit-limit': String(t.limit),
+      'x-ratelimit-remaining': String(remaining ?? Math.max(0, t.limit - w.count(now))),
+      'x-ratelimit-reset': String(Math.ceil(w.oldestExpiry(now) / 1000)),
+    };
+  }
+
+  /** The headers of the tier with the fewest remaining, undocumented tiers included. */
+  private headersFor(tiers: CountedTier[], ops: MockOpTier[], now: number) {
+    const documented = this.tightest(tiers, now);
+    let best: MockOpTier | null = null;
+    let bestLeft = this.limits[documented] - this.windows[documented].count(now);
+    for (const t of ops) {
+      const left = t.limit - this.opWindows.get(t.id)!.count(now);
+      if (left < bestLeft) {
+        best = t;
+        bestLeft = left;
+      }
+    }
+    return best ? this.opHeaders(best, now) : this.rateHeaders(documented, now);
+  }
+
+  /** The most any undocumented tier held in one sliding window, recomputed from the log (must stay within its limit). */
+  maxInAnyOpWindow(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const t of this.opts.opTiers ?? []) {
+      const at = this.opCounted.filter((c) => c.tier === t.id).map((c) => c.at);
+      let max = 0;
+      let lo = 0;
+      for (let hi = 0; hi < at.length; hi++) {
+        while (at[hi]! - at[lo]! >= t.windowMs) lo++;
+        max = Math.max(max, hi - lo + 1);
+      }
+      out[t.id] = max;
+    }
+    return out;
   }
 
   async start(): Promise<string> {
@@ -322,6 +401,22 @@ export class MockLk {
       }
     }
 
+    // v2 E5.5: the undocumented per-operation tiers refuse first, with their own headers.
+    const ops = this.opTiersFor(method, path);
+    for (const t of ops) {
+      const w = this.opWindows.get(t.id)!;
+      if (w.count(now) + 1 > t.limit) {
+        this.stats.genuine429++;
+        call.outcome = `genuine-429:${t.id}`;
+        const frees = w.freesAt(now, 1, t.limit);
+        this.error(reply, 429, 'RATE_LIMITED', {
+          ...this.opHeaders(t, now, 0),
+          'retry-after': String(Math.max(1, Math.ceil((frees - now) / 1000))),
+        });
+        return;
+      }
+    }
+
     // Real rate limiting: refuse if any tier would be exceeded.
     for (const t of ORDER) {
       if (!tiers.includes(t)) continue;
@@ -339,7 +434,11 @@ export class MockLk {
     }
 
     this.count(tiers, items, now);
-    const headers = this.rateHeaders(this.tightest(tiers, now), now);
+    for (const t of ops) {
+      this.opWindows.get(t.id)!.add(now, 1);
+      this.opCounted.push({ at: now, tier: t.id });
+    }
+    const headers = this.headersFor(tiers, ops, now);
 
     if (action?.kind === 'status') {
       call.outcome = `status-${action.status}`;

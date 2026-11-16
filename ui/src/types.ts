@@ -178,9 +178,32 @@ export interface TierSnapshot {
   drift: { atMs: number; observedUsed: number; modelledUsed: number; delta: number } | null;
 }
 
+/**
+ * v2 E5.5: a limit LegendKeeper reported that matches no documented tier, learned for an operation group. It paces only
+ * that group's calls and expires once its window has passed twice without being seen again.
+ */
+export interface OperationTierSnapshot {
+  id: string;
+  group: string;
+  ops: string[];
+  limit: number;
+  windowMs: number;
+  used: number;
+  remaining: number;
+  reportedRemaining: number;
+  resetAtMs: number;
+  firstSeenAtMs: number;
+  lastSeenAtMs: number;
+  expiresAtMs: number;
+  blockedUntilMs: number | null;
+  inFlight: number;
+}
+
 export interface BudgetSnapshot {
   atMs: number;
   tiers: Record<TierId, TierSnapshot>;
+  /** v2 E5.5: learned operation limits (absent from a bridge before E5.5). */
+  operationTiers?: OperationTierSnapshot[];
   queues: Record<PriorityClass, number>;
   inFlight: number;
   writeSpacingMs: number;
@@ -1497,7 +1520,14 @@ export interface RehearsalView {
   startedBy: string;
   startedAt: number;
   finishedAt: number | null;
-  estimate: { reads?: number; writes?: number; uploads?: number; wallClockMs?: number | null } | null;
+  estimate: {
+    reads?: number;
+    writes?: number;
+    uploads?: number;
+    wallClockMs?: number | null;
+    pacing?: { msPerWrite: number; msPerRead: number } | null;
+    figures?: PlanFiguresView | null;
+  } | null;
   plan: {
     pages?: string[];
     coverage?: Record<string, string[]>;
@@ -1582,6 +1612,28 @@ export interface SnapshotDiffResponse {
   reads: number;
 }
 
+/** v2 E5.5 (backlog 16): the figures a plan's time rests on (older servers send none). */
+export interface PlanFiguresView {
+  perWrite: {
+    ms: number;
+    from: 'measured' | 'spacing';
+    measuredMs: number | null;
+    samples: number;
+    spacingMs: number;
+  } | null;
+  limits: { tier: string; limit: number | null; windowMs: number | null; share: number }[];
+  groups: { group: string; limit: number; windowMs: number; steps: number; ms: number }[];
+}
+
+export interface PlanEstimateView {
+  reads: number;
+  writes: number;
+  wallClockMs: number | null;
+  fitsToday: boolean | null;
+  pacing: { msPerWrite: number; msPerRead: number } | null;
+  figures: PlanFiguresView | null;
+}
+
 export interface RestorePlanView {
   page: { id: string; name: string };
   scope: string;
@@ -1597,6 +1649,8 @@ export interface RestorePlanView {
   idMap: Record<string, string> | null;
   followUp: string | null;
   reads: number;
+  /** v2 E5.5: how long it should take once approved, and the figures used (absent from older servers). */
+  estimate?: PlanEstimateView | null;
 }
 
 export interface RestoreResponse {
@@ -1650,6 +1704,8 @@ export interface RehearsalPlanResponse {
       wallClockMs: number | null;
       fitsToday: boolean | null;
       pacing?: { msPerWrite: number; msPerRead: number } | null;
+      /** v2 E5.5: the figures the time rests on. */
+      figures?: PlanFiguresView | null;
     };
   };
 }

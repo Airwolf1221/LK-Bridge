@@ -419,6 +419,53 @@ describe('Request Budgets', () => {
     expect(screen.getByLabelText('Jobs (P2)')).toHaveValue('25');
   });
 
+  it('E5.5: lists the learned operation limits: group, operations seen, limit, window, remaining, last seen, expiry', async () => {
+    const now = Date.now();
+    const b = budgets();
+    b.snapshot = {
+      ...b.snapshot,
+      operationTiers: [
+        {
+          id: 'group:assets',
+          group: 'assets',
+          ops: ['createAssetFolder', 'createImageUpload'],
+          limit: 20,
+          windowMs: 60_000,
+          used: 7,
+          remaining: 13,
+          reportedRemaining: 13,
+          resetAtMs: now + 30_000,
+          firstSeenAtMs: now - 90_000,
+          lastSeenAtMs: now - 30_000,
+          expiresAtMs: now + 90_000,
+          blockedUntilMs: now + 12_000,
+          inFlight: 0,
+        },
+      ],
+    } as typeof b.snapshot;
+    installApi({ ...baseRoutes(), 'GET /budgets': b });
+    renderApp('/ui/budgets');
+    const card = await screen.findByRole('region', { name: 'Learned operation limits' });
+    const table = within(card).getByRole('table', { name: 'Learned operation limits' });
+    const row = within(table).getAllByRole('row')[1]!;
+    const cells = within(row)
+      .getAllByRole('cell')
+      .map((c) => c.textContent);
+    expect(cells[0]).toMatch(/^assets refused for 1[12] s$/);
+    expect(cells.slice(1, 5)).toEqual(['createAssetFolder, createImageUpload', '20', 'minute', '13 of 20']);
+    expect(cells[5]).toMatch(/^3\d s ago$/);
+    expect(cells[6]).toMatch(/^in 1 min [23]\d s$/);
+    // The documented write tier is untouched by it.
+    expect(screen.getByRole('region', { name: 'Writes per minute' })).toHaveTextContent('12 / 120');
+  });
+
+  it('E5.5: says when no operation limit has been learned', async () => {
+    installApi({ ...baseRoutes(), 'GET /budgets': budgets() });
+    renderApp('/ui/budgets');
+    const card = await screen.findByRole('region', { name: 'Learned operation limits' });
+    expect(card).toHaveTextContent('None learned: LegendKeeper has reported only its documented limits.');
+  });
+
   it('edits the reserve floors with a confirmation, and refuses an invalid order', async () => {
     const api = installApi({
       ...baseRoutes(),

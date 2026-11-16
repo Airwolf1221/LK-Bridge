@@ -1,6 +1,7 @@
 import type { PriorityClass } from '../../config/lk.js';
 import type { BridgeLkError } from '../errors.js';
 import type { OperationKind, TierId } from '../registry-types.js';
+import type { BudgetTierId, GroupTierId } from './groups.js';
 
 export type { PriorityClass } from '../../config/lk.js';
 export const PRIORITY_CLASSES: readonly PriorityClass[] = ['P0', 'P1', 'P2', 'P3'];
@@ -80,9 +81,38 @@ export interface TierSnapshot {
   } | null;
 }
 
+/**
+ * v2 E5.5 (ADR 0047): a tier LegendKeeper reported that matches no documented one, learned for an operation's rate
+ * group. It paces only the calls of that group and expires once its window has passed twice without being seen again.
+ */
+export interface OperationTierSnapshot {
+  readonly id: GroupTierId;
+  /** The rate group (`assets`, or an operation id for an operation of no listed group). */
+  readonly group: string;
+  /** The operations its header was seen on, in the order first seen. */
+  readonly ops: readonly string[];
+  readonly limit: number;
+  /** Inferred from `X-RateLimit-Reset`: up to 60 s a minute, up to an hour an hour, otherwise a day. */
+  readonly windowMs: number;
+  /** The bridge's count in the window (snapped to LegendKeeper's at every sighting). */
+  readonly used: number;
+  readonly remaining: number;
+  /** What LegendKeeper last said was left, and when it said the window resets. */
+  readonly reportedRemaining: number;
+  readonly resetAtMs: number;
+  readonly firstSeenAtMs: number;
+  readonly lastSeenAtMs: number;
+  readonly expiresAtMs: number;
+  /** Set while LegendKeeper refuses this group (429) until Retry-After. */
+  readonly blockedUntilMs: number | null;
+  readonly inFlight: number;
+}
+
 export interface BudgetSnapshot {
   readonly atMs: number;
   readonly tiers: Readonly<Record<TierId, TierSnapshot>>;
+  /** v2 E5.5: learned operation tiers, live ones only (an empty list when LegendKeeper has reported none). */
+  readonly operationTiers: readonly OperationTierSnapshot[];
   readonly queues: Readonly<Record<PriorityClass, number>>;
   readonly inFlight: number;
   readonly writeSpacingMs: number;
@@ -93,8 +123,10 @@ export interface SampleEvent {
   readonly atMs: number;
   readonly opId: string;
   readonly status: number;
-  /** Tier the headers were matched to, or null if no drawn tier fits them. */
+  /** Documented tier the headers were matched to, or null when they went to a learned operation tier. */
   readonly tier: TierId | null;
+  /** v2 E5.5: the rate group whose learned tier the headers went to (a limit no documented tier has). */
+  readonly group?: string;
   readonly limit: number;
   readonly remaining: number;
   readonly resetAtMs: number;
@@ -106,7 +138,7 @@ export interface ThrottledEvent {
   readonly atMs: number;
   readonly opId: string;
   readonly code: string | undefined;
-  readonly tiers: readonly TierId[];
+  readonly tiers: readonly BudgetTierId[];
   readonly retryAtMs: number;
 }
 
@@ -115,7 +147,7 @@ export interface BudgetWaitEvent {
   readonly opId: string;
   readonly priority: PriorityClass;
   readonly jobId: string | undefined;
-  readonly tier: TierId;
+  readonly tier: BudgetTierId;
   readonly retryAtMs: number;
 }
 
@@ -132,10 +164,20 @@ export interface EstimateInput {
   readonly createManyItems?: number;
   /** Class the work would run at (default P2, jobs). Its reserve floor shrinks the usable budget. */
   readonly priority?: PriorityClass;
+  /**
+   * v2 E5.5: the operations among the reads and writes, by operation id, as far as the caller knows them. Learned
+   * operation tiers pace the ones in their group (a rehearsal's asset folder and image uploads, say); the rest follow
+   * the documented tiers only.
+   */
+  readonly ops?: Readonly<Record<string, number>>;
 }
 
 export interface TierEstimate {
-  readonly tier: TierId;
+  /** The documented tier, or a learned operation tier's id (`group:<name>`). */
+  readonly tier: BudgetTierId;
+  /** v2 E5.5: the effective limit used (`limitOf`: the configured one, or a lower one LegendKeeper reported). */
+  readonly limit: number;
+  readonly windowMs: number;
   readonly demand: number;
   /** Units the class may still use right now. */
   readonly available: number;
@@ -144,16 +186,44 @@ export interface TierEstimate {
   readonly timeMs: number;
 }
 
+/** v2 E5.5: a learned operation tier's share of an estimate. */
+export interface OperationTierEstimate extends TierEstimate {
+  readonly id: GroupTierId;
+  readonly group: string;
+}
+
+/**
+ * v2 E5.5 (backlog 16): what one write is taken to cost in time. The measured figure is the median wall time of the
+ * project's recent write steps (from `steps`), floored at the configured spacing; without one, the spacing.
+ */
+export interface PerWriteFigure {
+  readonly ms: number;
+  readonly source: 'measured' | 'spacing';
+  readonly spacingMs: number;
+  readonly measured: MeasuredWriteDuration | null;
+}
+
+export interface MeasuredWriteDuration {
+  /** Median wall time of the write steps sampled, in ms. */
+  readonly ms: number;
+  /** How many write steps it is the median of. */
+  readonly samples: number;
+}
+
 export interface Estimate {
   /** Projected wall-clock time for the workload at the class's budget and write pacing. */
   readonly wallClockMs: number;
   /** The tier that bounds the time (or, if nothing waits, the one left with least headroom). `pacing` when
    * write spacing dominates. */
-  readonly tightestTier: TierId | 'pacing';
+  readonly tightestTier: BudgetTierId | 'pacing';
   readonly fitsToday: boolean;
   readonly dayRemaining: number;
   readonly dayNeeded: number;
   readonly pacingMs: number;
   readonly calls: { readonly reads: number; readonly writes: number; readonly createManyCalls: number };
   readonly tiers: readonly TierEstimate[];
+  /** v2 E5.5: each live learned operation tier the planned operations draw on (`ops`), at its learned limit. */
+  readonly operationTiers: readonly OperationTierEstimate[];
+  /** v2 E5.5: the time per write the pacing assumes, and where it came from. */
+  readonly perWrite: PerWriteFigure;
 }

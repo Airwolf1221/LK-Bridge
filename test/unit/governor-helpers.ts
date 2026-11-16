@@ -1,6 +1,6 @@
 import { defaultGovernorSettings, type GovernorSettings } from '../../src/config/lk.js';
 import { FakeClock } from '../../src/lk/governor/clock.js';
-import { Governor } from '../../src/lk/governor/governor.js';
+import { Governor, type GovernorOptions } from '../../src/lk/governor/governor.js';
 import type { CostSpec, ExecuteRequest, PriorityClass } from '../../src/lk/governor/types.js';
 import type { TierId } from '../../src/lk/registry-types.js';
 
@@ -43,8 +43,15 @@ export function rate(limit: number, remaining: number, resetAtMs: number): Recor
   };
 }
 
-/** A governor on a fake clock with a scripted transport. Default reply: 200 `{ ok: true }`, no rate headers. */
-export function setup(overrides: Partial<GovernorSettings> = {}, responder?: Responder) {
+/**
+ * A governor on a fake clock with a scripted transport. Default reply: 200 `{ ok: true }`, no rate headers. `extra`
+ * passes v2 E5.5's options (the measured write duration, the info log).
+ */
+export function setup(
+  overrides: Partial<GovernorSettings> = {},
+  responder?: Responder,
+  extra: Pick<GovernorOptions, 'writeDuration' | 'log'> = {},
+) {
   const clock = new FakeClock();
   const seen: SeenRequest[] = [];
   let reply: Responder = responder ?? (() => json(200, { ok: true }));
@@ -52,6 +59,7 @@ export function setup(overrides: Partial<GovernorSettings> = {}, responder?: Res
     settings: defaultGovernorSettings(overrides),
     clock,
     random: () => 0.5,
+    ...extra,
     transport: (input, init) => {
       const req: SeenRequest = {
         atMs: clock.now(),

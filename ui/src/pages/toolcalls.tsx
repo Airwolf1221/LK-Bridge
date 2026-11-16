@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, qs } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction } from '../components';
 import { fmtInt, fmtTime, principalText } from '../format';
@@ -282,7 +282,14 @@ export function ToolCallsPage() {
 function RetentionCard({ data, onSaved }: { data: ToolCallsResponse | undefined; onSaved: () => void }) {
   const cur = data?.settings.retentionDays ?? 7;
   const [days, setDays] = useState(String(cur));
-  useEffect(() => setDays(String(cur)), [cur]);
+  // Follow the saved value when it changes (loaded, or saved), but not on mount: the field already starts from it, and
+  // an effect run then could land after an edit made before React flushed it, undoing the edit.
+  const shown = useRef(cur);
+  useEffect(() => {
+    if (shown.current === cur) return;
+    shown.current = cur;
+    setDays(String(cur));
+  }, [cur]);
   const { run, busy } = useAction();
   const max = data?.settings.maxRetentionDays ?? 90;
   const value = Number(days);

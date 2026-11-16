@@ -48,6 +48,22 @@ A rehearsal restores a full snapshot into a throwaway root of a sandbox project,
 - **The estimate** is paced as the governor will pace the run at background priority (P3): the writes one after another
   at P3's write rate, and the reads at its request rate. At the default limits that is about a second a write and under
   half a second a read once the run is long. The plan shows the rates it assumed.
+- **Honest estimates (v2 E5.5, backlog 16; [ADR 0047](adr/0047-learned-operation-limits.md)).** The rates are each
+  tier's effective limit, and a write takes at least the target project's **measured per-write duration**: the median
+  wall time of its last 200 write steps, floored at the configured spacing. The plan names its asset steps (the folder,
+  each image's upload and asset, the PUT, the folder's delete), so a learned limit for the `assets` group paces those
+  steps only: they take the longer of their own pacing and what the group's limit allows, and every other write goes at
+  P3's share of the documented 120 a minute. `estimate.figures` says which figures were used: `perWrite` (`from`
+  `measured` or `spacing`, the median and how many steps it is of), `limits` (each documented tier's limit and P3's share
+  of it) and `groups` (each learned group's limit, window, steps and time). Right after a period of slow pacing the
+  median reads high until about 200 new write steps have run; the figures make that visible.
+- **Progress against the plan (v2 E5.5).** A running rehearsal saves its stage and its writes, reads and uploads every
+  few seconds (`progress`). The Snapshots page shows them against the plan's, with the time elapsed and a projected finish
+  (the elapsed time over the share of the planned work done, writes and reads weighted by the plan's pacing; before 2% of
+  it, the start plus the estimate).
+- **Restores** carry the same estimate (`estimate`, at P1, the priority they run at once approved): the dashboard's
+  Preview shows it with its figures, and `restore_snapshot` says it in a few words (`estimate.about`,
+  `secondsPerWrite`, `perWriteFrom`, and any learned limit that paces it).
 - **Reads never fail the run.** Any read in the comparison that fails (a map LegendKeeper cannot list, a timeout, an
   error) is a difference naming the page and the piece. The comparison carries on with the other pages, and the run
   finishes and deletes its root as usual.

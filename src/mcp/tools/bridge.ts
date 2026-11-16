@@ -7,7 +7,7 @@ import * as z from 'zod';
 import type { JobView, JobWithSteps, StepView } from '../../jobs/index.js';
 import type { McpToolContext } from '../server.js';
 import { TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
-import type { BudgetSnapshot, TierSnapshot } from '../../lk/index.js';
+import type { BudgetSnapshot, OperationTierSnapshot, TierSnapshot } from '../../lk/index.js';
 import { defineTool, READ_ANNOTATIONS, renamedTool } from './define.js';
 import {
   errorFromThrown,
@@ -230,9 +230,27 @@ function tierRow(t: TierSnapshot, now: number) {
   };
 }
 
+/** v2 E5.5: a limit LegendKeeper reported for one operation group (it paces only that group's calls). */
+function learnedRow(t: OperationTierSnapshot, now: number) {
+  return {
+    group: t.group,
+    ops: t.ops,
+    limit: t.limit,
+    window: t.windowMs <= 60_000 ? 'minute' : t.windowMs <= 3_600_000 ? 'hour' : 'day',
+    remaining: t.remaining,
+    lastSeenSecondsAgo: Math.max(0, Math.round((now - t.lastSeenAtMs) / 1000)),
+    expiresInSeconds: Math.max(0, Math.ceil((t.expiresAtMs - now) / 1000)),
+    ...(t.blockedUntilMs !== null
+      ? { blockedForSeconds: Math.max(0, Math.ceil((t.blockedUntilMs - now) / 1000)) }
+      : {}),
+  };
+}
+
 export function budgetBody(s: BudgetSnapshot) {
+  const learned = s.operationTiers ?? [];
   return {
     tiers: Object.values(s.tiers).map((t) => tierRow(t, s.atMs)),
+    ...(learned.length > 0 ? { learnedOperationLimits: learned.map((t) => learnedRow(t, s.atMs)) } : {}),
     queues: s.queues,
     inFlight: s.inFlight,
     writeSpacingMs: s.writeSpacingMs,
@@ -570,6 +588,12 @@ function otherTools(deps: ToolDeps) {
               dayRemaining: e.dayRemaining,
               dayNeeded: e.dayNeeded,
               calls: e.calls,
+              // v2 E5.5: the time per write the pacing assumes, and where it came from.
+              secondsPerWrite: Math.round(e.perWrite.ms / 100) / 10,
+              perWriteFrom:
+                e.perWrite.source === 'measured'
+                  ? `the median of the last ${e.perWrite.measured?.samples ?? 0} write steps`
+                  : 'the configured write spacing',
               advice: !e.fitsToday
                 ? 'This does not fit in today’s request budget. Split it over several days or reduce it.'
                 : e.wallClockMs > 60_000
