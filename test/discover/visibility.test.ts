@@ -53,6 +53,7 @@ describe('showLowLevelTools, per profile', () => {
         'write_page',
         // v2 C2b: the Resources, Documents and character tools
         'create_character',
+        'arkona_create_character',
         'create_document',
         'create_index',
         'create_many_resources',
@@ -112,13 +113,13 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 56 tools off and 56 + 3 + 2 + 89 on', async () => {
+  it('shows 57 tools off and 57 + 3 + 2 + 89 on', async () => {
     const t = w.stack.newToken('counting', 'write');
     // 61 before v2 E3b; get_resources, bridge_proposals_mine and bridge_job_wait were merged (-3) and lk_upload_image and
     // create_bare_resource are hidden by default (-2).
-    expect(await list(t.token)).toHaveLength(56);
+    expect(await list(t.token)).toHaveLength(57);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(56 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(57 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {
