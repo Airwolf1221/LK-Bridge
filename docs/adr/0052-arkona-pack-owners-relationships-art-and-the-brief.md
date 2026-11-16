@@ -15,9 +15,8 @@
   decision 14).
 - Migration: **none**. The pack's rules are one JSON document in the `packs` table already; the new seed reaches a stored
   pack as a new version at start (decision 12), which the owner approves.
-- Numbered 0052, the next free number after F3.1's (F3c's) 0051. F3.1 had not reached `main` when this was written: its
-  branch (`claude/adoring-lamport-gus05p` at a485fd0) was merged in so that decision 14 is built on its rule, at the
-  owner's request.
+- Numbered 0052, the next free number after F3.1's (F3c's) 0051. F3.1's branch was merged in before it reached `main`, so
+  that decision 14 could be built on its rule at the owner's request; it has since landed (#60) with the same code.
 - Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
   spike or round-trip script.
 
@@ -278,7 +277,7 @@ date of approval (auto: a heading added (“…”))`, `Last Major Revision skip
 - Four tools are added (67 with the per-operation tools off, 156 with them on; 61 in a `propose` or `write` profile while
   a pack is attached, 26 in a `read` profile, the brief being a read tool).
 - ADR 0051's "Left" item for the setting-pack tools (they did not apply the rule or take `lastMajorRevision`) is done
-  here (decision 14). When F3.1 reaches `main`, merging it is expected to be clean: its changes are already in this branch.
+  here (decision 14).
 - Left for later: editing the owner table on the dashboard (it is read-only there; a new version comes from the seed or
   the owner's `replaceRules`), a routing line in an existing home index (the owner tool leaves it, and says so), the
   monolith split and selective approval (PLAN-v2 10.5).
