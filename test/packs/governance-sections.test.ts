@@ -93,14 +93,18 @@ describe('pinned sections', () => {
 
   it('a changed pinned section refuses every package, naming the section; approved again, all work', async () => {
     expect((await everyTool()).every((x) => x.code === undefined)).toBe(true);
-    w.editSection('formatting', 'Approved Hierarchy');
+    w.editSection('formatting', 'Approved Hierarchy and Standardised Navigation');
     const status = await packs().governance('arkona');
     expect(status.state).toBe('changed');
     const formatting = status.sources.find((s) => s.key === 'source-formatting')!;
-    expect(formatting.sections?.find((s) => s.heading === 'Approved Hierarchy')?.state).toBe('changed');
+    expect(
+      formatting.sections?.find((s) => s.heading === 'Approved Hierarchy and Standardised Navigation')?.state,
+    ).toBe('changed');
     expect(formatting.sections?.filter((s) => s.state === 'same')).toHaveLength(3);
-    expect(status.message).toMatch(/pinned section “Approved Hierarchy”/);
-    expect(packs().get('arkona')!.drift?.changed[0]?.sections).toEqual(['Approved Hierarchy']);
+    expect(status.message).toMatch(/pinned section “Approved Hierarchy and Standardised Navigation”/);
+    expect(packs().get('arkona')!.drift?.changed[0]?.sections).toEqual([
+      'Approved Hierarchy and Standardised Navigation',
+    ]);
     const refused = await everyTool();
     expect(refused.map((x) => [x.tool, x.code])).toEqual([
       ['arkona_create_owner', 'PACK_NOT_CURRENT'],
@@ -108,7 +112,8 @@ describe('pinned sections', () => {
       ['arkona_create_relationship', 'PACK_NOT_CURRENT'],
       ['arkona_add_character_art', 'PACK_NOT_CURRENT'],
     ]);
-    for (const x of refused) expect(x.message, x.tool).toMatch(/Approved Hierarchy/);
+    for (const x of refused)
+      expect(x.message, x.tool).toMatch(/Approved Hierarchy and Standardised Navigation/);
     await packs().commands.approve('owner', 'arkona');
     expect((await everyTool()).every((x) => x.code === undefined)).toBe(true);
   });
@@ -126,12 +131,12 @@ describe('pinned sections', () => {
   it('a package planned before a pinned section changed stops before it writes', async () => {
     const p = await w.call('arkona_create_owner', compactPolity({ name: 'Kingdom of Awsan' }));
     expect(p.body.status, p.text).toBe('proposal_captured');
-    w.editSection('tagging', 'Closed Primary Categories');
+    w.editSection('tagging', 'Closed Primary Categories and Specialist Functions');
     const writes = w.seen.filter((l) => !l.startsWith('GET')).length;
     const done = await approve(w, String(p.body.proposalId));
     expect(done.job?.status).toBe('failed');
     expect(done.job?.lastError?.code).toBe('PACK_GOVERNANCE_CHANGED');
-    expect(done.job?.lastError?.message).toMatch(/Closed Primary Categories/);
+    expect(done.job?.lastError?.message).toMatch(/Closed Primary Categories and Specialist Functions/);
     expect(w.seen.filter((l) => !l.startsWith('GET')).length).toBe(writes);
     await packs().commands.approve('owner', 'arkona');
   });
@@ -140,7 +145,7 @@ describe('pinned sections', () => {
     const doc = w.repo.blocks.get(w.governanceDocs.formatting)!;
     const saved = structuredClone(doc.blocks);
     const at = (doc.blocks as { kind: string; content?: { text: string }[] }[]).findIndex(
-      (b) => b.kind === 'heading' && b.content?.[0]?.text === 'Active Template Suite',
+      (b) => b.kind === 'heading' && b.content?.[0]?.text === 'Active Template Suite and Sidebar Collections',
     );
     (doc.blocks as { content: { text: string }[] }[])[at]!.content = [{ text: 'Template Catalogue' }];
     doc.version++;
@@ -159,7 +164,7 @@ describe('pinned sections', () => {
     }
     // A heading renumbered or recased is still found.
     (doc.blocks as { kind: string; content?: { text: string }[] }[])[at]!.content = [
-      { text: '4. ACTIVE TEMPLATE SUITE' },
+      { text: '4. ACTIVE TEMPLATE SUITE & SIDEBAR COLLECTIONS' },
     ];
     doc.version++;
     await packs().commands.approve('owner', 'arkona');

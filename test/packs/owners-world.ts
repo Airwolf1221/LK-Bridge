@@ -129,15 +129,18 @@ export const OSTRAND = {
   'Settlements & Locations': 'ostsett1',
 } as const;
 
-/** The pinned sections the owners world's governance documents hold. */
+/**
+ * The pinned sections the owners world's governance documents hold: the six exact headings of Arkona's pages, as the
+ * planner read them on 16 November 2026 (ADR 0052 amendment). The seed pins the same.
+ */
 export const PINNED = {
   formatting: [
     'Page Names and Templates',
     'Nation-Centred Territorial Navigation',
-    'Approved Hierarchy',
-    'Active Template Suite',
+    'Approved Hierarchy and Standardised Navigation',
+    'Active Template Suite and Sidebar Collections',
   ],
-  tagging: ['Exact Tag Grammar', 'Closed Primary Categories'],
+  tagging: ['Exact Tag Grammar', 'Closed Primary Categories and Specialist Functions'],
 } as const;
 
 const heading = (id: string, level: number, text: string) => ({

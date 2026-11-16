@@ -75,7 +75,7 @@ export function computeTags(input: {
           page: input.page,
           slot: 'working',
           value: t,
-          reason: `a Working page carries ${input.rules.tags.working} and its primary tag only (Tagging Standard v1.8); add “${t}” when the page is promoted`,
+          reason: `a Working ${input.role.role} page carries ${kept.tags.join(', ') || 'no tags'} here; add “${t}” when the page is promoted`,
         });
     return { tags: kept.tags, held };
   }

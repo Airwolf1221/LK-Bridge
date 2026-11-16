@@ -9,6 +9,9 @@ import { startAdminStack, type AdminStack } from './helpers.js';
 
 let s: AdminStack;
 let version = 1;
+/** ADR 0052 amendment: the blocks of each governance document (none by default). */
+const docBlocks: Record<string, unknown[]> = {};
+let formVersion = 1;
 beforeAll(async () => {
   // LegendKeeper as far as the pack needs it: three governance documents, each with a version.
   s = await startAdminStack({
@@ -19,10 +22,10 @@ beforeAll(async () => {
           status: 200,
           body: {
             id: m[1],
-            version: `v${m[1] === 'govtags' ? version : 1}`,
+            version: `v${m[1] === 'govtags' ? version : m[1] === 'govform' ? formVersion : 1}`,
             schema: 1,
             text: '',
-            blocks: [],
+            blocks: docBlocks[m[1]!] ?? [],
           },
         };
       return undefined;
@@ -149,6 +152,69 @@ describe('the Packs page API', () => {
     expect(s.audit('pack.set_tokens')[0]).toMatchObject({ actor: 'owner', target: 'arkona' });
     const g = await s.get('/api/admin/packs/arkona/governance');
     expect(g.json.governance.state).toBe('rules_changed');
+  });
+
+  it('ADR 0052 amendment: a missing pinned heading is refused with the page’s outline; re-mapping it needs re-authentication, is audited, and the new version approves', async () => {
+    const h = (id: string, level: number, text: string) => ({
+      id,
+      kind: 'heading',
+      level,
+      content: [{ text }],
+    });
+    docBlocks.govform = [
+      h('f0', 1, 'Source Formatting'),
+      h('f1', 2, 'Approved Hierarchy and Standardised Navigation'),
+      h('f2', 3, 'Index Levels'),
+    ];
+    formVersion = 2;
+    const gov = s.runtime.packs.get('arkona')!.governance;
+    s.runtime.packs.store.setGovernance(
+      'arkona',
+      gov.map((g) => (g.key === 'source-formatting' ? { ...g, sections: ['Approved Hierarchy'] } : g)),
+    );
+    reauth();
+    const refused = await s.post('/api/admin/packs/arkona/approve', { confirm: true });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe('GOVERNANCE_SECTION_MISSING');
+    expect(refused.json.error.outline['source-formatting']).toEqual([
+      { heading: 'Source Formatting', level: 1 },
+      { heading: 'Approved Hierarchy and Standardised Navigation', level: 2 },
+      { heading: 'Index Levels', level: 3 },
+    ]);
+    expect(refused.json.error.governance.sources[1].sections).toEqual([
+      { heading: 'Approved Hierarchy', found: null, state: 'missing' },
+    ]);
+    const body = {
+      source: 'source-formatting',
+      from: 'Approved Hierarchy',
+      to: 'Approved Hierarchy and Standardised Navigation',
+      confirm: true,
+    };
+    expire();
+    const noReauth = await s.post('/api/admin/packs/arkona/sections', body);
+    expect(noReauth.status).toBe(403);
+    expect(noReauth.json.error.code).toBe('REAUTH_REQUIRED');
+    expect(s.audit('pack.remap_section')).toEqual([]);
+    reauth();
+    const noConfirm = await s.post('/api/admin/packs/arkona/sections', { ...body, confirm: undefined });
+    expect(noConfirm.status).toBe(400);
+    const notThere = await s.post('/api/admin/packs/arkona/sections', { ...body, to: 'Approved' });
+    expect(notThere.status).toBe(409);
+    expect(notThere.json.error.code).toBe('HEADING_NOT_FOUND');
+    const v = s.runtime.packs.get('arkona')!.version;
+    const ok = await s.post('/api/admin/packs/arkona/sections', body);
+    expect(ok.status, JSON.stringify(ok.json)).toBe(200);
+    expect(ok.json.pack.version).toBe(v + 1);
+    expect(ok.json.governance.state).toBe('rules_changed');
+    expect(s.audit('pack.remap_section')[0]).toMatchObject({
+      actor: 'owner',
+      target: 'arkona',
+      before: { heading: 'Approved Hierarchy' },
+      after: { heading: 'Approved Hierarchy and Standardised Navigation' },
+    });
+    const approved = await s.post('/api/admin/packs/arkona/approve', { confirm: true });
+    expect(approved.status, JSON.stringify(approved.json)).toBe(200);
+    expect(approved.json.governance.state).toBe('current');
   });
 
   it('an unknown pack is 404', async () => {

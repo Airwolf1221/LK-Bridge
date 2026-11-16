@@ -511,8 +511,8 @@ exists: edit those with `write_page` and `set_facts`.
   owner). Subject is the name; Status, Continuity Type, Continuity and Inheritance follow from `status` and `continuity`
   (`"Main"`, the default, or an alternate universe's name, which makes the page AU); `supersedes` is "None" unless given;
   Last Major Revision is set when the job runs.
-- `specialistTag`: at most one of the type's specialist tags (a Working page carries `Working` and its primary tag only:
-  a specialist tag is held until promotion and reported).
+- `specialistTag`: at most one of the type's specialist tags (a Working page carries `Working`, its primary tag, then
+  the specialist: `Working, Culture, Language`).
 - `markdown`: `## Purpose` first, then its sections, then `## Source Boundaries` and `## Unresolved Material`. The
   template's own placeholder headings you do not fill are left out.
 - `dependencies`: current Authoritative owners only (`DEPENDENCY_NOT_AUTHORITATIVE` for a Working or Archived page or an

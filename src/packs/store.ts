@@ -176,6 +176,32 @@ export class PackStore {
     return this.get(id)!;
   }
 
+  /**
+   * ADR 0052 amendment (16 November 2026): a new version with the same rules and new governance sources (the owner
+   * re-mapped a pinned heading on the Packs page), in one transaction. The approval stays on the version it covered, so
+   * the owner approves the mapping together with the version.
+   */
+  newGovernanceVersion(id: string, governance: readonly GovernanceSource[], reason: string): Pack {
+    const at = this.now();
+    const sources = JSON.stringify(governance.map((g) => governanceSourceSchema.parse(g)));
+    this.db.transaction(() => {
+      const cur = this.db.prepare('SELECT version, rules FROM packs WHERE id = ?').get(id) as
+        { version: number; rules: string } | undefined;
+      if (!cur) throw new Error(`No pack ${id}`);
+      const version = cur.version + 1;
+      this.db
+        .prepare('UPDATE packs SET governance = ?, version = ?, updated_at = ? WHERE id = ?')
+        .run(sources, version, at, id);
+      this.db
+        .prepare(
+          `INSERT INTO pack_versions (pack_id, version, rules, governance, approved, reason, created_at)
+           VALUES (?, ?, ?, ?, NULL, ?, ?)`,
+        )
+        .run(id, version, cur.rules, sources, reason.slice(0, 500), at);
+    })();
+    return this.get(id)!;
+  }
+
   /** Records the owner's approval of the CURRENT version (and clears the drift it settles). */
   approve(id: string, approval: PackApproval): Pack {
     const at = this.now();

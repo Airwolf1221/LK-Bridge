@@ -50,9 +50,10 @@ export const roleRuleSchema = z
      */
     tags: z.array(text(100)).max(12),
     /**
-     * v3 F3b (ADR 0052): the tags of a Working page when they differ from `tags` (an owner page: `Working` and its
-     * primary tag only, per the Tagging Standard v1.8 as the F3b design quotes it). A slot of `tags` it leaves out is
-     * held and reported, never silently dropped. Absent: a Working page has `tags` with `Working` as its status tag.
+     * v3 F3b (ADR 0052): the tags of a Working page when they differ from `tags` (an owner page in Arkona's seed:
+     * `Working`, the primary tag, then the specialist if any, by the owner's ruling of 16 November 2026). A slot of
+     * `tags` it leaves out is held and reported, never silently dropped. Absent: a Working page has `tags` with
+     * `Working` as its status tag.
      */
     workingTags: z.array(text(100)).max(12).optional(),
     /** Which facts the page gets: `identity` (every fact), `general` (the type's general keys only), `none`. */

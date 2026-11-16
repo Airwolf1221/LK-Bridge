@@ -9,6 +9,8 @@
  * - `GET /packs/:id/governance`: the governance sources read now (one read each), with drift recorded.
  * - `POST /packs/:id/approve` `{ confirm: true }` (re-authenticated).
  * - `PUT /packs/:id/tokens` `{ race?, culture?, confirm: true }` (re-authenticated).
+ * - `POST /packs/:id/sections` `{ source, from, to, confirm: true }` (re-authenticated; ADR 0052 amendment): re-maps a
+ *   pinned heading of a governance source to one of the document's actual headings. A new version, waiting for approval.
  */
 import * as z from 'zod';
 import { PackError } from '../../packs/types.js';
@@ -23,11 +25,25 @@ const tokensBody = z
   .object({ race: tokenMap.optional(), culture: tokenMap.optional(), confirm: z.literal(true) })
   .strict();
 
+const remapBody = z
+  .object({
+    source: z.string().min(1).max(40),
+    from: z.string().min(1).max(200),
+    to: z.string().trim().min(1).max(200),
+    confirm: z.literal(true),
+  })
+  .strict();
+
 const STATUS: Readonly<Record<string, number>> = {
   PACK_NOT_FOUND: 404,
   NOT_OWNER: 403,
   INVALID_TOKEN: 400,
   GOVERNANCE_UNREADABLE: 409,
+  GOVERNANCE_SECTION_MISSING: 409,
+  SOURCE_NOT_FOUND: 404,
+  SECTION_NOT_PINNED: 409,
+  SECTION_ALREADY_PINNED: 409,
+  HEADING_NOT_FOUND: 409,
 };
 
 function packs(ctx: Parameters<Register>[1]): Packs {
@@ -66,6 +82,20 @@ export const registerPacks: Register = (api, ctx) => {
     parseInput(z.object({ confirm: z.literal(true) }).strict(), req.body);
     return guarded(async () => {
       const r = await packs(ctx).commands.approve('owner', id);
+      return { pack: packs(ctx).view(id), governance: r.governance };
+    });
+  });
+
+  api.post('/packs/:id/sections', async (req) => {
+    requireReauth(ctx.deps.services, req);
+    const { id } = parseInput(idParam, req.params);
+    const b = parseInput(remapBody, req.body);
+    return guarded(async () => {
+      const r = await packs(ctx).commands.remapSection('owner', id, {
+        source: b.source,
+        from: b.from,
+        to: b.to,
+      });
       return { pack: packs(ctx).view(id), governance: r.governance };
     });
   });

@@ -166,14 +166,22 @@ For each pack:
   table** (each owner type's template, primary and specialist tags and allowed homes, and the race roster's kinds);
 - its **versions**, newest first, each with its reason and whether it was approved.
 
-Two changes, each confirmed and then re-authenticated (your password, and the TOTP code if you use one), and each
+Three changes, each confirmed and then re-authenticated (your password, and the TOTP code if you use one), and each
 audited:
 
 - **Approve this pack version** records the current rules' version with each governance source's document version, read
   now (`pack.approve`), and a digest of each pinned section. A source that cannot be read cannot be approved
-  (`GOVERNANCE_UNREADABLE`), nor one whose pinned section is not on the page (`GOVERNANCE_SECTION_MISSING`, listing the
-  page's headings). Approve after you have checked the rules against the governance pages; approve again after a
-  governance page changes.
+  (`GOVERNANCE_UNREADABLE`), nor one whose pinned section is not on the page (`GOVERNANCE_SECTION_MISSING`: the page
+  then shows the picker below). Approve after you have checked the rules against the governance pages; approve again
+  after a governance page changes.
+- **Re-map** a pinned heading (ADR 0052, amendment of 16 November 2026). When an approval is refused with
+  `GOVERNANCE_SECTION_MISSING`, or **Check governance now** finds a pinned heading the page no longer has (a governance
+  page renamed it), a **Pinned headings not found** table appears: each missing heading, its page, and a picker of that
+  page's actual headings, listed in order and indented by level ("(level 2)"); a heading already pinned on that page
+  cannot be chosen. Pick the heading the section has now and press **Re-map**: the mapping becomes part of a new pack
+  version (`pack.remap_section`, recording the old heading and the new one), which you then approve with **Approve this
+  pack version**, so you approve the mapping and the version together. Headings match as a whole (case, punctuation
+  and numbering aside), never by prefix ([packs.md](packs.md#re-mapping-a-pinned-heading)).
 - **Save token maps** makes a new version (`pack.set_tokens`), which waits for your approval: until then the tools fail
   closed. A token is never one of the never-tags (Unknown, Unestablished, None), and no value or token has an em or
   en dash in it (`INVALID_TOKEN`).
@@ -210,7 +218,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Lifecycle † | `GET /lifecycle/records` (`limit`, `offset`; the lifecycle record, newest first, and the link index's freshness; v2 C2c). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Tool calls  | `GET /tool-calls` (filters `principalId`, `profile`, `tool`, `outcome=success\|error\|proposal\|waiting\|queued\|not_success`, `code`, `project`, `sinceMinutes`; paging `limit` (≤ 500) and `before`, answered with `nextBefore`; also the filter choices and the retention), `PUT /tool-calls/retention` (`{ days: 0-90, confirm: true }`; audited). Owner only; view only (v2 E3, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md))                                                                                                                                                                                                                                                                           |
 | Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                                                                              |
-| Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md))                                                                                                                                                                                                                                                                                                             |
+| Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)), `POST /packs/:id/sections` (`{ source, from, to, confirm: true }`: re-maps a pinned heading; a new version) ‡ (ADR 0052 amendment)                                                                                                                                                                         |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409
@@ -856,6 +864,9 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
 - `test/admin/packs.test.ts` and `test/ui/packs.test.tsx` (v3 F3a): the Packs page's routes (listed as stored, the
   governance read on request, approve and token maps refused without a fresh re-authentication, audited, drift and
   re-approval) and the page (navigation, state, sources, projects, rules, the drift alert, the two confirmations).
+  Since the ADR 0052 amendment: a missing pinned heading refused with the page's outline, the re-map refused without a
+  fresh re-authentication, audited old → new, and the new version approved; on the page, the picker (headings in order
+  with levels, a pinned one disabled), its confirmation, the password, and the choice sent.
 
 ## v3 F2 (ADR 0049)
 

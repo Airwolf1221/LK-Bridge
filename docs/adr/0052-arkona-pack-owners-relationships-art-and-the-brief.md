@@ -15,6 +15,9 @@
   decision 14).
 - Migration: **none**. The pack's rules are one JSON document in the `packs` table already; the new seed reaches a stored
   pack as a new version at start (decision 12), which the owner approves.
+- Amended by the **F3b.1 amendment** below (16 November 2026: the six pinned headings exactly as the pages have them,
+  re-mapping a pin on the Packs page, and a Working owner keeps its specialist tag). Decisions 5, 11 and 12 are read
+  with it.
 - Numbered 0052, the next free number after F3.1's (F3c's) 0051. F3.1's branch was merged in before it reached `main`, so
   that decision 14 could be built on its rule at the owner's request; it has since landed (#60) with the same code.
 - Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
@@ -281,3 +284,53 @@ date of approval (auto: a heading added (“…”))`, `Last Major Revision skip
 - Left for later: editing the owner table on the dashboard (it is read-only there; a new version comes from the seed or
   the owner's `replaceRules`), a routing line in an existing home index (the owner tool leaves it, and says so), the
   monolith split and selective approval (PLAN-v2 10.5).
+
+## F3b.1 amendment (16 November 2026)
+
+The owner's run of 16 November 2026 could not approve the new Arkona pack version: "Source Formatting has no section
+“Approved Hierarchy”; Source Formatting has no section “Active Template Suite”; Controlled Native Tagging Standard has
+no section “Closed Primary Categories”." The cause was the handoff, not decision 11's code: the F3b handoff abbreviated
+three headings. The planner read the real headings live on 16 November 2026; this session touched no live system
+(no LegendKeeper, no bridge connector, no dashboard), and every test uses the mock LegendKeeper and fixtures. No new ADR
+and no migration: the pinned headings live in the pack's governance JSON, which every pack version already stores.
+
+1. **The six exact headings (amends decision 11).** The seed pins Source Formatting (`cn8v87hh/l41y28c8`): Page Names
+   and Templates; Nation-Centred Territorial Navigation; **Approved Hierarchy and Standardised Navigation**; **Active
+   Template Suite and Sidebar Collections**; and the Controlled Native Tagging Standard (`cn8v87hh/bfrv43jr`): Exact Tag
+   Grammar; **Closed Primary Categories and Specialist Functions**. Matching stays exact: a pinned heading matches a
+   page heading as a whole, with decision 11's allowances (case, punctuation, numbering, "&" for "and") and nothing more;
+   no prefix and no fuzzy match, so a pinned section is unambiguous.
+2. **Re-mapping a pin without a code session.** When approval fails with `GOVERNANCE_SECTION_MISSING`, the refusal
+   carries each source's outline (its headings in order, with their levels) and the governance status; a governance
+   check carries the outline of any source whose pinned heading is missing. The Packs page shows each missing heading
+   beside a picker of that page's headings. Choosing one (`POST /api/admin/packs/:id/sections`, re-authenticated) checks
+   the choice is one of the page's headings now and not already pinned, and makes a **new pack version** with the new
+   mapping (`PackStore.newGovernanceVersion`: same rules, new governance, both in `pack_versions`), audited
+   `pack.remap_section` with the old heading and the new one. The version waits for approval, so the owner approves the
+   mapping and the version together. **Chosen**: every re-map is its own version (as a token-map edit is), rather than
+   editing the version already pending: each change keeps its reason in the version list, and approval still covers
+   all of them at once. The same picker appears when a governance page later renames a pinned heading: an expected
+   drift, not a dead end.
+3. **A Working owner keeps its specialist (the owner, 16 November 2026; amends decision 5).** A Working or Archived
+   owner's tags are the lifecycle tag, then the primary, then the specialist if any (`Working, Culture, Language`, not
+   `Working, Culture`), matching the Tagging Standard ("preserve actually meaningful existing subject tags… after the
+   lifecycle marker") and F3a's Working characters, which keep their identity tokens. The seed's `owners.tags.working`
+   is `$status, $primary, $specialist`, so nothing is held for a Working owner; the held-and-reported mechanism stays
+   for a role whose Working list leaves a slot out. An Archived owner is made by `archive_page` (the pack tools make
+   only Working and Authoritative pages), which removes only the outgoing status tag and adds `Archived` (ADR 0035
+   decision 8), so its primary and specialist stay. **Left for later**: that general tool adds `Archived` last
+   (`Culture, Language, Archived`). Putting the lifecycle tag where the status tag stood would match the Tagging
+   Standard's order, but it changes `archive_page`, `move_to_working`, `promote_page` and `unarchive_page` for every
+   project, so it needs its own decision rather than this amendment.
+4. **Pack versioning (decision 12).** Items 1 and 3 change the pack data, so the seed is now `arkona-2026-11-16-f3b1`,
+   superseding F3a's `arkona-2026-11-16` and F3b's `arkona-2026-11-16-f3b`: start-up offers it as a new version (token
+   maps kept, the governance places kept, the exact headings taken), which the owner approves once. A later seed's own
+   headings replace a re-mapped one when that seed is offered.
+
+Tests: `test/packs/pinned-headings.test.ts` (approval with the six real headings against fixture pages that use them;
+F3b's abbreviated pins refused, word for word, then the new seed approved first time; a renamed heading refused with the
+outline, the re-map's refusals, the re-map audited old → new and approved), `test/packs/owners.test.ts` (Working and
+Archived owners carry their specialist; none without one), `test/admin/packs.test.ts` (the re-map needs
+re-authentication) and `test/ui/packs.test.tsx` (the picker).
+
+After deploying, the owner approves the new pack version on the Packs page; it should succeed first time.

@@ -8,6 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { HomeRule, OwnerType } from '../../src/packs/types.js';
+import { tagsAfter } from '../../src/mcp/tools/lifecycle.js';
 import { approve, C } from './world.js';
 import {
   compactPolity,
@@ -534,7 +535,7 @@ describe('name, facts, text and links (design 1.4)', () => {
 });
 
 describe('the lifecycle and the AU rule (design 1.4, 1.5)', () => {
-  it('Working by default: [BWRK] under [INDEX] Working, Working and the primary tag, the specialist held', async () => {
+  it('Working by default: [BWRK] under [INDEX] Working; Working, the primary tag, then the specialist (owner, 16 Nov 2026)', async () => {
     const r = await dry({ ...compactPolity(), specialistTag: 'Government' });
     expect(r.isError, r.text).toBe(false);
     expect(r.body.lifecycleStatus).toBe('working');
@@ -542,10 +543,38 @@ describe('the lifecycle and the AU rule (design 1.4, 1.5)', () => {
       page: '[BWRK] Kingdom of Saba - Historical Polity Reference',
       parent: '[INDEX] Working',
     });
-    expect(r.body.pages[0].tags).toEqual(['Working', 'Polity']);
-    expect(r.body.heldTags).toEqual([expect.objectContaining({ value: 'Government', slot: 'working' })]);
+    // ADR 0052 amendment: the specialist is kept after the lifecycle tag and the primary, never held.
+    expect(r.body.pages[0].tags).toEqual(['Working', 'Polity', 'Government']);
+    expect(r.body.heldTags ?? []).toEqual([]);
     expect(r.body.notes.join(' ')).toMatch(/promote_page \(destination: \[INDEX\] Salahad Polities\)/);
     expect(r.body.pages[0].facts).toContainEqual({ key: 'Status', value: 'Working' });
+  });
+
+  it('a Working owner carries its specialist after the primary; with none, the lifecycle and primary tags only', async () => {
+    const lang = await dry(
+      pkg('Culture', 'Salahad Cultures', { status: 'working', specialistTag: 'Language' }),
+    );
+    expect(lang.isError, lang.text).toBe(false);
+    expect(lang.body.pages[0].tags).toEqual(['Working', 'Culture', 'Language']);
+    expect(lang.body.heldTags ?? []).toEqual([]);
+    const plain = await dry(pkg('Culture', 'Salahad Cultures', { status: 'working' }));
+    expect(plain.body.pages[0].tags).toEqual(['Working', 'Culture']);
+    expect(plain.body.heldTags ?? []).toEqual([]);
+    // Authoritative, for comparison: the same grammar after CANON.
+    const canon = await dry(pkg('Culture', 'Salahad Cultures', { specialistTag: 'Language' }));
+    expect(canon.body.pages[0].tags).toEqual(['CANON', 'Culture', 'Language']);
+  });
+
+  it('an Archived owner: archiving swaps only the status tag, so the primary and specialist stay', () => {
+    // archive_page removes the outgoing status tag and adds Archived, other tags untouched (ADR 0035 decision 8).
+    const archived = tagsAfter(['CANON', 'Culture', 'Language'], ['CANON'], ['Archived']);
+    expect(archived).toEqual(expect.arrayContaining(['Archived', 'Culture', 'Language']));
+    expect(archived).toHaveLength(3);
+    expect(tagsAfter(['Working', 'Culture', 'Language'], ['Working'], ['Archived'])).toEqual(
+      expect.arrayContaining(['Archived', 'Culture', 'Language']),
+    );
+    const plain = tagsAfter(['CANON', 'Culture'], ['CANON'], ['Archived']);
+    expect([...plain].sort()).toEqual(['Archived', 'Culture']);
   });
 
   it('an AU owner carries AU in place of CANON; a Working AU owner leads with Working and carries neither', async () => {

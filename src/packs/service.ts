@@ -17,7 +17,14 @@ import type { Registry } from '../registry/index.js';
 import { cleanPrefixes, templateBaseKey } from '../registry/names.js';
 import { PACK_SEEDS } from './arkona.js';
 import { hookFor } from './hooks.js';
-import { headingsOf, pinnedSections, type FoundSection } from './sections.js';
+import {
+  headingKey,
+  headingsOf,
+  outlineOf,
+  pinnedSections,
+  type FoundSection,
+  type OutlineHeading,
+} from './sections.js';
 import { PackStore } from './store.js';
 import {
   PackError,
@@ -74,6 +81,11 @@ export interface SourceStatus {
     readonly found: string | null;
     readonly state: 'same' | 'changed' | 'missing' | 'unapproved';
   }[];
+  /**
+   * ADR 0052 amendment (16 November 2026): the document's headings in order, with their levels, when a pinned section
+   * is missing: the Packs page offers them in a picker so the owner can re-map the pin.
+   */
+  readonly outline?: readonly OutlineHeading[];
 }
 
 export interface GovernanceStatus {
@@ -133,6 +145,16 @@ export interface Packs {
       projectId: string,
       templates?: Readonly<Record<string, string | null>>,
     ): PackAttachment;
+    /**
+     * ADR 0052 amendment (16 November 2026): the owner re-maps a pinned heading of a governance source to one of the
+     * document's actual headings (read now; matched whole, never by prefix). A new version with the new mapping, which
+     * waits for the owner's approval with the rest of the version. Audited with the old heading and the new one.
+     */
+    remapSection(
+      actor: string,
+      packId: string,
+      change: { readonly source: string; readonly from: string; readonly to: string },
+    ): Promise<{ pack: Pack; governance: GovernanceStatus }>;
     /** Replaces a pack's rules (the owner's command, used by the tests; never an agent). A new version. Audited. */
     replaceRules(actor: string, packId: string, rules: PackRules, reason: string): Pack;
   };
@@ -337,8 +359,14 @@ export function createPacks(d: PacksDeps): Packs {
     /** v3 F3b: each pinned section as read now (empty when the source pins none or could not be read). */
     sections: FoundSection[];
     headings: string[];
+    /** ADR 0052 amendment: the document's outline (empty when the source pins none or could not be read). */
+    outline: OutlineHeading[];
   }> => {
-    const none = { sections: [] as FoundSection[], headings: [] as string[] };
+    const none = {
+      sections: [] as FoundSection[],
+      headings: [] as string[],
+      outline: [] as OutlineHeading[],
+    };
     const p = projectByName(src.project);
     if (!p || p.id === null)
       return { version: null, digest: null, reason: `project ${src.project} is not registered`, ...none };
@@ -358,6 +386,7 @@ export function createPacks(d: PacksDeps): Packs {
         digest: blocksDigest(r.blocks),
         sections: pinnedSections(r.blocks, src.sections ?? []),
         headings: (src.sections ?? []).length > 0 ? headingsOf(r.blocks) : [],
+        outline: (src.sections ?? []).length > 0 ? outlineOf(r.blocks) : [],
       };
     } catch (e) {
       return { version: null, digest: null, reason: e instanceof Error ? e.message : String(e), ...none };
@@ -418,6 +447,7 @@ export function createPacks(d: PacksDeps): Packs {
         state,
         ...(read.reason ? { reason: read.reason } : {}),
         ...(sections ? { sections } : {}),
+        ...(sections?.some((x) => x.state === 'missing') ? { outline: read.outline } : {}),
       });
     }
     /** The changed pinned sections of a changed source, in words. */
@@ -553,12 +583,18 @@ export function createPacks(d: PacksDeps): Packs {
         if (missing.length > 0) {
           throw new PackError(
             'GOVERNANCE_SECTION_MISSING',
-            `The pack cannot be approved: ${missing.map((m) => `${m.source} has no section “${m.heading}”`).join('; ')}. The pack's rules were derived from these sections; check the governance page (or tell the bridge's maintainer the section's new heading).`,
+            `The pack cannot be approved: ${missing.map((m) => `${m.source} has no section “${m.heading}”`).join('; ')}. The pack's rules were derived from these sections; check the governance page, or pick the section's heading as the page has it now (Packs page: re-map the pinned heading).`,
             {
               missing,
               headings: Object.fromEntries(
                 [...new Set(missing.map((m) => m.key))].map((k) => [k, lastSections.get(k)?.headings ?? []]),
               ),
+              // ADR 0052 amendment: each source's outline (headings in order, with levels) for the Packs page's
+              // picker, and the governance status it was read in.
+              outline: Object.fromEntries(
+                status.sources.filter((s) => s.outline).map((s) => [s.key, s.outline]),
+              ),
+              governance: status,
             },
           );
         }
@@ -661,6 +697,59 @@ export function createPacks(d: PacksDeps): Packs {
         });
         changed();
         return store.attachment(pack.id, projectId)!;
+      },
+      async remapSection(actor, packId, change) {
+        if (actor !== ACTOR_OWNER)
+          throw new PackError('NOT_OWNER', 'Only the owner re-maps a pinned section.');
+        const pack = requirePack(packId);
+        const src = pack.governance.find((g) => g.key === change.source);
+        if (!src)
+          throw new PackError(
+            'SOURCE_NOT_FOUND',
+            `The ${pack.name} pack has no governance source ${change.source}.`,
+          );
+        const pinned = src.sections ?? [];
+        const at = pinned.indexOf(change.from);
+        if (at < 0)
+          throw new PackError(
+            'SECTION_NOT_PINNED',
+            `${src.name} has no pinned section “${change.from}” (pinned: ${pinned.join('; ') || 'none'}).`,
+          );
+        // The new heading must be one of the document's headings as read now, matched whole (no prefix, no guess).
+        const read = await readSource(src);
+        if (read.version === null)
+          throw new PackError(
+            'GOVERNANCE_UNREADABLE',
+            `${src.name} could not be read (${read.reason ?? 'unreadable'}), so its headings cannot be checked.`,
+          );
+        const outline = read.outline;
+        const hits = outline.filter((h) => headingKey(h.heading) === headingKey(change.to));
+        if (hits.length === 0)
+          throw new PackError(
+            'HEADING_NOT_FOUND',
+            `${src.name} has no heading “${change.to}” now; pick one of its headings.`,
+            { outline },
+          );
+        const to = hits[0]!.heading;
+        if (pinned.some((h, i) => i !== at && headingKey(h) === headingKey(to)))
+          throw new PackError('SECTION_ALREADY_PINNED', `${src.name}'s “${to}” is already pinned.`);
+        if (pinned[at] === to) return { pack, governance: await governance(pack.id) };
+        const sections = pinned.map((h, i) => (i === at ? to : h));
+        const nextGovernance = pack.governance.map((g) => (g.key === src.key ? { ...g, sections } : g));
+        const after = store.newGovernanceVersion(
+          pack.id,
+          nextGovernance,
+          `pinned section of ${src.name} re-mapped on the Packs page: “${change.from}” → “${to}”`,
+        );
+        d.audit(
+          actor,
+          'pack.remap_section',
+          pack.id,
+          { version: pack.version, source: src.key, heading: change.from },
+          { version: after.version, source: src.key, heading: to },
+        );
+        changed();
+        return { pack: after, governance: await governance(pack.id) };
       },
       replaceRules(actor, packId, rules, reason) {
         const pack = requirePack(packId);
