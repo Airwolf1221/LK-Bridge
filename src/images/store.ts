@@ -12,7 +12,7 @@ export type UploadSource =
   | 'upload_id'
   | 'dashboard'
   | 'restore'
-  /** v3 F2 (ADR 0049 decision 12): a ChatGPT conversation attachment (`file`), downloaded by the bridge. */
+  /** v3 F2 (ADR 0049 decision 11): a ChatGPT conversation attachment (`file`), downloaded by the bridge. */
   | 'chatgpt_file'
   /** v3 F2 (ADR 0049 decision 10): an image migrate-staging brought from the old LegendKeeper staging folder. */
   | 'migrated';

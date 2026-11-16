@@ -132,3 +132,25 @@ Every table holding LegendKeeper data has a required `project_id` (migration 060
 ## One bridge process per project
 
 The bridge's per-page and per-resource locks are in-process, and LegendKeeper's `If-Match` is not an atomic compare-and-swap, so two processes serving one project could overlap writes and lose one. A second process on the same database is refused at start-up (`INSTANCE_LOCKED`, naming the other process). Never put one project's key in two bridges' env files.
+
+## The default project (v3 F2)
+
+[ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 3. The default project (the one
+tools and pages use when no project is named) is stored in the bridge's database. **Make default** on a project's row of
+the Projects page stores it (a fresh re-authentication; audited `project.make_default`); it applies at once, with no
+restart. `LK_DEFAULT_PROJECT` in the env file is an override: while it is set and names another served project, it wins,
+and the page says "The env file's `LK_DEFAULT_PROJECT=…` overrides this; remove that line to use the dashboard's
+choice." `sudo /opt/lk-bridge/bin/env-sync.sh --retire-default-project` comments the line out once the stored default
+agrees with it (and refuses, naming both, while they disagree). With several projects listed, `LK_DEFAULT_PROJECT` is
+optional. `npm run projects -- stored-default` prints the stored default (env-sync uses it).
+
+## Last Major Revision and image settings (v3 F2)
+
+Each project has a switch per category of substantial edit that sets a page's Last Major Revision (`lmrWritePage`,
+`lmrBlockEdits`, `lmrChronologyTable`, `lmrRestore`, `lmrPackTools`, `lmrFacts`: on by default; `lmrNamesTagsMoves`,
+`lmrLinkCollections`, `lmrTimelineMap`, `lmrAuditSplit`: off) and its housekeeping keys (`lmrHousekeepingKeys`, a
+`;`-separated list, default `Last Major Revision; Reference Type; Supersedes; Status`); see
+[tools.md](tools.md#last-major-revision-on-every-substantial-edit-v3-f2). `imageStagingMaxDays` (default
+`IMAGE_STAGING_MAX_DAYS`, 90) is how long an unplaced staged image is kept on the server. `imageStagingFolder` now only
+names the old LegendKeeper staging folder for `npm run images -- migrate-staging`, and can be cleared once that folder is
+gone. All are edited on the Projects page (audited `project.set_setting`).

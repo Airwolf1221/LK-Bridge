@@ -461,7 +461,7 @@ export interface FetchImageOptions extends GuardOptions {
   readonly maxRedirects?: number;
   readonly signal?: AbortSignal | undefined;
   /**
-   * v3 F2 (ADR 0049 decision 12): any declared content type is accepted (a file store may answer
+   * v3 F2 (ADR 0049 decision 11): any declared content type is accepted (a file store may answer
    * `application/octet-stream`); the magic bytes alone decide whether it is an image.
    */
   readonly anyContentType?: boolean;

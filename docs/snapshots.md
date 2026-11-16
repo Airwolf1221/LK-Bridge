@@ -70,3 +70,25 @@ A rehearsal restores a full snapshot into a throwaway root of a sandbox project,
 - **Leftover roots.** A rehearsal the bridge was restarted during is marked stopped, and its root is kept. Delete it from
   the Snapshots page ("Delete its root"), or in the app (a top-level page named `lk-bridge rehearsal <time>`) if the page
   says the delete failed.
+
+## v3 F2: missing pieces, pages deleted in the app, and finishing a recreate
+
+[ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decisions 4 to 6.
+
+- **A partial snapshot says what it is missing.** Each partial snapshot's row on the Snapshots page expands
+  (**Show what is missing**) to list each missing piece: the page (a link to it in the tree; the asset library for the
+  library's own), the piece, its reference and the reason, read from the manifest once per request. `list_snapshots`
+  gives the same in summary form: `missing: { total, thisPage: [{ piece, ref, reason }], otherPages }`. No more
+  `node -e` on the server.
+- **A page deleted in the LegendKeeper app** can be restored (scope `deleted`) when a full or change snapshot holds it,
+  although the bridge holds no delete record of it. The lifecycle and canon guards judge the restore from the newest
+  snapshot's state (its name with its prefix, its parent, its Status and tags), as they would a create of that page: an
+  Authoritative page comes back only as a canonical proposal. It is refused only when no snapshot holds it. Every restore
+  proposal names the snapshot it came from and when it was taken.
+- **A recreate that stopped part-way is finished, never duplicated.** Its page's id was minted when its proposal was
+  captured and is kept with the restore's record. The same request again (or **Finish** on the restores list of the
+  Snapshots page) compares the page it made with the snapshot and proposes only what is missing: documents it lacks (with
+  their content), a page document still blank, a map's features, a timeline's lanes and events, a board's content, and
+  sidebar properties. When nothing is missing the answer is "nothing to do".
+- Staged images (on the bridge's server since v3 F2) are unapproved: they are in no snapshot and no off-site copy.
+- A restore that changes a page's text sets its Last Major Revision (the restore category; a rehearsal never does).

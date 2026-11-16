@@ -105,7 +105,7 @@ export interface McpToolProvider<S extends z.ZodObject = z.ZodObject> {
   /** Scopes the caller must hold (checked before the handler). Default: none beyond `/mcp` access. */
   readonly requiredScopes?: readonly string[];
   /**
-   * v3 F2 (ADR 0049 decision 12): the tool descriptor's `_meta` in `tools/list`, passed through as it is (the SDK keeps
+   * v3 F2 (ADR 0049 decision 11): the tool descriptor's `_meta` in `tools/list`, passed through as it is (the SDK keeps
    * it): for example `{ "openai/fileParams": ["file"] }`, which tells ChatGPT that input `file` takes a conversation
    * attachment (it fills in a download URL and file id). Other clients ignore it.
    */

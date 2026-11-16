@@ -1479,7 +1479,7 @@ export function formatAssumptionsReport(findings: readonly Finding[]): string {
 }
 
 /**
- * v3 F2 (ADR 0049 decision 6): LS1's clean-up, judged. `del` is deleteFeature's answer, `again` listFeatures' after it
+ * v3 F2 (ADR 0049 decision 7): LS1's clean-up, judged. `del` is deleteFeature's answer, `again` listFeatures' after it
  * (null when the delete did not succeed). On the live test world (15 November 2026) LegendKeeper refused deleteFeature
  * on the map too: the same label-size check runs on a delete. The feature then goes with its throwaway page when the
  * run's pages are cleaned up (the `cleanup` finding checks that), which is a successful clean-up: a PASS with a note,

@@ -45,7 +45,7 @@ export interface ImageSourceInput {
   readonly base64?: string | undefined;
   readonly url?: string | undefined;
   /**
-   * v3 F2 (ADR 0049 decision 12): a ChatGPT file's temporary `download_url` (a capability: never logged, stored,
+   * v3 F2 (ADR 0049 decision 11): a ChatGPT file's temporary `download_url` (a capability: never logged, stored,
    * journalled or returned). Downloaded through the same guarded transport as `url`, whatever UPLOAD_ALLOW_URL_SOURCE
    * says, with any declared content type (the magic bytes decide).
    */

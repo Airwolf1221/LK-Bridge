@@ -266,7 +266,7 @@ const uploadSchema = z.object({
     .max(64)
     .optional()
     .describe('A staged image to place (see the Staging page, or a stage: true upload).'),
-  // v3 F2 (ADR 0049 decision 12): a ChatGPT conversation attachment, as ChatGPT fills it in (OpenAI Apps SDK, "Define
+  // v3 F2 (ADR 0049 decision 11): a ChatGPT conversation attachment, as ChatGPT fills it in (OpenAI Apps SDK, "Define
   // file inputs"): the bridge downloads the bytes itself, during the call.
   file: z
     .object({
@@ -319,7 +319,7 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
         ', `file` (a ChatGPT conversation attachment), `upload_id` (from prepare_image_upload: for agents with a shell) or `staged_id` (an image already staged). In ChatGPT, pass a conversation attachment as `file` (ChatGPT fills it in); agents with a shell use `upload_id`; `data_base64` is for small images only. `destination`: `for_character` { name, race } (the character’s folder), `for_page` (a character’s page, Working or Archived included, or one of its specialist pages such as “{name} - Art”, gives its character’s folder; the race is read from its Race / Species fact) or `folder` (an id, or a path such as "Characters / Beastkin / Qishen / Mehrana al-Khalid"), plus `subfolders` (a list, or one path such as "Wardrobe / Qipao"); missing folders are created. dryRun lists the folders it would create. `stage: true` keeps the image hidden for later placement. The same original sent again returns the existing asset: never upload a copy to move an image. At scope propose the image is staged and its placement is the proposal. Never repeat a call that returned a jobId or proposalId. Then put the image on a page with write_page: ![alt](asset url). Example: { "data_base64": "…", "destination": { "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "subfolders": "Wardrobe / Qipao", "project": "test" }. Cost: 2 writes (1 more per new folder), 1 read and 1 download to verify. PNG, JPEG, GIF or WebP up to ' +
         `${max} bytes.`,
       inputSchema: uploadSchema,
-      // v3 F2 (ADR 0049 decision 12): ChatGPT replaces a conversation attachment given to `file` with a file object.
+      // v3 F2 (ADR 0049 decision 11): ChatGPT replaces a conversation attachment given to `file` with a file object.
       meta: { 'openai/fileParams': ['file'] },
       annotations: {
         readOnlyHint: false,
@@ -484,7 +484,7 @@ async function uploadBytes(
       bytes = b;
       name = name ?? slot.name;
     } else if (args.file !== undefined) {
-      // v3 F2 (ADR 0049 decision 12): ChatGPT's file, downloaded now, at every scope (its link expires long before an
+      // v3 F2 (ADR 0049 decision 11): ChatGPT's file, downloaded now, at every scope (its link expires long before an
       // owner approves anything; at scope propose the bytes are staged and only the placement waits). Only the file's id
       // and the link's host are logged.
       source = 'chatgpt_file';

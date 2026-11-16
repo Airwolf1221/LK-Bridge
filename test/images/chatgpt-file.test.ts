@@ -1,5 +1,5 @@
 /**
- * v3 F2 (ADR 0049 decision 12): `upload_image`'s fifth source, `file`: a ChatGPT conversation attachment, as ChatGPT
+ * v3 F2 (ADR 0049 decision 11): `upload_image`'s fifth source, `file`: a ChatGPT conversation attachment, as ChatGPT
  * fills it in (`{ download_url, file_id, mime_type?, file_name? }`; OpenAI Apps SDK, "Define file inputs"). The tool's
  * descriptor carries `_meta["openai/fileParams"]: ["file"]`. The bridge downloads the file during the call through the
  * guarded transport of the `url` source (https, public addresses, the port allow-list, pinned DNS, the size capped while

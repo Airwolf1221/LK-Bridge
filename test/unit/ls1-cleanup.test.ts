@@ -1,5 +1,5 @@
 /**
- * v3 F2 (ADR 0049 decision 6): LS1's clean-up. LegendKeeper also refuses deleteFeature on a map holding the label it
+ * v3 F2 (ADR 0049 decision 7): LS1's clean-up. LegendKeeper also refuses deleteFeature on a map holding the label it
  * cannot list; the feature then goes with its throwaway page in the run's clean-up, which is a pass with a note.
  */
 import { describe, expect, it } from 'vitest';
