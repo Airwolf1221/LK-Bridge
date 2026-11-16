@@ -213,14 +213,11 @@ const routes = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('the Audits page', () => {
-  it('is in the navigation, after Snapshots', async () => {
+  it('is in the navigation, under Quality (open on its page)', async () => {
     installApi(routes());
     renderApp('/ui/audits');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    const labels = within(nav)
-      .getAllByRole('link')
-      .map((a) => a.textContent);
-    expect(labels.indexOf('Audits')).toBe(labels.indexOf('Snapshots') + 1);
+    expect(within(nav).getByRole('button', { name: 'Quality' })).toHaveAttribute('aria-expanded', 'true');
     expect(within(nav).getByRole('link', { name: 'Audits' })).toHaveAttribute('aria-current', 'page');
   });
 
