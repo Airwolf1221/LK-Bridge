@@ -902,12 +902,13 @@ export class LifecycleGuard implements WriteGuard {
                 internal,
               );
             })();
-        const to = await this.areaLive(
-          c,
-          input.project,
-          typeof body.parentId === 'string' ? body.parentId : null,
-          internal,
-        );
+        // v3 F3a (ADR 0050): a parent created earlier in the same request has the area it was created in (as for a
+        // create under it): a setting pack moves a Reference under the index the same job makes in its place.
+        const dest = typeof body.parentId === 'string' ? body.parentId : null;
+        const to: Area | 'unknown' =
+          dest !== null && createdArea.has(dest)
+            ? (createdArea.get(dest) ?? null)
+            : await this.areaLive(c, input.project, dest, internal);
         const ch =
           this.moveChange(c, rid, name(rid), from, to, i) ??
           this.ownAreaMove(c, rid, known?.rawName ?? (await this.nameNow(input.project, rid)), to, i);

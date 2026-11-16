@@ -172,6 +172,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
 
   // 3. Changes to existing pages.
   const lmrPages: { id: string; name: string; after: number[] }[] = [];
+  // Existing pages whose Last Major Revision this job sets: checked by the pack's own row check (dated at run time).
+  const existingChecks: { id: string; name: string; plan: import('../../facts/plan.js').FactsPlan }[] = [];
   for (const c of plan.existing) {
     if (c.kind === 'rename') {
       const node = ctx.tree.node(ctx.projectId, c.page.id).data;
@@ -215,7 +217,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       for (const s of fx.steps) {
         if (s.op === VERIFY_STEP) {
           const body = (s.params?.body ?? {}) as { targets?: VerifyTarget[] };
-          targets.push(...(body.targets ?? []));
+          if (c.substantial) existingChecks.push({ id: c.page.id, name: c.page.rawName, plan: c.plan });
+          else targets.push(...(body.targets ?? []));
           continue;
         }
         const shifted = shiftStep(s, base);
@@ -396,6 +399,22 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     });
     labels.push(`move ${c.page.rawName} under ${c.toName}`);
     targets.push(pageTarget(`${c.name}: place`, c.page.id, { check: 'parent', parentId: index.id }));
+    // The new pages under that index now stand beside the moved page: their expected neighbours, in sibling order.
+    const order = [...siblings, { id: c.page.id, displayName: me.displayName, kind: me.kind }].sort(compareSiblings);
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i]!;
+      if (t.kind !== 'resource' || !t.placement || t.placement.parentId !== index.id) continue;
+      const at = order.findIndex((o) => o.id === t.resourceId);
+      if (at < 0) continue;
+      targets[i] = {
+        ...t,
+        placement: {
+          parentId: index.id,
+          after: at > 0 ? order[at - 1]!.id : null,
+          before: at + 1 < order.length ? order[at + 1]!.id : null,
+        },
+      };
+    }
     operations.push({
       tool,
       pack: pack.id,
@@ -469,6 +488,40 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         pageTarget(`${p.rawName}: links`, p.id, {
           check: 'links',
           collections: links.map((l) => ({ title: l.title, ids: l.targets.map((t: LinkTarget) => t.resourceId) })),
+        }),
+      );
+    }
+  }
+  for (const x of existingChecks) {
+    const lmr = lmrStepOf.get(x.id);
+    const rows = x.plan.rowsAfter;
+    targets.push(
+      pageTarget(
+        `${x.name}: sidebar rows`,
+        x.id,
+        {
+          check: 'rows',
+          property: env.pack.rules.sidebar.property,
+          keys: rows.map((r) => r.key),
+          values: Object.fromEntries(
+            rows
+              .filter((r) => r.key.trim().toLowerCase() !== lmrKey.trim().toLowerCase())
+              .map((r) => [
+                r.key,
+                r.content.map((c) => (typeof (c as Obj).text === 'string' ? ((c as Obj).text as string) : '')).join(''),
+              ]),
+          ),
+          lmrKey,
+        },
+        lmr ? [{ step: lmr, as: 'lmr' }] : undefined,
+      ),
+    );
+    const added = x.plan.links.filter((l) => l.added.length > 0);
+    if (added.length > 0) {
+      targets.push(
+        pageTarget(`${x.name}: links`, x.id, {
+          check: 'links',
+          collections: added.map((l) => ({ title: l.title, ids: l.added.map((a) => a.resourceId) })),
         }),
       );
     }
