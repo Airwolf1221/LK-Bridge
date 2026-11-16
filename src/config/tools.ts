@@ -53,6 +53,11 @@ const toolsEnvSchema = z.object({
   IMAGE_UPLOAD_IDLE_TIMEOUT_MS: intFrom(15_000, 1_000, 300_000),
   /** Staged images older than this are reported on the dashboard (never removed automatically). */
   IMAGE_STAGING_REPORT_DAYS: intFrom(30, 1, 3650),
+  // v3 F2 (ADR 0049 decision 10): an unplaced image staged on the server is removed after this many days, a week after
+  // the dashboard first warned (per project on the Projects page: imageStagingMaxDays); and the image store keeps this
+  // much free disk (a new staging upload is refused below it).
+  IMAGE_STAGING_MAX_DAYS: intFrom(90, 1, 3650),
+  IMAGE_STAGING_MIN_FREE_GB: z.coerce.number().min(0).max(100_000).default(5),
   /** How long the bytes kept before an asset delete are kept. */
   ASSET_BYTES_RETENTION_DAYS: intFrom(90, 1, 3650),
   /**
@@ -137,6 +142,10 @@ export interface ImageSettings {
   readonly bodyTimeoutMs: number;
   readonly idleTimeoutMs: number;
   readonly stagingReportDays: number;
+  /** v3 F2: IMAGE_STAGING_MAX_DAYS (the project setting imageStagingMaxDays overrides it). */
+  readonly stagingMaxDays: number;
+  /** v3 F2: IMAGE_STAGING_MIN_FREE_GB in bytes: the free disk a new staging upload needs. */
+  readonly stagingMinFreeBytes: number;
   readonly keptBytesRetentionDays: number;
   /** Lowercase host names asset files are downloaded from. */
   readonly assetHosts: readonly string[];
@@ -153,6 +162,8 @@ export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
   bodyTimeoutMs: 120_000,
   idleTimeoutMs: 15_000,
   stagingReportDays: 30,
+  stagingMaxDays: 90,
+  stagingMinFreeBytes: 5 * 1_073_741_824,
   keptBytesRetentionDays: 90,
   assetHosts: [...DEFAULT_LK_ASSET_HOSTS],
 };
@@ -198,6 +209,8 @@ export function loadToolsConfig(env: NodeJS.ProcessEnv = process.env): ToolsSett
       bodyTimeoutMs: e.IMAGE_UPLOAD_BODY_TIMEOUT_MS,
       idleTimeoutMs: e.IMAGE_UPLOAD_IDLE_TIMEOUT_MS,
       stagingReportDays: e.IMAGE_STAGING_REPORT_DAYS,
+      stagingMaxDays: e.IMAGE_STAGING_MAX_DAYS,
+      stagingMinFreeBytes: Math.round(e.IMAGE_STAGING_MIN_FREE_GB * GIB),
       keptBytesRetentionDays: e.ASSET_BYTES_RETENTION_DAYS,
       assetHosts: parseHosts(e.LK_ASSET_HOSTS),
     },

@@ -32,6 +32,7 @@ const usage = `Usage:
   npm run projects -- list
   npm run projects -- sandbox <name> on|off     mark a project as a sandbox (test world only) or not
   npm run projects -- settings <name>           show a project's settings
+  npm run projects -- stored-default            the default the dashboard stored ("Make default"), for env-sync
   npm run projects -- set <name> <key> <value>  change one setting ("-" clears it); keys: ${PROJECT_SETTING_KEYS.filter(
     (k) => k.editable,
   )
@@ -66,6 +67,13 @@ export function runProjectsCommand(
             `read-only ${p.readOnly ? 'yes' : 'no'}  verified ${iso(p.verifiedAt)}`,
         );
       }
+      return 0;
+    }
+    // v3 F2 (ADR 0049 decision 3): env-sync's --retire-default-project asks which default the dashboard stored. One
+    // line, a project name only: `stored-default=<name>` (empty when none is stored).
+    if (cmd === 'stored-default') {
+      const p = store.list().find((x) => x.isDefault && x.archivedAt === null);
+      out(`stored-default=${p?.name ?? ''}`);
       return 0;
     }
     if (cmd === 'sandbox') {
@@ -125,7 +133,7 @@ export function runProjectsCommand(
         }
         return 0;
       }
-      let value: string | boolean | null;
+      let value: string | number | boolean | null;
       try {
         value = parseSettingValue(key!, valueParts.join(' '));
       } catch (e) {

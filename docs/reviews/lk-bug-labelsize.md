@@ -36,8 +36,9 @@ errors: [{"path":"labelSize","message":"Invalid enum value. Expected 'small' | '
    `POST …/docs/{documentId}/features` with
    `{"type":"label","name":"Test","pos":[0,0],"labelSize":"md"}`. It answers 201.
 2. `GET …/docs/{documentId}/features`. It answers the 400 above, instead of the list.
-3. Delete that feature by its id (`DELETE …/features/{featureId}`), or set its label size again in the app (small, medium
-   or large). `listFeatures` answers 200 again.
+3. Set its label size again in the app (small, medium or large). `listFeatures` answers 200 again.
+4. Deleting that feature by its id (`DELETE …/features/{featureId}`) does **not** help: on our test world (15 November 2026) `deleteFeature` was refused on such a map too, so the same check appears to run on a delete. The feature could
+   only be removed with its page (deleting the whole map page).
 
 The reverse cannot work either: the write schemas do not list `small`, the only kind of value `listFeatures` returns.
 
@@ -45,6 +46,8 @@ The reverse cannot work either: the write schemas do not list `small`, the only 
 
 - No client can set a label size and still read the map. One such feature hides every other feature of the map from
   `listFeatures`.
+- No client can delete that feature either: `deleteFeature` is refused on the map as well, so the API cannot undo the
+  write. Only the app (or deleting the page) can.
 - A backup that copies a map's features cannot restore their label sizes. The values it reads (`small`, `medium`,
   `large`) cannot be written, and the values it could write break the next read.
 - Our integration has stopped sending `labelSize` at all until this is fixed. Label sizes have to be set in the app.

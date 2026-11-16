@@ -216,9 +216,44 @@ export class ProjectRegistry implements ProjectsRuntime, SelectableProjects {
       this.notes.push(note);
       this.log.warn({}, note);
     }
-    // The default flag follows LK_DEFAULT_PROJECT at once, even before the check (a stored project keeps its row).
-    if (this.defaultName) this.store.setDefault(this.defaultName);
+    // v3 F2 (ADR 0049 decision 3): the stored default is the dashboard's choice ("Make default") and is never
+    // overwritten from the env file; LK_DEFAULT_PROJECT only overrides it while it is set. A database with no stored
+    // default yet (a first start, or one from before F2) takes the effective one, so the choice starts where it was.
+    if (this.storedDefault === null && this.defaultName) this.store.setDefault(this.defaultName);
     this.reload();
+  }
+
+  /** v3 F2: the default the dashboard stored ("Make default"), when it names a project that is not archived. */
+  get storedDefault(): string | null {
+    for (const r of this.records.values()) if (r.isDefault && r.archivedAt === null) return r.name;
+    return null;
+  }
+
+  /**
+   * v3 F2: LK_DEFAULT_PROJECT when it is set, names a served project and DISAGREES with the stored default: it then
+   * overrides the dashboard's choice (the Projects page says so). Null otherwise.
+   */
+  get envOverride(): string | null {
+    const env = this.o.config.lk.defaultProject;
+    if (!env || !this.entries.has(env)) return null;
+    return env === this.storedDefault ? null : env;
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 3): stores `name` as the default project (the Projects page's "Make default"; owner
+   * commands audit it). Takes effect at once, without a restart, unless LK_DEFAULT_PROJECT overrides it. Returns the
+   * project's view, or undefined when it is not a served project.
+   */
+  makeDefault(name: string): ProjectView | undefined {
+    const key = name.trim().toLowerCase();
+    const entry = this.entries.get(key);
+    const record = [...this.records.values()].find((r) => r.name === key);
+    if (!entry || !record || record.archivedAt !== null) return undefined;
+    this.store.setDefault(key);
+    this.reload();
+    const v = this.view(entry);
+    this.emit(v);
+    return v;
   }
 
   /**

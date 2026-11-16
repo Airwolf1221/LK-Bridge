@@ -21,6 +21,7 @@ import {
   readQualifiedKcy,
   type Calendar,
 } from '../calendar/index.js';
+import { QUALIFIED_NAME_SEPARATOR, renameFor, renameLine } from './names.js';
 import type { AgeConfig, ChronologyConfig } from './settings.js';
 import { currentTableOnly, type CheckFinding, type ChronologyLink, type TableOnlyMark } from './store.js';
 import { outOfOrder, readAgeTable, readMainTable, sameDate, type AgeRow, type AgeTable } from './table.js';
@@ -114,7 +115,7 @@ export function namesMatch(name: string, description: string): boolean {
 }
 
 /** v2 E6 (ADR 0048): between a qualified row's event name and its Date cell (`<opening words> – <Date cell>`). */
-export const QUALIFIED_NAME_SEPARATOR = ' – ';
+export { QUALIFIED_NAME_SEPARATOR } from './names.js';
 
 /** An event's `uri` points at a table document (either accepted form). */
 export function uriPointsAt(uri: string | null, resourceId: string, documentId: string): boolean {
@@ -512,6 +513,19 @@ export async function runCheck(o: {
           ...(change ? { shapeChange: change } : {}),
           ...(m.row.reading ? { reading: describeReading(m.row.reading) } : {}),
         },
+      });
+    }
+    // v3 F2 (ADR 0049 decision 1): a linked event whose date tail (written by the bridge) no longer says what the row's
+    // Date cell says, though the date agrees: the cell's wording changed. "Propose a fix" makes a name-only update.
+    for (const p of paired.pairs) {
+      const link = o.links.find((l) => l.tableDocumentId === age.tableDocumentId && l.rowId === p.row.id);
+      const to = renameFor(p.event, link, p.row);
+      if (to === null) continue;
+      add({
+        kind: 'name_drift',
+        age: age.name,
+        message: `Row ${p.row.index + 1} (“${p.row.dateText}”, ${p.row.description.slice(0, 80)}): its event's name no longer carries the row's Date cell (${renameLine(p.event.name, to)}). The date agrees.`,
+        detail: { rowId: p.row.id, eventId: p.event.id, date: p.row.dateText, from: p.event.name, to },
       });
     }
     for (const r of paired.rows) {

@@ -58,6 +58,9 @@ describe('tools configuration', () => {
       bodyTimeoutMs: 120_000,
       idleTimeoutMs: 15_000,
       stagingReportDays: 30,
+      // v3 F2 (ADR 0049 decision 10): unplaced staged images on the server, and the disk the image store keeps.
+      stagingMaxDays: 90,
+      stagingMinFreeBytes: 5 * 1024 ** 3,
       keptBytesRetentionDays: 90,
       assetHosts: ['assets.legendkeeper.com', 'assets2.legendkeeper.com'],
     });

@@ -84,6 +84,8 @@ describe('set_facts on Rheashira: no false conflict', () => {
       `GET /resources/${PAGE}/properties/${RHEASHIRA.property}/rows`, // the check in the lock (rank order)
       `PATCH /resources/${PAGE}/properties/${RHEASHIRA.property}/rows/rhea0012`,
       `GET /resources/${PAGE}`, // verify (stored order)
+      // v3 F2 (ADR 0049): Last Major Revision, chained on the Scope write's version (no read of its own)
+      `PATCH /resources/${PAGE}/properties/${RHEASHIRA.property}/rows/rhea0013`,
       `GET /resources/${PAGE}`, // the tree's re-read
     ]);
     expect(row('Scope').text).toBe('Moon elf envoy and archivist');

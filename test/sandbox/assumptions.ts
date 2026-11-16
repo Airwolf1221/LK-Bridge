@@ -1330,13 +1330,9 @@ export async function runAssumptions(
               del.status === 204 || del.status === 200 || del.status === 404
                 ? await raw('listFeatures', 'GET', `${docPath()}/features`)
                 : null;
-            if (!again) {
-              verdict = 'fail';
-              detail += `; clean-up failed: deleteFeature answered ${del.status} ${del.code ?? ''}. Delete feature ${featureId} of ${page.id as string} by hand (its page goes with the root).`;
-            } else if (again.status !== 200) {
-              verdict = 'fail';
-              detail += `; after deleting the feature, listFeatures still answered ${again.status} ${again.code ?? ''}`;
-            } else detail += '; the feature was deleted and listFeatures answers 200 again';
+            const c = ls1Cleanup(del, again);
+            if (c.fail) verdict = 'fail';
+            detail += c.detail;
           } catch (e) {
             verdict = 'fail';
             detail += `; clean-up failed: ${(e as Error).message}. Delete feature ${featureId} of ${page.id as string} by hand (its page goes with the root).`;
@@ -1480,4 +1476,28 @@ export function formatAssumptionsReport(findings: readonly Finding[]): string {
     `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE${count('noted') > 0 ? `, ${count('noted')} NOTED` : ''}`,
     '',
   ].join('\n');
+}
+
+/**
+ * v3 F2 (ADR 0049 decision 7): LS1's clean-up, judged. `del` is deleteFeature's answer, `again` listFeatures' after it
+ * (null when the delete did not succeed). On the live test world (15 November 2026) LegendKeeper refused deleteFeature
+ * on the map too: the same label-size check runs on a delete. The feature then goes with its throwaway page when the
+ * run's pages are cleaned up (the `cleanup` finding checks that), which is a successful clean-up: a PASS with a note,
+ * not a FAIL. A delete that succeeded but left the map unlistable is still a failure.
+ */
+export function ls1Cleanup(
+  del: { readonly status: number; readonly code?: string | null },
+  again: { readonly status: number; readonly code?: string | null } | null,
+): { fail: boolean; detail: string } {
+  if (!again)
+    return {
+      fail: false,
+      detail: `; deleteFeature was refused on this map too (${del.status} ${del.code ?? ''}), so the feature is removed with its throwaway page in the run's clean-up (see docs/reviews/lk-bug-labelsize.md)`,
+    };
+  if (again.status !== 200)
+    return {
+      fail: true,
+      detail: `; after deleting the feature, listFeatures still answered ${again.status} ${again.code ?? ''}`,
+    };
+  return { fail: false, detail: '; the feature was deleted and listFeatures answers 200 again' };
 }

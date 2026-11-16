@@ -438,7 +438,7 @@ function walkPath(
   startFolderId: string | null,
   startPath: readonly string[],
   segments: readonly string[],
-  notes: string[],
+  _notes: string[],
 ): Walked {
   const steps: PlanStep[] = [];
   let parentId = startFolderId;
@@ -450,9 +450,9 @@ function walkPath(
       steps.push({ name: seg, action: 'create', folderId: null, parentFolderId: null, path });
       continue;
     }
-    const matches = deps.assets
-      .children(projectId, parentId)
-      .data.filter((f: AssetFolder) => f.name === seg || nameKey(f.name) === nameKey(seg));
+    // v3 F2 (ADR 0049 decision 9): byte for byte, as LegendKeeper stores names (sandbox A9) and as the job's run-time
+    // find-or-create compares them: a folder differing only in case or spacing is another folder, and a new one is planned.
+    const matches = deps.assets.children(projectId, parentId).data.filter((f: AssetFolder) => f.name === seg);
     if (matches.length > 1) {
       return {
         ok: false,
@@ -469,8 +469,6 @@ function walkPath(
     }
     if (matches.length === 1) {
       const f = matches[0]!;
-      if (f.name !== seg)
-        notes.push(`The folder “${f.name}” is used for “${seg}”; names are compared ignoring case.`);
       steps.push({
         name: f.name,
         action: 'reuse',

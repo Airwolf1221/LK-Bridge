@@ -286,6 +286,19 @@ lkb_secrets_tool() {
     bash -c 'umask 077 && cd "$1" && exec node dist/secrets/env-tool.js --file "$2" "$3"' lkb-secrets-tool "$LKB_APP_DIR" "$file" "$mode"
 }
 
+# lkb_stored_default: the default project the dashboard stored (v3 F2, "Make default"), as the service user with an empty
+# environment and DB_PATH from the env file: prints `stored-default=<name>` (empty when none). A project name only.
+lkb_stored_default() {
+  local home db
+  home="$(getent passwd "$LKB_SERVICE_USER" | cut -d: -f6 || true)"
+  db="$(env_file_get DB_PATH)"
+  # shellcheck disable=SC2016 # the inner script's $1 belongs to the inner bash
+  ${LKB_RUNAS:-runuser -u} "$LKB_SERVICE_USER" -- env -i HOME="${home:-/}" USER="$LKB_SERVICE_USER" \
+    LOGNAME="$LKB_SERVICE_USER" PATH="${LKB_NODE_DIR}/bin:/usr/bin:/bin" LANG=C.UTF-8 \
+    DB_PATH="${db:-${LKB_DATA_DIR}/bridge.db}" \
+    bash -c 'umask 077 && cd "$1" && exec node dist/projects/cli.js stored-default' lkb-projects-tool "$LKB_APP_DIR"
+}
+
 # lkb_has_secrets_tool: succeeds when the built app has the secret store's tool (releases from OPS2 on).
 lkb_has_secrets_tool() { [[ -f "${LKB_APP_DIR}/dist/secrets/env-tool.js" ]]; }
 

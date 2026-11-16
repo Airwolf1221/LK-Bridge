@@ -419,7 +419,7 @@ setting `useEtagVersions` (default on) until the owner's next sandbox run confir
 `chronology-check` on Arkona and propose fixes for what it finds, before the move is called done.
 
 **E6 "Chronology II" notes (built 16 November 2026; [ADR 0048](adr/0048-chronology-ii.md); migration `2700`), after
-Arkona's first checks:** qualified dates (`c. 4A 563; exact date unresolved`, `After X and before Y, …`) read by their
+Arkona's first checks; also called v3 F1:** qualified dates (`c. 4A 563; exact date unresolved`, `After X and before Y, …`) read by their
 anchor for pairing, events and the KCY check, never rewritten and never used for ordering (25 of the owner's 26 example
 forms read; relative offsets stay unreadable with the reason); an unreadable row reported once; scored pairing with the
 Divan Heirage guard and `pairedBy` shown; a fix that turns a range into a single date needs a confirmation; the

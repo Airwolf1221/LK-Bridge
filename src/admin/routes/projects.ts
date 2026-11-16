@@ -22,8 +22,17 @@ export const registerProjects: Register = (api, ctx) => {
   api.get('/projects', () => {
     projects.refresh(); // settings changed with `npm run projects -- set` while the bridge runs
     const def = projects.defaultProject();
+    const override = projects.envOverride;
     return {
       default: def.name,
+      // v3 F2 (ADR 0049 decision 3): the dashboard's stored choice, and the env file's override when it disagrees.
+      storedDefault: projects.storedDefault,
+      envOverride: override,
+      ...(override
+        ? {
+            overrideNote: `The env file’s LK_DEFAULT_PROJECT=${override} overrides this; remove that line to use the dashboard’s choice.`,
+          }
+        : {}),
       requireProjectForWrites: config.lk.requireProjectForWrites,
       singleProjectForm: config.lk.singleProjectForm,
       settingKeys: PROJECT_SETTING_KEYS,
@@ -104,6 +113,14 @@ export const registerProjects: Register = (api, ctx) => {
     const { name } = parseInput(nameParam, req.params);
     parseInput(z.object({ confirm: z.literal(true) }), req.body);
     return ctx.actions.removeProject(name);
+  });
+
+  /** v3 F2 (ADR 0049 decision 3): "Make default": stores the default project. Re-authentication; audited. */
+  api.post('/projects/:name/default', (req) => {
+    requireReauth(ctx.deps.services, req);
+    const { name } = parseInput(nameParam, req.params);
+    parseInput(z.object({ confirm: z.literal(true) }), req.body);
+    return ctx.actions.makeDefaultProject(name);
   });
 
   api.put('/projects/:name/read-only', (req) => {

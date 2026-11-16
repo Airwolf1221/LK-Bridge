@@ -134,7 +134,7 @@ export function expandFacts(
       ifMatchFrom: i === 0 ? { step: 1, key: kvLabel } : { step: steps.length },
       expectCurrent: { state: 'rows', hash: rowsContentHash(rowStates(w.rowsBefore ?? [])), label: kvLabel },
       deferTreeReread: true,
-      journalOperation: { ...journalOperation, write: w.label },
+      journalOperation: { ...journalOperation, write: w.label, ...(w.factKey ? { factKey: w.factKey } : {}) },
       ...(i === 0 && preImage ? { journalPreImage: preImage } : {}),
     });
   });
@@ -145,7 +145,7 @@ export function expandFacts(
       params: w.params,
       expectCurrent: { state: 'collection', hash: stateHash(w.collectionBefore!), label: title },
       deferTreeReread: true,
-      journalOperation: { ...journalOperation, write: w.label },
+      journalOperation: { ...journalOperation, write: w.label, ...(w.factKey ? { factKey: w.factKey } : {}) },
     });
   }
   const properties = [
@@ -294,7 +294,7 @@ export function expandNewPageFacts(input: {
       ifMatchFrom: i === 0 ? { step: input.copyStepNo, key: label } : { step: input.copyStepNo + i },
       expectCurrent: { state: 'rows', hash: rowsContentHash(rowStates(w.rowsBefore ?? [])), label },
       deferTreeReread: true,
-      journalOperation: { ...journal, write: w.label },
+      journalOperation: { ...journal, write: w.label, ...(w.factKey ? { factKey: w.factKey } : {}) },
     });
   });
   for (const w of collWrites) {
@@ -303,7 +303,7 @@ export function expandNewPageFacts(input: {
       params: w.params,
       bindIds: bind,
       deferTreeReread: true,
-      journalOperation: { ...journal, write: w.label },
+      journalOperation: { ...journal, write: w.label, ...(w.factKey ? { factKey: w.factKey } : {}) },
     });
   }
   const verify: VerifyTarget = {

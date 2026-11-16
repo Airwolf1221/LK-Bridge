@@ -23,6 +23,7 @@ export type Category =
   | 'lifecycle' // prefix, Status, tag and place; lifecycle and set records
   | 'keep_regions' // line breaks, inline icons, unsupported blocks, collections
   | 'chronology' // D1's chronology check, folded in
+  | 'assets' // v3 F2: the asset library (duplicate folders)
   | 'audit'; // about the run itself (a stale snapshot, a missing template read)
 
 export const CATEGORIES: readonly Category[] = [
@@ -37,6 +38,7 @@ export const CATEGORIES: readonly Category[] = [
   'lifecycle',
   'keep_regions',
   'chronology',
+  'assets',
   'audit',
 ];
 
@@ -55,7 +57,9 @@ export type FixKind =
   /** v2 E5 hotfix: the age's Main count set to its table's row count, through the chronology module likewise. */
   | 'chronology_count'
   /** v2 E6 (ADR 0048): an event without a table row deleted (only the event), through the chronology module likewise. */
-  | 'chronology_orphan';
+  | 'chronology_orphan'
+  /** v3 F2 (ADR 0049 decision 9): duplicate asset folders merged into the earliest, the emptied ones deleted. */
+  | 'merge_asset_folders';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -349,6 +353,18 @@ export const CODES = {
     category: 'chronology',
     severity: 'warning',
     title: 'A row and its event disagree about the date',
+    fix: 'chronology_sync',
+  },
+  duplicate_asset_folders: {
+    category: 'assets',
+    severity: 'warning',
+    title: 'Sibling asset folders with exactly the same name',
+    fix: 'merge_asset_folders',
+  },
+  chronology_name_drift: {
+    category: 'chronology',
+    severity: 'info',
+    title: 'An event’s date tail no longer matches its row’s Date cell',
     fix: 'chronology_sync',
   },
   chronology_row_out_of_order: {

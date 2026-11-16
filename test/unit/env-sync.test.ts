@@ -298,6 +298,37 @@ describe('planSync: retiring imported keys (OPS2)', () => {
   });
 });
 
+describe('planSync: retiring LK_DEFAULT_PROJECT once the stored default agrees (v3 F2)', () => {
+  const live = [
+    'LK_PROJECTS=test,arkona',
+    'LK_DEFAULT_PROJECT=arkona',
+    `LK_PROJECT_TEST_API_KEY=${KEY}`,
+    '',
+  ].join('\n');
+
+  it('comments the line out with a note when the dashboard stores the same default; then nothing is left', () => {
+    const p = plan(shipped, live, { retireDefaultProject: 'arkona' });
+    expect(p.retire).toEqual(["LK_DEFAULT_PROJECT (the dashboard's stored default, arkona, agrees)"]);
+    expect(p.text).toMatch(
+      /^# retired by env-sync \(v9\.9\.9, 2026-11-09\): the dashboard stores the default/m,
+    );
+    expect(p.text).toMatch(/^# LK_DEFAULT_PROJECT=arkona$/m);
+    expect(p.text).toMatch(/^LK_PROJECT_TEST_API_KEY=/m);
+    const again = plan(shipped, p.text, { retireDefaultProject: 'arkona' });
+    expect(again.retire).toEqual([]);
+    expect(again.notes.join('\n')).toMatch(/LK_DEFAULT_PROJECT is not set in the file: nothing to retire/);
+  });
+
+  it('refuses while the stored default disagrees, or none is stored', () => {
+    expect(refusal({ template: shipped, live, retireDefaultProject: 'test' })).toMatch(
+      /LK_DEFAULT_PROJECT=arkona differs from the dashboard's stored default \(test\)\. Press Make default on arkona/,
+    );
+    expect(refusal({ template: shipped, live, retireDefaultProject: '' })).toMatch(
+      /no stored default project yet/,
+    );
+  });
+});
+
 describe('planSync: rotating the master key (OPS2)', () => {
   const OLD = 'TESTMASTER-0123456789-0123456789-0123456789';
   it('moves the current key to SECRETS_MASTER_KEY_PREVIOUS (value text moved) and generates a new one', () => {

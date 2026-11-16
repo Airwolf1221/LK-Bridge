@@ -407,10 +407,10 @@ export function buildUpdate(state: MapState, req: UpdateRequest): Built | Fail {
     ) {
       want.polygons = [g.fields.polygon];
     } else Object.assign(want, g.fields);
-    // v2 E4 (backlog 4; the D2 sandbox's M6d, INCONCLUSIVE): LegendKeeper keeps a region's old `polygon` beside new
-    // `polygons`, and which one the app draws is not known. Until the sandbox probe (M6e) says how to clear it, the bridge
-    // writes one consistent form: a region that still carries a `polygon` gets it set to the first of its new polygons,
-    // so the two never show different shapes.
+    // v2 E4 (backlog 4; the D2 sandbox's M6d): LegendKeeper keeps a region's old `polygon` beside new `polygons`. v3 F2
+    // (ADR 0049 decision 7): the owner's M6e run showed that `polygon: []` clears the old single shape cleanly, so that
+    // is the one form now: a region written with `polygons` that still carries a `polygon` has it cleared, and the region
+    // is stored with one shape (E4 copied the first polygon into `polygon` instead, which left the shape twice).
     if (
       type === 'region' &&
       Array.isArray(want.polygons) &&
@@ -418,7 +418,7 @@ export function buildUpdate(state: MapState, req: UpdateRequest): Built | Fail {
       Array.isArray(cur.polygon) &&
       cur.polygon.length > 0
     )
-      want.polygon = (want.polygons as unknown[])[0];
+      want.polygon = [];
   }
   // The parent and the place.
   let newParent = parentOf(cur);

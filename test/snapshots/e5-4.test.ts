@@ -30,7 +30,7 @@ import {
   sampleTimeline,
 } from '../../src/snapshots/rehearsal.js';
 import { labelSizeListRefusal } from '../maps/label-size-bug.js';
-import { PROJECT, type ToolCall } from '../tools/helpers.js';
+import { PROJECT, PUBLIC_URL, type ToolCall } from '../tools/helpers.js';
 import { S, snapshotsWorld, type SnapshotsWorld } from './world.js';
 
 vi.setConfig({ testTimeout: 180_000 });
@@ -219,8 +219,32 @@ describe('a map LegendKeeper cannot list (E5.4)', () => {
     );
     // Every other page is complete.
     expect(m.pages.filter((p) => p.id !== S.atlas && (p.missing ?? []).length > 0)).toEqual([]);
-    // A restore of that map from this snapshot is refused (the piece was not taken), never read as "no features".
+    // v3 F2 (ADR 0049 decision 4): the missing piece is listed, on the Snapshots page and by list_snapshots.
+    const svc = w.stack.services;
+    const session = svc.owner.createSession('127.0.0.1', 'vitest');
+    const res = await fetch(`${w.stack.base}/api/admin/snapshots?project=test`, {
+      headers: { cookie: `${svc.owner.sessionCookie}=${session}`, origin: PUBLIC_URL },
+    });
+    const page = (await res.json()) as { snapshots: { id: string; missingPieces?: unknown }[] };
+    expect(page.snapshots.find((x) => x.id === m.id)!.missingPieces).toEqual([
+      {
+        pageId: S.atlas,
+        pageName: atlas.name,
+        piece: 'document',
+        ref: w.d.map,
+        reason: `its features: ${LABEL_SIZE_UNLISTABLE}`,
+      },
+    ]);
     c = await w.stack.connect();
+    const listed = await call('list_snapshots', { page: S.atlas });
+    const entry = (listed.body.snapshots as { snapshot: string; missing?: unknown }[]).find(
+      (x) => x.snapshot === m.id,
+    )!;
+    expect(entry.missing).toEqual({
+      total: 1,
+      thisPage: [{ piece: 'document', ref: w.d.map, reason: `its features: ${LABEL_SIZE_UNLISTABLE}` }],
+    });
+    // A restore of that map from this snapshot is refused (the piece was not taken), never read as "no features".
     const rs = await call('restore_snapshot', {
       page: S.atlas,
       snapshot: m.id,

@@ -9,6 +9,7 @@
  * - `restore_snapshot` (W): a page's documents, its sidebar, one document, or a deleted page, back to a chosen snapshot.
  *   ALWAYS a proposal, at every scope (`write` included): the owner approves it on the dashboard. `dryRun` shows the plan.
  */
+import { missingPiecesOf } from '../../snapshots/manifest.js';
 import * as z from 'zod';
 import { mcpOrigin } from '../../policy/mcp.js';
 import type { McpToolProvider } from '../server.js';
@@ -87,7 +88,7 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
     }),
     annotations: READ_ANNOTATIONS,
     handler: (args) =>
-      withProject(deps, args.project, 'read', (pd) => {
+      withProject(deps, args.project, 'read', async (pd) => {
         const svc = pd.services?.snapshots;
         if (!svc)
           return errorResult(
@@ -101,12 +102,39 @@ function listSnapshotsTool(deps: ToolDeps): McpToolProvider {
           return errorResult({ code: 'NOT_FOUND', message: f.error, documents: f.documents }, pd);
         const limit = args.limit ?? 30;
         const h = historyOf(svc, pd.project.id, page.id, f, limit);
+        // v3 F2 (ADR 0049 decision 4): a partial snapshot says what it is missing, in summary form: how many pieces in
+        // all, and this page's own (piece, reference, reason). One manifest read per partial snapshot; no LK call.
+        const snapshots = await Promise.all(
+          h.snapshots.map(async (e) => {
+            if (!e.partial) return e;
+            const m = await svc.manifest(e.snapshot).catch(() => null);
+            if (!m) return e;
+            const all = missingPiecesOf(m);
+            const here = all.filter((x) => x.pageId === page.id);
+            return {
+              ...e,
+              missing: {
+                total: all.length,
+                ...(here.length > 0
+                  ? {
+                      thisPage: here.slice(0, 10).map((x) => ({
+                        piece: x.piece,
+                        ...(x.ref !== undefined ? { ref: x.ref } : {}),
+                        reason: x.reason.slice(0, 200),
+                      })),
+                    }
+                  : {}),
+                ...(all.length > here.length ? { otherPages: all.length - here.length } : {}),
+              },
+            };
+          }),
+        );
         return render(
           {
             page: { id: page.id, name: page.name, deleted: !page.live },
             of: f.label,
             count: h.count,
-            snapshots: h.snapshots,
+            snapshots,
             ...(h.more ? { more: h.more } : {}),
             hint:
               h.count === 0

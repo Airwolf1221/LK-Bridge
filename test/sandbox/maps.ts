@@ -721,21 +721,12 @@ export async function runMapsSandbox(
             fail(
               `stored polygon ${JSON.stringify(s.polygon)} / polygons ${JSON.stringify(s.polygons)}, expected two polygons`,
             );
-          // v2 E4 (backlog 4): the bridge writes one consistent form: a region that still carries a `polygon` gets it set to
-          // the first of its new polygons, so the two never show different shapes. A stale OLD shape is still a finding.
-          if (Array.isArray(s.polygon) && s.polygon.length > 0) {
-            const first = want[0]!;
-            const mirrored =
-              s.polygon.length === first.length &&
-              (s.polygon as unknown[]).every(
-                (v, j) => Array.isArray(v) && nearPair(v as number[], first[j]!),
-              );
-            if (!mirrored)
-              throw new Unclear(
-                `two polygons were stored in \`polygons\`, but the old \`polygon\` (${s.polygon.length} points) is still there: LegendKeeper keeps both, and which one the app draws is not known. Look at the region in the app.`,
-              );
-            return 'two polygons stored in `polygons`; `polygon` holds the first of them (the bridge’s one consistent form), not the old shape';
-          }
+          // v3 F2 (ADR 0049 decision 7): the bridge clears a region's old `polygon` (`polygon: []`, as M6e showed) when it
+          // writes `polygons`, so the region keeps one shape. Any `polygon` still there is a finding.
+          if (Array.isArray(s.polygon) && s.polygon.length > 0)
+            fail(
+              `two polygons were stored in \`polygons\`, but \`polygon\` (${s.polygon.length} points) was not cleared`,
+            );
           return 'two polygons stored in `polygons`; the old `polygon` is gone';
         },
       );

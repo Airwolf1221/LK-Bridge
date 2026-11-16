@@ -85,3 +85,27 @@ rules.
 There, `CANON` is itself a problem: the finding's tag signal expects "no CANON (Design References area)", and the
 evidence names the area (`canonExemptArea`: its id and name). Status and the other status tags are checked as
 everywhere. A page outside a listed index still needs `CANON`.
+
+## Duplicate asset folders (`duplicate_asset_folders`, category Asset library; v3 F2)
+
+[ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 9. Read-only, from the bridge's
+asset tree (no request): two or more sibling folders with exactly the same name (byte for byte, as LegendKeeper stores
+names). The finding gives each set's path and, for each folder, how many assets it holds (and which is the earliest the
+bridge saw). Before v3 F2, two placements planned while a folder chain was missing could each create it.
+
+**Propose a fix** (`merge_asset_folders`, ONE proposal):
+
+1. the assets of the later duplicates move into the earliest one, matched folder by folder down the chain (a subfolder the
+   earliest also has, by exact name, is merged the same way);
+2. each duplicate the moves empty is deleted, deepest first; each delete checks the folder again when the job runs and
+   skips one that is not empty then (never deleted with what is in it).
+
+An asset whose name the earliest folder already holds is moved anyway, never deleted, and the proposal says so. A
+duplicate that would still hold something (a subfolder with no match) is never deleted. Pre-images are journalled as for
+any move and delete (a deleted folder's bytes are kept).
+
+## Chronology: an event's date tail out of step (`chronology_name_drift`; v3 F2)
+
+ADR 0049 decision 1. A linked qualified event whose name ends with a date tail the bridge wrote, which no longer says what
+its row's Date cell says although the date agrees (the cell's wording changed). **Propose a fix** goes through
+`sync_timeline_event` and makes a name-only update.

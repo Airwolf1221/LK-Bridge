@@ -129,6 +129,8 @@ Pages are changed with `write_page`, in Markdown (read `get_markdown_guide` firs
 document; the bridge turns it into LegendKeeper blocks, keeps everything you did not change exactly as it was (ids,
 styling, keep regions), and checks what it wrote.
 
+Substantial edits update Last Major Revision automatically; don't set it yourself.
+
 1. **Read first.** `read_document` gives the page's Markdown and its `version`. Change the Markdown you read.
 2. **Pass `baseVersion`.** If the page changed since, a whole-page edit is refused, and a section edit goes ahead only if
    that section is still exactly as you read it.
@@ -506,11 +508,16 @@ transparency and every animation frame kept; a WebP is stored as it is; metadata
    characters. For an image the person has in hand, ask them to upload it on the dashboard's **Staging** page and give
    you its staged id.
 2. **`url`**: a public https image.
-3. **`upload_id`**: if you have a shell or sandbox. Call `prepare_image_upload` with the file's `sha256`, `byte_length`,
+3. **`file`**: in ChatGPT, pass a conversation attachment as `file` (ChatGPT fills it in); the bridge downloads it during
+   the call. `name` defaults to the file's name (its extension dropped). If the answer is `FILE_URL_EXPIRED`, call
+   `upload_image` again with the same attachment so ChatGPT issues a fresh link; if that fails, ask the user to attach the
+   image again. One file per call.
+4. **`upload_id`**: if you have a shell or sandbox. Call `prepare_image_upload` with the file's `sha256`, `byte_length`,
    `content_type` and `name`; run the Python or curl script it returns with the file's path (it checks the hash and sends
    the file; it answers "received"); then call `upload_image` with the `upload_id` within 15 minutes. The capability in
-   the script works once, for 5 minutes, for that file only: never put it in a URL or a page.
-4. **`staged_id`**: place an image that is already staged.
+   the script works once, for 5 minutes, for that file only: never put it in a URL or a page. Not for ChatGPT or any
+   assistant whose code environment cannot reach the bridge: ChatGPT uses `file`.
+5. **`staged_id`**: place an image that is already staged.
 
 `destination` says where it goes; the bridge plans it from the asset tree and refuses rather than guesses:
 `for_character { name, race }` (a folder named after the character is reused wherever it is; otherwise
@@ -524,9 +531,10 @@ path written like the folder chain (`"Wardrobe / Qipao"`: Qipao inside Wardrobe;
 Existing folders are reused and missing ones created. Check with `dryRun: true` first if unsure: it lists the folders that
 would be created.
 
-**Staging.** `stage: true` uploads and verifies the image but keeps it hidden in the staging folder; place it later with
-`staged_id` (and a `destination`, or the one you gave when staging). With a `propose` connection every upload is staged
-and the placement is a proposal for the owner: do not retry it. The same image sent again returns the existing asset
+**Staging.** `stage: true` keeps the image on the bridge's own server (nothing goes to LegendKeeper until it is placed);
+place it later with `staged_id` (and a `destination`, or the one you gave when staging): it is then uploaded straight into
+its folder, with its final name, and verified. With a `propose` connection every upload is staged and the placement is a
+proposal for the owner: do not retry it. The same image sent again returns the existing asset
 (`deduplicated: true`); never upload a copy to "move" an image.
 
 **Using it.** Put an image on a page with `write_page`: `![alt text](asset url)` (only this project's assets). It can

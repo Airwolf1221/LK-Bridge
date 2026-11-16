@@ -32,7 +32,7 @@ import {
   type ProjectDeps,
   type ToolDeps,
 } from './shape.js';
-import { resolveImage, UploadSourceError } from './upload-source.js';
+import { FILE_URL_EXPIRED_HINT, resolveImage, UploadSourceError } from './upload-source.js';
 
 const TOOL = 'upload_image';
 const name200 = z.string().trim().min(1).max(200);
@@ -217,6 +217,7 @@ function rowAnswer(pd: ProjectDeps, r: ImageUploadRow, job: JobView | undefined)
             ? 'waiting_budget'
             : 'queued',
     ...(r.staged || r.placedAt !== null ? { staged_id: r.id } : {}),
+    ...(r.staged && r.serverSha256 ? { onServer: true } : {}),
     ...(r.assetId
       ? {
           asset: {
@@ -265,10 +266,24 @@ const uploadSchema = z.object({
     .max(64)
     .optional()
     .describe('A staged image to place (see the Staging page, or a stage: true upload).'),
+  // v3 F2 (ADR 0049 decision 11): a ChatGPT conversation attachment, as ChatGPT fills it in (OpenAI Apps SDK, "Define
+  // file inputs"): the bridge downloads the bytes itself, during the call.
+  file: z
+    .object({
+      download_url: z.string().min(1).max(8192),
+      file_id: z.string().min(1).max(256),
+      mime_type: z.string().max(200).optional(),
+      file_name: z.string().max(500).optional(),
+    })
+    .strict()
+    .optional()
+    .describe(
+      'In ChatGPT: a conversation attachment (ChatGPT fills this in). The bridge downloads it during the call; its type is read from its bytes.',
+    ),
   name: name200
     .optional()
     .describe(
-      'The asset name; a file extension is dropped. Required with data_base64 or url; with upload_id it defaults to the prepared name; with staged_id it renames.',
+      'The asset name; a file extension is dropped. Required with data_base64 or url; with file it defaults to the file’s name; with upload_id it defaults to the prepared name; with staged_id it renames.',
     ),
   description: z.string().max(10_000).optional(),
   destination: destinationArg.optional(),
@@ -301,9 +316,11 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
       description:
         'Uploads an image as a LegendKeeper asset: converted to WebP (quality 90; orientation, transparency and animation kept), checked after storing, and filed in the right folder. Give exactly ONE source: `data_base64` (small images only: 2 MB is about 2.7 million characters), ' +
         (deps.settings.upload.allowUrlSource ? '`url` (a public https image)' : '`url` (switched off here)') +
-        ', `upload_id` (from prepare_image_upload: for agents with a shell) or `staged_id` (an image already staged). `destination`: `for_character` { name, race } (the character’s folder), `for_page` (a character’s page, Working or Archived included, or one of its specialist pages such as “{name} - Art”, gives its character’s folder; the race is read from its Race / Species fact) or `folder` (an id, or a path such as "Characters / Beastkin / Qishen / Mehrana al-Khalid"), plus `subfolders` (a list, or one path such as "Wardrobe / Qipao"); missing folders are created. dryRun lists the folders it would create. `stage: true` keeps the image hidden for later placement. The same original sent again returns the existing asset: never upload a copy to move an image. At scope propose the image is staged and its placement is the proposal. Never repeat a call that returned a jobId or proposalId. Then put the image on a page with write_page: ![alt](asset url). Example: { "data_base64": "…", "destination": { "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "subfolders": "Wardrobe / Qipao", "project": "test" }. Cost: 2 writes (1 more per new folder), 1 read and 1 download to verify. PNG, JPEG, GIF or WebP up to ' +
+        ', `file` (a ChatGPT conversation attachment), `upload_id` (from prepare_image_upload: for agents with a shell) or `staged_id` (an image already staged). In ChatGPT, pass a conversation attachment as `file` (ChatGPT fills it in); agents with a shell use `upload_id`; `data_base64` is for small images only. `destination`: `for_character` { name, race } (the character’s folder), `for_page` (a character’s page, Working or Archived included, or one of its specialist pages such as “{name} - Art”, gives its character’s folder; the race is read from its Race / Species fact) or `folder` (an id, or a path such as "Characters / Beastkin / Qishen / Mehrana al-Khalid"), plus `subfolders` (a list, or one path such as "Wardrobe / Qipao"); missing folders are created. dryRun lists the folders it would create. `stage: true` keeps the image hidden for later placement. The same original sent again returns the existing asset: never upload a copy to move an image. At scope propose the image is staged and its placement is the proposal. Never repeat a call that returned a jobId or proposalId. Then put the image on a page with write_page: ![alt](asset url). Example: { "data_base64": "…", "destination": { "for_character": { "name": "Asagiri Miyabi", "race": "Foxian" } }, "subfolders": "Wardrobe / Qipao", "project": "test" }. Cost: 2 writes (1 more per new folder), 1 read and 1 download to verify. PNG, JPEG, GIF or WebP up to ' +
         `${max} bytes.`,
       inputSchema: uploadSchema,
+      // v3 F2 (ADR 0049 decision 11): ChatGPT replaces a conversation attachment given to `file` with a file object.
+      meta: { 'openai/fileParams': ['file'] },
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -320,14 +337,24 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
               pd,
             );
           }
-          const sources = [args.data_base64, args.url, args.upload_id, args.staged_id].filter(
+          const sources = [args.data_base64, args.url, args.file, args.upload_id, args.staged_id].filter(
             (v) => v !== undefined,
           );
           if (sources.length !== 1) {
             return errorResult(
               {
                 code: 'INVALID_REQUEST',
-                message: 'Give exactly one source: data_base64, url, upload_id or staged_id.',
+                message: 'Give exactly one source: data_base64, url, file, upload_id or staged_id.',
+              },
+              pd,
+            );
+          }
+          // v3 F2: the file's name, else its own file_name (extension dropped); one is needed.
+          if (args.file !== undefined && args.name === undefined && !args.file.file_name?.trim()) {
+            return errorResult(
+              {
+                code: 'INVALID_REQUEST',
+                message: 'The file has no file_name: give name (the asset’s name).',
               },
               pd,
             );
@@ -356,7 +383,18 @@ export function imageTools(deps: ToolDeps): McpToolProvider[] {
             args.staged_id !== undefined
               ? placeStaged(pd, mctx, svc, args)
               : uploadBytesOnce(pd, mctx, svc, args);
-          return withRequest(pd, mctx, TOOL, args, null, run);
+          // v3 F2: the file's download_url is a capability and changes with every link ChatGPT issues: the request's
+          // hash names the file by its id instead, and the URL goes nowhere but the download.
+          const hashed = args.file
+            ? {
+                ...args,
+                file: {
+                  file_id: args.file.file_id,
+                  ...(args.file.file_name ? { file_name: args.file.file_name } : {}),
+                },
+              }
+            : args;
+          return withRequest(pd, mctx, TOOL, hashed, null, run);
         }),
     }),
     prepareTool(deps),
@@ -416,6 +454,8 @@ async function uploadBytes(
   let source: UploadSource;
   let name = args.name;
   let slot = null as ReturnType<ImageService['slots']['slotFor']>;
+  // v3 F2: what the answer may say of a ChatGPT file: its id and its link's host (never the link).
+  let fileSeen: { id: string; host: string } | null = null;
   try {
     if (args.upload_id !== undefined) {
       source = 'upload_id';
@@ -443,6 +483,26 @@ async function uploadBytes(
       }
       bytes = b;
       name = name ?? slot.name;
+    } else if (args.file !== undefined) {
+      // v3 F2 (ADR 0049 decision 11): ChatGPT's file, downloaded now, at every scope (its link expires long before an
+      // owner approves anything; at scope propose the bytes are staged and only the placement waits). Only the file's id
+      // and the link's host are logged.
+      source = 'chatgpt_file';
+      name = name ?? args.file.file_name;
+      let host = '';
+      try {
+        host = new URL(args.file.download_url).host;
+      } catch {
+        host = '(not a URL)';
+      }
+      fileSeen = { id: args.file.file_id, host };
+      const img = await resolveImage(
+        { fileUrl: args.file.download_url },
+        pd.settings.upload,
+        pd.uploadGuard,
+        mctx.signal,
+      );
+      bytes = Buffer.from(img.dataBase64, 'base64');
     } else {
       source = args.data_base64 !== undefined ? 'data_base64' : 'url';
       if (name === undefined) return fail('INVALID_REQUEST', 'name is required with data_base64 or url.');
@@ -455,10 +515,11 @@ async function uploadBytes(
       bytes = Buffer.from(img.dataBase64, 'base64');
     }
   } catch (e) {
-    if (e instanceof UploadSourceError) return fail(e.code, e.message);
+    if (e instanceof UploadSourceError)
+      return fail(e.code, e.message, e.code === 'FILE_URL_EXPIRED' ? { hint: FILE_URL_EXPIRED_HINT } : {});
     throw e;
   }
-  const displayName = displayNameOf(name);
+  const displayName = displayNameOf(name!);
 
   // ---- conversion
   let img: ConvertedImage;
@@ -508,6 +569,7 @@ async function uploadBytes(
 
   const head = {
     name: displayName,
+    ...(fileSeen ? { file: fileSeen } : {}),
     image: imageFacts(img),
     destination: planFacts(plan),
     ...(stage
@@ -524,6 +586,62 @@ async function uploadBytes(
         (propose
           ? 'At scope propose the image would be staged and its placement proposed to the owner.'
           : ''),
+    };
+    return answer(render(body, pd), body);
+  }
+
+  // ---- v3 F2 (ADR 0049 decision 10): staging keeps the image on the bridge's server; nothing goes to LegendKeeper.
+  if (stage) {
+    let staged: ImageUploadRow;
+    try {
+      staged = await svc.stageOnServer({
+        projectId: pd.project.id,
+        image: img,
+        name: displayName,
+        description: args.description,
+        intended: intended ? { destination: intended.destination, path: intended.path } : null,
+        source,
+        origin: mcpOrigin(mctx, TOOL),
+      });
+    } catch (e) {
+      if (e instanceof ImageServiceError) return fail(e.code, e.message, e.details);
+      throw e;
+    }
+    if (slot) await svc.slots.consume(slot);
+    const stagedHead = { ...head, destination: { path: [], createsFolders: [], onServer: true } };
+    let body: Record<string, unknown> = { ...stagedHead, ...rowAnswer(pd, staged, undefined) };
+    if (propose && intended) {
+      const again = await planDestination(pd, mctx, svc, intended.destination);
+      if (again.ok) {
+        try {
+          const placed = await svc.place({
+            projectId: pd.project.id,
+            row: staged,
+            plan: again.plan,
+            origin: mcpOrigin(mctx, TOOL),
+            tool: TOOL,
+            described: again.described,
+          });
+          if ('proposalId' in placed.submitted) {
+            body = {
+              ...body,
+              status: 'proposal_captured',
+              proposalId: placed.submitted.proposalId,
+              hint:
+                'The image is staged on the bridge’s server (nothing is in LegendKeeper yet). Placing it is a proposal for the owner and was NOT done: when approved, it is uploaded straight into its folder. ' +
+                'Never retry it; follow it with bridge_proposal_status.',
+            };
+            return answer(render(body, pd), body);
+          }
+        } catch (e) {
+          if (!(e instanceof ImageServiceError)) throw e;
+          body = { ...body, placementError: { code: e.code, message: e.message } };
+        }
+      }
+    }
+    body = {
+      ...body,
+      hint: `Staged on the bridge’s server (nothing is in LegendKeeper until it is placed). Place it with upload_image { "staged_id": "${staged.id}"${intended ? '' : ', "destination": { … }'} }, or on the dashboard’s Staging page.`,
     };
     return answer(render(body, pd), body);
   }
@@ -803,7 +921,7 @@ function prepareTool(deps: ToolDeps): McpToolProvider {
     title: 'Prepare a binary image upload',
     access: 'write',
     description:
-      'For agents with a shell or sandbox (Claude Code, scripts), so they need not paste megabytes of base64: give the file’s sha256 (lowercase hex), byte_length, content_type and name; you get an upload_id (a single-use capability: it works ONCE, for 5 minutes, for that file only) and ready-made Python and curl scripts. Run one with the file’s path, then call upload_image with the upload_id within 15 minutes. Never put the capability in a URL. A chat assistant with no shell cannot use it. Cost: nothing in LegendKeeper until upload_image.',
+      'For agents with a shell or sandbox (Claude Code, scripts), so they need not paste megabytes of base64: give the file’s sha256 (lowercase hex), byte_length, content_type and name; you get an upload_id (a single-use capability: it works ONCE, for 5 minutes, for that file only) and ready-made Python and curl scripts. Run one with the file’s path, then call upload_image with the upload_id within 15 minutes. Never put the capability in a URL. Not for ChatGPT or any assistant whose code environment cannot reach the bridge: ChatGPT uses upload_image’s `file`. Cost: nothing in LegendKeeper until upload_image.',
     inputSchema: z.object({
       sha256: z
         .string()

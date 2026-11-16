@@ -100,7 +100,7 @@ describe('LK_PROJECTS', () => {
     expect(ok.warnings.join('\n')).not.toMatch(/SECRETS_MASTER_KEY/);
   });
 
-  it('refuses a bad or repeated name, and a missing or unlisted default, naming variables only', () => {
+  it('refuses a bad or repeated name, and an unlisted default, naming variables only', () => {
     expect(issues({ ...multi, LK_PROJECTS: 'arkona,9lives' })).toMatch(
       /"9lives" is not a valid project name/,
     );
@@ -108,7 +108,8 @@ describe('LK_PROJECTS', () => {
     expect(issues({ ...multi, LK_PROJECTS: 'arkona,ARKONA' })).toMatch(/"arkona" is listed twice/);
     expect(issues({ ...multi, LK_PROJECTS: ' , ' })).toMatch(/list at least one project name/);
     const { LK_DEFAULT_PROJECT: _d, ...noDefault } = multi;
-    expect(issues(noDefault)).toMatch(/LK_DEFAULT_PROJECT: required when LK_PROJECTS lists more than one/);
+    // v3 F2 (ADR 0049): optional with several projects: the dashboard's stored default applies.
+    expect(loadConfig(noDefault).lk.defaultProject).toBe('');
     expect(issues({ ...multi, LK_DEFAULT_PROJECT: 'other' })).toMatch(/"other" is not listed in LK_PROJECTS/);
     expect(issues({ ...multi, LK_PROJECTS: `a${'b'.repeat(32)}` })).toMatch(/not a valid project name/);
   });
@@ -153,8 +154,8 @@ describe('the single-project form (v1, backwards compatible)', () => {
   });
 
   it('projectsFrom reports issues instead of throwing', () => {
-    const r = projectsFrom({ LK_PROJECTS: 'a,b', LK_PROJECT_A_API_KEY: KEY_A });
-    // OPS2: b's missing key is a warning; the missing default (two listed) is the one issue.
+    const r = projectsFrom({ LK_PROJECTS: 'a,b', LK_PROJECT_A_API_KEY: KEY_A, LK_DEFAULT_PROJECT: 'c' });
+    // OPS2: b's missing key is a warning; the unlisted default is the one issue (v3 F2: a missing one is none).
     expect(r.issues.length).toBe(1);
     expect(r.warnings.join('\n')).toMatch(/LK_PROJECT_B_API_KEY is not set/);
     expect(r.projects.map((p) => p.name)).toEqual(['a']);

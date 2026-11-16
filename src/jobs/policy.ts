@@ -55,6 +55,11 @@ export interface PolicyContext {
    * placement. Set by the engine from bridge code only (`UploadImageSubmit.staging`); never from an agent's input.
    */
   readonly staging?: boolean;
+  /**
+   * v3 F2 (ADR 0049 decision 10): a batch that places an image staged on the bridge's server (it uploads it into its
+   * final folder). Set by the engine from bridge code only (`BatchSubmit.stagedPlacement`).
+   */
+  readonly stagedPlacement?: boolean;
 }
 
 export type PolicyDecision =
@@ -129,6 +134,11 @@ export interface ProposalExtras {
   readonly operations?: readonly Readonly<Record<string, unknown>>[];
   /** A one-line summary to show instead of the generic one. */
   readonly summary?: string;
+  /**
+   * v3 F2 (ADR 0049 decision 2): added to the summary when the engine appended the `Last Major Revision` steps
+   * (`+ Last Major Revision → date of approval`).
+   */
+  readonly lmrNote?: string;
   /**
    * Reads the tool made in this same call, so capture does not repeat them: the target read's operation, path and the
    * body it returned. Used only when the target matches exactly.

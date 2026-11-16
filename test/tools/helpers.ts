@@ -3,6 +3,7 @@
  * and the official MCP client connected with a personal access token. Real clock; write spacing is set to 0 so
  * tests do not wait, everything else is the production configuration.
  */
+import type { Writable } from 'node:stream';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +37,8 @@ export interface StackOptions {
   readonly opTiers?: ConstructorParameters<typeof MockLk>[0]['opTiers'];
   /** Scope of the default token's profile (`tools-test`). Default `write`, so every tool is exercised. */
   readonly scope?: Scope;
+  /** v3 F2: every log line, at trace level (to assert what is never logged). Default: silent. */
+  readonly logStream?: Writable;
 }
 
 export interface Stack {
@@ -108,7 +111,8 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     toolsSettings,
     db,
     version: '0.0.0-test',
-    logLevel: 'silent',
+    logLevel: o.logStream ? 'trace' : 'silent',
+    ...(o.logStream ? { logStream: o.logStream } : {}),
     pruneIntervalMs: 0,
     // The mock LK is plain http on loopback; everything else (the upload host) goes through the real guard.
     lkTransport: (input, init) => fetch(input, init),

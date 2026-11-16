@@ -469,7 +469,10 @@ describe('proposals', () => {
     const id = await propose('Scribe');
     const list = await stack.get('/api/admin/proposals?group=pending');
     const row = list.json.proposals.find((p: any) => p.id === id);
-    expect(row).toMatchObject({ state: 'pending', profile: 'Scribe', opCount: 1 });
+    // v3 F2: when the repository tree knows the page has a Last Major Revision row (it depends on what earlier tests
+    // left in it), the proposal also carries that row's decision and write.
+    expect(row).toMatchObject({ state: 'pending', profile: 'Scribe' });
+    expect([1, 3]).toContain(row.opCount);
     const detail = (await stack.get(`/api/admin/proposals/${id}`)).json.proposal;
     expect(detail.ops[0]).toMatchObject({ op: 'replaceDocumentBlocks' });
     expect(detail.ops[0].changes.length).toBeGreaterThan(0);

@@ -145,6 +145,9 @@ budget (arkona): writes 0/120·min …
 
 ### Low-level layer
 
+Last Major Revision (v3 F2): a block edit through `lk_api_write` or `lk_api_batch` sets it on the page, in the same job or
+proposal ([below](#last-major-revision-on-every-substantial-edit-v3-f2)).
+
 **`lk_api_list_operations`** `{ tag?, kind?, risk? }`: the 89 operations with kind (`read` / `write` / `upload`), risk (`safe` / `destructive` / `admin`), cost class, one-line summary, `versioned`, `paged`.
 
 **`lk_api_describe_operation`** `{ operationId }`: the input JSON Schema (with only the `$defs` it uses), risk, concurrency, whether it is versioned and which read gives the version, rate costs, and the guards that apply. A very large schema (the block model) comes back as a handle.
@@ -315,12 +318,41 @@ result is a handle.
 
 **Forgiving sections (v2 E3b).** A heading is matched exactly first (case does not matter). A miss is matched loosely, and the evaluation showed why: agents guess names such as "find pages", "Promote" or a label copied from the which-tool table, and six exact-match misses wasted calls. The loose match ignores case, punctuation and spacing; counts the key words of a heading (a word found in few headings counts for more than "page" or "text"); knows a few synonyms ("promote", "promotion" and "lifecycle" lead to the page lifecycle; "find", "search" and "read" to finding and reading; "canon" and "approval", "image" and "upload", "date" and "timeline", and so on); and takes the labels of the "Which tool?" table as aliases of the section they point to. One clear match returns that section with `matched` naming the exact name to ask for next time; several return `SECTION_AMBIGUOUS` with the `candidates`; none returns `SECTION_NOT_FOUND` with `sections`, every exact section name. The bridge guide's "How to decide" lists the exact names. The code is `src/mcp/tools/guide-sections.ts`.
 
+## Last Major Revision on every substantial edit (v3 F2)
+
+[ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 2 (the owner's decision of 16
+November 2026). A **substantial edit** of a page also sets the page's `Last Major Revision` row to today on the bridge's
+clock (Europe/London, `YYYY-MM-DD`), **in the same job and the same proposal** as the edit, as one more step after the
+content write. Agents never set it themselves.
+
+| Counts (each a per-project switch, on by default)                                                                                                                       | Does not count (switches, off by default)                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `write_page`, any mode (`lmrWritePage`)                                                                                                                                 | tag, alias, icon or name changes; moves and re-orders (`lmrNamesTagsMoves`)        |
+| block edits through `lk_api_write` / `lk_api_batch`: insert, replace, update, delete a block, `replaceDocumentBlocks`; the dashboard's own text fixes (`lmrBlockEdits`) | link-collection-only changes: Dependencies, Related Sources (`lmrLinkCollections`) |
+| a chronology table's rows (`create_` / `update_` / `delete_timeline_event` on the table) and the count fix (`lmrChronologyTable`)                                       | timeline events and map features on their own (`lmrTimelineMap`)                   |
+| a restore that changes text (`lmrRestore`)                                                                                                                              | an audit's paragraph split (`lmrAuditSplit`)                                       |
+| setting-pack tools (`lmrPackTools`)                                                                                                                                     | whitespace-only or unchanged writes (no write happens anyway)                      |
+| a fact's value through `set_facts`, except the housekeeping keys (`lmrFacts`; `lmrHousekeepingKeys`, default `Last Major Revision; Reference Type; Supersedes; Status`) |                                                                                    |
+
+- **How.** A `bridge.lmr` decision step, then `updatePropertyRow` of the row. The date is worked out when the job runs (a
+  proposal: the day it is approved and applied; its summary says `+ Last Major Revision → date of approval`). Its own
+  If-Match: chained on the edit's own row write's version or ETag (`useEtagVersions`) when there is one (`set_facts`),
+  otherwise the version one read of the rows gives inside the job.
+- **Only on pages with the row** (the repository tree's sidebar says where it is; indexes and AI REPOSITORY tabs usually
+  have none and are skipped silently, with no request). Already today: nothing is written. The lifecycle tools set it
+  themselves, as before; a restore rehearsal never does; a page created in the same request is left alone.
+- **Never blocks the edit.** If the date cannot be written after the content was, the job still succeeds and records a
+  follow-up (`followUps: [{ kind: "lmr_failed", … }]` in its result, and an error row); the content stays written.
+- It applies to every agent and to the dashboard's own fixes, at any scope. It is not a canon-protected fact.
+
 ## Writing pages: `write_page` (v2 C1)
 
 The main way agents change the owner's pages: Markdown in the owner's schema ([markdown.md](markdown.md)), turned into
 LegendKeeper blocks by B1's converter, written as ONE `replaceDocumentBlocks` under the document's lock, and read back
 to check it. Design: [ADR 0031](adr/0031-write-page.md). The agent guide's "Writing pages" section
 ([bridge-guide.md](bridge-guide.md)) is the short version.
+
+Last Major Revision: a `write_page` edit sets it, in the same job or proposal ([above](#last-major-revision-on-every-substantial-edit-v3-f2)).
 
 **`write_page`** `{ page, document?, mode, section?, markdown, baseVersion?, dropRegions?, dryRun?, detail?, project }`:
 `access: write`, annotations `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false`,
@@ -456,7 +488,9 @@ The tools a profile sees:
 
 Changes a page's sidebar **facts** (the key-value rows of its `PROPERTIES` property) and its relationship **links** (the
 link collections, such as Dependencies and Related Sources), as ONE job under the page's lock, checked inside the
-lock, chained version by version, and read back. Design: [ADR 0032](adr/0032-set-facts-and-canon.md). The agent
+lock, chained version by version, and read back. Design: [ADR 0032](adr/0032-set-facts-and-canon.md). Last Major
+Revision: a changed fact's value sets it (chained on the job's own row write), except the housekeeping keys
+([above](#last-major-revision-on-every-substantial-edit-v3-f2)). The agent
 guide's "Editing facts and links" and "Canon and approval" sections ([bridge-guide.md](bridge-guide.md)) are the short
 version.
 
@@ -1084,6 +1118,11 @@ pages is refused at capture (delete it in parts).
 
 ## The calendar and the timelines (v2 D1)
 
+Last Major Revision (v3 F2): a change to a chronology table's rows (`create_timeline_event`, `update_timeline_event`,
+`delete_timeline_event`) and the count fix set it on the chronology page; a timeline event on its own does not.
+`sync_timeline_event` renames an event only to keep a date tail the bridge wrote in step with its row's Date cell (ADR
+0049 decision 1; the proposal says `name: "… – old" → "… – new"`).
+
 Design: [ADR 0038](adr/0038-calendar-engine-and-chronology-sync.md). The calendar engine is built from the project's
 LegendKeeper calendar definition alone and matches LegendKeeper on every event of the spike's oracle. A chronology event
 is three things kept in step: a row of its age's table (the **authority**), an event of its age's timeline (a derived
@@ -1298,13 +1337,14 @@ reused), so `create_map_feature` and `update_map_feature` cost 7 reads, a single
 [ADR 0041](adr/0041-image-pipeline.md) has the decisions and the threat review. `upload_image` is the tool to use;
 `lk_upload_image` (below) stays as it was, for raw uploads.
 
-**`upload_image`** `{ data_base64 | url | upload_id | staged_id, name?, description?, destination?, stage?, deduplicate?,
-dryRun?, waitSeconds?, operation_id?, project }`. Exactly one source:
+**`upload_image`** `{ data_base64 | url | file | upload_id | staged_id, name?, description?, destination?, stage?,
+deduplicate?, dryRun?, waitSeconds?, operation_id?, project }`. Exactly one of the five sources:
 
 | Source        | For                                                                                                                                        |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | `data_base64` | Small images inline (a `data:` URI is accepted). A 2 MB image is about 2.7 million characters, so chat assistants should prefer staging.   |
 | `url`         | A public https image, through the guarded fetch (`UPLOAD_ALLOW_URL_SOURCE`).                                                               |
+| `file`        | v3 F2: a ChatGPT conversation attachment, `{ download_url, file_id, mime_type?, file_name? }`, filled in by ChatGPT (see below).           |
 | `upload_id`   | A file sent beforehand to the binary endpoint (`prepare_image_upload`, then its script). Same connection and project, once, within 15 min. |
 | `staged_id`   | A staged image to place (from `stage: true`, or the dashboard's Staging page). `name` renames it.                                          |
 
@@ -1342,18 +1382,51 @@ asset id is still returned, nothing is retried), and for a staged image `updateA
   created in order, and a non-folder with the same name is a conflict, as for any folder. The dashboard's Staging page
   takes the same form and shows the full resolved path before placing.
 
-Folders are never moved; a non-folder asset with a needed folder's name is refused (`ASSET_NAME_CONFLICT`).
+Folders are never moved; a non-folder asset with a needed folder's name is refused (`ASSET_NAME_CONFLICT`). **Since v3
+F2** ([ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 9) folder names are compared
+byte for byte, as LegendKeeper stores them (a folder differing only in case or spacing is another folder, and the plan
+says a new one will be made), and each folder is **found or created when the job runs**, not when it is planned: inside
+the job, under the project's asset-folder lock (held for that step only), the parent's children are read fresh, and a
+folder of exactly that name is used instead of creating another. A proposal still says "create folder …" (the plan when
+it was written); the job's result (`foldersUsed`, each `found existing folder` or `created folder`) and the journal say
+what happened. Two placements into one missing chain (two proposals, two jobs, or one batch) make one chain. A raw
+`createAssetFolder` through `lk_api_write` keeps its plain meaning. An image is never placed in the library's root
+(`DESTINATION_IS_ROOT`), and an image name already in the destination folder is numbered (`Portrait (2)`).
+
+**ChatGPT's `file`** (v3 F2, ADR 0049 decision 11). The tool's descriptor carries `_meta: { "openai/fileParams":
+["file"] }` in `tools/list`: ChatGPT then replaces a conversation attachment given to `file` with a file object (`download_url`
+and `file_id` always; `mime_type` and `file_name` sometimes). The bridge downloads the bytes **during the call, at every
+scope** (the link expires long before an owner approves anything: at `propose` the bytes are staged at once and only the
+placement waits), through the `url` source's guarded transport whatever `UPLOAD_ALLOW_URL_SOURCE` says: https only,
+public addresses only, the port allow-list, the DNS answer pinned, no credentials (never the LegendKeeper key),
+`UPLOAD_MAX_BYTES` enforced while streaming, a timeout, at most 3 redirects with every hop checked by the same rules.
+`mime_type` is never trusted: the magic bytes decide. `name` defaults to `file_name` with its extension dropped; with
+neither, `INVALID_REQUEST`. The `download_url` is a capability: never logged, stored, journalled or returned (the answer
+says `file: { id, host }`; the request record hashes `file_id`). A link that answers 401, 403, 404 or 410 is
+`FILE_URL_EXPIRED` (hint: call `upload_image` again with the same attachment so ChatGPT issues a fresh link; if that
+fails, ask the user to attach the image again), never retried. One file per call; the source is recorded as
+`chatgpt_file`. Claude ignores the `_meta`.
 
 **Deduplication.** The same original (by its SHA-256) sent again to the same project returns the existing asset, staged
 or placed, with `deduplicated: true`, and sends nothing. `deduplicate: false` uploads it again and needs a new
 `operation_id`.
 
-**Staging and `propose`.** `stage: true` uploads, verifies and hides the image in the project's staging folder
-(`imageStagingFolder`, default `LK-Bridge staging`, found by name or created), keeping a `destination` as the intended
-one; the answer has `staged_id`. Place it later with `staged_id` (the intended destination unless another is given): ONE
-job moves it, unhides it, optionally renames it, and reads it back (`placementVerified`). **At scope `propose` every
-upload is staged** and its placement (when a destination is given) is the proposal: the proposal holds no image bytes,
-and the owner's approval places it. A `staged_id` placed at `propose` is a proposal too.
+**Staging and `propose`** (v3 F2, ADR 0049 decision 10: unapproved images wait on the bridge's server, not in
+LegendKeeper, as Arkona's Visual References standard asks). `stage: true` converts the image and keeps the WebP on the
+bridge's own disk (`images/staged/`, by SHA-256) with its hashes, size, dimensions, intended destination and
+extension-free name: **nothing is sent to LegendKeeper** (`onServer: true`; a new staging upload is refused with
+`STAGING_DISK_LOW` below `IMAGE_STAGING_MIN_FREE_GB`). The answer has `staged_id`. Place it later with `staged_id` (the
+intended destination unless another is given): ONE job finds or creates the folders, uploads the WebP straight into its
+final folder with its final name (createImageUpload, the signed PUT of the server's bytes, createImageAsset), checks the
+stored file's SHA-256 (`upload_image.verify`) and reads the asset back (folder, name, not hidden: `placementVerified`);
+the server copy is removed once it is placed. **At scope `propose` every upload is staged** and its placement (when a
+destination is given) is the proposal: the proposal holds no image bytes (the job reads them from the server when the
+owner approves it). A `staged_id` placed at `propose` is a proposal too. Staged images are in no snapshot and no off-site
+copy (they are unapproved). An unplaced staged image older than `IMAGE_STAGING_MAX_DAYS` (90; per project:
+`imageStagingMaxDays`) is first shown on the Staging page with the date it goes, and removed from the server a week
+later; one older than `IMAGE_STAGING_REPORT_DAYS` (30) is reported. Images staged in LegendKeeper before F2 still place
+(moved and unhidden) until `npm run images -- migrate-staging --project <name>` moves them to the server; the image
+restore of E1a still stages in LegendKeeper (its proposal names the new asset's URL).
 
 Answers: `status` (`uploaded`, `staged`, `placed`, `proposal_captured`, `deduplicated` with the earlier asset, `queued`,
 `waiting_budget`, `dry_run`), `asset { id, name, url, folderId, folderPath, hidden }`, `storedBytesVerified`, `image`
@@ -1362,14 +1435,16 @@ Answers: `status` (`uploaded`, `staged`, `placed`, `proposal_captured`, `dedupli
 `![alt](url)` (same-project assets only).
 
 Codes before any job: `INVALID_REQUEST`, `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`,
-`UPLOAD_URL_SOURCE_DISABLED`, `UPLOAD_URL_REFUSED`, `UPLOAD_URL_FAILED`, `UPLOAD_ID_UNKNOWN`, `UPLOAD_NOT_RECEIVED`,
+`UPLOAD_URL_SOURCE_DISABLED`, `UPLOAD_URL_REFUSED`, `UPLOAD_URL_FAILED`, `FILE_URL_EXPIRED`, `UPLOAD_ID_UNKNOWN`,
+`UPLOAD_NOT_RECEIVED`,
 `UPLOAD_ID_USED`, `UPLOAD_EXPIRED`, `IMAGE_EMPTY`, `IMAGE_TYPE_UNSUPPORTED`, `IMAGE_TOO_LARGE`, `IMAGE_TOO_MANY_PIXELS`,
 `IMAGE_TOO_MANY_FRAMES`, `IMAGE_TRUNCATED`, `IMAGE_CORRUPT`, `IMAGE_CONVERT_TIMEOUT`, `IMAGE_CONVERTER_BUSY`,
 `DESTINATION_REQUIRED`, `INVALID_DESTINATION`, `FOLDER_REQUIRED`, `PAGE_NOT_UNDER_CHARACTERS`, `ASSET_TREE_NOT_READY`,
 `AMBIGUOUS_FOLDER`, `ASSET_NAME_CONFLICT`, `RACE_NOT_FOUND`, `STAGED_NOT_FOUND`, `STAGED_NOT_READY`, `ALREADY_PLACED`,
-`STAGED_BUSY`; after: `UPLOAD_FAILED`, `PLACE_FAILED`.
+`STAGED_BUSY`, `STAGING_DISK_LOW`, `DESTINATION_IS_ROOT`; after: `UPLOAD_FAILED`, `PLACE_FAILED`.
 
-**`prepare_image_upload`** `{ sha256, byte_length, content_type, name, project }` (scope `write` or `propose`): an
+**`prepare_image_upload`** `{ sha256, byte_length, content_type, name, project }` (scope `write` or `propose`). Not for
+ChatGPT or any assistant whose code environment cannot reach the bridge: ChatGPT uses `upload_image`'s `file`. An
 `upload_id`, a single-use capability (256 bits; once, 5 minutes, only that file in that project for that connection),
 the endpoint (`POST <BRIDGE_PUBLIC_URL>/uploads/<upload_id>`, the capability in `Authorization: Upload <token>`, never in
 the URL) and two scripts that read a local file, check its SHA-256 and send it: Python with the standard library only,
@@ -1390,11 +1465,17 @@ is refused (`ASSET_BYTES_NOT_KEPT`) unless the owner allows it on the Staging pa
 
 **Costs** (reads and writes to LegendKeeper, measured against the mock): an upload into an existing folder 2 writes, 1
 read (the asset tree's re-read) and 1 download (the verification), plus the PUT on the upload tier; each folder created
-1 write and 1 read more; staging 1 write and 1 read more (the hide); placing a staged image 1 write and 2 reads; a
+1 write and 1 read more (and 1 read to find it when the job runs); staging nothing (v3 F2: it stays on the server);
+placing a staged image the upload's 2 writes, 2 reads and 1 download; a
 deduplicated call nothing; an image delete 1 write, 2 reads and 1 download. Conversion is local: about 3 s for a 12 MP
 photo, one at a time.
 
 ## Snapshots and restores (v2 E1a)
+
+v3 F2 (ADR 0049): a restore that changes a page's text sets its Last Major Revision; `list_snapshots` gives a partial
+snapshot's missing pieces in summary (`missing: { total, thisPage, otherPages }`); a page deleted in the app is restored
+when a full or change snapshot holds it, judged by that snapshot's state; a recreate that stopped part-way is finished by
+the same request again (only what is missing). Details: [snapshots.md](snapshots.md).
 
 [ADR 0042](adr/0042-snapshots-restore-rehearsal.md) has the decisions. The bridge keeps its own copies of every page under
 the AI REPOSITORY: a **full** snapshot each week (every page and the asset library), a **change** snapshot after every

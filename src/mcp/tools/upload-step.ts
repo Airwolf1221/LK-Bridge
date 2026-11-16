@@ -19,6 +19,8 @@ interface PutBody {
   readonly contentHash?: string;
   readonly dataBase64?: string;
   readonly purged?: boolean;
+  /** v3 F2 (ADR 0049 decision 10): the bytes are the WebP the bridge keeps on its server for a staged image. */
+  readonly stagedSha256?: string;
 }
 
 interface CreatedUpload {
@@ -40,12 +42,23 @@ export function createUploadPutHandler(
     readonly now?: () => number;
     /** UPLOAD_PUT_TIMEOUT_MS: the PUT's own per-attempt deadline, not the governor's LK request timeout. */
     readonly putTimeoutMs?: number;
+    /** v3 F2: a staged image's bytes on the bridge's server, by the WebP's SHA-256 (null when gone). */
+    readonly stagedBytes?: (sha256: string) => Promise<Buffer | null>;
   } = {},
 ): CustomStepHandler {
   const now = opts.now ?? Date.now;
   return async (ctx) => {
     const body = (ctx.params.body ?? {}) as PutBody;
-    if (body.purged || typeof body.dataBase64 !== 'string') {
+    // v3 F2: a staged image's placement sends the bytes the bridge kept on its server (read now, checked below).
+    let staged: Buffer | null = null;
+    if (typeof body.stagedSha256 === 'string') {
+      staged = (await opts.stagedBytes?.(body.stagedSha256)) ?? null;
+      if (!staged)
+        throw fail(
+          'STAGED_BYTES_GONE',
+          'The staged image’s bytes are no longer on the bridge’s server (discarded or expired). Stage the image again.',
+        );
+    } else if (body.purged || typeof body.dataBase64 !== 'string') {
       throw fail(
         'UPLOAD_BYTES_DISCARDED',
         'The image bytes were discarded after an earlier successful upload. Upload the image again.',
@@ -69,7 +82,7 @@ export function createUploadPutHandler(
         );
       }
     }
-    const bytes = Buffer.from(body.dataBase64, 'base64');
+    const bytes = staged ?? Buffer.from(body.dataBase64!, 'base64');
     if (bytes.length !== body.contentLength) {
       throw fail('UPLOAD_LENGTH_MISMATCH', 'The stored image does not match its declared length', 'bridge');
     }
@@ -104,10 +117,12 @@ export function createUploadPutHandler(
       run: (signal) => ctx.lk.fetch(url, { method: 'PUT', headers, body: new Uint8Array(bytes), signal }),
     });
 
-    // The bytes are no longer needed: keep the database small, and keep the image out of job exports.
-    ctx.replaceParams({
-      body: { contentType: body.contentType, contentLength: body.contentLength, purged: true },
-    });
+    // The bytes are no longer needed: keep the database small, and keep the image out of job exports. (A staged image's
+    // step holds only its hash, and keeps it: the bytes stay on the server until the placement has succeeded.)
+    if (!staged)
+      ctx.replaceParams({
+        body: { contentType: body.contentType, contentLength: body.contentLength, purged: true },
+      });
     return { uploaded: true, bytes: bytes.length, contentType: body.contentType };
   };
 }

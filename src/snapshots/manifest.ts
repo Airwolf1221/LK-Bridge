@@ -45,6 +45,42 @@ export interface MissingPiece {
   readonly reason: string;
 }
 
+/** v3 F2 (ADR 0049 decision 4): one missing piece of a partial snapshot, with the page it belongs to. */
+export interface MissingPieceView {
+  /** The page's (or template's) id; null for the asset library. */
+  readonly pageId: string | null;
+  readonly pageName: string | null;
+  readonly piece: string;
+  readonly ref?: string;
+  readonly reason: string;
+}
+
+/**
+ * v3 F2: every missing piece a manifest records (each page's, each template's and the library's), in manifest order.
+ * The Snapshots page and list_snapshots show them; before F2 they were only in the gzipped manifest on disk.
+ */
+export function missingPiecesOf(m: Manifest): MissingPieceView[] {
+  const out: MissingPieceView[] = [];
+  for (const p of [...m.pages, ...(m.templates ?? [])])
+    for (const x of p.missing ?? [])
+      out.push({
+        pageId: p.id,
+        pageName: p.name ?? null,
+        piece: x.piece,
+        ...(x.ref !== undefined ? { ref: x.ref } : {}),
+        reason: x.reason,
+      });
+  for (const x of m.library?.missing ?? [])
+    out.push({
+      pageId: null,
+      pageName: null,
+      piece: x.piece,
+      ...(x.ref !== undefined ? { ref: x.ref } : {}),
+      reason: x.reason,
+    });
+  return out;
+}
+
 export interface PageEntry {
   // The tree: id, parent, rank, name, kind.
   readonly id: string;

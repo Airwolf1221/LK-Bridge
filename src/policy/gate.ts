@@ -138,6 +138,8 @@ export class LivePolicyGate implements PolicyGate {
         // v2 D3 (ADR 0041): staging an image is allowed: it lands hidden in the project's staging folder, and placing it
         // is the proposal the owner approves (the proposal then holds no image bytes).
         if (ctx.jobKind === 'upload_image' && ctx.staging === true) return { decision: 'allow' };
+        // v3 F2 (ADR 0049 decision 10): placing an image staged on the bridge's server uploads it: the proposal.
+        if (ctx.jobKind === 'batch_ops' && ctx.stagedPlacement === true) return { decision: 'propose' };
         // Refused before anything is sent: lk_upload_image, and raw createImageUpload / createImageAsset calls.
         if (ctx.jobKind === 'upload_image' || UPLOAD_OPERATIONS.has(op.operationId)) {
           return deny(UPLOAD_PROPOSE_REASON);

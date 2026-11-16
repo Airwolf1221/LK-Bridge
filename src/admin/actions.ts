@@ -251,6 +251,35 @@ export function createAdminActions(d: AdminDeps) {
       );
       return after;
     },
+    /**
+     * v3 F2 (ADR 0049 decision 3): stores the default project ("Make default"; the route asks for a fresh
+     * re-authentication). Audited `project.make_default`. No restart: the registry answers from the stored default at
+     * once, unless LK_DEFAULT_PROJECT overrides it (the page then says so).
+     */
+    makeDefaultProject(name: string) {
+      const before = projects.find(name);
+      if (!before || before.status === 'archived')
+        throw new AdminHttpError(
+          404,
+          'UNKNOWN_PROJECT',
+          `No project ${name.slice(0, 64)} to make the default`,
+        );
+      const was = projects.storedDefault;
+      const after = projects.makeDefault(before.name);
+      if (!after)
+        throw new AdminHttpError(
+          409,
+          'PROJECT_NOT_SERVED',
+          `Project "${before.name}" is not served now, so it cannot be the default.`,
+        );
+      audit('project.make_default', before.name, { storedDefault: was }, { storedDefault: before.name });
+      return {
+        project: after,
+        default: projects.defaultProject().name,
+        storedDefault: projects.storedDefault,
+        envOverride: projects.envOverride,
+      };
+    },
     /** v2 A1: checks a configured project's key again now (after the owner fixed the env file and restarted, or LK). */
     async verifyProject(name: string) {
       const before = projects.byConfiguredName(name);
@@ -268,7 +297,7 @@ export function createAdminActions(d: AdminDeps) {
       const before = projects.find(ref);
       if (!before?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${ref} with stored data`);
       if (before.status === 'archived') throw archivedError(before.name);
-      let parsed: string | boolean | null;
+      let parsed: string | number | boolean | null;
       try {
         parsed = parseSettingValue(key, value);
       } catch (e) {

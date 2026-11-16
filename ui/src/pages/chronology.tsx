@@ -531,6 +531,7 @@ function LookupResult({
 const KIND: Record<ChronologyFindingKind, string> = {
   row_without_event: 'Row without an event',
   date_mismatch: 'Row and event disagree about the date',
+  name_drift: 'Event name’s date out of step with its row',
   event_without_row: 'Event without a row',
   row_out_of_order: 'Row out of order',
   wrong_kcy: 'Wrong KCY',
@@ -751,7 +752,9 @@ function CheckCard({
                 {last.findings.map((f, i) => {
                   const key = `${f.kind}:${typeof f.detail?.rowId === 'string' ? f.detail.rowId : typeof f.detail?.eventId === 'string' ? f.detail.eventId : i}`;
                   const fixable =
-                    ((f.kind === 'row_without_event' || f.kind === 'date_mismatch') &&
+                    ((f.kind === 'row_without_event' ||
+                      f.kind === 'date_mismatch' ||
+                      f.kind === 'name_drift') &&
                       typeof f.detail?.rowId === 'string') ||
                     // A count mismatch has a fix when the Main table has a row (a count) for the age.
                     (f.kind === 'count_mismatch' && typeof f.detail?.main === 'string') ||

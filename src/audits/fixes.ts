@@ -615,5 +615,56 @@ export async function proposeFix(
     case 'chronology_count':
     case 'chronology_orphan':
       throw new AuditError('USE_CHRONOLOGY', 'This fix goes through the chronology module.');
+    case 'merge_asset_folders':
+      return fixMergeFolders(d, projectId, f);
   }
+}
+
+/**
+ * v3 F2 (ADR 0049 decision 9): duplicate asset folders merged. ONE proposal: each asset of a later duplicate moved into
+ * its match in the earliest chain (`updateAsset`, journalled with its pre-image), then each emptied duplicate deleted,
+ * deepest first, each only if it is empty when the job runs (`onlyIfEmpty`: never deleted with anything in it).
+ */
+async function fixMergeFolders(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
+  const a = f.fix!.args as {
+    keep?: string;
+    moves?: { assetId: string; name: string; from: string; to: string; toId?: string }[];
+    deletes?: { folderId: string; path: string }[];
+    sameNames?: string[];
+  };
+  const moves = a.moves ?? [];
+  const deletes = a.deletes ?? [];
+  if (!a.keep || (moves.length === 0 && deletes.length === 0))
+    throw new AuditError('FIX_NOT_APPLICABLE', 'Nothing to move or delete; nothing was proposed.');
+  const steps: StepSpec[] = [
+    ...moves.map((m) => ({
+      op: 'updateAsset',
+      params: { path: { assetId: m.assetId }, body: { folderId: m.toId ?? a.keep! } },
+      journalOperation: {
+        tool: 'audits.merge_asset_folders',
+        write: `move “${m.name}” from ${m.from} to ${m.to}`,
+      },
+    })),
+    ...deletes.map((x) => ({
+      op: 'deleteAsset',
+      params: { path: { assetId: x.folderId } },
+      onlyIfEmpty: true,
+      journalOperation: {
+        tool: 'audits.merge_asset_folders',
+        write: `delete the emptied duplicate ${x.path}`,
+      },
+    })),
+  ];
+  const same = a.sameNames ?? [];
+  const ev = f.evidence as { name?: unknown; path?: unknown };
+  const name = typeof ev.name === 'string' ? ev.name : '';
+  const title = `Merge duplicate folders “${name}”: ${same.length ? `${same.length} same-named asset(s) moved anyway, never deleted; ` : ''}move ${moves.length} asset(s) into the earliest, delete ${deletes.length} emptied duplicate(s), deepest first`;
+  return propose(d, projectId, {
+    steps,
+    title,
+    operation: { tool: 'audits.merge_asset_folders', keep: a.keep, moves, deletes, sameNames: same },
+    page: { id: a.keep, name: typeof ev.path === 'string' ? ev.path : a.keep },
+    pageParts: ['asset folders'],
+    fix: 'merge_asset_folders',
+  });
 }

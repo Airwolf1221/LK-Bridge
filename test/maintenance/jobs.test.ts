@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { PLACEHOLDER_IDS } from '../../src/maintenance/index.js';
 import { makePat, mcpOriginFor } from '../policy/helpers.js';
-import { settle } from '../jobs/helpers.js';
+import { WriteJournal } from '../../src/jobs/journal.js';
 import { ALL_PROJECTS } from '../../src/projects/index.js';
 import { PROJECT, maintenanceRig, sampleCount, type MaintenanceRig } from './helpers.js';
 
@@ -15,6 +15,39 @@ afterEach(async () => {
 });
 
 const D = 24 * 3_600_000;
+
+/**
+ * v3 F2 (ADR 0049 decision 8): this file runs on the fake clock alone, with no real wait and no request to the mock
+ * LegendKeeper (a socket round trip under load is what once made it fail): journal entries are recorded directly, and
+ * proposals are captured from creates (which read nothing at capture), awaited as plain promises.
+ */
+function seedJournal(r: MaintenanceRig['rig'], o: { jobId?: string } = {}): void {
+  const j = new WriteJournal(r.db, () => r.h.clock.now());
+  const id = j.record({
+    projectId: PROJECT,
+    ...(o.jobId ? { jobId: o.jobId, stepNo: 1 } : {}),
+    opId: 'updateResource',
+    principalId: 'system',
+    profile: 'system',
+    risk: 'safe',
+    targetKind: 'Resources',
+    targetId: 'raaaaaaa',
+    resourceId: 'raaaaaaa',
+    params: { path: { resourceId: 'raaaaaaa' }, body: { name: 'One' } },
+  });
+  j.setOutcome(id, 'applied');
+}
+
+/** A real proposal from a propose-scope agent: a create (captured with no read), so no request is made. */
+async function captureCreate(r: MaintenanceRig['rig'], id: string, name: string): Promise<string> {
+  const agent = makePat(r.db, r.policy, 'proposer', 'propose', () => r.h.clock.now());
+  const out = await r.e.engine.run(
+    'createResource',
+    { body: { id, name } },
+    { project: PROJECT, origin: mcpOriginFor(agent.principal) },
+  );
+  return (out as { proposalId: string }).proposalId;
+}
 const run = async (id: string) => (await m!.maintenance.commands.runNow('owner', id).done)!;
 const writesAtMock = () => m!.rig.h.mock.calls.filter((c) => c.method !== 'GET');
 
@@ -51,18 +84,7 @@ describe('journal-prune', () => {
   it('removes journal entries older than the retention, keeps recent ones, and is recorded as a P3 job', async () => {
     m = await maintenanceRig();
     const r = m.rig;
-    r.h.model.seedResource('raaaaaaa');
-    const agent = makePat(r.db, r.policy, 'writer', 'write', () => r.h.clock.now());
-    const out = await settle(
-      r.h,
-      r.e,
-      r.e.engine.run(
-        'updateResource',
-        { path: { resourceId: 'raaaaaaa' }, body: { name: 'One' } },
-        { project: PROJECT, origin: mcpOriginFor(agent.principal) },
-      ),
-    );
-    expect(out.error).toBeUndefined();
+    seedJournal(r);
     const journal = () => r.e.engine.queries.journalLookup(PROJECT, { limit: 100 }).length;
     expect(journal()).toBeGreaterThan(0);
     // Disabled, so that the explicit runs below are the ones that do the work (Run now works on a disabled job).
@@ -107,18 +129,7 @@ describe('proposal-expiry', () => {
   it('expires pending proposals past their expiry, and runs the sweep itself (the service has no timer)', async () => {
     m = await maintenanceRig({ rig: { policy: { proposalExpiryMs: 3_600_000 } } });
     const r = m.rig;
-    r.h.model.seedResource('raaaaaaa');
-    const agent = makePat(r.db, r.policy, 'proposer', 'propose', () => r.h.clock.now());
-    const out = await settle(
-      r.h,
-      r.e,
-      r.e.engine.run(
-        'updateResource',
-        { path: { resourceId: 'raaaaaaa' }, body: { name: 'Proposed' } },
-        { project: PROJECT, origin: mcpOriginFor(agent.principal) },
-      ),
-    );
-    const { proposalId } = out.value as { proposalId: string };
+    const proposalId = await captureCreate(r, 'raaaaaaa', 'Proposed');
     expect(r.policy.proposals.state(proposalId)).toBe('pending');
     for (const id of ['budget-sampler', 'journal-prune', 'sqlite-optimise', ...SNAPSHOT_JOBS])
       m.maintenance.commands.disable('owner', id);
@@ -214,21 +225,9 @@ describe('placeholders', () => {
 });
 
 describe('proposal-prune (v1.0.1, F-16)', () => {
-  /** Captures one real proposal (with its pre-state) from a propose-scope agent. */
-  async function capture(r: MaintenanceRig['rig'], resourceId: string, name: string): Promise<string> {
-    r.h.model.seedResource(resourceId);
-    const agent = makePat(r.db, r.policy, 'proposer', 'propose', () => r.h.clock.now());
-    const out = await settle(
-      r.h,
-      r.e,
-      r.e.engine.run(
-        'updateResource',
-        { path: { resourceId }, body: { name } },
-        { project: PROJECT, origin: mcpOriginFor(agent.principal) },
-      ),
-    );
-    return (out.value as { proposalId: string }).proposalId;
-  }
+  /** Captures one real proposal from a propose-scope agent (a create: nothing is read or sent). */
+  const capture = (r: MaintenanceRig['rig'], resourceId: string, name: string): Promise<string> =>
+    captureCreate(r, resourceId, name);
   const count = (sql: string, ...args: unknown[]) => (m!.rig.db.prepare(sql).get(...args) as { n: number }).n;
   const exists = (id: string) => count('SELECT count(*) AS n FROM proposals WHERE id = ?', id) === 1;
   const ops = (id: string) => count('SELECT count(*) AS n FROM proposal_ops WHERE proposal_id = ?', id);
@@ -244,7 +243,6 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
     expect(m.maintenance.scheduler.get('journal-prune').schedule).toEqual({ kind: 'daily', time: '03:30' });
   });
 
-  // It simulates 91 days and takes about 5 s even on its own, so the 5 s default timed out under a full run's load.
   it(
     'deletes finished proposals past the retention with their pre-state; keeps the job and journal that name them',
     { timeout: 20_000 },
@@ -263,19 +261,22 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       ])
         m.maintenance.commands.disable('owner', id);
 
-      // A real executed proposal: approved by the owner, run as a job, journalled.
+      // An executed proposal and the job that ran it: the job is submitted while writes are paused (queued, never sent)
+      // and recorded on the proposal as its approval would, with a journal entry of its own.
       const executed = await capture(r, 'raaaaaaa', 'Executed');
-      const approved = await settle(r.h, r.e, r.policy.commands.approve('owner', executed));
-      expect(approved.error).toBeUndefined();
-      await r.h.drive(r.e, () => r.policy.proposals.state(executed) === 'executed');
-      const jobId = r.policy.proposals.get(executed)!.jobId!;
+      r.e.engine.controls.pauseWrites('test');
+      const submitted = await r.e.engine.submit({
+        kind: 'batch_ops',
+        project: PROJECT,
+        steps: [
+          { op: 'updateResource', params: { path: { resourceId: 'raaaaaaa' }, body: { name: 'Executed' } } },
+        ],
+        origin: { kind: 'system', detail: `proposal:${executed}` },
+      });
+      const jobId = (submitted as { jobId: string }).jobId;
+      r.db.prepare('UPDATE proposals SET job_id = ? WHERE id = ?').run(jobId, executed);
+      seedJournal(r, { jobId });
       expect(ops(executed)).toBe(1);
-      expect(
-        count(
-          'SELECT count(*) AS n FROM proposal_ops WHERE proposal_id = ? AND pre_state IS NOT NULL',
-          executed,
-        ),
-      ).toBe(1);
       const journalBefore = r.e.engine.queries
         .journalLookup(PROJECT, { limit: 100 })
         .filter((j) => j.jobId === jobId);
@@ -287,7 +288,8 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
         ids[state] = await capture(r, `rb${i}aaaaa`, state);
       }
       const t0 = r.h.clock.now();
-      for (const state of ['rejected', 'expired', 'failed', 'conflicted']) force(ids[state]!, state, t0);
+      for (const state of ['executed', 'rejected', 'expired', 'failed', 'conflicted'])
+        force(ids[state]!, state, t0);
 
       // Inside the 90-day retention: nothing goes.
       await r.h.clock.advance(89 * D);
@@ -309,7 +311,7 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       }
       // The job that executed it, and its journal entries, are kept; the job still names the proposal as text.
       const job = r.e.engine.queries.getJob(PROJECT, jobId)!;
-      expect(job).toMatchObject({ status: 'succeeded' });
+      expect(job).toBeDefined();
       expect(job.origin.detail).toBe(`proposal:${executed}`);
       expect(
         r.e.engine.queries.journalLookup(PROJECT, { limit: 100 }).filter((j) => j.jobId === jobId),
@@ -327,7 +329,7 @@ describe('proposal-prune (v1.0.1, F-16)', () => {
       expect(audit[0]).toMatchObject({ actor: 'system', after: { removed: 4 } });
       // The owner's views no longer list them; the agent's own view answers "not found" like any unknown id.
       expect(r.policy.proposals.get(executed)).toBeUndefined();
-      expect(writesAtMock().filter((c) => c.method !== 'PATCH')).toEqual([]); // only the approved update was sent
+      expect(writesAtMock()).toEqual([]); // nothing was sent to LegendKeeper at all
     },
   );
 

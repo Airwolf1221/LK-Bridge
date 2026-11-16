@@ -369,8 +369,14 @@ export function StagingPage() {
               {d.staged.map((img) => (
                 <tr key={img.stagedId}>
                   <td>
-                    {img.url ? (
-                      <img className="thumb" src={img.url} alt={img.name} width={64} loading="lazy" />
+                    {img.thumbnail || img.url ? (
+                      <img
+                        className="thumb"
+                        src={img.thumbnail ?? img.url ?? ''}
+                        alt={img.name}
+                        width={64}
+                        loading="lazy"
+                      />
                     ) : (
                       <span className="muted">{img.state === 'uploading' ? 'uploading…' : '—'}</span>
                     )}
@@ -379,6 +385,17 @@ export function StagingPage() {
                     {img.name}
                     <br />
                     <code>{img.stagedId}</code> <CopyButton text={img.stagedId} what="staged id" />
+                    {img.onServer ? (
+                      <div className="muted small-text">On the bridge’s server (not in LegendKeeper)</div>
+                    ) : (
+                      <div className="muted small-text">In LegendKeeper’s old staging folder</div>
+                    )}
+                    {img.removedAfter && (
+                      <div className="note note-warn small-text" data-testid="staging-expiry">
+                        Unplaced for over {img.maxDays} days: it will be removed from the server on{' '}
+                        {fmtTime(img.removedAfter)} unless it is placed.
+                      </div>
+                    )}
                     {img.error && <div className="bad">{img.error}</div>}
                   </td>
                   <td>

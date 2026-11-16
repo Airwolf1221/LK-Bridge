@@ -24,6 +24,9 @@ import {
 import {
   EXPECT_STEP,
   RECORD_STEP,
+  LMR_STEP,
+  londonDate,
+  type LmrParams,
   SIDEBAR_IGNORED_FIELDS,
   VERIFY_STEP,
   isInternalStep,
@@ -215,6 +218,9 @@ export function lockKeyFor(op: OperationDef, params: OpParams): string | null {
   return null;
 }
 
+/** v3 F2 (ADR 0049 decision 9): the per-project lock every bridge-planned asset folder is found or created under. */
+export const ASSET_FOLDER_LOCK = 'asset-folders';
+
 /** The lock key as the lock manager sees it: `<projectId>:<key>` (v2 A1). */
 export function projectLockKey(projectId: string, key: string | null): string | null {
   return key === null ? null : `${projectId}:${key}`;
@@ -285,7 +291,14 @@ export class StepExecutor {
     const store = opts.storeResult !== false;
     if (op.kind === 'read') return this.runRead(job, step, op, params, store);
 
-    const lockKey = projectLockKey(job.projectId, lockKeyFor(op, params));
+    // v3 F2 (ADR 0049 decision 9): a folder the bridge planned is found or created when the job runs, under the
+    // project's asset-folder lock (held for this step only), so two jobs placing into one missing chain make one chain.
+    const findOrCreate = op.operationId === 'createAssetFolder' && step.options.findOrCreate === true;
+    const emptyOnly = op.operationId === 'deleteAsset' && step.options.onlyIfEmpty === true;
+    const lockKey =
+      findOrCreate || emptyOnly
+        ? projectLockKey(job.projectId, ASSET_FOLDER_LOCK)
+        : projectLockKey(job.projectId, lockKeyFor(op, params));
     // v2 C2a: the job already holds this lock for its whole run (BatchSubmit.holdLock); it is not taken again. v2 C2c:
     // a job may hold two (the page's and one of its documents').
     const held: readonly string[] =
@@ -295,7 +308,7 @@ export class StepExecutor {
           ? [opts.heldLock]
           : opts.heldLock;
     const ownLock = lockKey !== null && !held.includes(lockKey);
-    if (ownLock && held.length > 0) {
+    if (ownLock && held.length > 0 && !findOrCreate && !emptyOnly) {
       return this.fail(
         job,
         step,
@@ -318,6 +331,20 @@ export class StepExecutor {
           signal,
         );
         this.d.setJobWaiting(job.id, null);
+      }
+      if (findOrCreate && step.status !== 'running' && !step.maybeSent && step.firstSentAt === null) {
+        const found = await this.findFolder(job, step, params);
+        if (found) {
+          releaseLock?.();
+          return found;
+        }
+      }
+      if (emptyOnly && step.status !== 'running' && !step.maybeSent && step.firstSentAt === null) {
+        const kept = await this.folderNotEmpty(job, step, params);
+        if (kept) {
+          releaseLock?.();
+          return kept;
+        }
       }
       releaseSlot = await this.d.writers.acquire(
         {
@@ -342,11 +369,108 @@ export class StepExecutor {
     try {
       const hold = step.status === 'running' ? null : this.d.writeHold(job.projectId);
       if (hold) return { kind: 'held', reason: hold };
-      return await this.runWrite(job, step, op, params, ref, store);
+      const out = await this.runWrite(job, step, op, params, ref, store);
+      if (findOrCreate && out.kind === 'succeeded') {
+        const entry = this.d.journal.entryIdForStep(job.id, step.stepNo);
+        if (entry !== undefined && entry !== null)
+          this.d.journal.annotate(entry, { folder: 'created folder' });
+      }
+      return out;
     } finally {
       releaseSlot();
       releaseLock?.();
     }
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 9): a folder delete planned "only if empty": its contents read now, inside the asset-folder
+   * lock. Anything in it: the delete is not sent, and the step succeeds with `{ skipped }`; empty (or not readable as a
+   * folder): null, and the delete goes ahead as planned (LegendKeeper answers for a folder that is gone).
+   */
+  private async folderNotEmpty(job: JobView, step: StepView, params: OpParams): Promise<StepOutcome | null> {
+    const id = params.path?.assetId;
+    if (typeof id !== 'string') return null;
+    const stats = newCallStats();
+    const r = await this.readOp(job, step, 'listAssets', { query: { limit: 1, folderId: id } }, stats);
+    const b = (r.body ?? {}) as { data?: unknown };
+    const n = Array.isArray(b.data) ? b.data.length : 0;
+    if (!r.exists || n === 0) return null;
+    return this.succeed(job, step, stats, {
+      skipped: 'the folder is not empty when the job runs: it was not deleted',
+      folderId: id,
+    });
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 9): the parent's children read fresh, inside the asset-folder lock; a folder whose name is
+   * exactly the planned one (byte for byte, as LegendKeeper stores names: sandbox A9) is used instead of creating one.
+   * The step then succeeds with that folder (`found: true`; the steps after it bind its id as they would a new one's),
+   * and the journal says so (`not_applied`: nothing was sent). Null when there is none, or the parent cannot be listed
+   * (the create then answers for itself, as before: a parent deleted since the plan fails it with LegendKeeper's error).
+   */
+  private async findFolder(job: JobView, step: StepView, params: OpParams): Promise<StepOutcome | null> {
+    const body = (params.body ?? {}) as { name?: unknown; folderId?: unknown };
+    if (typeof body.name !== 'string') return null;
+    const parent = typeof body.folderId === 'string' && body.folderId !== '' ? body.folderId : null;
+    const stats = newCallStats();
+    let match: Record<string, unknown> | undefined;
+    try {
+      let cursor: string | undefined;
+      for (let page = 0; page < 100 && !match; page++) {
+        const r = await this.readOp(
+          job,
+          step,
+          'listAssets',
+          { query: { limit: 100, ...(parent ? { folderId: parent } : {}), ...(cursor ? { cursor } : {}) } },
+          stats,
+        );
+        if (!r.exists) return null;
+        const b = (r.body ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+        const items = Array.isArray(b.data) ? (b.data as Record<string, unknown>[]) : [];
+        match = items.find(
+          (x) =>
+            x?.type === 'FOLDER' &&
+            x.name === body.name &&
+            (x.folderId ?? null) === parent &&
+            typeof x.id === 'string',
+        );
+        if (b.hasMore !== true || typeof b.nextCursor !== 'string') break;
+        cursor = b.nextCursor;
+      }
+    } catch (e) {
+      if (e instanceof BudgetWaitError) throw e;
+      return null;
+    }
+    if (!match) return null;
+    const journalId = this.d.journal.record({
+      projectId: job.projectId,
+      jobId: job.id,
+      stepNo: step.stepNo,
+      opId: step.opId,
+      principalId: job.principalId,
+      profile: job.profile,
+      approvedBy: job.approvedBy,
+      risk: 'safe',
+      targetKind: 'Assets',
+      targetId: String(match.id),
+      resourceId: null,
+      documentId: null,
+      version: null,
+      params,
+      operation: {
+        ...(step.options.journalOperation ?? {}),
+        folder: 'found existing folder',
+        folderId: String(match.id),
+      },
+    });
+    this.d.journal.setOutcome(journalId, 'not_applied');
+    return this.succeed(job, step, stats, {
+      id: match.id,
+      name: match.name,
+      folderId: match.folderId ?? null,
+      type: 'FOLDER',
+      found: true,
+    });
   }
 
   // ------------------------------------------------------------------------------------------ custom steps
@@ -428,6 +552,10 @@ export class StepExecutor {
           throw new JobsError('BRIDGE_ERROR', `The ${name} record is not available; nothing was written.`);
         return this.succeed(job, step, stats, await handler(job, step, params));
       }
+      if (step.opId === LMR_STEP) {
+        // v3 F2 (ADR 0049 decision 2): the Last Major Revision decision (reads only).
+        return this.succeed(job, step, stats, await this.runLmr(job, step, params, stats));
+      }
       if (step.opId !== VERIFY_STEP) throw new JobsError('BRIDGE_ERROR', `Unknown bridge step ${step.opId}`);
       const verification = await this.runVerify(job, step, params, stats);
       if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
@@ -435,6 +563,101 @@ export class StepExecutor {
     } catch (e) {
       return this.fail(job, step, stats, e);
     }
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 2): `bridge.lmr`. Today on the bridge's clock (Europe/London) is worked out NOW, when the
+   * job runs (an approved proposal: the day it is applied). Skipped when none of the edit's writes wrote anything (an
+   * unchanged write), when the page has no such row, or when the row already says today. The If-Match is the new
+   * version of an earlier row write of the same property in this job (its ETag, when `useEtagVersions` is on), or the
+   * version one read of the rows gives, inside the job (and its locks).
+   */
+  private async runLmr(
+    job: JobView,
+    step: StepView,
+    params: OpParams,
+    stats: CallStats,
+  ): Promise<Record<string, unknown>> {
+    const b = (params.body ?? {}) as unknown as LmrParams;
+    const today = londonDate(this.d.now());
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    // The edit itself: a write that found nothing to change (an unchanged page) is not an edit.
+    const wrote = b.after.some((n) => {
+      const s = this.d.repo.step(job.id, n);
+      if (s?.status !== 'succeeded') return false;
+      const r = (s.resultSummary ?? {}) as { unchanged?: unknown; skipped?: unknown };
+      return r.unchanged !== true && r.skipped === undefined;
+    });
+    if (!wrote) return { skip: 'the edit wrote nothing', date: today };
+    let rowId = b.rowId;
+    let value = b.value;
+    let version: string | undefined;
+    if (b.chainFrom !== undefined && rowId !== undefined) {
+      const s = this.d.repo.step(job.id, b.chainFrom);
+      const r =
+        s?.status === 'succeeded'
+          ? ((this.d.repo.stepResult(s) ?? {}) as { version?: unknown; etag?: unknown })
+          : {};
+      version = str(r.version) ?? (this.d.etagVersions?.(job.projectId) === false ? undefined : str(r.etag));
+    }
+    const chained = version !== undefined;
+    let propertyId = b.propertyId;
+    if (!chained && propertyId === undefined) {
+      // The plan did not know the page's sidebar (the tree had not read it): find the key-value property with the row.
+      const r = await this.readOp(job, step, 'listProperties', { path: { resourceId: b.resourceId } }, stats);
+      if (!r.exists) return { skip: 'the page is gone', date: today };
+      const body = (r.body ?? {}) as { data?: unknown; properties?: unknown };
+      const props = (
+        Array.isArray(body.data) ? body.data : Array.isArray(body.properties) ? body.properties : []
+      ) as Record<string, unknown>[];
+      const k = b.key.normalize('NFKC').trim().toLowerCase();
+      const holder = props.find(
+        (p) =>
+          p?.kind === 'keyValue' &&
+          Array.isArray(p.rows) &&
+          (p.rows as Record<string, unknown>[]).some(
+            (x) => typeof x?.key === 'string' && x.key.normalize('NFKC').trim().toLowerCase() === k,
+          ),
+      );
+      if (!holder || typeof holder.id !== 'string')
+        return { skip: `the page has no ${b.key} row`, date: today };
+      propertyId = holder.id;
+    }
+    if (!chained) {
+      const r = await this.readOp(
+        job,
+        step,
+        'listPropertyRows',
+        { path: { resourceId: b.resourceId, propertyId: propertyId! } },
+        stats,
+      );
+      if (!r.exists) return { skip: 'the sidebar property is gone', date: today };
+      const body = (r.body ?? {}) as { data?: unknown; version?: unknown };
+      const key = b.key.normalize('NFKC').trim().toLowerCase();
+      const row = (Array.isArray(body.data) ? (body.data as Record<string, unknown>[]) : []).find(
+        (x) => typeof x?.key === 'string' && x.key.normalize('NFKC').trim().toLowerCase() === key,
+      );
+      if (!row || typeof row.id !== 'string') return { skip: `the page has no ${b.key} row`, date: today };
+      rowId = row.id;
+      value = runsText(row.content) ?? (typeof row.text === 'string' ? row.text : '');
+      version = str(body.version);
+    }
+    if ((value ?? '').trim() === today) return { skip: `${b.key} already says ${today}`, date: today };
+    if (version === undefined)
+      throw new JobsError(
+        'BRIDGE_ERROR',
+        `No version to set ${b.key} with (If-Match); nothing was sent.`,
+        ref,
+      );
+    return {
+      date: today,
+      chained,
+      versions: { lmr: version },
+      lmr: {
+        path: { resourceId: b.resourceId, propertyId: propertyId!, rowId: rowId! },
+        body: { content: [{ text: today }] },
+      },
+    };
   }
 
   /** `bridge.expect`: each property as the plan saw it, or a conflict. Returns the version each read gave. */
@@ -935,7 +1158,15 @@ export class StepExecutor {
         } else if (t.kind === 'asset') {
           // v2 D3 (ADR 0041): an asset read back with getAsset: its folder (or the folder an earlier step of the job
           // created), hidden flag and name.
-          const r = await this.readOp(job, step, 'getAsset', { path: { assetId: t.assetId } }, stats);
+          let assetId = t.assetId;
+          if (t.assetFrom) {
+            const src = this.d.repo.step(job.id, t.assetFrom.step);
+            const made = src ? (this.d.repo.stepResult(src) as { id?: unknown } | null) : null;
+            assetId = typeof made?.id === 'string' ? made.id : undefined;
+          }
+          const r = assetId
+            ? await this.readOp(job, step, 'getAsset', { path: { assetId } }, stats)
+            : { exists: false, body: undefined };
           if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
           else {
             const a = (r.body ?? {}) as Record<string, unknown>;
@@ -2340,4 +2571,16 @@ export function refusedFields(
     return text.includes(k) || (/^icon/i.test(k) && /\bicon\b/i.test(text));
   });
   return hit.length > 0 ? hit : undefined;
+}
+
+/** v3 F2: a row value's plain text from its runs (null when it has none). */
+function runsText(content: unknown): string | null {
+  if (!Array.isArray(content)) return null;
+  return (content as unknown[])
+    .map((r) =>
+      r && typeof r === 'object' && typeof (r as { text?: unknown }).text === 'string'
+        ? (r as { text: string }).text
+        : '',
+    )
+    .join('');
 }

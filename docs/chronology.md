@@ -121,6 +121,14 @@ named with the row's opening words, as every event is, then `–` and the row's 
 charter is sealed – c. 4A 563; exact date unresolved`. The timeline then shows the owner's own wording, "after" or
 "before" for an open bound, and `c.` or `Approximately` for an approximate date. Plain rows' events are named as before.
 
+**The tail follows the row** (v3 F2, [ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md)
+decision 1). The link between a row and its event records the tail the bridge wrote. When the owner later edits the Date
+cell, the next sync or "Propose a fix" that changes the event's date also rewrites the tail (after the name's **last**
+`–`) to the cell, in the same proposal (`name: "… – c. 4A 563; exact date unresolved" → "… – Isar 3rd, 4A 563; exact
+day disputed"`); a row that has become plain drops the tail and its `–`. If only the wording changed (the date did not),
+the check reports **name drift** on the row, fixed by a name-only update. The opening words are never touched, and an
+unlinked event, an event the owner renamed, or a `–` written by anyone else is never treated as the bridge's tail.
+
 ## Pairing a row and an event
 
 The check, the repair and the timeline tools pair them the same way: the bridge's own links; the same date with the

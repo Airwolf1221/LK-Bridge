@@ -774,3 +774,23 @@ buffering by default. Chunk 7's runbook should keep it that way (no `encode` of 
   with the real dashboard code in jsdom while a mock job runs.
 - `test/e2e/`: Chromium against the built dashboard under the real CSP (sign-in and return, live pages, proposal diff, a
   token, a phone-sized dark layout).
+
+## v3 F2 (ADR 0049)
+
+- **Projects**: **Make default** on each project row (a fresh re-authentication; audited `project.make_default`), and the
+  note "The env file's `LK_DEFAULT_PROJECT=…` overrides this; remove that line to use the dashboard's choice." while the
+  env file disagrees. The settings list gains the Last Major Revision switches and housekeeping keys, and
+  `imageStagingMaxDays`.
+- **Snapshots**: a partial snapshot's row expands to list its missing pieces (page, piece, reference, reason). The
+  restores list has **Finish** on a recreate that stopped part-way (audited `snapshots.finish_recreate`).
+- **Staging**: staged images wait on the bridge's server; the thumbnail is the bridge's own copy
+  (`GET /api/admin/staging/:id/image`, the owner's session). An image past `IMAGE_STAGING_MAX_DAYS` shows the date it will
+  be removed from the server unless it is placed. Discard removes the server copy (no job). Images staged in LegendKeeper
+  before F2 are marked so until `npm run images -- migrate-staging` moves them.
+- **Chronology**: a new finding, "Event name's date out of step with its row" (`name_drift`), with **Propose a fix** (a
+  name-only update).
+- **Audits**: a new category, **Asset library**, with the finding "Sibling asset folders with exactly the same name"
+  (`duplicate_asset_folders`) and its **Propose a fix** (merge into the earliest; delete the emptied duplicates, deepest
+  first).
+- **Jobs**: a job's result lists `foldersUsed` (each folder found or created) and `followUps` (a Last Major Revision write
+  that failed after the edit: `lmr_failed`; the job itself succeeded and the edit stayed written).

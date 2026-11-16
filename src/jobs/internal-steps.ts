@@ -26,11 +26,88 @@ export const VERIFY_STEP = 'bridge.verify';
  * the lifecycle module registers (`engine.registerRecordHandler`).
  */
 export const RECORD_STEP = 'bridge.record';
-export const INTERNAL_STEPS: ReadonlySet<string> = new Set([EXPECT_STEP, VERIFY_STEP, RECORD_STEP]);
+/**
+ * v3 F2 (ADR 0049 decision 2): the decision before a page's `Last Major Revision` row is set after a substantial edit.
+ * It works out today's date on the bridge's clock (Europe/London) when it RUNS (for a proposal: the day it is approved
+ * and applied), finds the row (from the plan, chaining on an earlier row write's version, or by one read of the rows
+ * inside the job), and either says what the next step sends (`lmr`: path, body, version) or that it is skipped (no
+ * such row, or it already says today). Only reads; a failure is a follow-up (`lmr_failed`), never the job's.
+ */
+export const LMR_STEP = 'bridge.lmr';
+export const INTERNAL_STEPS: ReadonlySet<string> = new Set([EXPECT_STEP, VERIFY_STEP, RECORD_STEP, LMR_STEP]);
+
+/** v3 F2: a date on the bridge's clock (Europe/London), as `YYYY-MM-DD` (the form Arkona's pages use). */
+export function londonDate(ms: number): string {
+  const p = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(ms));
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/** v3 F2: the params of `bridge.lmr` (`{ body }`). */
+export interface LmrParams {
+  readonly resourceId: string;
+  /** The key-value property that holds the row; absent when the plan did not know (then it is found by one read). */
+  readonly propertyId?: string;
+  /** The row's key (`Last Major Revision`, or the project's own name for it). */
+  readonly key: string;
+  /** The row's id and value as the plan saw them, when it did (then a chained version needs no read). */
+  readonly rowId?: string;
+  readonly value?: string;
+  /** An earlier row write of the same property in this job, whose new version (or ETag) is this write's If-Match. */
+  readonly chainFrom?: number;
+  /** The steps whose writes made the edit substantial: if none of them wrote anything, nothing is set. */
+  readonly after: readonly number[];
+  /** The page's name, for the follow-up. */
+  readonly page?: string;
+}
 
 export function isInternalStep(op: string): boolean {
   return INTERNAL_STEPS.has(op);
 }
+
+/**
+ * v3 F2 (ADR 0049 decision 10): the steps a bridge-built batch (`internal: true`) may carry that are not LegendKeeper
+ * operations: the internal steps, and the signed-URL PUT and stored-file check of an image upload (`upload_image.put`,
+ * `upload_image.verify`, run by their custom handlers), so a staged image's placement, which uploads it from the
+ * bridge's server, is one ordinary batch job or proposal. `lk_api_batch` never sets `internal`.
+ */
+export const BATCH_UPLOAD_STEPS: ReadonlySet<string> = new Set(['upload_image.put', 'upload_image.verify']);
+export function isBridgeStep(op: string): boolean {
+  return INTERNAL_STEPS.has(op) || BATCH_UPLOAD_STEPS.has(op);
+}
+
+const uploadPutParamsSchema = z
+  .object({
+    body: z
+      .object({
+        contentType: z.string().min(1).max(100),
+        contentLength: z.number().int().min(1),
+        contentHash: z.string().regex(/^[0-9a-f]{64}$/),
+        /** The WebP the bridge keeps on its server (images/staged/), read when the step runs. */
+        stagedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+      })
+      .strict(),
+  })
+  .strict();
+const uploadVerifyParamsSchema = z
+  .object({
+    body: z
+      .object({
+        assetStep: z.number().int().min(1),
+        contentLength: z.number().int().min(1).optional(),
+        contentHash: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
+      })
+      .strict(),
+  })
+  .strict();
 
 const id = z.string().min(1).max(256);
 const label = z.string().min(1).max(300);
@@ -380,14 +457,22 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('asset'),
       label,
-      assetId: id,
+      assetId: id.optional(),
+      // v3 F2 (ADR 0049 decision 10): an asset an earlier step of the job created (a staged image's upload).
+      assetFrom: z
+        .object({ step: z.number().int().min(1) })
+        .strict()
+        .optional(),
       fields: z.record(z.string(), z.unknown()),
       folderFrom: z
         .object({ step: z.number().int().min(1) })
         .strict()
         .optional(),
     })
-    .strict(),
+    .strict()
+    .refine((t) => (t.assetId === undefined) !== (t.assetFrom === undefined), {
+      message: 'an asset target names assetId or assetFrom',
+    }),
   // v2 D1: one lane of a timeline, present with this name.
   z
     .object({
@@ -669,7 +754,9 @@ export type VerifyTarget =
   | {
       readonly kind: 'asset';
       readonly label: string;
-      readonly assetId: string;
+      readonly assetId?: string;
+      /** v3 F2: the asset an earlier step of the job created. */
+      readonly assetFrom?: { readonly step: number };
       readonly fields: Readonly<Record<string, unknown>>;
       readonly folderFrom?: { readonly step: number };
     }
@@ -729,6 +816,23 @@ export type VerifyTarget =
       readonly gone?: boolean;
     };
 
+const lmrParamsSchema = z
+  .object({
+    body: z
+      .object({
+        resourceId: id,
+        propertyId: id.optional(),
+        key: z.string().min(1).max(256),
+        rowId: id.optional(),
+        value: z.string().max(2048).optional(),
+        chainFrom: z.number().int().min(1).optional(),
+        after: z.array(z.number().int().min(1)).min(1).max(1000),
+        page: z.string().max(500).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
 /** The params of an internal step: `{ body: { checks } }` or `{ body: { targets } }`. */
 export function expectStep(checks: readonly ExpectCheck[], options: StepOptions = {}) {
   return { op: EXPECT_STEP, params: { body: { checks } }, ...options };
@@ -747,7 +851,13 @@ export function internalStepIssues(op: string, params: unknown): { path: string;
         ? verifyParamsSchema
         : op === RECORD_STEP
           ? recordParamsSchema
-          : null;
+          : op === LMR_STEP
+            ? lmrParamsSchema
+            : op === 'upload_image.put'
+              ? uploadPutParamsSchema
+              : op === 'upload_image.verify'
+                ? uploadVerifyParamsSchema
+                : null;
   if (!schema) return [{ path: 'op', message: `${op} is not one of the bridge's own steps` }];
   const r = schema.safeParse(params);
   return r.success
@@ -773,6 +883,10 @@ export function internalPolicyMeta(op: string, options: StepOptions): PolicyOpMe
 /** Reads an internal step makes, for estimates: one per check or target (a placement check adds one listing). */
 export function internalReads(op: string, params: unknown): number {
   if (op === RECORD_STEP) return 0;
+  if (op === LMR_STEP) {
+    const b = (params as { body?: Partial<LmrParams> } | undefined)?.body;
+    return b?.chainFrom !== undefined && b.rowId !== undefined ? 0 : b?.propertyId === undefined ? 2 : 1;
+  }
   const body = (params as { body?: { checks?: unknown[]; targets?: unknown[] } } | undefined)?.body;
   // A map check reads the map's settings and its features (two reads); every other check one.
   if (op === EXPECT_STEP)

@@ -39,7 +39,8 @@ import { READERS, opMeta } from '../jobs/op-meta.js';
 import {
   EXPECT_STEP,
   internalStepIssues,
-  isInternalStep,
+  isBridgeStep,
+  LMR_STEP,
   withoutDirectOnlyChecks,
 } from '../jobs/internal-steps.js';
 import { mintClientId } from '../jobs/ids.js';
@@ -463,7 +464,7 @@ export class ProposalService implements ProposalSink {
     // 1. Validate, and dry-run the guards that do not write.
     const defs: (OperationDef | null)[] = ops.map((o, i) => {
       // v2 C2a: the bridge's own check and verify steps, only in an expansion bridge code built.
-      if (meta.jobOptions?.internal === true && isInternalStep(o.op)) {
+      if (meta.jobOptions?.internal === true && isBridgeStep(o.op)) {
         const issues = internalStepIssues(o.op, o.params);
         if (issues.length > 0) {
           throw new InvalidParamsError(
@@ -574,26 +575,35 @@ export class ProposalService implements ProposalSink {
     // page and document (the tree), the entity (the pre-image just captured; a sidebar row's property by one cheap
     // read). A high-level tool gives its own summary and pays nothing here. A name that cannot be found is left out.
     const lowLevel = !meta.extras?.summary && !meta.extras?.operation && !meta.extras?.operations;
+    // v3 F2 (ADR 0049): the Last Major Revision steps the engine appended are not named one by one (the note says
+    // what they do), and cost nothing here.
+    const own = ops.filter((o) => o.op !== LMR_STEP && o.decisionFrom === undefined);
+    const ownCaptured = captured.filter(
+      (_, i) => ops[i]!.op !== LMR_STEP && ops[i]!.decisionFrom === undefined,
+    );
     const names: (OpNames | null)[] = lowLevel
-      ? await this.nameOps(engine, meta, readOrigin, ops, captured)
-      : ops.map(() => null);
+      ? await this.nameOps(engine, meta, readOrigin, own, ownCaptured)
+      : own.map(() => null);
 
     // 3. Store the ordered operations as one proposal.
     const id = newProposalId();
     const now = this.now();
-    const summary = meta.extras?.summary
-      ? meta.extras.summary.slice(0, SUMMARY_MAX)
-      : proposalSummary(ops, names);
+    const note = meta.extras?.lmrNote ? ` ${meta.extras.lmrNote}` : '';
+    const base = meta.extras?.summary ? meta.extras.summary : proposalSummary(own, names);
+    const summary =
+      note === ''
+        ? base.slice(0, SUMMARY_MAX)
+        : `${base.slice(0, Math.max(0, SUMMARY_MAX - note.length))}${note}`;
     const origin = sanitiseOrigin(meta.origin);
     const operation = meta.extras?.operation ? JSON.stringify(capOperation(meta.extras.operation)) : null;
     // v2 C2a: the list of high-level operations, the page-level summary, canonical approval and the job's shape.
     const opList = meta.extras?.operations ?? (meta.extras?.operation ? [meta.extras.operation] : undefined);
     const operations = opList ? JSON.stringify(opList.map(capOperation)) : null;
     const pages = buildPageSummary(
-      ops,
+      own,
       opList,
       (rid) => this.pageName(meta.project, rid),
-      names.map((n, i) => (n ? pagePart(ops[i]!.op, n) : null)),
+      names.map((n, i) => (n ? pagePart(own[i]!.op, n) : null)),
     );
     const jobOptions: StoredJobOptions | null =
       (meta.jobOptions &&
@@ -743,7 +753,7 @@ export class ProposalService implements ProposalSink {
     const out: (OpNames | null)[] = [];
     for (let i = 0; i < ops.length; i++) {
       const o = ops[i]!;
-      if (isInternalStep(o.op)) {
+      if (isBridgeStep(o.op)) {
         out.push(null);
         continue;
       }
@@ -1496,7 +1506,7 @@ export class ProposalService implements ProposalSink {
       const pre = truncated ? ((r.pre_state as string | null) ?? '') : parseJson<unknown>(r.pre_state, null);
       const params = base.params as OpParams;
       // v2 C2a: the bridge's own check and verify steps change nothing; they show their parameters only.
-      if (isInternalStep(base.op)) {
+      if (isBridgeStep(base.op)) {
         return {
           ...base,
           preState: null,
@@ -1692,7 +1702,7 @@ function executionSteps(ops: readonly ProposalOpView[]): StepSpec[] {
   return ops.map((op) => {
     const params = op.params as OpParams;
     // v2 C2a: the bridge's own check and verify steps are submitted exactly as stored.
-    if (isInternalStep(op.op)) return { op: op.op, params, ...stepOptions(op.options) };
+    if (isBridgeStep(op.op)) return { op: op.op, params, ...stepOptions(op.options) };
     const def = requireOperation(op.op);
     const keys = [params.path?.resourceId, params.path?.documentId].filter((k): k is string => !!k);
     let p: OpParams = params;
@@ -1727,7 +1737,7 @@ function createdIds(op: string, params: OpParams): string[] {
 
 /** v2 C2a: a create's client id(s), minted now where the operation takes one and none was given. */
 function withMintedIds(o: ProposedOp): ProposedOp {
-  if (isInternalStep(o.op) || !getOperation(o.op)) return o;
+  if (isBridgeStep(o.op) || !getOperation(o.op)) return o;
   const meta = opMeta(o.op);
   const body = o.params.body as Record<string, unknown> | undefined;
   if (meta.clientId === 'body.id' && body && body.id === undefined) {
@@ -1766,6 +1776,12 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.dropIfRefused ? { dropIfRefused: o.dropIfRefused } : {}),
     // v2 D3 (ADR 0041): a folder (or asset) the same job creates, its id bound in the job (an image placement).
     ...(o.bindFrom ? { bindFrom: o.bindFrom } : {}),
+    // v3 F2 (ADR 0049): the Last Major Revision write, decided and dated when the approved job runs; never fatal.
+    ...(o.decisionFrom ? { decisionFrom: o.decisionFrom } : {}),
+    ...(o.followUp ? { followUp: o.followUp } : {}),
+    // v3 F2 (ADR 0049 decision 9): a planned folder is found or created when the approved job runs.
+    ...(o.findOrCreate === true ? { findOrCreate: true } : {}),
+    ...(o.onlyIfEmpty === true ? { onlyIfEmpty: true } : {}),
   };
 }
 

@@ -39,6 +39,10 @@ export interface ImagesWorld extends ResourcesWorld {
   readonly gets: string[];
   /** Images served at `https://assets.test:<port>/img/<name>` (for url sources), with their content type. */
   readonly web: Map<string, { type: string; body: Buffer }>;
+  /** v3 F2: ChatGPT-style files at `https://assets.test:<port>/f/<name>`: a status, a redirect or a streamed body. */
+  readonly files: Map<string, { status: number; location?: string; type?: string; body?: Buffer }>;
+  /** v3 F2: what the file route saw (host and path) and how many body bytes it wrote. */
+  readonly fileStats: { requests: string[]; bytesSent: number };
   /** When set, the next asset created serves these bytes instead of what was uploaded (a corrupted store). */
   corruptNext: Buffer | null;
   /** The mock's createImageUpload / createImageAsset calls. */
@@ -91,6 +95,9 @@ export async function imagesWorld(
   const lkUploads: unknown[] = [];
   const web = new Map<string, { type: string; body: Buffer }>();
   const dims = new Map<string, { width: number; height: number }>();
+  // v3 F2 (ChatGPT files): `/f/<name>` answers what the test set: a status, a redirect, a body (streamed in chunks).
+  const files = new Map<string, { status: number; location?: string; type?: string; body?: Buffer }>();
+  const fileStats = { requests: [] as string[], bytesSent: 0 };
   const server: Server = createServer({ key, cert }, (req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
@@ -106,6 +113,26 @@ export async function imagesWorld(
           .then((m) => dims.set(key, { width: m.width ?? 0, height: m.pageHeight ?? m.height ?? 0 }))
           .catch(() => undefined)
           .finally(() => res.writeHead(200).end());
+        return;
+      }
+      if (req.method === 'GET' && url.startsWith('/f/')) {
+        fileStats.requests.push(`${req.headers.host ?? ''}${req.url ?? ''}`);
+        const f = files.get(url.slice(3));
+        if (!f) return void res.writeHead(404).end();
+        if (f.location) return void res.writeHead(f.status, { location: f.location }).end();
+        const body = f.body ?? Buffer.alloc(0);
+        res.writeHead(f.status, { 'content-type': f.type ?? 'application/octet-stream' });
+        let at = 0;
+        const pump = () => {
+          while (at < body.length && !res.destroyed) {
+            const chunk = body.subarray(at, at + 16_384);
+            at += chunk.length;
+            fileStats.bytesSent += chunk.length;
+            if (!res.write(chunk)) return void res.once('drain', pump);
+          }
+          if (!res.destroyed) res.end();
+        };
+        pump();
         return;
       }
       if (req.method === 'GET' && url.startsWith('/img/')) {
@@ -143,7 +170,14 @@ export async function imagesWorld(
     tools: {
       ...DEFAULT_TOOLS_SETTINGS,
       ...o.tools,
-      images: { ...DEFAULT_IMAGE_SETTINGS, assetHosts: ['assets.test'], dataDir, ...o.images },
+      images: {
+        ...DEFAULT_IMAGE_SETTINGS,
+        assetHosts: ['assets.test'],
+        dataDir,
+        // v3 F2: a test container's disk may be small; the low-disk refusal has its own test.
+        stagingMinFreeBytes: 0,
+        ...o.images,
+      },
     },
   })) as ImagesWorld;
   let n = 0;
@@ -191,6 +225,8 @@ export async function imagesWorld(
     failDownload,
     gets,
     web,
+    files,
+    fileStats,
     corruptNext: null as Buffer | null,
     lkUploads,
     async close() {

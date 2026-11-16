@@ -1,8 +1,50 @@
 # Changelog
 
+## Unreleased: v3 F2 (16 November 2026): Last Major Revision, Make default, snapshot follow-ups, server-side staging, ChatGPT files, folders found at run time
+
+[ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) (Proposed); [ADR 0048](adr/0048-chronology-ii.md)
+accepted with the owner's decisions A–C; PLAN-v2's E6 note says "also called v3 F1". Migrations `2800` (a chronology
+link's name tail) and `2900` (server staging, migrate-staging requests). Nothing was run against a live system: every test
+uses the mock LegendKeeper and fixtures.
+
+- **A qualified event's name stays true to its row.** The date tail the bridge wrote after an event's last `–` follows
+  the row's Date cell when a sync or "Propose a fix" changes the date (dropped when the row becomes plain); wording alone
+  is a new `name_drift` finding with a name-only fix. Only tails the bridge wrote count; the opening words are never
+  touched.
+- **Last Major Revision on every substantial edit** (owner, 16 November 2026). `write_page`, block edits through
+  `lk_api_write` / `lk_api_batch`, chronology table rows, restores that change text, pack tools and `set_facts` (except
+  the housekeeping keys) set the page's row to today (Europe/London, `YYYY-MM-DD`) in the same job and proposal, with
+  their own If-Match; a proposal is dated the day it is approved. Pages without the row are skipped silently; already
+  today writes nothing; a failure after the edit is a follow-up (`lmr_failed`), never a rollback. Each category is a
+  per-project switch.
+- **Make default** on the Projects page stores the default project (re-authentication, audited, no restart);
+  `LK_DEFAULT_PROJECT` is an override the page names; `env-sync.sh --retire-default-project` retires the line once the
+  stored default agrees.
+- **A partial snapshot's missing pieces** are listed on the Snapshots page and, in summary, by `list_snapshots`.
+- **Pages deleted in the app** are restored from the snapshot that holds them, judged by its state (an Authoritative page
+  as a canonical proposal). Every restore proposal names its snapshot and when it was taken.
+- **A recreate that stopped part-way** is finished by the same request again, or **Finish** on the Snapshots page: only
+  what is missing is written, never a second page or document (E4-OPEN-1 closed).
+- **Unapproved images wait on the bridge's server** (owner, 16 November 2026; supersedes ADR 0041 decision 7). Staging
+  sends nothing to LegendKeeper; placing uploads the image straight into its final folder with its final name and verifies
+  it; the Staging page shows the bridge's own copy; discard removes it; `IMAGE_STAGING_MAX_DAYS` (90) warns, then removes;
+  `IMAGE_STAGING_MIN_FREE_GB` refuses a new staging upload on a low disk. Staged images are in no snapshot or off-site
+  copy. `npm run images -- migrate-staging --project <name>` moves the old `LK-Bridge staging` folder's images to the
+  server and proposes deleting them and the folder. An image is never placed in the library's root, and a name already in
+  the folder is numbered.
+- **ChatGPT files.** `upload_image` takes a conversation attachment as `file` (`_meta["openai/fileParams"]`; the SDK passes
+  `_meta` through unchanged): downloaded during the call through the guarded transport, at every scope; the magic bytes
+  decide; the link is never logged, stored, journalled or returned; an expired link is `FILE_URL_EXPIRED`.
+- **Folders found or created when the job runs** (the owner's report of 16 November 2026: two approved placements made
+  two identical folder chains). Under a per-project asset-folder lock, byte-exact names; the job's result and journal say
+  "found existing folder" or "created folder". A new audit finding, duplicate asset folders, with a merge fix.
+- Small items: LS1 treats "removed with its throwaway page" as a pass with a note (`deleteFeature` is refused on such a
+  map too; the LegendKeeper bug report says so); a region's old `polygon` is cleared (`polygon: []`) when `polygons` is
+  written; the maintenance jobs test runs on the fake clock alone.
+
 ## Unreleased: E6 "Chronology II" (16 November 2026): qualified dates, better pairing, events without a row, named proposals
 
-[ADR 0048](adr/0048-chronology-ii.md) (Proposed: owner decisions A–C); the new [docs/chronology.md](chronology.md); a
+[ADR 0048](adr/0048-chronology-ii.md) (accepted 16 November 2026: owner decisions A–C as built); the new [docs/chronology.md](chronology.md); a
 PLAN-v2 note after D1.1. Migration `2700` (`chronology_table_only`). Nothing was run against a live system: every test
 uses the mock LegendKeeper and fixtures built from Arkona's real date forms.
 

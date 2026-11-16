@@ -75,6 +75,8 @@ export interface PlannedWrite {
   readonly params: OpParams;
   /** For results and the journal: `Status: changed`, `Dependencies: 2 added`. */
   readonly label: string;
+  /** v3 F2 (ADR 0049): a row write's fact key (whether it is a housekeeping key, for Last Major Revision). */
+  readonly factKey?: string;
   /** The property it writes. */
   readonly propertyId: string;
   /** Rows of the key-value property just before this write (row writes; for the in-step check). */
@@ -238,6 +240,7 @@ export function planFacts(input: FactsPlanInput): FactsPlan {
             body: f.value!.length > 0 ? { content: f.value } : { content: null },
           },
           label: `${row.key}: changed`,
+          factKey: row.key,
           propertyId: pid,
         },
         { rowsBefore: before },
@@ -301,6 +304,7 @@ export function planFacts(input: FactsPlanInput): FactsPlan {
             },
           },
           label: `${f.key.trim()}: added`,
+          factKey: f.key.trim(),
           propertyId: pid,
         },
         { rowsBefore: before },
@@ -321,6 +325,7 @@ export function planFacts(input: FactsPlanInput): FactsPlan {
           op: 'deletePropertyRow',
           params: { path: { ...path, rowId: row.id! } },
           label: `${row.key}: removed`,
+          factKey: row.key,
           propertyId: pid,
         },
         { rowsBefore: before },

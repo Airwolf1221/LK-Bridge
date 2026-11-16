@@ -23,6 +23,10 @@ import * as z from 'zod';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { diffText } from '../../snapshots/diff.js';
 import { documentsOf, historyOf, pieceNow, pieceThen } from '../../snapshots/history.js';
+import { missingPiecesOf } from '../../snapshots/manifest.js';
+
+/** v3 F2: at most this many missing pieces are listed per snapshot (the rest are counted). */
+const MISSING_SHOWN = 200;
 import { imageRestoreDeps, restoreImage } from '../../snapshots/image-restore.js';
 import type { Rehearsals } from '../../snapshots/rehearsal.js';
 import { RestoreError } from '../../snapshots/restore.js';
@@ -105,10 +109,26 @@ export const registerSnapshots: Register = (api, ctx) => {
     const project = ctx.project(q.project);
     const { svc, restores } = services();
     const [overview, backups] = await Promise.all([svc.overview(project.id), svc.databaseBackups()]);
+    // v3 F2 (ADR 0049 decision 4): a partial snapshot lists its missing pieces (page, piece, reference, reason), from
+    // its manifest, read once per snapshot in this request (snapshots are small; only partial ones are read).
+    const rows = svc.index.snapshots(project.id, { ...(q.kind ? { kind: q.kind } : {}), limit: q.limit });
+    const snapshots = await Promise.all(
+      rows.map(async (row) => {
+        if (row.missing === 0) return row;
+        const m = await svc.manifest(row.id).catch(() => null);
+        if (!m) return { ...row, missingPieces: null };
+        const pieces = missingPiecesOf(m);
+        return {
+          ...row,
+          missingPieces: pieces.slice(0, MISSING_SHOWN),
+          ...(pieces.length > MISSING_SHOWN ? { missingMore: pieces.length - MISSING_SHOWN } : {}),
+        };
+      }),
+    );
     return {
       project: project.name,
       overview,
-      snapshots: svc.index.snapshots(project.id, { ...(q.kind ? { kind: q.kind } : {}), limit: q.limit }),
+      snapshots,
       restores: restores.list(project.id, { limit: 50 }),
       rehearsals: svc.index.rehearsals(project.id, 50),
       sandboxes: sandboxes(),
@@ -231,6 +251,26 @@ export const registerSnapshots: Register = (api, ctx) => {
   });
 
   /** "Propose a restore": always a proposal, approved as normal on the Proposals page. `dryRun`: the plan only. */
+  /**
+   * v3 F2 (ADR 0049 decision 6): "Finish" a recreate that stopped part-way: the same request proposed again, planning
+   * only what the page it made still lacks. Audited `snapshots.finish_recreate`.
+   */
+  api.post('/snapshots/restores/:id/finish', async (req) => {
+    const q = parseInput(projectQuery, req.query);
+    const { id } = parseInput(z.object({ id: z.string().regex(/^rst_[0-9a-f]{16}$/) }), req.params);
+    const project = ctx.project(q.project);
+    const { restores } = services();
+    try {
+      const r = await restores.finish(project.id, id, ORIGIN('snapshots.finish_recreate'), 'owner');
+      if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', summary: r.plan.summary };
+      audit('snapshots.finish_recreate', r.proposalId, { project: project.id, restoreId: id });
+      return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary };
+    } catch (e) {
+      if (e instanceof RestoreError) throw new AdminHttpError(409, e.code, e.message, e.details);
+      throw e;
+    }
+  });
+
   api.post('/snapshots/restore', async (req) => {
     const q = parseInput(projectQuery, req.query);
     const b = parseInput(

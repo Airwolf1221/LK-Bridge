@@ -59,6 +59,10 @@ import { CanonicalGuard } from './facts/index.js';
 import { combineGuards } from './jobs/write-guard.js';
 import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
+import { lifecycleFrom } from './lifecycle/settings.js';
+import { createLmrPlanner } from './lmr/index.js';
+import { assetLibraryOf } from './assets/library.js';
+import { snapshotPageState } from './snapshots/restore.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
 import { mapCheckers } from './maps/index.js';
@@ -284,6 +288,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       [UPLOAD_PUT_STEP]: createUploadPutHandler({
         putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,
         guard: uploadGuard,
+        // v3 F2 (ADR 0049 decision 10): a staged image's bytes, from the image service (created below).
+        stagedBytes: (sha) => images.stagedBytes.get(sha),
       }),
       [UPLOAD_VERIFY_STEP]: createUploadVerifyHandler({ assetHosts: imageSettings.assetHosts }),
     },
@@ -343,6 +349,22 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }
   };
   policy.proposals.setPageNames(pageName);
+  // v3 F2 (ADR 0049 decision 2): a substantial edit also sets its page's Last Major Revision, in the same job and
+  // proposal. The planner reads nothing: the tree's sidebar summary says where the row is.
+  const unregisterLmr = engine.setLmrPlanner(
+    createLmrPlanner({
+      settings: (projectId) => projectStore.byId(projectId)?.settings,
+      lmrKey: (projectId) => lifecycleFrom(projectStore.byId(projectId)?.settings).fields.lastMajorRevision,
+      sidebar: (projectId, pageId) => {
+        try {
+          return tree.queries.sidebars(projectId, [pageId]).data.get(pageId);
+        } catch {
+          return undefined;
+        }
+      },
+      pageName,
+    }),
+  );
   // v2 E6 (ADR 0048): a low-level proposal names the document it touches, from the tree.
   policy.proposals.setDocumentNames((projectId, resourceId, documentId) => {
     try {
@@ -368,6 +390,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     node: treeNode,
     // v2 E4 (RV2-1): what a delete recorded of a page (its name, parent and tags), so its restore can be judged.
     deletedPage: (projectId, id) => deletedPageRecord(engine, projectId, id),
+    // v3 F2 (ADR 0049 decision 5): else what the newest snapshot holding it says (a page deleted in the app).
+    snapshotPage: async (projectId, id) => {
+      const s = await snapshotPageState(snapshots, projectId, id);
+      return s ? { name: s.name, parentId: s.parentId, tags: s.tags } : null;
+    },
   });
   const unregisterGuard = engine.setWriteGuard(
     combineGuards(
@@ -377,6 +404,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         settings: (projectId) => projectStore.byId(projectId)?.settings,
         engine,
         pageName,
+        // v3 F2 (ADR 0049 decision 5): a deleted page restored is judged by the sidebar its newest snapshot holds.
+        restoredPage: async (projectId, id) => {
+          const s = await snapshotPageState(snapshots, projectId, id);
+          return s ? { name: s.name, rows: s.rows } : null;
+        },
         // v2 C2b: a cascade delete's pages, from the repository tree (null when the tree cannot answer).
         descendants: (projectId, resourceId) => {
           try {
@@ -540,6 +572,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
+    // v3 F2 (ADR 0049 decision 9): duplicate asset folders, from the bridge's asset tree (no LegendKeeper read).
+    assetLibrary: (projectId) => assetLibraryOf(assets, projectId),
   });
   audits.start();
   const detachAuditCheckers = [
@@ -604,6 +638,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine.registerMapChecker(name, fn as Parameters<JobEngine['registerMapChecker']>[1]),
   );
   const images = createImages({
+    // v3 F2 (ADR 0049 decision 10): migrate-staging downloads the old staged images through the project's governor.
+    lkFor: (projectId) => projects.client(projectId),
     db: o.db,
     engine,
     assets,
@@ -774,6 +810,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       await engine.stop();
       unregisterPlanner();
       unregisterGuard();
+      unregisterLmr();
       detachLifecycle();
       detachChronology();
       for (const off of detachMaps) off();
