@@ -191,13 +191,22 @@ export const registerAudits: Register = (api, ctx) => {
         project: projectParam,
         // v2 E6 (ADR 0048): a chronology repair that turns a range into a single date (or the reverse).
         confirmShapeChange: z.boolean().optional(),
+        // v3 F2.1: the owner's choice in a chronology tie: "Use this event", "Make a new event", "Pair with this row".
+        eventId: z.string().min(1).max(64).optional(),
+        createNew: z.boolean().optional(),
+        rowId: z.string().min(1).max(64).optional(),
       }),
       req.body,
     );
     const p = ctx.project(b.project);
+    if (b.createNew === true && b.eventId !== undefined)
+      throw new AdminHttpError(400, 'INVALID_INPUT', 'createNew and eventId cannot be given together.');
     return wrap(() =>
       audits().proposeFix('owner', p.id, id, {
         ...(b.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+        ...(b.eventId !== undefined ? { eventId: b.eventId } : {}),
+        ...(b.createNew === true ? { createNew: true } : {}),
+        ...(b.rowId !== undefined ? { rowId: b.rowId } : {}),
       }),
     );
   });

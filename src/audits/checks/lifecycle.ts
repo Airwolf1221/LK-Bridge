@@ -279,6 +279,7 @@ export function keepRegionsCheck(ctx: AuditContext): FindingDraft[] {
 const CHRONOLOGY_CODE: Record<string, FindingCode> = {
   row_without_event: 'chronology_row_without_event',
   event_without_row: 'chronology_event_without_row',
+  event_in_tie: 'chronology_event_in_tie',
   date_mismatch: 'chronology_date_mismatch',
   name_drift: 'chronology_name_drift',
   row_out_of_order: 'chronology_row_out_of_order',
@@ -318,6 +319,12 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
     const countFixable = f.kind === 'count_mismatch' && typeof d.main === 'string';
     // v2 E6 (ADR 0048): an event without a row has one too: the event deleted (only the event).
     const orphanFixable = f.kind === 'event_without_row' && typeof d.eventId === 'string';
+    // v3 F2.1: an event in a tie is paired with the row the owner picks (one button per candidate), never deleted.
+    const candidates = Array.isArray(d.candidates) ? (d.candidates as Record<string, unknown>[]) : [];
+    const pairFixable =
+      f.kind === 'event_in_tie' &&
+      typeof d.eventId === 'string' &&
+      candidates.some((c) => typeof c.rowId === 'string');
     const shape = typeof d.shapeChange === 'string' ? d.shapeChange : null;
     out.push({
       code,
@@ -354,7 +361,21 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
                   summary: `Propose deleting the ${f.age} timeline event, which has no table row (only the event).`,
                 },
               }
-            : {}),
+            : pairFixable
+              ? {
+                  fix: {
+                    kind: 'chronology_pair' as const,
+                    args: {
+                      age: f.age,
+                      eventId: d.eventId,
+                      candidates: candidates
+                        .filter((c) => typeof c.rowId === 'string')
+                        .map((c) => ({ rowId: c.rowId, date: c.date, words: c.words })),
+                    },
+                    summary: `Propose pairing the ${f.age} timeline event with the row you pick (sync_timeline_event with event_id); it is never deleted.`,
+                  },
+                }
+              : {}),
     });
   }
   return out;

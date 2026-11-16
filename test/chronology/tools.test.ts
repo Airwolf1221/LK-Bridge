@@ -51,7 +51,7 @@ describe('calendar_date', () => {
       shape: 'date-range',
       formattedStart: 'Jehet 11th, 4A 424',
       formattedEnd: 'Jehet 18th, 4A 424',
-      kcyText: '1,250,731 - 1,250,731',
+      kcyText: '1,250,731',
       age: FOURTH,
     });
     for (const d of [
@@ -146,7 +146,7 @@ describe('create_timeline_event', () => {
       'Kumikas 1st, AA 1,988,119 | The Archons wake on the first day of the reckoning | -1,988,119',
       'Isar 5th, AA 1,000,000 | The Concord is drafted | -1,000,000',
       'AA 1,000,000 | The Archon Concord is sealed | -1,000,000',
-      'Isar 3rd - 9th, AA 5 | The Last Archon Council sits for a week | -5 - -5',
+      'Isar 3rd - 9th, AA 5 | The Last Archon Council sits for a week | -5',
     ]);
     expect(w.count('Archon Age')).toBe('4');
   });

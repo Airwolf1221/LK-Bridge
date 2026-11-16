@@ -496,6 +496,159 @@ describe('the Chronology page, v2 E6 (ADR 0048)', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------------- v3 F2.1: ties
+
+  it('a fix refused for a tie shows each candidate event with “Use this event”, and one “Make a new event” (v3 F2.1)', async () => {
+    let posts = 0;
+    const api = installApi(
+      routes({
+        'GET /chronology/check': withFindings([
+          finding(
+            'row_without_event',
+            'Row 9 (“Before Selyros 40th, 4A 605; exact day unresolved”) has no event.',
+            {
+              rowId: 'kvqam7yc',
+              date: 'Before Selyros 40th, 4A 605; exact day unresolved',
+            },
+          ),
+        ]),
+        'GET /chronology/table-only': { project: checkJson.project, marks: [] },
+        'POST /chronology/propose-fix': () =>
+          ++posts === 1
+            ? {
+                status: 409,
+                body: {
+                  error: {
+                    code: 'PAIRING_AMBIGUOUS',
+                    message:
+                      'The row … could be its own: “Mehrana returns…” (Selyros 40th, 4A 605, n4nl9rud); “Another telling” (Selyros 40th, 4A 605, eother01).',
+                    details: {
+                      row: { id: 'kvqam7yc' },
+                      candidates: [
+                        { id: 'n4nl9rud', name: 'Mehrana returns…', date: 'Selyros 40th, 4A 605' },
+                        { id: 'eother01', name: 'Another telling', date: 'Selyros 40th, 4A 605' },
+                      ],
+                    },
+                  },
+                },
+              }
+            : { status: 'proposal_captured', proposalId: `prop_6${posts}`, summary: 'x' },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    const tie = await within(table).findByTestId('tie-choices');
+    expect(tie).toHaveTextContent('“Mehrana returns…” (Selyros 40th, 4A 605, n4nl9rud)');
+    expect(within(tie).getAllByRole('button', { name: 'Use this event' })).toHaveLength(2);
+    expect(within(tie).getAllByRole('button', { name: 'Make a new event' })).toHaveLength(1);
+    // The refusal itself is shown too, with the candidates in its words.
+    expect(await screen.findByText(/could be its own: “Mehrana returns…”/)).toBeInTheDocument();
+    const second = tie.querySelector('[data-candidate="eother01"]') as HTMLElement;
+    await user.click(within(second).getByRole('button', { name: 'Use this event' }));
+    await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(2));
+    expect(api.find('POST', '/chronology/propose-fix')[1]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      rowId: 'kvqam7yc',
+      eventId: 'eother01',
+    });
+    expect(await within(table).findByText(/Proposal prop_62 is waiting/)).toBeInTheDocument();
+    expect(within(table).queryByTestId('tie-choices')).toBeNull();
+  });
+
+  it('“Make a new event” sends createNew for the row (v3 F2.1)', async () => {
+    let posts = 0;
+    const api = installApi(
+      routes({
+        'GET /chronology/check': withFindings([
+          finding('row_without_event', 'Row 9 has no event.', {
+            rowId: 'kvqam7yc',
+            date: 'Before Selyros 40th',
+          }),
+        ]),
+        'GET /chronology/table-only': { project: checkJson.project, marks: [] },
+        'POST /chronology/propose-fix': () =>
+          ++posts === 1
+            ? {
+                status: 409,
+                body: {
+                  error: {
+                    code: 'PAIRING_AMBIGUOUS',
+                    message: 'tied',
+                    details: {
+                      row: { id: 'kvqam7yc' },
+                      candidates: [{ id: 'n4nl9rud', name: 'M', date: 'D' }],
+                    },
+                  },
+                },
+              }
+            : { status: 'proposal_captured', proposalId: 'prop_70', summary: 'x' },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    await user.click(await within(table).findByRole('button', { name: 'Make a new event' }));
+    await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(2));
+    expect(api.find('POST', '/chronology/propose-fix')[1]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      rowId: 'kvqam7yc',
+      createNew: true,
+    });
+  });
+
+  it('an event in a tie offers “Pair with this row” per candidate and never a delete (v3 F2.1)', async () => {
+    const api = installApi(
+      routes({
+        'GET /chronology/check': withFindings([
+          finding('event_in_tie', 'Event “Mehrana returns…” (Selyros 40th, 4A 605) is in a tie: 2 rows …', {
+            eventId: 'n4nl9rud',
+            name: 'Mehrana returns…',
+            date: 'Selyros 40th, 4A 605',
+            candidates: [
+              {
+                rowId: 'w26f230j',
+                date: 'After Pardis-an placement and before Selyros 40th, 4A 605',
+                words: 'In the final House period…',
+              },
+              {
+                rowId: 'kvqam7yc',
+                date: 'Before Selyros 40th, 4A 605',
+                words: 'Following Mehrana’s return…',
+              },
+            ],
+          }),
+        ]),
+        'GET /chronology/table-only': { project: checkJson.project, marks: [] },
+        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_71', summary: 'x' },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    expect(table).toHaveTextContent('Event in a tie');
+    expect(within(table).queryByRole('button', { name: 'Propose deleting the event' })).toBeNull();
+    const tie = within(table).getByTestId('tie-choices');
+    expect(within(tie).getAllByRole('button', { name: 'Pair with this row' })).toHaveLength(2);
+    expect(within(tie).queryByRole('button', { name: 'Make a new event' })).toBeNull();
+    const row = tie.querySelector('[data-candidate="kvqam7yc"]') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: 'Pair with this row' }));
+    await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
+    expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      rowId: 'kvqam7yc',
+      eventId: 'n4nl9rud',
+    });
+  });
+
   it('marks a row table-only from its finding, lists the marks, and clears one', async () => {
     const api = installApi(
       routes({

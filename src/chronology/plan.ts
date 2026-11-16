@@ -265,6 +265,25 @@ export function buildJob(o: {
         );
         break;
       }
+      case 'event.assert': {
+        // v3 F2.1: not a write: the timeline is locked and the event compared inside the lock (a link's compare-and-swap).
+        const now = o.ctx.events[w.eventId] ?? {};
+        if (!eventsChecked.has(w.eventId)) {
+          eventsChecked.add(w.eventId);
+          checks.push({
+            label: `event:${w.eventId}`,
+            kind: 'event',
+            resourceId,
+            documentId: w.documentId,
+            eventId: w.eventId,
+            present: true,
+            fields: Object.fromEntries(
+              EVENT_FIELDS.filter((k) => now[k] !== undefined).map((k) => [k, now[k]]),
+            ),
+          });
+        }
+        break;
+      }
       case 'event.delete': {
         const now = o.ctx.events[w.eventId] ?? {};
         checks.push({

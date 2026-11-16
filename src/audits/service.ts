@@ -293,7 +293,15 @@ export class Audits {
     actor: string,
     projectId: string,
     findingId: number,
-    opts: { readonly confirmShapeChange?: boolean } = {},
+    opts: {
+      readonly confirmShapeChange?: boolean;
+      /** v3 F2.1: "Use this event" on a refused, ambiguous sync fix. */
+      readonly eventId?: string;
+      /** v3 F2.1: "Make a new event" on a refused, ambiguous sync fix. */
+      readonly createNew?: boolean;
+      /** v3 F2.1: "Pair with this row" on an event in a tie: which candidate row. */
+      readonly rowId?: string;
+    } = {},
   ): Promise<FixResult> {
     const f = this.store.get(projectId, findingId);
     if (!f) throw new AuditError('NOT_FOUND', `No finding ${findingId}.`);
@@ -304,9 +312,20 @@ export class Audits {
     if (
       f.fix.kind === 'chronology_sync' ||
       f.fix.kind === 'chronology_count' ||
-      f.fix.kind === 'chronology_orphan'
+      f.fix.kind === 'chronology_orphan' ||
+      f.fix.kind === 'chronology_pair'
     ) {
       const kind = f.fix.kind;
+      if (kind === 'chronology_pair') {
+        const rows = Array.isArray(f.fix.args.candidates)
+          ? (f.fix.args.candidates as { rowId?: unknown }[]).map((c) => c.rowId)
+          : [];
+        if (opts.rowId === undefined || !rows.includes(opts.rowId))
+          throw new AuditError(
+            'FIX_NOT_APPLICABLE',
+            'Pick one of the rows this event is tied with (Pair with this row); nothing was proposed.',
+          );
+      }
       const c = await this.d.chronology.proposeFix(
         actor,
         projectId,
@@ -314,12 +333,22 @@ export class Audits {
           ? { kind: 'count', age: String(f.fix.args.age) }
           : kind === 'chronology_orphan'
             ? { kind: 'orphan', age: String(f.fix.args.age), eventId: String(f.fix.args.eventId) }
-            : {
-                age: String(f.fix.args.age),
-                rowId: String(f.fix.args.rowId),
-                // v2 E6 (ADR 0048): a range made a single date (or the reverse) only with the owner's confirmation.
-                ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
-              },
+            : kind === 'chronology_pair'
+              ? {
+                  age: String(f.fix.args.age),
+                  rowId: opts.rowId!,
+                  eventId: String(f.fix.args.eventId),
+                  ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+                }
+              : {
+                  age: String(f.fix.args.age),
+                  rowId: String(f.fix.args.rowId),
+                  // v2 E6 (ADR 0048): a range made a single date (or the reverse) only with the owner's confirmation.
+                  ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+                  // v3 F2.1: the owner's choice after a refused, ambiguous pairing.
+                  ...(opts.eventId !== undefined ? { eventId: opts.eventId } : {}),
+                  ...(opts.createNew === true ? { createNew: true } : {}),
+                },
       );
       r =
         c.status === 'proposal_captured'

@@ -1253,6 +1253,8 @@ export interface ChronologyLookupView extends ChronologyFindView {
 export type ChronologyFindingKind =
   | 'row_without_event'
   | 'event_without_row'
+  /** v3 F2.1: an unpaired event that unpaired rows could own: paired by the owner, never deleted. */
+  | 'event_in_tie'
   | 'date_mismatch'
   | 'name_drift'
   | 'row_out_of_order'

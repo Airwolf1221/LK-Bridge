@@ -170,8 +170,15 @@ export const registerChronology: Register = (api, ctx) => {
           eventId: z.string().min(1).max(64).optional(),
           // v2 E6: a repair that turns a range into a single date (or the reverse) is confirmed by the owner.
           confirmShapeChange: z.boolean().optional(),
+          // v3 F2.1: "Make a new event" (a sync fix whose candidates the owner passes over). With `eventId` on a sync
+          // fix: "Use this event" / "Pair with this row".
+          createNew: z.boolean().optional(),
         })
         .strict()
+        .refine((x) => !(x.createNew === true && x.eventId !== undefined), {
+          message: 'createNew and eventId cannot be given together',
+          path: ['createNew'],
+        })
         .refine((x) => x.kind === 'count' || x.kind === 'orphan' || x.rowId !== undefined, {
           message: 'rowId is required unless kind is count or orphan',
           path: ['rowId'],
@@ -195,6 +202,8 @@ export const registerChronology: Register = (api, ctx) => {
                 age: b.age,
                 rowId: b.rowId!,
                 ...(b.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+                ...(b.eventId !== undefined ? { eventId: b.eventId } : {}),
+                ...(b.createNew === true ? { createNew: true } : {}),
               },
       );
     } catch (e) {

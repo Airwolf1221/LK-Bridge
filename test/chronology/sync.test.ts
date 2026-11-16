@@ -288,20 +288,40 @@ describe('sync_timeline_event: refusals', () => {
     ]);
     expect(done().writes).toBe(0);
     expect(events().length).toBe(before);
+    // The refusal names every candidate in its message (name, date and id), not only in its details (v3 F2.1).
+    for (const c of r.body.error.candidates as Obj[]) {
+      expect(r.body.error.message).toContain(String(c.id));
+      expect(r.body.error.message).toContain(String(c.name));
+    }
+    expect(r.body.error.message).toContain('4A 881');
+    // A choice that is not an event of the age is refused, with the candidates named.
+    const bad = await call('sync_timeline_event', {
+      row: { date: '4A 881', description: 'The year of the long harvest' },
+      event_id: 'nosuchev',
+    });
+    expect(bad.body.error.code).toBe('EVENT_NOT_FOUND');
+    expect(bad.body.error.message).toContain('Harvest, one telling');
     // Naming one of them is the caller's choice.
     const choice = (r.body.error.candidates as Obj[]).find((c) => c.name === 'Harvest, one telling')!;
     const ok = await call('sync_timeline_event', {
       row: { date: '4A 881', description: 'The year of the long harvest' },
       event_id: choice.id,
     });
-    // It already agrees with the row (same date, detail and uri), so there is nothing to write.
-    expect(ok.body.status, ok.text).toBe('nothing_to_do');
-    // A choice that is not an event of the age is refused.
-    const bad = await call('sync_timeline_event', {
-      row: { date: '4A 881', description: 'The year of the long harvest' },
-      event_id: 'nosuchev',
+    // It already agrees with the row (same date, detail and uri): nothing to write, but the choice is remembered
+    // (v3 F2.1): the bridge records the link, and the check pairs them from now on.
+    expect(ok.body, ok.text).toMatchObject({
+      status: 'linked',
+      action: 'link',
+      pairedBy: 'chosen by the caller',
     });
-    expect(bad.body.error.code).toBe('EVENT_NOT_FOUND');
+    expect(done().writes).toBe(0);
+    const again = await call('sync_timeline_event', {
+      row: { date: '4A 881', description: 'The year of the long harvest' },
+    });
+    expect(again.body, again.text).toMatchObject({
+      status: 'nothing_to_do',
+      pairedBy: 'linked by the bridge',
+    });
     deleteEvent(String(eventNamed('Harvest, one telling')[0]!.id));
     deleteEvent(String(eventNamed('Harvest, another telling')[0]!.id));
     // Put the row's event back so later tests start clean.
@@ -315,14 +335,14 @@ describe('sync_timeline_event: refusals', () => {
     const none = await call('sync_timeline_event', {
       row: { date: 'Kumikas 3rd, 4A 881', description: 'No such row' },
     });
-    expect(none.body.error.code).toBe('EVENT_NOT_FOUND');
+    expect(none.body.error.code).toBe('ROW_NOT_FOUND');
     expect(none.body.error.sameDate).toHaveLength(1);
     const only = await call('sync_timeline_event', { row: { date: 'Kumikas 3rd, 4A 881' } });
     expect(only.body.error.code).toBe('INVALID_PARAMS');
     const bad = await call('sync_timeline_event', { row: { date: 'Unknown', description: 'x' } });
     expect(bad.body.error.code).toBe('DATE_UNKNOWN_ALONE');
     const gone = await call('sync_timeline_event', { row: { row_id: 'rfour999', age: FOURTH } });
-    expect(gone.body.error.code).toBe('EVENT_NOT_FOUND');
+    expect(gone.body.error.code).toBe('ROW_NOT_FOUND');
   });
 
   it('dryRun shows the plan and writes nothing', async () => {
@@ -476,7 +496,7 @@ describe('propose scope and the dashboard’s "Propose a fix"', () => {
     expect(ok).toMatchObject({ status: 'nothing_to_do' });
     await expect(
       chronology.proposeFix('owner', PROJECT, { age: FOURTH, rowId: 'rfour999' }),
-    ).rejects.toMatchObject({ code: 'EVENT_NOT_FOUND' });
+    ).rejects.toMatchObject({ code: 'ROW_NOT_FOUND' });
     await expect(
       chronology.proposeFix('owner', PROJECT, { age: 'Seventh Age', rowId: 'rfour000' }),
     ).rejects.toMatchObject({ code: 'AGE_NOT_FOUND' });
