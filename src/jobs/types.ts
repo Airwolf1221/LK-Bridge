@@ -173,9 +173,27 @@ export interface StepOptions {
     /**
      * v2 E1a: where in the earlier step's result the id is: `id` (the default: a created folder, asset or document), or
      * `documents.<n>.id` (the n-th document of a page `createResource` made, 0 to 4: it creates up to five).
+     * v3 F3a (ADR 0050): `documents.main.id`, the main page document of a page the job made (from a template, whose
+     * documents LegendKeeper copies in an order it does not state): the one named `Main` of type page or blank, else the
+     * only page or blank document; any other answer stops the step before anything is sent.
      */
-    readonly from?: 'id' | `documents.${number}.id`;
+    readonly from?: 'id' | `documents.${number}.id` | 'documents.main.id';
   };
+  /**
+   * v3 F3a (ADR 0050), set by bridge code only: just before it runs, every string in this step's `body` equal to a
+   * `placeholder` is replaced by the `url` of the asset the named earlier step created (`createImageAsset`): a page's
+   * image blocks, written in the same job that uploads the images, name each new asset by its real address. Done once,
+   * checked against the schema and stored before anything is sent; a step being recovered keeps what it was sent with.
+   */
+  readonly bindAssetUrls?: readonly { readonly step: number; readonly placeholder: string }[];
+  /**
+   * v3 F3a (ADR 0050), set by bridge code only, on a `replaceDocumentBlocks` of a page the same job made from a template
+   * (whose copy already holds the template's content): inside the lock, after the read that gives the If-Match, the
+   * registered filler named here works out the blocks to send from the document as it is then and the planned blocks
+   * (keeping what Markdown cannot express, such as an index's collection block). The result is stored before it is sent,
+   * with the version read as its If-Match, so a recovery compares with it; the unsupported-block guard still judges it.
+   */
+  readonly fill?: { readonly filler: string; readonly input?: unknown };
   /**
    * v3 F2 (ADR 0049 decision 2), set by bridge code only: this write's path and body come from the decision the named
    * `bridge.lmr` step made when it ran (its result's `lmr`), and when that step decided to skip it (or did not succeed),

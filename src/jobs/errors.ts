@@ -292,6 +292,35 @@ export class StateConflictError extends VersionConflictError {
 }
 
 /**
+ * v3 F3a (ADR 0050): a registered check inside the job refused the work with a typed reason (for example
+ * `CHARACTER_EXISTS`: the character a package would create appeared after it was planned). Nothing was written. A
+ * `VersionConflictError` underneath, so the engine, the proposals and the tools treat it as a conflict (never retried,
+ * an approved proposal ends conflicted); its JSON carries the refusal's own code, message and details.
+ */
+export class CheckRefusedError extends VersionConflictError {
+  override readonly name = 'VersionConflictError';
+  constructor(
+    opId: string,
+    readonly refusal: string,
+    message: string,
+    readonly details: Readonly<Record<string, unknown>> = {},
+    ref: JobRef = {},
+  ) {
+    super(opId, null, null, ref);
+    this.message = message;
+  }
+  override toJSON() {
+    return {
+      ...super.toJSON(),
+      ...this.details,
+      code: this.refusal,
+      message: this.message,
+      reason: 'refused_in_lock',
+    };
+  }
+}
+
+/**
  * v2 C2a (ADR 0032): a write would make a protected canonical change (for example set a page's Status to
  * Authoritative) and the work does not carry the owner's canonical approval. Nothing was sent.
  */

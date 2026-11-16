@@ -312,6 +312,24 @@ const mapCheck = z
   })
   .strict();
 
+/**
+ * v3 F3a (ADR 0050): a check judged by an ASYNCHRONOUS checker the bridge registered by name
+ * (`engine.registerAsyncChecker`): a setting pack's in-lock checks (the character is still absent when its job runs; the
+ * pack's governance sources are still the approved versions). The checker reads through the job itself (governed,
+ * counted with the step) and answers differences (a conflict: nothing is written), a typed refusal (the job stops with
+ * that code before any write), and bodies for `bindBody`.
+ */
+const registeredCheck = z
+  .object({
+    label,
+    kind: z.literal('registered'),
+    checker: z.string().min(1).max(100),
+    /** The page the check is about, when there is one (its versions are kept under it). */
+    resourceId: id.optional(),
+    input: z.unknown(),
+  })
+  .strict();
+
 export const expectCheckSchema = z.union([
   propertyCheck,
   copyCheck,
@@ -324,6 +342,7 @@ export const expectCheckSchema = z.union([
   eventCheck,
   laneCheck,
   mapCheck,
+  registeredCheck,
 ]);
 
 // C2d: a whole set checks up to a hundred pages' rows and notes in one step (it was 50).
@@ -511,6 +530,22 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
       gone: z.boolean().optional(),
     })
     .strict(),
+  // v3 F3a (ADR 0050): anything read back and judged by an asynchronous checker the bridge registered by name (a setting
+  // pack's page checks), given the results of earlier steps it names (`inputFrom`: a Last Major Revision decision, an
+  // image's new asset). Each target is reported on its own, so one page can have several (one per gated field).
+  z
+    .object({
+      kind: z.literal('registered'),
+      label,
+      checker: z.string().min(1).max(100),
+      resourceId: id.optional(),
+      input: z.unknown(),
+      inputFrom: z
+        .array(z.object({ step: z.number().int().min(1), as: z.string().min(1).max(100) }).strict())
+        .max(50)
+        .optional(),
+    })
+    .strict(),
 ]);
 
 export const verifyParamsSchema = z
@@ -551,7 +586,8 @@ export type ExpectCheck =
   | DocumentCheck
   | EventCheck
   | LaneCheck
-  | MapCheck;
+  | MapCheck
+  | RegisteredExpectCheck;
 
 /** v2 D2: a map document and its features, judged by a registered map checker. */
 export interface MapCheck {
@@ -814,7 +850,96 @@ export type VerifyTarget =
       readonly match?: { readonly name: string; readonly type: string };
       readonly fields?: Readonly<Record<string, unknown>>;
       readonly gone?: boolean;
-    };
+    }
+  | RegisteredVerifyTarget;
+
+/** v3 F3a (ADR 0050): a target read back and judged by a registered asynchronous checker. */
+export interface RegisteredVerifyTarget {
+  readonly kind: 'registered';
+  readonly label: string;
+  readonly checker: string;
+  readonly resourceId?: string;
+  readonly input: unknown;
+  /** Earlier steps whose results the checker gets, each under its own name (`from[as]`). */
+  readonly inputFrom?: readonly { readonly step: number; readonly as: string }[];
+}
+
+/** v3 F3a (ADR 0050): a `bridge.expect` check judged by a registered asynchronous checker. */
+export interface RegisteredExpectCheck {
+  readonly label: string;
+  readonly kind: 'registered';
+  readonly checker: string;
+  readonly resourceId?: string;
+  readonly input: unknown;
+}
+
+/**
+ * v3 F3a (ADR 0050): what a registered asynchronous checker gets. `read` is a governed read in the job's name (counted
+ * with its step, told to the snapshot service like the bridge's other check reads); a 404 is `{ exists: false }`. In a
+ * verify step the same read is made once per step (later targets get the answer the first one did).
+ */
+export interface RegisteredCheckContext {
+  readonly projectId: string;
+  readonly jobId: string;
+  readonly stepNo: number;
+  readonly label: string;
+  readonly phase: 'expect' | 'verify';
+  readonly input: unknown;
+  /** Verify only: the stored results of the earlier steps the target names, by their `as` names (null: not succeeded). */
+  readonly from: Readonly<Record<string, unknown>>;
+  read(op: string, params: OpParamsShape): Promise<{ readonly exists: boolean; readonly body: unknown }>;
+}
+
+/** The params of a read (`{ path?, query? }`), as the registry takes them. */
+export interface OpParamsShape {
+  readonly path?: Readonly<Record<string, string>>;
+  readonly query?: Readonly<Record<string, unknown>>;
+}
+
+/** What a registered checker answers. */
+export interface RegisteredCheckResult {
+  /** A difference is a conflict in `bridge.expect` (nothing written) and a mismatch in `bridge.verify`. */
+  readonly differences: readonly StateDifference[];
+  /**
+   * `bridge.expect` only: a typed refusal. The job stops at the check, before any write, with this code (for example
+   * `CHARACTER_EXISTS`) and message, and the details beside them; never retried.
+   */
+  readonly refusal?: {
+    readonly code: string;
+    readonly message: string;
+    readonly details?: Readonly<Record<string, unknown>>;
+  };
+  /** `bridge.expect` only: write bodies by key, for `bindBody`. */
+  readonly bodies?: Readonly<Record<string, unknown>>;
+  /** What the checker saw, kept in the step's result. */
+  readonly observed?: unknown;
+}
+
+export type RegisteredChecker = (ctx: RegisteredCheckContext) => Promise<RegisteredCheckResult>;
+
+/**
+ * v3 F3a (ADR 0050): a filler, by name (`engine.registerFiller`), for `StepOptions.fill`: given the document as it is
+ * when the write runs (read inside its lock) and the blocks the plan wants, it answers the blocks to send: a page the
+ * same job made from a template already holds the template's content, and what Markdown cannot express there (a
+ * collection block, `unsupported` content) is kept. A filler that throws stops the write (a conflict; nothing is sent).
+ */
+export interface FillContext {
+  readonly projectId: string;
+  readonly jobId: string;
+  readonly stepNo: number;
+  readonly input: unknown;
+  /** The blocks the step was planned with (after every binding). */
+  readonly planned: readonly unknown[];
+  readonly current: { readonly version: string; readonly blocks: readonly unknown[] };
+}
+
+export interface FillResult {
+  readonly blocks: readonly unknown[];
+  /** What the filler did, kept in the step's result (`filled`). */
+  readonly note?: Readonly<Record<string, unknown>>;
+}
+
+export type Filler = (ctx: FillContext) => FillResult;
 
 const lmrParamsSchema = z
   .object({

@@ -861,7 +861,9 @@ export class ImageService {
       reason?: unknown;
     };
     const assetId = typeof a.id === 'string' ? a.id : null;
-    if (j.status === 'succeeded' && assetId) {
+    // v3 F3a (ADR 0050): the image is placed once ITS asset was created, even when a later step of the same job (a
+    // setting pack's page writes) stopped it: the asset exists in LegendKeeper, so it must never be uploaded again.
+    if (assetId && (j.status === 'succeeded' || asset !== undefined)) {
       const intended = (r.intended ?? {}) as {
         placing?: { name?: string; path?: string[]; folderId?: string | null };
       };
@@ -886,7 +888,11 @@ export class ImageService {
               ? v.reason
               : 'the stored file was not checked',
           error:
-            res.verified === false ? 'placed, but the read back did not match the plan (see the job)' : null,
+            j.status !== 'succeeded'
+              ? `placed, but the job that placed it then stopped: ${j.lastError?.message ?? j.status}`
+              : res.verified === false
+                ? 'placed, but the read back did not match the plan (see the job)'
+                : null,
         }) ?? r;
       if (verified) {
         try {

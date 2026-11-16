@@ -49,7 +49,9 @@ import {
   isInternalStep,
   LMR_STEP,
   type DocumentChecker,
+  type Filler,
   type MapChecker,
+  type RegisteredChecker,
 } from './internal-steps.js';
 import type { WriteGuard } from './write-guard.js';
 import type { LmrPlan, LmrPlanInput, LmrPlanner } from './lmr-hook.js';
@@ -233,6 +235,10 @@ export class JobEngine {
   private readonly checkers = new Map<string, DocumentChecker>();
   /** v2 D2: the map checkers of `bridge.expect` (`kind: 'map'`) and `bridge.verify` (`kind: 'mapChecked'`), by name. */
   private readonly mapCheckers = new Map<string, MapChecker>();
+  /** v3 F3a (ADR 0050): the asynchronous checkers of `bridge.expect` and `bridge.verify` (`kind: 'registered'`). */
+  private readonly asyncCheckers = new Map<string, RegisteredChecker>();
+  /** v3 F3a (ADR 0050): the fillers of `StepOptions.fill`, by name. */
+  private readonly fillers = new Map<string, Filler>();
   private readonly etagVersions: ((projectId: string) => boolean) | undefined;
   private readOnlyOverride: boolean | null;
   private writesPaused: boolean;
@@ -280,6 +286,8 @@ export class JobEngine {
       recordHandler: (store) => this.recordHandlers.get(store),
       checker: (name) => this.checkers.get(name),
       mapChecker: (name) => this.mapCheckers.get(name),
+      asyncChecker: (name) => this.asyncCheckers.get(name),
+      filler: (name) => this.fillers.get(name),
       ...(o.etagVersions ? { etagVersions: o.etagVersions } : {}),
       assetDeleteKeeper: () => this.assetDeleteKeeper,
       onRead: (info) => this.notifyRead(info),
@@ -587,6 +595,29 @@ export class JobEngine {
     this.mapCheckers.set(name, checker);
     return () => {
       if (this.mapCheckers.get(name) === checker) this.mapCheckers.delete(name);
+    };
+  }
+
+  /**
+   * v3 F3a (ADR 0050): registers an asynchronous checker for `bridge.expect` checks and `bridge.verify` targets of kind
+   * `registered` (a setting pack's), replacing any earlier one of that name. A job whose check names a missing checker
+   * fails at that check, before its writes (a verify target is `not_checked`). Returns an unregister.
+   */
+  registerAsyncChecker(name: string, checker: RegisteredChecker): () => void {
+    this.asyncCheckers.set(name, checker);
+    return () => {
+      if (this.asyncCheckers.get(name) === checker) this.asyncCheckers.delete(name);
+    };
+  }
+
+  /**
+   * v3 F3a (ADR 0050): registers a filler for `StepOptions.fill`, replacing any earlier one of that name. A write that
+   * names a missing filler fails before anything is sent. Returns an unregister.
+   */
+  registerFiller(name: string, filler: Filler): () => void {
+    this.fillers.set(name, filler);
+    return () => {
+      if (this.fillers.get(name) === filler) this.fillers.delete(name);
     };
   }
 
@@ -1157,10 +1188,12 @@ export class JobEngine {
     const body = (params.body ?? {}) as Record<string, unknown>;
     if (typeof body.uploadKey === 'string' && body.uploadKey.length > 0 && body.uploadKey !== 'pending')
       return false;
-    // v2 D3: folders may be created first, so the upload is the createImageUpload step before this one.
+    // v2 D3: folders may be created first, so the upload is the createImageUpload step before this one. v3 F3a (ADR
+    // 0050): the NEAREST one before it, so a batch that uploads several images binds each asset to its own upload.
     const first = this.repo
       .steps(jobId)
-      .find((s) => s.opId === 'createImageUpload' && s.stepNo < step.stepNo);
+      .filter((s) => s.opId === 'createImageUpload' && s.stepNo < step.stepNo)
+      .sort((a, b) => b.stepNo - a.stepNo)[0];
     // v3 F2: outside an upload job, only a batch that made its own upload binds its key (a raw createImageAsset keeps
     // the key it was given).
     if (!first && this.repo.job(jobId)?.kind !== 'upload_image') return false;
@@ -1336,13 +1369,17 @@ export class JobEngine {
       source?.status === 'succeeded'
         ? (this.repo.stepResult(source) as { id?: unknown; documents?: unknown } | null)
         : null;
-    // v2 E1a: the n-th document of a page the job created, or a created entity's own id.
+    // v2 E1a: the n-th document of a page the job created, or a created entity's own id. v3 F3a (ADR 0050): or its
+    // main page document, by name and type (a template copy's documents come in an order LegendKeeper does not state).
     const docAt = from.from !== undefined ? /^documents\.([0-4])\.id$/.exec(from.from) : null;
-    const id = docAt
-      ? Array.isArray(result?.documents)
-        ? (result.documents as { id?: unknown }[])[Number(docAt[1])]?.id
-        : undefined
-      : result?.id;
+    const id =
+      from.from === 'documents.main.id'
+        ? mainDocumentId(result?.documents)
+        : docAt
+          ? Array.isArray(result?.documents)
+            ? (result.documents as { id?: unknown }[])[Number(docAt[1])]?.id
+            : undefined
+          : result?.id;
     if (typeof id !== 'string' || id.length === 0) {
       return new JobsError(
         'BRIDGE_ERROR',
@@ -1357,6 +1394,50 @@ export class JobEngine {
         : from.to === 'path.documentId'
           ? { ...params, path: { ...(params.path ?? {}), documentId: id } }
           : { ...params, body: { ...((params.body ?? {}) as Record<string, unknown>), folderId: id } };
+    try {
+      this.validate(step.opId, next);
+    } catch (e) {
+      if (e instanceof JobsError) return e;
+      throw e;
+    }
+    if (JSON.stringify(next) !== JSON.stringify(params)) this.repo.setStepParams(job.id, step.stepNo, next);
+    return null;
+  }
+
+  /**
+   * v3 F3a (ADR 0050): replaces, in this step's body, every string equal to a placeholder of `options.bindAssetUrls` by
+   * the `url` of the asset the named earlier step created (see `StepOptions.bindAssetUrls`). Stored before anything is
+   * sent, checked against the schema; a step that may already have been sent keeps what it was sent with.
+   */
+  private bindAssetUrls(job: JobView, step: StepView): JobsError | null {
+    const binds = step.options.bindAssetUrls;
+    if (!binds || binds.length === 0) return null;
+    if (step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
+    const ref = { jobId: job.id, stepNo: step.stepNo };
+    const urls = new Map<string, string>();
+    for (const b of binds) {
+      const source = b.step < step.stepNo ? this.repo.step(job.id, b.step) : undefined;
+      const made =
+        source?.status === 'succeeded' ? (this.repo.stepResult(source) as { url?: unknown } | null) : null;
+      if (typeof made?.url !== 'string' || made.url.length === 0) {
+        return new JobsError(
+          'BRIDGE_ERROR',
+          `${step.opId}: step ${b.step} gave no asset address to put in place of ${b.placeholder}; nothing was sent`,
+          ref,
+        );
+      }
+      urls.set(b.placeholder, made.url);
+    }
+    const params = this.repo.stepParams(step);
+    const swap = (v: unknown): unknown =>
+      typeof v === 'string'
+        ? (urls.get(v) ?? v)
+        : Array.isArray(v)
+          ? v.map(swap)
+          : v !== null && typeof v === 'object'
+            ? Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, swap(x)]))
+            : v;
+    const next: OpParams = { ...params, body: swap(params.body) };
     try {
       this.validate(step.opId, next);
     } catch (e) {
@@ -1958,6 +2039,10 @@ export class JobEngine {
       if (!bound) {
         step = this.repo.step(jobId, step.stepNo) ?? step;
         bound = this.bindFrom(job, step);
+      }
+      if (!bound) {
+        step = this.repo.step(jobId, step.stepNo) ?? step;
+        bound = this.bindAssetUrls(job, step);
       }
       if (!bound) {
         step = this.repo.step(jobId, step.stepNo) ?? step;
@@ -2928,13 +3013,42 @@ function stepOptions(o: StepOptions): StepOptions {
           bindFrom: {
             step: o.bindFrom.step,
             to: o.bindFrom.to,
-            ...(typeof o.bindFrom.from === 'string' && /^documents\.[0-4]\.id$/.test(o.bindFrom.from)
+            ...(typeof o.bindFrom.from === 'string' &&
+            (/^documents\.[0-4]\.id$/.test(o.bindFrom.from) || o.bindFrom.from === 'documents.main.id')
               ? { from: o.bindFrom.from }
               : {}),
           },
         }
       : {}),
+    // v3 F3a (ADR 0050): set by bridge code only.
+    ...(Array.isArray(o.bindAssetUrls) &&
+    o.bindAssetUrls.length > 0 &&
+    o.bindAssetUrls.every((b) => Number.isInteger(b?.step) && typeof b?.placeholder === 'string')
+      ? { bindAssetUrls: o.bindAssetUrls.map((b) => ({ step: b.step, placeholder: b.placeholder })) }
+      : {}),
+    ...(o.fill && typeof o.fill.filler === 'string'
+      ? { fill: { filler: o.fill.filler, ...(o.fill.input !== undefined ? { input: o.fill.input } : {}) } }
+      : {}),
   };
+}
+
+/**
+ * v3 F3a (ADR 0050): the main page document among a created page's documents: the one named `Main` (any case) of type
+ * page or blank, else the only page or blank document; undefined otherwise.
+ */
+export function mainDocumentId(documents: unknown): string | undefined {
+  if (!Array.isArray(documents)) return undefined;
+  const docs = (documents as { id?: unknown; name?: unknown; type?: unknown }[]).filter(
+    (d) =>
+      d &&
+      typeof d.id === 'string' &&
+      d.id.length > 0 &&
+      (d.type === 'page' || d.type === 'blank' || d.type === undefined),
+  );
+  const named = docs.filter((d) => typeof d.name === 'string' && d.name.trim().toLowerCase() === 'main');
+  if (named.length === 1) return named[0]!.id as string;
+  if (named.length === 0 && docs.length === 1) return docs[0]!.id as string;
+  return undefined;
 }
 
 export function createJobEngine(options: CreateJobEngineOptions): JobEngine {
