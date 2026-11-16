@@ -225,6 +225,11 @@ export interface PlanEnv {
   readonly governance: GovernanceStatus;
   /** Today (Europe/London) for the preview; the job dates Last Major Revision when it runs. */
   readonly today: string;
+  /**
+   * Whether existing pages the package substantially changes get Last Major Revision (the project's `lmrPackTools`
+   * switch, v3 F2's category for setting-pack tools; on by default). Pages the package creates always get it.
+   */
+  readonly lmrOnChanges: boolean;
 }
 
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);

@@ -7,6 +7,7 @@
  */
 import { londonDate } from '../jobs/internal-steps.js';
 import { lifecycleFrom } from '../lifecycle/settings.js';
+import { lmrConfigFrom } from '../lmr/index.js';
 import type { McpToolContext, McpToolResult } from '../mcp/server.js';
 import { createCtx, withRequest, type CreateOutcome } from '../mcp/tools/create-support.js';
 import { finish, repoContext } from '../mcp/tools/repo.js';
@@ -88,8 +89,17 @@ export async function runPackage(
     lifecycle,
     governance,
     today: londonDate(Date.now()),
+    lmrOnChanges: lmrConfigFrom(settings, lifecycle.fields.lastMajorRevision).categories.packTools,
   };
   const plan = await planPackage(env, o.input);
+  if (
+    !env.lmrOnChanges &&
+    plan.existing.some((c) => c.kind === 'rename' || (c.kind === 'facts' && c.substantial))
+  ) {
+    plan.notes.push(
+      `${lifecycle.fields.lastMajorRevision} is not changed on the existing pages this package changes: the project's switch for setting-pack tools (lmrPackTools) is off. The pages it creates get it.`,
+    );
+  }
   let job: PackJob | null = null;
   if (plan.refusals.length === 0) {
     const built = buildPackJob(env, plan);

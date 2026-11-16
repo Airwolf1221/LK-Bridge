@@ -487,7 +487,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     const at = createStepOf.get(p.id);
     if (at) addLmr(p.id, p.rawName, [at]);
   }
-  for (const x of lmrPages) addLmr(x.id, x.name, x.after);
+  // Existing pages only while the project's `lmrPackTools` switch is on (v3 F2); new pages always.
+  if (env.lmrOnChanges) for (const x of lmrPages) addLmr(x.id, x.name, x.after);
 
   // 8. Verify: each new page's own checks (one target per gated field), then everything else gathered above.
   for (const p of created) {

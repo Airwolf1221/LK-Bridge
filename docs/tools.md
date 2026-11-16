@@ -1173,7 +1173,8 @@ template ids for the project, checked against the project's templates as last re
 in the template's order and never gains or loses a row: the fixed facts (Continuity Type `CANON`, Continuity `Main`,
 Inheritance `None`, unless an existing character's standing says otherwise), Status, Subject, Reference Type, Scope,
 the identity facts on the identity page, Supersedes `None` unless given, and **Last Major Revision set to the day the job
-runs** (a `bridge.lmr` step, as F2's; also on every existing page the package substantially changes). Tags are
+runs** (a `bridge.lmr` step, as F2's; also on every existing page the package substantially changes, while the project's `lmrPackTools` switch
+is on, its default; the preview notes it when off). Tags are
 **computed**, never typed: `{status tag}, Character, {race token}, {naming culture token}` on the identity page (one
 token when they are the same), `{status tag}, Character, {specialist tag}` on a specialist page,
 `{status tag}, Character, Character Art` and `{status tag}, Character, Relationship`; a race or culture with no approved

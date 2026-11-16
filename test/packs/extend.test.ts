@@ -35,6 +35,16 @@ const bio = (title = 'Biography') => ({
   scope: 'Her life',
   markdown: body('Her life.', '## Early Life\n\nThe house.\n\n'),
 });
+const today = () => {
+  const p = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const v = (k: string) => p.find((x) => x.type === k)!.value;
+  return `${v('year')}-${v('month')}-${v('day')}`;
+};
 const mainBlocks = (id: string) => {
   const d = w.repo.liveDocs(w.repo.live(id)!).find((x) => x.name === 'Main')!;
   return { id: d.id, ...(w.repo.blocks.get(d.id) ?? { version: 0, blocks: [] }) };
@@ -198,6 +208,43 @@ describe('targeting an existing character', () => {
     const done = await approve(w, String(r.body.proposalId));
     expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
     expect(rowsOf(C.mehrana1)['Naming Culture']).toBe('Menkheti');
+    // A substantial change: the Core's Last Major Revision is the day the job ran.
+    expect(rowsOf(C.mehrana1)['Last Major Revision']).toBe(today());
+  });
+
+  it('with the project’s lmrPackTools switch off, existing pages keep their date; new pages still get today', async () => {
+    // Existing gate debt on Nadira (a blank Temporal Scope), fixed by the package: a substantial change.
+    w.sidebars.outside(C.nadira, (sb) => {
+      const row = sb.props
+        .find((p) => p.title === 'PROPERTIES')!
+        .rows!.find((r) => r.key === 'Temporal Scope')!;
+      row.content = [];
+    });
+    w.stack.runtime.projects.setSetting(PROJECT, 'lmrPackTools', false);
+    try {
+      const pkg = {
+        name: 'ignored',
+        target: 'Nadira al-Khalid',
+        identity: { temporalScope: '5A 880 - 5A 931' },
+        pages: [
+          { ...bio('Wardrobe'), specialistTag: 'Wardrobe', referenceType: 'Character Wardrobe Reference' },
+        ],
+      };
+      const dry = await call({ ...pkg, dryRun: true });
+      expect(dry.body.notes.join(' ')).toMatch(/not changed on the existing pages.*lmrPackTools/);
+      const r = await call(pkg);
+      expect(r.body.status, r.text).toBe('proposal_captured');
+      const done = await approve(w, String(r.body.proposalId));
+      expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
+      expect((done.job?.result as { verified?: boolean }).verified).toBe(true);
+      expect(rowsOf(C.nadira)['Temporal Scope']).toBe('5A 880 - 5A 931');
+      expect(rowsOf(C.nadira)['Last Major Revision']).toBe('2026-11-01');
+      expect(rowsOf(pageNamed('[BSRC] Nadira al-Khalid - Wardrobe')!.id)['Last Major Revision']).toBe(
+        today(),
+      );
+    } finally {
+      w.stack.runtime.projects.setSetting(PROJECT, 'lmrPackTools', null);
+    }
   });
 });
 
