@@ -3021,9 +3021,9 @@ function stepOptions(o: StepOptions): StepOptions {
         }
       : {}),
     // v3 F3a (ADR 0050): set by bridge code only.
-    ...(Array.isArray(o.bindAssetUrls) &&
+    ...(o.bindAssetUrls &&
     o.bindAssetUrls.length > 0 &&
-    o.bindAssetUrls.every((b) => Number.isInteger(b?.step) && typeof b?.placeholder === 'string')
+    o.bindAssetUrls.every((b) => Number.isInteger(b.step) && typeof b.placeholder === 'string')
       ? { bindAssetUrls: o.bindAssetUrls.map((b) => ({ step: b.step, placeholder: b.placeholder })) }
       : {}),
     ...(o.fill && typeof o.fill.filler === 'string'

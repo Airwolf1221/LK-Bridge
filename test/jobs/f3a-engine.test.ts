@@ -32,7 +32,7 @@ async function runJob(
   const sub = await e.engine.submit({ project: PROJECT, kind: 'batch_ops', origin, steps, internal: true });
   if (!('jobId' in sub)) throw new Error('expected a job');
   const done = await settle(hh, e, e.engine.wait(PROJECT, sub.jobId, 60_000));
-  if (done.error) throw done.error;
+  if (done.error) throw done.error instanceof Error ? done.error : new Error(JSON.stringify(done.error));
   return e.engine.queries.getJob(PROJECT, sub.jobId)!;
 }
 

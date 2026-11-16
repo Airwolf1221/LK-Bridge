@@ -717,7 +717,7 @@ export class StepExecutor {
             phase: 'expect',
             input: c.input,
             from: {},
-            read: (op, p) => this.readOp(job, step, op, p as OpParams, stats),
+            read: (op, p) => this.readOp(job, step, op, p, stats),
           });
         } catch (e) {
           if (e instanceof JobsError) throw e;
@@ -1268,7 +1268,7 @@ export class StepExecutor {
               const key = `${op} ${stableJson(p)}`;
               let hit = cachedReads.get(key);
               if (!hit) {
-                hit = this.readOp(job, step, op, p as OpParams, stats);
+                hit = this.readOp(job, step, op, p, stats);
                 cachedReads.set(key, hit);
               }
               return hit;
