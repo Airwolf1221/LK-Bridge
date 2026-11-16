@@ -330,7 +330,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         '`home` is REQUIRED: the index it goes in (name, id or path), checked against the type’s allowed homes (HOME_NOT_ALLOWED lists suitable ones nearby; homeOverride { reason } only when the owner decided otherwise). A nation that is only a compact Reference needs its own index first: `nation` + `promoteNation: true` makes it in the same proposal; `createSubindex` names one national subindex to make. Reference Type, Scope and Temporal Scope are required: if one is unknown, ASK THE OWNER. ' +
         'dryRun shows the full preview and writes nothing; otherwise ONE proposal for the owner whatever your scope (canonical for status "authoritative" or a move of canon). Never resubmit it: follow it with bridge_proposal_status. ' +
         'Example: { "type": "Polity", "name": "Sultanate of Tarim", "descriptor": "Historical Polity Reference", "home": "Salahad Polities", "referenceType": "Historical Polity Reference", "scope": "A coastal sultanate", "temporalScope": "4A 100 - 4A 400", "markdown": "## Purpose\n…", "dryRun": true, "project": "test" }. ' +
-        'Cost: 4 reads to plan (3 of them the pack’s governance); the job about 16 reads and 13 writes for one page (one write per sidebar row), about 26 and 17 with promoteNation.',
+        'Cost: 4 reads to plan (3 of them the pack’s governance); the job about 20 reads and 13 writes for one page (one write per sidebar row); with promoteNation 7 reads to plan, the job about 31 and 16.',
       inputSchema: z.object({
         type: z
           .string()
@@ -440,7 +440,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
       description:
         'The Arkona pack: ONE joint relationship page for two EXISTING characters (`a`, `b`: names, aliases or ids), named “{a} & {b} - {label}” with both names as their indexes give them, from the AI Relationship template, hosted under `host`’s index (default a), tags COMPUTED (CANON, Character, Relationship), and added to BOTH characters’ Related Sources in the same proposal (a Working relationship is linked from a canon character only after promotion: PARTNER_LINK_DEFERRED says so). A missing character is CHARACTER_NOT_FOUND (make it with arkona_create_character first); a pair that already has one is RELATIONSHIP_EXISTS, naming it. ' +
         'dryRun shows the preview; otherwise ONE proposal for the owner whatever your scope. Never resubmit it: follow it with bridge_proposal_status. ' +
-        'Cost: 5 reads to plan; the job about 22 reads and 15 writes (one write per sidebar row, and each participant’s Related Sources).',
+        'Cost: about 14 reads to plan; the job about 40 reads and 15 writes (one write per sidebar row, each participant’s Related Sources, the host index’s routing line).',
       inputSchema: z.object({
         a: z.string().min(1).max(200).describe('One character (name, alias or id); hosts it by default.'),
         b: z.string().min(1).max(200).describe('The other character.'),
@@ -491,7 +491,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         'The Arkona pack: adds reference images to an EXISTING character (`character`: name, alias or id): each placed in the character’s asset folder (Characters / race / name, with Forms, Outfits or Details subfolders; folders found or made when the job runs) under a semantic, extension-free name (“{name} - {label}”, numbered if taken), and shown on the character’s Art page with its label and interpretation: the Art page is made when missing, or extended under its “Reference Images” section. Each image needs `interpretation` (what it establishes); a bare image is refused. ' +
         'Sources: `staged_id` (from upload_image { stage: true } with NO destination, which proposes nothing), `upload_id` (prepare_image_upload), or in ChatGPT the attached `file` (for the one image with neither). An upload or file is staged on the bridge’s server first, even on a dry run (its staged_id is in the answer). ' +
         'dryRun shows the preview; otherwise ONE proposal for the owner whatever your scope: nothing reaches LegendKeeper until the owner approves it. Never resubmit it. ' +
-        'Cost: 3 to 5 reads to plan; the job about 12 reads and 6 writes for one image on an existing Art page.',
+        'Cost: 4 to 7 reads to plan; the job about 11 reads and 3 writes for one image on an existing Art page, about 27 and 16 when it makes the Art page.',
       inputSchema: z.object({
         character: z.string().min(1).max(200).describe('An existing character (name, alias or id).'),
         images: z

@@ -110,7 +110,11 @@ function identityRows(v: Partial<Record<string, string>>): Rows {
 }
 
 export async function packWorld(
-  o: Parameters<typeof imagesWorld>[0] & { readonly approve?: boolean } = {},
+  o: Parameters<typeof imagesWorld>[0] & {
+    readonly approve?: boolean;
+    /** v3 F3b: false leaves out Mehrana I and II's shared alias (the evaluation scenarios' world has one Mehrana). */
+    readonly mehranaAlias?: boolean;
+  } = {},
 ): Promise<PackWorld> {
   // As the chronology tests do, this world's per-minute limits are raised: its files make many calls in a minute.
   const w = (await imagesWorld({
@@ -128,16 +132,17 @@ export async function packWorld(
       page(C.sunElves, '[INDEX] Sun Elves', C.elves);
       page(C.sunCore, '[BSRC] Sun Elves - Core Information', C.sunElves, { referenceType: 'General Source' });
       page(C.mehrana1Index, '[INDEX] Mehrana I al-Khalid', C.qishen);
+      const shared = o.mehranaAlias === false ? [] : ['Mehrana al-Khalid'];
       page(C.mehrana1, '[BSRC] Mehrana I al-Khalid - Character Core', C.mehrana1Index, {
         referenceType: 'Character Core',
-        aliases: ['Mehrana al-Khalid'],
+        aliases: shared,
         canonical: 'Mehrana I al-Khalid',
         tags: ['CANON', 'Character', 'Qishen'],
       });
       page(C.mehrana2Index, '[INDEX] Mehrana II al-Khalid', C.qishen);
       page(C.mehrana2, '[BSRC] Mehrana II al-Khalid - Character Core', C.mehrana2Index, {
         referenceType: 'Character Core',
-        aliases: ['Mehrana al-Khalid'],
+        aliases: shared,
         canonical: 'Mehrana II al-Khalid',
         tags: ['CANON', 'Character', 'Qishen'],
       });

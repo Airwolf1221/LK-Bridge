@@ -31,8 +31,8 @@ beforeAll(async () => {
 afterAll(() => stack.close());
 
 describe('docs/reviews/scenarios.json', () => {
-  it('loads and is valid: the 30 scenarios of the E3 script and v3 F3a’s four, numbered 1 to 34', () => {
-    expect(file.scenarios.map((s) => s.id)).toEqual(Array.from({ length: 34 }, (_, i) => i + 1));
+  it('loads and is valid: the 30 scenarios of the E3 script, v3 F3a’s four and v3 F3b’s four, numbered 1 to 38', () => {
+    expect(file.scenarios.map((s) => s.id)).toEqual(Array.from({ length: 38 }, (_, i) => i + 1));
     expect(file.preamble).toMatch(/^I am testing a LegendKeeper connector called LK-Bridge/);
     expect(file.preamble).toContain('Work only in the project named `test`');
     for (const s of file.scenarios) {
@@ -141,7 +141,7 @@ describe('docs/reviews/scenarios.json', () => {
   });
 
   it('lists the scenarios of a set for an assistant', () => {
-    expect(scenariosFor(file, 'all', 'chatgpt')).toHaveLength(34);
+    expect(scenariosFor(file, 'all', 'chatgpt')).toHaveLength(38);
     expect(scenariosFor(file, 'core', 'claude')).toHaveLength(17);
   });
 
@@ -164,7 +164,7 @@ describe('docs/reviews/scenarios.json', () => {
   });
 
   it('v3 F3a: the four Arkona pack scenarios are marked with their pack and expect the pack tool', () => {
-    const pack = file.scenarios.filter((s) => s.pack !== undefined);
+    const pack = file.scenarios.filter((s) => s.pack !== undefined && s.id <= 34);
     expect(pack.map((s) => [s.id, s.pack])).toEqual([
       [31, 'arkona'],
       [32, 'arkona'],
@@ -181,6 +181,28 @@ describe('docs/reviews/scenarios.json', () => {
     expect(byId(33).alwaysProposal).toBe(false);
     expect(byId(34).dependsOn).toEqual([31]);
     // The human copy lists them too, with the same prompts.
+    const md = readFileSync(new URL('../../docs/reviews/E3-evaluation.md', import.meta.url), 'utf8');
+    for (const s of pack) for (const p of s.prompts) expect(md, `scenario ${s.id}`).toContain(p);
+  });
+
+  it('v3 F3b: the four owner-tool scenarios: the owner tool twice, the relationship, the art; the nation needs 35', () => {
+    const pack = file.scenarios.filter((s) => s.pack !== undefined && s.id > 34);
+    expect(pack.map((s) => [s.id, s.pack, s.expectedTools])).toEqual([
+      [35, 'arkona', ['arkona_create_owner']],
+      [36, 'arkona', ['arkona_create_owner']],
+      [37, 'arkona', ['arkona_create_relationship']],
+      [38, 'arkona', ['upload_image', 'arkona_add_character_art']],
+    ]);
+    for (const s of pack) {
+      expect(s.core, `scenario ${s.id}`).toBe(false);
+      expect(s.alwaysProposal, `scenario ${s.id}`).toBe(true);
+      expect(s.mistakeTools, `scenario ${s.id}`).toContain('create_resource');
+    }
+    expect(byId(36).dependsOn).toEqual([35]);
+    expect(byId(35).needsApproval).toBe(true);
+    // Scenario 38's image is its own (not scenario 32's), so a run is not deduplicated against it.
+    const png = (s: string) => /([A-Za-z0-9+/]{60,}={0,2})\s*$/.exec(s)![1]!;
+    expect(png(byId(38).prompts[0]!)).not.toBe(png(byId(32).prompts[0]!));
     const md = readFileSync(new URL('../../docs/reviews/E3-evaluation.md', import.meta.url), 'utf8');
     for (const s of pack) for (const p of s.prompts) expect(md, `scenario ${s.id}`).toContain(p);
   });
