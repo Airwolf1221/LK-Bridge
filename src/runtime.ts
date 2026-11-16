@@ -33,7 +33,9 @@ import {
   createUploadPutHandler,
   createUploadVerifyHandler,
   guideResources,
-  createUploadTransport, type ToolDeps } from './mcp/tools/index.js';
+  createUploadTransport,
+  type ToolDeps,
+} from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
 import { footerFor } from './mcp/tools/shape.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
@@ -349,7 +351,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   const unregisterPackEngine = registerPackEngine(engine, {
     packs,
     registry,
-    setTemplate: (projectId, resourceId, templateId) => tree.store.setTemplate(projectId, resourceId, templateId),
+    setTemplate: (projectId, resourceId, templateId) =>
+      tree.store.setTemplate(projectId, resourceId, templateId),
   });
   // v2 C1: the bridge's memory of recent page versions, and write_page's in-lock re-planner (section edits whose section
   // is unchanged). Registered before any job can run: the scheduler starts in a microtask, after createRuntime returns.
@@ -710,45 +713,45 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
 
   const toolDeps: ToolDeps = {
-      engine,
-      projects,
-      selector,
-      settings: o.toolsSettings,
-      version: o.version,
-      principalNames: (ids) => policy.store.describePrincipals(ids),
-      configuredReadOnly: config.lk.readOnly,
-      publicUrl: config.server.publicUrl,
-      uploadGuard,
-      services: {
-        tree,
-        registry,
-        assets,
-        versions,
-        projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
-        templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
-        // v2 C2b: factsVersion's memory, and the create tools' operation ids and duplicate-request claims (kept at
-        // least as long as the journal).
-        factsVersions: new FactsVersions(o.db, () => (o.clock ?? systemClock).now()),
-        requests: new RequestRegistry(
-          o.db,
-          () => (o.clock ?? systemClock).now(),
-          Math.max(30, config.journal.retentionDays + 1) * 24 * 3_600_000,
-        ),
-        // v2 C2c: the page lifecycle (settings, records, the link index).
-        lifecycle,
-        // v2 D1: chronology sync.
-        chronology,
-        images,
-        snapshots,
-        restores,
-        // v2 E2: the audits (audit_findings).
-        audits,
-        // v2 E4: the undo of a block-by-block write that stopped part-way.
-        blockwiseUndo,
-        // v3 F3a (ADR 0050): the setting packs.
-        packs,
-      },
-    };
+    engine,
+    projects,
+    selector,
+    settings: o.toolsSettings,
+    version: o.version,
+    principalNames: (ids) => policy.store.describePrincipals(ids),
+    configuredReadOnly: config.lk.readOnly,
+    publicUrl: config.server.publicUrl,
+    uploadGuard,
+    services: {
+      tree,
+      registry,
+      assets,
+      versions,
+      projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+      templateKeys: new TemplateKeys(o.db, () => (o.clock ?? systemClock).now()),
+      // v2 C2b: factsVersion's memory, and the create tools' operation ids and duplicate-request claims (kept at
+      // least as long as the journal).
+      factsVersions: new FactsVersions(o.db, () => (o.clock ?? systemClock).now()),
+      requests: new RequestRegistry(
+        o.db,
+        () => (o.clock ?? systemClock).now(),
+        Math.max(30, config.journal.retentionDays + 1) * 24 * 3_600_000,
+      ),
+      // v2 C2c: the page lifecycle (settings, records, the link index).
+      lifecycle,
+      // v2 D1: chronology sync.
+      chronology,
+      images,
+      snapshots,
+      restores,
+      // v2 E2: the audits (audit_findings).
+      audits,
+      // v2 E4: the undo of a block-by-block write that stopped part-way.
+      blockwiseUndo,
+      // v3 F3a (ADR 0050): the setting packs.
+      packs,
+    },
+  };
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.
@@ -762,7 +765,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       if (t.packGeneric === true && !want.some((x) => x.name === t.name)) tools.splice(i, 1);
     }
     for (const x of want)
-      if (!tools.some((t) => t.name === x.name)) tools.push(genericPackTool(toolDeps, x.packId, x.prefix, x.tool));
+      if (!tools.some((t) => t.name === x.name))
+        tools.push(genericPackTool(toolDeps, x.packId, x.prefix, x.tool));
   };
   syncPackTools();
   const detachPackTools = packs.onChange(syncPackTools);

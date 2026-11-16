@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON tool results */
 /**
  * v3 F3a (ADR 0050): `arkona_create_character` against the mock LegendKeeper with Arkona-shaped fixtures: the package's
  * validation (the gate, names, dashes, links, images), the planning (compact, developed, an index only when wanted, the
@@ -33,7 +34,8 @@ const ident = (over: Record<string, unknown> = {}) => ({
 });
 const call = (args: Record<string, unknown>): Promise<ToolCall> => w.call(TOOL, { project: 'test', ...args });
 const err = (r: ToolCall) => r.body.error as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-const pageNamed = (name: string) => [...w.repo.res.values()].find((r) => r.deletedAt === null && r.name === name);
+const pageNamed = (name: string) =>
+  [...w.repo.res.values()].find((r) => r.deletedAt === null && r.name === name);
 const parentName = (name: string) => w.repo.res.get(pageNamed(name)!.parentId!)?.name;
 const rows = (id: string) => w.sidebars.rows(id).map((r) => `${r.key}=${r.text}`);
 const blocksOf = (id: string) => {
@@ -60,30 +62,43 @@ describe('the package: validation', () => {
     ['namingCulture', 'Naming Culture'],
     ['lifeState', 'Life State'],
     ['temporalScope', 'Temporal Scope'],
-  ])('a missing %s is IDENTITY_INCOMPLETE, naming the field and telling the agent to ask the owner', async (field, key) => {
-    const identity = ident();
-    delete (identity as Record<string, unknown>)[field];
-    const r = await call(compactPackage({ name: `Gate ${field}`, identity, dryRun: true }));
-    expect(r.isError).toBe(true);
-    expect(err(r).code).toBe('IDENTITY_INCOMPLETE');
-    expect(err(r).refusals[0].fields).toEqual([key]);
-    expect(err(r).message).toMatch(/ask the owner/i);
-  });
+  ])(
+    'a missing %s is IDENTITY_INCOMPLETE, naming the field and telling the agent to ask the owner',
+    async (field, key) => {
+      const identity = ident();
+      delete (identity as Record<string, unknown>)[field];
+      const r = await call(compactPackage({ name: `Gate ${field}`, identity, dryRun: true }));
+      expect(r.isError).toBe(true);
+      expect(err(r).code).toBe('IDENTITY_INCOMPLETE');
+      expect(err(r).refusals[0].fields).toEqual([key]);
+      expect(err(r).message).toMatch(/ask the owner/i);
+    },
+  );
 
   it('a blank, whitespace or placeholder value is refused too', async () => {
     for (const v of ['', '   ', 'TBD', '[Naming culture]', 'Unknown']) {
-      const r = await call(compactPackage({ name: 'Gate blank', identity: ident({ namingCulture: v }), dryRun: true }));
+      const r = await call(
+        compactPackage({ name: 'Gate blank', identity: ident({ namingCulture: v }), dryRun: true }),
+      );
       expect(err(r).code, v).toBe('IDENTITY_INCOMPLETE');
     }
   });
 
   it('Unestablished needs a reason, which goes into Unresolved Material', async () => {
-    const bare = await call(compactPackage({ name: 'Gate open', identity: ident({ namingCulture: 'Unestablished' }), dryRun: true }));
+    const bare = await call(
+      compactPackage({
+        name: 'Gate open',
+        identity: ident({ namingCulture: 'Unestablished' }),
+        dryRun: true,
+      }),
+    );
     expect(err(bare).code).toBe('UNESTABLISHED_NEEDS_REASON');
     const ok = await call(
       compactPackage({
         name: 'Gate open',
-        identity: ident({ namingCulture: { value: 'Unestablished', reason: 'The owner has not chosen her clan yet.' } }),
+        identity: ident({
+          namingCulture: { value: 'Unestablished', reason: 'The owner has not chosen her clan yet.' },
+        }),
         dryRun: true,
       }),
     );
@@ -93,7 +108,9 @@ describe('the package: validation', () => {
     expect(page.text.headings).toContain('Unresolved Material');
     // The culture slot is held (Unestablished is never a tag).
     expect(page.tags).toEqual(['Working', 'Character', 'Foxian']);
-    expect(ok.body.heldTags).toContainEqual(expect.objectContaining({ slot: 'culture', value: 'Unestablished' }));
+    expect(ok.body.heldTags).toContainEqual(
+      expect.objectContaining({ slot: 'culture', value: 'Unestablished' }),
+    );
   });
 
   it('CANON or a date in a page name is refused', async () => {
@@ -107,7 +124,13 @@ describe('the package: validation', () => {
       ...compactPackage({ name: 'Dated Titles', depth: 'developed' }),
       pages: [
         { role: 'core', scope: 'x', markdown: body('Core.') },
-        { role: 'specialist', title: 'Biography 2025', referenceType: 'Character Biography', scope: 'x', markdown: body('Bio.') },
+        {
+          role: 'specialist',
+          title: 'Biography 2025',
+          referenceType: 'Character Biography',
+          scope: 'x',
+          markdown: body('Bio.'),
+        },
       ],
       dryRun: true,
     });
@@ -145,7 +168,9 @@ describe('the package: validation', () => {
     const unknown = await call(
       compactPackage({
         name: 'Linker',
-        pages: [{ role: 'compact', scope: 'x', markdown: body('x'), dependencies: ['No Such Page Anywhere'] }],
+        pages: [
+          { role: 'compact', scope: 'x', markdown: body('x'), dependencies: ['No Such Page Anywhere'] },
+        ],
         dryRun: true,
       }),
     );
@@ -182,7 +207,12 @@ describe('the package: validation', () => {
       ...compactPackage({ name: 'Bare Image', depth: 'developed' }),
       pages: [
         { role: 'core', scope: 'x', markdown: body('Core.') },
-        { role: 'art', scope: 'x', markdown: body('Art.'), images: [{ staged_id: s.body.staged_id, label: 'Primary Reference - Portrait' }] },
+        {
+          role: 'art',
+          scope: 'x',
+          markdown: body('Art.'),
+          images: [{ staged_id: s.body.staged_id, label: 'Primary Reference - Portrait' }],
+        },
       ],
       dryRun: true,
     });
@@ -191,11 +221,21 @@ describe('the package: validation', () => {
 
   it('the body: Purpose first, never the page title or a metadata header, no empty section', async () => {
     const md = (text: string) =>
-      call(compactPackage({ name: 'Body Rules', pages: [{ role: 'compact', scope: 'x', markdown: text }], dryRun: true }));
+      call(
+        compactPackage({
+          name: 'Body Rules',
+          pages: [{ role: 'compact', scope: 'x', markdown: text }],
+          dryRun: true,
+        }),
+      );
     expect(err(await md('## Body Rules\n\nx\n\n## Purpose\n\ny\n')).code).toBe('BODY_REPEATS_TITLE');
-    expect(err(await md('Status: Working\nReference Type: Compact\n\n## Purpose\n\ny\n')).code).toBe('BODY_HAS_METADATA_HEADER');
+    expect(err(await md('Status: Working\nReference Type: Compact\n\n## Purpose\n\ny\n')).code).toBe(
+      'BODY_HAS_METADATA_HEADER',
+    );
     expect(err(await md('## Overview\n\nx\n')).code).toBe('PURPOSE_NOT_FIRST');
-    expect(err(await md('## Purpose\n\nx\n\n## Life\n\n## Source Boundaries\n\ny\n')).code).toBe('EMPTY_SECTION');
+    expect(err(await md('## Purpose\n\nx\n\n## Life\n\n## Source Boundaries\n\ny\n')).code).toBe(
+      'EMPTY_SECTION',
+    );
     const warned = await md('## Purpose\n\nx\n');
     expect(warned.isError).toBe(false);
     expect(warned.body.warnings.map((x: { code: string }) => x.code)).toContain('SECTION_MISSING');
@@ -206,7 +246,14 @@ describe('the package: validation', () => {
       ...compactPackage({ name: 'Taggy', depth: 'developed' }),
       pages: [
         { role: 'core', scope: 'x', markdown: body('Core.') },
-        { role: 'specialist', title: 'Lore', referenceType: 'Character Biography', specialistTag: 'Lore', scope: 'x', markdown: body('Lore.') },
+        {
+          role: 'specialist',
+          title: 'Lore',
+          referenceType: 'Character Biography',
+          specialistTag: 'Lore',
+          scope: 'x',
+          markdown: body('Lore.'),
+        },
       ],
       dryRun: true,
     });
@@ -218,9 +265,19 @@ describe('planning', () => {
   it('a compact package is one page: under its race when authoritative, under [INDEX] Working when working', async () => {
     const a = await call(compactPackage({ name: 'Plan Compact', status: 'authoritative', dryRun: true }));
     expect(a.isError, a.text).toBe(false);
-    expect(a.body.tree).toEqual([expect.objectContaining({ page: '[BSRC] Plan Compact - Character Reference', parent: '[INDEX] Foxians' })]);
+    expect(a.body.tree).toEqual([
+      expect.objectContaining({
+        page: '[BSRC] Plan Compact - Character Reference',
+        parent: '[INDEX] Foxians',
+      }),
+    ]);
     const wk = await call(compactPackage({ name: 'Plan Compact', dryRun: true }));
-    expect(wk.body.tree).toEqual([expect.objectContaining({ page: '[BWRK] Plan Compact - Character Reference', parent: '[INDEX] Working' })]);
+    expect(wk.body.tree).toEqual([
+      expect.objectContaining({
+        page: '[BWRK] Plan Compact - Character Reference',
+        parent: '[INDEX] Working',
+      }),
+    ]);
   });
 
   it('a compact package with a relationship gets an index, its Reference and the Relationship', async () => {
@@ -245,7 +302,13 @@ describe('planning', () => {
       ...compactPackage({ name: 'Plan Developed', depth: 'developed' }),
       pages: [
         { role: 'core', scope: 'x', markdown: body('Core.') },
-        { role: 'specialist', title: 'Biography', specialistTag: 'Biography', scope: 'x', markdown: body('Life.') },
+        {
+          role: 'specialist',
+          title: 'Biography',
+          specialistTag: 'Biography',
+          scope: 'x',
+          markdown: body('Life.'),
+        },
       ],
       dryRun: true,
     });
@@ -256,7 +319,9 @@ describe('planning', () => {
       '[BWRK] Plan Developed - Character Core',
     ]);
     // The Biography's Reference Type was suggested from its title.
-    expect(r.body.pages.find((x: { role: string }) => x.role === 'specialist').referenceType).toBe('Character Biography');
+    expect(r.body.pages.find((x: { role: string }) => x.role === 'specialist').referenceType).toBe(
+      'Character Biography',
+    );
     expect(r.body.warnings.map((x: { code: string }) => x.code)).toContain('REFERENCE_TYPE_SUGGESTED');
     // The index text is drafted and shown.
     expect(r.body.pages[0].indexText).toMatch(/## How to Use This Index/);
@@ -266,7 +331,12 @@ describe('planning', () => {
       ...compactPackage({ name: 'Plan Developed', depth: 'developed' }),
       pages: [
         { role: 'core', scope: 'x', markdown: body('Core.') },
-        { role: 'specialist', title: 'Wardrobe', referenceType: 'Character Wardrobe & Personal Presentation Reference', scope: 'x' },
+        {
+          role: 'specialist',
+          title: 'Wardrobe',
+          referenceType: 'Character Wardrobe & Personal Presentation Reference',
+          scope: 'x',
+        },
       ],
       dryRun: true,
     });
@@ -274,7 +344,14 @@ describe('planning', () => {
   });
 
   it('an unmatched race goes to Undetermined / Unknown, with a warning, and Race / Species stays as given', async () => {
-    const r = await call(compactPackage({ name: 'Plan Starborn', status: 'authoritative', identity: ident({ race: 'Starborn' }), dryRun: true }));
+    const r = await call(
+      compactPackage({
+        name: 'Plan Starborn',
+        status: 'authoritative',
+        identity: ident({ race: 'Starborn' }),
+        dryRun: true,
+      }),
+    );
     expect(r.isError, r.text).toBe(false);
     expect(r.body.tree[0].parent).toBe('[INDEX] Undetermined / Unknown');
     expect(r.body.warnings.map((x: { code: string }) => x.code)).toContain('RACE_FALLBACK');
@@ -289,7 +366,13 @@ describe('planning', () => {
   });
 
   it('a monolith split is refused (a later tool)', async () => {
-    const r = await call(compactPackage({ name: 'Splitter', split: { from: 'Nadira al-Khalid - Character Core' }, dryRun: true }));
+    const r = await call(
+      compactPackage({
+        name: 'Splitter',
+        split: { from: 'Nadira al-Khalid - Character Core' },
+        dryRun: true,
+      }),
+    );
     expect(err(r).code).toBe('MONOLITH_SPLIT_UNSUPPORTED');
   });
 });
@@ -299,13 +382,29 @@ describe('tags: the Controlled Native Tagging Standard v1.8', () => {
   const type = rules.types[0]!;
   const role = (r: string) => type.roles.find((x) => x.role === r)!;
   const tags = (r: string, o: Record<string, unknown>) =>
-    computeTags({ rules, role: role(r), page: 'p', status: 'authoritative', unestablished: 'Unestablished', ...o });
+    computeTags({
+      rules,
+      role: role(r),
+      page: 'p',
+      status: 'authoritative',
+      unestablished: 'Unestablished',
+      ...o,
+    });
 
   it('reproduces the standard’s own examples exactly', () => {
-    expect(tags('core', { race: 'High Elf', culture: 'Menkheti' }).tags).toEqual(['CANON', 'Character', 'High Elf', 'Menkheti']);
+    expect(tags('core', { race: 'High Elf', culture: 'Menkheti' }).tags).toEqual([
+      'CANON',
+      'Character',
+      'High Elf',
+      'Menkheti',
+    ]);
     expect(tags('relationship', {}).tags).toEqual(['CANON', 'Character', 'Relationship']);
     expect(tags('specialist', { specialist: 'Biography' }).tags).toEqual(['CANON', 'Character', 'Biography']);
-    expect(tags('core', { race: 'Therian', culture: 'Therian' }).tags).toEqual(['CANON', 'Character', 'Therian']);
+    expect(tags('core', { race: 'Therian', culture: 'Therian' }).tags).toEqual([
+      'CANON',
+      'Character',
+      'Therian',
+    ]);
   });
 
   it('maps Draconic (True Dragons) to Draconic', () => {
@@ -321,12 +420,24 @@ describe('tags: the Controlled Native Tagging Standard v1.8', () => {
     const r = tags('core', { race: 'Starborn', culture: 'Unestablished' });
     expect(r.tags).toEqual(['CANON', 'Character']);
     expect(r.held.map((h) => h.slot)).toEqual(['race', 'culture']);
-    expect(tags('core', { race: 'Kami', culture: 'Menkheti' }).tags).toEqual(['CANON', 'Character', 'Kami', 'Menkheti']);
+    expect(tags('core', { race: 'Kami', culture: 'Menkheti' }).tags).toEqual([
+      'CANON',
+      'Character',
+      'Kami',
+      'Menkheti',
+    ]);
   });
 
   it('a Working set: Working first, no CANON', () => {
     expect(
-      computeTags({ rules, role: role('core'), page: 'p', status: 'working', race: 'Sun Elf', culture: 'Menkheti' }).tags,
+      computeTags({
+        rules,
+        role: role('core'),
+        page: 'p',
+        status: 'working',
+        race: 'Sun Elf',
+        culture: 'Menkheti',
+      }).tags,
     ).toEqual(['Working', 'Character', 'Sun Elf', 'Menkheti']);
   });
 
@@ -387,9 +498,20 @@ describe('a compact background character, end to end (scenario 1)', () => {
     // The six gated fields were six separate checks.
     const job = w.stack.runtime.engine.queries.getJob(PROJECT, done.jobId!)!;
     const steps = w.stack.runtime.engine.stepResults(PROJECT, job.id) ?? [];
-    const verify = steps.find((s) => (s.value as { verification?: { targets?: unknown[] } })?.verification?.targets);
-    const labels = ((verify?.value as { verification: { targets: { label: string }[] } }).verification.targets).map((t) => t.label);
-    for (const k of ['Personal / Given Name', 'Family / Surname', 'Race / Species', 'Naming Culture', 'Life State', 'Temporal Scope'])
+    const verify = steps.find(
+      (s) => (s.value as { verification?: { targets?: unknown[] } })?.verification?.targets,
+    );
+    const labels = (
+      verify?.value as { verification: { targets: { label: string }[] } }
+    ).verification.targets.map((t) => t.label);
+    for (const k of [
+      'Personal / Given Name',
+      'Family / Surname',
+      'Race / Species',
+      'Naming Culture',
+      'Life State',
+      'Temporal Scope',
+    ])
       expect(labels).toContain(`[BWRK] Ashen Mori - Character Reference: ${k}`);
     expect(labels).toContain('[BWRK] Ashen Mori - Character Reference: tags');
     expect(labels).toContain('[BWRK] Ashen Mori - Character Reference: sidebar rows');
@@ -398,7 +520,12 @@ describe('a compact background character, end to end (scenario 1)', () => {
 
 describe('an authoritative developed character with art and a relationship (scenario 2)', () => {
   it('a canonical proposal; the set in place; both participants link the Relationship; the images placed and verified', async () => {
-    const s1 = await w.call('upload_image', { data_base64: fixture('alpha.png').toString('base64'), name: 'p1', stage: true, project: 'test' });
+    const s1 = await w.call('upload_image', {
+      data_base64: fixture('alpha.png').toString('base64'),
+      name: 'p1',
+      stage: true,
+      project: 'test',
+    });
     const s2 = await w.call('upload_image', {
       data_base64: fixture('already.webp').toString('base64'),
       name: 'p2',
@@ -409,21 +536,60 @@ describe('an authoritative developed character with art and a relationship (scen
       name: 'Halime al-Sabri',
       depth: 'developed',
       status: 'authoritative',
-      identity: { givenName: 'Halime', surname: 'al-Sabri', race: 'Sun Elf', namingCulture: 'Menkheti', lifeState: 'Alive at 5A 931', temporalScope: '5A 800 - 5A 931' },
+      identity: {
+        givenName: 'Halime',
+        surname: 'al-Sabri',
+        race: 'Sun Elf',
+        namingCulture: 'Menkheti',
+        lifeState: 'Alive at 5A 931',
+        temporalScope: '5A 800 - 5A 931',
+      },
       pages: [
-        { role: 'core', scope: 'Sun elf magistrate', markdown: body('Identity and routing.', '## Identity\n\nA magistrate.\n\n'), dependencies: ['Sun Elves - Core Information'] },
-        { role: 'specialist', title: 'Biography', specialistTag: 'Biography', scope: 'Her life', markdown: body('Her life.', '## Early Life\n\nThe south.\n\n') },
-        { role: 'specialist', title: 'Personality & Institutional Ethos', referenceType: 'Character Personality & Lifestyle Reference', specialistTag: 'Personality', scope: 'Her conduct', markdown: body('Conduct.') },
+        {
+          role: 'core',
+          scope: 'Sun elf magistrate',
+          markdown: body('Identity and routing.', '## Identity\n\nA magistrate.\n\n'),
+          dependencies: ['Sun Elves - Core Information'],
+        },
+        {
+          role: 'specialist',
+          title: 'Biography',
+          specialistTag: 'Biography',
+          scope: 'Her life',
+          markdown: body('Her life.', '## Early Life\n\nThe south.\n\n'),
+        },
+        {
+          role: 'specialist',
+          title: 'Personality & Institutional Ethos',
+          referenceType: 'Character Personality & Lifestyle Reference',
+          specialistTag: 'Personality',
+          scope: 'Her conduct',
+          markdown: body('Conduct.'),
+        },
         {
           role: 'art',
           scope: 'Visual references',
           markdown: body('The visual references.'),
           images: [
-            { staged_id: s1.body.staged_id, label: 'Primary Reference - Character Portrait', interpretation: 'Her face and bearing.' },
-            { staged_id: s2.body.staged_id, label: 'Outfit Reference - Court Robes', interpretation: 'Her court dress.', subfolder: 'Outfits / Court Robes' },
+            {
+              staged_id: s1.body.staged_id,
+              label: 'Primary Reference - Character Portrait',
+              interpretation: 'Her face and bearing.',
+            },
+            {
+              staged_id: s2.body.staged_id,
+              label: 'Outfit Reference - Court Robes',
+              interpretation: 'Her court dress.',
+              subfolder: 'Outfits / Court Robes',
+            },
           ],
         },
-        { role: 'relationship', with: 'Nadira al-Khalid', scope: 'Halime and Nadira', markdown: body('Colleagues.') },
+        {
+          role: 'relationship',
+          with: 'Nadira al-Khalid',
+          scope: 'Halime and Nadira',
+          markdown: body('Colleagues.'),
+        },
       ],
     };
     const dry = await call({ ...pkg, dryRun: true });
@@ -457,15 +623,31 @@ describe('an authoritative developed character with art and a relationship (scen
     const rel = pageNamed('[BSRC] Halime al-Sabri & Nadira al-Khalid - Relationship')!;
     expect(core.tags).toEqual(['CANON', 'Character', 'Sun Elf', 'Menkheti']);
     expect(rel.tags).toEqual(['CANON', 'Character', 'Relationship']);
-    expect(pageNamed('[BSRC] Halime al-Sabri - Biography')!.tags).toEqual(['CANON', 'Character', 'Biography']);
-    expect(pageNamed('[BSRC] Halime al-Sabri - Character Art')!.tags).toEqual(['CANON', 'Character', 'Character Art']);
+    expect(pageNamed('[BSRC] Halime al-Sabri - Biography')!.tags).toEqual([
+      'CANON',
+      'Character',
+      'Biography',
+    ]);
+    expect(pageNamed('[BSRC] Halime al-Sabri - Character Art')!.tags).toEqual([
+      'CANON',
+      'Character',
+      'Character Art',
+    ]);
     // Both participants' identity pages list the Relationship in Related Sources.
     const related = (id: string) =>
-      w.sidebars.pages.get(id)!.props.find((x) => x.title === 'Related Sources')!.items!.map((i) => i.resourceId);
+      w.sidebars.pages
+        .get(id)!
+        .props.find((x) => x.title === 'Related Sources')!
+        .items!.map((i) => i.resourceId);
     expect(related(core.id)).toContain(rel.id);
     expect(related(C.nadira)).toContain(rel.id);
     // The Core depends on the race's Core Information.
-    expect(w.sidebars.pages.get(core.id)!.props.find((x) => x.title === 'Dependencies')!.items!.map((i) => i.resourceId)).toEqual([C.sunCore]);
+    expect(
+      w.sidebars.pages
+        .get(core.id)!
+        .props.find((x) => x.title === 'Dependencies')!
+        .items!.map((i) => i.resourceId),
+    ).toEqual([C.sunCore]);
     // The images: in the mirrored folder and its subfolder, verified, and on the Art page.
     const art = pageNamed('[BSRC] Halime al-Sabri - Character Art')!;
     const imgs = blocksOf(art.id).filter((b) => b.kind === 'image');
@@ -498,7 +680,9 @@ describe('the verify step', () => {
       }
     };
     try {
-      const p = await call(compactPackage({ name: 'Planted Drift', identity: ident({ namingCulture: 'Velaran' }) }));
+      const p = await call(
+        compactPackage({ name: 'Planted Drift', identity: ident({ namingCulture: 'Velaran' }) }),
+      );
       const done = await approve(w, String(p.body.proposalId));
       expect(done.job?.status).toBe('succeeded');
       const res = done.job?.result as { verified?: boolean };
@@ -507,7 +691,9 @@ describe('the verify step', () => {
       expect(proposal.execution?.verified).toBe(false);
       expect(JSON.stringify(proposal.execution?.verification)).toContain('Naming Culture');
       // The page-level summary lists the new page first.
-      expect(proposal.pageSummary[0]?.label).toMatch(/^New page \[BWRK\] Planted Drift - Character Reference/);
+      expect(proposal.pageSummary[0]?.label).toMatch(
+        /^New page \[BWRK\] Planted Drift - Character Reference/,
+      );
     } finally {
       w.sidebars.mangle = null;
     }
@@ -528,7 +714,9 @@ describe('two packages for one new name (CHARACTER_EXISTS inside the job)', () =
     expect(second.job?.lastError).toMatchObject({ code: 'CHARACTER_EXISTS' });
     expect(String(second.job?.lastError?.message)).toMatch(/target/);
     expect(w.stack.mock.calls.filter((c) => c.method !== 'GET').length).toBe(writesBefore);
-    expect([...w.repo.res.values()].filter((r) => r.deletedAt === null && r.name.includes('Twin Racer'))).toHaveLength(1);
+    expect(
+      [...w.repo.res.values()].filter((r) => r.deletedAt === null && r.name.includes('Twin Racer')),
+    ).toHaveLength(1);
   });
 });
 
@@ -546,14 +734,19 @@ describe('the pack and its tool', () => {
       expect(err(r).code).toBe('PACK_NOT_ATTACHED');
       await client.close();
     } finally {
-      packs.commands.attach('owner', 'arkona', PROJECT, packs.attachment('arkona', PROJECT)?.templates ?? {
-        index: 'tplindex',
-        core: 'tplcore1',
-        compact: 'tplcomp1',
-        general: 'tplgen01',
-        art: 'tplart01',
-        relationship: 'tplrel01',
-      });
+      packs.commands.attach(
+        'owner',
+        'arkona',
+        PROJECT,
+        packs.attachment('arkona', PROJECT)?.templates ?? {
+          index: 'tplindex',
+          core: 'tplcore1',
+          compact: 'tplcomp1',
+          general: 'tplgen01',
+          art: 'tplart01',
+          relationship: 'tplrel01',
+        },
+      );
     }
     const client = await w.stack.connect();
     expect((await client.listTools()).tools.map((t) => t.name)).toContain(TOOL);
@@ -571,14 +764,26 @@ describe('the pack and its tool', () => {
       ...compactPackage({ name: 'Promote Me', depth: 'developed' }),
       pages: [
         { role: 'core', scope: 'x', markdown: body('Core.') },
-        { role: 'specialist', title: 'Biography', specialistTag: 'Biography', scope: 'x', markdown: body('Life.') },
+        {
+          role: 'specialist',
+          title: 'Biography',
+          specialistTag: 'Biography',
+          scope: 'x',
+          markdown: body('Life.'),
+        },
       ],
     });
     const done = await approve(w, String(p.body.proposalId));
     expect(done.job?.status).toBe('succeeded');
     const idx = pageNamed('[INDEX] Promote Me')!;
     expect(idx.parentId).toBe(LIFECYCLE.working);
-    const dry = await w.call('promote_page', { page: idx.id, subtree: true, destination: 'Foxians', dryRun: true, project: 'test' });
+    const dry = await w.call('promote_page', {
+      page: idx.id,
+      subtree: true,
+      destination: 'Foxians',
+      dryRun: true,
+      project: 'test',
+    });
     expect(dry.isError, dry.text).toBe(false);
   });
 });

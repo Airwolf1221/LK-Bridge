@@ -36,7 +36,13 @@ export interface PacksDeps {
   readonly projects: { list(): ProjectView[]; activeIds(): string[] };
   readonly registry: Pick<Registry, 'forProject'>;
   /** The audit log (`PolicyStore.audit`). */
-  readonly audit: (actor: string, action: string, target: string | null, before?: unknown, after?: unknown) => void;
+  readonly audit: (
+    actor: string,
+    action: string,
+    target: string | null,
+    before?: unknown,
+    after?: unknown,
+  ) => void;
   readonly now?: () => number;
   readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
   /** The seeds offered (default: the bridge's own, the Arkona pack). Tests pass their own. */
@@ -70,7 +76,10 @@ export interface GovernanceStatus {
 }
 
 export interface PackView extends Pack {
-  readonly attachments: readonly (PackAttachment & { readonly projectName: string; readonly served: boolean })[];
+  readonly attachments: readonly (PackAttachment & {
+    readonly projectName: string;
+    readonly served: boolean;
+  })[];
   readonly tools: readonly string[];
 }
 
@@ -120,7 +129,9 @@ export interface Packs {
 
 /** The digest of a document's blocks (stable JSON, SHA-256). */
 export function blocksDigest(blocks: unknown): string {
-  return createHash('sha256').update(stableJson(blocks ?? [])).digest('hex');
+  return createHash('sha256')
+    .update(stableJson(blocks ?? []))
+    .digest('hex');
 }
 
 export function createPacks(d: PacksDeps): Packs {
@@ -156,8 +167,7 @@ export function createPacks(d: PacksDeps): Packs {
     const notes: string[] = [];
     const templates: Record<string, string | null> = {};
     const home = seed ? projectByName(seed.home) : undefined;
-    const homeSnapshot =
-      home?.id != null ? d.registry.forProject(home.id).store.templates().templates : [];
+    const homeSnapshot = home?.id != null ? d.registry.forProject(home.id).store.templates().templates : [];
     const target = d.registry.forProject(projectId).store.templates();
     for (const [role, homeId] of Object.entries(homeTemplates)) {
       const g = given?.[role];
@@ -198,9 +208,8 @@ export function createPacks(d: PacksDeps): Packs {
   const ensureSeeded = (): void => {
     let any = false;
     for (const s of seeds) {
-      let pack = store.get(s.id);
-      if (!pack) {
-        pack = store.insert({
+      if (!store.get(s.id)) {
+        store.insert({
           id: s.id,
           name: s.name,
           prefix: s.prefix,
@@ -211,7 +220,8 @@ export function createPacks(d: PacksDeps): Packs {
         d.audit('system', 'pack.seed', s.id, undefined, { version: 1, seed: s.seed });
         any = true;
       }
-      const homeGiven = s.projects.find((p) => p.name.toLowerCase() === s.home.toLowerCase())?.templates ?? {};
+      const homeGiven =
+        s.projects.find((p) => p.name.toLowerCase() === s.home.toLowerCase())?.templates ?? {};
       for (const p of s.projects) {
         const view = projectByName(p.name);
         if (!view || view.id === null) continue;
@@ -245,7 +255,8 @@ export function createPacks(d: PacksDeps): Packs {
     signal?: AbortSignal,
   ): Promise<{ version: string | null; digest: string | null; reason?: string }> => {
     const p = projectByName(src.project);
-    if (!p || p.id === null) return { version: null, digest: null, reason: `project ${src.project} is not registered` };
+    if (!p || p.id === null)
+      return { version: null, digest: null, reason: `project ${src.project} is not registered` };
     if (!d.projects.activeIds().includes(p.id))
       return { version: null, digest: null, reason: `project ${src.project} is not served now` };
     try {
@@ -272,7 +283,13 @@ export function createPacks(d: PacksDeps): Packs {
       const read = await readSource(src, o.signal);
       const was = approved?.sources.find((x) => x.key === src.key)?.version ?? null;
       const state: SourceStatus['state'] =
-        read.version === null ? 'unreadable' : !approved ? 'unapproved' : was === read.version ? 'same' : 'changed';
+        read.version === null
+          ? 'unreadable'
+          : !approved
+            ? 'unapproved'
+            : was === read.version
+              ? 'same'
+              : 'changed';
       sources.push({
         key: src.key,
         name: src.name,
@@ -315,10 +332,16 @@ export function createPacks(d: PacksDeps): Packs {
         message: `The ${pack.name} pack's governance sources could not all be read (${sources
           .filter((s) => s.state === 'unreadable')
           .map((s) => `${s.name}: ${s.reason ?? 'unreadable'}`)
-          .join('; ')}), so the bridge cannot tell whether they changed. No tags are computed until they can be read.`,
+          .join(
+            '; ',
+          )}), so the bridge cannot tell whether they changed. No tags are computed until they can be read.`,
       };
     } else {
-      out = { ...base, state: 'current', message: 'The pack is approved and its governance sources are as approved.' };
+      out = {
+        ...base,
+        state: 'current',
+        message: 'The pack is approved and its governance sources are as approved.',
+      };
     }
     // A drift seen is recorded (the Packs page shows it); an approved, current pack clears an old one.
     if (out.state === 'changed') {
@@ -386,9 +409,12 @@ export function createPacks(d: PacksDeps): Packs {
         }
         // Work out the templates again for every attachment whose template ids are not all known.
         const seed = seedOf(pack.id);
-        const homeGiven = seed?.projects.find((p) => p.name.toLowerCase() === seed.home.toLowerCase())?.templates;
+        const homeGiven = seed?.projects.find(
+          (p) => p.name.toLowerCase() === seed.home.toLowerCase(),
+        )?.templates;
         for (const a of store.attachments(pack.id)) {
-          if (Object.values(a.templates).every((v) => v !== null) && Object.keys(a.templates).length > 0) continue;
+          if (Object.values(a.templates).every((v) => v !== null) && Object.keys(a.templates).length > 0)
+            continue;
           const given = Object.fromEntries(
             Object.entries(a.templates).filter((e): e is [string, string] => e[1] !== null),
           );
@@ -405,7 +431,12 @@ export function createPacks(d: PacksDeps): Packs {
         const after = store.approve(pack.id, approval);
         d.audit(actor, 'pack.approve', pack.id, before, {
           ...approval,
-          sources: status.sources.map((s) => ({ key: s.key, name: s.name, version: s.current, digest: s.digest })),
+          sources: status.sources.map((s) => ({
+            key: s.key,
+            name: s.name,
+            version: s.current,
+            digest: s.digest,
+          })),
         });
         changed();
         return { pack: after, governance: await governance(pack.id) };
@@ -414,13 +445,17 @@ export function createPacks(d: PacksDeps): Packs {
         if (actor !== ACTOR_OWNER) throw new PackError('NOT_OWNER', 'Only the owner edits a pack.');
         const pack = requirePack(packId);
         const race = maps.race !== undefined ? tokenMap(maps.race, 'race') : pack.rules.tags.race;
-        const culture = maps.culture !== undefined ? tokenMap(maps.culture, 'culture') : pack.rules.tags.culture;
+        const culture =
+          maps.culture !== undefined ? tokenMap(maps.culture, 'culture') : pack.rules.tags.culture;
         const never = new Set(pack.rules.tags.never.map((t) => t.toLowerCase()));
         for (const [k, v] of [...Object.entries(race), ...Object.entries(culture)]) {
           if (never.has(v.toLowerCase()))
             throw new PackError('INVALID_TOKEN', `“${k}” maps to “${v}”, which is never a tag.`);
         }
-        if (stableJson(race) === stableJson(pack.rules.tags.race) && stableJson(culture) === stableJson(pack.rules.tags.culture))
+        if (
+          stableJson(race) === stableJson(pack.rules.tags.race) &&
+          stableJson(culture) === stableJson(pack.rules.tags.culture)
+        )
           return pack;
         const rules = packRulesSchema.parse({ ...pack.rules, tags: { ...pack.rules.tags, race, culture } });
         const after = store.newVersion(pack.id, rules, 'token maps edited on the Packs page');
@@ -456,7 +491,13 @@ export function createPacks(d: PacksDeps): Packs {
       replaceRules(actor, packId, rules, reason) {
         const pack = requirePack(packId);
         const after = store.newVersion(pack.id, rules, reason);
-        d.audit(actor, 'pack.replace_rules', pack.id, { version: pack.version }, { version: after.version, reason });
+        d.audit(
+          actor,
+          'pack.replace_rules',
+          pack.id,
+          { version: pack.version },
+          { version: after.version, reason },
+        );
         changed();
         return after;
       },
@@ -474,7 +515,10 @@ function z_tokenMap(m: Readonly<Record<string, string>>, what: string): Record<s
     const key = k.replace(/\s+/g, ' ').trim();
     const tok = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '';
     if (key === '' || key.length > 200 || tok === '' || tok.length > 100)
-      throw new PackError('INVALID_TOKEN', `A ${what} token needs a value (1 to 200 characters) and a token (1 to 100).`);
+      throw new PackError(
+        'INVALID_TOKEN',
+        `A ${what} token needs a value (1 to 200 characters) and a token (1 to 100).`,
+      );
     if (/[–—]/.test(key + tok))
       throw new PackError('INVALID_TOKEN', `“${key}”: no em or en dashes in tokens (use a hyphen).`);
     const lower = key.toLowerCase();

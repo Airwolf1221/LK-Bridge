@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- parsed JSON tool results */
 /**
  * v3 F3a (ADR 0050), section C2: `arkona_create_character` with `target`, adding new pages to an existing character.
  * The new pages copy the target's standing (Status, Continuity Type, Continuity, Inheritance, read live) and lifecycle
@@ -8,7 +9,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROJECT, type ToolCall } from '../tools/helpers.js';
-import { approve, C, LIFECYCLE, packWorld, TPL, type PackWorld } from './world.js';
+import { approve, C, packWorld, TPL, type PackWorld } from './world.js';
 
 const TOOL = 'arkona_create_character';
 let w: PackWorld;
@@ -23,7 +24,8 @@ const body = (md: string, more = '') =>
   `## Purpose\n\n${md}\n\n${more}## Source Boundaries\n\nThis page only.\n\n## Unresolved Material\n\nNone.\n`;
 const call = (args: Record<string, unknown>): Promise<ToolCall> => w.call(TOOL, { project: 'test', ...args });
 const err = (r: ToolCall) => r.body.error as Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
-const pageNamed = (name: string) => [...w.repo.res.values()].find((r) => r.deletedAt === null && r.name === name);
+const pageNamed = (name: string) =>
+  [...w.repo.res.values()].find((r) => r.deletedAt === null && r.name === name);
 const rowsOf = (id: string) => Object.fromEntries(w.sidebars.rows(id).map((r) => [r.key, r.text]));
 const bio = (title = 'Biography') => ({
   role: 'specialist',
@@ -42,7 +44,9 @@ describe('targeting an existing character', () => {
   it('an ambiguous name is refused with each candidate and its role (Mehrana I and II)', async () => {
     const r = await call({ name: 'x', target: 'Mehrana al-Khalid', pages: [bio()], dryRun: true });
     expect(err(r).code).toBe('TARGET_AMBIGUOUS');
-    const names = err(r).refusals[0].candidates.map((c: { name: string; role: string }) => `${c.name} (${c.role})`);
+    const names = err(r).refusals[0].candidates.map(
+      (c: { name: string; role: string }) => `${c.name} (${c.role})`,
+    );
     expect(names).toEqual(
       expect.arrayContaining([
         '[BSRC] Mehrana I al-Khalid - Character Core (Character Core)',
@@ -55,7 +59,14 @@ describe('targeting an existing character', () => {
     const r = await call({
       name: 'Mehrana II al-Khalid',
       depth: 'developed',
-      identity: { givenName: 'M', surname: 'K', race: 'Qishen', namingCulture: 'Menkheti', lifeState: 'Alive', temporalScope: '5A 931' },
+      identity: {
+        givenName: 'M',
+        surname: 'K',
+        race: 'Qishen',
+        namingCulture: 'Menkheti',
+        lifeState: 'Alive',
+        temporalScope: '5A 931',
+      },
       pages: [{ role: 'core', scope: 'x', markdown: body('x') }],
       dryRun: true,
     });
@@ -92,7 +103,10 @@ describe('targeting an existing character', () => {
     expect(dry.body.warnings.map((x: { code: string }) => x.code)).toContain('IDENTITY_DEBT');
     // The index's routing section gains the new page's line.
     expect(dry.body.existing).toContainEqual(
-      expect.objectContaining({ page: '[INDEX] Mehrana I al-Khalid', change: 'How to Use This Index: +1 line(s)' }),
+      expect.objectContaining({
+        page: '[INDEX] Mehrana I al-Khalid',
+        change: 'How to Use This Index: +1 line(s)',
+      }),
     );
     const p = await call({ name: 'ignored', target: 'Mehrana I al-Khalid', pages: [bio()] });
     expect(p.body.status).toBe('proposal_captured');
@@ -102,7 +116,11 @@ describe('targeting an existing character', () => {
     expect((done.job?.result as { verified?: boolean }).verified).toBe(true);
     const made = pageNamed('[BSRC] Mehrana I al-Khalid - Biography')!;
     expect(made.parentId).toBe(C.mehrana1Index);
-    expect(rowsOf(made.id)).toMatchObject({ Status: 'Authoritative', 'Continuity Type': 'CANON', Subject: 'Mehrana I al-Khalid' });
+    expect(rowsOf(made.id)).toMatchObject({
+      Status: 'Authoritative',
+      'Continuity Type': 'CANON',
+      Subject: 'Mehrana I al-Khalid',
+    });
     // The routing line was appended (never a rewrite): the old line and the new one.
     const idx = mainBlocks(C.mehrana1Index);
     const text = JSON.stringify(idx.blocks);
@@ -118,7 +136,13 @@ describe('targeting an existing character', () => {
   });
 
   it('an explicit "working" override drafts [BWRK] pages in the Working area, for promote_page later', async () => {
-    const r = await call({ name: 'ignored', target: 'Mehrana II al-Khalid', status: 'working', pages: [bio()], dryRun: true });
+    const r = await call({
+      name: 'ignored',
+      target: 'Mehrana II al-Khalid',
+      status: 'working',
+      pages: [bio()],
+      dryRun: true,
+    });
     expect(r.isError, r.text).toBe(false);
     expect(r.body.tree).toEqual([
       expect.objectContaining({ page: '[BWRK] Mehrana II al-Khalid - Biography', parent: '[INDEX] Working' }),
@@ -128,9 +152,17 @@ describe('targeting an existing character', () => {
   });
 
   it('an AU target: its pages go in its AU branch with its Continuity', async () => {
-    const r = await call({ name: 'ignored', target: 'Kaito of the Shattered Sky', pages: [bio()], dryRun: true });
+    const r = await call({
+      name: 'ignored',
+      target: 'Kaito of the Shattered Sky',
+      pages: [bio()],
+      dryRun: true,
+    });
     expect(r.isError, r.text).toBe(false);
-    expect(r.body.tree[0]).toMatchObject({ page: '[BSRC] Kaito of the Shattered Sky - Biography', parent: '[INDEX] Kaito of the Shattered Sky' });
+    expect(r.body.tree[0]).toMatchObject({
+      page: '[BSRC] Kaito of the Shattered Sky - Biography',
+      parent: '[INDEX] Kaito of the Shattered Sky',
+    });
     expect(r.body.pages[0].facts).toEqual(
       expect.arrayContaining([
         { key: 'Continuity Type', value: 'AU' },
@@ -143,7 +175,10 @@ describe('targeting an existing character', () => {
     const r = await call({ name: 'ignored', target: 'Tamsin Reed', pages: [bio()], dryRun: true });
     expect(r.isError, r.text).toBe(false);
     expect(r.body.lifecycleStatus).toBe('working');
-    expect(r.body.tree[0]).toMatchObject({ page: '[BWRK] Tamsin Reed - Biography', parent: '[INDEX] Tamsin Reed' });
+    expect(r.body.tree[0]).toMatchObject({
+      page: '[BWRK] Tamsin Reed - Biography',
+      parent: '[INDEX] Tamsin Reed',
+    });
   });
 
   it('existing gate debt is fixed by the package’s values in the same proposal', async () => {
@@ -151,7 +186,13 @@ describe('targeting an existing character', () => {
       name: 'ignored',
       target: 'Mehrana I al-Khalid',
       identity: { namingCulture: 'Menkheti' },
-      pages: [{ ...bio('Personality'), specialistTag: 'Personality', referenceType: 'Character Personality & Lifestyle Reference' }],
+      pages: [
+        {
+          ...bio('Personality'),
+          specialistTag: 'Personality',
+          referenceType: 'Character Personality & Lifestyle Reference',
+        },
+      ],
     });
     expect(r.body.status, r.text).toBe('proposal_captured');
     const done = await approve(w, String(r.body.proposalId));
@@ -179,7 +220,9 @@ describe('a Compact Reference with no index (the Kamigawa Miyuki pattern), and u
     expect(changes).toMatch(/renamed to \[BSRC\] Kamigawa Miyuki - Character Core/);
     expect(changes).toMatch(/moved under \[INDEX\] Kamigawa Miyuki \(id kept\)/);
     // The Reference's Biography section is now the new page's domain: a follow-up trim is due.
-    expect(dry.body.warnings).toContainEqual(expect.objectContaining({ code: 'UPGRADE_OVERLAP', section: 'Biography' }));
+    expect(dry.body.warnings).toContainEqual(
+      expect.objectContaining({ code: 'UPGRADE_OVERLAP', section: 'Biography' }),
+    );
     const p = await call(pkg);
     expect(p.body.status, p.text).toBe('proposal_captured');
     const done = await approve(w, String(p.body.proposalId));
@@ -211,7 +254,13 @@ describe('a Compact Reference with no index (the Kamigawa Miyuki pattern), and u
   });
 
   it('upgradeToCore needs a Compact Reference target', async () => {
-    const r = await call({ name: 'x', target: 'Nadira al-Khalid', upgradeToCore: true, pages: [bio('History')], dryRun: true });
+    const r = await call({
+      name: 'x',
+      target: 'Nadira al-Khalid',
+      upgradeToCore: true,
+      pages: [bio('History')],
+      dryRun: true,
+    });
     expect(err(r).code).toBe('UPGRADE_NOT_COMPACT');
   });
 
@@ -220,7 +269,13 @@ describe('a Compact Reference with no index (the Kamigawa Miyuki pattern), and u
     const saved = kv.rows!;
     kv.rows = saved.slice(0, -1);
     try {
-      const r = await call({ name: 'x', target: 'Asagiri Kaede', upgradeToCore: true, pages: [bio('Notes')], dryRun: true });
+      const r = await call({
+        name: 'x',
+        target: 'Asagiri Kaede',
+        upgradeToCore: true,
+        pages: [bio('Notes')],
+        dryRun: true,
+      });
       expect(err(r).code).toBe('TEMPLATES_DIFFER');
     } finally {
       kv.rows = saved;

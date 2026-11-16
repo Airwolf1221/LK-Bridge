@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
 /**
  * v3 F3a (ADR 0050): the Packs page. It shows a pack's state (approved, drift), its governance sources and versions, its
  * projects and templates, its rules read-only, and its token maps; "Approve this pack version" and "Save token maps" ask
@@ -39,7 +38,14 @@ const pack = (over: Record<string, unknown> = {}) => ({
       projectId: 'lkp_arkona',
       projectName: 'arkona',
       served: true,
-      templates: { core: 'bffw83fb', compact: 'exl4dzki', art: 'g7gdpoe6', relationship: 'krkreawl', general: 'ie08m47o', index: 'zaomdr49' },
+      templates: {
+        core: 'bffw83fb',
+        compact: 'exl4dzki',
+        art: 'g7gdpoe6',
+        relationship: 'krkreawl',
+        general: 'ie08m47o',
+        index: 'zaomdr49',
+      },
       notes: [],
       attachedAt: 1,
       attachedBy: 'seed',
@@ -57,7 +63,12 @@ function needsReauth(then: (c: Call) => unknown) {
   let confirmed = false;
   return {
     route: (c: Call) =>
-      confirmed ? then(c) : { status: 403, body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } } },
+      confirmed
+        ? then(c)
+        : {
+            status: 403,
+            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
+          },
     reauth: () => {
       confirmed = true;
       return { until: Date.now() + 300_000 };
@@ -93,24 +104,47 @@ describe('the Packs page', () => {
         packs: [
           pack({
             version: 1,
-            drift: { at: 1, changed: [{ key: 'tagging-standard', name: 'Controlled Native Tagging Standard', approved: 'v18', current: 'v19' }] },
+            drift: {
+              at: 1,
+              changed: [
+                {
+                  key: 'tagging-standard',
+                  name: 'Controlled Native Tagging Standard',
+                  approved: 'v18',
+                  current: 'v19',
+                },
+              ],
+            },
           }),
         ],
       },
       'GET /packs/arkona/governance': {
         governance: {
           state: 'changed',
-          message: 'Arkona’s governance changed since the owner approved the Arkona pack: Controlled Native Tagging Standard.',
+          message:
+            'Arkona’s governance changed since the owner approved the Arkona pack: Controlled Native Tagging Standard.',
           version: 1,
           approvedVersion: 1,
           sources: [
-            { key: 'tagging-standard', name: 'Controlled Native Tagging Standard', project: 'arkona', resourceId: 'cn8v87hh', documentId: 'bfrv43jr', approved: 'v18', current: 'v19', digest: 'x', state: 'changed' },
+            {
+              key: 'tagging-standard',
+              name: 'Controlled Native Tagging Standard',
+              project: 'arkona',
+              resourceId: 'cn8v87hh',
+              documentId: 'bfrv43jr',
+              approved: 'v18',
+              current: 'v19',
+              digest: 'x',
+              state: 'changed',
+            },
           ],
         },
       },
     });
     renderApp('/ui/packs');
-    expect(await screen.findByRole('alert')).toHaveTextContent(/No tags are computed until you check the rules and approve again/);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      /No tags are computed until you check the rules and approve again/,
+    );
     await user.click(screen.getByRole('button', { name: 'Check governance now' }));
     expect(await screen.findByText('v19')).toBeInTheDocument();
     expect(api.find('GET', '/packs/arkona/governance')).toHaveLength(1);
@@ -120,7 +154,13 @@ describe('the Packs page', () => {
     const user = userEvent.setup();
     const gate = needsReauth(() => ({
       pack: pack(),
-      governance: { state: 'current', message: 'The pack is approved and its governance sources are as approved.', version: 2, approvedVersion: 2, sources: [] },
+      governance: {
+        state: 'current',
+        message: 'The pack is approved and its governance sources are as approved.',
+        version: 2,
+        approvedVersion: 2,
+        sources: [],
+      },
     }));
     const api = installApi({
       ...baseRoutes(),
@@ -156,12 +196,17 @@ describe('the Packs page', () => {
     await user.type(within(table).getByLabelText(`Race / Species value ${n}`), 'Starborn');
     await user.type(within(table).getByLabelText(`Race / Species token ${n}`), 'Starborn');
     await user.click(screen.getByRole('button', { name: 'Save token maps' }));
-    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save token maps' }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save token maps' }),
+    );
     const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
     await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
     await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
     await screen.findByText(/Token maps saved/);
-    const sent = api.find('PUT', '/packs/arkona/tokens').at(-1)!.body as { race: Record<string, string>; confirm: boolean };
+    const sent = api.find('PUT', '/packs/arkona/tokens').at(-1)!.body as {
+      race: Record<string, string>;
+      confirm: boolean;
+    };
     expect(sent.confirm).toBe(true);
     expect(sent.race.Starborn).toBe('Starborn');
     expect(sent.race['Sun Elf']).toBe('Sun Elf');

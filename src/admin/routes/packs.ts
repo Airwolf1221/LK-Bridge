@@ -32,7 +32,8 @@ const STATUS: Readonly<Record<string, number>> = {
 
 function packs(ctx: Parameters<Register>[1]): Packs {
   const p = ctx.deps.runtime.packs;
-  if (!p) throw new AdminHttpError(503, 'PACKS_UNAVAILABLE', 'Setting packs are not available in this bridge.');
+  if (!p)
+    throw new AdminHttpError(503, 'PACKS_UNAVAILABLE', 'Setting packs are not available in this bridge.');
   return p;
 }
 
@@ -40,7 +41,8 @@ async function guarded<T>(fn: () => T | Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof PackError) throw new AdminHttpError(STATUS[e.code] ?? 400, e.code, e.message, { ...e.details });
+    if (e instanceof PackError)
+      throw new AdminHttpError(STATUS[e.code] ?? 400, e.code, e.message, { ...e.details });
     throw e;
   }
 }

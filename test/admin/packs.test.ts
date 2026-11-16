@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- parsed JSON replies */
 /**
  * v3 F3a (ADR 0050): the Packs page's admin API. The Arkona pack is listed as stored (no request); its governance is read
  * on request; approving a version and saving the token maps each need a fresh re-authentication and are audited.
@@ -14,16 +15,44 @@ beforeAll(async () => {
     respond: (req: MockRequest): MockResponse | undefined => {
       const m = /\/resources\/govroot1\/docs\/(gov[a-z]+)\/blocks\/?$/.exec(req.path);
       if (req.method === 'GET' && m)
-        return { status: 200, body: { id: m[1], version: `v${m[1] === 'govtags' ? version : 1}`, schema: 1, text: '', blocks: [] } };
+        return {
+          status: 200,
+          body: {
+            id: m[1],
+            version: `v${m[1] === 'govtags' ? version : 1}`,
+            schema: 1,
+            text: '',
+            blocks: [],
+          },
+        };
       return undefined;
     },
   });
   await s.runtime.ready;
   s.runtime.packs.ensureSeeded();
   s.runtime.packs.store.setGovernance('arkona', [
-    { key: 'character-architecture', project: 'test', resourceId: 'govroot1', documentId: 'govarch', name: 'Character Architecture' },
-    { key: 'source-formatting', project: 'test', resourceId: 'govroot1', documentId: 'govform', name: 'Source Formatting' },
-    { key: 'tagging-standard', project: 'test', resourceId: 'govroot1', documentId: 'govtags', name: 'Controlled Native Tagging Standard', label: 'v1.8' },
+    {
+      key: 'character-architecture',
+      project: 'test',
+      resourceId: 'govroot1',
+      documentId: 'govarch',
+      name: 'Character Architecture',
+    },
+    {
+      key: 'source-formatting',
+      project: 'test',
+      resourceId: 'govroot1',
+      documentId: 'govform',
+      name: 'Source Formatting',
+    },
+    {
+      key: 'tagging-standard',
+      project: 'test',
+      resourceId: 'govroot1',
+      documentId: 'govtags',
+      name: 'Controlled Native Tagging Standard',
+      label: 'v1.8',
+    },
   ]);
 });
 afterAll(async () => {
@@ -96,7 +125,10 @@ describe('the Packs page API', () => {
 
   it('saving the token maps needs re-authentication, makes a new version (audited) that waits for approval', async () => {
     expire();
-    const refused = await s.put('/api/admin/packs/arkona/tokens', { race: { Starborn: 'Starborn' }, confirm: true });
+    const refused = await s.put('/api/admin/packs/arkona/tokens', {
+      race: { Starborn: 'Starborn' },
+      confirm: true,
+    });
     expect(refused.status).toBe(403);
     reauth();
     const bad = await s.put('/api/admin/packs/arkona/tokens', { culture: { Foo: 'None' }, confirm: true });

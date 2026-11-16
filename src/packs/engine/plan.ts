@@ -203,7 +203,11 @@ export interface PackPlan {
     readonly reservation: string | null;
     readonly under: readonly { readonly parentId: string; readonly names: readonly string[] }[];
   };
-  readonly target: { readonly identity: NodeRef; readonly index: NodeRef | null; readonly role: string } | null;
+  readonly target: {
+    readonly identity: NodeRef;
+    readonly index: NodeRef | null;
+    readonly role: string;
+  } | null;
   readonly notes: string[];
 }
 
@@ -247,7 +251,7 @@ function rowValue(sidebar: readonly SidebarProperty[], title: string, key: strin
   const row = kv?.rows?.find((r) => factKey(r.key) === factKey(key));
   if (!row) return null;
   return row.content
-    .map((r) => (typeof (r as Obj).text === 'string' ? ((r as Obj).text as string) : ''))
+    .map((r) => (typeof r.text === 'string' ? r.text : ''))
     .join('')
     .trim();
 }
@@ -271,7 +275,12 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   const tagsCurrent = env.governance.state === 'current';
 
   // ---------------------------------------------------------------------------------- the text rules, on every input
-  const name = replaceDashes(cleanPrefixes(input.name).name.replace(/\s+/g, ' ').trim(), input.name, 'name', replacements);
+  const name = replaceDashes(
+    cleanPrefixes(input.name).name.replace(/\s+/g, ' ').trim(),
+    input.name,
+    'name',
+    replacements,
+  );
   if (name === '' || name.length > 200) refuse('INVALID_NAME', 'The name (1 to 200 characters) is required.');
   const pkgPages = input.pages.map((p, i) => {
     const where = `${p.role}${p.title ? ` “${p.title}”` : ''} (pages[${i}])`;
@@ -285,7 +294,8 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         p.referenceType !== undefined
           ? replaceDashes(p.referenceType.trim(), where, 'Reference Type', replacements)
           : undefined,
-      markdown: p.markdown !== undefined ? replaceDashesInMarkdown(p.markdown, where, replacements) : undefined,
+      markdown:
+        p.markdown !== undefined ? replaceDashesInMarkdown(p.markdown, where, replacements) : undefined,
       images: p.images?.map((im, j) => ({
         ...im,
         label: replaceDashes(im.label.trim(), `${where} images[${j}]`, 'label', replacements),
@@ -311,7 +321,10 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   }
   for (const k of Object.keys(input.identity)) {
     if (!type.identity.some((f) => f.field === k))
-      refuse('UNKNOWN_IDENTITY_FIELD', `identity.${k} is not a ${type.name} identity field (${type.identity.map((f) => f.field).join(', ')}).`);
+      refuse(
+        'UNKNOWN_IDENTITY_FIELD',
+        `identity.${k} is not a ${type.name} identity field (${type.identity.map((f) => f.field).join(', ')}).`,
+      );
   }
   if (input.split !== undefined) {
     refuse(
@@ -335,7 +348,11 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   }
   for (const r of type.roles) {
     const n = pkgPages.filter((p) => p.role === r.role).length;
-    if (n > r.max) refuse('TOO_MANY_PAGES', `At most ${r.max} ${r.role} page${r.max === 1 ? '' : 's'} in one package (${n} given).`);
+    if (n > r.max)
+      refuse(
+        'TOO_MANY_PAGES',
+        `At most ${r.max} ${r.role} page${r.max === 1 ? '' : 's'} in one package (${n} given).`,
+      );
   }
 
   // ---------------------------------------------------------------------------------- the subject
@@ -348,7 +365,12 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   let targetIndexNode: TreeNode | null = null;
   let targetIdentityNode: TreeNode | null = null;
   let targetRace: string | null = null;
-  let standing: { status: string | null; continuityType: string | null; continuity: string | null; inheritance: string | null } = {
+  let standing: {
+    status: string | null;
+    continuityType: string | null;
+    continuity: string | null;
+    inheritance: string | null;
+  } = {
     status: null,
     continuityType: null,
     continuity: null,
@@ -411,17 +433,23 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     } else {
       const s = found.subjects[0]!;
       targetIdentityNode = ctx.tree.node(ctx.projectId, s.identity.id).data;
-      const parent = targetIdentityNode?.parentId ? ctx.tree.node(ctx.projectId, targetIdentityNode.parentId).data : null;
+      const parent = targetIdentityNode?.parentId
+        ? ctx.tree.node(ctx.projectId, targetIdentityNode.parentId).data
+        : null;
       const subjectName = s.subject || subjectOf(s.identity.displayName, null);
       targetRace = s.race;
       targetIndexNode =
-        parent && parent.kind === 'index' && nameKey(parent.displayName) === nameKey(subjectName) ? parent : null;
+        parent && parent.kind === 'index' && nameKey(parent.displayName) === nameKey(subjectName)
+          ? parent
+          : null;
       target = {
         identity: s.identity,
         index: targetIndexNode ? ctx.types.resolveOne(targetIndexNode.id) : null,
         role: s.role,
       };
-      const read = await liveRead(pd, env.mctx, env.tool, 'getResource', { path: { resourceId: s.identity.id } });
+      const read = await liveRead(pd, env.mctx, env.tool, 'getResource', {
+        path: { resourceId: s.identity.id },
+      });
       if (!read.ok) refuse('TARGET_UNREADABLE', `The target ${s.identity.rawName} could not be read now.`);
       else targetSidebar = sidebarFrom(read.value);
       if (targetSidebar) {
@@ -451,7 +479,9 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         'CHARACTER_EXISTS',
         `A ${type.name.toLowerCase()} named “${name}” exists (${found.subjects
           .map((s) => `${s.identity.rawName}: ${s.identity.path}`)
-          .join('; ')}). To add pages to it, call again with target set to its name or id (never a second set of pages for one ${type.name.toLowerCase()}).`,
+          .join(
+            '; ',
+          )}). To add pages to it, call again with target set to its name or id (never a second set of pages for one ${type.name.toLowerCase()}).`,
         {
           candidates: found.subjects.map((s) => ({
             id: s.identity.id,
@@ -507,7 +537,13 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       warn(
         'IDENTITY_DEBT',
         `${target!.identity.rawName} has blank gated fields: ${debt.join(', ')} (existing debt; not refused). Ask the owner for the values and fix them with set_facts, or give them in this package's identity to fix them in the same proposal.`,
-        { fields: debt, suggestedSetFacts: { page: target!.identity.id, facts: Object.fromEntries(debt.map((k) => [k, '…'])) } },
+        {
+          fields: debt,
+          suggestedSetFacts: {
+            page: target!.identity.id,
+            facts: Object.fromEntries(debt.map((k) => [k, '…'])),
+          },
+        },
       );
     }
   }
@@ -537,18 +573,28 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         );
       }
     }
-    if (input.depth !== undefined) warn('DEPTH_IGNORED', '`depth` is for a new character; it is ignored with target.');
+    if (input.depth !== undefined)
+      warn('DEPTH_IGNORED', '`depth` is for a new character; it is ignored with target.');
   }
   if (input.upgradeToCore === true) {
     if (mode !== 'extend' || !hook.upgrade)
-      refuse('UPGRADE_NEEDS_TARGET', 'upgradeToCore works on an existing Compact Character Reference named by target.');
+      refuse(
+        'UPGRADE_NEEDS_TARGET',
+        'upgradeToCore works on an existing Compact Character Reference named by target.',
+      );
     else if (target && target.role !== hook.upgrade.from)
-      refuse('UPGRADE_NOT_COMPACT', `${target.identity.rawName} is already a ${target.role === 'core' ? 'Character Core' : target.role}; upgradeToCore is only for a Compact Character Reference.`);
+      refuse(
+        'UPGRADE_NOT_COMPACT',
+        `${target.identity.rawName} is already a ${target.role === 'core' ? 'Character Core' : target.role}; upgradeToCore is only for a Compact Character Reference.`,
+      );
   }
 
   // Relationship pages hosted elsewhere do not count as siblings for the index rule.
   const siblingRoles = pkgPages
-    .filter((p) => roleRule(p.role)?.facts !== 'identity' && !(p.role === type.relationship?.role && p.host === 'other'))
+    .filter(
+      (p) =>
+        roleRule(p.role)?.facts !== 'identity' && !(p.role === type.relationship?.role && p.host === 'other'),
+    )
     .map((p) => p.role);
 
   // ---------------------------------------------------------------------------------- templates
@@ -589,7 +635,9 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   let raceFallback = false;
   const raceValue = identity['race']?.value ?? null;
   const working = status === 'working';
-  const wi = env.lifecycle.workingIndexId ? ctx.tree.node(ctx.projectId, env.lifecycle.workingIndexId).data : null;
+  const wi = env.lifecycle.workingIndexId
+    ? ctx.tree.node(ctx.projectId, env.lifecycle.workingIndexId).data
+    : null;
   if (working && (!wi || wi.kind !== 'index')) {
     refuse(
       'LIFECYCLE_NOT_CONFIGURED',
@@ -600,7 +648,10 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   if (mode === 'new') {
     if (placement.kind === 'taxonomy') {
       try {
-        const r = ctx.types.raceIndex(raceValue && textKey(raceValue) !== unestablishedKey ? raceValue : null, placement.registryType);
+        const r = ctx.types.raceIndex(
+          raceValue && textKey(raceValue) !== unestablishedKey ? raceValue : null,
+          placement.registryType,
+        );
         raceIndex = ctx.tree.node(ctx.projectId, r.node.id).data;
         if (r.unknown && raceValue && textKey(raceValue) !== unestablishedKey) raceFallback = true;
       } catch (e) {
@@ -625,7 +676,11 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     } else {
       const r = ctx.types.resolve(placement.index, { kinds: ['index'] });
       if (r.status === 'resolved') raceIndex = ctx.tree.node(ctx.projectId, r.node.id).data;
-      else refuse('PLACEMENT_INDEX_NOT_FOUND', `The ${type.name} index “${placement.index}” is not one index in the repository.`);
+      else
+        refuse(
+          'PLACEMENT_INDEX_NOT_FOUND',
+          `The ${type.name} index “${placement.index}” is not one index in the repository.`,
+        );
     }
     home = working ? wi : raceIndex;
   }
@@ -636,9 +691,9 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   // A new set's index (or an existing one); a new index for an extension of a Compact Reference with no index.
   let indexPage: PlannedPage | null = null;
   let indexParent: { existing: string } | { item: string } | null = null;
-  let hostIndexId: string | null = null; // the existing index new pages go under
   let movedReference: NodeRef | null = null;
-  const wantIndexNew = mode === 'new' && identityRole !== null && hook.wantsIndex(identityRole, siblingRoles, type);
+  const wantIndexNew =
+    mode === 'new' && identityRole !== null && hook.wantsIndex(identityRole, siblingRoles, type);
   const prefix = working ? '[BWRK] ' : '[BSRC] ';
   const pageKind = working ? 'bwrk' : 'bsrc';
 
@@ -653,7 +708,6 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       );
     } else if (targetIndexNode) {
       extensionParent = { existing: targetIndexNode.id };
-      hostIndexId = targetIndexNode.id;
     } else if (siblingRoles.length > 0 && targetIdentityNode) {
       // The Kamigawa Miyuki pattern: an [INDEX] made in the Reference's place, the Reference moved under it.
       const parentId = targetIdentityNode.parentId;
@@ -671,8 +725,16 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     const raw = `[INDEX] ${indexName}`;
     const parent = indexParent ?? { existing: home!.id };
     const parentNode = 'existing' in parent ? ctx.tree.node(ctx.projectId, parent.existing).data : null;
-    if (parentNode && ctx.tree.children(ctx.projectId, parentNode.id).data.some((c) => c.kind === 'index' && nameKey(c.displayName) === nameKey(indexName))) {
-      refuse('CHARACTER_INDEX_EXISTS', `An index named “${indexName}” already exists under ${parentNode.displayName}.`);
+    if (
+      parentNode &&
+      ctx.tree
+        .children(ctx.projectId, parentNode.id)
+        .data.some((c) => c.kind === 'index' && nameKey(c.displayName) === nameKey(indexName))
+    ) {
+      refuse(
+        'CHARACTER_INDEX_EXISTS',
+        `An index named “${indexName}” already exists under ${parentNode.displayName}.`,
+      );
     }
     if (tid) {
       indexPage = {
@@ -706,7 +768,9 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     }
   }
 
-  const parentFor = (p: (typeof pkgPages)[number]): { parent: { existing: string } | { item: string }; parentName: string } | null => {
+  const parentFor = (
+    p: (typeof pkgPages)[number],
+  ): { parent: { existing: string } | { item: string }; parentName: string } | null => {
     if (mode === 'extend') {
       if (!extensionParent) return null;
       return {
@@ -718,7 +782,8 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       };
     }
     const r = roleRule(p.role)!;
-    if (r.facts === 'identity' && !indexPage) return home ? { parent: { existing: home.id }, parentName: home.rawName } : null;
+    if (r.facts === 'identity' && !indexPage)
+      return home ? { parent: { existing: home.id }, parentName: home.rawName } : null;
     if (indexPage) return { parent: { item: 'index' }, parentName: indexPage.rawName };
     return home ? { parent: { existing: home.id }, parentName: home.rawName } : null;
   };
@@ -741,7 +806,10 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     if (type.relationship && rule.role === type.relationship.role) {
       if (!hook.relationships) refuse('RELATIONSHIPS_UNSUPPORTED', `${type.name} has no relationship pages.`);
       if (!p.with) {
-        refuse('RELATIONSHIP_PARTNER_REQUIRED', `${p.where}: a relationship needs \`with\`, the other participant.`);
+        refuse(
+          'RELATIONSHIP_PARTNER_REQUIRED',
+          `${p.where}: a relationship needs \`with\`, the other participant.`,
+        );
         continue;
       }
       const found = characterCandidates(cleanPrefixes(p.with).name.trim());
@@ -752,7 +820,13 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
             ? `${p.where}: no ${type.name.toLowerCase()} matches “${p.with}”. Both participants must exist (create the other first).`
             : `${p.where}: “${p.with}” names ${found.subjects.length} ${type.name.toLowerCase()}s; pass the id of the one you mean.`,
           found.subjects.length > 1
-            ? { candidates: found.subjects.map((s) => ({ id: s.identity.id, name: s.identity.rawName, path: s.identity.path })) }
+            ? {
+                candidates: found.subjects.map((s) => ({
+                  id: s.identity.id,
+                  name: s.identity.rawName,
+                  path: s.identity.path,
+                })),
+              }
             : {},
         );
         continue;
@@ -764,16 +838,26 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       partner = {
         node: s.identity,
         subject: psubject,
-        indexId: pparent && pparent.kind === 'index' && nameKey(pparent.displayName) === nameKey(psubject) ? pparent.id : null,
+        indexId:
+          pparent && pparent.kind === 'index' && nameKey(pparent.displayName) === nameKey(psubject)
+            ? pparent.id
+            : null,
       };
       if (target && s.identity.id === target.identity.id) {
         refuse('RELATIONSHIP_WITH_SELF', `${p.where}: a relationship needs two different participants.`);
         continue;
       }
-      display = fill(rule.name, { A: subject, B: psubject, Label: p.label || type.relationship.defaultLabel });
+      display = fill(rule.name, {
+        A: subject,
+        B: psubject,
+        Label: p.label || type.relationship.defaultLabel,
+      });
     } else if (rule.role === 'specialist' || rule.name.includes('{Title}')) {
       if (!p.title) {
-        refuse('TITLE_REQUIRED', `${p.where}: a ${rule.role} page needs a title (its name is “${fill(rule.name, { Name: subject, Title: '<title>' })}”).`);
+        refuse(
+          'TITLE_REQUIRED',
+          `${p.where}: a ${rule.role} page needs a title (its name is “${fill(rule.name, { Name: subject, Title: '<title>' })}”).`,
+        );
         continue;
       }
       display = fill(rule.name, { Name: subject, Title: p.title });
@@ -829,7 +913,8 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
             nameKey(s.referenceType) === nameKey(d.rule.referenceType)),
       );
       const sameRef =
-        d.p.referenceType && siblings.find((s) => s.referenceType && nameKey(s.referenceType) === nameKey(d.p.referenceType!));
+        d.p.referenceType &&
+        siblings.find((s) => s.referenceType && nameKey(s.referenceType) === nameKey(d.p.referenceType!));
       const hit = same ?? sameRef ?? null;
       if (hit) {
         refuse(
@@ -852,7 +937,11 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   }
 
   // Link targets: the package's own pages, else exactly one page of the repository.
-  const resolveTarget = (ref: string, pageName: string, pageStatus: 'working' | 'authoritative'): LinkTarget | null => {
+  const resolveTarget = (
+    ref: string,
+    pageName: string,
+    pageStatus: 'working' | 'authoritative',
+  ): LinkTarget | null => {
     const own = ownByName.get(nameKey(cleanPrefixes(ref).name)) ?? ownByName.get(nameKey(ref));
     if (own) return { resourceId: own.id, name: own.name };
     const r = ctx.types.resolve(ref, {});
@@ -862,7 +951,9 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         r.status === 'ambiguous'
           ? `${pageName}: the link “${ref}” names ${r.candidates.length} pages; give the id of the one meant.`
           : `${pageName}: the link “${ref}” names no page of the repository.`,
-        r.status === 'ambiguous' ? { candidates: r.candidates.map((c) => ({ id: c.id, name: c.rawName, path: c.path })) } : {},
+        r.status === 'ambiguous'
+          ? { candidates: r.candidates.map((c) => ({ id: c.id, name: c.rawName, path: c.path })) }
+          : {},
       );
       return null;
     }
@@ -895,9 +986,16 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
   };
 
   const pageStatus: 'working' | 'authoritative' = status;
-  const continuityType = mode === 'extend' && standing.continuityType ? standing.continuityType : type.fixedFacts['Continuity Type'] ?? null;
-  const continuity = mode === 'extend' && standing.continuity ? standing.continuity : type.fixedFacts['Continuity'] ?? null;
-  const inheritance = mode === 'extend' && standing.inheritance ? standing.inheritance : type.fixedFacts['Inheritance'] ?? null;
+  const continuityType =
+    mode === 'extend' && standing.continuityType
+      ? standing.continuityType
+      : (type.fixedFacts['Continuity Type'] ?? null);
+  const continuity =
+    mode === 'extend' && standing.continuity ? standing.continuity : (type.fixedFacts['Continuity'] ?? null);
+  const inheritance =
+    mode === 'extend' && standing.inheritance
+      ? standing.inheritance
+      : (type.fixedFacts['Inheritance'] ?? null);
 
   for (const d of drafts) {
     const { p, rule } = d;
@@ -905,7 +1003,10 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     const placed = parentFor(p);
     if (!placed) {
       if (mode === 'extend' && target && !extensionParent) {
-        refuse('NO_PLACE_FOR_PAGES', `${d.displayName}: ${target.identity.rawName} has no index and this package brings nothing that needs one.`);
+        refuse(
+          'NO_PLACE_FOR_PAGES',
+          `${d.displayName}: ${target.identity.rawName} has no index and this package brings nothing that needs one.`,
+        );
       }
       continue;
     }
@@ -914,9 +1015,15 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     let parentName = placed.parentName;
     if (d.partner && p.host === 'other') {
       if (working) {
-        refuse('HOST_NOT_WORKING', `${d.displayName}: a Working relationship is hosted under its own character's Working index (host "self"); the other participant is not in the Working area.`);
+        refuse(
+          'HOST_NOT_WORKING',
+          `${d.displayName}: a Working relationship is hosted under its own character's Working index (host "self"); the other participant is not in the Working area.`,
+        );
       } else if (!d.partner.indexId) {
-        refuse('HOST_HAS_NO_INDEX', `${d.displayName}: ${d.partner.node.rawName} has no index to host the relationship; host it under this character (host "self").`);
+        refuse(
+          'HOST_HAS_NO_INDEX',
+          `${d.displayName}: ${d.partner.node.rawName} has no index to host the relationship; host it under this character (host "self").`,
+        );
       } else {
         parent = { existing: d.partner.indexId };
         parentName = ctx.tree.node(ctx.projectId, d.partner.indexId).data?.rawName ?? '?';
@@ -936,15 +1043,27 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       if (p.referenceType) {
         referenceType = p.referenceType;
         if (suggestions.length > 0 && !suggestions.some((s) => textKey(s) === textKey(p.referenceType!)))
-          warn('REFERENCE_TYPE_SUGGESTION', `${d.displayName}: suggested Reference Type ${suggestions.map((s) => `“${s}”`).join(' or ')} (the package's “${p.referenceType}” is used).`, { page: d.displayName, suggestions });
+          warn(
+            'REFERENCE_TYPE_SUGGESTION',
+            `${d.displayName}: suggested Reference Type ${suggestions.map((s) => `“${s}”`).join(' or ')} (the package's “${p.referenceType}” is used).`,
+            { page: d.displayName, suggestions },
+          );
       } else if (suggestions.length === 1) {
         referenceType = suggestions[0]!;
-        warn('REFERENCE_TYPE_SUGGESTED', `${d.displayName}: Reference Type “${referenceType}” (suggested from the title).`, { page: d.displayName });
+        warn(
+          'REFERENCE_TYPE_SUGGESTED',
+          `${d.displayName}: Reference Type “${referenceType}” (suggested from the title).`,
+          { page: d.displayName },
+        );
       } else {
         refuse(
           'REFERENCE_TYPE_REQUIRED',
           `${d.displayName}: give referenceType${suggestions.length ? ` (suggested: ${suggestions.join(', ')})` : ` (for example ${[...new Set(Object.values(type.suggestedReferenceTypes))].join(', ')})`}.`,
-          { suggestions: suggestions.length ? suggestions : [...new Set(Object.values(type.suggestedReferenceTypes))] },
+          {
+            suggestions: suggestions.length
+              ? suggestions
+              : [...new Set(Object.values(type.suggestedReferenceTypes))],
+          },
         );
       }
     }
@@ -953,14 +1072,23 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     if (rule.tags.includes('$specialist') && p.specialistTag) {
       const hit = type.specialistTags.find((t) => textKey(t) === textKey(p.specialistTag!));
       if (!hit)
-        refuse('TAG_NOT_ALLOWED', `${d.displayName}: “${p.specialistTag}” is not one of the specialist tags (${type.specialistTags.join(', ')}); tags are never typed freely.`);
+        refuse(
+          'TAG_NOT_ALLOWED',
+          `${d.displayName}: “${p.specialistTag}” is not one of the specialist tags (${type.specialistTags.join(', ')}); tags are never typed freely.`,
+        );
       else specialist = hit;
     } else if (p.specialistTag && !rule.tags.includes('$specialist')) {
-      refuse('TAG_NOT_ALLOWED', `${d.displayName}: a ${rule.role} page takes no specialist tag; its tags are computed.`);
+      refuse(
+        'TAG_NOT_ALLOWED',
+        `${d.displayName}: a ${rule.role} page takes no specialist tag; its tags are computed.`,
+      );
     }
     // Facts, in template order, only rows the template has.
-    const sidebarRead = tid ? await readSidebar(pd, env.mctx, env.tool, tid, env.cc.sidebars, env.cc.templateTags) : null;
-    if (sidebarRead && !sidebarRead.ok) refuse('TEMPLATE_UNREADABLE', `${d.displayName}: its template could not be read now.`);
+    const sidebarRead = tid
+      ? await readSidebar(pd, env.mctx, env.tool, tid, env.cc.sidebars, env.cc.templateTags)
+      : null;
+    if (sidebarRead && !sidebarRead.ok)
+      refuse('TEMPLATE_UNREADABLE', `${d.displayName}: its template could not be read now.`);
     const tSidebar = sidebarRead?.ok ? sidebarRead.value : [];
     const tKeys = keysOf(tSidebar, props);
     const want: { key: string; value: string }[] = [];
@@ -973,7 +1101,12 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     put('Continuity', continuity);
     put('Inheritance', inheritance);
     if (rule.facts === 'identity') for (const f of identityFacts()) put(f.key, f.value);
-    put('Subject', d.partner && type.relationship ? fill(type.relationship.subject, { A: subject, B: d.partner.subject }) : subject);
+    put(
+      'Subject',
+      d.partner && type.relationship
+        ? fill(type.relationship.subject, { A: subject, B: d.partner.subject })
+        : subject,
+    );
     put('Reference Type', referenceType);
     put('Scope', p.scope ?? null);
     put('Supersedes', identity['supersedes']?.value || 'None');
@@ -991,14 +1124,25 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     if (rule.facts === 'identity' && tKeys) {
       for (const f of gated) {
         if (!tKeys.some((k) => factKey(k) === factKey(f.key)))
-          warn('TEMPLATE_ROW_MISSING', `${d.displayName}: the template has no “${f.key}” row, so that gated field cannot be written there.`, { page: d.displayName });
+          warn(
+            'TEMPLATE_ROW_MISSING',
+            `${d.displayName}: the template has no “${f.key}” row, so that gated field cannot be written there.`,
+            { page: d.displayName },
+          );
       }
     }
-    if (!p.scope) warn('SCOPE_MISSING', `${d.displayName}: no scope given (the Scope row stays empty).`, { page: d.displayName });
+    if (!p.scope)
+      warn('SCOPE_MISSING', `${d.displayName}: no scope given (the Scope row stays empty).`, {
+        page: d.displayName,
+      });
     // Links: the package's, then (later) the automatic relationship links.
     const linkTargets: { title: string; targets: LinkTarget[] }[] = [];
-    const deps = (p.dependencies ?? []).map((r) => resolveTarget(r, d.displayName, pageStatus)).filter((t): t is LinkTarget => t !== null);
-    const rel = (p.related ?? []).map((r) => resolveTarget(r, d.displayName, pageStatus)).filter((t): t is LinkTarget => t !== null);
+    const deps = (p.dependencies ?? [])
+      .map((r) => resolveTarget(r, d.displayName, pageStatus))
+      .filter((t): t is LinkTarget => t !== null);
+    const rel = (p.related ?? [])
+      .map((r) => resolveTarget(r, d.displayName, pageStatus))
+      .filter((t): t is LinkTarget => t !== null);
     if (deps.length) linkTargets.push({ title: linkTitle.dependencies, targets: deps });
     if (rel.length) linkTargets.push({ title: linkTitle.related, targets: rel });
     // Tags.
@@ -1017,15 +1161,20 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     held.push(...tagResult.held);
     // Body.
     let md = p.markdown ?? '';
-    if (rule.facts === 'identity' && unestablished.length > 0) md = withUnresolved(md, type.text.unresolved, unestablished);
+    if (rule.facts === 'identity' && unestablished.length > 0)
+      md = withUnresolved(md, type.text.unresolved, unestablished);
     let blocks: LkBlock[] | null = null;
     const headings: string[] = [];
     const pageImages: PlannedImage[] = [];
     if (rule.body === 'required' && md.trim() === '') {
-      refuse('BODY_REQUIRED', `${d.displayName}: the page needs its text (markdown); no empty or token pages.`, { page: d.displayName });
+      refuse(
+        'BODY_REQUIRED',
+        `${d.displayName}: the page needs its text (markdown); no empty or token pages.`,
+        { page: d.displayName },
+      );
     } else if (md.trim() !== '' && converter) {
       try {
-        blocks = fromMarkdown(md, { blocks: [] }, converter).blocks as LkBlock[];
+        blocks = fromMarkdown(md, { blocks: [] }, converter).blocks;
         const check = checkBody({
           page: d.displayName,
           role: rule.role,
@@ -1038,13 +1187,14 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
         warnings.push(...check.warnings.map((x) => ({ ...x })));
         for (const s of sectionsOf(blocks)) if (s.heading) headings.push(s.title);
       } catch (e) {
-        if (e instanceof MarkdownError) refuse(e.code, `${d.displayName}: ${e.message}`, { page: d.displayName });
+        if (e instanceof MarkdownError)
+          refuse(e.code, `${d.displayName}: ${e.message}`, { page: d.displayName });
         else throw e;
       }
     }
     // Images (the Art page): staged uploads, each with its label and interpretation.
     if (rule.role === type.assets.role && p.images && p.images.length > 0 && blocks) {
-      const planned = await planImages(env, {
+      const planned = planImages(env, {
         page: d.displayName,
         subject,
         race: mode === 'extend' ? targetRace : raceFallback ? null : raceValue,
@@ -1054,8 +1204,20 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       });
       pageImages.push(...planned);
       images.push(...planned);
-      blocks = withImages(blocks, planned, type.assets.section, rule.warnMissing.concat(['Source Boundaries', 'Unresolved Material']), converter!);
-      headings.splice(0, headings.length, ...sectionsOf(blocks).filter((s) => s.heading).map((s) => s.title));
+      blocks = withImages(
+        blocks,
+        planned,
+        type.assets.section,
+        rule.warnMissing.concat(['Source Boundaries', 'Unresolved Material']),
+        converter!,
+      );
+      headings.splice(
+        0,
+        headings.length,
+        ...sectionsOf(blocks)
+          .filter((s) => s.heading)
+          .map((s) => s.title),
+      );
     } else if (p.images && p.images.length > 0 && rule.role !== type.assets.role) {
       refuse('IMAGES_NOT_HERE', `${d.displayName}: images go on the ${type.assets.role} page.`);
     }
@@ -1131,21 +1293,39 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     const tSidebar = p.templateId ? env.cc.sidebars.get(p.templateId) : undefined;
     if (!tSidebar) continue;
     const plan = planOnTemplate(p, tSidebar, props, refuse);
-    if (plan) (p as { facts: NewPageFactsPlan | null }).facts = { plan, templateSidebar: tSidebar, status: statusFacts(pageStatus) };
+    if (plan)
+      (p as { facts: NewPageFactsPlan | null }).facts = {
+        plan,
+        templateSidebar: tSidebar,
+        status: statusFacts(pageStatus),
+      };
   }
 
   // ---------------------------------------------------------------------------------- the index's body
   if (indexPage) {
     const children = [
       ...pages.filter((p) => 'item' in p.parent && p.parent.item === 'index'),
-      ...(movedReference ? [{ id: movedReference.id, rawName: movedReference.rawName, displayName: movedReference.displayName, scope: (ctx.tree.node(ctx.projectId, movedReference.id).data?.scope ?? null) as string | null }] : []),
+      ...(movedReference
+        ? [
+            {
+              id: movedReference.id,
+              rawName: movedReference.rawName,
+              displayName: movedReference.displayName,
+              scope: ctx.tree.node(ctx.projectId, movedReference.id).data?.scope ?? null,
+            },
+          ]
+        : []),
     ].sort((a, b) => (a.displayName < b.displayName ? -1 : 1));
     const md =
       indexMarkdown ??
-      draftIndex(type, subject, children.map((c) => ({ id: c.id, name: c.rawName, scope: c.scope ?? null })));
+      draftIndex(
+        type,
+        subject,
+        children.map((c) => ({ id: c.id, name: c.rawName, scope: c.scope ?? null })),
+      );
     if (converter) {
       try {
-        const blocks = fromMarkdown(md, { blocks: [] }, converter).blocks as LkBlock[];
+        const blocks = fromMarkdown(md, { blocks: [] }, converter).blocks;
         const check = checkBody({
           page: indexPage.rawName,
           role: indexRule.role,
@@ -1161,14 +1341,19 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
           ...indexPage,
           markdown: md,
           blocks,
-          headings: sectionsOf(blocks).filter((s) => s.heading).map((s) => s.title),
+          headings: sectionsOf(blocks)
+            .filter((s) => s.heading)
+            .map((s) => s.title),
         };
       } catch (e) {
         if (e instanceof MarkdownError) refuse(e.code, `${indexPage.rawName}: ${e.message}`);
         else throw e;
       }
     }
-    if (!indexMarkdown) notes.push(`The index's text is drafted (Purpose, ${type.index.routing}, ${type.index.collection}, ${type.index.boundaries}); it is in the preview to edit, or give your own as index.markdown.`);
+    if (!indexMarkdown)
+      notes.push(
+        `The index's text is drafted (Purpose, ${type.index.routing}, ${type.index.collection}, ${type.index.boundaries}); it is in the preview to edit, or give your own as index.markdown.`,
+      );
   } else if (indexMarkdown !== undefined) {
     warn('INDEX_TEXT_UNUSED', 'index.markdown was given but this package makes no index; it is not used.');
   }
@@ -1180,7 +1365,12 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     for (const f of gated) {
       const now = rowValue(targetSidebar, props, f.key);
       const given = identity[f.field]!;
-      if ((now === null || now === '' || isPlaceholder(now, type.placeholders)) && given.value && !isPlaceholder(given.value, type.placeholders) && now !== null) {
+      if (
+        (now === null || now === '' || isPlaceholder(now, type.placeholders)) &&
+        given.value &&
+        !isPlaceholder(given.value, type.placeholders) &&
+        now !== null
+      ) {
         facts.push({ key: f.key, value: given.value });
         why.push(`${f.key}: was blank, now “${given.value}”`);
       }
@@ -1207,7 +1397,13 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
           const np = nameProblem(to, rules);
           if (np) refuse(np.code, np.message);
           renamed = to;
-          existing.push({ kind: 'rename', page: target.identity, from: target.identity.rawName, to, coreTemplateId: coreTid });
+          existing.push({
+            kind: 'rename',
+            page: target.identity,
+            from: target.identity.rawName,
+            to,
+            coreTemplateId: coreTid,
+          });
           facts.push({ key: 'Reference Type', value: coreRule.referenceType ?? 'Character Core' });
           why.push(`Reference Type: ${compactRule.referenceType} → ${coreRule.referenceType}`);
           // The Reference's body is kept; sections the new pages now own are warned about.
@@ -1219,15 +1415,47 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
     const links = partnerLinks.get(target.identity.id)?.links ?? [];
     partnerLinks.delete(target.identity.id);
     if (facts.length > 0 || links.length > 0) {
-      const plan = planExisting(targetSidebar, target.identity.id, props, facts, links.length ? [{ title: linkTitle.related, targets: links }] : [], refuse, target.identity.rawName);
-      if (plan) existing.push({ kind: 'facts', page: target.identity, sidebar: targetSidebar, plan, why: [...why, ...(links.length ? [`${linkTitle.related}: +${links.length}`] : [])], substantial: facts.length > 0 });
+      const plan = planExisting(
+        targetSidebar,
+        target.identity.id,
+        props,
+        facts,
+        links.length ? [{ title: linkTitle.related, targets: links }] : [],
+        refuse,
+        target.identity.rawName,
+      );
+      if (plan)
+        existing.push({
+          kind: 'facts',
+          page: target.identity,
+          sidebar: targetSidebar,
+          plan,
+          why: [...why, ...(links.length ? [`${linkTitle.related}: +${links.length}`] : [])],
+          substantial: facts.length > 0,
+        });
     }
     if (movedReference && indexPage) {
-      existing.push({ kind: 'move', page: movedReference, to: { item: 'index' }, toName: indexPage.rawName, name: renamed ?? movedReference.rawName });
+      existing.push({
+        kind: 'move',
+        page: movedReference,
+        to: { item: 'index' },
+        toName: indexPage.rawName,
+        name: renamed ?? movedReference.rawName,
+      });
     }
     // Routing lines in the existing index.
-    if (hook.routing && targetIndexNode && pages.some((p) => 'existing' in p.parent && p.parent.existing === targetIndexNode!.id)) {
-      const r = await routingChange(env, targetIndexNode, pages.filter((p) => 'existing' in p.parent && p.parent.existing === targetIndexNode!.id), refuse, warn);
+    if (
+      hook.routing &&
+      targetIndexNode &&
+      pages.some((p) => 'existing' in p.parent && p.parent.existing === targetIndexNode.id)
+    ) {
+      const r = await routingChange(
+        env,
+        targetIndexNode,
+        pages.filter((p) => 'existing' in p.parent && p.parent.existing === targetIndexNode.id),
+        refuse,
+        warn,
+      );
       if (r) existing.push(r);
     }
   }
@@ -1239,23 +1467,52 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       continue;
     }
     const sb = sidebarFrom(read.value);
-    const plan = planExisting(sb, node.id, props, [], [{ title: linkTitle.related, targets: links }], refuse, node.rawName);
-    if (plan && !plan.empty) existing.push({ kind: 'facts', page: node, sidebar: sb, plan, why: [`${linkTitle.related}: +${links.length}`], substantial: false });
+    const plan = planExisting(
+      sb,
+      node.id,
+      props,
+      [],
+      [{ title: linkTitle.related, targets: links }],
+      refuse,
+      node.rawName,
+    );
+    if (plan && !plan.empty)
+      existing.push({
+        kind: 'facts',
+        page: node,
+        sidebar: sb,
+        plan,
+        why: [`${linkTitle.related}: +${links.length}`],
+        substantial: false,
+      });
   }
 
   if (!tagsCurrent) {
-    refuse('PACK_NOT_CURRENT', `${env.governance.message} No tags were computed (fail closed), so nothing can be proposed now.`, {
-      governance: { state: env.governance.state, sources: env.governance.sources },
-    });
+    refuse(
+      'PACK_NOT_CURRENT',
+      `${env.governance.message} No tags were computed (fail closed), so nothing can be proposed now.`,
+      {
+        governance: { state: env.governance.state, sources: env.governance.sources },
+      },
+    );
   }
   if (status === 'authoritative' && mode === 'new') {
-    notes.push('status "authoritative": the set is built in place as canon, so this is a canonical proposal ("Approve and accept as canon").');
+    notes.push(
+      'status "authoritative": the set is built in place as canon, so this is a canonical proposal ("Approve and accept as canon").',
+    );
   }
 
   const allPages = indexPage ? [indexPage, ...pages] : pages;
   const absentUnder: { parentId: string; names: string[] }[] = [];
   if (mode === 'new') {
-    const names = [...new Set([subject, ...allPages.filter((p) => p.rule.facts === 'identity' || p.kind === 'index').map((p) => p.displayName)])];
+    const names = [
+      ...new Set([
+        subject,
+        ...allPages
+          .filter((p) => p.rule.facts === 'identity' || p.kind === 'index')
+          .map((p) => p.displayName),
+      ]),
+    ];
     for (const id of [home?.id, raceIndex?.id, wi?.id].filter((x): x is string => typeof x === 'string'))
       if (!absentUnder.some((a) => a.parentId === id)) absentUnder.push({ parentId: id, names });
   } else {
@@ -1351,7 +1608,11 @@ function planExisting(
 }
 
 /** Appends `Unestablished` reasons to the body's Unresolved Material section (made when absent). */
-export function withUnresolved(md: string, heading: string, items: readonly { key: string; reason: string }[]): string {
+export function withUnresolved(
+  md: string,
+  heading: string,
+  items: readonly { key: string; reason: string }[],
+): string {
   const lines = items.map((i) => `- ${i.key}: Unestablished. ${i.reason}`);
   const src = md.replace(/\s+$/, '');
   const re = new RegExp(`^(#{1,6})\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'im');
@@ -1408,9 +1669,18 @@ function withImages(
   if (images.length === 0) return [...blocks];
   const add: LkBlock[] = [];
   for (const im of images) {
-    const parts = fromMarkdown(`### ${im.label.replace(/^#+\s*/, '')}\n\n${im.interpretation}\n`, { blocks: [] }, ctx).blocks as LkBlock[];
+    const parts = fromMarkdown(
+      `### ${im.label.replace(/^#+\s*/, '')}\n\n${im.interpretation}\n`,
+      { blocks: [] },
+      ctx,
+    ).blocks;
     add.push(parts[0]!);
-    add.push({ id: ctx.mintBlockId ? ctx.mintBlockId() : mintClientId(), kind: 'image', url: im.placeholder, alt: im.label } as unknown as LkBlock);
+    add.push({
+      id: ctx.mintBlockId ? ctx.mintBlockId() : mintClientId(),
+      kind: 'image',
+      url: im.placeholder,
+      alt: im.label,
+    });
     add.push(...parts.slice(1));
   }
   const secs = sectionsOf(blocks);
@@ -1423,7 +1693,7 @@ function withImages(
     out.splice(at, 0, ...add);
     return out;
   }
-  const heading = fromMarkdown(`## ${section}\n`, { blocks: [] }, ctx).blocks as LkBlock[];
+  const heading = fromMarkdown(`## ${section}\n`, { blocks: [] }, ctx).blocks;
   const b = secs.findIndex((s) => s.heading && boundaries.some((x) => textKey(x) === textKey(s.title)));
   if (b < 0) return [...out, ...heading, ...add];
   let at = 0;
@@ -1433,7 +1703,7 @@ function withImages(
 }
 
 /** The staged images of an Art page, with their folder and display names (refused rather than guessed). */
-async function planImages(
+function planImages(
   env: PlanEnv,
   o: {
     page: string;
@@ -1443,7 +1713,7 @@ async function planImages(
     refuse: (code: string, message: string, more?: Obj) => void;
     warn: (code: string, message: string, more?: Obj) => void;
   },
-): Promise<PlannedImage[]> {
+): PlannedImage[] {
   const { pd, ctx, type } = env;
   const images = pd.services?.images;
   if (!images) {
@@ -1456,21 +1726,36 @@ async function planImages(
   for (const [i, im] of o.images.entries()) {
     const where = `${o.page}: images[${i}]`;
     if (!im.interpretation || im.interpretation.trim() === '') {
-      o.refuse('BARE_IMAGE', `${where}: an image needs its interpretation text (what the reference establishes); a bare image is refused.`);
+      o.refuse(
+        'BARE_IMAGE',
+        `${where}: an image needs its interpretation text (what the reference establishes); a bare image is refused.`,
+      );
       continue;
     }
-    const parts = im.label.split(' - ').map((s) => s.trim()).filter(Boolean);
+    const parts = im.label
+      .split(' - ')
+      .map((s) => s.trim())
+      .filter(Boolean);
     if (parts.length < 2 || /\.(png|jpe?g|gif|webp|avif|bmp|tiff?)$/i.test(im.label)) {
-      o.refuse('IMAGE_LABEL_INVALID', `${where}: the label is “{Visual Role} - {Descriptor}” (for example “Primary Reference - Character Portrait”), with no file extension.`);
+      o.refuse(
+        'IMAGE_LABEL_INVALID',
+        `${where}: the label is “{Visual Role} - {Descriptor}” (for example “Primary Reference - Character Portrait”), with no file extension.`,
+      );
       continue;
     }
     const row = images.staged(ctx.projectId, im.staged_id);
     if (!row || !row.staged) {
-      o.refuse('STAGED_IMAGE_NOT_FOUND', `${where}: no staged image ${im.staged_id} in this project (stage it with upload_image first).`);
+      o.refuse(
+        'STAGED_IMAGE_NOT_FOUND',
+        `${where}: no staged image ${im.staged_id} in this project (stage it with upload_image first).`,
+      );
       continue;
     }
     if (!row.serverSha256) {
-      o.refuse('STAGED_IMAGE_LEGACY', `${where}: ${im.staged_id} was staged in LegendKeeper before staging moved to the bridge; the owner migrates it first (images migrate-staging).`);
+      o.refuse(
+        'STAGED_IMAGE_LEGACY',
+        `${where}: ${im.staged_id} was staged in LegendKeeper before staging moved to the bridge; the owner migrates it first (images migrate-staging).`,
+      );
       continue;
     }
     if (row.placementJobId || row.placementProposalId || row.discardJobId) {
@@ -1486,7 +1771,7 @@ async function planImages(
     if (im.subfolder) {
       const m = /^\s*([^/]+?)\s*(?:\/\s*(.+?)\s*)?$/.exec(im.subfolder);
       const head = m?.[1] ?? '';
-      const kind = (Object.entries(subfolders) as [string, string][]).find(([, v]) => textKey(v) === textKey(head));
+      const kind = Object.entries<string>(subfolders).find(([, v]) => textKey(v) === textKey(head));
       if (!kind || (kind[0] !== 'details' && !m?.[2]) || (kind[0] === 'details' && m?.[2])) {
         o.refuse(
           'SUBFOLDER_INVALID',
@@ -1496,7 +1781,7 @@ async function planImages(
       }
       sub = kind[0] === 'details' ? [kind[1]] : [kind[1], m![2]!];
     }
-    const name = (type.assets.displayName as string).replace(/\{Subject\}/g, o.subject).replace(/\{Label\}/g, im.label);
+    const name = type.assets.displayName.replace(/\{Subject\}/g, o.subject).replace(/\{Label\}/g, im.label);
     if (out.some((x) => x.name === name && x.subfolder === (sub.join(' / ') || null))) {
       o.refuse('IMAGE_NAME_TWICE', `${where}: two images would both be named “${name}” in one folder.`);
       continue;
@@ -1520,8 +1805,15 @@ async function planImages(
       continue;
     }
     const p = planned.plan;
-    const free = p.destination.folderId && p.wouldCreate.length === 0 ? images.freeName(ctx.projectId, p.destination.folderId, name) : name;
-    if (free !== name) o.warn('IMAGE_NAME_NUMBERED', `${where}: “${name}” is taken in that folder; it is placed as “${free}”.`);
+    const free =
+      p.destination.folderId && p.wouldCreate.length === 0
+        ? images.freeName(ctx.projectId, p.destination.folderId, name)
+        : name;
+    if (free !== name)
+      o.warn(
+        'IMAGE_NAME_NUMBERED',
+        `${where}: “${name}” is taken in that folder; it is placed as “${free}”.`,
+      );
     out.push({
       stagedId: im.staged_id,
       row,
@@ -1547,37 +1839,48 @@ async function routingChange(
   warn: (code: string, message: string, more?: Obj) => void,
 ): Promise<ExistingChange | null> {
   const { pd, type } = env;
-  const doc = index.documents.find((d) => d.name === 'Main' && (d.type === 'page' || d.type === 'blank')) ??
-    (index.documents.filter((d) => d.type === 'page').length === 1 ? index.documents.find((d) => d.type === 'page') : undefined);
+  const doc =
+    index.documents.find((d) => d.name === 'Main' && (d.type === 'page' || d.type === 'blank')) ??
+    (index.documents.filter((d) => d.type === 'page').length === 1
+      ? index.documents.find((d) => d.type === 'page')
+      : undefined);
   if (!doc) {
     warn('ROUTING_SKIPPED', `${index.rawName} has no main page document; its routing lines were not added.`);
     return null;
   }
-  const read = await liveRead(pd, env.mctx, env.tool, 'getDocumentBlocks', { path: { resourceId: index.id, documentId: doc.id } });
+  const read = await liveRead(pd, env.mctx, env.tool, 'getDocumentBlocks', {
+    path: { resourceId: index.id, documentId: doc.id },
+  });
   if (!read.ok) {
     refuse('INDEX_UNREADABLE', `${index.rawName} could not be read now.`);
     return null;
   }
   const body = read.value as { version?: string; blocks?: LkBlock[] };
-  const blocks = (body.blocks ?? []) as LkBlock[];
+  const blocks = body.blocks ?? [];
   const md = toMarkdown({ blocks }).markdown;
   const want = textKey(type.index.routing);
   const found = sectionsOf(blocks).find((s) => s.heading && textKey(s.title) === want);
   if (!found) {
-    warn('ROUTING_SECTION_MISSING', `${index.rawName} has no “${type.index.routing}” section, so no routing lines were added (add them with write_page).`);
+    warn(
+      'ROUTING_SECTION_MISSING',
+      `${index.rawName} has no “${type.index.routing}” section, so no routing lines were added (add them with write_page).`,
+    );
     return null;
   }
   const lines = children.map(
     (c) =>
       `- [${c.rawName.replace(/\[/g, '\\[').replace(/\]/g, '\\]')}](lk://resources/${c.id})${c.scope ? `: ${c.scope}` : ''}`,
   );
-  let sectionMd = '';
+  let sectionMd: string;
   let planned: LkBlock[];
   try {
     sectionMd = getSection(md, found.title).markdown;
     const ctx = env.pd.services ? pageConverterContext(env.pd.services, env.ctx.projectId) : undefined;
-    planned = applyEdit({ blocks }, { mode: 'append_to_section', section: found.title, markdown: lines.join('\n') }, ctx ?? {})
-      .blocks as LkBlock[];
+    planned = applyEdit(
+      { blocks },
+      { mode: 'append_to_section', section: found.title, markdown: lines.join('\n') },
+      ctx ?? {},
+    ).blocks;
   } catch (e) {
     warn(
       'ROUTING_SECTION_AMBIGUOUS',
@@ -1602,16 +1905,20 @@ async function routingChange(
 /** Sections of the Reference's body that the new pages' domains now own (by heading words): a follow-up trim is due. */
 async function overlapWarnings(env: PlanEnv, page: NodeRef, pages: readonly PlannedPage[]): Promise<Issue[]> {
   const node = env.ctx.tree.node(env.ctx.projectId, page.id).data;
-  const doc = node?.documents.find((d) => d.name === 'Main') ?? node?.documents.find((d) => d.type === 'page');
+  const doc =
+    node?.documents.find((d) => d.name === 'Main') ?? node?.documents.find((d) => d.type === 'page');
   if (!node || !doc) return [];
-  const read = await liveRead(env.pd, env.mctx, env.tool, 'getDocumentBlocks', { path: { resourceId: page.id, documentId: doc.id } });
+  const read = await liveRead(env.pd, env.mctx, env.tool, 'getDocumentBlocks', {
+    path: { resourceId: page.id, documentId: doc.id },
+  });
   if (!read.ok) return [];
-  const blocks = ((read.value as { blocks?: LkBlock[] }).blocks ?? []) as LkBlock[];
+  const blocks = (read.value as { blocks?: LkBlock[] }).blocks ?? [];
   const domains = env.type.text.overload.domains;
   const owned = new Set<string>();
   for (const p of pages) {
     const t = textKey(`${p.displayName} ${p.referenceType ?? ''}`);
-    for (const [d, words] of Object.entries(domains)) if (words.some((w) => t.includes(textKey(w))) || t.includes(textKey(d))) owned.add(d);
+    for (const [d, words] of Object.entries(domains))
+      if (words.some((w) => t.includes(textKey(w))) || t.includes(textKey(d))) owned.add(d);
   }
   const out: Issue[] = [];
   for (const s of sectionsOf(blocks)) {

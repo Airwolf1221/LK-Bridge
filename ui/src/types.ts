@@ -2152,7 +2152,9 @@ export interface PackTypeRules {
   name: string;
   tool: string;
   hook: string | null;
-  placement: { kind: 'taxonomy'; registryType: string; field: string; fallbackIndex: string } | { kind: 'fixed'; index: string };
+  placement:
+    | { kind: 'taxonomy'; registryType: string; field: string; fallbackIndex: string }
+    | { kind: 'fixed'; index: string };
   roles: PackRoleRule[];
   identity: { field: string; key: string; gated: boolean }[];
   unestablished: string;
@@ -2207,9 +2209,19 @@ export interface PackView {
   prefix: string;
   rules: PackRules;
   version: number;
-  governance: { key: string; project: string; resourceId: string; documentId: string; name: string; label?: string }[];
+  governance: {
+    key: string;
+    project: string;
+    resourceId: string;
+    documentId: string;
+    name: string;
+    label?: string;
+  }[];
   approved: { version: number; at: number; by: string; sources: { key: string; version: string }[] } | null;
-  drift: { at: number; changed: { key: string; name: string; approved: string | null; current: string | null }[] } | null;
+  drift: {
+    at: number;
+    changed: { key: string; name: string; approved: string | null; current: string | null }[];
+  } | null;
   seed: string | null;
   attachments: {
     projectId: string;

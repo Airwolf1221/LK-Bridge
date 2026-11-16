@@ -17,7 +17,11 @@ const identityValue = z.union([
   z
     .object({
       value: z.string().max(500),
-      reason: z.string().max(2000).optional().describe('Required when value is "Unestablished": why it is open.'),
+      reason: z
+        .string()
+        .max(2000)
+        .optional()
+        .describe('Required when value is "Unestablished": why it is open.'),
     })
     .strict(),
 ]);
@@ -29,14 +33,18 @@ const image = z
       .string()
       .min(1)
       .max(300)
-      .describe('“{Visual Role} - {Descriptor}”, e.g. “Primary Reference - Character Portrait”; no file extension.'),
+      .describe(
+        '“{Visual Role} - {Descriptor}”, e.g. “Primary Reference - Character Portrait”; no file extension.',
+      ),
     interpretation: z.string().max(5000).optional().describe('What this reference establishes (required).'),
     subfolder: z
       .string()
       .max(300)
       .nullable()
       .optional()
-      .describe('“Forms / <named form>”, “Outfits / <named outfit>” or “Details”; omit for the character’s folder.'),
+      .describe(
+        '“Forms / <named form>”, “Outfits / <named outfit>” or “Details”; omit for the character’s folder.',
+      ),
   })
   .strict();
 
@@ -47,8 +55,16 @@ const page = z
       .min(1)
       .max(40)
       .describe('core | compact | specialist | art | relationship (only the domains with real content).'),
-    title: z.string().max(200).optional().describe('specialist: the domain, e.g. "Biography" (name “{Name} - {title}”).'),
-    referenceType: z.string().max(200).optional().describe('specialist: its Reference Type (a suggestion is offered).'),
+    title: z
+      .string()
+      .max(200)
+      .optional()
+      .describe('specialist: the domain, e.g. "Biography" (name “{Name} - {title}”).'),
+    referenceType: z
+      .string()
+      .max(200)
+      .optional()
+      .describe('specialist: its Reference Type (a suggestion is offered).'),
     specialistTag: z
       .string()
       .max(100)
@@ -57,10 +73,22 @@ const page = z
         'specialist: at most one of Biography, Personality, Relationship, Character Art, Visual Reference, Wardrobe, Magic, Equipment.',
       ),
     scope: z.string().max(1000).optional().describe('The Scope row: one line of what the page covers.'),
-    markdown: z.string().max(200_000).optional().describe('The page text: “## Purpose” first (no title, no metadata).'),
-    dependencies: z.array(z.string().max(500)).max(50).optional().describe('Pages it depends on (names or ids).'),
+    markdown: z
+      .string()
+      .max(200_000)
+      .optional()
+      .describe('The page text: “## Purpose” first (no title, no metadata).'),
+    dependencies: z
+      .array(z.string().max(500))
+      .max(50)
+      .optional()
+      .describe('Pages it depends on (names or ids).'),
     related: z.array(z.string().max(500)).max(50).optional().describe('Related Sources (names or ids).'),
-    images: z.array(image).max(30).optional().describe('art: the staged images, each with its interpretation.'),
+    images: z
+      .array(image)
+      .max(30)
+      .optional()
+      .describe('art: the staged images, each with its interpretation.'),
     with: z.string().max(200).optional().describe('relationship: the other character (name or id).'),
     label: z.string().max(100).optional().describe('relationship: the label (default "Relationship").'),
     host: z.enum(['self', 'other']).optional().describe('relationship: whose index holds it (default self).'),
@@ -72,7 +100,12 @@ const page = z
  * `create_owner`, or a type defined only in test data): one tool per name, its `type` argument choosing among the types
  * that share it, read from the pack's rules at each call. The same engine as `arkona_create_character`.
  */
-export function genericPackTool(deps: ToolDeps, packId: string, prefix: string, toolName: string): McpToolProvider {
+export function genericPackTool(
+  deps: ToolDeps,
+  packId: string,
+  prefix: string,
+  toolName: string,
+): McpToolProvider {
   const full = `${prefix}${toolName}`;
   const typesOf = () =>
     deps.services?.packs
@@ -86,14 +119,28 @@ export function genericPackTool(deps: ToolDeps, packId: string, prefix: string, 
       access: 'write',
       description:
         `A setting pack's creation tool: builds a whole subject from ONE package by the pack's rules (only the pages you give, each from its template, named, placed, its sidebar filled in template order, its tags COMPUTED, links resolved), then verified. \`type\` chooses the kind (see the pack on get_bridge_guide). dryRun shows the full preview and writes nothing; otherwise it is ONE proposal for the owner, whatever your scope: never resubmit it, follow it with bridge_proposal_status. Missing identity values: ask the owner, never guess. ` +
-        'Cost: about 6 reads to plan; the job about 8 reads and 6 writes per page.',
+        'Cost: 4 to 8 reads to plan (3 of them the pack’s governance); the job about 20 reads and 19 writes per page with a full sidebar (one write per row), fewer for an index.',
       inputSchema: z.object({
-        type: z.string().min(1).max(100).describe('The kind of subject (one of the pack’s types for this tool).'),
+        type: z
+          .string()
+          .min(1)
+          .max(100)
+          .describe('The kind of subject (one of the pack’s types for this tool).'),
         name: z.string().min(1).max(200).describe('The subject’s name (no prefix).'),
-        status: z.enum(['working', 'authoritative']).optional().describe('working (default) or authoritative (canon).'),
-        identity: z.record(z.string().max(40), identityValue).default({}).describe('The type’s identity facts.'),
+        status: z
+          .enum(['working', 'authoritative'])
+          .optional()
+          .describe('working (default) or authoritative (canon).'),
+        identity: z
+          .record(z.string().max(40), identityValue)
+          .default({})
+          .describe('The type’s identity facts.'),
         pages: z.array(page).max(30).default([]).describe('The pages, only those with real content.'),
-        index: z.object({ markdown: z.string().max(100_000) }).strict().optional().describe('The index text.'),
+        index: z
+          .object({ markdown: z.string().max(100_000) })
+          .strict()
+          .optional()
+          .describe('The index text.'),
         target: z.string().min(1).max(200).optional().describe('An EXISTING subject to add new pages to.'),
         dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
         preview: z.boolean().optional().describe('The same as dryRun.'),
@@ -130,7 +177,7 @@ export function genericPackTool(deps: ToolDeps, packId: string, prefix: string, 
             },
             dryRun: args.dryRun === true || args.preview === true,
             operationId: args.operation_id,
-            args: args as Record<string, unknown>,
+            args: args,
           });
         }),
     }),
@@ -140,7 +187,11 @@ export function genericPackTool(deps: ToolDeps, packId: string, prefix: string, 
 
 /** The tool names a set of packs needs besides the explicit tools: `{ packId, prefix, tool }` each once. */
 export function genericPackToolNames(
-  packs: readonly { readonly id: string; readonly prefix: string; readonly rules: { readonly types: readonly { readonly tool: string }[] } }[],
+  packs: readonly {
+    readonly id: string;
+    readonly prefix: string;
+    readonly rules: { readonly types: readonly { readonly tool: string }[] };
+  }[],
   explicit: ReadonlySet<string>,
 ): { packId: string; prefix: string; tool: string; name: string }[] {
   const out: { packId: string; prefix: string; tool: string; name: string }[] = [];
@@ -168,14 +219,19 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         'depth "compact": one Character Reference; "developed": an [INDEX] with a Character Core. status "working" (default): a Working set to promote later; "authoritative": canon. The six identity fields (givenName, surname, race, namingCulture, lifeState, temporalScope) are required: if one is unknown, ASK THE OWNER, never guess ("Unestablished" only with a reason the owner gave). ' +
         'dryRun shows the full preview (pages, facts, tags, links, folders, every dash replaced, refusals and warnings) and writes nothing: preview first. Otherwise it is ONE proposal for the owner, whatever your scope; never resubmit it, follow it with bridge_proposal_status. A refusal names the fix. ' +
         'Example: { "name": "Asagiri Ren", "depth": "compact", "identity": { "givenName": "Ren", "surname": "Asagiri", "race": "Foxian", "namingCulture": "Fujimatsuan", "lifeState": "Alive", "temporalScope": "5A 931" }, "pages": [{ "role": "compact", "scope": "Shrine guard", "markdown": "## Purpose\\n…" }], "dryRun": true, "project": "test" }. ' +
-        'Cost: about 6 reads to plan (3 of them the pack’s governance); the job about 8 reads and 6 writes per page, plus 4 writes per image.',
+        'Cost: 4 to 8 reads to plan (3 of them the pack’s governance); the job about 20 reads and 19 writes for a compact character (one write per sidebar row), about 57 and 46 for a Core with a Biography and a Relationship, about 28 and 16 for an Art page with one image.',
       inputSchema: z.object({
         name: z.string().min(1).max(200).describe('The character’s Canonical Display Name (no prefix).'),
-        depth: z.enum(['compact', 'developed']).optional().describe('compact: a Reference; developed: index and Core.'),
+        depth: z
+          .enum(['compact', 'developed'])
+          .optional()
+          .describe('compact: a Reference; developed: index and Core.'),
         status: z
           .enum(['working', 'authoritative'])
           .optional()
-          .describe('working (default for a new character): a Working set; authoritative: canon (a canonical proposal).'),
+          .describe(
+            'working (default for a new character): a Working set; authoritative: canon (a canonical proposal).',
+          ),
         identity: z
           .object({
             givenName: identityValue.optional(),
@@ -208,7 +264,10 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .boolean()
           .optional()
           .describe('With target, a Compact Reference: rename it to its Character Core (text kept).'),
-        split: z.unknown().optional().describe('Not supported: splitting an existing page is refused (a later tool).'),
+        split: z
+          .unknown()
+          .optional()
+          .describe('Not supported: splitting an existing page is refused (a later tool).'),
         dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
         preview: z.boolean().optional().describe('The same as dryRun.'),
         operation_id: operationIdArg,
@@ -236,7 +295,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             input,
             dryRun: args.dryRun === true || args.preview === true,
             operationId: args.operation_id,
-            args: args as Record<string, unknown>,
+            args: args,
           });
         }),
     }),

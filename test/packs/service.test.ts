@@ -58,7 +58,11 @@ describe('the Arkona pack, as data', () => {
     const packs = w.stack.runtime.packs;
     const approved = packs.get('arkona')!.approved!;
     expect(approved.by).toBe('owner');
-    expect(approved.sources.map((s) => s.key)).toEqual(['character-architecture', 'source-formatting', 'tagging-standard']);
+    expect(approved.sources.map((s) => s.key)).toEqual([
+      'character-architecture',
+      'source-formatting',
+      'tagging-standard',
+    ]);
     expect(audit('pack.approve').length).toBeGreaterThan(0);
     expect((await packs.governance('arkona')).state).toBe('current');
     w.editGovernance('architecture');
@@ -78,7 +82,9 @@ describe('the Arkona pack, as data', () => {
     const pack = packs.get('arkona')!;
     packs.store.setGovernance('arkona', [{ ...pack.governance[0]!, documentId: 'nosuchdoc' }]);
     try {
-      await expect(packs.commands.approve('owner', 'arkona')).rejects.toMatchObject({ code: 'GOVERNANCE_UNREADABLE' });
+      await expect(packs.commands.approve('owner', 'arkona')).rejects.toMatchObject({
+        code: 'GOVERNANCE_UNREADABLE',
+      });
       expect((await packs.governance('arkona')).state).not.toBe('current');
     } finally {
       packs.store.setGovernance('arkona', pack.governance);
@@ -95,11 +101,18 @@ describe('the Arkona pack, as data', () => {
     expect(after.rules.tags.race.Starborn).toBe('Starborn');
     expect(audit('pack.set_tokens')[0]).toMatchObject({ target: 'arkona' });
     expect((await packs.governance('arkona')).state).toBe('rules_changed');
-    expect(() => packs.commands.setTokens('owner', 'arkona', { culture: { Foo: 'Unknown' } })).toThrow(/never a tag/);
-    expect(() => packs.commands.setTokens('owner', 'arkona', { culture: { 'Foo — Bar': 'Foo' } })).toThrow(/dashes/);
+    expect(() => packs.commands.setTokens('owner', 'arkona', { culture: { Foo: 'Unknown' } })).toThrow(
+      /never a tag/,
+    );
+    expect(() => packs.commands.setTokens('owner', 'arkona', { culture: { 'Foo — Bar': 'Foo' } })).toThrow(
+      /dashes/,
+    );
     await packs.commands.approve('owner', 'arkona');
     expect(packs.get('arkona')!.approved!.version).toBe(v + 1);
-    expect(packs.store.versions('arkona')[0]).toMatchObject({ version: v + 1, reason: 'token maps edited on the Packs page' });
+    expect(packs.store.versions('arkona')[0]).toMatchObject({
+      version: v + 1,
+      reason: 'token maps edited on the Packs page',
+    });
   });
 });
 

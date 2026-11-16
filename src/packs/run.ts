@@ -10,7 +10,7 @@ import { lifecycleFrom } from '../lifecycle/settings.js';
 import type { McpToolContext, McpToolResult } from '../mcp/server.js';
 import { createCtx, withRequest, type CreateOutcome } from '../mcp/tools/create-support.js';
 import { finish, repoContext } from '../mcp/tools/repo.js';
-import { errorResult, render, type ProjectDeps } from '../mcp/tools/shape.js';
+import { errorResult, type ProjectDeps } from '../mcp/tools/shape.js';
 import { runWriteJob } from '../mcp/tools/write-job.js';
 import { buildPackJob, type PackJob } from './engine/job.js';
 import { planPackage, type PackageInput, type PackPlan, type PlanEnv } from './engine/plan.js';
@@ -31,9 +31,14 @@ export interface RunPackageOptions {
   readonly args: Obj;
 }
 
-export async function runPackage(pd: ProjectDeps, mctx: McpToolContext, o: RunPackageOptions): Promise<McpToolResult> {
+export async function runPackage(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  o: RunPackageOptions,
+): Promise<McpToolResult> {
   const packs = pd.services?.packs;
-  if (!packs) return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Setting packs are not available here.' }, pd);
+  if (!packs)
+    return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Setting packs are not available here.' }, pd);
   const pack = packs.get(o.packId);
   if (!pack) return errorResult({ code: 'PACK_NOT_FOUND', message: `No pack ${o.packId}.` }, pd);
   const attachment = packs.attachment(pack.id, pd.project.id);
@@ -49,11 +54,18 @@ export async function runPackage(pd: ProjectDeps, mctx: McpToolContext, o: RunPa
     );
   }
   const type = pack.rules.types.find((t) => t.name.toLowerCase() === o.type.toLowerCase());
-  if (!type) return errorResult({ code: 'PACK_TYPE_NOT_FOUND', message: `The ${pack.name} pack has no type ${o.type}.` }, pd);
+  if (!type)
+    return errorResult(
+      { code: 'PACK_TYPE_NOT_FOUND', message: `The ${pack.name} pack has no type ${o.type}.` },
+      pd,
+    );
   const hook = hookFor(type);
   if (!hook)
     return errorResult(
-      { code: 'PACK_HOOK_MISSING', message: `The ${type.name} type names the hook “${type.hook ?? ''}”, which this bridge does not have.` },
+      {
+        code: 'PACK_HOOK_MISSING',
+        message: `The ${type.name} type names the hook “${type.hook ?? ''}”, which this bridge does not have.`,
+      },
       pd,
     );
   const rc = repoContext(pd);
@@ -97,7 +109,7 @@ export async function runPackage(pd: ProjectDeps, mctx: McpToolContext, o: RunPa
         refusals: plan.refusals,
         ...(first.hint ? { hint: first.hint } : {}),
         preview,
-      } as never,
+      },
       pd,
     );
   }
@@ -110,59 +122,74 @@ export async function runPackage(pd: ProjectDeps, mctx: McpToolContext, o: RunPa
     };
     return finish(pd, mctx, o.tool, body, () => ({ pages: plan.pages.length, summary: job!.summary }));
   }
-  return withRequest(pd, mctx, o.tool, { ...o.args, dryRun: false }, null, async (): Promise<CreateOutcome> => {
-    const j = job!;
-    const head: Obj = {
-      pack: pack.id,
-      type: type.name,
-      subject: plan.subject,
-      mode: plan.mode,
-      lifecycleStatus: plan.status,
-      pages: plan.pages.map((p) => ({ id: p.id, name: p.rawName, parent: p.parentName })),
-      ...(plan.images.length ? { images: plan.images.map((i) => ({ staged_id: i.stagedId, name: i.name, folder: i.path.join(' / ') })) } : {}),
-      ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
-      ...(plan.replacements.length ? { replacements: plan.replacements } : {}),
-      ...(plan.held.length ? { heldTags: plan.held } : {}),
-      ...(plan.notes.length ? { notes: plan.notes } : {}),
-    };
-    const out = await runWriteJob(pd, mctx, o.tool, {
-      steps: j.steps,
-      labels: j.labels,
-      title: j.summary,
-      ...(j.marker ? { lifecycle: j.marker } : {}),
-      forceProposal: pack.rules.settings.alwaysPropose,
-      stagedPlacement: plan.images.length > 0,
-      proposal: {
-        operations: j.operations,
-        summary: j.summary,
-        operation: { tool: o.tool, pack: pack.id, preview },
-        prefetched: [...cc.sidebars.entries()].map(([resourceId, sb]) => ({
-          op: 'listProperties',
-          path: { resourceId },
-          body: { data: sb.map((p) => p.raw) },
-        })),
-      },
-      head,
-      preview: () => ({ pages: plan.pages.length, summary: j.summary }),
-    });
-    // The staged images: the job (or proposal) that places them, and where each one's asset step is.
-    const images = pd.services?.images;
-    if (images && (out.jobId || out.proposalId)) {
-      for (const im of plan.images) {
-        const assetStep = j.assetSteps.get(im.stagedId);
-        if (!assetStep) continue;
-        images.store.updateUpload(pd.project.id, im.stagedId, {
-          ...(out.jobId ? { placementJobId: out.jobId } : { placementProposalId: out.proposalId! }),
-          intended: {
-            ...(im.row.intended ?? {}),
-            placing: { name: im.name, path: im.path, folderId: im.folderId, assetStep },
-          },
-          error: null,
-        });
+  return withRequest(
+    pd,
+    mctx,
+    o.tool,
+    { ...o.args, dryRun: false },
+    null,
+    async (): Promise<CreateOutcome> => {
+      const j = job!;
+      const head: Obj = {
+        pack: pack.id,
+        type: type.name,
+        subject: plan.subject,
+        mode: plan.mode,
+        lifecycleStatus: plan.status,
+        pages: plan.pages.map((p) => ({ id: p.id, name: p.rawName, parent: p.parentName })),
+        ...(plan.images.length
+          ? {
+              images: plan.images.map((i) => ({
+                staged_id: i.stagedId,
+                name: i.name,
+                folder: i.path.join(' / '),
+              })),
+            }
+          : {}),
+        ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
+        ...(plan.replacements.length ? { replacements: plan.replacements } : {}),
+        ...(plan.held.length ? { heldTags: plan.held } : {}),
+        ...(plan.notes.length ? { notes: plan.notes } : {}),
+      };
+      const out = await runWriteJob(pd, mctx, o.tool, {
+        steps: j.steps,
+        labels: j.labels,
+        title: j.summary,
+        ...(j.marker ? { lifecycle: j.marker } : {}),
+        forceProposal: pack.rules.settings.alwaysPropose,
+        stagedPlacement: plan.images.length > 0,
+        proposal: {
+          operations: j.operations,
+          summary: j.summary,
+          operation: { tool: o.tool, pack: pack.id, preview },
+          prefetched: [...cc.sidebars.entries()].map(([resourceId, sb]) => ({
+            op: 'listProperties',
+            path: { resourceId },
+            body: { data: sb.map((p) => p.raw) },
+          })),
+        },
+        head,
+        preview: () => ({ pages: plan.pages.length, summary: j.summary }),
+      });
+      // The staged images: the job (or proposal) that places them, and where each one's asset step is.
+      const images = pd.services?.images;
+      if (images && (out.jobId || out.proposalId)) {
+        for (const im of plan.images) {
+          const assetStep = j.assetSteps.get(im.stagedId);
+          if (!assetStep) continue;
+          images.store.updateUpload(pd.project.id, im.stagedId, {
+            ...(out.jobId ? { placementJobId: out.jobId } : { placementProposalId: out.proposalId! }),
+            intended: {
+              ...(im.row.intended ?? {}),
+              placing: { name: im.name, path: im.path, folderId: im.folderId, assetStep },
+            },
+            error: null,
+          });
+        }
       }
-    }
-    return { kind: 'job', head, labels: j.labels, ...out };
-  });
+      return { kind: 'job', head, labels: j.labels, ...out };
+    },
+  );
 }
 
 /** The preview (decision: section 4 of the design): the tree, each page in full, assets, replacements, refusals. */
@@ -203,7 +230,14 @@ export function previewOf(
     mode: plan.mode,
     lifecycleStatus: plan.status,
     ...(plan.target
-      ? { target: { id: plan.target.identity.id, name: plan.target.identity.rawName, role: plan.target.role, index: plan.target.index?.rawName ?? null } }
+      ? {
+          target: {
+            id: plan.target.identity.id,
+            name: plan.target.identity.rawName,
+            role: plan.target.role,
+            index: plan.target.index?.rawName ?? null,
+          },
+        }
       : {}),
     governance: {
       state: plan.governance.state,
@@ -228,8 +262,14 @@ export function previewOf(
         ? { lastMajorRevision: 'set to the day the job runs (the day the owner approves)' }
         : {}),
       tags: p.tags ?? [],
-      dependencies: p.linkTargets.find((l) => l.title.toLowerCase() === plan.pack.rules.sidebar.dependencies.toLowerCase())?.targets.map((t) => t.name) ?? [],
-      relatedSources: p.linkTargets.find((l) => l.title.toLowerCase() === plan.pack.rules.sidebar.related.toLowerCase())?.targets.map((t) => t.name) ?? [],
+      dependencies:
+        p.linkTargets
+          .find((l) => l.title.toLowerCase() === plan.pack.rules.sidebar.dependencies.toLowerCase())
+          ?.targets.map((t) => t.name) ?? [],
+      relatedSources:
+        p.linkTargets
+          .find((l) => l.title.toLowerCase() === plan.pack.rules.sidebar.related.toLowerCase())
+          ?.targets.map((t) => t.name) ?? [],
       text: p.blocks ? { blocks: p.blocks.length, headings: p.headings } : null,
       ...(p.kind === 'index' && p.markdown ? { indexText: p.markdown } : {}),
       ...(p.images.length ? { images: p.images.map((i) => i.name) } : {}),
@@ -238,7 +278,10 @@ export function previewOf(
       c.kind === 'move'
         ? { page: c.page.rawName, change: `moved under ${c.toName} (id kept)` }
         : c.kind === 'rename'
-          ? { page: c.from, change: `renamed to ${c.to}; Reference Type Character Core; the Core template recorded` }
+          ? {
+              page: c.from,
+              change: `renamed to ${c.to}; Reference Type Character Core; the Core template recorded`,
+            }
           : c.kind === 'facts'
             ? { page: c.page.rawName, change: c.why.join('; ') }
             : { page: c.page.rawName, change: `${c.section}: +${c.lines.length} line(s)`, lines: c.lines },

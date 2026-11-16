@@ -109,11 +109,7 @@ export function nameProblem(name: string, rules: PackRules): { code: string; mes
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 export const textKey = (s: string) =>
-  s
-    .normalize('NFKC')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLocaleLowerCase('en-GB');
+  s.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('en-GB');
 
 /** The plain text of a block's runs. */
 export function blockText(b: LkBlock | Obj): string {
@@ -169,7 +165,8 @@ function textSize(blocks: readonly unknown[]): number {
   return n;
 }
 
-const PLACEHOLDER_TEXT = /^(?:\s*(?:tbd|tbc|todo|to do|placeholder|lorem ipsum.*|\.\.\.|…|\[.*\]|<.*>|\{.*\}|-+|\?+)\s*)$/i;
+const PLACEHOLDER_TEXT =
+  /^(?:\s*(?:tbd|tbc|todo|to do|placeholder|lorem ipsum.*|\.\.\.|…|\[.*\]|<.*>|\{.*\}|-+|\?+)\s*)$/i;
 const METADATA_KEYS = [
   'status',
   'reference type',
@@ -216,7 +213,11 @@ export function checkBody(input: {
   const first = blocks[0];
   const firstHeading = type.text.firstHeading;
   if (!first) {
-    refusals.push({ code: 'BODY_EMPTY', page, message: `${page}: the page has no text; give its ${firstHeading} first.` });
+    refusals.push({
+      code: 'BODY_EMPTY',
+      page,
+      message: `${page}: the page has no text; give its ${firstHeading} first.`,
+    });
     return { refusals, warnings };
   }
   const firstText = blockText(first).trim();
@@ -327,7 +328,9 @@ function looksLikeMetadata(blocks: readonly LkBlock[]): boolean {
 
 /** Placeholders a gated value may not be (compared without case, brackets and surrounding space). */
 export function isPlaceholder(value: string, placeholders: readonly string[]): boolean {
-  const v = textKey(value).replace(/^[[({<]+|[\])}>]+$/g, '').trim();
+  const v = textKey(value)
+    .replace(/^[[({<]+|[\])}>]+$/g, '')
+    .trim();
   if (v === '') return true;
   if (/^\{.*\}$|^\[.*\]$|^<.*>$/.test(textKey(value))) return true;
   return placeholders.some((p) => textKey(p) === v);

@@ -40,10 +40,10 @@ export function PacksPage() {
       </PageHeader>
       <p className="muted">
         A setting pack holds one setting’s rules as data: its page types, templates by role, names, placement,
-        sidebar facts, the closed tag grammar and its token maps, the text rules. Its tools carry its prefix and
-        are listed only while it is attached to a project the bridge serves. The rules are derived from the
-        setting’s governance pages, never competing with them: when a source changes, no tags are computed until
-        you check the rules and approve the pack again.
+        sidebar facts, the closed tag grammar and its token maps, the text rules. Its tools carry its prefix
+        and are listed only while it is attached to a project the bridge serves. The rules are derived from
+        the setting’s governance pages, never competing with them: when a source changes, no tags are computed
+        until you check the rules and approve the pack again.
       </p>
       {r.data.packs.length === 0 ? (
         <Empty>No pack is stored.</Empty>
@@ -78,7 +78,10 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
     }).then((ok) => {
       if (!ok) return;
       void run(
-        () => withReauth(() => api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/approve`, { confirm: true })),
+        () =>
+          withReauth(() =>
+            api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/approve`, { confirm: true }),
+          ),
         `${pack.name} version ${pack.version} approved.`,
       ).then((x) => {
         if (x) setGov(x.governance);
@@ -88,18 +91,27 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
   const approved = pack.approved;
   const state: PackGovernance['state'] =
     gov?.state ??
-    (!approved ? 'unapproved' : approved.version !== pack.version ? 'rules_changed' : pack.drift ? 'changed' : 'current');
+    (!approved
+      ? 'unapproved'
+      : approved.version !== pack.version
+        ? 'rules_changed'
+        : pack.drift
+          ? 'changed'
+          : 'current');
   return (
     <section className="card" aria-labelledby={`pack-${pack.id}-h`} data-pack={pack.id}>
       <h2 id={`pack-${pack.id}-h`}>
-        {pack.name} <span className="muted small-text">({pack.id}, version {pack.version})</span>{' '}
+        {pack.name}{' '}
+        <span className="muted small-text">
+          ({pack.id}, version {pack.version})
+        </span>{' '}
         <Badge tone={STATE_TONE[state]}>{STATE_LABEL[state]}</Badge>
       </h2>
       {(gov?.message ?? (state !== 'current' ? null : null)) && <p className="note">{gov?.message}</p>}
       {pack.drift && !gov && (
         <p className="note note-bad" role="alert">
-          Governance changed since the approval: {pack.drift.changed.map((c) => c.name).join(', ')}. No tags are
-          computed until you check the rules and approve again.
+          Governance changed since the approval: {pack.drift.changed.map((c) => c.name).join(', ')}. No tags
+          are computed until you check the rules and approve again.
         </p>
       )}
       <dl className="kv">
@@ -203,7 +215,8 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
 }
 
 type Row = { key: string; token: string };
-const toRows = (m: Record<string, string>): Row[] => Object.entries(m).map(([key, token]) => ({ key, token }));
+const toRows = (m: Record<string, string>): Row[] =>
+  Object.entries(m).map(([key, token]) => ({ key, token }));
 const toMap = (rows: Row[]) =>
   Object.fromEntries(rows.filter((r) => r.key.trim() !== '').map((r) => [r.key.trim(), r.token.trim()]));
 
@@ -228,7 +241,11 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
       void run(
         () =>
           withReauth(() =>
-            api.put(`/packs/${pack.id}/tokens`, { race: toMap(race), culture: toMap(culture), confirm: true }),
+            api.put(`/packs/${pack.id}/tokens`, {
+              race: toMap(race),
+              culture: toMap(culture),
+              confirm: true,
+            }),
           ),
         'Token maps saved: approve the new version to use them.',
       ).then(onChanged);
@@ -237,8 +254,9 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
     <>
       <h3>Token maps</h3>
       <p className="muted small-text">
-        A fact value (Race / Species, Naming Culture) and the tag token it becomes. A value with no token is held:
-        left out of the tags and reported, never invented. {pack.rules.tags.never.join(', ')} are never tags.
+        A fact value (Race / Species, Naming Culture) and the tag token it becomes. A value with no token is
+        held: left out of the tags and reported, never invented. {pack.rules.tags.never.join(', ')} are never
+        tags.
       </p>
       <div className="grid-2">
         <TokenTable title="Race / Species" rows={race} onChange={setRace} />
@@ -252,7 +270,8 @@ function TokenMaps({ pack, onChanged }: { pack: PackView; onChanged: () => void 
 }
 
 function TokenTable({ title, rows, onChange }: { title: string; rows: Row[]; onChange: (r: Row[]) => void }) {
-  const set = (i: number, patch: Partial<Row>) => onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const set = (i: number, patch: Partial<Row>) =>
+    onChange(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <div className="table-wrap">
       <table aria-label={`${title} tokens`}>
@@ -267,13 +286,25 @@ function TokenTable({ title, rows, onChange }: { title: string; rows: Row[]; onC
           {rows.map((r, i) => (
             <tr key={i}>
               <td>
-                <input aria-label={`${title} value ${i + 1}`} value={r.key} onChange={(e) => set(i, { key: e.target.value })} />
+                <input
+                  aria-label={`${title} value ${i + 1}`}
+                  value={r.key}
+                  onChange={(e) => set(i, { key: e.target.value })}
+                />
               </td>
               <td>
-                <input aria-label={`${title} token ${i + 1}`} value={r.token} onChange={(e) => set(i, { token: e.target.value })} />
+                <input
+                  aria-label={`${title} token ${i + 1}`}
+                  value={r.token}
+                  onChange={(e) => set(i, { token: e.target.value })}
+                />
               </td>
               <td>
-                <button type="button" className="small" onClick={() => onChange(rows.filter((_, j) => j !== i))}>
+                <button
+                  type="button"
+                  className="small"
+                  onClick={() => onChange(rows.filter((_, j) => j !== i))}
+                >
                   Remove
                 </button>
               </td>
@@ -314,8 +345,12 @@ function Rules({ pack }: { pack: PackView }) {
             {t.placement.kind === 'taxonomy'
               ? `by ${t.placement.field} through the ${t.placement.registryType} taxonomy; an unmatched value goes to ${t.placement.fallbackIndex}, with a warning`
               : `under ${t.placement.index}`}
-            . Gated fields: {t.identity.filter((f) => f.gated).map((f) => f.key).join(', ') || 'none'} (
-            {t.unestablished} only with a reason).
+            . Gated fields:{' '}
+            {t.identity
+              .filter((f) => f.gated)
+              .map((f) => f.key)
+              .join(', ') || 'none'}{' '}
+            ({t.unestablished} only with a reason).
           </p>
           <div className="table-wrap">
             <table aria-label={`${t.name} roles`}>

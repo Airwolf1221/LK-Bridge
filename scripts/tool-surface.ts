@@ -181,6 +181,11 @@ export const NOTES: Readonly<Record<string, Note>> = {
     'create_resource; create_bare_resource',
     'Specialist pages left flat under [INDEX] Working; an invented race; `authoritative` by default thinking.',
   ),
+  arkona_create_character: N(
+    'Packs',
+    'create_character; create_resource; set_facts (one package instead)',
+    'Separate creates on an Arkona project; a guessed identity value instead of asking the owner; typed tags; resubmitting the proposal.',
+  ),
   archive_page: N(
     'Lifecycle',
     'delete_resource; move_resource',
@@ -352,6 +357,7 @@ export function inventory(report: SurfaceReport, baseline?: Baseline): string {
     'Pages',
     'Facts',
     'Resources',
+    'Packs',
     'Lifecycle',
     'Documents',
     'Timelines',

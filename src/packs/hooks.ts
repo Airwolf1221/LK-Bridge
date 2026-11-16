@@ -15,10 +15,13 @@ import type { TypeRules } from './types.js';
 export interface TypeHook {
   readonly name: string;
   /** The identity role of a NEW subject, or a refusal message. */
-  identityRole(input: {
-    readonly depth?: string | undefined;
-    readonly roles: readonly string[];
-  }, type: TypeRules): { role: string } | { refusal: { code: string; message: string } };
+  identityRole(
+    input: {
+      readonly depth?: string | undefined;
+      readonly roles: readonly string[];
+    },
+    type: TypeRules,
+  ): { role: string } | { refusal: { code: string; message: string } };
   /** Whether a NEW subject's set gets its own index, given its identity role and the roles hosted beside it. */
   wantsIndex(identityRole: string, siblingRoles: readonly string[], type: TypeRules): boolean;
   readonly relationships: boolean;
@@ -27,7 +30,8 @@ export interface TypeHook {
 }
 
 /** The roles of a type that hold its identity facts. */
-const identityRoles = (type: TypeRules) => type.roles.filter((r) => r.facts === 'identity').map((r) => r.role);
+const identityRoles = (type: TypeRules) =>
+  type.roles.filter((r) => r.facts === 'identity').map((r) => r.role);
 
 /** The generic behaviour: the first identity role; an index whenever another page sits beside the identity page. */
 export const GENERIC_HOOK: TypeHook = Object.freeze({

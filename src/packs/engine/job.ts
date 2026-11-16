@@ -19,7 +19,7 @@
  * 8. `bridge.verify`: each page's parent and place, its six gated fields as six checks, its template rows (none added or
  *    dropped), its tags in order, its links, each image's asset; the text writes verify themselves as they go.
  */
-import type { LinkTarget } from '../../facts/plan.js';
+import type { FactsPlan, LinkTarget } from '../../facts/plan.js';
 import { expandFacts } from '../../facts/expand.js';
 import { LMR_STEP, VERIFY_STEP, type ExpectCheck, type VerifyTarget } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
@@ -64,7 +64,12 @@ export function shiftStep(s: StepSpec, base: number): StepSpec {
           ...(isStepRef(t.assetFrom) ? { assetFrom: at(t.assetFrom) } : {}),
           ...(isStepRef(t.folderFrom) ? { folderFrom: at(t.folderFrom) } : {}),
           ...(Array.isArray(t.inputFrom)
-            ? { inputFrom: (t.inputFrom as { step: number; as: string }[]).map((x) => ({ ...x, step: x.step + base })) }
+            ? {
+                inputFrom: (t.inputFrom as { step: number; as: string }[]).map((x) => ({
+                  ...x,
+                  step: x.step + base,
+                })),
+              }
             : isStepRef(t.inputFrom)
               ? { inputFrom: at(t.inputFrom) }
               : {}),
@@ -173,7 +178,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
   // 3. Changes to existing pages.
   const lmrPages: { id: string; name: string; after: number[] }[] = [];
   // Existing pages whose Last Major Revision this job sets: checked by the pack's own row check (dated at run time).
-  const existingChecks: { id: string; name: string; plan: import('../../facts/plan.js').FactsPlan }[] = [];
+  const existingChecks: { id: string; name: string; plan: FactsPlan }[] = [];
   for (const c of plan.existing) {
     if (c.kind === 'rename') {
       const node = ctx.tree.node(ctx.projectId, c.page.id).data;
@@ -207,11 +212,18 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         tool,
         pack: pack.id,
         page: { id: c.page.id, name: c.from },
-        pageParts: [`renamed to ${c.to}`, 'Reference Type Character Core', `the ${type.name} Core template recorded`],
+        pageParts: [
+          `renamed to ${c.to}`,
+          'Reference Type Character Core',
+          `the ${type.name} Core template recorded`,
+        ],
         summaryLabel: `${c.from}: upgraded to ${c.to} (id, documents, facts, links and text kept)`,
       });
     } else if (c.kind === 'facts') {
-      const fx = expandFacts(c.plan, { id: c.page.id, name: c.page.rawName }, c.sidebar, { facts: c.why, links: null });
+      const fx = expandFacts(c.plan, { id: c.page.id, name: c.page.rawName }, c.sidebar, {
+        facts: c.why,
+        links: null,
+      });
       const base = steps.length;
       const firstWrite = base + 2;
       for (const s of fx.steps) {
@@ -227,7 +239,12 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
             ? shifted
             : { ...shifted, journalOperation: { ...(shifted.journalOperation ?? {}), tool, pack: pack.id } },
         );
-        labels.push(s.op === 'bridge.expect' ? 'check' : `${c.page.rawName}: ${String((s.journalOperation as Obj | undefined)?.write ?? s.op)}`);
+        const write = (s.journalOperation as Obj | undefined)?.write;
+        labels.push(
+          s.op === 'bridge.expect'
+            ? 'check'
+            : `${c.page.rawName}: ${typeof write === 'string' ? write : s.op}`,
+        );
       }
       if (c.substantial) {
         const after: number[] = [];
@@ -254,9 +271,17 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         verifyAfterWrite: true,
         replan: {
           planner: WRITE_PAGE_PLANNER,
-          input: { mode: 'append_to_section', section: c.section, markdown: c.markdown, sectionHash: c.sectionHash },
+          input: {
+            mode: 'append_to_section',
+            section: c.section,
+            markdown: c.markdown,
+            sectionHash: c.sectionHash,
+          },
         },
-        journalOperation: journal({ id: c.page.id, name: c.page.rawName }, `${c.section}: ${c.lines.length} line(s) added`),
+        journalOperation: journal(
+          { id: c.page.id, name: c.page.rawName },
+          `${c.section}: ${c.lines.length} line(s) added`,
+        ),
       });
       labels.push(`${c.page.rawName}: ${c.section} +${c.lines.length}`);
       operations.push({
@@ -301,10 +326,15 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     im.creates.forEach((c, i) => {
       steps.push({
         op: 'createAssetFolder',
-        params: { body: { name: c.name, ...(i === 0 && c.parentFolderId ? { folderId: c.parentFolderId } : {}) } },
+        params: {
+          body: { name: c.name, ...(i === 0 && c.parentFolderId ? { folderId: c.parentFolderId } : {}) },
+        },
         ...(i > 0 ? { bindFrom: { step: first + i - 1, to: 'body.folderId' as const } } : {}),
         findOrCreate: true,
-        journalOperation: journal(null, `folder ${im.path.slice(0, im.path.length - im.creates.length + i + 1).join(' / ')}`),
+        journalOperation: journal(
+          null,
+          `folder ${im.path.slice(0, im.path.length - im.creates.length + i + 1).join(' / ')}`,
+        ),
       });
       labels.push(`folder ${c.name}`);
     });
@@ -379,7 +409,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     if (!index) continue;
     const siblings = created
       .filter((p) => 'item' in p.parent && p.parent.item === c.to.item)
-      .map((p) => ({ id: p.id, displayName: p.displayName, kind: p.kind as ResolveKind }));
+      .map((p) => ({ id: p.id, displayName: p.displayName, kind: p.kind }));
     const me = { displayName: c.name.replace(/^\[[A-Z]{4,5}\]\s*/, ''), kind: c.page.kind as ResolveKind };
     let after: string | undefined;
     let before: string | undefined;
@@ -400,7 +430,9 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     labels.push(`move ${c.page.rawName} under ${c.toName}`);
     targets.push(pageTarget(`${c.name}: place`, c.page.id, { check: 'parent', parentId: index.id }));
     // The new pages under that index now stand beside the moved page: their expected neighbours, in sibling order.
-    const order = [...siblings, { id: c.page.id, displayName: me.displayName, kind: me.kind }].sort(compareSiblings);
+    const order = [...siblings, { id: c.page.id, displayName: me.displayName, kind: me.kind }].sort(
+      compareSiblings,
+    );
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i]!;
       if (t.kind !== 'resource' || !t.placement || t.placement.parentId !== index.id) continue;
@@ -463,7 +495,14 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     const lmr = lmrStepOf.get(p.id);
     for (const k of p.gatedKeys) {
       const v = p.factValues.find((f) => f.key.toLowerCase() === k.toLowerCase())?.value ?? null;
-      targets.push(pageTarget(`${p.rawName}: ${k}`, p.id, { check: 'field', property: env.pack.rules.sidebar.property, key: k, value: v }));
+      targets.push(
+        pageTarget(`${p.rawName}: ${k}`, p.id, {
+          check: 'field',
+          property: env.pack.rules.sidebar.property,
+          key: k,
+          value: v,
+        }),
+      );
     }
     if (p.templateKeys) {
       targets.push(
@@ -487,7 +526,10 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       targets.push(
         pageTarget(`${p.rawName}: links`, p.id, {
           check: 'links',
-          collections: links.map((l) => ({ title: l.title, ids: l.targets.map((t: LinkTarget) => t.resourceId) })),
+          collections: links.map((l) => ({
+            title: l.title,
+            ids: l.targets.map((t: LinkTarget) => t.resourceId),
+          })),
         }),
       );
     }
@@ -506,10 +548,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
           values: Object.fromEntries(
             rows
               .filter((r) => r.key.trim().toLowerCase() !== lmrKey.trim().toLowerCase())
-              .map((r) => [
-                r.key,
-                r.content.map((c) => (typeof (c as Obj).text === 'string' ? ((c as Obj).text as string) : '')).join(''),
-              ]),
+              .map((r) => [r.key, r.content.map((c) => (typeof c.text === 'string' ? c.text : '')).join('')]),
           ),
           lmrKey,
         },

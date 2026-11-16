@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * v3 F3a (ADR 0050), A2: the engine is type-driven. A dummy second type, defined ONLY in this test's data (a "Polity"
  * with one template, a fixed placement and a primary tag, no hook), plans, previews and proposes through the same engine
@@ -22,7 +23,17 @@ const POLITY: TypeRules = {
   hook: null,
   placement: { kind: 'fixed', index: 'Locations' },
   roles: [
-    { role: 'index', template: 'index', name: '{Name}', referenceType: null, tags: [], facts: 'none', body: 'drafted', warnMissing: [], max: 1 },
+    {
+      role: 'index',
+      template: 'index',
+      name: '{Name}',
+      referenceType: null,
+      tags: [],
+      facts: 'none',
+      body: 'drafted',
+      warnMissing: [],
+      max: 1,
+    },
     {
       role: 'core',
       template: 'general',
@@ -39,10 +50,25 @@ const POLITY: TypeRules = {
   unestablished: 'Unestablished',
   placeholders: [],
   fixedFacts: { 'Continuity Type': 'CANON', Continuity: 'Main', Inheritance: 'None' },
-  generalKeys: ['Status', 'Continuity Type', 'Continuity', 'Inheritance', 'Subject', 'Reference Type', 'Scope', 'Last Major Revision', 'Supersedes'],
+  generalKeys: [
+    'Status',
+    'Continuity Type',
+    'Continuity',
+    'Inheritance',
+    'Subject',
+    'Reference Type',
+    'Scope',
+    'Last Major Revision',
+    'Supersedes',
+  ],
   specialistTags: [],
   suggestedReferenceTypes: {},
-  assets: { subfolders: { form: 'Forms', outfit: 'Outfits', details: 'Details' }, displayName: '{Subject} - {Label}', section: 'Reference Images', role: 'core' },
+  assets: {
+    subfolders: { form: 'Forms', outfit: 'Outfits', details: 'Details' },
+    displayName: '{Subject} - {Label}',
+    section: 'Reference Images',
+    role: 'core',
+  },
   index: {
     role: 'index',
     purpose: 'Routes to {Name}’s sources.',
@@ -51,7 +77,11 @@ const POLITY: TypeRules = {
     boundaries: 'Index Boundaries',
     boundariesText: 'Routing only.',
   },
-  text: { firstHeading: 'Purpose', unresolved: 'Unresolved Material', overload: { roles: [], domains: {}, minChars: 1200 } },
+  text: {
+    firstHeading: 'Purpose',
+    unresolved: 'Unresolved Material',
+    overload: { roles: [], domains: {}, minChars: 1200 },
+  },
   relationship: null,
 };
 
@@ -71,7 +101,13 @@ describe('a type defined only in test data (the dummy Polity)', () => {
     const waiting = await w.call('arkona_create_owner', {
       type: 'Polity',
       name: 'Kingdom of Ash',
-      pages: [{ role: 'core', scope: 'A kingdom', markdown: '## Purpose\n\nA kingdom.\n\n## Source Boundaries\n\nOnly.\n' }],
+      pages: [
+        {
+          role: 'core',
+          scope: 'A kingdom',
+          markdown: '## Purpose\n\nA kingdom.\n\n## Source Boundaries\n\nOnly.\n',
+        },
+      ],
       dryRun: true,
       project: 'test',
     });
@@ -83,13 +119,21 @@ describe('a type defined only in test data (the dummy Polity)', () => {
       type: 'Polity',
       name: 'Kingdom of Ash',
       status: 'authoritative',
-      pages: [{ role: 'core', scope: 'A kingdom', markdown: '## Purpose\n\nA kingdom of the east.\n\n## Source Boundaries\n\nThe realm only.\n' }],
+      pages: [
+        {
+          role: 'core',
+          scope: 'A kingdom',
+          markdown: '## Purpose\n\nA kingdom of the east.\n\n## Source Boundaries\n\nThe realm only.\n',
+        },
+      ],
       project: 'test',
     };
     const dry = await w.call('arkona_create_owner', { ...pkg, dryRun: true });
     expect(dry.isError, dry.text).toBe(false);
     expect(dry.body.type).toBe('Polity');
-    expect(dry.body.tree).toEqual([expect.objectContaining({ page: '[BSRC] Kingdom of Ash - Polity Core', parent: '[INDEX] Locations' })]);
+    expect(dry.body.tree).toEqual([
+      expect.objectContaining({ page: '[BSRC] Kingdom of Ash - Polity Core', parent: '[INDEX] Locations' }),
+    ]);
     expect(dry.body.pages[0].tags).toEqual(['CANON', 'Polity']);
     expect(dry.body.pages[0].facts).toEqual(
       expect.arrayContaining([

@@ -86,7 +86,12 @@ export const C = {
   draft: 'draftwk1',
 } as const;
 
-const heading = (id: string, level: number, text: string) => ({ id, kind: 'heading', level, content: [{ text }] });
+const heading = (id: string, level: number, text: string) => ({
+  id,
+  kind: 'heading',
+  level,
+  content: [{ text }],
+});
 const para = (id: string, text: string) => ({ id, kind: 'paragraph', content: [{ text }] });
 
 export interface PackWorld extends ImagesWorld {
@@ -279,7 +284,11 @@ export async function packWorld(
     req.method === 'GET'
       ? {
           status: 200,
-          body: { data: templates.map((t) => ({ ...t, parentId: 'templates' })), hasMore: false, nextCursor: null },
+          body: {
+            data: templates.map((t) => ({ ...t, parentId: 'templates' })),
+            hasMore: false,
+            nextCursor: null,
+          },
         }
       : undefined,
   );
@@ -302,7 +311,9 @@ export async function packWorld(
         const fresh = (b: Record<string, unknown>): Record<string, unknown> => ({
           ...structuredClone(b),
           id: `cp${(++n).toString(36).padStart(6, '0')}`,
-          ...(Array.isArray(b.children) ? { children: (b.children as Record<string, unknown>[]).map(fresh) } : {}),
+          ...(Array.isArray(b.children)
+            ? { children: (b.children as Record<string, unknown>[]).map(fresh) }
+            : {}),
         });
         w.repo.blocks.set(mainOf(copyId).id, {
           version: 1,
@@ -321,7 +332,12 @@ export async function packWorld(
       SidebarModel.links(`rl${id}`.slice(0, 8), 'Related Sources', related),
       { id: `tg${id}`.slice(0, 8), kind: 'unsupported' as const, title: 'TAGS' },
     ]);
-  const canon = { Status: 'Authoritative', 'Continuity Type': 'CANON', Continuity: 'Main', Inheritance: 'None' };
+  const canon = {
+    Status: 'Authoritative',
+    'Continuity Type': 'CANON',
+    Continuity: 'Main',
+    Inheritance: 'None',
+  };
   props(C.mehrana1, {
     ...canon,
     Subject: 'Mehrana I al-Khalid',
@@ -442,8 +458,20 @@ export async function packWorld(
   const packs = w.stack.runtime.packs;
   packs.ensureSeeded();
   packs.store.setGovernance('arkona', [
-    { key: 'character-architecture', project: 'test', resourceId: ROOT, documentId: governanceDocs.architecture, name: 'Character Architecture' },
-    { key: 'source-formatting', project: 'test', resourceId: ROOT, documentId: governanceDocs.formatting, name: 'Source Formatting' },
+    {
+      key: 'character-architecture',
+      project: 'test',
+      resourceId: ROOT,
+      documentId: governanceDocs.architecture,
+      name: 'Character Architecture',
+    },
+    {
+      key: 'source-formatting',
+      project: 'test',
+      resourceId: ROOT,
+      documentId: governanceDocs.formatting,
+      name: 'Source Formatting',
+    },
     {
       key: 'tagging-standard',
       project: 'test',
@@ -478,7 +506,11 @@ export async function packWorld(
 export async function approve(
   w: PackWorld,
   proposalId: string,
-): Promise<{ state: string; jobId: string | null; job: ReturnType<PackWorld['stack']['runtime']['engine']['queries']['getJob']> }> {
+): Promise<{
+  state: string;
+  jobId: string | null;
+  job: ReturnType<PackWorld['stack']['runtime']['engine']['queries']['getJob']>;
+}> {
   const policy = w.stack.runtime.policy;
   const p0 = policy.proposals.get(proposalId)!;
   if (p0.requiresCanonicalApproval) await policy.commands.approveAsCanon('owner', proposalId);

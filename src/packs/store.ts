@@ -59,7 +59,9 @@ export class PackStore {
   private toPack(r: PackRow): Pack {
     const rules = packRulesSchema.safeParse(parseJson<unknown>(r.rules, null));
     if (!rules.success) {
-      throw new Error(`The stored rules of the pack ${r.id} are not valid: ${rules.error.issues[0]?.message ?? ''}`);
+      throw new Error(
+        `The stored rules of the pack ${r.id} are not valid: ${rules.error.issues[0]?.message ?? ''}`,
+      );
     }
     const governance = parseJson<unknown[]>(r.governance, [])
       .map((g) => governanceSourceSchema.safeParse(g))
@@ -124,8 +126,7 @@ export class PackStore {
     const valid = JSON.stringify(packRulesSchema.parse(rules));
     this.db.transaction(() => {
       const cur = this.db.prepare('SELECT version, governance FROM packs WHERE id = ?').get(id) as
-        | { version: number; governance: string }
-        | undefined;
+        { version: number; governance: string } | undefined;
       if (!cur) throw new Error(`No pack ${id}`);
       const version = cur.version + 1;
       this.db
@@ -170,7 +171,9 @@ export class PackStore {
       .run(drift ? JSON.stringify(drift) : null, this.now(), id);
   }
 
-  versions(id: string): { version: number; reason: string; approved: PackApproval | null; createdAt: number }[] {
+  versions(
+    id: string,
+  ): { version: number; reason: string; approved: PackApproval | null; createdAt: number }[] {
     return (
       this.db
         .prepare(

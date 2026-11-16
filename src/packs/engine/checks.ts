@@ -66,8 +66,15 @@ export function registerPackEngine(
   };
 }
 
-async function governanceCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
-  const input = (ctx.input ?? {}) as { packId?: string; version?: number; sources?: { key: string; version: string }[] };
+async function governanceCheck(
+  d: PackEngineDeps,
+  ctx: RegisteredCheckContext,
+): Promise<RegisteredCheckResult> {
+  const input = (ctx.input ?? {}) as {
+    packId?: string;
+    version?: number;
+    sources?: { key: string; version: string }[];
+  };
   const pack = input.packId ? d.packs.get(input.packId) : null;
   const refusal = (message: string, more: Obj = {}): RegisteredCheckResult => ({
     differences: [],
@@ -80,7 +87,8 @@ async function governanceCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): 
     );
   }
   const status = await d.packs.governance(pack.id);
-  if (status.state !== 'current') return refusal(`${status.message} Nothing was written.`, { governance: status.sources });
+  if (status.state !== 'current')
+    return refusal(`${status.message} Nothing was written.`, { governance: status.sources });
   const want = new Map((input.sources ?? []).map((s) => [s.key, s.version]));
   const moved = status.sources.filter((s) => want.get(s.key) !== s.current);
   if (moved.length > 0) {
@@ -88,7 +96,13 @@ async function governanceCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): 
       `The ${pack.name} pack was approved again since this package was planned (${moved.map((s) => s.name).join(', ')}). Nothing was written: plan the package again.`,
     );
   }
-  return { differences: [], observed: { version: pack.version, sources: status.sources.map((s) => ({ key: s.key, version: s.current })) } };
+  return {
+    differences: [],
+    observed: {
+      version: pack.version,
+      sources: status.sources.map((s) => ({ key: s.key, version: s.current })),
+    },
+  };
 }
 
 async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
@@ -135,7 +149,10 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
               message: extend
                 ? `${raw} appeared since this package was planned, so its page would be a duplicate. Nothing was written. Read the character again and plan a new package.`
                 : `“${subject}” appeared since this package was planned (${raw}). Nothing was written. Re-run the package with target set to “${subject}” to add its pages to the existing ${what}.`,
-              details: { existing: { id: str(x.id), name: raw }, hint: extend ? undefined : `Re-run with target: "${subject}".` },
+              details: {
+                existing: { id: str(x.id), name: raw },
+                hint: extend ? undefined : `Re-run with target: "${subject}".`,
+              },
             },
           };
         }
@@ -153,7 +170,8 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
     } catch {
       r = null;
     }
-    const ids = r?.status === 'resolved' ? [r.node.id] : r?.status === 'ambiguous' ? r.candidates.map((c) => c.id) : [];
+    const ids =
+      r?.status === 'resolved' ? [r.node.id] : r?.status === 'ambiguous' ? r.candidates.map((c) => c.id) : [];
     for (const id of ids) {
       const c = types.characterOfPage(id);
       if (c.ok) {
@@ -162,7 +180,10 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
           refusal: {
             code: 'CHARACTER_EXISTS',
             message: `“${subject}” exists now (${c.value.core.rawName}), since this package was planned. Nothing was written. Re-run it with target set to “${subject}” to add its pages.`,
-            details: { existing: { id: c.value.core.id, name: c.value.core.rawName }, hint: `Re-run with target: "${subject}".` },
+            details: {
+              existing: { id: c.value.core.id, name: c.value.core.rawName },
+              hint: `Re-run with target: "${subject}".`,
+            },
           },
         };
       }
@@ -175,7 +196,13 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
 const runsText = (content: unknown): string =>
   Array.isArray(content)
     ? (content as Obj[])
-        .map((r) => (typeof r.text === 'string' ? r.text : isObj(r.mention) && typeof r.mention.text === 'string' ? r.mention.text : ''))
+        .map((r) =>
+          typeof r.text === 'string'
+            ? r.text
+            : isObj(r.mention) && typeof r.mention.text === 'string'
+              ? r.mention.text
+              : '',
+        )
         .join('')
         .trim()
     : '';
@@ -189,7 +216,8 @@ async function pageCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckRe
   const res = (r.body ?? {}) as Obj;
   const diffs: StateDifference[] = [];
   const props = Array.isArray(res.properties) ? (res.properties as Obj[]) : [];
-  const kv = (title: string) => props.filter((p) => p.kind === 'keyValue' && factKey(str(p.title) ?? '') === factKey(title));
+  const kv = (title: string) =>
+    props.filter((p) => p.kind === 'keyValue' && factKey(str(p.title) ?? '') === factKey(title));
   const rowsOf = (p: Obj) =>
     (Array.isArray(p.rows) ? (p.rows as Obj[]) : [])
       .slice()
@@ -198,15 +226,24 @@ async function pageCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckRe
         const rb = str(b.rank) ?? '';
         return ra < rb ? -1 : ra > rb ? 1 : (str(a.id) ?? '') < (str(b.id) ?? '') ? -1 : 1;
       })
-      .map((row) => ({ key: str(row.key) ?? '', value: runsText(row.content ?? (row.text ? [{ text: row.text }] : [])) }));
+      .map((row) => ({
+        key: str(row.key) ?? '',
+        value: runsText(row.content ?? (row.text ? [{ text: row.text }] : [])),
+      }));
   switch (input.check) {
     case 'field': {
       const p = kv(str(input.property) ?? 'PROPERTIES');
-      const row = p.length === 1 ? rowsOf(p[0]!).find((x) => factKey(x.key) === factKey(str(input.key) ?? '')) : undefined;
+      const row =
+        p.length === 1
+          ? rowsOf(p[0]!).find((x) => factKey(x.key) === factKey(str(input.key) ?? ''))
+          : undefined;
       const want = str(input.value);
-      if (!row) diffs.push({ path: ctx.label, expected: `the row “${String(input.key)}”`, actual: '(no row)' });
-      else if (want !== null && row.value !== want.trim()) diffs.push({ path: ctx.label, expected: want, actual: row.value });
-      else if (want === null && row.value === '') diffs.push({ path: ctx.label, expected: 'a value', actual: '(blank)' });
+      if (!row)
+        diffs.push({ path: ctx.label, expected: `the row “${String(input.key)}”`, actual: '(no row)' });
+      else if (want !== null && row.value !== want.trim())
+        diffs.push({ path: ctx.label, expected: want, actual: row.value });
+      else if (want === null && row.value === '')
+        diffs.push({ path: ctx.label, expected: 'a value', actual: '(blank)' });
       break;
     }
     case 'rows': {
@@ -227,7 +264,8 @@ async function pageCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckRe
       const values = isObj(input.values) ? (input.values as Record<string, string>) : {};
       for (const [k, v] of Object.entries(values)) {
         const row = got.find((x) => factKey(x.key) === factKey(k));
-        if (row && row.value !== v.trim()) diffs.push({ path: `${ctx.label} “${k}”`, expected: v, actual: row.value });
+        if (row && row.value !== v.trim())
+          diffs.push({ path: `${ctx.label} “${k}”`, expected: v, actual: row.value });
       }
       const lmrKey = str(input.lmrKey);
       const lmr = ctx.from.lmr as { date?: unknown } | null | undefined;
@@ -240,13 +278,17 @@ async function pageCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckRe
     }
     case 'tags': {
       const want = Array.isArray(input.tags) ? (input.tags as string[]) : [];
-      const got = Array.isArray(res.tags) ? (res.tags as unknown[]).filter((t): t is string => typeof t === 'string') : [];
+      const got = Array.isArray(res.tags)
+        ? (res.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+        : [];
       if (want.join('\u0000') !== got.join('\u0000'))
         diffs.push({ path: `${ctx.label} (in order)`, expected: want, actual: got });
       break;
     }
     case 'links': {
-      const cols = Array.isArray(input.collections) ? (input.collections as { title: string; ids: string[] }[]) : [];
+      const cols = Array.isArray(input.collections)
+        ? (input.collections as { title: string; ids: string[] }[])
+        : [];
       for (const c of cols) {
         const hits = props.filter(
           (p) =>
@@ -254,17 +296,25 @@ async function pageCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckRe
             factKey(str(p.title) ?? '') === factKey(c.title),
         );
         if (hits.length !== 1) {
-          diffs.push({ path: `${ctx.label} ${c.title}`, expected: 'one collection', actual: `${hits.length}` });
+          diffs.push({
+            path: `${ctx.label} ${c.title}`,
+            expected: 'one collection',
+            actual: `${hits.length}`,
+          });
           continue;
         }
-        const items = (Array.isArray(hits[0]!.items) ? (hits[0]!.items as Obj[]) : []).map((i) => str(i.resourceId));
+        const items = (Array.isArray(hits[0]!.items) ? (hits[0]!.items as Obj[]) : []).map((i) =>
+          str(i.resourceId),
+        );
         const missing = c.ids.filter((x) => !items.includes(x));
-        if (missing.length > 0) diffs.push({ path: `${ctx.label} ${c.title}`, expected: c.ids, actual: items });
+        if (missing.length > 0)
+          diffs.push({ path: `${ctx.label} ${c.title}`, expected: c.ids, actual: items });
       }
       break;
     }
     case 'name':
-      if (str(res.name) !== str(input.name)) diffs.push({ path: ctx.label, expected: input.name, actual: res.name ?? null });
+      if (str(res.name) !== str(input.name))
+        diffs.push({ path: ctx.label, expected: input.name, actual: res.name ?? null });
       break;
     case 'parent':
       if (str(res.parentId) !== str(input.parentId))
@@ -312,6 +362,10 @@ export function fillBody(ctx: FillContext): FillResult {
   void input;
   return {
     blocks: out,
-    note: { kept, ...(keptSections.length ? { keptSections } : {}), what: current.filter(keepKind).map((b) => blockText(b) || String((b as Obj).kind)) },
+    note: {
+      kept,
+      ...(keptSections.length ? { keptSections } : {}),
+      what: current.filter(keepKind).map((b) => blockText(b) || String((b as Obj).kind)),
+    },
   };
 }
