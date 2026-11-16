@@ -10,7 +10,7 @@ import type { PackageInput } from '../../packs/engine/plan.js';
 import type { McpToolProvider } from '../server.js';
 import { defineTool } from './define.js';
 import { CREATE_ANNOTATIONS, operationIdArg } from './resources.js';
-import { projectArg, withProject, type ToolDeps } from './shape.js';
+import { errorResult, projectArg, withProject, type ToolDeps } from './shape.js';
 
 const identityValue = z.union([
   z.string().max(500),
@@ -66,6 +66,95 @@ const page = z
     host: z.enum(['self', 'other']).optional().describe('relationship: whose index holds it (default self).'),
   })
   .strict();
+
+/**
+ * v3 F3a (ADR 0050): the generic pack tool, for every tool name a pack's types name besides the explicit ones (F3b's
+ * `create_owner`, or a type defined only in test data): one tool per name, its `type` argument choosing among the types
+ * that share it, read from the pack's rules at each call. The same engine as `arkona_create_character`.
+ */
+export function genericPackTool(deps: ToolDeps, packId: string, prefix: string, toolName: string): McpToolProvider {
+  const full = `${prefix}${toolName}`;
+  const typesOf = () =>
+    deps.services?.packs
+      ?.get(packId)
+      ?.rules.types.filter((t) => t.tool === toolName)
+      .map((t) => t.name) ?? [];
+  return Object.assign(
+    defineTool({
+      name: full,
+      title: `Create a pack page set (${full})`,
+      access: 'write',
+      description:
+        `A setting pack's creation tool: builds a whole subject from ONE package by the pack's rules (only the pages you give, each from its template, named, placed, its sidebar filled in template order, its tags COMPUTED, links resolved), then verified. \`type\` chooses the kind (see the pack on get_bridge_guide). dryRun shows the full preview and writes nothing; otherwise it is ONE proposal for the owner, whatever your scope: never resubmit it, follow it with bridge_proposal_status. Missing identity values: ask the owner, never guess. ` +
+        'Cost: about 6 reads to plan; the job about 8 reads and 6 writes per page.',
+      inputSchema: z.object({
+        type: z.string().min(1).max(100).describe('The kind of subject (one of the pack’s types for this tool).'),
+        name: z.string().min(1).max(200).describe('The subject’s name (no prefix).'),
+        status: z.enum(['working', 'authoritative']).optional().describe('working (default) or authoritative (canon).'),
+        identity: z.record(z.string().max(40), identityValue).default({}).describe('The type’s identity facts.'),
+        pages: z.array(page).max(30).default([]).describe('The pages, only those with real content.'),
+        index: z.object({ markdown: z.string().max(100_000) }).strict().optional().describe('The index text.'),
+        target: z.string().min(1).max(200).optional().describe('An EXISTING subject to add new pages to.'),
+        dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
+        preview: z.boolean().optional().describe('The same as dryRun.'),
+        operation_id: operationIdArg,
+        project: projectArg,
+      }),
+      annotations: CREATE_ANNOTATIONS,
+      listed: () => (deps.services?.packs?.toolListed(packId) ?? false) && typesOf().length > 0,
+      handler: (args, mctx) =>
+        withProject(deps, args.project, 'write', (pd) => {
+          const types = typesOf();
+          const type = types.find((t) => t.toLowerCase() === args.type.toLowerCase());
+          if (!type) {
+            return errorResult(
+              {
+                code: 'PACK_TYPE_NOT_FOUND',
+                message: `${full} makes ${types.join(', ') || 'no type now'}; not “${args.type}”.`,
+                types,
+              },
+              pd,
+            );
+          }
+          return runPackage(pd, mctx, {
+            packId,
+            type,
+            tool: full,
+            input: {
+              name: args.name,
+              ...(args.status !== undefined ? { status: args.status } : {}),
+              identity: args.identity,
+              pages: args.pages,
+              ...(args.index !== undefined ? { index: args.index } : {}),
+              ...(args.target !== undefined ? { target: args.target } : {}),
+            },
+            dryRun: args.dryRun === true || args.preview === true,
+            operationId: args.operation_id,
+            args: args as Record<string, unknown>,
+          });
+        }),
+    }),
+    { packGeneric: true },
+  );
+}
+
+/** The tool names a set of packs needs besides the explicit tools: `{ packId, prefix, tool }` each once. */
+export function genericPackToolNames(
+  packs: readonly { readonly id: string; readonly prefix: string; readonly rules: { readonly types: readonly { readonly tool: string }[] } }[],
+  explicit: ReadonlySet<string>,
+): { packId: string; prefix: string; tool: string; name: string }[] {
+  const out: { packId: string; prefix: string; tool: string; name: string }[] = [];
+  for (const p of packs)
+    for (const t of p.rules.types) {
+      const name = `${p.prefix}${t.tool}`;
+      if (explicit.has(name) || out.some((x) => x.name === name)) continue;
+      out.push({ packId: p.id, prefix: p.prefix, tool: t.tool, name });
+    }
+  return out;
+}
+
+/** The explicit pack tools (their own schemas): `arkona_create_character`. */
+export const EXPLICIT_PACK_TOOLS: ReadonlySet<string> = new Set(['arkona_create_character']);
 
 export function packTools(deps: ToolDeps): McpToolProvider[] {
   const packs = () => deps.services?.packs;

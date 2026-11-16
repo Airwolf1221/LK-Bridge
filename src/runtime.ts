@@ -1,3 +1,4 @@
+import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
 import { registerPackEngine } from './packs/engine/checks.js';
 import { deletedPageRecord } from './lifecycle/deleted.js';
@@ -32,8 +33,7 @@ import {
   createUploadPutHandler,
   createUploadVerifyHandler,
   guideResources,
-  createUploadTransport,
-} from './mcp/tools/index.js';
+  createUploadTransport, type ToolDeps } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
 import { footerFor } from './mcp/tools/shape.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
@@ -709,8 +709,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
   });
 
-  const bridgeTools = createBridgeTools(
-    {
+  const toolDeps: ToolDeps = {
       engine,
       projects,
       selector,
@@ -749,12 +748,24 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         // v3 F3a (ADR 0050): the setting packs.
         packs,
       },
-    },
-    { exposePerOpTools: config.mcp.exposePerOpTools },
-  );
+    };
+  const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
   // The agent-facing proposal tools (read-only, own proposals only, per project), with the budget footer like every
   // tool.
-  const tools = [...bridgeTools, ...policy.tools];
+  const tools: McpToolProvider[] = [...bridgeTools, ...policy.tools];
+  // v3 F3a (ADR 0050): a pack's tools follow its data: every tool name its types name besides the explicit ones gets the
+  // generic pack tool, added (and removed) in this same list when the pack's rules change, so a new type needs no code.
+  const syncPackTools = () => {
+    const want = genericPackToolNames(packs.list(), EXPLICIT_PACK_TOOLS);
+    for (let i = tools.length - 1; i >= 0; i--) {
+      const t = tools[i] as McpToolProvider & { packGeneric?: boolean };
+      if (t.packGeneric === true && !want.some((x) => x.name === t.name)) tools.splice(i, 1);
+    }
+    for (const x of want)
+      if (!tools.some((t) => t.name === x.name)) tools.push(genericPackTool(toolDeps, x.packId, x.prefix, x.tool));
+  };
+  syncPackTools();
+  const detachPackTools = packs.onChange(syncPackTools);
   // v2 E3 (ADR 0045): the tool-call log. Its budget probe sums every project's hourly request and write counters, so a
   // call's budget use is how far they moved while it ran (approximate: another call in the same moment counts too).
   const toolCalls = new ToolCallLog({
@@ -854,6 +865,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachBlockwiseUndo();
       detachRestores();
       unregisterPackEngine();
+      detachPackTools();
       await tree.stop();
       detachRegistry();
       await assets.stop();

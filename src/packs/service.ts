@@ -78,6 +78,8 @@ const ACTOR_OWNER = 'owner';
 
 export interface Packs {
   readonly store: PackStore;
+  /** Told after a pack is stored, attached, or its rules or approval change (the runtime keeps its tools in step). */
+  onChange(fn: () => void): () => void;
   /** Stores missing packs from their seeds and attaches them to the projects the seeds name (idempotent). */
   ensureSeeded(): void;
   list(): PackView[];
@@ -125,6 +127,16 @@ export function createPacks(d: PacksDeps): Packs {
   const now = d.now ?? (() => Date.now());
   const store = new PackStore(d.db, now);
   const seeds = d.seeds ?? PACK_SEEDS;
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    for (const fn of listeners) {
+      try {
+        fn();
+      } catch (e) {
+        d.log?.warn({ err: e }, 'a pack change listener failed');
+      }
+    }
+  };
 
   const projectByName = (name: string): ProjectView | undefined =>
     d.projects.list().find((p) => p.name.toLowerCase() === name.toLowerCase() && p.status !== 'archived');
@@ -184,6 +196,7 @@ export function createPacks(d: PacksDeps): Packs {
   const seedOf = (packId: string) => seeds.find((s) => s.id === packId);
 
   const ensureSeeded = (): void => {
+    let any = false;
     for (const s of seeds) {
       let pack = store.get(s.id);
       if (!pack) {
@@ -196,6 +209,7 @@ export function createPacks(d: PacksDeps): Packs {
           seed: s.seed,
         });
         d.audit('system', 'pack.seed', s.id, undefined, { version: 1, seed: s.seed });
+        any = true;
       }
       const homeGiven = s.projects.find((p) => p.name.toLowerCase() === s.home.toLowerCase())?.templates ?? {};
       for (const p of s.projects) {
@@ -205,8 +219,10 @@ export function createPacks(d: PacksDeps): Packs {
         const { templates, notes } = deriveTemplates(s, homeGiven, view.id, p.templates);
         store.attach(s.id, view.id, templates, notes, 'seed');
         d.audit('system', 'pack.attach', s.id, undefined, { project: view.name, templates, notes });
+        any = true;
       }
     }
+    if (any) changed();
   };
 
   const toolsOf = (pack: Pack) => pack.rules.types.map((t) => `${pack.prefix}${t.tool}`);
@@ -331,6 +347,10 @@ export function createPacks(d: PacksDeps): Packs {
 
   return {
     store,
+    onChange(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
     ensureSeeded,
     list: () => store.list().map(viewOf),
     get: (id) => store.get(id),
@@ -387,6 +407,7 @@ export function createPacks(d: PacksDeps): Packs {
           ...approval,
           sources: status.sources.map((s) => ({ key: s.key, name: s.name, version: s.current, digest: s.digest })),
         });
+        changed();
         return { pack: after, governance: await governance(pack.id) };
       },
       setTokens(actor, packId, maps) {
@@ -410,6 +431,7 @@ export function createPacks(d: PacksDeps): Packs {
           { version: pack.version, race: pack.rules.tags.race, culture: pack.rules.tags.culture },
           { version: after.version, race, culture },
         );
+        changed();
         return after;
       },
       attach(actor, packId, projectId, templates) {
@@ -428,12 +450,14 @@ export function createPacks(d: PacksDeps): Packs {
           templates: derived.templates,
           notes: derived.notes,
         });
+        changed();
         return store.attachment(pack.id, projectId)!;
       },
       replaceRules(actor, packId, rules, reason) {
         const pack = requirePack(packId);
         const after = store.newVersion(pack.id, rules, reason);
         d.audit(actor, 'pack.replace_rules', pack.id, { version: pack.version }, { version: after.version, reason });
+        changed();
         return after;
       },
     },
