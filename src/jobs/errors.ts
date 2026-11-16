@@ -4,7 +4,7 @@
  * as `LkOperationError`, which carries the governor's `BridgeLkError` as `lk` (and as `cause`).
  */
 import type { BridgeLkError } from '../lk/errors.js';
-import type { TierId } from '../lk/registry-types.js';
+import type { BudgetTierId } from '../lk/governor/groups.js';
 
 export type JobsErrorCode =
   | 'UNKNOWN_OPERATION'
@@ -362,7 +362,7 @@ export class BudgetExhaustedError extends JobsError {
   override readonly name = 'BudgetExhaustedError';
   constructor(
     readonly opId: string,
-    readonly tier: TierId,
+    readonly tier: BudgetTierId,
     readonly retryAtMs: number,
     cause?: unknown,
   ) {

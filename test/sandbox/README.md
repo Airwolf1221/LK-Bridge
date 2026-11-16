@@ -127,6 +127,20 @@ clean-up does.
   that `listFeatures` answers 200 again (a FAIL if not, naming the feature to delete by hand). Two writes and two reads
   more: about 108 writes in all.
 
+- **LIM1, LegendKeeper's own limits on its asset routes (v2 E5.5, [ADR 0047](../../docs/adr/0047-learned-operation-limits.md)):**
+  runs FIRST, while the key's write minute is nearly unused, so each answer's headers name the asset route's own tier
+  (LegendKeeper reports the tier with the fewest requests left). It (1) creates an asset folder
+  (`lk-bridge assumptions LIM1 <time>`), (2) uploads one 70-byte PNG into it (`createImageUpload`, the signed PUT through
+  the governor as the bridge's upload step sends it, `createImageAsset`), (3) deletes the image and then the folder, by
+  id, even after a failure, and (4) records the `X-RateLimit-*` headers each answered as **NOTED**: the limit, the
+  remaining count, the reset and the window it implies (for example "createAssetFolder 201: limit 20, remaining 19, reset
+  in 58 s (a minute window)"; the PUT usually answers with no rate headers), followed by what the bridge learned from
+  them ("assets 20 a minute (seen on createAssetFolder, createImageUpload, createImageAsset); assets 60 a minute (seen on
+  deleteAsset)"). Send the owner's LIM1 line to document the real figures. INCONCLUSIVE if a step could not be made; FAIL
+  only if the clean-up failed (the report names the asset to delete by hand in the asset library). The signed URL is
+  never printed. Five writes and one PUT to the upload host more: about 113 writes in all. The dry run models the asset
+  routes' tiers at 20 and 60 a minute and checks the line.
+
 ## The chronology (v2 D1)
 
 `npm run test:sandbox` (on the server `deploy/sandbox-test.sh --project test`) also runs `chronology.test.ts`;

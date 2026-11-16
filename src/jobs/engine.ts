@@ -2207,7 +2207,11 @@ export class JobEngine {
     let reads = 0;
     let writes = 0;
     let createManyItems = 0;
+    // v2 E5.5: the operations by id, so a learned operation limit paces the ones in its group.
+    const ops: Record<string, number> = {};
     for (const { def, params, opId } of items) {
+      const id = def?.operationId ?? opId;
+      if (id) ops[id] = (ops[id] ?? 0) + 1;
       if (!def) {
         reads += internalReads(opId ?? '', params); // the bridge's own check and verify steps read only
         continue;
@@ -2223,7 +2227,7 @@ export class JobEngine {
         createManyItems += Array.isArray(list) ? list.length : 0;
       } else writes++;
     }
-    return this.clientOf(projectId).governor.estimate({ reads, writes, createManyItems, priority });
+    return this.clientOf(projectId).governor.estimate({ reads, writes, createManyItems, priority, ops });
   }
 
   private guardContext(projectId: string) {

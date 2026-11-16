@@ -565,7 +565,9 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
 - Before a workload of hundreds of calls, ask `bridge_estimate`; do not read pages to find out. Run multi-step low-level
   work as one `lk_api_batch` job rather than a loop of single calls. Several pages at once: `get_resource` with `resources`.
 - **Never loop on a budget error.** `BUDGET_EXHAUSTED` names the time to retry (`retryAt`): wait until then, or tell the
-  person. A write that returns `waiting_budget` has not failed: it resumes by itself.
+  person. A write that returns `waiting_budget` has not failed: it resumes by itself. Some operations have limits of
+  their own (image uploads and asset folders: about 20 a minute); `bridge_budget` lists them, a refusal names the group
+  (`group:assets`), and the budget line ends `| blocked assets 12s` while it lasts. Other writes are not affected.
 - `queued` and `waiting_budget` mean the write is accepted and will run. Follow a job with `bridge_job_status`; pass
   `wait_seconds` (1 to 25) to wait for it instead of polling. Never submit it again.
 - A write that returns `proposal_captured` was not made. Tell the person it is waiting for approval; follow it with

@@ -17,6 +17,8 @@ import { useProject, useProjectApi, useProjectReloadOn, useScopedApi } from '../
 import { Link, useRoute } from '../router';
 import type {
   ImageRestoreResponse,
+  PlanEstimateView,
+  PlanFiguresView,
   PlanNoteView,
   RehearsalPlanResponse,
   RehearsalView,
@@ -80,6 +82,47 @@ function TextDiff({ text, label }: { text: string; label: string }) {
   );
 }
 
+const per = (ms: number) => (ms <= 60_000 ? 'minute' : ms <= 3_600_000 ? 'hour' : 'day');
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+/**
+ * v2 E5.5 (backlog 16): which figures a plan's time rests on, in words: the time per write (the measured median of the
+ * project's recent write steps, or the configured spacing), the write tier's effective limit and the class's share,
+ * and any learned operation limit with the steps it paces.
+ */
+export function figuresText(f: PlanFiguresView | null | undefined): string | null {
+  if (!f) return null;
+  const parts: string[] = [];
+  const pw = f.perWrite;
+  if (pw)
+    parts.push(
+      pw.from === 'measured'
+        ? `a write takes about ${secs(pw.ms)}, the median of the last ${fmtInt(pw.samples)} write steps`
+        : pw.measuredMs !== null
+          ? `a write takes at least the ${fmtInt(pw.spacingMs)} ms spacing (the last ${fmtInt(pw.samples)} write steps took a median ${secs(pw.measuredMs)})`
+          : `a write takes at least the ${fmtInt(pw.spacingMs)} ms spacing (no write steps measured yet)`,
+    );
+  const wm = f.limits.find((l) => l.tier === 'write-min');
+  if (wm && wm.limit !== null)
+    parts.push(`writes at ${fmtInt(wm.limit)} a minute (this run’s share ${fmtInt(wm.share)})`);
+  for (const g of f.groups)
+    parts.push(
+      `the ${g.group} group’s learned limit of ${fmtInt(g.limit)} a ${per(g.windowMs)} paces its ${fmtInt(g.steps)} step${g.steps === 1 ? '' : 's'} (about ${fmtDuration(g.ms)})`,
+    );
+  return parts.length ? `Figures used: ${parts.join('; ')}.` : null;
+}
+
+function EstimateLine({ e }: { e: PlanEstimateView }) {
+  return (
+    <p className="muted small-text" aria-label="Restore estimate">
+      Once approved: {fmtInt(e.writes)} write{e.writes === 1 ? '' : 's'} and {fmtInt(e.reads)} read
+      {e.reads === 1 ? '' : 's'}
+      {e.wallClockMs !== null ? `, about ${fmtDuration(e.wallClockMs)}` : ''}
+      {e.fitsToday === false ? ' (more than today’s budget has left)' : ''}. {figuresText(e.figures)}
+    </p>
+  );
+}
+
 function PlanView({ plan }: { plan: RestorePlanView }) {
   return (
     <div className="stack" aria-label="Restore plan">
@@ -89,6 +132,7 @@ function PlanView({ plan }: { plan: RestorePlanView }) {
           ({plan.writes} write{plan.writes === 1 ? '' : 's'}; planning read {plan.reads})
         </span>
       </p>
+      {plan.estimate && <EstimateLine e={plan.estimate} />}
       {plan.pieces.map((p) => (
         <details key={p.label} open>
           <summary>{p.label}</summary>
@@ -647,7 +691,54 @@ function newestComplete<T extends { kind: string; state: string; takenAt: number
     .sort((a, b) => b.takenAt - a.takenAt)[0];
 }
 
+/**
+ * v2 E5.5: how far a running rehearsal has got against its plan, from its `progress` (the stage and the counts, saved
+ * every few seconds) and its estimate. The projected finish is the elapsed time over the share of the planned work
+ * done (writes and reads weighted by the plan's pacing); before 2% of it, the start plus the estimate.
+ */
+export function rehearsalProgress(r: RehearsalView, now: number) {
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const writes = num(r.progress.writes);
+  const reads = num(r.progress.reads);
+  const plannedWrites = num(r.estimate?.writes);
+  const plannedReads = num(r.estimate?.reads);
+  const mw = Math.max(1, r.estimate?.pacing?.msPerWrite ?? 1);
+  const mr = Math.max(1, r.estimate?.pacing?.msPerRead ?? 1);
+  const total = plannedWrites * mw + plannedReads * mr;
+  const done = Math.min(writes, plannedWrites) * mw + Math.min(reads, plannedReads) * mr;
+  const share = total > 0 ? Math.min(1, done / total) : 0;
+  const elapsedMs = Math.max(0, now - r.startedAt);
+  const estimateMs = r.estimate?.wallClockMs ?? null;
+  const finishAt =
+    share >= 0.02 ? r.startedAt + elapsedMs / share : estimateMs !== null ? r.startedAt + estimateMs : null;
+  return {
+    stage: typeof r.progress.stage === 'string' ? r.progress.stage : 'starting',
+    writes,
+    plannedWrites,
+    reads,
+    plannedReads,
+    elapsedMs,
+    estimateMs,
+    finishAt: finishAt === null ? null : Math.max(now, finishAt),
+  };
+}
+
+function RehearsalProgress({ r, now }: { r: RehearsalView; now: number }) {
+  const p = rehearsalProgress(r, now);
+  return (
+    <div className="small-text" aria-label="Rehearsal progress" data-testid="rehearsal-progress">
+      Stage: {p.stage} · writes {fmtInt(p.writes)} of {fmtInt(p.plannedWrites)} · reads {fmtInt(p.reads)} of{' '}
+      {fmtInt(p.plannedReads)} · {fmtDuration(p.elapsedMs)} elapsed
+      {p.estimateMs !== null ? ` (estimate ${fmtDuration(p.estimateMs)})` : ''}
+      {p.finishAt !== null
+        ? ` · projected finish ${fmtTime(p.finishAt)} (in ${fmtDuration(p.finishAt - now)})`
+        : ''}
+    </div>
+  );
+}
+
 function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => void }) {
+  const now = useNow(5_000);
   const confirm = useConfirm();
   const { run, busy } = useAction();
   const fulls = d.snapshots.filter((s) => s.kind === 'full');
@@ -748,6 +839,11 @@ function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => v
                 : ''}
             </p>
           )}
+          {plan && figuresText(plan.estimate.figures) && (
+            <p className="muted small-text" aria-label="Estimate figures">
+              {figuresText(plan.estimate.figures)}
+            </p>
+          )}
           {plan && (plan.cuts ?? []).length > 0 && (
             <div className="note" aria-label="What the sample leaves out">
               <strong>Left out of the sample</strong>
@@ -784,9 +880,7 @@ function Rehearsals({ d, onChanged }: { d: SnapshotsResponse; onChanged: () => v
                 <td>{r.mode}</td>
                 <td>
                   <StatusBadge status={r.state} />
-                  {r.state === 'running' && typeof r.progress.stage === 'string' ? (
-                    <span className="muted"> {r.progress.stage}</span>
-                  ) : null}
+                  {r.state === 'running' && <RehearsalProgress r={r} now={now} />}
                 </td>
                 <td>
                   {r.result

@@ -32,6 +32,8 @@ export interface StackOptions {
   /** Reuse this database file (restart tests). */
   readonly dbPath?: string;
   readonly limits?: ConstructorParameters<typeof MockLk>[0]['limits'];
+  /** v2 E5.5: undocumented per-operation tiers on the mock LegendKeeper (the asset routes'). */
+  readonly opTiers?: ConstructorParameters<typeof MockLk>[0]['opTiers'];
   /** Scope of the default token's profile (`tools-test`). Default `write`, so every tool is exercised. */
   readonly scope?: Scope;
 }
@@ -67,6 +69,7 @@ export async function startStack(o: StackOptions = {}): Promise<Stack> {
     apiKey: API_KEY,
     ...(o.respond ? { respond: o.respond } : {}),
     ...(o.limits ? { limits: o.limits } : {}),
+    ...(o.opTiers ? { opTiers: o.opTiers } : {}),
   });
   const lkUrl = await mock.start();
   const dir = o.dbPath ? undefined : mkdtempSync(join(tmpdir(), 'lkb-tools-'));

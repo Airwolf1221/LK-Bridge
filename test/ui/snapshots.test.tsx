@@ -7,6 +7,8 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import { figuresText, rehearsalProgress } from '../../ui/src/pages/snapshots';
+import type { RehearsalView } from '../../ui/src/types';
 import { baseRoutes, installApi, projectOf, renderApp, useDom, type Call } from './helpers';
 
 useDom();
@@ -527,6 +529,136 @@ describe('the Snapshots page', () => {
     const cuts = within(card).getByLabelText('What the sample leaves out');
     expect(cuts).toHaveTextContent('Chronology, Timeline: 25 of 730 events (with the 4 of 9 lanes they use)');
     expect(cuts).toHaveTextContent('World Map, Map: 40 of 310 features');
+  });
+
+  it('E5.5: the estimate says which figures it used: the measured write time and the assets group’s learned limit', async () => {
+    installApi(
+      routes({
+        'POST /snapshots/rehearsals/plan': {
+          plan: {
+            source: { projectId: 'lkp_baisheng', snapshotId: SNAP, takenAt: '', kind: 'full' },
+            target: { projectId: 'lkp_test', name: 'test' },
+            mode: 'sampled',
+            pages: ['p1'],
+            coverage: {},
+            images: 3,
+            estimate: {
+              reads: 120,
+              writes: 180,
+              uploads: 3,
+              wallClockMs: 300_000,
+              fitsToday: true,
+              pacing: { msPerWrite: 1500, msPerRead: 400 },
+              figures: {
+                perWrite: { ms: 1500, from: 'measured', measuredMs: 1500, samples: 200, spacingMs: 500 },
+                limits: [{ tier: 'write-min', limit: 120, windowMs: 60_000, share: 60 }],
+                groups: [{ group: 'assets', limit: 20, windowMs: 60_000, steps: 8, ms: 12_000 }],
+              },
+            },
+          },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/snapshots');
+    const card = await screen.findByRole('region', { name: 'Restore rehearsal' });
+    await user.click(within(card).getByRole('button', { name: 'Estimate' }));
+    const figures = await within(card).findByLabelText('Estimate figures');
+    expect(figures).toHaveTextContent('a write takes about 1.5 s, the median of the last 200 write steps');
+    expect(figures).toHaveTextContent('writes at 120 a minute (this run’s share 60)');
+    expect(figures).toHaveTextContent(
+      'the assets group’s learned limit of 20 a minute paces its 8 steps (about 12 s)',
+    );
+  });
+
+  it('E5.5: a running rehearsal shows its stage, writes and reads against the plan, the time and the projected finish', async () => {
+    const running = {
+      ...response().rehearsals[0]!,
+      id: 'rh_00000000000000c2',
+      state: 'running',
+      rootState: 'kept',
+      startedAt: Date.now() - 120_000,
+      finishedAt: null,
+      result: null,
+      estimate: {
+        writes: 400,
+        reads: 100,
+        wallClockMs: 600_000,
+        pacing: { msPerWrite: 1000, msPerRead: 1000 },
+      },
+      progress: { stage: 'content', writes: 200, reads: 0, uploads: 3 },
+    };
+    installApi(routes({ 'GET /snapshots': response({ rehearsals: [running] }) }));
+    renderApp('/ui/snapshots');
+    const p = await screen.findByLabelText('Rehearsal progress');
+    expect(p).toHaveTextContent('Stage: content');
+    expect(p).toHaveTextContent('writes 200 of 400');
+    expect(p).toHaveTextContent('reads 0 of 100');
+    // (Real time runs on between building the row and rendering it: to the second.)
+    expect(p).toHaveTextContent(/2 min 0\d s elapsed \(estimate 10 min 00 s\)/);
+    // 200 of 500 units in 2 minutes: 5 minutes in all, so 3 more.
+    expect(p).toHaveTextContent(/projected finish .* \(in 3 min 0\d s\)/);
+  });
+
+  it('E5.5: the restore plan says how long it should take once approved, and with which figures', async () => {
+    const api = installApi(
+      routes({
+        'POST /snapshots/restore': {
+          status: 'dry_run',
+          plan: {
+            ...plan,
+            estimate: {
+              reads: 2,
+              writes: 1,
+              wallClockMs: 2000,
+              fitsToday: true,
+              pacing: { msPerWrite: 1500, msPerRead: 0 },
+              figures: {
+                perWrite: { ms: 500, from: 'spacing', measuredMs: 320, samples: 12, spacingMs: 500 },
+                limits: [{ tier: 'write-min', limit: 120, windowMs: 60_000, share: 108 }],
+                groups: [],
+              },
+            },
+          },
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/snapshots');
+    await user.click(await screen.findByRole('button', { name: 'Atlas' }));
+    const history = await screen.findByRole('table', { name: 'Page history' });
+    await user.click(within(history).getByRole('button', { name: 'Propose a restore' }));
+    const form = await screen.findByRole('form', { name: `Propose a restore to ${SNAP}` });
+    await user.click(within(form).getByRole('button', { name: 'Preview' }));
+    const line = await within(form).findByLabelText('Restore estimate');
+    expect(line).toHaveTextContent('Once approved: 1 write and 2 reads, about 2 s.');
+    expect(line).toHaveTextContent('Figures used: a write takes at least the 500 ms spacing');
+    expect(api.find('POST', '/snapshots/restore')).toHaveLength(1);
+    const view = figuresText({
+      perWrite: { ms: 500, from: 'spacing', measuredMs: 320, samples: 12, spacingMs: 500 },
+      limits: [{ tier: 'write-min', limit: 120, windowMs: 60_000, share: 108 }],
+      groups: [],
+    });
+    expect(view).toBe(
+      'Figures used: a write takes at least the 500 ms spacing (the last 12 write steps took a median 0.3 s); writes at 120 a minute (this run’s share 108).',
+    );
+    expect(figuresText(null)).toBeNull();
+  });
+
+  it('E5.5: the projected finish falls back to the estimate before 2% of the work is done', () => {
+    const r = {
+      startedAt: NOW - 1000,
+      estimate: { writes: 400, reads: 100, wallClockMs: 600_000 },
+      progress: { writes: 1, reads: 0 },
+    } as unknown as RehearsalView;
+    const p = rehearsalProgress(r, NOW);
+    expect(p).toMatchObject({
+      stage: 'starting',
+      writes: 1,
+      plannedWrites: 400,
+      finishAt: NOW - 1000 + 600_000,
+    });
+    expect(rehearsalProgress({ ...r, estimate: null }, NOW).finishAt).toBeNull();
   });
 
   it('has no daily changed-pages switch (LegendKeeper’s updatedAt does not track content)', async () => {

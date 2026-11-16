@@ -128,7 +128,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Overview †  | `GET /overview` (every project's status, health, controls, job and error counts, pending proposals, headline gauges; `?refresh=true` re-checks LegendKeeper, otherwise cached for a minute)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Jobs †      | `GET /jobs` (`view=active\|history`, `status`, `origin`, `principalId`, `profile`, `kind`, `before`, `limit`), `GET /jobs/:id` (steps, attempts, request ids, `uncertain`, retry advice), `GET /jobs/:id/artifacts/:artifactId`, `POST /jobs/:id/cancel\|pause\|resume`, `POST /jobs/:id/steps/:stepNo/retry` (`{ force }`)                                                                                                                                                                                                                                                                                                                                                                                               |
 | Errors †    | `GET /errors` (`resolved=false\|true\|all`), `GET /errors/group?fingerprint=`, `POST /errors/resolve`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| Budgets †   | `GET /budgets` (one project's snapshot, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Budgets †   | `GET /budgets` (one project's snapshot with its learned operation limits, 24 h history in at most 288 buckets, drift, floors), `GET /budgets/all` (every project side by side), `PUT /budgets/reserve-floors`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk` (`action`: `approve`, `reject`, or `approve-as-canon` with `{ confirm: true }`; at most 100 ids)                                                                                                                                                                                                                                                        |
@@ -500,8 +500,8 @@ the bridge's own copies of the selected project's pages.
 - **Page history**: find a page by name (a deleted one too); its snapshots, newest first, piece by piece (first seen,
   changed, unchanged, deleted, back); **Diff with now** for any piece (a few reads); **Propose a restore** from any
   snapshot: the page's documents, its sidebar, one document, or a deleted page (undelete, or recreate with its original
-  or new ids). **Preview** shows the plan (each piece's diff, what cannot be restored exactly, what is left alone, new ids)
-  without proposing; **Propose this restore** makes the proposal, linked to the Proposals page. A restore is always a
+  or new ids). **Preview** shows the plan (each piece's diff, what cannot be restored exactly, what is left alone, new ids,
+  and since v2 E5.5 how long it should take once approved, with the figures used) without proposing; **Propose this restore** makes the proposal, linked to the Proposals page. A restore is always a
   proposal, the owner's own included. A restore that finishes with a field LegendKeeper refused (an icon name it does not
   know: the write is sent again without it) shows **couldn't be restored exactly** beside its state, with each field
   listed.
@@ -514,9 +514,14 @@ the bridge's own copies of the selected project's pages.
   use) and 40 features of each map (with their folders, and a region and a path if there are any); the estimate lists what
   it leaves out. **Estimate** first (pages, images, reads, writes and the time at background priority, paced as the
   governor will pace it: about a second a write and under half a second a read at the default limits), then **Start the
-  rehearsal** after a confirmation. The list shows each rehearsal's state
-  and stage, and its results: pages restored exactly, the differences with their reasons, what a restore cannot bring
-  back, the cost and the time; **Delete its root** for a kept copy.
+  rehearsal** after a confirmation. Since v2 E5.5 the estimate says **which figures it used**: the time per write (the
+  median of the test world's last 200 write steps, or the configured spacing when that is longer), the write tier's
+  limit and the run's share of it, and any learned operation limit that paces the image steps (for example "the assets
+  group's learned limit of 20 a minute paces its 8 steps"). The list shows each rehearsal's state, and while one runs,
+  its **progress against the plan**: the stage, writes and reads done of those planned, the time elapsed (with the
+  estimate) and a projected finish (from the share of the planned work done; before 2% of it, the start plus the
+  estimate). It shows the results once done: pages restored exactly, the differences with their reasons, what a restore
+  cannot bring back, the cost and the time; **Delete its root** for a kept copy.
 - **Snapshots**: every snapshot (taken, kind and the tool that made a change snapshot, pages, new pieces and bytes,
   requests), complete or **partial** with why.
 - **Database copies**: the nightly and pre-deploy copies of the database (`deploy/backup.sh`, in `BACKUP_DIR`, default
@@ -678,6 +683,28 @@ The last group is built into components when the bridge starts (the tool list, t
 They are stored in `runtime_settings` (`dash.*` keys) and applied by `applyStoredSettings` when the runtime is built; the
 Settings page shows _pending restart_ until they match what is running. Clearing a stored value goes back to the
 environment's. A stored value that no longer validates is ignored.
+
+## Request Budgets: learned operation limits (v2 E5.5)
+
+LegendKeeper's asset routes have rate limits of their own that its spec does not list (about 20 a minute for asset
+folders and image uploads, about 60 for asset deletes), and it reports them when they have the fewest requests left.
+The bridge learns such a limit for the operation's group and paces only that group by it, never every write
+([ADR 0047](adr/0047-learned-operation-limits.md)). The **Learned operation limits** card on the Request Budgets page
+lists them for the selected project:
+
+- **Group**: `assets` for the asset routes (folders, uploads, image assets, updates, deletes), or an operation's own id;
+  **refused for N s** while LegendKeeper is refusing the group (a 429), which blocks only that group;
+- **Operations seen**: the operations the limit was reported on;
+- **Limit** and **Window** (inferred from LegendKeeper's reset: up to a minute, up to an hour, or a day);
+- **Remaining**: the bridge's count against it, snapped to LegendKeeper's at every report;
+- **Last seen**, and **Expires**: a learned limit is forgotten once its window has passed twice without LegendKeeper
+  reporting it again. A restart forgets them too; they are learned again at the next report.
+
+"None learned" means LegendKeeper has reported only its documented limits. The documented tiers' gauges are unaffected
+by a learned limit: the test world's writes read 120 a minute. The All projects view lists each project's learned limits
+in a line. The budget footer agents see is unchanged, apart from `| blocked <group> <s>s` while a group is refused, and
+the bridge logs the first sighting of each group and limit once (an info line naming the project, the operation and the
+figures).
 
 ## The budget sampler
 

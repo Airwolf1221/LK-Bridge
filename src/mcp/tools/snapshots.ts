@@ -25,7 +25,7 @@ import {
   type ProjectDeps,
   type ToolDeps,
 } from './shape.js';
-import { RestoreError } from '../../snapshots/restore.js';
+import { RestoreError, type RestoreEstimate } from '../../snapshots/restore.js';
 import { diffText } from '../../snapshots/diff.js';
 import { historyOf, pieceFilterOf, pieceNow, pieceThen } from '../../snapshots/history.js';
 import { imageRestoreDeps, restoreImage } from '../../snapshots/image-restore.js';
@@ -186,6 +186,37 @@ function snapshotDiffTool(deps: ToolDeps): McpToolProvider {
   });
 }
 
+/**
+ * v2 E5.5 (backlog 16): the restore's time once approved, in a few words, with the per-write figure it assumes (the
+ * measured median of the project's recent write steps, or the spacing) and any learned operation limit that paces it.
+ */
+function estimateLine(e: RestoreEstimate): Record<string, unknown> {
+  const ms = e.wallClockMs ?? 0;
+  const pw = e.figures?.perWrite;
+  return {
+    about:
+      ms < 60_000 ? `${Math.max(1, Math.round(ms / 1000))} s` : `${Math.round((ms / 60_000) * 10) / 10} min`,
+    writes: e.writes,
+    ...(pw
+      ? {
+          secondsPerWrite: Math.round(pw.ms / 100) / 10,
+          perWriteFrom:
+            pw.from === 'measured'
+              ? `the median of the last ${pw.samples} write steps`
+              : 'the configured write spacing',
+        }
+      : {}),
+    ...(e.figures && e.figures.groups.length > 0
+      ? {
+          learnedLimits: e.figures.groups.map(
+            (g) =>
+              `${g.group}: ${g.limit} per ${g.windowMs <= 60_000 ? 'minute' : g.windowMs <= 3_600_000 ? 'hour' : 'day'}`,
+          ),
+        }
+      : {}),
+  };
+}
+
 function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
   return defineTool({
     name: 'restore_snapshot',
@@ -316,6 +347,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
                 }
               : {}),
             reads: plan.reads,
+            ...(plan.estimate?.wallClockMs != null ? { estimate: estimateLine(plan.estimate) } : {}),
           };
           if (plan.empty)
             return render(

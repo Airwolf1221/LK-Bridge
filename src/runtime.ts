@@ -568,6 +568,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       },
       now: () => (o.clock ?? systemClock).now(),
     }),
+    // v2 E5.5: the restore's time once approved, from the project's governor (learned limits, measured write time).
+    estimate: (projectId, input) => projects.anyClient(projectId)?.governor.estimate(input),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });

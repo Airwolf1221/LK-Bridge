@@ -34,7 +34,7 @@ lk.budgetFooter('test'); // 'budget (test): writes 0/120·min 0/3,000·h | all 1
 | `LkClient`                                                                       | `{ sdk, governor, projectId, fetch, call(req), budgetFooter(project?) }` (the footer names the project when given, v2 A1). `call` is `governor.execute` with `kind`/`costs` looked up from the registry (`createManyResources` items are read from `input.body.resources`).                                                 |
 | `governor.execute<T>(req): Promise<T>`                                           | The one way to reach LK. See below.                                                                                                                                                                                                                                                                                         |
 | `governor.snapshot(): BudgetSnapshot`                                            | Every tier: `used`, `limit` (effective), `configuredLimit`, `remaining`, `windowMs`, `resetAtMs`, `blockedUntilMs`, `inFlight`, `reactiveOnly`, `drift` (observed vs modelled at the last server correction). Plus `queues` per class, `inFlight`, `writeSpacingMs`, `nextWriteAtMs`.                                       |
-| `governor.estimate({ reads, writes, createManyItems, priority? })`               | Projected wall-clock time, tightest tier (or `'pacing'`), whether it fits today's remaining day budget, and a per-tier breakdown. Pure maths in `estimateFrom(snapshot, settings, input)`.                                                                                                                                  |
+| `governor.estimate({ reads, writes, createManyItems, priority?, ops? })`         | Projected time, tightest tier (`'pacing'`, or a learned `group:<name>`), whether it fits today, per-tier breakdown. v2 E5.5: `ops`, `perWrite` (below).                                                                                                                                                                     |
 | `formatBudgetFooter(snapshot, project?)`                                         | The one-line footer from PLAN §5.4; `budget (<project>): …` when a project name is given (v2 A1).                                                                                                                                                                                                                           |
 | `governor.on('sample' \| 'throttled' \| 'budget-wait', cb)`                      | Events for the UI (chunk 5). Returns an unsubscribe function. `sample`: rate headers seen, the tier they matched and the modelled count they replaced. `throttled`: tiers LK refused (429) and until when. `budget-wait`: a call surfaced `BudgetWaitError`.                                                                |
 | `BridgeLkError`                                                                  | Every failure: `status`, LK `code` (or a bridge code), `requestId`, `errors[]`, `retryable`, `classification` (`user_fixable` · `conflict` · `auth` · `budget` · `upstream` · `bridge`), `opId`, `ambiguous`, `retryAfterMs`, `attempts`. `toJSON()` is safe to log.                                                        |
@@ -94,10 +94,21 @@ exactly 3,000 writes/hour. Retries are writes too and are paced.
 **Server correction.** The governed fetch reads `X-RateLimit-Limit/-Remaining/-Reset` and `Retry-After` on every
 response, 429s included. The headers describe only the tightest tier, matched by limit (then window, then
 consumption order). That tier's count is snapped to `limit - remaining` plus our other in-flight calls: raised
-with units that expire at the server's reset, or lowered by dropping the oldest units. If the reported limit
-matches no configured tier, the tier is matched by window and the lower of configured and observed limits is
-used from then on (server wins). On a 429 the tier is blocked until Retry-After. Calls LK refuses before counting
-(400/401/402/403/405 without rate headers) and calls that never sent a request are refunded.
+with units that expire at the server's reset, or lowered by dropping the oldest units. On a 429 the tier is blocked
+until Retry-After. Calls LK refuses before counting (400/401/402/403/405 without rate headers) and calls that never
+sent a request are refunded.
+
+**Learned operation limits (v2 E5.5, ADR 0047).** A reported limit that matches no documented tier the call draws is
+taken as a documented tier's change only when the window its reset implies is that tier's, its count is within 2 (or 5%
+of the limit) of ours, and the operation is not in a listed group (the asset routes). Otherwise it becomes a learned
+tier of the operation's rate group (`groups.ts`: `assets` for the asset routes, else the operation id), keyed by group
+and limit, with its window inferred from the reset. A learned tier paces, snaps and blocks (429) only its group's calls,
+and expires once its window has passed twice without being reported (never while blocked or in flight). It lives in
+memory only. A header at a documented tier's configured limit clears a limit learned for it. `snapshot().operationTiers`
+lists the live ones; the footer adds `blocked <group> <s>s`; the first sighting of a group and limit is logged once
+(`GovernorOptions.log`). `estimate` takes `ops` (counts by operation id), so the learned tiers pace only the operations in
+their group (`operationTiers`), and its `perWrite` is the time a write is taken to cost: the measured median of the
+project's recent write steps (`GovernorOptions.writeDuration`), floored at the spacing.
 
 **Counters across restarts (v1.0.1, review finding F-14).** The windows are in memory, so after a restart the
 governor used to believe the last minute, hour and day were empty although LegendKeeper still counts them; only the

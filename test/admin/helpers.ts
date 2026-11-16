@@ -28,13 +28,15 @@ import type { Policy } from '../../src/policy/index.js';
 import type { Runtime } from '../../src/runtime.js';
 import { createBridge } from '../../src/server.js';
 import { ownerCredentials, throwawaySecret, type TestBridge } from '../auth/helpers.js';
-import { MockLk, type MockRequest, type MockResponse } from '../contract/mock-lk.js';
+import { MockLk, type MockOpTier, type MockRequest, type MockResponse } from '../contract/mock-lk.js';
 
 export const API_KEY = 'mock-key-not-real';
 export const PROJECT = 'proj_mock';
 export const PUBLIC_URL = 'https://lk.example.test';
 
 export interface AdminStackOptions {
+  /** v2 E5.5: undocumented per-operation tiers on the mock LegendKeeper (the asset routes'). */
+  readonly opTiers?: readonly MockOpTier[];
   readonly respond?: (req: MockRequest) => MockResponse | undefined;
   readonly env?: Record<string, string>;
   readonly admin?: Partial<AdminSettings>;
@@ -114,6 +116,7 @@ export async function startAdminStack(o: AdminStackOptions = {}): Promise<AdminS
     clock: systemClock,
     apiKey: API_KEY,
     ...(o.respond ? { respond: o.respond } : {}),
+    ...(o.opTiers ? { opTiers: o.opTiers } : {}),
   });
   const lkUrl = await mock.start();
   const dir = mkdtempSync(join(tmpdir(), 'lkb-admin-'));

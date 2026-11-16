@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased: E5.5 (16 November 2026): learned operation limits, and honest estimates (backlog 16 done)
+
+[ADR 0047](adr/0047-learned-operation-limits.md); PLAN §1.2, §5.1 and §5.4 notes and amendment 9. Migration `2600` (an
+index on `steps (project_id, finished_at)`; no data changes). Nothing was run against a live system: every test uses the
+mock governor and the mock LegendKeeper, which can now model the asset routes' own tiers. The sandbox probe LIM1 is for
+the owner to run.
+
+- **The finding (the owner's sampled rehearsal, 15–16 November).** It estimated about 10 minutes and ran for over 40. The
+  test world's footer read `writes 10/20·min`. LegendKeeper reports `X-RateLimit-*` for the tier with the fewest requests
+  left, and its asset routes have tiers its spec does not list (about 20 a minute for asset folders and image uploads,
+  about 60 for asset deletes). The governor found no tier with that limit, fell back to "match by window", took the 20
+  for `write-min`, and kept it until a restart, so every write in the project went at 20 a minute (P3's share 10).
+- **An unrecognised limit never lowers a documented tier.** A header is matched to a documented tier by its limit as
+  before. A new limit counts as a documented tier's change only when the window its reset implies is that tier's, its
+  count is near the bridge's own, and the operation is not an asset route. Otherwise it becomes a **learned tier of the
+  operation's rate group**: `assets` for `createAssetFolder`, `createImageUpload`, `createImageAsset`, `updateAsset`,
+  `deleteAsset` and the signed upload PUT (which joins only once it carries the headers itself); any other operation is
+  a group of its own. The window comes from the reset (up to 60 s a minute, up to an hour an hour, otherwise a day). A
+  learned tier paces only its group, a 429 on it blocks only its group (honouring `Retry-After`; a long one parks the
+  call with the tier `group:<name>`), and it expires once its window has passed twice without being reported. A header
+  at a documented tier's configured limit now clears a limit learned for it. `UPLOAD_RATE_EXCEEDED` still blocks the
+  bridge-only `upload` tier; that tier is not the `assets` group's home (ADR 0047 decision 4).
+- **Visible.** The Request Budgets page has a **Learned operation limits** card (group, operations seen, limit, window,
+  remaining, last seen, expiry, and "refused for N s"), and the All projects view a line per project. `bridge_budget`
+  adds `learnedOperationLimits` when there are any. The footer is unchanged apart from `| blocked <group> <s>s` while a
+  group is refused. The first sighting of a group and limit is logged once per process (info), naming the project, the
+  operation and the figures.
+- **Honest estimates (backlog 16, done).** `governor.estimate` uses each tier's effective limit and, for the operations
+  the caller names (`ops`), the learned tiers of their groups, and only for those. A write takes at least the project's
+  **measured per-write duration**: the median wall time of its last 200 succeeded write steps (`steps`, read at most once
+  a minute), floored at the configured spacing; `perWrite` says which was used, and `bridge_estimate` reports
+  `secondsPerWrite` and `perWriteFrom`. The engine's job ETAs pass their operations too.
+- **The rehearsal and restore plans** name their operations (a rehearsal's asset folder, uploads, PUTs and the folder's
+  delete), so a learned `assets` limit paces those steps only and every other write goes at the documented limit. They
+  say which figures they used (`estimate.figures`: the per-write duration and its source, each tier's limit and the
+  class's share, each learned group's limit, steps and time). A restore plan now carries its estimate at P1 (the
+  dashboard's Preview shows it; `restore_snapshot` says it in a few words).
+- **A running rehearsal's progress.** It saves its stage and its writes, reads and uploads every few seconds, and the
+  Snapshots page shows them against the plan with the time elapsed and a projected finish.
+- **The sandbox probe LIM1** (`npm run test:sandbox -- assumptions`, run first in the file): an asset folder, one 70-byte
+  PNG uploaded into it, both deleted by id even after a failure, and the `X-RateLimit-*` headers of every answer recorded
+  as NOTED with the window each implies, then what the bridge learned. Its dry run against the mock checks the line.
+- **Tests.** `test/unit/governor-learned.test.ts` (a 20 header on `createImageUpload` and a 60 on `deleteAsset` leave
+  `write-min` at 120 and pace only the group; 120 and 3,000 headers match as before; a consistent new limit still lowers
+  `write-min` and 120 restores it; a far-off count goes to the operation's own group; an asset route never teaches a
+  documented tier; widening; expiry; a 429 blocks only the group; the first-sighting log; estimates with the group and
+  the measured figure), `test/contract/learned-limits.test.ts` (the owner's sequence replayed against the mock with the
+  asset routes' tiers: a root, a folder, 3 uploads, then 200 writes in under 4 minutes, not 19), `test/jobs/durations.test.ts`,
+  `test/snapshots/e5-5.test.ts`, `test/admin/learned-limits.test.ts`, and the Budgets and Snapshots page tests.
+- **Docs.** ADR 0047; PLAN §1.2, §5.1, §5.4 and amendment 9; `docs/dashboard.md` (Request Budgets, Snapshots);
+  `docs/snapshots.md` (estimates and progress); the E4 review's assumptions (the undocumented asset tiers);
+  `docs/tools.md`; the bridge guide's budgets section; `src/lk/README.md`; `test/sandbox/README.md` (LIM1).
+
 ## Unreleased: E5.4 (15 November 2026): label sizes are never sent, unreadable maps, and faster sampled rehearsals
 
 [ADR 0046](adr/0046-e4-owner-decisions.md) decision 14 (it supersedes decision 11's label-size mapping); notes in ADR 0040

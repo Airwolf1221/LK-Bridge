@@ -4,15 +4,22 @@
  * and not others, so this checks that the script runs every check to an answer, refuses another project, and cleans up
  * after itself; and that the checks the mock does model pass.
  */
+import { createServer, type Server } from 'node:https';
+import type { AddressInfo } from 'node:net';
+import { parseOutboundPortAllowlist } from '../../src/auth/ports.js';
+import { certificate } from '../images/world.js';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { formatAssumptionsReport, runAssumptions } from '../sandbox/assumptions.js';
 import { SandboxGuardError, type SmokeTarget } from '../sandbox/smoke.js';
-import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
+import { ASSET_ROUTE_TIERS, type MockRequest, type MockResponse } from '../contract/mock-lk.js';
 import { lifecycleWorld, type LifecycleWorld } from '../lifecycle/world.js';
 import { labelSizeListRefusal, labelSizeWriteRefusal } from '../maps/label-size-bug.js';
 import { API_KEY, PROJECT } from './helpers.js';
 
 let w: LifecycleWorld;
+/** v2 E5.5 (LIM1): the upload host the signed PUT goes to (no rate headers, as a storage host answers). */
+let storage: Server;
+const stored: { method: string; bytes: number }[] = [];
 const target = (): SmokeTarget => ({
   engine: w.stack.runtime.engine,
   lk: w.stack.runtime.projects.client(PROJECT)!,
@@ -23,10 +30,46 @@ const target = (): SmokeTarget => ({
 
 beforeAll(async () => {
   // The real limits would make the dry run wait for the key's minute; LegendKeeper's mock and the governor get more.
+  // v2 E5.5 (LIM1): the upload host the signed PUT goes to (https, no rate headers, as a storage host answers).
+  const { key, cert } = certificate();
+  storage = createServer({ key, cert }, (req, res) => {
+    let n = 0;
+    req.on('data', (c: Buffer) => (n += c.length));
+    req.on('end', () => {
+      stored.push({ method: req.method ?? '', bytes: n });
+      res.writeHead(200).end();
+    });
+  });
+  await new Promise<void>((r) => storage.listen(0, '127.0.0.1', r));
+  const port = (storage.address() as AddressInfo).port;
   w = await lifecycleWorld({
     env: { LK_TIER_LIMITS: JSON.stringify({ 'key-min': 5000, 'write-min': 2000 }) },
     limits: { 'key-min': 5000, 'write-min': 2000 },
+    // v2 E5.5 (LIM1): the asset routes' own tiers, as LegendKeeper evidently has them.
+    opTiers: ASSET_ROUTE_TIERS,
+    uploadGuard: {
+      resolve: (host) =>
+        Promise.resolve(host === 'storage.test' ? [{ address: '127.0.0.1', family: 4 as const }] : []),
+      ca: cert,
+      allowAddress: (a) => a === '127.0.0.1',
+      allowedPorts: parseOutboundPortAllowlist(`storage.test:${port}`),
+    },
   });
+  // createImageUpload, as the spec describes it (the asset model has none): a signed URL on the upload host.
+  w.overrides.set(/\/assets\/uploads$/, (req) =>
+    req.method === 'POST'
+      ? {
+          status: 201,
+          body: {
+            uploadKey: 'uk-lim1',
+            uploadUrl: `https://storage.test:${port}/put/uk-lim1`,
+            method: 'PUT',
+            headers: { 'content-type': 'image/png' },
+            expiresAt: new Date(Date.now() + 600_000).toISOString(),
+          },
+        }
+      : undefined,
+  );
   // saveResourceAsTemplate, as the spec describes it (the world's model has none): a template with the page's name
   // (or the one given) and a copy of its sidebar, outside the tree.
   w.overrides.set(/\/resources\/[^/]+\/save-as-template$/, (req) => {
@@ -66,7 +109,10 @@ beforeAll(async () => {
     return undefined;
   });
 });
-afterAll(async () => w.close());
+afterAll(async () => {
+  await w.close();
+  await new Promise<void>((r) => storage.close(() => r()));
+});
 
 describe('sandbox assumptions script (dry run)', () => {
   it('refuses to run against any project other than the one it was given', async () => {
@@ -92,7 +138,8 @@ describe('sandbox assumptions script (dry run)', () => {
     // every page the script writes (the sandbox runtime has no tree), and the clean-up's guard reads: the canon guard
     // lists and reads every page of a cascade at entry and again inside the lock (CR-09).
     // v2 E5.4: LS1 adds two writes (the label and its delete) and two reads.
-    expect(writes).toBeLessThanOrEqual(115);
+    // v2 E5.5: LIM1 adds five (the folder, the upload, the asset, two deletes); its PUT goes to the upload host.
+    expect(writes).toBeLessThanOrEqual(120);
     expect(reads).toBeLessThanOrEqual(540); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
     const ids = findings.map((f) => f.id);
     for (const id of [
@@ -125,8 +172,27 @@ describe('sandbox assumptions script (dry run)', () => {
       'H1',
       'LS1',
       'F29',
+      'LIM1',
     ])
       expect(ids, report).toContain(id);
+    // v2 E5.5: LIM1 records the asset routes' own limits as NOTED, and the bridge learned them for the asset group
+    // only; the PUT carried no rate headers; the image and the folder were deleted.
+    const lim1 = findings.find((f) => f.id === 'LIM1')!;
+    expect(lim1.verdict, report).toBe('noted');
+    expect(lim1.detail).toMatch(
+      /createAssetFolder 201: limit 20, remaining 19, reset in \d+ s \(a minute window\)/,
+    );
+    expect(lim1.detail).toMatch(/createImageUpload 201: limit 20, remaining 18/);
+    expect(lim1.detail).toMatch(/upload_image\.put \(the signed PUT\) 200: no X-RateLimit headers/);
+    expect(lim1.detail).toMatch(/createImageAsset 201: limit 20, remaining 17/);
+    expect(lim1.detail).toMatch(/deleteAsset \(the image\) 204: limit 60, remaining 59/);
+    expect(lim1.detail).toMatch(/deleteAsset \(the folder\) 204: limit 60, remaining 58/);
+    expect(lim1.detail).toMatch(
+      /the bridge learned: assets 20 a minute \(seen on createAssetFolder, createImageUpload, createImageAsset\); assets 60 a minute \(seen on deleteAsset\)/,
+    );
+    expect(lim1.detail).toMatch(/the image and the folder were deleted$/);
+    expect(stored).toEqual([{ method: 'PUT', bytes: 70 }]);
+    expect(w.stack.runtime.projects.client(PROJECT)!.governor.snapshot().tiers['write-min'].limit).toBe(2000);
     // v2 E5.4: the mock reproduces the label-size bug, so LS1 confirms it, and its clean-up makes the map listable.
     const ls1 = findings.find((f) => f.id === 'LS1')!;
     expect(ls1.verdict, report).toBe('pass');

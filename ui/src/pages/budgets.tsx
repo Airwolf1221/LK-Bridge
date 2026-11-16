@@ -13,11 +13,18 @@ import {
   useAction,
   useConfirm,
 } from '../components';
-import { TIER_LABELS, fmtInt } from '../format';
+import { TIER_LABELS, fmtAgo, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useApi, useNow } from '../hooks';
 import { useLiveBudget, useLiveBudgets, useProject, useScopedApi } from '../project';
 import { useRoute } from '../router';
-import type { BudgetSamples, BudgetsAllResponse, BudgetsResponse, PriorityClass, TierId } from '../types';
+import type {
+  BudgetSamples,
+  BudgetsAllResponse,
+  BudgetsResponse,
+  OperationTierSnapshot,
+  PriorityClass,
+  TierId,
+} from '../types';
 
 const QUEUE_LABELS: Record<PriorityClass, string> = {
   P0: 'P0 · dashboard',
@@ -115,6 +122,8 @@ function ProjectBudgets({ toggle }: { toggle: ReactNode }) {
         })}
       </div>
 
+      <LearnedLimits tiers={snap.operationTiers ?? []} now={now} />
+
       <section className="card mt" aria-labelledby="drift-h">
         <h2 id="drift-h">Project tier: observed against modelled</h2>
         {drift ? (
@@ -167,6 +176,71 @@ function ProjectBudgets({ toggle }: { toggle: ReactNode }) {
 
       <FloorsCard data={b.data} onSaved={b.reload} />
     </>
+  );
+}
+
+const windowLabel = (ms: number) =>
+  ms <= 60_000 ? 'minute' : ms <= 3_600_000 ? 'hour' : ms <= 86_400_000 ? 'day' : fmtDuration(ms);
+
+/**
+ * v2 E5.5: the limits LegendKeeper reported that match none of its documented tiers, learned per operation group. Each
+ * paces only its group's calls (never every write) and is forgotten once its window has passed twice unseen.
+ */
+function LearnedLimits({ tiers, now }: { tiers: OperationTierSnapshot[]; now: number }) {
+  return (
+    <section className="card mt" aria-labelledby="learned-h">
+      <h2 id="learned-h">Learned operation limits</h2>
+      <p className="muted small-text">
+        Limits LegendKeeper reported that match none of its documented tiers, such as its own limit on image
+        uploads and asset folders. Each one paces only the operations of its group, never every write, and is
+        forgotten once its window has passed twice without LegendKeeper reporting it again. A restart forgets
+        them too; they are learned again at the next report.
+      </p>
+      {tiers.length === 0 ? (
+        <p className="muted">None learned: LegendKeeper has reported only its documented limits.</p>
+      ) : (
+        <div className="table-wrap">
+          <table aria-label="Learned operation limits">
+            <thead>
+              <tr>
+                <th>Group</th>
+                <th>Operations seen</th>
+                <th>Limit</th>
+                <th>Window</th>
+                <th>Remaining</th>
+                <th>Last seen</th>
+                <th>Expires</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tiers.map((t) => (
+                <tr key={`${t.group}-${t.limit}`} data-group={t.group}>
+                  <td>
+                    <strong>{t.group}</strong>
+                    {t.blockedUntilMs !== null && t.blockedUntilMs > now && (
+                      <>
+                        {' '}
+                        <Badge tone="bad">refused for {fmtDuration(t.blockedUntilMs - now)}</Badge>
+                      </>
+                    )}
+                  </td>
+                  <td className="mono small-text">{t.ops.join(', ')}</td>
+                  <td>{fmtInt(t.limit)}</td>
+                  <td>{windowLabel(t.windowMs)}</td>
+                  <td>
+                    {fmtInt(t.remaining)} of {fmtInt(t.limit)}
+                  </td>
+                  <td title={fmtTime(t.lastSeenAtMs)}>{fmtAgo(t.lastSeenAtMs, now)}</td>
+                  <td title={fmtTime(t.expiresAtMs)}>
+                    {t.expiresAtMs > now ? `in ${fmtDuration(t.expiresAtMs - now)}` : 'now'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -237,6 +311,15 @@ function AllBudgets({ toggle }: { toggle: ReactNode }) {
                   <p className="muted small-text">
                     Project tier: {fmtInt(drift.observedUsed)} observed by LegendKeeper,{' '}
                     {fmtInt(drift.modelledUsed)} counted by the bridge.
+                  </p>
+                )}
+                {(snap.operationTiers ?? []).length > 0 && (
+                  <p className="muted small-text" data-testid="learned-limits">
+                    Learned operation limits:{' '}
+                    {snap
+                      .operationTiers!.map((t) => `${t.group} ${fmtInt(t.limit)}/${windowLabel(t.windowMs)}`)
+                      .join(', ')}
+                    .
                   </p>
                 )}
               </section>

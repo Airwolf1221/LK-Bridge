@@ -54,6 +54,13 @@ import type { RehearsalRow } from './db.js';
 import type { Manifest, PageEntry } from './manifest.js';
 import { bodyFields, RestoreError } from './restore.js';
 import type { SnapshotService } from './service.js';
+import {
+  pacingOf,
+  sequentialEstimate,
+  type EstimateLike,
+  type PlanEstimateInput,
+  type PlanFigures,
+} from './plan-estimate.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -87,13 +94,8 @@ export interface RehearsalDeps {
     client(id: string):
       | {
           governor: {
-            estimate(i: { reads: number; writes: number; priority?: 'P3' }): {
-              wallClockMs: number;
-              fitsToday: boolean;
-              tightestTier: string;
-              pacingMs?: number;
-              tiers?: readonly { tier: string; demand: number; capacityPerWindow: number }[];
-            };
+            /** v2 E5.5: `ops` names the asset steps, so a learned `assets` limit paces those steps only. */
+            estimate(i: PlanEstimateInput): EstimateLike;
           };
         }
       | undefined;
@@ -132,6 +134,11 @@ export interface RehearsalPlan {
     readonly fitsToday: boolean | null;
     /** What the pacing assumes: the time per write and per read at P3 (null without a governor). */
     readonly pacing?: { readonly msPerWrite: number; readonly msPerRead: number } | null;
+    /**
+     * v2 E5.5 (backlog 16): the figures the time rests on: the per-write duration (measured or the spacing), each
+     * tier's effective limit and P3's share, and any learned operation group (the image uploads') with its steps.
+     */
+    readonly figures?: PlanFigures | null;
   };
 }
 
@@ -371,37 +378,8 @@ function trimPage(l: Loaded): { loaded: Loaded; cuts: SampleCut[] } {
   return { loaded: cuts.length > 0 ? { ...l, documents } : l, cuts };
 }
 
-const WINDOW_MS: Readonly<Record<string, number>> = { min: 60_000, hour: 3_600_000, day: 86_400_000 };
-const windowOf = (tier: string): number | null => WINDOW_MS[tier.split('-').pop() ?? ''] ?? null;
-
-/**
- * v2 E5.4: the time per write and per read at P3, from the governor's own estimate: a write takes at least the write
- * spacing, and once the work needs more than a window's P3 share of a tier (`capacityPerWindow`), its share of that tier
- * (`window / capacity`): a write of the write and request tiers, a read of the request tiers.
- */
-export function pacingOf(
-  est: {
-    pacingMs?: number;
-    tiers?: readonly { tier: string; demand: number; capacityPerWindow: number }[];
-  },
-  writes: number,
-): { msPerWrite: number; msPerRead: number } {
-  let msPerWrite = writes > 0 && est.pacingMs ? est.pacingMs / writes : 0;
-  let msPerRead = 0;
-  for (const t of est.tiers ?? []) {
-    const w = windowOf(t.tier);
-    // A tier slows the run only once the work needs more than one window's share; then it flows at its steady rate.
-    if (w === null || t.capacityPerWindow <= 0 || t.demand <= t.capacityPerWindow) continue;
-    const per = w / t.capacityPerWindow;
-    if (t.tier.startsWith('write-')) msPerWrite = Math.max(msPerWrite, per);
-    else if (!t.tier.startsWith('items-')) {
-      msPerRead = Math.max(msPerRead, per);
-      // A write is also a request: it costs at least its share of the request tiers.
-      msPerWrite = Math.max(msPerWrite, per);
-    }
-  }
-  return { msPerWrite: Math.ceil(msPerWrite), msPerRead: Math.ceil(msPerRead) };
-}
+/** v2 E5.4's pacing, now shared with restores (src/snapshots/plan-estimate.ts). */
+export { pacingOf };
 
 // ============================================================================================ the copy's transforms
 
@@ -733,11 +711,22 @@ export class Rehearsals {
     }
     writes += images.size * 2;
     reads += images.size;
-    const est = this.d.projects.client(target.id)?.governor.estimate({ reads, writes, priority: 'P3' });
+    // v2 E5.5: the asset steps by operation, so a learned `assets` limit paces those steps and no others.
+    const ops: Record<string, number> =
+      images.size > 0
+        ? {
+            createAssetFolder: 1,
+            createImageUpload: images.size,
+            createImageAsset: images.size,
+            'upload_image.put': images.size,
+            deleteAsset: 1,
+          }
+        : {};
+    const est = this.d.projects.client(target.id)?.governor.estimate({ reads, writes, priority: 'P3', ops });
     // v2 E5.4: the governor's estimate assumes the work flows in parallel at the budget's steady rate; the rehearsal's
     // jobs run one after another, so the writes at P3's write rate plus the reads at its request rate bound it from below.
-    const pacing = est ? pacingOf(est, writes) : null;
-    const paced = pacing ? writes * pacing.msPerWrite + reads * pacing.msPerRead : 0;
+    // v2 E5.5: a write takes at least the measured per-write duration, and the asset steps what the group's limit allows.
+    const seq = sequentialEstimate(est, { reads, writes, ops });
     return {
       plan: {
         source: {
@@ -756,9 +745,10 @@ export class Rehearsals {
           reads,
           writes,
           uploads: images.size,
-          wallClockMs: est ? Math.max(est.wallClockMs, paced) : null,
-          fitsToday: est ? est.fitsToday : null,
-          pacing,
+          wallClockMs: seq.wallClockMs,
+          fitsToday: seq.fitsToday,
+          pacing: seq.pacing,
+          figures: seq.figures,
         },
       },
       loaded,
@@ -897,15 +887,28 @@ export class Rehearsals {
     const rootId = mintClientId(8);
     let assetFolder: string | null = null;
     // The asset folder's id rides along with the progress, so "Delete its root" later removes it too.
-    const progress = (p: Obj) =>
+    let stage: Obj = {};
+    let lastWrite = 0;
+    const save = () => {
+      lastWrite = this.d.now();
       idx.updateRehearsal(id, {
         progress: {
-          ...p,
+          ...stage,
           writes: counts.writes,
           reads: counts.reads,
+          uploads: counts.uploads,
           ...(assetFolder ? { assetFolder } : {}),
         },
       });
+    };
+    const progress = (p: Obj) => {
+      stage = p;
+      save();
+    };
+    /** v2 E5.5: the counts as they grow (at most every 2 s), so the Snapshots page shows the run against its plan. */
+    const tick = () => {
+      if (this.d.now() - lastWrite >= 2000) save();
+    };
 
     /** Every write the rehearsal makes stays in its root (or its own asset folder): checked before each job. */
     const inside = (steps: readonly StepSpec[], folder: string | null) =>
@@ -983,6 +986,7 @@ export class Rehearsals {
       });
       counts.uploads++;
       counts.writes += 2;
+      tick();
       if (!('jobId' in r)) continue;
       let done: JobView;
       for (;;) {
@@ -1102,6 +1106,7 @@ export class Rehearsals {
       j = await this.job(target, steps, `rehearsal ${id}: page ${e.name}`);
       counts.jobs++;
       counts.writes += steps.length;
+      tick();
       const r = this.results(target, j);
       if (r[0]?.status !== 'succeeded') {
         differences.push({
@@ -1254,6 +1259,7 @@ export class Rehearsals {
       j = await this.job(target, steps, `rehearsal ${id}: content of ${l.entry.name}`, named);
       counts.jobs++;
       counts.writes += steps.length;
+      tick();
       noteDropped(l.entry.name, this.results(target, j));
       for (const s of this.results(target, j))
         if (s.status !== 'succeeded')
@@ -1269,6 +1275,7 @@ export class Rehearsals {
     const read = this.d.svc.reader(target, 'P3');
     const counted: Reader = async (op, params) => {
       counts.reads++;
+      tick();
       return read(op, params);
     };
     let exact = 0;
