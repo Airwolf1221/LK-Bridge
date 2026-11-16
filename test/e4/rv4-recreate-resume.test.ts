@@ -1,4 +1,3 @@
- 
 /**
  * RV4, finished in v3 F2 (ADR 0049 decision 6; E4-OPEN-1): a recreate (restore_snapshot, scope deleted, mode recreate;
  * ADR 0042) that stops part-way can be finished: the same request again (or "Finish" on the dashboard) compares the page
