@@ -1,6 +1,7 @@
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
 import { registerPackEngine } from './packs/engine/checks.js';
+import { addPackTaxonomyEntry } from './packs/taxonomy.js';
 import { deletedPageRecord } from './lifecycle/deleted.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
 import { BlockwiseUndo } from './pages/undo.js';
@@ -357,6 +358,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     // after the image service below exists).
     stagedImage: (projectId, stagedId) => images.staged(projectId, stagedId),
     proposalJob: (proposalId) => policy.proposals.get(proposalId)?.jobId ?? null,
+    addTaxonomyEntry: (projectId, r, actor) =>
+      addPackTaxonomyEntry(registry.forProject(projectId).store, r, (...a) => policy.store.audit(...a), actor),
   });
   // v2 C1: the bridge's memory of recent page versions, and write_page's in-lock re-planner (section edits whose section
   // is unchanged). Registered before any job can run: the scheduler starts in a microtask, after createRuntime returns.

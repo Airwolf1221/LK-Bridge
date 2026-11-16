@@ -443,6 +443,27 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     });
   }
 
+  // v3 F3b (design 1.1a): a character navigation index made here is recorded in the Character taxonomy (one entry).
+  for (const t of plan.taxonomy ?? []) {
+    steps.push({
+      op: 'bridge.record',
+      params: {
+        body: {
+          action: 'complete',
+          store: PACK_RECORD_STORE,
+          record: { kind: 'taxonomy_entry', resourceId: t.resourceId, plural: t.plural, parentNodeId: t.parentNodeId },
+        },
+      },
+    });
+    labels.push(`add ${t.plural} to the Character taxonomy`);
+    operations.push({
+      tool,
+      pack: pack.id,
+      kind: 'taxonomy_entry',
+      summaryLabel: `${t.plural}: added to the Character taxonomy (Repository Mappings), so characters of it can be placed`,
+    });
+  }
+
   // 6. A Reference moved under its new index, placed among the new pages there.
   for (const c of plan.existing) {
     if (c.kind !== 'move') continue;

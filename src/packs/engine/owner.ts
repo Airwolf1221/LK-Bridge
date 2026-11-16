@@ -23,7 +23,7 @@ import { mintClientId } from '../../jobs/ids.js';
 import { readSidebar, statusValue } from '../../mcp/tools/create-support.js';
 import { fromMarkdown, MarkdownError, type FromMarkdownContext, type LkBlock } from '../../markdown/index.js';
 import { pageConverterContext } from '../../pages/index.js';
-import { cleanPrefixes, key as nameKey } from '../../registry/names.js';
+import { cleanPrefixes, key as nameKey, singularFor } from '../../registry/names.js';
 import type { TreeNode } from '../../tree/index.js';
 import type { HomeRule, OwnerKind, OwnerKindName, OwnerType, PackRules, RoleRule, TypeRules } from '../types.js';
 import {
@@ -540,7 +540,16 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
           'NAVIGATION_PARENT_MISSING',
           `${path} cannot be made: ${[owners.races.navigation, ...chain.slice(0, -1)].join(' / ')} does not exist. Make the racial group's navigation first (its own package with createCharacterNavigation).`,
         );
-      else navPlan = { parent, name, path };
+      else {
+        navPlan = { parent, name, path };
+        const s = singularFor(name);
+        if (s.source === 'rule')
+          warn(
+            'TAXONOMY_SINGULAR_GUESS',
+            `${name} is added to the Character taxonomy with the singular “${s.singular}”, a guess: the owner checks it on the Repository Mappings page before a character of ${name} can be placed.`,
+            { plural: name, singular: s.singular },
+          );
+      }
     } else
       warn(
         'CHARACTER_NAVIGATION_MISSING',
@@ -861,7 +870,7 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
         `[INDEX] ${navPlan.name}`,
         { existing: navPlan.parent.id },
         navPlan.parent.rawName,
-        `character navigation (createCharacterNavigation): ${navPlan.path}`,
+        `character navigation (createCharacterNavigation): ${navPlan.path}, added to the Character taxonomy`,
       )
     : null;
   const ownerPage: PlannedPage = {
@@ -1054,6 +1063,9 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       continuity: { type: continuityType, name: continuity },
     },
     ...(promote ? { canonical: { reason: `moves the Authoritative page ${promote.node.rawName} into the new ${nationRaw} (promoteNation)` } } : {}),
+    ...(navPage && navPlan
+      ? { taxonomy: [{ resourceId: navPage.id, plural: navPlan.name, parentNodeId: navPlan.parent.id }] }
+      : {}),
     ...(overridden && override ? { summaryNote: `home override: ${override}` } : {}),
   };
 }

@@ -309,6 +309,11 @@ export interface PackPlan {
   readonly summaryNote?: string;
   /** v3 F3b: staged images whose own pending placement proposal the package takes over (design section 6). */
   readonly takeovers?: readonly { readonly stagedId: string; readonly proposalId: string }[];
+  /**
+   * v3 F3b (design 1.1a): a character navigation index the package makes, recorded in the Character taxonomy when the
+   * job runs, so the character tool can place a character of that race.
+   */
+  readonly taxonomy?: readonly { readonly resourceId: string; readonly plural: string; readonly parentNodeId: string }[];
 }
 
 export interface PlanEnv {

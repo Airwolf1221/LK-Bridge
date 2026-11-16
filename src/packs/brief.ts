@@ -95,10 +95,11 @@ export async function characterBrief(
     const sb = ctx.tree.sidebars(ctx.projectId, [hit.identity.id]).data.get(hit.identity.id) ?? null;
     const kv = (sb ?? []).find((p) => p.kind === 'keyValue' && textKey(p.title ?? '') === textKey(property));
     rows = [...(kv?.rows ?? [])].map((r) => ({ key: r.key, text: r.text }));
+    const readAt = identity ? Math.min(identity.lastReadAt, ctx.now) : null;
     fieldsFrom = {
       source: 'tree',
-      readAt: identity ? new Date(identity.lastReadAt).toISOString() : null,
-      age: identity ? ago(ctx.now - identity.lastReadAt) : null,
+      readAt: readAt !== null ? new Date(readAt).toISOString() : null,
+      age: readAt !== null ? ago(ctx.now - readAt) : null,
       ...(sb === null ? { note: 'The tree has not read this page’s sidebar yet: call again with live: true.' } : {}),
     };
   }

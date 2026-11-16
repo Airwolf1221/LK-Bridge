@@ -59,6 +59,12 @@ export interface PackEngineDeps {
     | undefined;
   /** v3 F3b: the job a proposal ran as (null while it waits), for the staged images' check. */
   readonly proposalJob?: (proposalId: string) => string | null;
+  /** v3 F3b (design 1.1a): records ONE Character taxonomy entry for a navigation index a package made. */
+  readonly addTaxonomyEntry?: (
+    projectId: string,
+    r: { readonly resourceId: string; readonly plural: string; readonly parentNodeId: string },
+    actor: string,
+  ) => Record<string, unknown>;
 }
 
 /** Registers the pack's checkers, filler and record handler with the engine. Returns an unregister. */
@@ -77,6 +83,19 @@ export function registerPackEngine(
       if (r.kind === 'set_template' && typeof r.resourceId === 'string' && typeof r.templateId === 'string') {
         d.setTemplate(job.projectId, r.resourceId, r.templateId);
         return { recorded: 'set_template', resourceId: r.resourceId, templateId: r.templateId };
+      }
+      if (
+        r.kind === 'taxonomy_entry' &&
+        typeof r.resourceId === 'string' &&
+        typeof r.plural === 'string' &&
+        typeof r.parentNodeId === 'string' &&
+        d.addTaxonomyEntry
+      ) {
+        return d.addTaxonomyEntry(
+          job.projectId,
+          { resourceId: r.resourceId, plural: r.plural, parentNodeId: r.parentNodeId },
+          job.approvedBy ?? job.principalId,
+        );
       }
       return { recorded: null };
     }, PACK_RECORD_STORE),
