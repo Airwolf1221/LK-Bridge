@@ -419,13 +419,17 @@ The full list of forms is in docs/chronology.md.
 - `delete_timeline_event { event: { event_id, age? }, orphan: true, confirm: true }` deletes ONLY a timeline event that
   no table row accounts for (the check's "event without a row"): no row is deleted and the count does not change. It
   is refused when the event has a row after all (`EVENT_HAS_ROW`) or an unpaired row could be its own
-  (`PAIRING_AMBIGUOUS`: pair them with `sync_timeline_event` and `event_id` instead). `dryRun` shows the event and the
+  (`PAIRING_AMBIGUOUS`: it is not an orphan; pair it with `sync_timeline_event` and `event_id` instead). The check
+  reports such an event as an "event in a tie", never as an event without a row. `dryRun` shows the event and the
   three rows nearest it by date. The journal keeps the event.
 - `sync_timeline_event { row: { date, description } | { row_id, age } }` repairs the timeline for ONE table row, the
   table being the authority: it creates the row's missing event, or corrects the paired event's minutes, `detail`, shape
   and `uri` to match the row. It never touches the table or the count and never renames an event; a row whose event
-  already agrees answers `nothing_to_do`. If several events could be the row's it refuses with the candidates
-  (`PAIRING_AMBIGUOUS`): tell the person, or pass `event_id` to choose one. Use it for what the chronology check
+  already agrees answers `nothing_to_do`. `description` may be the row's opening words (at least 20 characters, the
+  start of exactly one row of that date); no such row is `ROW_NOT_FOUND`. If several events could be the row's it
+  refuses (`PAIRING_AMBIGUOUS`) naming each candidate's name, date and id: tell the person, then pass `event_id` to pair
+  it with one (an event that already agrees is linked: `linked`, no LegendKeeper write, and the choice is remembered),
+  or `create_new: true` to make a new event instead. Use it for what the chronology check
   reports (a row without an event, a row and event that disagree about the date). A repair that turns a range event
   into a single date, or the reverse, is refused (`SHAPE_CHANGE_UNCONFIRMED`, saying `range → single day`) until you
   have checked with the person and repeat it with `confirm_shape_change: true`. A qualified row's event takes its

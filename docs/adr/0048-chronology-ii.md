@@ -5,7 +5,8 @@
   unchanged; **(B)** an unreadable row is reported once; **(C)** table-only rows take no part in pairing. Amended by
   [ADR 0049](0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 1: the date tail the bridge wrote
   into a linked event's name now follows the row's Date cell (decision 3's "never renames" no longer holds for that
-  tail).
+  tail). Amended by the **F2.1 amendments** below (v3 F2.1, 16 November 2026: ties, links by choice, `create_new`,
+  events in a tie, six more date forms, the KCY of a range inside one year).
 - Builds on: [ADR 0038](0038-calendar-engine-and-chronology-sync.md) (the engine, the chronology jobs),
   [ADR 0039](0039-date-styles-timeline-repair-and-etag-versions.md) (the two date styles, `sync_timeline_event`, the
   four-pass pairing, "Propose a fix"), [ADR 0044](0044-audits.md) (the audits' chronology fold-in) and
@@ -220,3 +221,100 @@ through the audits page is now a 409 with its code and reason (it was a 500).
   then a few qualified-row events approved one shape at a time (year, range, open start, approximate) and looked at on
   the timeline in the app before the rest; and the Divan Heirage pair (the range row with its event, the vote with its
   own or offered a new one).
+
+## F2.1 amendments (v3 F2.1, 16 November 2026)
+
+The owner's Arkona run of 16 November 2026, after F1: every "Propose a fix" worked except on open-start rows, refused
+with `PAIRING_AMBIGUOUS`. On the Fourth Age table (`jhk6xcal`) three rows share Selyros 40th, 4A 605: two qualified rows
+(`After Pardis-an placement and before Selyros 40th, 4A 605; …`, `Before Selyros 40th, 4A 605; …`) whose open-start
+anchors are that day, and the plain row `Selyros 40th, 4A 605`. The one event of that day plainly belongs to the plain
+row. Pass 3 found three rows and one event and paired nothing; the plain row was refused too; choosing the event with
+`event_id` answered `nothing_to_do` and recorded nothing, so the next check tied again; naming the row by its opening
+words failed with `EVENT_NOT_FOUND`. And all four of Arkona's "events without a row" (the 4A 605 return, the 4A 613
+wedding, the Divan Heirage, the 4A 630 abdication) offered a delete that was then refused: they were events caught in
+ties. No new ADR and no migration: the row–event link table (`chronology_links`) holds a link the caller chose as it
+holds one the bridge made.
+
+**F2.1-1. A plain row beats a qualified anchor** (decision 5, amended). After pass 3, a date where rows and events are not
+equally many is settled by its plain rows: when they are exactly as many as its events, they take them (one to one, as
+pass 3 does), and the qualified rows anchored on that day are left unpaired and offered new events, as the Viziers' vote
+is in the Divan Heirage case. The pair records `pairedBy: plain` ("plain row preferred over qualified anchor"). Pass 2 now
+takes a name only when it names exactly one row of that date, and that row's name matches one event (two plain rows and
+one event: the name decides, or nothing does; a cut-short name that names both decides nothing). In the scored pass, two
+ranges of the same start are told apart by the year their ends fall in (`start+year`, between `start+end` and
+`start+shape`; named only where it decided). The Divan Heirage guard and every earlier ordering test stand.
+
+**F2.1-2. A caller's choice is remembered** (decision 5 and ADR 0039's `sync_timeline_event`). `event_id` on an event that
+already agrees records the row–event link (`pairedBy: "chosen by the caller"`) and answers `linked` (`action: "link"`),
+not `nothing_to_do`. It is a bridge-side record with no LegendKeeper write: the job holds the age's table and timeline,
+compares the row (`row.assert`) and the event (a new `event.assert`, not a write) inside the lock, and its record's
+completion stores the link; the record audits it. At scope `propose` it is still ONE proposal (summary `link row … to
+event …`), because it changes what the check reports: bridge code may force a proposal for a job whose only change is its
+record (`src/jobs/engine.ts`: `forceProposal` now also applies when a `bridge.record` step is the change). The check
+honours stored links first, as before. The orphan path is the same: "Pair with this row" on an event in a tie makes the
+link (or the correction) for the row the owner picks, so the event stops being in a tie.
+
+**F2.1-3. "None of these: make a new event."** `create_new: true` on `sync_timeline_event` (never with `event_id`:
+`INVALID_PARAMS`) creates the row's event even though candidates exist; the answer (`passedOver`), the proposal's summary
+and its head name the candidates it passed over. A row that is paired already is refused (`ROW_HAS_EVENT`).
+
+**F2.1-4. Refusals show the candidates.** `PAIRING_AMBIGUOUS` names every candidate's name, date and id in its message,
+not only in its details. On the Chronology page and the Audits page a refused fix shows each candidate event with **Use
+this event** (F2.1-2) and one **Make a new event** button (F2.1-3), so the owner resolves a tie without an assistant. A
+choice that changes the event's shape asks first, as decision 6 requires.
+
+**F2.1-5. A row by its opening words.** In `row: { date, description }` a description that is a prefix of exactly one row
+of that date (at least 20 characters, compared after trimming and collapsing whitespace; a trailing `…` or `...` is
+ignored) finds the row. An exact match still wins. An ambiguous prefix is refused with the rows it matched
+(`ROW_AMBIGUOUS`); a prefix under 20 characters that begins a row is refused (`ROW_PREFIX_TOO_SHORT`); nothing matching
+is `ROW_NOT_FOUND` (it was `EVENT_NOT_FOUND`), with the rows of that date in its message and details. A missing `row_id`
+is `ROW_NOT_FOUND` too.
+
+**F2.1-6. Other ties.** Settled: two plain rows and one event (the name, F2.1-1); a plain row against an open-end (or any
+qualified) row anchored on the same day (F2.1-1); ranges of the same start (F2.1-1, `start+year`). Still refused, with the
+candidates shown (F2.1-4): two or more plain rows and fewer events with no deciding name; qualified rows alone on a day
+with fewer events; ranges of the same start ending in the same year. Kept from ADR 0039 (not a refusal): a day with as
+many rows as events is paired one to one in table and timeline order.
+
+**F2.1-7. Six more certain forms** (decision 1, amended; the owner, 16 November 2026). Each reads only when unambiguous:
+`On or after X` / `On or before X` (as `After X` / `Before X`; Arkona row 443); `Before or during X` (an open start ending
+at the end of X) and `During or after X` (an open end from its start), X any known form such as `the third week of Isar,
+4A 566` (row 288); `4A 614-617` (the second part a bare number greater than the first, the same era) and `Across X` as a
+qualifier like `From` (row 340); `Early` / `Mid` / `Late` on a year make it approximate (its event year detail, its name
+tail the cell as usual), and `Late 4A 621 onward` is an open end from that year (row 358); a bracketed gloss in another
+era naming the same instant (`Camue 1st, 5A 1 (4A 950)`: the same KCY at a year's precision, the same minutes at a finer
+one) is qualifier, and one that does not agree leaves the row unread; a range whose ends differ in precision (`Camue 4A
+624` to `Kumikas 25th, 4A 630`) reads with each end at its own precision (`QualifiedReading.endsText`) and its event takes
+the coarser detail. `From Isar 4A 566 to Selaphos 3rd, 4A 566`, unread before, is now read that way. A reading of an
+inclusive bound carries `inclusive` (described "from X", "up to and including X"). The reader still never works out a
+relative offset or an event used as a date (`After the Altun Sahra War in 4A 633` stays unread). Every example is in the
+shared date-form fixture (`READ_F21`).
+
+**F2.1-8. A range within one KCY** (ADR 0038 decision 5's `sameYearRange`). The default is now the single value
+(`1,250,918` for `Kumikas 17th - 24th, 4A 611`); `1,250,918 - 1,250,918` is accepted as well, and neither is reported as
+"written differently", whatever the confirmed style says. A project whose confirmed style says `range` keeps writing
+ranges until the owner confirms the style again.
+
+**F2.1-9. An event with candidate rows is not an event without a row** (decision 7 and 9, amended). An unpaired event that
+any unpaired row could own (the same date, the same start or its name: `couldBeRowOf`, now shared by the check and the
+orphan delete) is reported as `event_in_tie` ("Event in a tie"; in the audits `chronology_event_in_tie`, fix
+`chronology_pair`), never as `event_without_row`. It lists its candidate rows (date and opening words) with **Pair with
+this row** for each (F2.1-2). It never offers a delete. "Event without a row" and its delete are kept for events no row
+could own. The orphan refusal now reads "This event is not an orphan: N rows of the table could be its own (…). Pair it
+with one instead of deleting it."
+
+### F2.1 consequences
+
+- On the Arkona fixture (`test/chronology/ties.test.ts`) the Selyros 40th row pairs with its event (`plain`), each
+  "before Selyros 40th" row's fix makes one open-start event named with its Date-cell tail, and the event is never an
+  event without a row. The four Arkona shapes appear as events in a tie (with their candidates, no delete) until the
+  plain rows decide; then they pair outright.
+- The answer's `pairedBy` is now in words for every pair (`linked by the bridge`, `the same date`, …).
+- Costs: a link costs the planning reads of any sync (about 6) and, in the lock, the table and the event: no write.
+
+### For the owner, after deploying
+
+Re-run the Arkona check. The Selyros 40th row should be paired, and the two "before Selyros 40th" rows should each offer
+a new event. Any other open-start refusal should now resolve the same way, or show its candidates with **Use this
+event** and **Make a new event**. If the Fourth Age's confirmed KCY style says a range inside one year is a range,
+confirm the style again to write the single value (both are accepted either way).
