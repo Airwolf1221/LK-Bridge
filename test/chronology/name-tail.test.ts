@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * v3 F2 (ADR 0049 decision 1): a qualified event's name stays true to its row.
  *
@@ -216,7 +215,7 @@ describe('a qualified event’s name follows its row (ADR 0049 decision 1)', () 
     expect(await drift()).toEqual([]);
   });
 
-  it('a link made before migration 2800 is recognised from its record', async () => {
+  it('a link made before migration 2800 is recognised from its record', () => {
     const db = w.stack.runtime.chronology.store.db;
     db.prepare('UPDATE chronology_links SET name_tail = NULL WHERE project_id = ?').run(PROJECT);
     const links = w.stack.runtime.chronology.store.links(PROJECT);

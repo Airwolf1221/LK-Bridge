@@ -27,7 +27,6 @@ import {
   eventText,
   matchRowsAndEvents,
   namesMatch,
-  QUALIFIED_NAME_SEPARATOR,
   readEvents,
   shapeChange,
   tableUri,
