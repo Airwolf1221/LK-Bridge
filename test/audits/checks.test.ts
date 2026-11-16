@@ -716,6 +716,39 @@ describe('the chronology fold-in', () => {
     expect(find(out, 'chronology_wrong_kcy').source).toMatchObject({ kind: 'chronology-check', checkId: 9 });
   });
 
+  it('v2 E6: an event without a row offers its deletion; a fix that changes an event’s shape asks to be confirmed', () => {
+    const e6: CheckRun = {
+      ...run,
+      findings: [
+        {
+          kind: 'event_without_row',
+          age: 'Fourth Age',
+          message: 'Event “Orphan” has no table row.',
+          detail: { eventId: 'evorph1', start: 1, name: 'Orphan', date: '4A 890', nearest: [] },
+        },
+        {
+          kind: 'date_mismatch',
+          age: 'Fourth Age',
+          message: 'Row and event disagree.',
+          detail: { rowId: 'row8', eventId: 'ev8', shapeChange: 'range → single day', pairedBy: 'start' },
+        },
+      ],
+    };
+    const out = chronologyCheck(context(model([ROOT]), { chronologyConfigured: true, chronology: e6 }));
+    expect(find(out, 'chronology_event_without_row').fix).toMatchObject({
+      kind: 'chronology_orphan',
+      args: { age: 'Fourth Age', eventId: 'evorph1' },
+    });
+    expect(find(out, 'chronology_date_mismatch').fix).toMatchObject({
+      kind: 'chronology_sync',
+      args: { rowId: 'row8' },
+      confirm: { shapeChange: 'range → single day' },
+    });
+    expect(find(out, 'chronology_date_mismatch').fix!.summary).toMatch(
+      /range → single day: needs your confirmation/,
+    );
+  });
+
   it('offers the count fix for a count mismatch with a Main row, and none when the Main table has no row (v2 E5 hotfix)', () => {
     const counts: CheckRun = {
       ...run,

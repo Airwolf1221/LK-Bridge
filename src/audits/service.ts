@@ -285,21 +285,37 @@ export class Audits {
    * "Propose a fix" for one finding: re-reads its target live (P1), then creates an ordinary proposal through the
    * machinery of an existing tool, with every guard. Nothing is applied; the owner approves it. Audited.
    */
-  async proposeFix(actor: string, projectId: string, findingId: number): Promise<FixResult> {
+  async proposeFix(
+    actor: string,
+    projectId: string,
+    findingId: number,
+    opts: { readonly confirmShapeChange?: boolean } = {},
+  ): Promise<FixResult> {
     const f = this.store.get(projectId, findingId);
     if (!f) throw new AuditError('NOT_FOUND', `No finding ${findingId}.`);
     if (!f.fix)
       throw new AuditError('NO_FIX', 'This finding offers no fix: only the owner can decide what is right.');
     if (f.state !== 'open') throw new AuditError('FINDING_GONE', 'This finding is no longer present.');
     let r: FixResult;
-    if (f.fix.kind === 'chronology_sync' || f.fix.kind === 'chronology_count') {
+    if (
+      f.fix.kind === 'chronology_sync' ||
+      f.fix.kind === 'chronology_count' ||
+      f.fix.kind === 'chronology_orphan'
+    ) {
       const kind = f.fix.kind;
       const c = await this.d.chronology.proposeFix(
         actor,
         projectId,
         kind === 'chronology_count'
           ? { kind: 'count', age: String(f.fix.args.age) }
-          : { age: String(f.fix.args.age), rowId: String(f.fix.args.rowId) },
+          : kind === 'chronology_orphan'
+            ? { kind: 'orphan', age: String(f.fix.args.age), eventId: String(f.fix.args.eventId) }
+            : {
+                age: String(f.fix.args.age),
+                rowId: String(f.fix.args.rowId),
+                // v2 E6 (ADR 0048): a range made a single date (or the reverse) only with the owner's confirmation.
+                ...(opts.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+              },
       );
       r =
         c.status === 'proposal_captured'

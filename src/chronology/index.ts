@@ -24,6 +24,7 @@ import { runCheck, type CheckReader } from './check.js';
 import { buildJob, type WriteContext } from './plan.js';
 import { planSync, SYNC_TOOL } from './sync.js';
 import { COUNT_FIX_TOOL, planCountFix } from './count.js';
+import { ORPHAN_TOOL, planOrphanDelete } from './orphan.js';
 import {
   chronologyConfigFrom,
   chronologySchema,
@@ -33,7 +34,13 @@ import {
   type ChronologyConfig,
   type StoredChronology,
 } from './settings.js';
-import { ChronologyStore, type ChronologyTarget, type ChronologyTool, type TargetWrite } from './store.js';
+import {
+  ChronologyStore,
+  type ChronologyTarget,
+  type ChronologyTool,
+  type TableOnlyMark,
+  type TargetWrite,
+} from './store.js';
 import { detectStyle, readAgeTable, readMainTable, type AgeTable, type DetectedStyle } from './table.js';
 
 export * from './settings.js';
@@ -43,6 +50,16 @@ export * from './checkers.js';
 export { runCheck, type CheckReader, type CheckReport } from './check.js';
 export * from './sync.js';
 export { COUNT_FIX_TOOL, planCountFix, type CountFixPlan, type CountFixResult } from './count.js';
+export * from './orphan.js';
+export {
+  matchRowsAndEvents,
+  nearestRows,
+  openingWords,
+  shapeChange,
+  type MismatchBy,
+  type PairHow,
+  type Pairing,
+} from './check.js';
 
 type Obj = Record<string, unknown>;
 
@@ -179,14 +196,40 @@ export interface Chronology {
     | { readonly status: 'proposal_captured'; readonly proposalId: string; readonly summary: string | null }
     | { readonly status: 'nothing_to_do'; readonly message: string }
   >;
+  /**
+   * v2 E6 (ADR 0048): marks a row of an age table table-only (the owner never wants it on the timeline). The table is
+   * read once (the row's cells as they are now are kept with the mark); the mark hides the row from the check while
+   * they are unchanged. Audited `chronology.table_only`.
+   */
+  markTableOnly(
+    actor: string,
+    projectId: string,
+    o: { readonly age: string; readonly rowId: string; readonly reason?: string | null },
+  ): Promise<TableOnlyMark>;
+  /** Clears a row's table-only mark (no request). Audited `chronology.table_only`. */
+  unmarkTableOnly(
+    actor: string,
+    projectId: string,
+    o: { readonly age: string; readonly rowId: string },
+  ): void;
   attach(): () => void;
   stop(): void;
 }
 
-/** What "Propose a fix" fixes: a table row's timeline event (the default), or an age's Main count (v2 E5 hotfix). */
+/**
+ * What "Propose a fix" fixes: a table row's timeline event (the default), an age's Main count (v2 E5 hotfix), or (v2
+ * E6) an event without a row, deleted.
+ */
 export type ChronologyFix =
-  | { readonly kind?: 'sync'; readonly age: string; readonly rowId: string }
-  | { readonly kind: 'count'; readonly age: string };
+  | {
+      readonly kind?: 'sync';
+      readonly age: string;
+      readonly rowId: string;
+      /** v2 E6 (ADR 0048): a repair that changes the event's shape (`range → single day`) needs this. */
+      readonly confirmShapeChange?: boolean;
+    }
+  | { readonly kind: 'count'; readonly age: string }
+  | { readonly kind: 'orphan'; readonly age: string; readonly eventId: string };
 
 const nodeView = (n: TreeNode) => ({ id: n.id, name: n.rawName, path: n.path.names.join(' / ') });
 
@@ -708,6 +751,7 @@ export function createChronology(d: ChronologyDeps): Chronology {
         calendar: cal,
         read: paced,
         links: store.links(projectId),
+        tableOnly: store.tableOnly(projectId),
       });
       const done = store.finishCheck(projectId, run.id, {
         state: 'succeeded',
@@ -771,11 +815,32 @@ export function createChronology(d: ChronologyDeps): Chronology {
         audit: { kind: 'count', from: plan.main.value, to: plan.rows, events: plan.events },
       });
     }
+    if (fix.kind === 'orphan') {
+      // v2 E6 (ADR 0048): an event without a row, deleted (only the event; no row, no count change).
+      const plan = await planOrphanDelete({
+        config: c,
+        calendar: cal,
+        read,
+        links: store.links(projectId),
+        tableOnly: store.tableOnly(projectId),
+        ref: { eventId: fix.eventId, age: age.name },
+      });
+      if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
+      return capture(actor, projectId, {
+        tool: ORPHAN_TOOL,
+        config: c,
+        age,
+        page,
+        plan,
+        audit: { kind: 'orphan', eventId: fix.eventId, nearest: plan.nearest.map((n) => n.rowId) },
+      });
+    }
     const plan = await planSync({
       config: c,
       calendar: cal,
       read,
       links: store.links(projectId),
+      tableOnly: store.tableOnly(projectId),
       ref: { rowId: fix.rowId, age: age.name },
     });
     if (!plan.ok) throw new ChronologyError(plan.code, plan.message, plan.details);
@@ -784,14 +849,84 @@ export function createChronology(d: ChronologyDeps): Chronology {
         status: 'nothing_to_do',
         message: 'The row and its timeline event already agree; nothing was proposed.',
       };
+    // v2 E6 (ADR 0048): a repair that turns a range into a single date (or the reverse) is never one click.
+    if (plan.shapeChange && fix.confirmShapeChange !== true)
+      throw new ChronologyError(
+        'SHAPE_CHANGE_UNCONFIRMED',
+        `This fix would change the ${age.name} event “${plan.event?.name.slice(0, 80) ?? ''}”: ${plan.shapeChange} (the row says “${plan.row.dateText}”). Check that the row and the event are the same chronology event, then confirm the change. Nothing was proposed.`,
+        { shapeChange: plan.shapeChange, rowId: fix.rowId, eventId: plan.event?.id ?? null },
+      );
     return capture(actor, projectId, {
       tool: SYNC_TOOL,
       config: c,
       age,
       page,
       plan,
-      audit: { rowId: fix.rowId, action: plan.action },
+      audit: {
+        rowId: fix.rowId,
+        action: plan.action,
+        ...(plan.shapeChange ? { shapeChange: plan.shapeChange, confirmed: true } : {}),
+      },
     });
+  };
+
+  // ------------------------------------------------------------------------------------------ table-only marks
+
+  const ageNamed = (projectId: string, name: string): AgeConfig => {
+    const ready = readiness(projectId);
+    if (!ready.ok) throw new ChronologyError(ready.code, ready.message);
+    const age = ready.config.ages.find((a) => nameKey(a.name) === nameKey(name));
+    if (!age) throw new ChronologyError('AGE_NOT_FOUND', `No age of the chronology is named “${name}”.`);
+    return age;
+  };
+
+  const markTableOnly: Chronology['markTableOnly'] = async (actor, projectId, o) => {
+    const age = ageNamed(projectId, o.age);
+    const c = config(projectId);
+    const read = reader(projectId, 'P1', { n: 0 });
+    const list = (await read('listCalendars', {})) as { data?: Obj[] } | undefined;
+    const def = (list?.data ?? []).find((x) => x.id === c.calendarId);
+    if (!def)
+      throw new ChronologyError('CALENDAR_NOT_FOUND', `The calendar ${String(c.calendarId)} was not found.`);
+    const cal = remember(projectId, def);
+    const b = (await read('getDocumentBlocks', {
+      path: { resourceId: c.resourceId!, documentId: age.tableDocumentId },
+    })) as { blocks?: unknown[] } | undefined;
+    const t = readAgeTable(b?.blocks ?? [], cal.parser, c.style.date, c.columns);
+    const row = t?.rows.find((r) => r.id === o.rowId);
+    if (!row) throw new ChronologyError('ROW_NOT_FOUND', `The ${age.name} table has no row ${o.rowId}.`);
+    const before = store.tableOnlyMark(projectId, age.tableDocumentId, o.rowId);
+    const reason = o.reason?.trim() ? o.reason.trim().slice(0, 500) : null;
+    const mark = store.markTableOnly(projectId, {
+      tableDocumentId: age.tableDocumentId,
+      rowId: o.rowId,
+      age: age.name,
+      texts: { description: row.description, date: row.dateText, kcy: row.kcyText },
+      reason,
+      by: actor,
+    });
+    d.audit(
+      actor,
+      'chronology.table_only',
+      projectId,
+      before ? { age: age.name, rowId: o.rowId, tableOnly: true, date: before.texts.date } : null,
+      { age: age.name, rowId: o.rowId, tableOnly: true, date: row.dateText, reason },
+    );
+    return mark;
+  };
+
+  const unmarkTableOnly: Chronology['unmarkTableOnly'] = (actor, projectId, o) => {
+    const age = ageNamed(projectId, o.age);
+    const before = store.unmarkTableOnly(projectId, age.tableDocumentId, o.rowId);
+    if (!before)
+      throw new ChronologyError('NOT_FOUND', `The ${age.name} row ${o.rowId} is not marked table-only.`);
+    d.audit(
+      actor,
+      'chronology.table_only',
+      projectId,
+      { age: age.name, rowId: o.rowId, tableOnly: true, date: before.texts.date, reason: before.reason },
+      { age: age.name, rowId: o.rowId, tableOnly: false },
+    );
   };
 
   /**
@@ -877,6 +1012,8 @@ export function createChronology(d: ChronologyDeps): Chronology {
     resolve,
     check,
     proposeFix,
+    markTableOnly,
+    unmarkTableOnly,
     attach() {
       const offRecord = d.engine.registerRecordHandler(recordHandler, 'chronology');
       const checkers = chronologyCheckers((projectId) => calendar(projectId));

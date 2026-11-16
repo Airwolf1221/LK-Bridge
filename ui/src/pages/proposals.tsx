@@ -940,6 +940,7 @@ function OpView({ op, conflict }: { op: ProposalOp; conflict: ProposalDetail['co
           {op.version && <span className="muted small-text mono">captured at {op.version}</span>}
         </span>
       </div>
+      {op.label && op.label !== op.op && <p className="small-text">{op.label}</p>}
       {op.unsupportedLoss.length > 0 && (
         <p className="note note-bad" role="alert">
           This would remove {op.unsupportedLoss.length} block{op.unsupportedLoss.length === 1 ? '' : 's'} the

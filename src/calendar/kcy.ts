@@ -67,6 +67,44 @@ const CELL = new RegExp(
   'u',
 );
 
+/**
+ * v2 E6 (ADR 0048): the KCY cell of a qualified row, its words counted as text, never as errors: `1,250,870
+ * (approximate)`, `1,250,926 - 1,250,931`, `1,250,872 (year only)`, `1,250,937 onward`, `Unassigned - approximate
+ * date`. `text`: no number at all (an unassigned KCY is fine); `value`: one value or one range, with the words around
+ * it; `unclear`: more numbers than one value or range (not checked).
+ */
+export type QualifiedKcy =
+  | { readonly kind: 'text' }
+  | { readonly kind: 'value'; readonly start: number; readonly end: number | null; readonly words: string }
+  | { readonly kind: 'unclear' };
+
+const Q_NUM = String.raw`\d{1,3}(?:,\d{3})+|\d+`;
+// A minus sign only when it touches the number and starts the cell or follows a space or bracket (so the dash of
+// `Unassigned - 1,250,870` is never read as a sign).
+const Q_CORE = new RegExp(
+  String.raw`(?:(?<=^|[\s(])([-−–]))?(${Q_NUM})(?:\s*(?:[-–—]|to)\s*([-−–](?=\d))?(${Q_NUM}))?`,
+  'u',
+);
+
+export function readQualifiedKcy(text: string): QualifiedKcy {
+  const t = text.normalize('NFKC').replace(/\s+/g, ' ').trim();
+  if (!/\d/.test(t)) return { kind: 'text' };
+  const m = Q_CORE.exec(t);
+  if (!m) return { kind: 'unclear' };
+  const words = `${t.slice(0, m.index)} ${t.slice(m.index + m[0].length)}`.trim();
+  if (/\d/.test(words)) return { kind: 'unclear' };
+  const val = (sign: string | undefined, num: string) => {
+    const n = Number(num.replace(/,/g, ''));
+    return sign ? -n : n;
+  };
+  return {
+    kind: 'value',
+    start: val(m[1], m[2]!),
+    end: m[4] !== undefined ? val(m[3], m[4]) : null,
+    words,
+  };
+}
+
 /** Reads a KCY cell (`1,250,308`, `-1,988,119`, `1,250,407 - 1,250,409`), or null when it is not one. */
 export function parseKcyCell(text: string): KcyCell | null {
   const m = CELL.exec(text.normalize('NFKC'));

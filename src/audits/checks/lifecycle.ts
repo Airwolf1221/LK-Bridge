@@ -314,6 +314,9 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
       (f.kind === 'row_without_event' || f.kind === 'date_mismatch') && typeof d.rowId === 'string';
     // v2 E5 hotfix: a count mismatch has a fix when the Main table has a row for the age (it has a count to set).
     const countFixable = f.kind === 'count_mismatch' && typeof d.main === 'string';
+    // v2 E6 (ADR 0048): an event without a row has one too: the event deleted (only the event).
+    const orphanFixable = f.kind === 'event_without_row' && typeof d.eventId === 'string';
+    const shape = typeof d.shapeChange === 'string' ? d.shapeChange : null;
     out.push({
       code,
       key: `${f.age}:${f.kind}:${id}:${f.kind === 'count_mismatch' ? '' : str(d.cell) || str(d.date)}`,
@@ -327,7 +330,10 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
             fix: {
               kind: 'chronology_sync' as const,
               args: { age: f.age, rowId: d.rowId },
-              summary: `Propose sync_timeline_event for the ${f.age} row.`,
+              summary: shape
+                ? `Propose sync_timeline_event for the ${f.age} row (${shape}: needs your confirmation).`
+                : `Propose sync_timeline_event for the ${f.age} row.`,
+              ...(shape ? { confirm: { shapeChange: shape } } : {}),
             },
           }
         : countFixable
@@ -338,7 +344,15 @@ export function chronologyCheck(ctx: AuditContext): FindingDraft[] {
                 summary: `Propose setting the ${f.age} count on the Main table to its table's row count.`,
               },
             }
-          : {}),
+          : orphanFixable
+            ? {
+                fix: {
+                  kind: 'chronology_orphan' as const,
+                  args: { age: f.age, eventId: d.eventId },
+                  summary: `Propose deleting the ${f.age} timeline event, which has no table row (only the event).`,
+                },
+              }
+            : {}),
     });
   }
   return out;

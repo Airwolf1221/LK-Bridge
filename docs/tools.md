@@ -1095,14 +1095,14 @@ that timeline's one lane and its Main row, plus how the tables write dates and K
 then, or when a confirmed document has gone, been renamed or changed type, the four event tools refuse with
 `CHRONOLOGY_NOT_CONFIGURED` or `CHRONOLOGY_CHANGED`.
 
-| Tool                    | Access | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| ----------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `calendar_date`         | R      | `date` (any accepted form, in either style), `minutes` (with `detail`, `endMinutes`) or `kcy`: the form, shape and detail, minutes, KCY (and its table text), the age, and the date's text in **both styles** (`formatted`: LegendKeeper's, no thousands separator in a year; `tableFormatted`: the table's); or exactly why the date is refused. No request while the calendar is cached.                                                                                                                                                                                                 |
-| `create_timeline_event` | W      | `date`, `name` (timeline), `description` (table; text or `{ markdown }`), optional `age` (to confirm the date's). One job: the row in calendar order, the event (exact minutes, detail, the age's lane, `uri` to the age's table), the count +1. An identical row is refused.                                                                                                                                                                                                                                                                                                              |
-| `update_timeline_event` | W      | `event` (its date with its description or name, or `row_id` / `event_id`), and a new `date`, `name` and/or `description`. Another age moves the row and the event and adjusts both counts. Refused when the row and its event have drifted apart.                                                                                                                                                                                                                                                                                                                                          |
-| `delete_timeline_event` | W      | `event`, `confirm: true`. Removes the row and the event, count −1; the journal keeps both.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `sync_timeline_event`   | W      | `row` (its `date` with its `description`, or its `row_id` with its `age`), optional `event_id` (to choose among candidates), `name`. Repairs the timeline for ONE row, **the table being the authority**: creates the row's event if it is missing (minutes, detail, an end for a range, the age's lane, `uri` to the age's table), or corrects the paired event's minutes, `detail`, shape and `uri` to match the row. Never touches the table or the Main count, never renames an event. A row whose event agrees: `nothing_to_do`. An ambiguous pairing is refused with the candidates. |
-| `create_timeline_lane`  | W      | `page`, `document` (a timeline), `name`, `size`, `color`. Touches only that timeline; refused on the chronology's age timelines (exactly one lane each by design).                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Tool                    | Access | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `calendar_date`         | R      | `date` (any accepted form, in either style), `minutes` (with `detail`, `endMinutes`) or `kcy`: the form, shape and detail, minutes, KCY (and its table text), the age, and the date's text in **both styles** (`formatted`: LegendKeeper's, no thousands separator in a year; `tableFormatted`: the table's); or exactly why the date is refused. No request while the calendar is cached.                                                                                                                                                                                                                                                                                                                                                                                 |
+| `create_timeline_event` | W      | `date`, `name` (timeline), `description` (table; text or `{ markdown }`), optional `age` (to confirm the date's). One job: the row in calendar order, the event (exact minutes, detail, the age's lane, `uri` to the age's table), the count +1. An identical row is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `update_timeline_event` | W      | `event` (its date with its description or name, or `row_id` / `event_id`), and a new `date`, `name` and/or `description`. Another age moves the row and the event and adjusts both counts. Refused when the row and its event have drifted apart.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `delete_timeline_event` | W      | `event`, `confirm: true`. Removes the row and the event, count −1; the journal keeps both. v2 E6: with `orphan: true` and `event.event_id` (and `age`), deletes ONLY a timeline event that has no table row: no row, no count change (refused with `EVENT_HAS_ROW` or `PAIRING_AMBIGUOUS`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `sync_timeline_event`   | W      | `row` (its `date` with its `description`, or its `row_id` with its `age`), optional `event_id` (to choose among candidates), `name`. Repairs the timeline for ONE row, **the table being the authority**: creates the row's event if it is missing (minutes, detail, an end for a range, the age's lane, `uri` to the age's table), or corrects the paired event's minutes, `detail`, shape and `uri` to match the row. Never touches the table or the Main count, never renames an event. A row whose event agrees: `nothing_to_do`. An ambiguous pairing is refused with the candidates. v2 E6: a qualified row's event takes its anchor; a repair that turns a range into a single date or the reverse needs `confirm_shape_change: true`; a table-only row is refused. |
+| `create_timeline_lane`  | W      | `page`, `document` (a timeline), `name`, `size`, `color`. Touches only that timeline; refused on the chronology's age timelines (exactly one lane each by design).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 All five W tools take `dryRun`, `operation_id` (C2b's) and `project`, and under `propose` give ONE proposal whose page
 shows the change as a Markdown diff of the rows, the count and the event.
@@ -1142,6 +1142,25 @@ single-day event, another year, a missing `uri`). This tool repairs ONE such row
 - **Nothing to do**: a row whose event already agrees answers `status: "nothing_to_do"` and writes nothing.
 - It is an ordinary edit (not canon); a job at scope `write`, ONE proposal at `propose`. The dashboard's **Propose a fix**
   on each such finding makes that proposal for the owner to approve ([dashboard.md](dashboard.md#chronology-v2-d1)).
+- **Chronology II** (v2 E6, [ADR 0048](adr/0048-chronology-ii.md)). A **qualified** row (`c. 4A 563; exact date
+unresolved`, `After Isar 6th and before Zarzakh 29th, 4A 610; …`) is read by its anchor
+  ([chronology.md](chronology.md)): its event takes the anchor's minutes and precision (a year, a month, a range, or
+  one point at the known bound of an open date) and its name is the row's opening words, then `–` and the Date cell as
+  written; the cell is never rewritten. The row can be named by its Date cell as the table shows it. **Pairing** is
+  scored: links, the same date (with the name, then alone), then for a row and an event that disagree the same start
+  and end, the same start and shape, the name, the same start; a candidate is taken only when it is the single best on
+  both sides, and a one-day row never takes a range event while a range row starts at the same minute (and the
+  reverse). The answer's `pairedBy` says how. A repair that turns a range into a single date or the reverse
+  (`shapeChange`: `range → single day`) is refused (`SHAPE_CHANGE_UNCONFIRMED`) until repeated with
+  `confirm_shape_change: true`; a dry run shows it. A row the owner marked table-only is refused (`ROW_TABLE_ONLY`).
+
+**`delete_timeline_event` with `orphan: true`** (v2 E6). The check's `event_without_row`: a timeline event no row of its
+age's table accounts for. `{ event: { event_id, age? }, orphan: true, confirm: true }` deletes only that event, never a
+row and never the Main count (the count is the table's row count); without `age` every age's timeline is searched. It
+is refused when the event is paired with a row after all (`EVENT_HAS_ROW`: delete both without `orphan`, or repair a
+mismatch with `sync_timeline_event`) or when an unpaired row could be its own (`PAIRING_AMBIGUOUS`, with the
+candidates). The answer (and `dryRun`) names the event, its date and the three rows nearest it by date. Inside the lock
+the table must still have no row for it, and the event must be as read; the journal keeps the event.
 
 **Calendar order** in a table: by year; within a year the dated rows by their start (a range by its start), then the
 year-only rows (and year ranges); a new row goes after the existing rows of the same date. The place and the new count
@@ -1150,6 +1169,7 @@ proposals for one age all land correctly.
 
 **Refusals** besides the date's: `AGE_MISMATCH`, `AGE_NOT_CONFIGURED`, `DUPLICATE_EVENT`, `EVENT_NOT_FOUND`,
 `EVENT_AMBIGUOUS`, `PAIRING_AMBIGUOUS`, `EVENT_TAKEN`, `EVENT_MISMATCH`, `ROW_MISMATCH`, `ROW_DATE_UNREADABLE`,
+`SHAPE_CHANGE_UNCONFIRMED`, `ROW_TABLE_ONLY`, `EVENT_HAS_ROW` (v2 E6),
 `CHRONOLOGY_DRIFT` (repaired by `sync_timeline_event`), `CHRONOLOGY_INCOMPLETE` (another change of the age stopped part-way),
 `CHRONOLOGY_IN_PROGRESS`, `CHRONOLOGY_RESUME_CONFLICT`, `CHRONOLOGY_TIMELINE` and `LANE_EXISTS`.
 
@@ -1162,21 +1182,25 @@ option (a)); only deleting a whole timeline document of an Authoritative page is
 
 ### Costs (reads and writes, measured against the mock)
 
-| Call                                   | Reads | Writes |
-| -------------------------------------- | ----- | ------ |
-| `calendar_date` (calendar cached)      | 0     | 0      |
-| `create_timeline_event`                | 10    | 3      |
-| `update_timeline_event`, same age      | 9     | 3      |
-| `update_timeline_event`, another age   | 18    | 6      |
-| `delete_timeline_event`                | 12    | 3      |
-| `sync_timeline_event`, a missing event | 7     | 1      |
-| `sync_timeline_event`, a correction    | 6     | 1      |
-| `create_timeline_lane`                 | 2     | 1      |
+| Call                                    | Reads | Writes |
+| --------------------------------------- | ----- | ------ |
+| `calendar_date` (calendar cached)       | 0     | 0      |
+| `create_timeline_event`                 | 10    | 3      |
+| `update_timeline_event`, same age       | 9     | 3      |
+| `update_timeline_event`, another age    | 18    | 6      |
+| `delete_timeline_event`                 | 12    | 3      |
+| `sync_timeline_event`, a missing event  | 7     | 1      |
+| `sync_timeline_event`, a correction     | 6     | 1      |
+| `delete_timeline_event`, `orphan: true` | 8     | 1      |
+| `create_timeline_lane`                  | 2     | 1      |
 
 `sync_timeline_event` reads 3 to plan (the calendar, the table, one page of 100 events), then in the lock the table, the
 event (and, for a new event, the lane) and 1 to verify; a proposal made from the dashboard costs the 3 planning reads
 only. Add one read per 100 events of the age's timeline when an event is found by its row (update and delete). A dry run
-costs the planning reads only (3 to 5).
+costs the planning reads only (3 to 5). `orphan: true` reads 3 to plan (the calendar, one page of events per 100, the
+table; one more page per age searched when no `age` is given), then the table and the event in the lock, the event's
+journal pre-image, and 1 to verify. Since E1a every timeline write is followed by its change snapshot's re-read of the
+timeline (3 reads and 1 per 100 events), not counted above.
 
 ## Maps (v2 D2)
 

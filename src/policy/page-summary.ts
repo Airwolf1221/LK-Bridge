@@ -99,6 +99,11 @@ export function buildPageSummary(
   ops: readonly { readonly op: string; readonly params: OpParams }[],
   operations: readonly Readonly<Record<string, unknown>>[] | undefined,
   nameOf: (resourceId: string) => string | null,
+  /**
+   * v2 E6 (ADR 0048): a low-level operation named at capture (`event “X” (date) deleted in “Doc”`), by its index in
+   * `ops`; null where it could not be named. Up to five per page are listed; the rest are counted as before.
+   */
+  named?: readonly (string | null)[],
 ): PageSummaryEntry[] {
   const groups = new Map<string, Group>();
   const group = (resourceId: string | null, name?: string, isNew = false): Group => {
@@ -131,7 +136,8 @@ export function buildPageSummary(
     if (summaryLabel !== undefined && g.label === undefined) g.label = summaryLabel;
     described.add(id);
   }
-  for (const { op, params } of ops) {
+  const namedParts = new Map<string, number>();
+  for (const [i, { op, params }] of ops.entries()) {
     if (isInternalStep(op)) continue;
     const body = isObj(params.body) ? params.body : {};
     if (op === 'createResource' || op === 'createResourceFromTemplate') {
@@ -154,6 +160,13 @@ export function buildPageSummary(
     const rid = str(params.path?.resourceId) ?? null;
     if (rid && described.has(rid)) continue;
     const g = group(rid);
+    const part = named?.[i] ?? null;
+    const shown = namedParts.get(g.resourceId ?? '@project') ?? 0;
+    if (part !== null && shown < 5) {
+      namedParts.set(g.resourceId ?? '@project', shown + 1);
+      if (!g.parts.includes(part)) g.parts.push(part);
+      continue;
+    }
     const effect = effectOf(op);
     if (/Property/.test(op) && !/Block/.test(op)) g.sidebar = true;
     g.counts.set(effect, (g.counts.get(effect) ?? 0) + 1);

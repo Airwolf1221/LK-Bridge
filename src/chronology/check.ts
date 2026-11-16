@@ -14,9 +14,15 @@
  * - event `uri`s that do not point at their age's table;
  * - dates the engine cannot read.
  */
-import { formatKcy, parseKcyCell, type Calendar } from '../calendar/index.js';
+import {
+  describeReading,
+  formatKcy,
+  parseKcyCell,
+  readQualifiedKcy,
+  type Calendar,
+} from '../calendar/index.js';
 import type { AgeConfig, ChronologyConfig } from './settings.js';
-import type { CheckFinding, ChronologyLink } from './store.js';
+import { currentTableOnly, type CheckFinding, type ChronologyLink, type TableOnlyMark } from './store.js';
 import { outOfOrder, readAgeTable, readMainTable, sameDate, type AgeRow, type AgeTable } from './table.js';
 
 type Obj = Record<string, unknown>;
@@ -84,15 +90,31 @@ export async function readEvents(
 
 const normText = (s: string) => s.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
 
-/** An event's name and a row's description name the same event: equal, or the name is the description cut short (… or ...). */
+/**
+ * An event's name and a row's description name the same event: equal, or the name is the description cut short (… or
+ * ...). v2 E6 (ADR 0048): a qualified row's event carries the row's Date cell after its opening words
+ * (`<opening words> – <Date cell>`); that tail is not part of the name's comparison.
+ */
 export function namesMatch(name: string, description: string): boolean {
-  const n = normText(name);
   const d = normText(description);
-  if (n === '' || d === '') return false;
-  if (n === d) return true;
-  const cut = n.replace(/(\.\.\.|…)$/, '').trim();
-  return cut !== n && cut.length > 0 && d.startsWith(cut);
+  const full = normText(name);
+  if (full === '' || d === '') return false;
+  const names = [full];
+  for (
+    let at = full.indexOf(QUALIFIED_NAME_SEPARATOR);
+    at > 0;
+    at = full.indexOf(QUALIFIED_NAME_SEPARATOR, at + 1)
+  )
+    names.push(full.slice(0, at).trim());
+  return names.some((n) => {
+    if (n === d) return true;
+    const cut = n.replace(/(\.\.\.|…)$/, '').trim();
+    return cut !== n && cut.length > 0 && d.startsWith(cut);
+  });
 }
+
+/** v2 E6 (ADR 0048): between a qualified row's event name and its Date cell (`<opening words> – <Date cell>`). */
+export const QUALIFIED_NAME_SEPARATOR = ' – ';
 
 /** An event's `uri` points at a table document (either accepted form). */
 export function uriPointsAt(uri: string | null, resourceId: string, documentId: string): boolean {
@@ -117,18 +139,27 @@ export interface RowEventPair {
   readonly how: PairHow;
 }
 
+/** How a row and an event that disagree about the date were found to be the same chronology event. */
+export type MismatchBy =
+  /** The bridge linked them. */
+  | 'link'
+  /** The same start and the same end (both ranges); only the precision differs. */
+  | 'start+end'
+  /** The same start and a compatible shape (both ranges, or both single dates); the end or precision differs. */
+  | 'start+shape'
+  /** The event's name is the row's description (or its start cut short). */
+  | 'name'
+  /** The same start, one a range and the other a single date. */
+  | 'start';
+
 /**
  * A row and an event that are the same chronology event but disagree about its date or shape (the row says a range and
- * the event a single day, or another year): paired by name, or by the same start, when no other candidate is possible.
+ * the event a single day, or another year), found by the scored pass of `matchRowsAndEvents`.
  */
 export interface DateMismatch {
   readonly row: AgeRow;
   readonly event: TimelineEvent;
-  /**
-   * `link`: the bridge linked them; `name`: the event's name is the row's description (or its start cut short);
-   * `start`: they begin at the same minute.
-   */
-  readonly by: 'link' | 'name' | 'start';
+  readonly by: MismatchBy;
 }
 
 export interface Pairing {
@@ -138,30 +169,52 @@ export interface Pairing {
   /** Rows and events left over, with no counterpart even by name or start (or with several: ambiguous). */
   readonly rows: AgeRow[];
   readonly events: TimelineEvent[];
+  /** v2 E6 (ADR 0048): rows the owner marked table-only (their text unchanged since): never paired, never reported. */
+  readonly tableOnly: AgeRow[];
 }
 
-const dateOfEvent = (e: TimelineEvent) => ({ start: e.start, end: e.end, detail: e.detail as 1 | 2 | 3 });
+export const dateOfEvent = (e: TimelineEvent) => ({
+  start: e.start,
+  end: e.end,
+  detail: e.detail as 1 | 2 | 3,
+});
+
+/** A single date or a range: what a range row must not lose to a single-day event, and the reverse. */
+const shapeOf = (d: { end: number | null }) => (d.end !== null ? 'range' : 'single');
 
 /**
- * Pairs rows and events one to one, in four passes (each uses only what the earlier ones left):
+ * Scores of the last pass (higher first). A name match adds to a date match; a range row against a single-date event
+ * (or the reverse) is the weakest evidence, and is barred while a row of the event's own shape starts there.
+ */
+const SCORE = { 'start+end': 8, 'start+shape': 4, name: 2, start: 1 } as const;
+
+/**
+ * Pairs rows and events one to one (each pass uses only what the earlier ones left). A row is compared by its
+ * `eventDate`: its plain date, or the anchor of its qualified date (ADR 0048).
  *
  * 1. the bridge's own links (a linked pair that disagrees about the date is a date mismatch, not a pair);
  * 2. the same date and the event's name is the row's description (or its start cut short);
  * 3. the same date alone, where a row and an event are the only two on that date (or equally many of each): the
  *    timeline's short name differs from the table's description by design, so wording alone is not a difference;
- * 4. the same chronology event with a different date (the table row and the event name each other, or begin at the same
- *    minute, with no other candidate on either side): reported as a date mismatch.
+ * 4. v2 E6: the same chronology event with a different date, by score: the same start and end (a range against a
+ *    range) first, then the same start with a compatible shape, then the name, then the same start alone. A candidate
+ *    is taken only when it is the one best candidate on both sides; a tie stays unpaired, never guessed. A row with a
+ *    single date never takes a range event while a range row of the age starts at the same minute (and the reverse):
+ *    the Divan Heirage case of the Fourth Age (16 November 2026).
  *
- * What is left over is reported as rows without an event and events without a row.
+ * Rows the owner marked table-only (`tableOnly`, by row id) take no part. What is left over is reported as rows without
+ * an event and events without a row.
  */
 export function matchRowsAndEvents(
   rows: readonly AgeRow[],
   events: readonly TimelineEvent[],
   links: readonly ChronologyLink[],
   age: AgeConfig,
+  opts: { readonly tableOnly?: ReadonlySet<string> } = {},
 ): Pairing {
   const pairs: RowEventPair[] = [];
-  const freeRows = new Set(rows);
+  const tableOnly = rows.filter((r) => r.id !== null && opts.tableOnly?.has(r.id) === true);
+  const freeRows = new Set(rows.filter((r) => !tableOnly.includes(r)));
   const freeEvents = new Set(events);
   const byEvent = new Map(events.map((e) => [e.id, e]));
   const mismatches: DateMismatch[] = [];
@@ -177,16 +230,16 @@ export function matchRowsAndEvents(
     const ev = byEvent.get(l.eventId);
     if (!row || !ev || !freeRows.has(row) || !freeEvents.has(ev)) continue;
     // A link says which event is the row's; it does not say they agree about the date.
-    if (row.date && !sameDate(dateOfEvent(ev), row.date)) {
+    if (row.eventDate && !sameDate(dateOfEvent(ev), row.eventDate)) {
       mismatches.push({ row, event: ev, by: 'link' });
       freeRows.delete(row);
       freeEvents.delete(ev);
     } else take(row, ev, 'link');
   }
   for (const row of [...freeRows]) {
-    if (!row.date) continue;
+    if (!row.eventDate) continue;
     const hit = [...freeEvents].find(
-      (e) => sameDate(dateOfEvent(e), row.date!) && namesMatch(e.name, row.description),
+      (e) => sameDate(dateOfEvent(e), row.eventDate!) && namesMatch(e.name, row.description),
     );
     if (hit) take(row, hit, 'date+name');
   }
@@ -195,8 +248,8 @@ export function matchRowsAndEvents(
     `${d.start}|${d.end ?? ''}|${d.detail}`;
   const rowsByDate = new Map<string, AgeRow[]>();
   for (const r of freeRows) {
-    if (!r.date) continue;
-    const k = key(r.date);
+    if (!r.eventDate) continue;
+    const k = key(r.eventDate);
     rowsByDate.set(k, [...(rowsByDate.get(k) ?? []), r]);
   }
   const eventsByDate = new Map<string, TimelineEvent[]>();
@@ -209,21 +262,54 @@ export function matchRowsAndEvents(
     if (!es || es.length !== rs.length) continue;
     rs.forEach((r, i) => take(r, es[i]!, 'date'));
   }
-  // Pass 4: the same chronology event with a different date.
-  const related = (r: AgeRow, e: TimelineEvent): 'name' | 'start' | null =>
-    namesMatch(e.name, r.description) ? 'name' : r.date && r.date.start === e.start ? 'start' : null;
-  const leftRows = [...freeRows].filter((r) => r.date);
-  for (const r of leftRows) {
-    const cands = [...freeEvents].filter((e) => related(r, e) !== null);
-    if (cands.length !== 1) continue;
-    const e = cands[0]!;
-    const back = leftRows.filter((x) => related(x, e) !== null);
-    if (back.length !== 1) continue;
-    mismatches.push({ row: r, event: e, by: related(r, e)! });
-    freeRows.delete(r);
-    freeEvents.delete(e);
+  // Pass 4: the same chronology event with a different date, by score. Every row of the age is a possible rival for
+  // the shape guard, a table-only one too: its event is still more likely its own than another shape's row's.
+  const shapesAt = new Map<number, AgeRow[]>();
+  for (const r of rows) {
+    if (!r.eventDate) continue;
+    shapesAt.set(r.eventDate.start, [...(shapesAt.get(r.eventDate.start) ?? []), r]);
   }
-  return { pairs, mismatches, rows: [...freeRows], events: [...freeEvents] };
+  const score = (r: AgeRow, e: TimelineEvent): { s: number; by: MismatchBy } | null => {
+    const rd = r.eventDate!;
+    const ed = dateOfEvent(e);
+    if (sameDate(rd, ed)) return null; // the same date: pass 3's to settle, or ambiguous
+    const name = namesMatch(e.name, r.description);
+    const sameStart = rd.start === ed.start;
+    const compatible = shapeOf(rd) === shapeOf(ed);
+    let by: MismatchBy | null = null;
+    if (sameStart && compatible) by = rd.end !== null && rd.end === ed.end ? 'start+end' : 'start+shape';
+    else if (sameStart) {
+      // A single-date row never takes a range event while a range row starts there (and the reverse).
+      const rival = (shapesAt.get(rd.start) ?? []).some(
+        (x) => x !== r && shapeOf(x.eventDate!) === shapeOf(ed),
+      );
+      if (rival) return null;
+      by = name ? 'name' : 'start';
+    } else if (name) by = 'name';
+    if (by === null) return null;
+    return { s: SCORE[by] + (name && by !== 'name' ? SCORE.name : 0), by };
+  };
+  const cands: { r: AgeRow; e: TimelineEvent; s: number; by: MismatchBy }[] = [];
+  for (const r of freeRows) {
+    if (!r.eventDate) continue;
+    for (const e of freeEvents) {
+      const sc = score(r, e);
+      if (sc) cands.push({ r, e, ...sc });
+    }
+  }
+  for (const level of [...new Set(cands.map((c) => c.s))].sort((a, b) => b - a)) {
+    for (const c of cands) {
+      if (c.s !== level || !freeRows.has(c.r) || !freeEvents.has(c.e)) continue;
+      // The one best candidate on both sides (a candidate as good or better that is still free makes it a tie).
+      const forRow = cands.filter((x) => x.r === c.r && x.s >= level && freeEvents.has(x.e));
+      const forEvent = cands.filter((x) => x.e === c.e && x.s >= level && freeRows.has(x.r));
+      if (forRow.length !== 1 || forEvent.length !== 1) continue;
+      mismatches.push({ row: c.r, event: c.e, by: c.by });
+      freeRows.delete(c.r);
+      freeEvents.delete(c.e);
+    }
+  }
+  return { pairs, mismatches, rows: [...freeRows], events: [...freeEvents], tableOnly };
 }
 
 /**
@@ -252,12 +338,59 @@ export interface CheckReport {
 
 const MAX_PER_KIND = 200;
 
+/** A row's opening words, for naming it in a proposal or a finding (the whole text when short). */
+export function openingWords(description: string, words = 10): string {
+  const t = description.replace(/\s+/g, ' ').trim();
+  const parts = t.split(' ');
+  if (parts.length <= words && t.length <= 90) return t;
+  const cut = parts.slice(0, words).join(' ');
+  return `${cut.length > 90 ? cut.slice(0, 89).trimEnd() : cut}…`;
+}
+
+/**
+ * v2 E6 (ADR 0048): the rows nearest a date (by their event date), up to `n`, nearest first: a range that holds the
+ * date is nearest of all; otherwise the distance to the row's start or end, whichever is closer.
+ */
+export function nearestRows(
+  rows: readonly AgeRow[],
+  start: number,
+  n = 3,
+): { rowId: string | null; date: string; words: string }[] {
+  const distance = (d: { start: number; end: number | null }) =>
+    d.end !== null && d.start <= start && start <= d.end
+      ? 0
+      : Math.min(Math.abs(d.start - start), d.end !== null ? Math.abs(d.end - start) : Infinity);
+  return rows
+    .filter((r) => r.eventDate !== null)
+    .map((r) => ({ r, d: distance(r.eventDate!) }))
+    .sort((a, b) => a.d - b.d || a.r.index - b.r.index)
+    .slice(0, n)
+    .map(({ r }) => ({ rowId: r.id, date: r.dateText, words: openingWords(r.description) }));
+}
+
+const unit = (detail: number) => (detail === 1 ? 'year' : detail === 2 ? 'month' : 'day');
+
+/**
+ * v2 E6 (ADR 0048): what a repair from the row would do to the event's shape, in plain words (`range → single day`,
+ * `single day → range`), or null when the shape stays.
+ */
+export function shapeChange(
+  event: { readonly end: number | null; readonly detail: number },
+  row: { readonly end: number | null; readonly detail: number },
+): string | null {
+  if (event.end !== null && row.end === null) return `range → single ${unit(row.detail)}`;
+  if (event.end === null && row.end !== null) return `single ${unit(event.detail)} → range`;
+  return null;
+}
+
 export async function runCheck(o: {
   readonly projectId: string;
   readonly config: ChronologyConfig;
   readonly calendar: Calendar;
   readonly read: CheckReader;
   readonly links: readonly ChronologyLink[];
+  /** v2 E6 (ADR 0048): the owner's table-only marks (each holds while its row is unchanged). */
+  readonly tableOnly?: readonly TableOnlyMark[];
 }): Promise<CheckReport> {
   const c = o.config;
   const resourceId = c.resourceId!;
@@ -286,9 +419,35 @@ export async function runCheck(o: {
     const events = (await readEvents(o.read, resourceId, age.timelineDocumentId)).filter(
       (e) => e.laneId === age.laneId,
     );
+    // v2 E6 (ADR 0048): rows the owner marked table-only are hidden while their cells are unchanged.
+    const marks = currentTableOnly(
+      t.rows,
+      (o.tableOnly ?? []).filter((m) => m.tableDocumentId === age.tableDocumentId),
+    );
+    const hidden = (r: AgeRow) => r.id !== null && marks.current.has(r.id);
+    let qualified = 0;
+    let unreadable = 0;
     // Dates the engine cannot read, and cells written differently from the confirmed style.
     for (const r of t.rows) {
+      if (hidden(r)) continue;
+      if (r.reading) {
+        // A qualified date: read by its anchor, never rewritten. Its qualifier words (in the Date and KCY cells) are
+        // text, not errors; the KCY is checked where one is computable (not for an open bound).
+        qualified++;
+        if (r.reading.openStart || r.reading.openEnd) continue;
+        const k = readQualifiedKcy(r.kcyText);
+        const want = r.reading.date.kcy;
+        if (k.kind === 'value' && (k.start !== want.start || (k.end ?? k.start) !== (want.end ?? want.start)))
+          add({
+            kind: 'wrong_kcy',
+            age: age.name,
+            message: `KCY “${r.kcyText}” for “${r.dateText}” (read as ${describeReading(r.reading)}) should be ${formatKcy(want, c.style.kcy)} (row ${r.index + 1}; its words are not checked).`,
+            detail: { rowId: r.id, cell: r.kcyText, engine: formatKcy(want, c.style.kcy), date: r.dateText },
+          });
+        continue;
+      }
       if (!r.date) {
+        unreadable++;
         add({
           kind: 'unreadable_date',
           age: age.name,
@@ -323,6 +482,7 @@ export async function runCheck(o: {
       }
     }
     for (const x of outOfOrder(t.rows)) {
+      if (hidden(x.row)) continue;
       add({
         kind: 'row_out_of_order',
         age: age.name,
@@ -330,39 +490,56 @@ export async function runCheck(o: {
         detail: { rowId: x.row.id, after: x.after.id },
       });
     }
-    const paired = matchRowsAndEvents(t.rows, events, o.links, age);
+    const paired = matchRowsAndEvents(t.rows, events, o.links, age, { tableOnly: marks.current });
     for (const m of paired.mismatches) {
-      const rowDate = m.row.date!;
+      const rowDate = m.row.eventDate!;
+      const change = shapeChange(m.event, rowDate);
       add({
         kind: 'date_mismatch',
         age: age.name,
         message:
           `Row ${m.row.index + 1} (“${m.row.dateText}”, ${m.row.description.slice(0, 80)}) and the timeline event ` +
-          `“${m.event.name.slice(0, 80)}” are the same event but disagree about its date: the row says ` +
+          `“${m.event.name.slice(0, 80)}” are the same event (paired by ${m.by}) but disagree about its date: the row says ` +
           `${rowDate.end !== null ? 'a range' : 'one date'} (${rowDate.formatted}), the event ` +
-          `${m.event.end !== null ? 'a range' : 'one date'} (${eventText(m.event)}). The table is the authority.`,
+          `${m.event.end !== null ? 'a range' : 'one date'} (${eventText(m.event)}). The table is the authority.` +
+          (change ? ` A fix would change the event: ${change}.` : ''),
         detail: {
           rowId: m.row.id,
           eventId: m.event.id,
           rowDate: m.row.dateText,
           eventDate: eventText(m.event),
           pairedBy: m.by,
+          ...(change ? { shapeChange: change } : {}),
+          ...(m.row.reading ? { reading: describeReading(m.row.reading) } : {}),
         },
       });
     }
-    for (const r of paired.rows)
+    for (const r of paired.rows) {
+      // A row whose date cannot be read is reported once, as unreadable; a qualified row's event is now fixable.
+      if (!r.eventDate) continue;
       add({
         kind: 'row_without_event',
         age: age.name,
         message: `Row ${r.index + 1} (“${r.dateText}”, ${r.description.slice(0, 80)}) has no timeline event.`,
-        detail: { rowId: r.id, date: r.dateText },
+        detail: {
+          rowId: r.id,
+          date: r.dateText,
+          ...(r.reading ? { reading: describeReading(r.reading) } : {}),
+        },
       });
+    }
     for (const e of paired.events)
       add({
         kind: 'event_without_row',
         age: age.name,
-        message: `Event “${e.name.slice(0, 80)}” (${e.formattedStart ?? e.start}) has no table row.`,
-        detail: { eventId: e.id, start: e.start },
+        message: `Event “${e.name.slice(0, 80)}” (${eventText(e)}) has no table row.`,
+        detail: {
+          eventId: e.id,
+          start: e.start,
+          name: e.name.slice(0, 200),
+          date: eventText(e),
+          nearest: nearestRows(t.rows, e.start),
+        },
       });
     for (const e of events)
       if (!uriPointsAt(e.uri, resourceId, age.tableDocumentId))
@@ -382,7 +559,38 @@ export async function runCheck(o: {
           : `The Main table has no row ${age.mainRowId} for ${age.name}.`,
         detail: { main: row?.countText ?? null, rows: t.rows.length, events: events.length },
       });
-    ages.push({ age: age.name, rows: t.rows.length, events: events.length, count: row?.countText ?? null });
+    // v2 E6 (ADR 0048): how each pair was made (the Chronology page shows it), and how the dates were read.
+    const pairedBy: Record<string, number> = {};
+    for (const p of paired.pairs) pairedBy[p.how] = (pairedBy[p.how] ?? 0) + 1;
+    for (const m of paired.mismatches) pairedBy[`mismatch:${m.by}`] = (pairedBy[`mismatch:${m.by}`] ?? 0) + 1;
+    ages.push({
+      age: age.name,
+      rows: t.rows.length,
+      events: events.length,
+      count: row?.countText ?? null,
+      dates: { qualified, unreadable, tableOnly: marks.current.size },
+      ...(marks.lapsed.length > 0
+        ? { tableOnlyLapsed: marks.lapsed.map((m) => ({ rowId: m.rowId, date: m.texts.date })) }
+        : {}),
+      pairedBy,
+      pairs: [
+        ...paired.pairs.map((p) => ({
+          rowId: p.row.id,
+          eventId: p.event.id,
+          by: p.how,
+          date: p.row.dateText.slice(0, 60),
+          ...(p.row.reading ? { qualified: true } : {}),
+        })),
+        ...paired.mismatches.map((m) => ({
+          rowId: m.row.id,
+          eventId: m.event.id,
+          by: m.by,
+          mismatch: true,
+          date: m.row.dateText.slice(0, 60),
+          ...(m.row.reading ? { qualified: true } : {}),
+        })),
+      ],
+    });
   }
   const summary =
     findings.length === 0

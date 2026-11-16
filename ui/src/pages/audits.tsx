@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { api, qs } from '../api';
-import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction } from '../components';
+import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { fmtAgo, fmtDuration, fmtInt, fmtTime } from '../format';
 import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
@@ -542,12 +542,32 @@ function FindingRow({
   hidePage: boolean;
 }) {
   const { run, busy } = useAction();
+  const confirm = useConfirm();
   const [reason, setReason] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const colspan = hidePage ? 4 : 5;
-  const propose = () =>
+  const propose = async () => {
+    // v2 E6 (ADR 0048): a chronology repair that turns a range into a single date (or the reverse) is never one click.
+    const shape = f.fix?.confirm?.shapeChange;
+    if (shape) {
+      const yes = await confirm({
+        title: 'This fix changes the event’s shape',
+        message: (
+          <p>
+            The timeline event would change: <strong>{shape}</strong>. Check that the row and the event are
+            the same chronology event before you propose it.
+          </p>
+        ),
+        confirmLabel: 'Propose the change',
+      });
+      if (!yes) return;
+    }
     void run(() =>
-      api.post<AuditProposeFixResponse>(`/audits/findings/${f.id}/propose-fix`, { confirm: true, project }),
+      api.post<AuditProposeFixResponse>(`/audits/findings/${f.id}/propose-fix`, {
+        confirm: true,
+        project,
+        ...(shape ? { confirmShapeChange: true } : {}),
+      }),
     ).then((r) => {
       if (!r) return;
       setNote(
@@ -556,6 +576,7 @@ function FindingRow({
           : r.message,
       );
     });
+  };
   const recheck = () =>
     void run(() =>
       api.post<AuditRecheckResponse>(`/audits/findings/${f.id}/recheck`, { confirm: true, project }),
@@ -640,11 +661,14 @@ function FindingRow({
                 className="small"
                 busy={busy}
                 disabled={!project}
-                onClick={propose}
+                onClick={() => void propose()}
                 title={f.fix.summary}
               >
                 Propose a fix
               </Button>
+            )}
+            {f.state === 'open' && f.fix?.confirm && (
+              <Badge tone="warn">{f.fix.confirm.shapeChange}: needs your confirmation</Badge>
             )}
             {f.state === 'open' && (
               <Button className="small" busy={busy} disabled={!project} onClick={recheck}>

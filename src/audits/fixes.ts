@@ -613,6 +613,7 @@ export async function proposeFix(
       return fixSplit(d, projectId, f);
     case 'chronology_sync':
     case 'chronology_count':
+    case 'chronology_orphan':
       throw new AuditError('USE_CHRONOLOGY', 'This fix goes through the chronology module.');
   }
 }

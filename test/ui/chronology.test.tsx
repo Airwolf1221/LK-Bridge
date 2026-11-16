@@ -392,3 +392,176 @@ describe('the Chronology page', () => {
     });
   });
 });
+
+describe('the Chronology page, v2 E6 (ADR 0048)', () => {
+  const finding = (kind: string, message: string, detail: Record<string, unknown>) => ({
+    kind,
+    age: 'Fourth Arkonan Age',
+    message,
+    detail,
+  });
+  const withFindings = (findings: unknown[], ages: unknown[] = []) => ({
+    ...checkJson,
+    last: { ...checkJson.last, findings, ages },
+  });
+  const mark = {
+    tableDocumentId: 'tab4a',
+    rowId: 'rowkept1',
+    age: 'Fourth Arkonan Age',
+    textsHash: 'h1',
+    texts: {
+      description: 'A private matter of the house',
+      date: 'c. 4A 640; exact date unresolved',
+      kcy: '',
+    },
+    reason: 'kept in the table only',
+    markedBy: 'owner',
+    markedAt: Date.now() - 60_000,
+  };
+
+  it('an event without a row offers its deletion and shows the nearest rows; the proposal deletes only the event', async () => {
+    const api = installApi(
+      routes({
+        'GET /chronology/check': withFindings([
+          finding('event_without_row', 'Event “A superseded telling” (4A 890) has no table row.', {
+            eventId: 'eorphan1',
+            name: 'A superseded telling',
+            date: '4A 890',
+            nearest: [
+              { rowId: 'r1', date: '4A 881 - 4A 900', words: 'The Quiet Years' },
+              { rowId: 'r2', date: 'Kumikas 3rd, 4A 881', words: 'Ashgate falls to the Isar host' },
+            ],
+          }),
+        ]),
+        'GET /chronology/table-only': { project: checkJson.project, marks: [] },
+        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_50', summary: 'x' },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    expect(within(table).getByTestId('nearest-rows')).toHaveTextContent(
+      'Nearest rows: 4A 881 - 4A 900: The Quiet Years; Kumikas 3rd, 4A 881: Ashgate falls to the Isar host',
+    );
+    await user.click(within(table).getByRole('button', { name: 'Propose deleting the event' }));
+    await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
+    expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      kind: 'orphan',
+      eventId: 'eorphan1',
+    });
+  });
+
+  it('a fix that turns a range into a single day is not one click: it warns, asks, and says so in the request', async () => {
+    const api = installApi(
+      routes({
+        'GET /chronology/check': withFindings([
+          finding('date_mismatch', 'Row 4 and the event “The Heirage” disagree about the date.', {
+            rowId: 'rowvote1',
+            eventId: 'evheir01',
+            rowDate: 'Isar 3rd, 4A 619',
+            eventDate: 'Isar 3rd, 4A 619 - Camue 5th, 4A 624',
+            pairedBy: 'start',
+            shapeChange: 'range → single day',
+          }),
+        ]),
+        'GET /chronology/table-only': { project: checkJson.project, marks: [] },
+        'POST /chronology/propose-fix': { status: 'proposal_captured', proposalId: 'prop_51', summary: 'x' },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const table = await screen.findByRole('table', { name: 'Findings' });
+    expect(within(table).getByTestId('shape-change')).toHaveTextContent('range → single day');
+    expect(table).toHaveTextContent('Paired by the same start.');
+    // Cancelled: nothing is proposed.
+    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    let dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveTextContent('range → single day');
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(0);
+    // Confirmed: the request says the owner confirmed the change of shape.
+    await user.click(within(table).getByRole('button', { name: 'Propose a fix' }));
+    dialog = screen.getByRole('alertdialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Propose the change' }));
+    await waitFor(() => expect(api.find('POST', '/chronology/propose-fix')).toHaveLength(1));
+    expect(api.find('POST', '/chronology/propose-fix')[0]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      rowId: 'rowvote1',
+      confirmShapeChange: true,
+    });
+  });
+
+  it('marks a row table-only from its finding, lists the marks, and clears one', async () => {
+    const api = installApi(
+      routes({
+        'GET /chronology/check': withFindings(
+          [
+            finding(
+              'unreadable_date',
+              '“Some months after the coronation” cannot be read: a relative offset.',
+              {
+                rowId: 'rowunrd1',
+                date: 'Some months after the coronation; undated',
+                code: 'DATE_RELATIVE',
+              },
+            ),
+          ],
+          [
+            {
+              age: 'Fourth Arkonan Age',
+              rows: 400,
+              events: 390,
+              count: '400',
+              dates: { qualified: 54, unreadable: 9, tableOnly: 1 },
+              tableOnlyLapsed: [{ rowId: 'rowkept1', date: 'c. 4A 640; exact date unresolved' }],
+              pairedBy: { 'date+name': 300, link: 6, 'mismatch:start+shape': 1 },
+              pairs: [
+                { rowId: 'rowheir1', eventId: 'evheir01', by: 'start+shape', mismatch: true, date: 'x' },
+              ],
+            },
+          ],
+        ),
+        'GET /chronology/table-only': { project: checkJson.project, marks: [mark] },
+        'POST /chronology/table-only': { ok: true, mark: null },
+      }),
+    );
+    const user = userEvent.setup();
+    renderApp('/ui/chronology');
+    const ages = await screen.findByRole('table', { name: 'Ages' });
+    expect(ages).toHaveTextContent('54 qualified (read by their anchor) · 9 unreadable · 1 table-only');
+    expect(ages).toHaveTextContent('the bridge’s link: 6');
+    expect(ages).toHaveTextContent('date mismatch by the same start and shape: 1');
+    expect(ages).toHaveTextContent('1 table-only mark no longer hold');
+
+    const table = screen.getByRole('table', { name: 'Findings' });
+    await user.click(within(table).getByRole('button', { name: 'Table-only' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Table-only' }));
+    await waitFor(() => expect(api.find('POST', '/chronology/table-only')).toHaveLength(1));
+    expect(api.find('POST', '/chronology/table-only')[0]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      rowId: 'rowunrd1',
+      tableOnly: true,
+    });
+
+    const card = screen.getByRole('heading', { name: /^Table-only rows/ }).closest('section')!;
+    const row = card.querySelector('[data-row="rowkept1"]')!;
+    expect(row).toHaveTextContent('A private matter of the house');
+    expect(row).toHaveTextContent('no longer holds: the row changed');
+    await user.click(within(card).getByRole('button', { name: 'Clear the mark' }));
+    await waitFor(() => expect(api.find('POST', '/chronology/table-only')).toHaveLength(2));
+    expect(api.find('POST', '/chronology/table-only')[1]!.body).toEqual({
+      confirm: true,
+      project: 'baisheng',
+      age: 'Fourth Arkonan Age',
+      rowId: 'rowkept1',
+      tableOnly: false,
+    });
+  });
+});

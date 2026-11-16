@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased: E6 "Chronology II" (16 November 2026): qualified dates, better pairing, events without a row, named proposals
+
+[ADR 0048](adr/0048-chronology-ii.md) (Proposed: owner decisions A–C); the new [docs/chronology.md](chronology.md); a
+PLAN-v2 note after D1.1. Migration `2700` (`chronology_table_only`). Nothing was run against a live system: every test
+uses the mock LegendKeeper and fixtures built from Arkona's real date forms.
+
+- **Qualified dates read by their anchor** (src/calendar/qualified.ts). A Date cell the plain forms cannot read, such as
+  `c. 4A 563; exact date unresolved`, `After Isar 6th and before Zarzakh 29th, 4A 610; …` or `Approximately House Year 8
+(c. 4A 578); …`, is read by its anchor: a year, a month, a day, a range, or one bound of an open date, approximate or
+  not, with everything else kept verbatim as the qualifier. A reading must be certain: relative offsets (`about nine
+months after …`), two possible days, a qualifier on a day and bounds that look like dates but are not stay
+  unreadable, and the check says why. The table is never rewritten; the reading is used for pairing, the row's event and
+  the KCY check, never for ordering. Of the owner's 26 example forms, 25 are read; of an Arkona-shaped set of 63, 54.
+- **The check.** A qualified row's KCY is checked where it is computable, its words (`(approximate)`, `onward`,
+  `Unassigned - approximate date`) counted as text. An unreadable row is reported once, as an unreadable date (it was
+  also a row without an event), so every row without an event is now fixable. Each age shows how its dates were read
+  and how each row and event were paired.
+- **Qualified rows' events.** `sync_timeline_event` and "Propose a fix" make them from the anchor: a year event, a month
+  event, a range, or one point at the known bound. LegendKeeper's events have no text but the name, so a qualified
+  row's event is named with the row's opening words, then `–` and its Date cell as written (owner decision A).
+- **Scored pairing.** Links; the same date (with the name, then alone); then the same start and end, the same start and
+  shape, the name, the same start, each taken only when it is the single best on both sides. A one-day row never takes
+  a range event while a range row starts at the same minute: the Fourth Age's Divan Heirage event pairs with its own row
+  and the Viziers' vote is offered its own. Every pair records how it was made (`pairedBy`).
+- **A fix that changes an event's shape** (`range → single day`, or the reverse) is never one click: the finding warns,
+  the dashboard asks, and `sync_timeline_event` refuses (`SHAPE_CHANGE_UNCONFIRMED`) until `confirm_shape_change: true`.
+- **Table-only rows.** A row the owner never wants on the timeline is marked on the Chronology page (audited
+  `chronology.table_only`): hidden from the check while its text is unchanged, back when it changes, never given an
+  event, still counted in the Main count. A new **Table-only rows** card lists the marks with **Clear the mark**.
+- **Events without a row.** "Propose a fix" (the Chronology and Audits pages, fix `chronology_orphan`) proposes deleting
+  only the event, naming it, its date and the three rows nearest it by date; the ordinary chronology job, journalled with
+  the event. Through MCP: `delete_timeline_event { event: { event_id }, orphan: true, confirm: true }` (no new tool).
+  Refused when the event has a row after all (`EVENT_HAS_ROW`) or a row could be its own (`PAIRING_AMBIGUOUS`).
+- **Named low-level proposals** (src/policy/op-names.ts). A proposal made by `lk_api_write` or `lk_api_batch` names the
+  page, the document and the entity (an event's name and date, a feature's type and name, a block's first words, a
+  property's title, a row's key with its property's title) from the pre-image it reads anyway (a row's property title
+  costs one read). The summary, **Pages affected** and each operation's card show them; a name that cannot be found
+  falls back to the ids and never blocks the proposal.
+- **Audits.** A chronology refusal through the audits page is a 409 with its reason (it was a 500).
+- **Tests.** `test/calendar/qualified.test.ts` (every form, read or deliberately unread, table-driven; the KCY words; the
+  63-cell set), `test/chronology/qualified.test.ts` (the check, a sync of each shape, the Divan Heirage fixture, the
+  table-only mark, the orphan fix and route, the Arkona-shaped counts), `test/chronology/pairing.test.ts` (scoring and
+  the guard), `test/policy/op-names.test.ts` (deleteEvent, deleteFeature, updateBlock, the property-row writes, and the
+  real capture), and the Chronology, Proposals, Audits and admin tests.
+- **Docs.** ADR 0048; docs/chronology.md; the bridge guide's chronology section; docs/dashboard.md (Chronology,
+  Proposals); docs/tools.md; PLAN-v2.
+
 ## Unreleased: E5.5 (16 November 2026): learned operation limits, and honest estimates (backlog 16 done)
 
 [ADR 0047](adr/0047-learned-operation-limits.md); PLAN §1.2, §5.1 and §5.4 notes and amendment 9. Migration `2600` (an

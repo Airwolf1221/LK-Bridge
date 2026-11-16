@@ -6,6 +6,7 @@ import { useApi, useNow, type Resource } from '../hooks';
 import { useProject, useScopedApi } from '../project';
 import { Link } from '../router';
 import type {
+  ChronologyAgeSummary,
   ChronologyCheckResponse,
   ChronologyEvidence,
   ChronologyFindView,
@@ -16,6 +17,7 @@ import type {
   ChronologyRecordView,
   ChronologyRecordsResponse,
   ChronologyStyle,
+  ChronologyTableOnlyResponse,
   ChronologyView,
 } from '../types';
 
@@ -26,7 +28,11 @@ import type {
  *   each age table and timeline: about 3 requests per age), and the owner's confirmation of what it found, including
  *   how the tables write dates and KCY values (learned from the rows; editable before confirming). Until confirmed,
  *   the chronology tools refuse. Every change is audited.
- * - Chronology check: its last run and findings, and "Run the check now". It reads only and never repairs.
+ * - Chronology check: its last run and findings, and "Run the check now". It reads only and never repairs. v2 E6 (ADR
+ *   0048): each age's dates as read (plain, qualified by their anchor, unreadable, table-only) and how each row and event
+ *   were paired; "Propose a fix" for an event without a row (deleted, only the event); a fix that changes an event's
+ *   shape asks first; "Table-only" for a row the owner never wants on the timeline.
+ * - Table-only rows (v2 E6): the marks, which hold while the row's text is unchanged; "Clear the mark".
  * - Changes: the record each timeline tool's job writes, newest first, with "Mark resolved" for a change that stopped
  *   part-way and was fixed by hand (audited).
  */
@@ -37,10 +43,12 @@ export function ChronologyPage() {
   );
   const check = useScopedApi<ChronologyCheckResponse>('/chronology/check');
   const records = useScopedApi<ChronologyRecordsResponse>('/chronology/records?limit=200');
+  const tableOnly = useScopedApi<ChronologyTableOnlyResponse>('/chronology/table-only');
   const reloadAll = () => {
     settings.reload();
     check.reload();
     records.reload();
+    tableOnly.reload();
   };
   return (
     <>
@@ -54,7 +62,8 @@ export function ChronologyPage() {
         is the authority; the timeline is a derived view of it.
       </p>
       {selected ? <SettingsCard project={selected} v={settings} /> : <Empty>No project is selected.</Empty>}
-      <CheckCard project={selected} r={check} />
+      <CheckCard project={selected} r={check} onMarked={tableOnly.reload} />
+      <TableOnlyCard project={selected} r={tableOnly} check={check.data?.last ?? null} />
       <RecordsCard project={selected} r={records} />
     </>
   );
@@ -537,8 +546,31 @@ const CHECK_STATE: Record<string, { text: string; tone: 'ok' | 'warn' | 'bad' | 
   failed: { text: 'failed', tone: 'bad' },
 };
 
-function CheckCard({ project, r }: { project: string | null; r: Resource<ChronologyCheckResponse> }) {
+/** A finding's detail field as text (an empty string when it is not one). */
+const text = (v: unknown): string => (typeof v === 'string' ? v : '');
+
+/** v2 E6 (ADR 0048): how a pair was made, in words. */
+const PAIRED_BY: Record<string, string> = {
+  link: 'the bridge’s link',
+  'date+name': 'date and name',
+  date: 'date alone',
+  'start+end': 'the same start and end',
+  'start+shape': 'the same start and shape',
+  name: 'the name',
+  start: 'the same start',
+};
+
+function CheckCard({
+  project,
+  r,
+  onMarked,
+}: {
+  project: string | null;
+  r: Resource<ChronologyCheckResponse>;
+  onMarked: () => void;
+}) {
   const { run, busy } = useAction();
+  const confirm = useConfirm();
   const now = useNow();
   // After "Run the check now", poll a few times even before the run shows as running.
   const [kick, setKick] = useState(0);
@@ -557,17 +589,45 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
   // setting the age's Main count to its table's row count; the owner approves it as normal.
   const [proposing, setProposing] = useState<string | null>(null);
   const [proposed, setProposed] = useState<Record<string, string>>({});
-  const propose = (f: ChronologyFinding, key: string) => {
+  const propose = async (f: ChronologyFinding, key: string) => {
     const rowId = typeof f.detail?.rowId === 'string' ? f.detail.rowId : null;
     const count = f.kind === 'count_mismatch';
-    if (!rowId && !count) return;
+    // v2 E6 (ADR 0048): an event without a row: the proposal deletes only the event.
+    const eventId =
+      f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string' ? f.detail.eventId : null;
+    if (!rowId && !count && !eventId) return;
+    // A fix that turns a range into a single date (or the reverse) is never one click.
+    const shape = typeof f.detail?.shapeChange === 'string' ? f.detail.shapeChange : null;
+    if (shape) {
+      const yes = await confirm({
+        title: 'This fix changes the event’s shape',
+        message: (
+          <>
+            <p>
+              The timeline event would change: <strong>{shape}</strong>.
+            </p>
+            <p className="small-text">
+              The row says “{text(f.detail?.rowDate)}”; the event is at {text(f.detail?.eventDate)}. Check
+              that they are the same chronology event (paired by{' '}
+              {PAIRED_BY[text(f.detail?.pairedBy)] ?? text(f.detail?.pairedBy)}) before you propose it.
+            </p>
+          </>
+        ),
+        confirmLabel: 'Propose the change',
+      });
+      if (!yes) return;
+    }
     setProposing(key);
     void run(() =>
       api.post<ChronologyProposeFixResponse>('/chronology/propose-fix', {
         confirm: true,
         project,
         age: f.age,
-        ...(count ? { kind: 'count' } : { rowId }),
+        ...(count
+          ? { kind: 'count' }
+          : eventId
+            ? { kind: 'orphan', eventId }
+            : { rowId, ...(shape ? { confirmShapeChange: true } : {}) }),
       }),
     )
       .then((res) => {
@@ -582,6 +642,32 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
       })
       .finally(() => setProposing(null));
   };
+
+  /** v2 E6 (ADR 0048): the owner never wants this row on the timeline (audited; holds while the row is unchanged). */
+  const markTableOnly = (f: ChronologyFinding) =>
+    void confirm({
+      title: 'Keep this row in the table only?',
+      message: (
+        <p>
+          “{text(f.detail?.date)}” stays in the {f.age} table and is never put on the timeline. The check
+          stops reporting it while the row’s text is unchanged; if the row changes, it comes back.
+        </p>
+      ),
+      confirmLabel: 'Table-only',
+    }).then((yes) => {
+      if (!yes) return;
+      void run(
+        () =>
+          api.post('/chronology/table-only', {
+            confirm: true,
+            project,
+            age: f.age,
+            rowId: f.detail?.rowId,
+            tableOnly: true,
+          }),
+        'Marked table-only. Run the check again to see it hidden.',
+      ).then((ok) => ok && onMarked());
+    });
 
   const start = () =>
     void run(
@@ -604,8 +690,10 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
       <p className="muted small-text">
         Compares each age’s table with its timeline and the Main counts. The check itself only reads and never
         repairs anything; “Propose a fix” on a row without an event, a row and event that disagree about the
-        date, or a Main count that differs from its table makes ONE proposal (the table is the authority) for
-        you to approve on the Proposals page. It also runs weekly (Maintenance Jobs page).
+        date, an event without a row (deleted: only the event), or a Main count that differs from its table
+        makes ONE proposal (the table is the authority) for you to approve on the Proposals page. A qualified
+        date (“c. 4A 563; exact date unresolved”) is read by its anchor and never rewritten. It also runs
+        weekly (Maintenance Jobs page).
       </p>
       {last && state ? (
         <dl className="kv">
@@ -661,25 +749,69 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
               </thead>
               <tbody>
                 {last.findings.map((f, i) => {
-                  const key = `${f.kind}:${typeof f.detail?.rowId === 'string' ? f.detail.rowId : i}`;
+                  const key = `${f.kind}:${typeof f.detail?.rowId === 'string' ? f.detail.rowId : typeof f.detail?.eventId === 'string' ? f.detail.eventId : i}`;
                   const fixable =
                     ((f.kind === 'row_without_event' || f.kind === 'date_mismatch') &&
                       typeof f.detail?.rowId === 'string') ||
                     // A count mismatch has a fix when the Main table has a row (a count) for the age.
-                    (f.kind === 'count_mismatch' && typeof f.detail?.main === 'string');
+                    (f.kind === 'count_mismatch' && typeof f.detail?.main === 'string') ||
+                    // v2 E6: an event without a row is deleted (only the event).
+                    (f.kind === 'event_without_row' && typeof f.detail?.eventId === 'string');
+                  const tableOnly =
+                    (f.kind === 'row_without_event' || f.kind === 'unreadable_date') &&
+                    typeof f.detail?.rowId === 'string';
+                  const shape = typeof f.detail?.shapeChange === 'string' ? f.detail.shapeChange : null;
+                  const nearest = Array.isArray(f.detail?.nearest)
+                    ? (f.detail.nearest as { date: string; words: string }[])
+                    : [];
                   return (
                     <tr key={i} data-kind={f.kind}>
                       <td>{KIND[f.kind] ?? f.kind}</td>
                       <td>{f.age}</td>
-                      <td>{f.message}</td>
+                      <td>
+                        {f.message}
+                        {typeof f.detail?.reading === 'string' && (
+                          <div className="muted small-text">Read as {f.detail.reading}.</div>
+                        )}
+                        {typeof f.detail?.pairedBy === 'string' && (
+                          <div className="muted small-text">
+                            Paired by {PAIRED_BY[f.detail.pairedBy] ?? f.detail.pairedBy}.
+                          </div>
+                        )}
+                        {shape && (
+                          <div className="note note-warn small-text" data-testid="shape-change">
+                            A fix would change the event: {shape}. It asks for your confirmation.
+                          </div>
+                        )}
+                        {nearest.length > 0 && (
+                          <div className="small-text" data-testid="nearest-rows">
+                            Nearest rows:{' '}
+                            {nearest.map((n, j) => (
+                              <span key={j}>
+                                {j > 0 && '; '}
+                                {n.date}: {n.words}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
                       <td>
                         {fixable && !proposed[key] && (
                           <Button
                             busy={busy && proposing === key}
                             disabled={busy || !project}
-                            onClick={() => propose(f, key)}
+                            onClick={() => void propose(f, key)}
                           >
-                            Propose a fix
+                            {f.kind === 'event_without_row' ? 'Propose deleting the event' : 'Propose a fix'}
+                          </Button>
+                        )}
+                        {tableOnly && (
+                          <Button
+                            className="small"
+                            disabled={busy || !project}
+                            onClick={() => markTableOnly(f)}
+                          >
+                            Table-only
                           </Button>
                         )}
                         {proposed[key] && (
@@ -698,6 +830,162 @@ function CheckCard({ project, r }: { project: string | null; r: Resource<Chronol
       )}
       {last && last.state === 'succeeded' && last.findings.length === 0 && (
         <p className="note note-ok small-text">No findings: the tables and timelines agree.</p>
+      )}
+      {last && (last.ages ?? []).length > 0 && <AgesTable ages={last.ages ?? []} />}
+    </section>
+  );
+}
+
+/**
+ * v2 E6 (ADR 0048): each age as the last check saw it: its dates (qualified ones read by their anchor, those that stay
+ * unreadable, table-only rows) and how its rows and events were paired, with every pair on request.
+ */
+function AgesTable({ ages }: { ages: readonly ChronologyAgeSummary[] }) {
+  return (
+    <div className="table-wrap mt">
+      <table aria-label="Ages">
+        <thead>
+          <tr>
+            <th>Age</th>
+            <th>Rows</th>
+            <th>Events</th>
+            <th>Main count</th>
+            <th>Dates</th>
+            <th>Paired by</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ages.map((a) => (
+            <tr key={a.age} data-age={a.age}>
+              <td>{a.age}</td>
+              <td>{fmtInt(a.rows)}</td>
+              <td>{fmtInt(a.events)}</td>
+              <td>{a.count ?? '–'}</td>
+              <td className="small-text">
+                {a.dates
+                  ? [
+                      `${fmtInt(a.dates.qualified)} qualified (read by their anchor)`,
+                      `${fmtInt(a.dates.unreadable)} unreadable`,
+                      `${fmtInt(a.dates.tableOnly)} table-only`,
+                    ].join(' · ')
+                  : '–'}
+                {(a.tableOnlyLapsed ?? []).length > 0 && (
+                  <div className="note note-warn">
+                    {a.tableOnlyLapsed!.length} table-only mark{a.tableOnlyLapsed!.length === 1 ? '' : 's'} no
+                    longer hold (the row changed): {a.tableOnlyLapsed!.map((x) => x.date).join('; ')}
+                  </div>
+                )}
+              </td>
+              <td className="small-text">
+                {Object.entries(a.pairedBy ?? {})
+                  .map(([how, n]) => {
+                    const [m, by] = how.startsWith('mismatch:')
+                      ? ['date mismatch by ', how.slice(9)]
+                      : ['', how];
+                    return `${m}${PAIRED_BY[by] ?? by}: ${fmtInt(n)}`;
+                  })
+                  .join(' · ') || '–'}
+                {(a.pairs ?? []).length > 0 && (
+                  <details>
+                    <summary>Every pair ({fmtInt(a.pairs!.length)})</summary>
+                    <ul className="small-text" data-testid={`pairs-${a.age}`}>
+                      {a.pairs!.map((p, i) => (
+                        <li key={i}>
+                          {p.date} — {PAIRED_BY[p.by] ?? p.by}
+                          {p.mismatch ? ' (dates disagree)' : ''}
+                          {p.qualified ? ' (qualified date)' : ''}{' '}
+                          <span className="muted mono">
+                            {p.rowId ?? '?'} ↔ {p.eventId}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ============================================================================================ table-only
+
+/**
+ * v2 E6 (ADR 0048): the rows the owner never wants on the timeline. Each mark holds while its row's text is unchanged
+ * (as an audit acknowledgement does); "Clear the mark" puts the row back in the check. Both are audited.
+ */
+function TableOnlyCard({
+  project,
+  r,
+  check,
+}: {
+  project: string | null;
+  r: Resource<ChronologyTableOnlyResponse>;
+  check: ChronologyCheckResponse['last'];
+}) {
+  const { run, busy } = useAction();
+  if (!r.data) return r.error ? <ErrorNote error={r.error} onRetry={r.reload} /> : <Loading />;
+  const lapsed = new Set(
+    (check?.ages ?? []).flatMap((a) => (a.tableOnlyLapsed ?? []).map((x) => `${a.age}:${x.rowId}`)),
+  );
+  const clear = (age: string, rowId: string) =>
+    void run(
+      () => api.post('/chronology/table-only', { confirm: true, project, age, rowId, tableOnly: false }),
+      'The mark is cleared; the row is back in the check.',
+    ).then((ok) => ok && r.reload());
+  return (
+    <section className="card table-wrap" aria-labelledby="chronology-table-only-h">
+      <h2 id="chronology-table-only-h">Table-only rows ({r.data.marks.length})</h2>
+      <p className="muted small-text">
+        Rows you never want on the timeline. The check does not report them while their text is unchanged; if
+        a row changes, its mark no longer holds and it is back in the check. Mark a row from its finding
+        above.
+      </p>
+      {r.data.marks.length === 0 ? (
+        <Empty>No row is marked table-only.</Empty>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Age</th>
+              <th>Date</th>
+              <th>Row</th>
+              <th>Reason</th>
+              <th>Marked</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {r.data.marks.map((m) => (
+              <tr key={`${m.tableDocumentId}:${m.rowId}`} data-row={m.rowId}>
+                <td>{m.age}</td>
+                <td>{m.texts.date}</td>
+                <td>
+                  {m.texts.description.length > 120
+                    ? `${m.texts.description.slice(0, 119)}…`
+                    : m.texts.description}
+                  {lapsed.has(`${m.age}:${m.rowId}`) && (
+                    <div>
+                      <Badge tone="warn">no longer holds: the row changed</Badge>
+                    </div>
+                  )}
+                </td>
+                <td className="small-text">{m.reason ?? '–'}</td>
+                <td className="small-text">
+                  {m.markedBy} · {fmtTime(m.markedAt)}
+                </td>
+                <td>
+                  <Button className="small" busy={busy} onClick={() => clear(m.age, m.rowId)}>
+                    Clear the mark
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </section>
   );

@@ -135,6 +135,14 @@ proposal each, for the owner to approve; the check itself still never repairs), 
 setting the age's Main count to its table's row count; hotfix of 15 November 2026). Runs are kept in `chronology_checks`
 (migration 1800); a run cut off by a restart is closed as failed by the next.
 
+**Chronology II** (v2 E6, [ADR 0048](adr/0048-chronology-ii.md)): a qualified date (`c. 4A 563; exact date unresolved`)
+is read by its anchor for pairing and the KCY check, never rewritten ([chronology.md](chronology.md)); a date that stays
+unreadable is reported once, with why. The last pass of the pairing is scored (the same start and end, the same start
+and shape, the name, the same start), never pairs a one-day row with a range event while a range row starts there,
+and each run stores how every pair was made. Rows the owner marked table-only are not reported while they are
+unchanged. An event without a row has a **Propose a fix** too (the event deleted, only the event). The request count is
+unchanged.
+
 ## `link-sweep` (v2 C2c)
 
 The **link index** (`link_index`, migration 1600; ADR 0035) records which page links to which: a link collection on

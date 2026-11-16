@@ -14,13 +14,21 @@
  * there), the write, `bridge.verify`, the journal, the record (resume, never replay).
  */
 import { createHash } from 'node:crypto';
-import { CalendarError, type Calendar, type ParsedDate } from '../calendar/index.js';
+import {
+  CalendarError,
+  describeReading,
+  parseQualified,
+  type Calendar,
+  type ParsedDate,
+} from '../calendar/index.js';
 import { mintClientId } from '../jobs/ids.js';
 import {
   eventText,
   matchRowsAndEvents,
   namesMatch,
+  QUALIFIED_NAME_SEPARATOR,
   readEvents,
+  shapeChange,
   tableUri,
   uriPointsAt,
   type CheckReader,
@@ -29,7 +37,13 @@ import {
 } from './check.js';
 import type { WriteContext } from './plan.js';
 import type { AgeConfig, ChronologyConfig } from './settings.js';
-import type { ChronologyLink, ChronologyTarget, TargetWrite } from './store.js';
+import {
+  currentTableOnly,
+  type ChronologyLink,
+  type ChronologyTarget,
+  type TableOnlyMark,
+  type TargetWrite,
+} from './store.js';
 import { readAgeTable, sameDate, sameText, type AgeRow, type AgeTable } from './table.js';
 
 type Obj = Record<string, unknown>;
@@ -77,6 +91,11 @@ export interface SyncPlan {
   /** How the event was found: the pairing pass, or the caller's choice. */
   readonly pairedBy: string | null;
   readonly changes: readonly FieldChange[];
+  /**
+   * v2 E6 (ADR 0048): what the repair does to the event's shape in plain words (`range → single day`, `single day →
+   * range`), or null. Such a repair is never one click: the dashboard and the tool ask for a confirmation first.
+   */
+  readonly shapeChange: string | null;
   readonly eventName: string;
   readonly writes: readonly TargetWrite[];
   readonly target: ChronologyTarget;
@@ -121,6 +140,43 @@ export function shortName(description: string): string {
   return `${t.slice(0, SHORT_NAME_LENGTH - 3).trimEnd()}...`;
 }
 
+/** LegendKeeper's longest event name. */
+export const EVENT_NAME_MAX = 500;
+
+/**
+ * v2 E6 (ADR 0048, owner to confirm): how a qualified row's event shows its qualification on the timeline.
+ * LegendKeeper's events have no text field but the name (`detail` is the precision, 1 to 4), so the owner's own
+ * wording goes into the name: `with-date`, the row's opening words as now, then ` – ` and the Date cell verbatim
+ * (`The House of Menkhet admits Mehrana… – c. 4A 563; exact date unresolved`); `plain`, the opening words alone (the
+ * timeline then shows the anchor's precision and nothing else). Plain rows are never affected.
+ */
+export const QUALIFIED_EVENT_NAMES: 'with-date' | 'plain' = 'with-date';
+
+/** The name a new event of this row gets (the caller's `name`, or the row's opening words; see above). */
+export function eventNameFor(row: AgeRow, given?: string): string {
+  const base = given?.trim() || shortName(row.description);
+  if (!row.reading || QUALIFIED_EVENT_NAMES === 'plain') return base.slice(0, EVENT_NAME_MAX);
+  const cell = row.dateText.replace(/\s+/g, ' ').trim();
+  const room = EVENT_NAME_MAX - base.length - QUALIFIED_NAME_SEPARATOR.length;
+  if (room < 10) return base.slice(0, EVENT_NAME_MAX);
+  const tail = cell.length <= room ? cell : `${cell.slice(0, room - 3).trimEnd()}...`;
+  return `${base}${QUALIFIED_NAME_SEPARATOR}${tail}`;
+}
+
+/** v2 E6 (ADR 0048): a row's qualified reading as every answer and proposal shows it. */
+export function readingView(r: AgeRow): Obj | null {
+  if (!r.reading) return null;
+  const q = r.reading;
+  return {
+    reads: describeReading(q),
+    anchor: q.anchorText,
+    qualifier: q.qualifier,
+    approximate: q.approximate,
+    ...(q.openStart ? { openStart: true } : {}),
+    ...(q.openEnd ? { openEnd: true } : {}),
+  };
+}
+
 const ageOfEra = (c: ChronologyConfig, cal: Calendar, d: ParsedDate): AgeConfig | null =>
   c.ages.find((a) => cal.engine.eras.find((e) => e.id === a.eraId)?.id === d.era.id) ?? null;
 
@@ -160,6 +216,8 @@ export async function planSync(o: {
   readonly read: CheckReader;
   readonly links: readonly ChronologyLink[];
   readonly ref: SyncRef;
+  /** v2 E6 (ADR 0048): the owner's table-only marks; a marked row is never given an event. */
+  readonly tableOnly?: readonly TableOnlyMark[];
 }): Promise<SyncResult> {
   const { config: c, calendar: cal, ref } = o;
   const resourceId = c.resourceId!;
@@ -173,8 +231,12 @@ export async function planSync(o: {
     try {
       date = cal.parser.parse(ref.date, c.style.date);
     } catch (e) {
-      if (e instanceof CalendarError) return refuse(e.code, e.message, { ...e.details });
-      throw e;
+      if (!(e instanceof CalendarError)) throw e;
+      // v2 E6 (ADR 0048): a qualified Date cell, given as the table shows it, read by its anchor.
+      const q = parseQualified(cal.parser, ref.date, c.style.date);
+      if (!q.ok)
+        return refuse(e.code, `${e.message} (read as a qualified date: ${q.message})`, { ...e.details });
+      date = q.reading.date;
     }
   }
   let age: AgeConfig | null = null;
@@ -230,7 +292,7 @@ export async function planSync(o: {
   if (ref.rowId !== undefined) {
     row = table.rows.find((r) => r.id === ref.rowId) ?? null;
     if (!row) return refuse('EVENT_NOT_FOUND', `The ${age.name} table has no row ${ref.rowId}.`);
-    if (date && (!row.date || !sameDate(row.date, date)))
+    if (date && (!row.eventDate || !sameDate(row.eventDate, date)))
       return refuse(
         'ROW_MISMATCH',
         `The row ${ref.rowId} says “${row.dateText}”, not ${date.text}. Nothing was done.`,
@@ -238,7 +300,10 @@ export async function planSync(o: {
       );
   } else {
     const hits = table.rows.filter(
-      (r) => r.date !== null && sameDate(r.date, date!) && sameText(r.description, ref.description ?? ''),
+      (r) =>
+        r.eventDate !== null &&
+        sameDate(r.eventDate, date!) &&
+        sameText(r.description, ref.description ?? ''),
     );
     if (hits.length === 0)
       return refuse(
@@ -246,7 +311,7 @@ export async function planSync(o: {
         `The ${age.name} table has no row on ${date!.text} with this description. Check it with the table, or pass row_id.`,
         {
           sameDate: table.rows
-            .filter((r) => r.date && sameDate(r.date, date!))
+            .filter((r) => r.eventDate && sameDate(r.eventDate, date!))
             .slice(0, 10)
             .map(rowView),
         },
@@ -259,13 +324,24 @@ export async function planSync(o: {
   }
   if (!row.id)
     return refuse('CHRONOLOGY_CHANGED', 'This row has no block id, so it cannot be named; nothing was done.');
-  if (!row.date)
+  if (!row.eventDate)
     return refuse(
       'ROW_DATE_UNREADABLE',
-      `The row’s date “${row.dateText}” cannot be read (${row.dateError?.message ?? 'unknown'}); fix the table first. Nothing was done.`,
+      `The row’s date “${row.dateText}” cannot be read (${row.dateError?.message ?? 'unknown'}); fix the table first, or mark the row table-only on the Chronology page. Nothing was done.`,
       { row: rowView(row), code: row.dateError?.code },
     );
-  const want: ParsedDate = row.date;
+  const marks = currentTableOnly(
+    table.rows,
+    (o.tableOnly ?? []).filter((m) => m.tableDocumentId === age.tableDocumentId),
+  );
+  if (marks.current.has(row.id))
+    return refuse(
+      'ROW_TABLE_ONLY',
+      `The owner marked the row “${row.dateText}” (${row.description.slice(0, 80)}) table-only: it is never put on the timeline. Nothing was done.`,
+      { row: rowView(row) },
+    );
+  // The plain date, or the qualified date's anchor (ADR 0048): what the event takes. The table is never rewritten.
+  const want: ParsedDate = row.eventDate;
 
   // The events, and the pairing as the check makes it.
   const events = (await readEvents(o.read, resourceId, age.timelineDocumentId)).filter(
@@ -276,6 +352,7 @@ export async function planSync(o: {
     events,
     o.links.filter((l) => l.tableDocumentId === age.tableDocumentId),
     age,
+    { tableOnly: marks.current },
   );
   let event: TimelineEvent | null = null;
   let pairedBy: string | null = null;
@@ -291,11 +368,24 @@ export async function planSync(o: {
     // Unpaired: a candidate is a leftover event that names the row's description, begins where it begins or has its
     // date. Any candidate makes the pairing ambiguous: never made a second event beside it.
     const free = pairing.events;
+    // v2 E6 (ADR 0048): an event of the other shape at the same start is not this row's while a row of the event's own
+    // shape starts there (the Divan Heirage case: the one-day row is offered a new event, not the range's).
+    const rival = (e: TimelineEvent) =>
+      e.start === want.start &&
+      (e.end !== null) !== (want.end !== null) &&
+      table.rows.some(
+        (x) =>
+          x !== row &&
+          x.eventDate !== null &&
+          x.eventDate.start === e.start &&
+          (x.eventDate.end !== null) === (e.end !== null),
+      );
     const candidates = free.filter(
       (e) =>
-        sameDate({ start: e.start, end: e.end, detail: e.detail as 1 | 2 | 3 }, want) ||
-        e.start === want.start ||
-        namesMatch(e.name, row.description),
+        !rival(e) &&
+        (sameDate({ start: e.start, end: e.end, detail: e.detail as 1 | 2 | 3 }, want) ||
+          e.start === want.start ||
+          namesMatch(e.name, row.description)),
     );
     if (ref.eventId !== undefined) {
       const chosen = events.find((e) => e.id === ref.eventId);
@@ -340,8 +430,9 @@ export async function planSync(o: {
     id: row.id,
     texts: { description: row.description, date: row.dateText, kcy: row.kcyText },
   };
-  const eventName = event?.name ?? (ref.name?.trim() || shortName(row.description));
+  const eventName = event?.name ?? eventNameFor(row, ref.name);
   const requestKey = syncRequestKey(ref);
+  const shape = event ? shapeChange(event, want) : null;
   const common = {
     ok: true as const,
     age,
@@ -350,6 +441,7 @@ export async function planSync(o: {
     event,
     pairedBy,
     changes,
+    shapeChange: shape,
     eventName,
     requestKey,
   };
@@ -383,14 +475,22 @@ export async function planSync(o: {
   const line = `| ${row.description} | ${row.dateText} | ${row.kcyText} |`;
   const lane = `## ${age.name} - Timeline (${age.laneName})`;
   const wantText = want.formatted;
+  const reading = readingView(row);
   const head = (action: SyncPlan['action']): Obj => ({
     action,
     age: age.name,
     row: rowView(row),
     date: { text: want.text, formatted: want.formatted, shape: want.shape, detail: want.detail },
+    ...(reading ? { reading } : {}),
     event: event ? eventView(event) : null,
     ...(pairedBy ? { pairedBy } : {}),
     changes,
+    ...(shape
+      ? {
+          shapeChange: shape,
+          warning: `This changes the event's shape: ${shape}. Check the row and the event first.`,
+        }
+      : {}),
     note: 'The table is the authority: only the timeline event is created or corrected. The table and the Main count are not touched.',
   });
 
@@ -486,7 +586,7 @@ export async function planSync(o: {
       writes,
       target: { writes, link: { ...link, eventId: id } },
       ctx: baseCtx({ [event.id]: event.raw }),
-      summary: `${SYNC_TOOL}: make the ${age.name} event for “${row.dateText}” again as a single date`,
+      summary: `${SYNC_TOOL}: make the ${age.name} event for “${row.dateText}” again as a single date (${shape ?? 'range → single date'})`,
       head: head('recreate'),
       markdown: { before, after },
     };
@@ -513,7 +613,7 @@ export async function planSync(o: {
     writes,
     target: { writes, link: { ...link, eventId: event.id } },
     ctx: baseCtx({ [event.id]: event.raw }),
-    summary: `${SYNC_TOOL}: correct the ${age.name} event for “${row.dateText}” (${changes.map((x) => x.field).join(', ')})`,
+    summary: `${SYNC_TOOL}: correct the ${age.name} event for “${row.dateText}” (${changes.map((x) => x.field).join(', ')}${shape ? `; ${shape}` : ''})`,
     head: head('correct'),
     markdown: { before, after },
   };

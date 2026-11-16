@@ -132,3 +132,86 @@ describe('matchRowsAndEvents', () => {
     expect(p.events.map((e) => e.id).sort()).toEqual(['a', 'b']);
   });
 });
+
+describe('scored pairing (v2 E6, ADR 0048): the Divan Heirage case', () => {
+  const vote = 'The Menkheti Viziers vote to admit Mehrana to active Divan Heirage';
+  const heirage =
+    'Mehrana’s Divan Heirage proceeds from formal domestic admission in 4A 619 to the final debrief';
+  const t = table([
+    ['Isar 3rd, 4A 619', vote, '1,250,926'],
+    [
+      'Isar 3rd, 4A 619 through the final personal debrief Camue 8th, 4A 624; exact final legal completion date unresolved',
+      heirage,
+      '1,250,926 - 1,250,931',
+    ],
+  ]);
+
+  it('the qualified range row is read by its anchor; the one-day row never takes the range event', () => {
+    expect(t.rows[1]!.date).toBeNull();
+    expect(t.rows[1]!.reading?.anchorText).toBe('Isar 3rd, 4A 619 - Camue 8th, 4A 624');
+    const p = matchRowsAndEvents(
+      t.rows,
+      [ev('e', 'The whole Divan Heirage', 'Isar 3rd, 4A 619 - Camue 5th, 4A 624')],
+      [],
+      age,
+    );
+    expect(p.mismatches.map((m) => [m.row.id, m.event.id, m.by])).toEqual([['r1', 'e', 'start+shape']]);
+    expect(p.rows.map((r) => r.id)).toEqual(['r0']);
+    expect(p.events).toEqual([]);
+  });
+
+  it('while a range row starts there, the one-day row does not take a second range event even when it is free', () => {
+    const p = matchRowsAndEvents(
+      t.rows,
+      [
+        ev('own', 'The Heirage', 'Isar 3rd, 4A 619 - Camue 8th, 4A 624'),
+        ev('extra', 'Another telling of the Heirage', 'Isar 3rd, 4A 619 - Camue 5th, 4A 624'),
+      ],
+      [],
+      age,
+    );
+    expect(p.pairs.map((x) => [x.row.id, x.event.id, x.how])).toEqual([['r1', 'own', 'date']]);
+    expect(p.mismatches).toEqual([]);
+    expect(p.rows.map((r) => r.id)).toEqual(['r0']);
+    expect(p.events.map((e) => e.id)).toEqual(['extra']);
+  });
+
+  it('without a range row there, a one-day row and a range event of the same start are still one event (by start)', () => {
+    const only = table([['Isar 3rd, 4A 619', vote, '1,250,926']]);
+    const p = matchRowsAndEvents(
+      only.rows,
+      [ev('e', 'The whole Divan Heirage', 'Isar 3rd, 4A 619 - Camue 5th, 4A 624')],
+      [],
+      age,
+    );
+    expect(p.mismatches.map((m) => [m.row.id, m.by])).toEqual([['r0', 'start']]);
+  });
+
+  it('the best candidate wins over a weaker one; a tie at the best stays unpaired', () => {
+    const two = table([
+      ['Isar 3rd, 4A 619 - Camue 8th, 4A 624', 'The long heirage', '1'],
+      ['Isar 3rd, 4A 619 - Camue 9th, 4A 624', 'The longer heirage', '2'],
+    ]);
+    const tie = matchRowsAndEvents(two.rows, [ev('e', 'x', 'Isar 3rd, 4A 619 - Camue 5th, 4A 624')], [], age);
+    expect(tie.mismatches).toEqual([]);
+    expect(tie.events.map((e) => e.id)).toEqual(['e']);
+    // A name match lifts one of them above the other.
+    const named = matchRowsAndEvents(
+      two.rows,
+      [ev('e', 'The longer heirage', 'Isar 3rd, 4A 619 - Camue 5th, 4A 624')],
+      [],
+      age,
+    );
+    expect(named.mismatches.map((m) => [m.row.id, m.by])).toEqual([['r1', 'start+shape']]);
+  });
+
+  it('a row marked table-only takes no part', () => {
+    const p = matchRowsAndEvents(t.rows, [ev('e', vote, 'Isar 3rd, 4A 619')], [], age, {
+      tableOnly: new Set(['r0']),
+    });
+    expect(p.pairs).toEqual([]);
+    expect(p.tableOnly.map((r) => r.id)).toEqual(['r0']);
+    expect(p.rows.map((r) => r.id)).toEqual(['r1']);
+    expect(p.events.map((e) => e.id)).toEqual(['e']);
+  });
+});

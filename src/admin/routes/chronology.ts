@@ -164,13 +164,21 @@ export const registerChronology: Register = (api, ctx) => {
           project: projectParam,
           age: z.string().min(1).max(200),
           // v2 E5 hotfix: `count` proposes the Main count of the age set to its table's row count (no row).
-          kind: z.enum(['sync', 'count']).optional(),
+          // v2 E6 (ADR 0048): `orphan` proposes deleting an event without a row (only the event).
+          kind: z.enum(['sync', 'count', 'orphan']).optional(),
           rowId: z.string().min(1).max(64).optional(),
+          eventId: z.string().min(1).max(64).optional(),
+          // v2 E6: a repair that turns a range into a single date (or the reverse) is confirmed by the owner.
+          confirmShapeChange: z.boolean().optional(),
         })
         .strict()
-        .refine((x) => x.kind === 'count' || x.rowId !== undefined, {
-          message: 'rowId is required unless kind is count',
+        .refine((x) => x.kind === 'count' || x.kind === 'orphan' || x.rowId !== undefined, {
+          message: 'rowId is required unless kind is count or orphan',
           path: ['rowId'],
+        })
+        .refine((x) => x.kind !== 'orphan' || x.eventId !== undefined, {
+          message: 'eventId is required when kind is orphan',
+          path: ['eventId'],
         }),
       req.body,
     );
@@ -179,23 +187,88 @@ export const registerChronology: Register = (api, ctx) => {
       return await chronology().proposeFix(
         'owner',
         p.id,
-        b.kind === 'count' ? { kind: 'count', age: b.age } : { age: b.age, rowId: b.rowId! },
+        b.kind === 'count'
+          ? { kind: 'count', age: b.age }
+          : b.kind === 'orphan'
+            ? { kind: 'orphan', age: b.age, eventId: b.eventId! }
+            : {
+                age: b.age,
+                rowId: b.rowId!,
+                ...(b.confirmShapeChange === true ? { confirmShapeChange: true } : {}),
+              },
       );
     } catch (e) {
-      if (e instanceof ChronologyError) {
-        const conflict = [
-          'PAIRING_AMBIGUOUS',
-          'EVENT_AMBIGUOUS',
-          'CHRONOLOGY_INCOMPLETE',
-          'CHRONOLOGY_NOT_CONFIGURED',
-          'CHRONOLOGY_CHANGED',
-          'EVENT_TAKEN',
-          'MAIN_ROW_NOT_FOUND',
-          'COUNT_UNREADABLE',
-        ];
-        throw new AdminHttpError(conflict.includes(e.code) ? 409 : 400, e.code, e.message, e.details);
+      if (e instanceof ChronologyError) throw chronologyHttpError(e);
+      throw e;
+    }
+  });
+
+  /** v2 E6 (ADR 0048): the table-only marks of the `project` query parameter's project. */
+  api.get('/chronology/table-only', (req) => {
+    const q = parseInput(z.object({ project: projectParam }), req.query);
+    const p = ctx.project(q.project);
+    return { project: p, marks: chronology().store.tableOnly(p.id) };
+  });
+
+  /**
+   * v2 E6 (ADR 0048): marks a row table-only (the owner never wants it on the timeline), or clears the mark
+   * (`tableOnly: false`). Marking reads the age table once (the row's cells are kept with the mark: it holds while
+   * they are unchanged). Audited `chronology.table_only`.
+   */
+  api.post('/chronology/table-only', async (req) => {
+    const b = parseInput(
+      z
+        .object({
+          confirm: z.literal(true),
+          project: projectParam,
+          age: z.string().min(1).max(200),
+          rowId: z.string().min(1).max(64),
+          tableOnly: z.boolean(),
+          reason: z.string().max(500).optional(),
+        })
+        .strict(),
+      req.body,
+    );
+    const p = ctx.project(b.project);
+    try {
+      if (!b.tableOnly) {
+        chronology().unmarkTableOnly('owner', p.id, { age: b.age, rowId: b.rowId });
+        return { ok: true, mark: null };
       }
+      const mark = await chronology().markTableOnly('owner', p.id, {
+        age: b.age,
+        rowId: b.rowId,
+        reason: b.reason ?? null,
+      });
+      return { ok: true, mark };
+    } catch (e) {
+      if (e instanceof ChronologyError) throw chronologyHttpError(e);
       throw e;
     }
   });
 };
+
+/** A chronology refusal as the dashboard gets it: 409 when the state is the reason, 404 for what is gone. */
+function chronologyHttpError(e: ChronologyError): AdminHttpError {
+  const conflict = [
+    'PAIRING_AMBIGUOUS',
+    'EVENT_AMBIGUOUS',
+    'CHRONOLOGY_INCOMPLETE',
+    'CHRONOLOGY_NOT_CONFIGURED',
+    'CHRONOLOGY_CHANGED',
+    'EVENT_TAKEN',
+    'MAIN_ROW_NOT_FOUND',
+    'COUNT_UNREADABLE',
+    // v2 E6 (ADR 0048)
+    'SHAPE_CHANGE_UNCONFIRMED',
+    'EVENT_HAS_ROW',
+    'ROW_TABLE_ONLY',
+  ];
+  const gone = ['ROW_NOT_FOUND', 'NOT_FOUND', 'EVENT_NOT_FOUND', 'AGE_NOT_FOUND'];
+  return new AdminHttpError(
+    conflict.includes(e.code) ? 409 : gone.includes(e.code) ? 404 : 400,
+    e.code,
+    e.message,
+    e.details,
+  );
+}

@@ -195,6 +195,21 @@ describe('Proposals', () => {
     );
   });
 
+  it('v2 E6: a low-level operation is named in plain words (page, document, entity)', async () => {
+    const label =
+      'deleteEvent: event “The Long Winter” (Kumikas 19th, 4A 100) in “Fourth Arkonan Age - Timeline” on “Universal Chronology” (chrono01 › efour001)';
+    installApi({
+      ...baseRoutes(),
+      'GET /proposals': { proposals: [proposal({ summary: `Proposed ${label}` })] },
+      'GET /proposals/prop_1': detail(proposal({ summary: `Proposed ${label}` }), [
+        op({ op: 'deleteEvent', label, changes: [] }),
+      ]),
+    });
+    renderApp('/ui/proposals?id=prop_1');
+    const card = await screen.findByRole('region', { name: 'Operation 1: deleteEvent' });
+    expect(card).toHaveTextContent(label);
+  });
+
   it('approves after a confirmation', async () => {
     const api = installApi({
       ...baseRoutes(),
