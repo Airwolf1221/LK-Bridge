@@ -40,7 +40,9 @@ describe('navigation', () => {
       'Maintenance Jobs',
       'Repository Mappings',
     ]) {
-      expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeInTheDocument();
+      expect(
+        within(nav).getByRole('link', { name: new RegExp(`^${name}`), hidden: true }),
+      ).toBeInTheDocument();
     }
     // The selected (default) project's pending count from the API; it arrives once the project list has loaded.
     await waitFor(() => expect(within(nav).getByRole('link', { name: /^Proposals/ })).toHaveTextContent('2'));

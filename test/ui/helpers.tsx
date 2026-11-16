@@ -3,7 +3,7 @@
  * Harness for the dashboard component tests (jsdom): a scriptable fake of the admin API (`fetch`), a fake
  * `EventSource` the test pushes stream events into, and a `renderApp` that mounts the real <App> at a given path.
  */
-import { render, type RenderResult } from '@testing-library/react';
+import { render, screen, within, type RenderResult } from '@testing-library/react';
 import { afterEach, expect, vi } from 'vitest';
 import { apiConfig } from '../../ui/src/api';
 import { App } from '../../ui/src/app';
@@ -135,6 +135,21 @@ export function installApi(routes: Routes): Api {
 }
 
 // -------------------------------------------------------------------------------------------- render helper
+
+/**
+ * A link in the main navigation (v3 F3c). If its sidebar group is closed, the group's button is clicked first, as the
+ * owner would.
+ */
+export async function navLink(
+  user: { click: (el: Element) => Promise<void> },
+  name: string | RegExp,
+): Promise<HTMLElement> {
+  const main = screen.getByRole('navigation', { name: 'Main' });
+  const link = within(main).getByRole('link', { name, hidden: true });
+  const closed = link.closest<HTMLElement>('ul[hidden]');
+  if (closed) await user.click(main.querySelector<HTMLElement>(`[aria-controls="${closed.id}"]`)!);
+  return link;
+}
 
 export function renderApp(path: string, session: SessionInfo = SESSION): RenderResult {
   FakeSource.all = [];

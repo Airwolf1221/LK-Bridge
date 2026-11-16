@@ -140,8 +140,14 @@ async function mount(path: string) {
   return R.render(<App session={session} createSource={createSource} />);
 }
 
-const nav = (name: RegExp) =>
-  within(screen.getByRole('navigation', { name: 'Main' })).getByRole('link', { name });
+/** A link in the main navigation, its sidebar group opened first if it is closed (v3 F3c). */
+async function nav(user: ReturnType<typeof UserEvent.setup>, name: RegExp): Promise<HTMLElement> {
+  const main = screen.getByRole('navigation', { name: 'Main' });
+  const link = within(main).getByRole('link', { name, hidden: true });
+  const closed = link.closest<HTMLElement>('ul[hidden]');
+  if (closed) await user.click(main.querySelector<HTMLElement>(`[aria-controls="${closed.id}"]`)!);
+  return link;
+}
 
 describe('a mock job runs while the pages update live', { timeout: 40_000 }, () => {
   it('Jobs, Budgets and Writers follow the job, and WRITERS_MAX changes without a restart', async () => {
@@ -174,7 +180,7 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
     expect(within(row).getByText('0 / 3 steps')).toBeInTheDocument();
 
     // Writers: a slot is busy with it, and holds the document lock.
-    await user.click(nav(/^Concurrent Writers/));
+    await user.click(await nav(user, /^Concurrent Writers/));
     await waitFor(() => expect(document.querySelector('[data-slot][data-state="busy"]')).not.toBeNull(), {
       timeout: 5000,
     });
@@ -208,7 +214,7 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
     );
 
     // Budgets: the writes gauge shows what was used.
-    await user.click(nav(/^Request Budgets/));
+    await user.click(await nav(user, /^Request Budgets/));
     const gauge = await screen.findByRole('region', { name: 'Writes per minute' });
     await waitFor(
       () => expect(gauge.querySelector('.gauge-figure')?.textContent).toMatch(/^[3-9]\d* \/ 120$/),
@@ -217,7 +223,7 @@ describe('a mock job runs while the pages update live', { timeout: 40_000 }, () 
     expect(screen.getByRole('region', { name: 'Image uploads' })).toHaveTextContent('reactive only');
 
     // Jobs again: the finished job is in History, succeeded, with all three steps done.
-    await user.click(nav(/^Jobs/));
+    await user.click(await nav(user, /^Jobs/));
     await user.click(await screen.findByRole('button', { name: 'History' }));
     const done = await screen.findByRole('row', { name: /Live end-to-end job/ });
     expect(within(done).getByText('Succeeded')).toBeInTheDocument();

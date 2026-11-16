@@ -32,6 +32,21 @@ fixtures. Nothing in `src/packs/`, the pack tools or the Packs page was touched 
   rightly refuses a raw Status write). Stable across 5 fresh runs, so CI now runs it in a step of its own; `npm run ci`
   stays browser-free.
 
+## Unreleased: v3 F3c (16 November 2026): a grouped sidebar
+
+A UI change only: no ADR, no migration. Nothing was run against a live system.
+
+- **The sidebar** keeps Overview, Jobs and Proposals (with its pending count) at the top, and files every other page
+  into expandable groups: Access & Account, Assets, Backups & Recovery, Limits, Monitoring, Quality, Repository and
+  Setup. Groups and pages are sorted by code, not by hand. The current page's group is open; the owner's choices are
+  remembered in this browser; a closed group shows its pages' counts. Group headers are buttons with `aria-expanded`,
+  work by keyboard, and keep the existing look in light and dark; narrow screens keep the same structure.
+- **Evaluation** has its own page (`/evaluation`, under Quality), with the helper open. It is still also a panel on
+  Tool calls.
+- **The router** is now a table (`ROUTES`), and a test fails when a page is neither in the sidebar nor a listed
+  sub-page of one.
+- See [docs/dashboard.md](dashboard.md#the-sidebar-v3-f3c).
+
 ## Unreleased: v3 F3a (16 November 2026): setting packs and the Arkona character tool
 
 [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md) (Proposed), carrying out the owner-approved

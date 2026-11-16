@@ -23,8 +23,8 @@ const SET_NAME: Record<EvaluationSet, string> = { core: 'Core', all: 'All' };
  * tool calls of that assistant's connections in between. You confirm Right, Partly or Wrong (the automatic grade is only a
  * hint); the run is saved, and gives a results table to copy and a comparison with an earlier run. For you only.
  */
-export function EvaluationPanel() {
-  const [open, setOpen] = useState(false);
+export function EvaluationPanel({ defaultOpen = false }: { defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <section className="card" aria-labelledby="ev-title">
       <div className="row row-between">
