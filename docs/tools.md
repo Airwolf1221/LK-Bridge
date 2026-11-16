@@ -50,10 +50,11 @@ about 29,850 tokens** (characters ÷ 4; 61 tools and about 31,100 before the own
 `arkona_create_character` ([below](#setting-packs-arkona_create_character-v3-f3a)): **57 tools, about 32,660 tokens** in a
 `propose` or `write` profile (the pack tool is about 2,330 of them; 62 with the low-level tools on), and the same 25 in a
 `read` profile. **Since v3 F3b** the Arkona pack lists five tools ([below](#setting-packs-owners-relationships-art-and-the-brief-v3-f3b)):
-**61 tools, about 36,620 tokens** in a `propose` or `write` profile (the five pack tools about 6,110 of them:
-`arkona_create_character` 2,410, `arkona_create_owner` 1,630, `arkona_add_character_art` 990, `arkona_create_relationship`
-750, `arkona_character_brief` 330; 66 with the low-level tools on), and **26, about 9,090**, in a `read` profile (the
-read-only `arkona_character_brief`; 29 with the low-level tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
+**61 tools, about 38,050 tokens** in a `propose` or `write` profile, measured with F3c's `lastMajorRevision` on the write
+tools (the five pack tools about 6,530 of them: `arkona_create_character` 2,520, `arkona_create_owner` 1,730,
+`arkona_add_character_art` 1,100, `arkona_create_relationship` 850, `arkona_character_brief` 330; 66 with the low-level
+tools on), and **26, about 9,090**, in a `read` profile (the read-only `arkona_character_brief`; 29 with the low-level
+tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -366,7 +367,7 @@ never sets it under `"auto"`:
 | block edits through `lk_api_write` / `lk_api_batch`: insert, replace, update, delete a block, `replaceDocumentBlocks`; the dashboard's own text fixes (`lmrBlockEdits`) | link collections other than Dependencies: Related Sources (`lmrLinkCollections`) |
 | a chronology table's rows (`create_` / `update_` / `delete_timeline_event` on the table) and the count fix (`lmrChronologyTable`)                                       | timeline events and map features on their own (`lmrTimelineMap`)                 |
 | a restore that changes text (`lmrRestore`)                                                                                                                              | an audit's paragraph split (`lmrAuditSplit`)                                     |
-| setting-pack tools (`lmrPackTools`; they plan their own date, not yet through the rule)                                                                                 |                                                                                  |
+| setting-pack tools (`lmrPackTools`; since v3 F3b the existing pages a package changes go through the rule, pages it makes are always dated)                             |                                                                                  |
 | `set_facts` facts and Dependencies, except the housekeeping keys (`lmrFacts`; `lmrHousekeepingKeys`, default `Last Major Revision; Reference Type; Supersedes; Status`) |                                                                                  |
 
 - **When it is measured.** When the edit is planned, from what the calling tool already read (`write_page`'s blocks,
@@ -1175,7 +1176,7 @@ serves (the list changes at the next `tools/list` when that changes); called for
 connection's scope, while the pack's `alwaysPropose` setting is on (its first weeks; the Arkona seed has it on); a
 package that makes canon is a canonical proposal ("Approve and accept as canon").
 
-**`arkona_create_character`** `{ name, depth?, status?, identity, pages, index?, target?, upgradeToCore?, dryRun?, preview?, operation_id?, project }`:
+**`arkona_create_character`** `{ name, depth?, status?, identity, pages, index?, target?, upgradeToCore?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
 a whole character from one package, by Arkona's Character Architecture, Source Formatting and Controlled Native
 Tagging Standard (v1.8).
 
@@ -1213,8 +1214,9 @@ template ids for the project, checked against the project's templates as last re
 in the template's order and never gains or loses a row: the fixed facts (Continuity Type `CANON`, Continuity `Main`,
 Inheritance `None`, unless an existing character's standing says otherwise), Status, Subject, Reference Type, Scope,
 the identity facts on the identity page, Supersedes `None` unless given, and **Last Major Revision set to the day the job
-runs** (a `bridge.lmr` step, as F2's; also on every existing page the package substantially changes, while the project's `lmrPackTools` switch
-is on, its default; the preview notes it when off). Tags are
+runs** (a `bridge.lmr` step, as F2's; on an existing page the package changes, since v3 F3b only when ADR 0051's rule or
+the package's `lastMajorRevision` says so, and while the project's `lmrPackTools` switch is on, its default; the preview
+notes it when off). Tags are
 **computed**, never typed: `{status tag}, Character, {race token}, {naming culture token}` on the identity page (one
 token when they are the same), `{status tag}, Character, {specialist tag}` on a specialist page,
 `{status tag}, Character, Character Art` and `{status tag}, Character, Relationship`; a race or culture with no approved
@@ -1306,7 +1308,19 @@ the brief" (under "Setting packs (Arkona)").
 in place of `CANON`; a Working or Archived page leads with its lifecycle tag, so neither appears. The owner's ruling of
 16 November 2026, recorded in the pack with its date. `arkona_create_character` changed with it.
 
-**`arkona_create_owner`** `{ type, kind?, name, descriptor?, status?, continuity?, home, homeOverride?, nation?, promoteNation?, createSubindex?, createCharacterNavigation?, referenceType, scope, temporalScope, supersedes?, specialistTag?, markdown?, dependencies?, related?, dryRun?, preview?, operation_id?, project }`:
+**Last Major Revision (all four write tools; ADR 0051's rule, merged from F3c).** Every page a package makes is dated
+the day its job runs, whatever is asked. An existing page it changes is dated only when the owner's rule calls the change
+a major revision, measured from what the planner already read (no extra read): new or rewritten text of 8 words or
+more, a heading added or reworded, a real fact change (not a housekeeping key such as Reference Type, a trim or a typo),
+a Dependency added or removed. A move, a new name and Related Sources alone are not (unless the owner switched names and
+moves, or link collections, on for the project), so `promoteNation`'s move and a relationship's links leave the date,
+while new image sections on an Art page and a gated fact filled set it. `lastMajorRevision: "set"` or `"skip"`
+overrides the rule for the existing pages; the project's `lmrPackTools` switch still decides whether the rule is asked
+under `"auto"`. The preview and the answer give `lastMajorRevision: { mode, newPages, existing: [{ page, set, why }] }`,
+and the proposal's summary and each page's line say the same (`+ Last Major Revision → date of approval (auto: a
+heading added (“…”))`, `Last Major Revision skipped: a move, not a major revision`).
+
+**`arkona_create_owner`** `{ type, kind?, name, descriptor?, status?, continuity?, home, homeOverride?, nation?, promoteNation?, createSubindex?, createCharacterNavigation?, referenceType, scope, temporalScope, supersedes?, specialistTag?, markdown?, dependencies?, related?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
 ONE non-character owner page, typed by the pack's owner table (19 types: Polity, Institution, Military, Culture, Event,
 Place, Technology, Magic, Material, Equipment, Species, Creature, Religion, Law, Programme, Education, Ceremony,
 Condition and the inter-polity Relationship; each its template, primary tag, closed specialist tags and allowed homes,
@@ -1354,7 +1368,7 @@ refusals, `OWNER_FACTS_INCOMPLETE`, `UNESTABLISHED_NEEDS_REASON`, `REFERENCE_TYP
 `SECTION_MISSING`, `TEMPLATE_ROW_MISSING`. **In the job**, before its first write: `PACK_GOVERNANCE_CHANGED`,
 `OWNER_EXISTS`, `NATION_INDEX_EXISTS`, `SUBINDEX_EXISTS`, `NAVIGATION_EXISTS`, `NATION_REFERENCE_MOVED`.
 
-**`arkona_create_relationship`** `{ a, b, label?, host?, status?, scope?, markdown?, dependencies?, related?, dryRun?, preview?, operation_id?, project }`:
+**`arkona_create_relationship`** `{ a, b, label?, host?, status?, scope?, markdown?, dependencies?, related?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
 ONE joint relationship page for two existing characters, on the character tool's builder: `{a} & {b} - {label}` (both
 names as their indexes give them; label "Relationship" by default) from AI Relationship, under `a`'s index (`host: "b"`
 for b's), Working or canon as its host is unless `status` says otherwise, tagged `CANON` (or `AU`), Character,
@@ -1365,7 +1379,7 @@ page), and the character tool's refusals for the host (`TARGET_ARCHIVED`, a Work
 partner's index) and for the page. **Warning**: `PARTNER_LINK_DEFERRED` (a Working relationship is linked from a canon
 character only after promotion). **In the job**: `RELATIONSHIP_EXISTS`.
 
-**`arkona_add_character_art`** `{ character, images: [{ staged_id? | upload_id?, label, interpretation, subfolder? }], file?, scope?, markdown?, status?, dryRun?, preview?, operation_id?, project }`:
+**`arkona_add_character_art`** `{ character, images: [{ staged_id? | upload_id?, label, interpretation, subfolder? }], file?, scope?, markdown?, status?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
 reference images for an existing character. Each is placed in the character's asset folder (`Characters / <race path>
 / <name>`, with `Forms / <form>`, `Outfits / <outfit>` or `Details` subfolders, found or created when the job runs) as
 `{name} - {label}` (no extension; numbered when taken), and on its Art page with its label and interpretation: the Art

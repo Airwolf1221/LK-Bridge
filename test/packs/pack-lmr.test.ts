@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
 /**
  * v3 F3b with F3.1's rule (ADR 0051 decision 1; ADR 0052 decision 14): every pack tool that changes an EXISTING page
  * dates it by the owner's Last Major Revision rule, and takes `lastMajorRevision` ("auto", the default; "set"; "skip");

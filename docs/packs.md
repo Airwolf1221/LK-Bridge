@@ -203,6 +203,19 @@ Repository Mappings).
 **Changing the table.** It is data: a new version of the rules (the service's `replaceRules`, or a new seed offered at
 start), approved by the owner. The Packs page shows it read-only.
 
+## Last Major Revision (v3 F3b, by ADR 0051's rule)
+
+Every page a package makes is dated the day its job runs (the owner's character-pack answer 10), whatever is asked. An
+existing page a package changes is dated by the owner's rule for real revisions (ADR 0051, `src/lmr`), applied by the
+pack's job builder (`src/packs/engine/lmr.ts`) from what the planner already read: a fact changed (not a housekeeping
+key, a trim or a typo), a Dependency added or removed, 8 or more words of text, a heading. A move, a new name and
+Related Sources alone are never enough on their own (unless the owner switched names and moves, or link collections, on
+for the project), so `promoteNation`'s moved Reference, an upgraded Reference's new name and a relationship's links keep
+their date; an Art page's new image sections and a filled-in gated fact set it. The four write tools take
+`lastMajorRevision: "auto" | "set" | "skip"` (the same override as the general write tools) for those existing pages; the
+project's `lmrPackTools` switch still decides whether the rule is asked under `"auto"`. The preview, the answer, the
+proposal's summary and each page's line say what was decided and why.
+
 ## Relationships, art, the brief and the staged-image takeover (v3 F3b)
 
 - **`arkona_create_relationship`** builds on the character tool: the package is the character tool's extension of `a`

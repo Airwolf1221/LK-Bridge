@@ -10,10 +10,14 @@
   proposal per package, the re-check in the job), [ADR 0049](0049-v3-f2-last-major-revision-default-project-and-staging.md)
   (server staging, folders found or created at run time, Last Major Revision), [ADR 0026](0026-type-registry-and-name-resolution.md)
   (the registry and its taxonomy), [ADR 0032](0032-set-facts-and-canon.md) and [ADR 0035](0035-page-lifecycle.md) (canon
-  and the lifecycle guard).
+  and the lifecycle guard), and [ADR 0051](0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) (decision 1:
+  the owner's rule for Last Major Revision and the `lastMajorRevision` override, which the pack tools now apply:
+  decision 14).
 - Migration: **none**. The pack's rules are one JSON document in the `packs` table already; the new seed reaches a stored
   pack as a new version at start (decision 12), which the owner approves.
-- Numbered 0052: session F3.1, running beside this one, takes 0051.
+- Numbered 0052, the next free number after F3.1's (F3c's) 0051. F3.1 had not reached `main` when this was written: its
+  branch (`claude/adoring-lamport-gus05p` at a485fd0) was merged in so that decision 14 is built on its rule, at the
+  owner's request.
 - Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
   spike or round-trip script.
 
@@ -209,6 +213,33 @@ any label), existing pages that must still be where the plan saw them (the Refer
 proposal captured an existing page's version (a relationship's Related Sources), the approval's own re-read may already
 find the change and mark the proposal conflicted, also before anything is written.
 
+## Decision 14: Last Major Revision by the owner's rule (ADR 0051), with `lastMajorRevision`
+
+The owner asked, once F3.1 (ADR 0051) settled what a major revision is, that every pack tool editing an EXISTING page use
+that rule and take its override. As built (`src/packs/engine/lmr.ts`):
+
+- **Pages a package makes are always dated**, the day its job runs, whatever `lastMajorRevision` says (the owner's
+  character-pack answer 10).
+- **An existing page a package changes** is decided by ADR 0051's rule, from what the planner already read (no extra
+  read): the facts as they were and as planned (a housekeeping key such as Reference Type never counts; trims, typos and
+  punctuation do not), the link collections' additions and removals (a Dependency counts; Related Sources alone does
+  not), the text the package adds or rewrites (an index's routing lines; an Art page's new image sections, each with a
+  heading). A move and a new name never count. So `arkona_create_character` with `target` dates a Core whose gated fact
+  it fills, but not an upgraded Reference that is only renamed and moved, nor a partner whose Related Sources gains the
+  relationship; `arkona_create_relationship` leaves both participants' dates; `arkona_add_character_art` dates the Art
+  page it extends; `promoteNation` leaves the moved Reference's date.
+- **The override**, as for the general write tools: `lastMajorRevision: "auto"` (the default), `"set"` (date every
+  existing page the package changes that has the row) or `"skip"` (date none of them). F2's per-project switches stay as
+  ADR 0051 keeps them: the setting-pack switch (`lmrPackTools`) decides whether the rule is asked at all under `"auto"`,
+  and names and moves (`lmrNamesTagsMoves`) or link collections (`lmrLinkCollections`), switched on, count as in F2.
+- **Said, not hidden**: the preview and the answer carry `lastMajorRevision: { mode, newPages, existing: [{ page, set,
+why }] }`; the proposal's summary and each changed page's line carry the general tools' words (`+ Last Major Revision →
+date of approval (auto: a heading added (“…”))`, `Last Major Revision skipped: a move, not a major revision`). A page
+  known to have no such row is left out. **Chosen**: the pack job keeps planning its own `bridge.lmr` steps (the engine's
+  general planner leaves a request that has them alone, so nothing is dated twice) and passes the override to the engine
+  too, for a package that ends up with none.
+- Costs: unchanged for the packages measured (the decisions need no read; the steps are the ones F3a planned).
+
 ## Costs (measured against the mock, test/packs/owner-costs.test.ts)
 
 | Package                                      | Plan reads | Job reads | Job writes |
@@ -225,16 +256,17 @@ find the change and mark the proposal conflicted, also before anything is writte
 
 ## Departures from the approved design, and why
 
-| Design                                                   | As built                                                                                                      | Why                                                                                                                                       |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Subject is a required fact                               | Subject is the package's `name` (always given)                                                                | The name's first part is the Subject; asking for it twice invites a mismatch                                                              |
-| A new race "needs character navigation" before placement | `createCharacterNavigation` also records one Character taxonomy entry for the new index (reviewed if guessed) | The character tool places by the registry's taxonomy; an index alone would still not place anyone                                         |
-| Art: "staged_id, file or upload_id"                      | `file` is one top-level attachment, for the one image with neither other source                               | ChatGPT fills declared file parameters at the top level only (ADR 0049 decision 11)                                                       |
-| Art: images "come from staged_id, file or upload_id"     | An upload or file is staged on the bridge's server first, even on a dry run (its staged id returned)          | A ChatGPT link expires before a second call can use it                                                                                    |
-| A Working page gets Working + the primary tag (1.4)      | As written; a specialist tag given is held and reported                                                       | 1.5 says lifecycle tags "replace the status tag", which could keep the specialist: the literal reading is the safer, and the rule is data |
-| promoteNation "places the new owner beside it"           | For a Working owner, the restructure is made and the owner drafted under [INDEX] Working                      | A Working page cannot sit under a canon index (the lifecycle guard); it is promoted into the new index later                              |
-| HOME_NOT_ALLOWED lists "suitable indexes nearby"         | Nearest by tree distance; for a home not found, nearest to the root (`HOME_NOT_FOUND`)                        | "Nearby" needs a measure; a home that does not exist has no place to measure from                                                         |
-| Relationship: hosting by F3a's rule                      | F3a's routing line in the hosting index is added too                                                          | F3a's builder does so for every new page under an existing character index                                                                |
+| Design                                                                     | As built                                                                                                      | Why                                                                                                                                       |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Subject is a required fact                                                 | Subject is the package's `name` (always given)                                                                | The name's first part is the Subject; asking for it twice invites a mismatch                                                              |
+| A new race "needs character navigation" before placement                   | `createCharacterNavigation` also records one Character taxonomy entry for the new index (reviewed if guessed) | The character tool places by the registry's taxonomy; an index alone would still not place anyone                                         |
+| Art: "staged_id, file or upload_id"                                        | `file` is one top-level attachment, for the one image with neither other source                               | ChatGPT fills declared file parameters at the top level only (ADR 0049 decision 11)                                                       |
+| Art: images "come from staged_id, file or upload_id"                       | An upload or file is staged on the bridge's server first, even on a dry run (its staged id returned)          | A ChatGPT link expires before a second call can use it                                                                                    |
+| A Working page gets Working + the primary tag (1.4)                        | As written; a specialist tag given is held and reported                                                       | 1.5 says lifecycle tags "replace the status tag", which could keep the specialist: the literal reading is the safer, and the rule is data |
+| promoteNation "places the new owner beside it"                             | For a Working owner, the restructure is made and the owner drafted under [INDEX] Working                      | A Working page cannot sit under a canon index (the lifecycle guard); it is promoted into the new index later                              |
+| HOME_NOT_ALLOWED lists "suitable indexes nearby"                           | Nearest by tree distance; for a home not found, nearest to the root (`HOME_NOT_FOUND`)                        | "Nearby" needs a measure; a home that does not exist has no place to measure from                                                         |
+| Relationship: hosting by F3a's rule                                        | F3a's routing line in the hosting index is added too                                                          | F3a's builder does so for every new page under an existing character index                                                                |
+| F3a's answer 10: Last Major Revision on every page "substantially" changed | ADR 0051's rule decides for existing pages; `lastMajorRevision` overrides; new pages always dated             | The owner's instruction after F3.1 landed: one rule for every tool                                                                        |
 
 ## Consequences
 
@@ -245,6 +277,8 @@ find the change and mark the proposal conflicted, also before anything is writte
   an Authoritative AU page; both should learn the ruling from the pack.
 - Four tools are added (67 with the per-operation tools off, 156 with them on; 61 in a `propose` or `write` profile while
   a pack is attached, 26 in a `read` profile, the brief being a read tool).
+- ADR 0051's "Left" item for the setting-pack tools (they did not apply the rule or take `lastMajorRevision`) is done
+  here (decision 14). When F3.1 reaches `main`, merging it is expected to be clean: its changes are already in this branch.
 - Left for later: editing the owner table on the dashboard (it is read-only there; a new version comes from the seed or
   the owner's `replaceRules`), a routing line in an existing home index (the owner tool leaves it, and says so), the
   monolith split and selective approval (PLAN-v2 10.5).

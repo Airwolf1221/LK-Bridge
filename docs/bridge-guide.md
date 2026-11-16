@@ -330,6 +330,12 @@ naming the projects they work on). The Arkona pack has five tools. Ask for the p
   bridge's server and proposes nothing; give its `staged_id` to the pack tool, which places it. An image you already
   uploaded with a destination at scope `propose` is taken over: its own placement proposal is withdrawn ("superseded by
   package prop_…"). An image in another package's proposal is refused (`STAGED_IMAGE_BUSY`).
+- **Last Major Revision.** Every page a pack tool makes is dated the day its job runs. An existing page it changes is dated
+  only for a major revision by the owner's rule: 8 or more words of new or rewritten text, a heading, a real fact change,
+  a Dependency. A move, a new name or Related Sources alone are not, so a relationship's links and a nation's moved
+  Reference keep their date, while new images on an Art page and a filled-in fact set it. `lastMajorRevision: "set"` or
+  `"skip"` overrides that for the existing pages (only when the person asks); the preview's `lastMajorRevision` says what
+  applies to each page and why.
 - **When the pack is not current.** The pack records the versions of Arkona's governance pages that the owner approved
   (and of the sections its rules come from). If one has changed since, or the pack's rules were edited, nothing is
   computed and every call is refused with `PACK_NOT_CURRENT`, naming what changed, until the owner checks the rules and
@@ -380,8 +386,8 @@ Every page's text starts with `## Purpose`: no title and no metadata header (Leg
 holds the facts), no empty or placeholder section. A Core, Reference or Relationship page should end with
 `## Source Boundaries` and `## Unresolved Material` (a warning names a missing one). Page names come from the rules, so
 never write a prefix. An em dash or en dash used as a separator anywhere in the package is replaced by an ASCII hyphen,
-and each replacement is listed (`replacements`); "CANON" or a date in a page name is refused. Last Major Revision is set to
-the day the job runs on every page the tool makes or substantially changes.
+and each replacement is listed (`replacements`); "CANON" or a date in a page name is refused. Last Major Revision: see the
+shared rules above.
 
 A compact background character:
 

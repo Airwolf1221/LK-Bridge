@@ -35,6 +35,10 @@ live system: every test uses the mock LegendKeeper and fixtures built from the s
 - **Governance**: the approval pins six sections of Source Formatting and the Tagging Standard by digest and is refused
   when one is missing; drift still fails closed, and now names the section. The job re-checks before it writes: a
   same-named sibling, an existing relationship, a nation index made meanwhile, a moved Reference, a staged image taken.
+- **Last Major Revision by ADR 0051's rule** (F3c, merged in): every pack tool that changes an existing page
+  (`arkona_create_character` with `target`, a relationship's Related Sources, an Art page extended, `promoteNation`'s
+  move) dates it only for a major revision by the owner's rule, and takes `lastMajorRevision: "auto" | "set" | "skip"`;
+  pages a package makes are always dated. The preview, the answer and the proposal say which applied and why.
 - **The Packs page** shows the owner table, the AU rule and rulings, and each source's pinned sections with their state.
 - **Docs**: the agents' guide's pack section is now "Setting packs (Arkona)", a part per tool (F3a's name still leads to
   the character part), with tested owner examples; tools.md (costs measured against the mock), packs.md, dashboard.md;

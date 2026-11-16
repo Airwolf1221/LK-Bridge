@@ -232,6 +232,13 @@ described. (D6) The takeover as described in section 6.
 - **Unestablished** is allowed for Reference Type, Scope and Temporal Scope, with a reason, which is written into
   Unresolved Material.
 
+**Last Major Revision, after F3.1 (your request).** Once ADR 0051 settled what a major revision is, every pack tool that
+changes an EXISTING page applies that rule and takes `lastMajorRevision: "auto" | "set" | "skip"`, as the general write
+tools do: a Core whose gated fact the package fills and an Art page that gains image sections are dated; a relationship's
+Related Sources links, an upgraded Reference's new name and `promoteNation`'s move are not (unless you switched names and
+moves, or link collections, on for the project). Pages a package makes are always dated, whatever is asked. The preview,
+the answer and the proposal say which applied to each page and why (ADR 0052 decision 14).
+
 **Left for later.** Outside the pack tools, `promote_page` still writes `CANON` when it promotes an AU page, and the
 lifecycle audit still expects `CANON` on an Authoritative AU page: both should learn the ruling. Editing the owner table
 on the dashboard (it is read-only there). The monolith split and selective approval (PLAN-v2 10.5).
