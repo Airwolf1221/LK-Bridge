@@ -20,7 +20,9 @@ import { factKey, sidebarFrom, type SidebarProperty } from '../../facts/index.js
 import { FactsPlanError, planFacts, type FactsPlan, type LinkTarget } from '../../facts/plan.js';
 import { rowTextRuns } from '../../facts/values.js';
 import { mintClientId } from '../../jobs/ids.js';
+import type { LmrMode } from '../../jobs/lmr-hook.js';
 import type { LifecycleConfig } from '../../lifecycle/settings.js';
+import type { LmrConfig } from '../../lmr/index.js';
 import {
   applyEdit,
   fromMarkdown,
@@ -336,10 +338,16 @@ export interface PlanEnv {
   /** Today (Europe/London) for the preview; the job dates Last Major Revision when it runs. */
   readonly today: string;
   /**
-   * Whether existing pages the package substantially changes get Last Major Revision (the project's `lmrPackTools`
-   * switch, v3 F2's category for setting-pack tools; on by default). Pages the package creates always get it.
+   * Whether the project's switch for setting-pack tools (`lmrPackTools`, v3 F2; on by default) lets the Last Major
+   * Revision rule date the EXISTING pages a package changes. Pages the package creates always get it.
    */
   readonly lmrOnChanges: boolean;
+  /**
+   * v3 F3b with ADR 0051 (ADR 0052 decision 14): the project's Last Major Revision configuration (the row's key, the
+   * switches, the housekeeping keys) and the caller's `lastMajorRevision` (`auto` when absent), which decide for the
+   * EXISTING pages a package changes (src/packs/engine/lmr.ts). Absent: the project's defaults, `auto`.
+   */
+  readonly lmr?: { readonly config: LmrConfig; readonly mode: LmrMode };
 }
 
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);

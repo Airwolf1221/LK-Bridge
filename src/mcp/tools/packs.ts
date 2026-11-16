@@ -13,8 +13,17 @@ import { runOwner, runPackage } from '../../packs/run.js';
 import type { PackageInput } from '../../packs/engine/plan.js';
 import type { McpToolProvider } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
+import { lastMajorRevisionArg } from './schemas.js';
 import { CREATE_ANNOTATIONS, operationIdArg } from './resources.js';
 import { errorResult, projectArg, withProject, type ToolDeps } from './shape.js';
+
+/**
+ * v3 F3b with ADR 0051 (ADR 0052 decision 14): the general tools' `lastMajorRevision`, for the EXISTING pages a package
+ * changes; the pages it makes are always dated.
+ */
+const packLmrArg = lastMajorRevisionArg.describe(
+  'Last Major Revision of the EXISTING pages the package changes (the pages it makes are always dated): "auto" (default: only for a major revision by the owner’s rule: 8+ words of text, a heading, a real fact, a Dependency; not a move, a new name, Related Sources alone), "set" or "skip". The preview says which applied to each page and why.',
+);
 
 const identityValue = z.union([
   z.string().max(500),
@@ -290,6 +299,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .unknown()
           .optional()
           .describe('Not supported: splitting an existing page is refused (a later tool).'),
+        lastMajorRevision: packLmrArg,
         dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
         preview: z.boolean().optional().describe('The same as dryRun.'),
         operation_id: operationIdArg,
@@ -318,6 +328,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             dryRun: args.dryRun === true || args.preview === true,
             operationId: args.operation_id,
             args: args,
+            lastMajorRevision: args.lastMajorRevision,
           });
         }),
     }),
@@ -409,6 +420,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           ),
         dependencies: linkList('Current Authoritative owners it depends on'),
         related: linkList('Related Sources'),
+        lastMajorRevision: packLmrArg,
         dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
         preview: z.boolean().optional().describe('The same as dryRun.'),
         operation_id: operationIdArg,
@@ -449,6 +461,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             dryRun: args.dryRun === true || args.preview === true,
             operationId: args.operation_id,
             args,
+            lastMajorRevision: args.lastMajorRevision,
           }),
         ),
     }),
@@ -473,6 +486,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         markdown: z.string().max(200_000).optional().describe('The text: “## Purpose” first.'),
         dependencies: linkList('Pages it depends on'),
         related: linkList('More Related Sources'),
+        lastMajorRevision: packLmrArg,
         dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
         preview: z.boolean().optional().describe('The same as dryRun.'),
         operation_id: operationIdArg,
@@ -499,6 +513,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             dryRun: args.dryRun === true || args.preview === true,
             operationId: args.operation_id,
             args,
+            lastMajorRevision: args.lastMajorRevision,
           }),
         ),
     }),
@@ -562,6 +577,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .optional()
           .describe('A new Art page’s text (“## Purpose” first); drafted when left out.'),
         status: z.enum(['working', 'authoritative']).optional().describe('A new Art page’s status.'),
+        lastMajorRevision: packLmrArg,
         dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
         preview: z.boolean().optional().describe('The same as dryRun.'),
         operation_id: operationIdArg,
@@ -595,6 +611,7 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
                   },
                 }
               : args,
+            lastMajorRevision: args.lastMajorRevision,
           }),
         ),
     }),

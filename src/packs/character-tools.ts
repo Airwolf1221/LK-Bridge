@@ -31,6 +31,7 @@ import {
   type PlanEnv,
 } from './engine/plan.js';
 import { textKey } from './engine/text.js';
+import type { LmrMode } from '../jobs/lmr-hook.js';
 import { characterEnv, finishPackage, packBasis } from './run.js';
 
 type Obj = Record<string, unknown>;
@@ -42,6 +43,8 @@ interface Run<I> {
   readonly dryRun: boolean;
   readonly operationId?: string | undefined;
   readonly args: Obj;
+  /** v3 F3b with ADR 0051: the caller's override for the existing pages the package changes (default `auto`). */
+  readonly lastMajorRevision?: LmrMode | undefined;
 }
 
 /** One character by name, alias or id, or the refusal (none: CHARACTER_NOT_FOUND; several: CHARACTER_AMBIGUOUS). */
@@ -129,7 +132,7 @@ export async function runRelationship(
 ): Promise<McpToolResult> {
   const b = await packBasis(pd, mctx, o.packId, o.tool);
   if (!b.ok) return b.result;
-  const e = characterEnv(pd, mctx, o.tool, b.value, 'Character');
+  const e = characterEnv(pd, mctx, o.tool, b.value, 'Character', o.lastMajorRevision);
   if (!e.ok) return e.result;
   const env = e.env;
   const a = oneCharacter(pd, env, o.input.a, 'a');
@@ -238,7 +241,7 @@ export async function runArt(
 ): Promise<McpToolResult> {
   const b = await packBasis(pd, mctx, o.packId, o.tool);
   if (!b.ok) return b.result;
-  const e = characterEnv(pd, mctx, o.tool, b.value, 'Character');
+  const e = characterEnv(pd, mctx, o.tool, b.value, 'Character', o.lastMajorRevision);
   if (!e.ok) return e.result;
   const env = e.env;
   const type = env.type;

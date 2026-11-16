@@ -8,7 +8,8 @@
  */
 import { londonDate } from '../jobs/internal-steps.js';
 import { lifecycleFrom } from '../lifecycle/settings.js';
-import { lmrConfigFrom } from '../lmr/index.js';
+import type { LmrMode } from '../jobs/lmr-hook.js';
+import { lmrConfigFrom, type LmrConfig } from '../lmr/index.js';
 import type { McpToolContext, McpToolResult } from '../mcp/server.js';
 import { createCtx, withRequest, type CreateCtx, type CreateOutcome } from '../mcp/tools/create-support.js';
 import { finish, repoContext, type RepoCtx } from '../mcp/tools/repo.js';
@@ -16,6 +17,7 @@ import { errorResult, render, type ProjectDeps } from '../mcp/tools/shape.js';
 import { runWriteJob } from '../mcp/tools/write-job.js';
 import type { LifecycleConfig } from '../lifecycle/settings.js';
 import { buildPackJob, type PackJob } from './engine/job.js';
+import { lmrSummary } from './engine/lmr.js';
 import { planOwner, type OwnerInput } from './engine/owner.js';
 import { planPackage, type PackageInput, type PackPlan, type PlanEnv } from './engine/plan.js';
 import { textKey } from './engine/text.js';
@@ -36,6 +38,8 @@ export interface RunPackageOptions {
   readonly operationId?: string | undefined;
   /** The raw arguments, for `operation_id`'s request hash. */
   readonly args: Obj;
+  /** v3 F3b with ADR 0051: the caller's override for the existing pages the package changes (default `auto`). */
+  readonly lastMajorRevision?: LmrMode | undefined;
 }
 
 /** What every pack tool needs before it plans: the pack, its attachment, the tree, the settings, the governance. */
@@ -47,6 +51,8 @@ export interface PackBasis {
   readonly lifecycle: LifecycleConfig;
   readonly governance: GovernanceStatus;
   readonly lmrOnChanges: boolean;
+  /** v3 F3b with ADR 0051: the project's Last Major Revision configuration (its key, switches, housekeeping keys). */
+  readonly lmrConfig: LmrConfig;
 }
 
 /** The pack and the project, checked (v3 F3b: shared by every pack tool). */
@@ -89,6 +95,7 @@ export async function packBasis(
   const lifecycle = lifecycleFrom(settings);
   const cc = createCtx(pd, mctx, ctx, tool);
   const governance = await packs.governance(pack.id, { signal: mctx.signal });
+  const lmrConfig = lmrConfigFrom(settings, lifecycle.fields.lastMajorRevision);
   return {
     ok: true,
     value: {
@@ -98,7 +105,8 @@ export async function packBasis(
       cc,
       lifecycle,
       governance,
-      lmrOnChanges: lmrConfigFrom(settings, lifecycle.fields.lastMajorRevision).categories.packTools,
+      lmrOnChanges: lmrConfig.categories.packTools,
+      lmrConfig,
     },
   };
 }
@@ -109,6 +117,7 @@ export function envOf(
   mctx: McpToolContext,
   tool: string,
   b: PackBasis,
+  lastMajorRevision: LmrMode = 'auto',
 ): Omit<PlanEnv, 'type' | 'hook'> {
   return {
     pd,
@@ -122,6 +131,7 @@ export function envOf(
     governance: b.governance,
     today: londonDate(Date.now()),
     lmrOnChanges: b.lmrOnChanges,
+    lmr: { config: b.lmrConfig, mode: lastMajorRevision },
   };
 }
 
@@ -132,6 +142,7 @@ export function characterEnv(
   tool: string,
   b: PackBasis,
   typeName: string,
+  lastMajorRevision: LmrMode = 'auto',
 ): { readonly ok: true; readonly env: PlanEnv } | { readonly ok: false; readonly result: McpToolResult } {
   const type = b.pack.rules.types.find((t) => t.name.toLowerCase() === typeName.toLowerCase());
   if (!type)
@@ -154,7 +165,7 @@ export function characterEnv(
         pd,
       ),
     };
-  return { ok: true, env: { ...envOf(pd, mctx, tool, b), type, hook } };
+  return { ok: true, env: { ...envOf(pd, mctx, tool, b, lastMajorRevision), type, hook } };
 }
 
 export async function runPackage(
@@ -164,7 +175,7 @@ export async function runPackage(
 ): Promise<McpToolResult> {
   const b = await packBasis(pd, mctx, o.packId, o.tool);
   if (!b.ok) return b.result;
-  const e = characterEnv(pd, mctx, o.tool, b.value, o.type);
+  const e = characterEnv(pd, mctx, o.tool, b.value, o.type, o.lastMajorRevision);
   if (!e.ok) return e.result;
   const plan = await planPackage(e.env, o.input);
   return finishPackage(pd, mctx, o, e.env, plan);
@@ -181,6 +192,7 @@ export async function runOwner(
     readonly dryRun: boolean;
     readonly operationId?: string | undefined;
     readonly args: Obj;
+    readonly lastMajorRevision?: LmrMode | undefined;
   },
 ): Promise<McpToolResult> {
   const b = await packBasis(pd, mctx, o.packId, o.tool);
@@ -196,7 +208,7 @@ export async function runOwner(
       },
       pd,
     );
-  const base = envOf(pd, mctx, o.tool, b.value);
+  const base = envOf(pd, mctx, o.tool, b.value, o.lastMajorRevision);
   const plan = await planOwner(base, o.input);
   return finishPackage(pd, mctx, o, { ...base, type: plan.type, hook: GENERIC_HOOK }, plan);
 }
@@ -215,26 +227,21 @@ export async function finishPackage(
     readonly dryRun: boolean;
     readonly operationId?: string | undefined;
     readonly args: Obj;
+    readonly lastMajorRevision?: LmrMode | undefined;
   },
   env: PlanEnv,
   plan: PackPlan,
 ): Promise<McpToolResult> {
   const { pack, ctx, type } = env;
-  if (
-    !env.lmrOnChanges &&
-    plan.existing.some(
-      (c) => c.kind === 'rename' || c.kind === 'images' || (c.kind === 'facts' && c.substantial),
-    )
-  ) {
-    plan.notes.push(
-      `${env.lifecycle.fields.lastMajorRevision} is not changed on the existing pages this package changes: the project's switch for setting-pack tools (lmrPackTools) is off. The pages it creates get it.`,
-    );
-  }
   let job: PackJob | null = null;
   if (plan.refusals.length === 0) {
     const built = buildPackJob(env, plan);
     if (!built.ok) return built.result;
     job = built.value;
+    if (job.lmr.existing.some((d) => !d.set && d.why.includes('lmrPackTools')))
+      plan.notes.push(
+        `${env.lifecycle.fields.lastMajorRevision} is not changed on the existing pages this package changes: the project's switch for setting-pack tools (lmrPackTools) is off. The pages it creates get it.`,
+      );
   }
   const preview = previewOf(plan, job, ctx.tree.node.bind(ctx.tree), ctx.projectId);
   if (plan.refusals.length > 0) {
@@ -293,6 +300,7 @@ export async function finishPackage(
         ...(plan.replacements.length ? { replacements: plan.replacements } : {}),
         ...(plan.held.length ? { heldTags: plan.held } : {}),
         ...(plan.notes.length ? { notes: plan.notes } : {}),
+        lastMajorRevision: lmrView(j),
       };
       const out = await runWriteJob(pd, mctx, o.tool, {
         steps: j.steps,
@@ -301,9 +309,13 @@ export async function finishPackage(
         ...(j.marker ? { lifecycle: j.marker } : {}),
         forceProposal: pack.rules.settings.alwaysPropose,
         stagedPlacement: plan.images.length > 0,
+        // v3 F3b with ADR 0051: the same override reaches the engine (whose own planner leaves this job alone while
+        // it has Last Major Revision steps of its own).
+        lastMajorRevision: j.lmr.mode,
         proposal: {
           operations: j.operations,
           summary: j.summary,
+          ...(j.lmr.existing.length > 0 ? { lmrNote: lmrSummary(j.lmr.existing) } : {}),
           operation: { tool: o.tool, pack: pack.id, preview },
           prefetched: [...env.cc.sidebars.entries()].map(([resourceId, sb]) => ({
             op: 'listProperties',
@@ -475,11 +487,24 @@ export function previewOf(
           })),
         }
       : {}),
+    ...(job ? { lastMajorRevision: lmrView(job) } : {}),
     replacements: plan.replacements,
     heldTags: plan.held,
     refusals: plan.refusals,
     warnings: plan.warnings,
     notes: plan.notes,
     ...(job ? { steps: job.labels.filter((l) => l !== 'check' && l !== 'verify'), writes: job.writes } : {}),
+  };
+}
+
+/**
+ * v3 F3b with ADR 0051 (ADR 0052 decision 14): what the package does to Last Major Revision, for the preview and the
+ * answer: the mode, the new pages (always dated), and each existing page it changes, set or skipped, and why.
+ */
+function lmrView(j: PackJob): Obj {
+  return {
+    mode: j.lmr.mode,
+    newPages: j.lmr.newPages,
+    existing: j.lmr.existing.map((d) => ({ page: d.page, set: d.set, why: d.why })),
   };
 }

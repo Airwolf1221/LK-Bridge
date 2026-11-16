@@ -15,11 +15,13 @@
  * 5. the images: folders found or created when the job runs, each image uploaded from the bridge's server and its stored
  *    bytes checked; then the Art page's text with each image block bound to its new asset's address;
  * 6. a moved Reference under its new index (last, so its place is worked out among the new pages);
- * 7. Last Major Revision, dated when the job runs, on every page created or substantially changed;
+ * 7. Last Major Revision, dated when the job runs, on every page created, and on an existing page the package changes
+ *    when the owner's rule (ADR 0051) or the caller's `lastMajorRevision` says so (src/packs/engine/lmr.ts);
  * 8. `bridge.verify`: each page's parent and place, its six gated fields as six checks, its template rows (none added or
  *    dropped), its tags in order, its links, each image's asset; the text writes verify themselves as they go.
  */
 import type { FactsPlan, LinkTarget } from '../../facts/plan.js';
+import type { SidebarProperty } from '../../facts/sidebar.js';
 import { expandFacts } from '../../facts/expand.js';
 import { LMR_STEP, VERIFY_STEP, type ExpectCheck, type VerifyTarget } from '../../jobs/internal-steps.js';
 import type { StepSpec } from '../../jobs/index.js';
@@ -27,8 +29,20 @@ import { stateHash } from '../../jobs/sidebar-state.js';
 import { WRITE_PAGE_PLANNER } from '../../pages/index.js';
 import { compareSiblings } from '../../registry/ordering.js';
 import type { ResolveKind } from '../../registry/index.js';
+import type { LmrMode } from '../../jobs/lmr-hook.js';
+import { lmrConfigFrom, textUnits } from '../../lmr/index.js';
 import { createMarker, planCreateJob, type Result } from '../../mcp/tools/create-support.js';
 import { errorResult } from '../../mcp/tools/shape.js';
+import {
+  decisionOf,
+  editOf,
+  keyOf,
+  noteFact,
+  noteLinks,
+  noteNameOrMove,
+  type ExistingEdit,
+  type LmrDecision,
+} from './lmr.js';
 import type { PackPlan, PlannedPage } from './plan.js';
 import type { PlanEnv } from './plan.js';
 
@@ -107,6 +121,15 @@ export interface PackJob {
   /** Each new page's parent and final neighbours (for the preview). */
   readonly placement: ReadonlyMap<string, { parentId: string; after: string | null; before: string | null }>;
   readonly marker: ReturnType<typeof createMarker>;
+  /**
+   * v3 F3b with ADR 0051 (ADR 0052 decision 14): Last Major Revision. Every page the package makes is dated; each
+   * existing page it changes is decided by the owner's rule or the caller's `lastMajorRevision`, and why.
+   */
+  readonly lmr: {
+    readonly mode: LmrMode;
+    readonly newPages: readonly string[];
+    readonly existing: readonly LmrDecision[];
+  };
 }
 
 export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
@@ -116,6 +139,18 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
   const operations: Obj[] = [];
   const targets: VerifyTarget[] = [];
   const lmrKey = env.lifecycle.fields.lastMajorRevision;
+  const lmrCfg = env.lmr?.config ?? lmrConfigFrom({}, lmrKey);
+  const lmrMode: LmrMode = env.lmr?.mode ?? 'auto';
+  // The existing pages the package changes, with what the Last Major Revision rule needs to judge each.
+  const edits = new Map<string, ExistingEdit>();
+  const hasLmrRow = (rows: readonly { readonly key: string }[]) =>
+    rows.some((r) => keyOf(r.key) === keyOf(lmrKey));
+  /** Whether a page has the row, as the tree last read its sidebar (null: not read). */
+  const treeHasRow = (id: string): boolean | null => {
+    const sb = ctx.tree.sidebars(ctx.projectId, [id]).data.get(id);
+    if (!sb) return null;
+    return sb.some((p) => p.kind === 'keyValue' && hasLmrRow(p.rows ?? []));
+  };
   const journal = (page: { id: string; name: string } | null, write: string): Obj => ({
     tool,
     pack: pack.id,
@@ -189,9 +224,15 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
   });
 
   // 3. Changes to existing pages.
-  const lmrPages: { id: string; name: string; after: number[] }[] = [];
-  // Existing pages whose Last Major Revision this job sets: checked by the pack's own row check (dated at run time).
-  const existingChecks: { id: string; name: string; plan: FactsPlan }[] = [];
+  // An existing page's facts: verified by its own plan's checks, or, when this job dates the page, by the pack's row
+  // check (its other rows as planned, Last Major Revision as dated when the job runs).
+  const factChecks: {
+    id: string;
+    name: string;
+    plan: FactsPlan;
+    sidebar: readonly SidebarProperty[];
+    targets: VerifyTarget[];
+  }[] = [];
   for (const c of plan.existing) {
     if (c.kind === 'rename') {
       const node = ctx.tree.node(ctx.projectId, c.page.id).data;
@@ -219,7 +260,11 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         },
       });
       labels.push('record the template');
-      lmrPages.push({ id: c.page.id, name: c.to, after: [at] });
+      const e = editOf(edits, c.page.id, c.to);
+      e.name = c.to;
+      e.after.push(at);
+      noteNameOrMove(e, lmrCfg, 'a new name');
+      e.hasRow ??= treeHasRow(c.page.id);
       targets.push(pageTarget(`${c.to}: name`, c.page.id, { check: 'name', name: c.to }));
       operations.push({
         tool,
@@ -242,8 +287,13 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       for (const s of fx.steps) {
         if (s.op === VERIFY_STEP) {
           const body = (s.params?.body ?? {}) as { targets?: VerifyTarget[] };
-          if (c.substantial) existingChecks.push({ id: c.page.id, name: c.page.rawName, plan: c.plan });
-          else targets.push(...(body.targets ?? []));
+          factChecks.push({
+            id: c.page.id,
+            name: c.page.rawName,
+            plan: c.plan,
+            sidebar: c.sidebar,
+            targets: body.targets ?? [],
+          });
           continue;
         }
         const shifted = shiftStep(s, base);
@@ -259,13 +309,14 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
             : `${c.page.rawName}: ${typeof write === 'string' ? write : s.op}`,
         );
       }
-      if (c.substantial) {
-        const after: number[] = [];
-        for (let n = firstWrite; n <= steps.length; n++) after.push(n);
-        const had = lmrPages.find((x) => x.id === c.page.id);
-        if (had) had.after.push(...after);
-        else lmrPages.push({ id: c.page.id, name: c.page.rawName, after });
-      }
+      // The rule's evidence: each fact as it was and as planned, each link collection's additions and removals.
+      const e = editOf(edits, c.page.id, c.page.rawName);
+      for (let n = firstWrite; n <= steps.length; n++) e.after.push(n);
+      for (const f of c.plan.facts)
+        if (f.change === 'added' || f.change === 'changed' || f.change === 'removed')
+          noteFact(e, lmrCfg, f.key, f.before, f.after);
+      for (const l of c.plan.links) noteLinks(e, lmrCfg, l.title, l.added.length, l.removed.length);
+      e.hasRow = c.sidebar.some((p) => hasLmrRow(p.rows ?? []));
       operations.push({
         tool,
         pack: pack.id,
@@ -297,6 +348,10 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         ),
       });
       labels.push(`${c.page.rawName}: ${c.section} +${c.lines.length}`);
+      const e = editOf(edits, c.page.id, c.page.rawName);
+      e.after.push(steps.length);
+      e.evidence.push({ kind: 'text', before: textUnits(c.blocks), after: textUnits(c.planned) });
+      e.hasRow ??= treeHasRow(c.page.id);
       operations.push({
         tool,
         pack: pack.id,
@@ -433,7 +488,16 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       ),
     });
     labels.push(`${c.page.rawName}: ${c.section} +${c.images.length} image(s)`);
-    lmrPages.push({ id: c.page.id, name: c.page.rawName, after: [at] });
+    // The new sections are appended: each image's label (a heading) and its interpretation are new page text. The
+    // images section's own heading is left out: the filler makes it only when the page lacks it.
+    const e = editOf(edits, c.page.id, c.page.rawName);
+    e.after.push(at);
+    e.evidence.push({
+      kind: 'text',
+      before: [],
+      after: textUnits(c.blocks).filter((u) => !(u.kind === 'heading' && keyOf(u.text) === keyOf(c.section))),
+    });
+    e.hasRow ??= treeHasRow(c.page.id);
     operations.push({
       tool,
       pack: pack.id,
@@ -495,6 +559,10 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       journalOperation: journal({ id: c.page.id, name: c.page.rawName }, `moved under ${c.toName}`),
     });
     labels.push(`move ${c.page.rawName} under ${c.toName}`);
+    const moved = editOf(edits, c.page.id, c.name);
+    moved.after.push(steps.length);
+    noteNameOrMove(moved, lmrCfg, 'a move');
+    moved.hasRow ??= treeHasRow(c.page.id);
     targets.push(pageTarget(`${c.name}: place`, c.page.id, { check: 'parent', parentId: index.id }));
     // The new pages under that index now stand beside the moved page: their expected neighbours, in sibling order.
     const order = [...siblings, { id: c.page.id, displayName: me.displayName, kind: me.kind }].sort(
@@ -553,13 +621,15 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     });
   }
 
-  // 7. Last Major Revision, dated when the job runs (pages made or substantially changed).
+  // 7. Last Major Revision, dated when the job runs: every page made; an existing page as the rule or the caller says.
   const lmrStepOf = new Map<string, number>();
-  const addLmr = (pageId: string, name: string, after: number[]) => {
+  const addLmr = (pageId: string, name: string, after: number[], why: string) => {
     const stepNo = steps.length + 1;
     steps.push({
       op: LMR_STEP,
-      params: { body: { resourceId: pageId, key: lmrKey, after, page: name.slice(0, 500) } },
+      params: {
+        body: { resourceId: pageId, key: lmrKey, after, page: name.slice(0, 500), why: why.slice(0, 500) },
+      },
       followUp: 'lmr_failed',
     });
     labels.push(`${lmrKey} of ${name}`);
@@ -579,13 +649,29 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
     labels.push(`${lmrKey} of ${name}: today`);
     lmrStepOf.set(pageId, stepNo);
   };
+  const newPages: string[] = [];
   for (const p of created) {
     if (!p.templateKeys?.some((k) => k.trim().toLowerCase() === lmrKey.trim().toLowerCase())) continue;
     const at = createStepOf.get(p.id);
-    if (at) addLmr(p.id, p.rawName, [at]);
+    if (!at) continue;
+    addLmr(p.id, p.rawName, [at], 'a page this package makes (always dated)');
+    newPages.push(p.rawName);
   }
-  // Existing pages only while the project's `lmrPackTools` switch is on (v3 F2); new pages always.
-  if (env.lmrOnChanges) for (const x of lmrPages) addLmr(x.id, x.name, x.after);
+  // v3 F3b with ADR 0051: each existing page by the owner's rule, or the caller's lastMajorRevision. A page known to
+  // have no such row is left out (nothing to set, nothing to say).
+  const decisions: LmrDecision[] = [];
+  for (const e of edits.values()) {
+    if (e.hasRow === false) continue;
+    const d = decisionOf(e, lmrCfg, lmrMode);
+    decisions.push(d);
+    if (d.set) addLmr(e.id, e.name, e.after, d.why);
+    // The page's line in the proposal (its first operation's label) says what was decided, and why.
+    const first = operations.find((o) => (o.page as { id?: string } | undefined)?.id === e.id);
+    if (first) {
+      if (Array.isArray(first.pageParts)) (first.pageParts as string[]).push(d.note);
+      if (typeof first.summaryLabel === 'string') first.summaryLabel = `${first.summaryLabel}; ${d.note}`;
+    }
+  }
 
   // 8. Verify: each new page's own checks (one target per gated field), then everything else gathered above.
   for (const p of created) {
@@ -632,9 +718,20 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
       );
     }
   }
-  for (const x of existingChecks) {
+  for (const x of factChecks) {
     const lmr = lmrStepOf.get(x.id);
-    const rows = x.plan.rowsAfter;
+    // Not dated by this job: its facts plan's own checks (Last Major Revision as it was).
+    if (lmr === undefined) {
+      targets.push(...x.targets);
+      continue;
+    }
+    // A change of links only plans no rows: the rows are then the page's as read, only Last Major Revision checked.
+    const rows =
+      x.plan.rowsAfter.length > 0
+        ? x.plan.rowsAfter
+        : (x.sidebar.find(
+            (p) => p.kind === 'keyValue' && keyOf(p.title) === keyOf(env.pack.rules.sidebar.property),
+          )?.rows ?? []);
     targets.push(
       pageTarget(
         `${x.name}: sidebar rows`,
@@ -643,14 +740,15 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
           check: 'rows',
           property: env.pack.rules.sidebar.property,
           keys: rows.map((r) => r.key),
+          // The planned values (none for a change of links only: rows it did not write are not judged).
           values: Object.fromEntries(
-            rows
+            x.plan.rowsAfter
               .filter((r) => r.key.trim().toLowerCase() !== lmrKey.trim().toLowerCase())
               .map((r) => [r.key, r.content.map((c) => (typeof c.text === 'string' ? c.text : '')).join('')]),
           ),
           lmrKey,
         },
-        lmr ? [{ step: lmr, as: 'lmr' }] : undefined,
+        [{ step: lmr, as: 'lmr' }],
       ),
     );
     const added = x.plan.links.filter((l) => l.added.length > 0);
@@ -714,7 +812,17 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
   const summary = `${tool}: ${plan.mode === 'new' ? '' : 'extend '}${plan.subject} (${plan.status === 'working' ? 'Working' : 'Authoritative'}): ${created.length} new page${created.length === 1 ? '' : 's'}${plan.images.length ? `, ${plan.images.length} image${plan.images.length === 1 ? '' : 's'}` : ''}${plan.existing.length ? `, ${plan.existing.length} change${plan.existing.length === 1 ? '' : 's'} to existing pages` : ''}${plan.summaryNote ? `; ${plan.summaryNote}` : ''}`;
   return {
     ok: true,
-    value: { steps, labels, operations, summary, writes, assetSteps, placement, marker },
+    value: {
+      steps,
+      labels,
+      operations,
+      summary,
+      writes,
+      assetSteps,
+      placement,
+      marker,
+      lmr: { mode: lmrMode, newPages, existing: decisions },
+    },
   };
 }
 
