@@ -309,6 +309,18 @@ export interface CanonicalGuardDeps {
     resourceId: string,
     documentId: string,
   ) => { readonly type: string | null; readonly name: string | null } | null;
+  /**
+   * v3 F2 (ADR 0049 decision 5): the sidebar rows a deleted page comes back with (`restoreResource`), from the newest
+   * snapshot holding it, with its name; judged as a new page's facts (an Authoritative page comes back only with the
+   * owner's canonical approval). Null when no snapshot holds it.
+   */
+  readonly restoredPage?: (
+    projectId: string,
+    resourceId: string,
+  ) => Promise<{
+    readonly name: string;
+    readonly rows: readonly { readonly key: string; readonly content: readonly Record<string, unknown>[] }[];
+  } | null>;
 }
 
 /**
@@ -359,7 +371,9 @@ export class CanonicalGuard implements WriteGuard {
           (it.op === 'deleteResource' && rules.some((r) => r.kind === 'delete' || r.kind === 'deleteKind')) ||
           (it.op === 'deleteDocument' && rules.some((r) => r.kind === 'deleteDocument')),
       );
-    if (!guarded.some((it) => it.op !== 'saveResourceAsTemplate')) return { decision: 'allow' };
+    const restores =
+      this.d.restoredPage !== undefined && input.items.some((it) => it.op === 'restoreResource');
+    if (!restores && !guarded.some((it) => it.op !== 'saveResourceAsTemplate')) return { decision: 'allow' };
     const priority = input.origin.approval !== undefined ? 'P0' : 'P1';
     const changes: ProtectedChange[] = [];
     const unchecked: { i: number; why: string }[] = [];
@@ -411,6 +425,22 @@ export class CanonicalGuard implements WriteGuard {
       sidebars.set(resourceId, sb);
       return sb;
     };
+    // v3 F2 (ADR 0049 decision 5): a deleted page restored comes back with its sidebar, judged as a new page's facts.
+    for (const it of input.items.map((x, i) => ({ ...x, i }))) {
+      if (it.op !== 'restoreResource' || !this.d.restoredPage) continue;
+      const rid = it.params.path?.resourceId;
+      if (!rid) continue;
+      const back = await this.d.restoredPage(input.project, rid).catch(() => null);
+      if (!back) continue;
+      const rows: SidebarRow[] = back.rows.map((r) => ({ id: null, key: r.key, content: r.content }));
+      for (const c of assessFactChange(rules, [], rows))
+        changes.push({
+          ...c,
+          stepIndex: it.i,
+          resourceId: rid,
+          page: `${back.name} (restored from a snapshot)`,
+        });
+    }
     for (const it of guarded) {
       if (it.op === 'saveResourceAsTemplate') {
         // CR-2026-11 (CR-17): a template saved from a page in the same request carries that page's sidebar, so a copy

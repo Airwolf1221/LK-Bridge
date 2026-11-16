@@ -235,6 +235,11 @@ export interface LifecycleGuardDeps {
    * name, parent and tags. Null when it has no record (the page was deleted outside the bridge, or long ago).
    */
   readonly deletedPage?: (projectId: string, id: string) => DeletedPageRecord | null;
+  /**
+   * v3 F2 (ADR 0049 decision 5): a deleted page's state as the newest snapshot holding it took it (name, parent, tags),
+   * for a page deleted in the app, of which the bridge holds no delete record. Null when no snapshot holds it.
+   */
+  readonly snapshotPage?: (projectId: string, id: string) => Promise<DeletedPageRecord | null>;
 }
 
 export interface DeletedPageRecord {
@@ -492,14 +497,19 @@ export class LifecycleGuard implements WriteGuard {
     stepIndex?: number,
   ): Promise<LifecycleChange | null> {
     if (c.workingIndexId === null && c.archiveIndexId === null) return null;
-    const rec = this.d.deletedPage?.(project, rid) ?? null;
+    // v3 F2 (ADR 0049 decision 5): a page deleted in the app has no delete record; the newest snapshot holding it says
+    // what it was (its prefix, tags) and where it was, as for a create of that page.
+    const rec =
+      this.d.deletedPage?.(project, rid) ??
+      (await this.d.snapshotPage?.(project, rid).catch(() => null)) ??
+      null;
     if (!rec) {
       return {
         resourceId: rid,
         page: rid,
         what: 'place',
         to: null,
-        text: 'the page would be restored, and the bridge has no record of what it was or where it was deleted from, so it cannot tell whether that crosses a lifecycle index',
+        text: 'the page would be restored, and neither a delete record nor any snapshot says what it was or where it was deleted from, so it cannot tell whether that crosses a lifecycle index',
         tool: 'restore it in the LegendKeeper app (the owner), then let the sweep pick it up',
         ...(stepIndex !== undefined ? { stepIndex } : {}),
       };

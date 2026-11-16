@@ -62,6 +62,7 @@ import { LifecycleGuard } from './lifecycle/guard.js';
 import { lifecycleFrom } from './lifecycle/settings.js';
 import { createLmrPlanner } from './lmr/index.js';
 import { assetLibraryOf } from './assets/library.js';
+import { snapshotPageState } from './snapshots/restore.js';
 import { createLifecycle, type Lifecycle } from './lifecycle/index.js';
 import { createChronology, type Chronology } from './chronology/index.js';
 import { mapCheckers } from './maps/index.js';
@@ -389,6 +390,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     node: treeNode,
     // v2 E4 (RV2-1): what a delete recorded of a page (its name, parent and tags), so its restore can be judged.
     deletedPage: (projectId, id) => deletedPageRecord(engine, projectId, id),
+    // v3 F2 (ADR 0049 decision 5): else what the newest snapshot holding it says (a page deleted in the app).
+    snapshotPage: async (projectId, id) => {
+      const s = await snapshotPageState(snapshots, projectId, id);
+      return s ? { name: s.name, parentId: s.parentId, tags: s.tags } : null;
+    },
   });
   const unregisterGuard = engine.setWriteGuard(
     combineGuards(
@@ -398,6 +404,11 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         settings: (projectId) => projectStore.byId(projectId)?.settings,
         engine,
         pageName,
+        // v3 F2 (ADR 0049 decision 5): a deleted page restored is judged by the sidebar its newest snapshot holds.
+        restoredPage: async (projectId, id) => {
+          const s = await snapshotPageState(snapshots, projectId, id);
+          return s ? { name: s.name, rows: s.rows } : null;
+        },
         // v2 C2b: a cascade delete's pages, from the repository tree (null when the tree cannot answer).
         descendants: (projectId, resourceId) => {
           try {

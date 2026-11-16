@@ -1,7 +1,7 @@
 /**
- * RV4: placing a staged image (src/images/service.ts `place`, ADR 0041) is ONE job: the missing folders, then
- * `updateAsset` (move, unhide, rename), then a read back. Here the `updateAsset` fails (500, not applied) after the
- * destination folder was created. What is the agent told, and does placing it again finish without a second folder?
+ * RV4: placing a staged image (src/images/service.ts `place`, ADR 0041) is ONE job: the missing folders, then (v3 F2,
+ * ADR 0049: the image waits on the bridge's server) the upload into the final folder, then a read back. Here the upload
+ * fails (refused, not applied) after the destination folder was created. What is the agent told, and does placing it again finish without a second folder?
  */
 import { afterEach, expect, it, vi } from 'vitest';
 import { fixture, imagesWorld, type ImagesWorld } from '../images/world.js';
@@ -28,11 +28,10 @@ async function stopAfterFolder() {
   });
   expect(r.body.status, r.text).toBe('staged');
   const stagedId = String(r.body.staged_id);
-  const assetId = (r.body.asset as { id: string }).id;
-  w.stack.mock.inject((c) => c.method === 'PATCH' && c.path.includes(`/assets/${assetId}`), {
+  w.stack.mock.inject((c) => c.method === 'POST' && /\/assets\/uploads\/?$/.test(c.path), {
     kind: 'status',
-    status: 500,
-    code: 'INTERNAL',
+    status: 400,
+    code: 'VALIDATION_ERROR',
   });
   const first = await call(w, { staged_id: stagedId });
   return { first, stagedId };

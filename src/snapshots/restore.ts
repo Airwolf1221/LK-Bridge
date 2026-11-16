@@ -207,6 +207,55 @@ async function load<T>(svc: SnapshotService, row: PieceRow, what: string): Promi
   return v;
 }
 
+/**
+ * v3 F2 (ADR 0049 decision 5): a deleted page's state as the newest snapshot holding it took it: its name (with its
+ * prefix), parent, tags and sidebar rows. The lifecycle and canon guards judge a restore of a page deleted in the app
+ * (the bridge holds no delete record of it) by it, as they would a create of that page. Null when no snapshot holds it.
+ */
+export async function snapshotPageState(
+  svc: SnapshotService,
+  projectId: string,
+  pageId: string,
+): Promise<{
+  readonly snapshotId: string;
+  readonly takenAt: number;
+  readonly name: string;
+  readonly parentId: string | null;
+  readonly tags: readonly string[];
+  readonly rows: readonly { readonly key: string; readonly content: readonly Obj[] }[];
+} | null> {
+  const rows = svc.index.pageHistory(projectId, pageId, { piece: 'resource', limit: 50 });
+  const row = rows.find((r) => r.piece === 'resource' && r.sha256);
+  if (!row?.sha256) return null;
+  const res = await svc.store.getJson<Obj>(row.sha256);
+  if (!res) return null;
+  const sbRow = svc.index
+    .pageHistory(projectId, pageId, { piece: 'sidebar', limit: 50 })
+    .find((r) => r.piece === 'sidebar' && r.sha256);
+  const sb = sbRow?.sha256 ? await svc.store.getJson<SidebarPiece>(sbRow.sha256) : null;
+  const entry = (await svc.manifest(row.snapshotId).catch(() => null))?.pages.find((p) => p.id === pageId);
+  const kv = (sb?.properties ?? []).filter((p) => p.kind === 'keyValue');
+  return {
+    snapshotId: row.snapshotId,
+    takenAt: row.takenAt,
+    name: typeof res.name === 'string' ? res.name : (row.name ?? pageId),
+    parentId: typeof res.parentId === 'string' ? res.parentId : (entry?.parentId ?? null),
+    tags: Array.isArray(res.tags)
+      ? (res.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+      : [],
+    rows: kv.flatMap((p) =>
+      (Array.isArray(p.rows) ? (p.rows as Obj[]) : []).map((r) => ({
+        key: typeof r.key === 'string' ? r.key : '',
+        content: Array.isArray(r.content)
+          ? (r.content as Obj[])
+          : typeof r.text === 'string'
+            ? [{ text: r.text }]
+            : [],
+      })),
+    ),
+  };
+}
+
 /** Every document a page had at the snapshot: its rows (live documents and ones deleted since alike). */
 function documentsAt(
   svc: SnapshotService,
@@ -944,8 +993,11 @@ export async function planRestore(d: RestoreDeps, input: RestoreInput): Promise<
   const warnings: string[] = [];
   const pieces: RestorePlan['pieces'][number][] = [];
   const nameAt = (): string => {
-    const rows = svc.index.pageHistory(input.projectId, input.pageId, { limit: 50 });
-    return rows.find((r) => r.name && r.takenAt <= snap.takenAt)?.name ?? rows[0]?.name ?? input.pageId;
+    // v3 F2: the page's own name (its resource piece's), never a document's.
+    const rows = svc.index
+      .pageHistory(input.projectId, input.pageId, { limit: 200 })
+      .filter((r) => r.piece === 'resource' && r.name);
+    return rows.find((r) => r.takenAt <= snap.takenAt)?.name ?? rows[0]?.name ?? input.pageId;
   };
   const res = (await read('getResource', { path: { resourceId: input.pageId } })) as Obj | undefined;
   const pageName = str(res?.name) ?? nameAt();
@@ -1149,9 +1201,11 @@ function finish(o: {
           : o.scope === 'content'
             ? 'content'
             : 'documents';
-  const summary = `restore_snapshot on “${o.page.name}”: ${what} to the ${o.snap.kind} snapshot of ${when}${
-    o.lost.length ? `; ${o.lost.length} item(s) cannot be restored (listed)` : ''
-  }`.slice(0, 500);
+  // v3 F2 (ADR 0049 decision 5): the proposal names the snapshot it came from and when it was taken.
+  const summary =
+    `restore_snapshot on “${o.page.name}”: ${what} to the ${o.snap.kind} snapshot ${o.snap.id} (taken ${when})${
+      o.lost.length ? `; ${o.lost.length} item(s) cannot be restored (listed)` : ''
+    }`.slice(0, 500);
   return {
     scope: o.scope,
     ...(o.mode ? { mode: o.mode } : {}),
