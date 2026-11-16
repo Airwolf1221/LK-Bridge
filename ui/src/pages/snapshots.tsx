@@ -558,12 +558,7 @@ function ImageRestore({ snapshots }: { snapshots: SnapshotRowView[] }) {
           </button>
           {result?.status === 'dry_run' && (
             <Button variant="primary" busy={busy} onClick={() => send(false)}>
-              Stage it and propose
-            </Button>
-          )}
-          {result?.status === 'staging' && (
-            <Button busy={busy} onClick={() => send(false)}>
-              Check again (it is being staged)
+              Propose it
             </Button>
           )}
         </div>
@@ -576,10 +571,15 @@ function ImageRestore({ snapshots }: { snapshots: SnapshotRowView[] }) {
               <Link to={`/proposals${qs({ id: result.proposalId })}`}>Open it on the Proposals page</Link>.
             </p>
           )}
-          {result.status === 'staging' && (
-            <p className="note">
-              It is being staged (<code>{result.stagedId}</code>). Press “Check again” once its upload has
-              ended; it is not uploaded twice.
+          {result.image && (
+            <p>
+              Goes back to{' '}
+              <strong>
+                {result.image.path.length > 0 ? result.image.path.join(' / ') : 'the library’s root'}
+              </strong>{' '}
+              as “{result.image.name}”
+              {result.image.creates.length > 0 && `, making ${result.image.creates.join(', ')}`}. Nothing is
+              sent to LegendKeeper until the proposal is approved; the image waits on the bridge’s server.
             </p>
           )}
           {result.references.length === 0 ? (

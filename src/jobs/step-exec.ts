@@ -62,6 +62,14 @@ import { inRankOrder } from '../lk/row-order.js';
 import type { WriteGuard } from './write-guard.js';
 import { assertNoUnsupportedLoss, unsupportedGuardSides } from './guards.js';
 import type { WriteJournal } from './journal.js';
+import {
+  blockWriteEvidence,
+  journalEvidence,
+  TEXT_WRITE_OPS,
+  verdictFor,
+  type LmrEvidence,
+  type LmrVerdict,
+} from '../lmr/measure.js';
 import { callOp, isNotFound, newCallStats, type CallStats } from './lk-call.js';
 import type { LockManager } from './locks.js';
 import { READERS, opMeta, type OpMeta, type ReaderDef } from './op-meta.js';
@@ -596,6 +604,60 @@ export class StepExecutor {
       return r.unchanged !== true && r.skipped === undefined;
     });
     if (!wrote) return { skip: 'the edit wrote nothing', date: today };
+    // v3 F3c (ADR 0051): a page text the plan could not measure is measured now, from what each write replaced (its
+    // journal pre-image) and what it sent. Not a major revision: the row is left as it is.
+    let why = b.why;
+    if (b.measure !== undefined) {
+      const v = this.measureEdit(job, b.after, b.measure.known ?? []);
+      why = `auto: ${v.reason}`;
+      if (!v.major) return { skip: `${v.reason}, not a major revision`, date: today };
+    }
+    const decided = await this.decideLmr(job, step, b, today, stats, ref);
+    return why !== undefined ? { ...decided, why } : decided;
+  }
+
+  /**
+   * v3 F3c (ADR 0051): the rule over the writes a job made, from the journal: each text write's pre-image (what it
+   * replaced or deleted) and the params it was sent with, plus what the plan already knew (`known`). A write that wrote
+   * nothing (an unchanged page) is left out.
+   */
+  private measureEdit(job: JobView, after: readonly number[], known: readonly unknown[]): LmrVerdict {
+    const evidence: LmrEvidence[] = known.filter(
+      (e): e is LmrEvidence =>
+        typeof e === 'object' && e !== null && typeof (e as { kind?: unknown }).kind === 'string',
+    );
+    const entries = this.d.journal.lookup(job.projectId, { jobId: job.id, limit: 1000 });
+    for (const n of after) {
+      const s = this.d.repo.step(job.id, n);
+      if (s?.status !== 'succeeded') continue;
+      const r = (s.resultSummary ?? {}) as { unchanged?: unknown; skipped?: unknown };
+      if (r.unchanged === true || r.skipped !== undefined) continue;
+      if (!TEXT_WRITE_OPS.has(s.opId)) continue;
+      const entry = entries.find((e) => e.stepNo === n);
+      const own = journalEvidence(entry?.operation);
+      if (own) {
+        evidence.push(own);
+        continue;
+      }
+      const params = this.d.repo.stepParams(s);
+      evidence.push(
+        blockWriteEvidence(s.opId, params, {
+          ...(entry?.preImage !== undefined && entry.preImage !== null ? { oldBlock: entry.preImage } : {}),
+        }),
+      );
+    }
+    return verdictFor(evidence);
+  }
+
+  /** v3 F2: the row, its value and its version (by chaining or one read), or why it is skipped. */
+  private async decideLmr(
+    job: JobView,
+    step: StepView,
+    b: LmrParams,
+    today: string,
+    stats: CallStats,
+    ref: { jobId: string; stepNo: number },
+  ): Promise<Record<string, unknown>> {
     let rowId = b.rowId;
     let value = b.value;
     let version: string | undefined;

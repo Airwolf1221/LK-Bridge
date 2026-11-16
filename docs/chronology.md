@@ -6,7 +6,9 @@ timeline is a view of it, and the Main count is the table's row count. The decis
 [ADR 0038](adr/0038-calendar-engine-and-chronology-sync.md) (the engine and the timeline tools),
 [ADR 0039](adr/0039-date-styles-timeline-repair-and-etag-versions.md) (two date styles, `sync_timeline_event`) and
 [ADR 0048](adr/0048-chronology-ii.md) (qualified dates, pairing, table-only rows, events without a row; its F2.1
-amendments: ties, links by choice, `create_new`, more forms). The tools are in
+amendments: ties, links by choice, `create_new`, more forms) and
+[ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) (same-day pairing without guessing; Last
+Major Revision only for a row's date or description). The tools are in
 [tools.md](tools.md), the dashboard's Chronology page in [dashboard.md](dashboard.md#chronology-v2-d1).
 
 ## Plain dates
@@ -200,6 +202,23 @@ event …`), because it changes what the check reports. The check honours stored
   (`ROW_PREFIX_TOO_SHORT`); no match is `ROW_NOT_FOUND`, with the rows of that date in the message.
 
 Anything still tied is refused, with the candidates shown as above.
+
+### Same-day pairing without guessing (v3 F3c)
+
+[ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) decision 2. Up to F2.1 a day with as
+many rows as events (two or more of each) was paired one to one in table order: a guess. Now, inside such a day:
+
+1. **a unique name match pairs first**: the event's name names exactly one row of that date (F2.1's rule);
+2. **stored links are respected** (the bridge's own, and the ones the owner chose with **Use this event** or **Pair
+   with this row**);
+3. **what is left pairs by the date only when it is one row and one event.** Two or more rows and as many events left
+   on that day are a **tie**: each event is reported as an **Event in a tie** with its candidate rows and **Pair with
+   this row**, and `sync_timeline_event` on one of the rows is refused with `PAIRING_AMBIGUOUS`, naming the candidates
+   (**Use this event**, **Make a new event**). Never paired by order.
+
+A day with exactly one row and one event is unchanged. "A plain row beats a qualified anchor" (above) likewise applies
+only to one plain row and one event. Once the owner pairs one row of a tie, the one row and one event left are unique
+and pair by the date at the next check.
 
 A repair that would turn a range event into a single day, or the reverse, says so (`range → single day`) and needs a
 confirmation.

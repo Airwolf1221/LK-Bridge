@@ -13,6 +13,7 @@ import { missingPiecesOf } from '../../snapshots/manifest.js';
 import * as z from 'zod';
 import { mcpOrigin } from '../../policy/mcp.js';
 import type { McpToolProvider } from '../server.js';
+import { lastMajorRevisionArg } from './schemas.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
 import { repoContext, resolvePage } from './repo.js';
 import { CHANGE_ANNOTATIONS } from './resources.js';
@@ -300,6 +301,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
         .optional()
         .describe('For a recreated page whose parent is gone: where it goes (a name or id).'),
       dryRun: z.boolean().optional().describe('Show the plan and its diff; propose nothing.'),
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: CHANGE_ANNOTATIONS,
@@ -349,6 +351,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
             ...(args.mode ? { mode: args.mode } : {}),
             ...(args.ids ? { ids: args.ids } : {}),
             ...(parentId ? { parentId } : {}),
+            ...(args.lastMajorRevision ? { lastMajorRevision: args.lastMajorRevision } : {}),
           } as const;
           const plan = await restores.plan(input);
           const view = {
@@ -415,7 +418,7 @@ function restoreSnapshotTool(deps: ToolDeps): McpToolProvider {
   });
 }
 
-/** Scope "image": a deleted image back as a new asset (staged now, placed by the proposal), its references optional. */
+/** Scope "image": a deleted image back as a new asset (kept on the bridge’s server, uploaded on approval), its references optional. */
 async function imageScope(
   pd: ProjectDeps,
   args: {
@@ -457,22 +460,13 @@ async function imageScope(
       { ...(args.dryRun ? { dryRun: true } : {}) },
     );
     if (r.status === 'dry_run') return render({ ...r, scope: 'image' }, pd);
-    if (r.status === 'staging')
-      return render(
-        {
-          ...r,
-          scope: 'image',
-          hint: 'The image is being staged (uploaded and hidden) first; call restore_snapshot again with the same arguments once its job ends (bridge_job_status). It is not uploaded twice.',
-        },
-        pd,
-      );
     return render(
       {
         ...r,
         scope: 'image',
         ...canonicalBody(
           r,
-          'A restore is always a proposal (whatever your scope): the image is staged (hidden) and waits for the owner.',
+          'A restore is always a proposal (whatever your scope): the image waits on the bridge’s server, and nothing is sent to LegendKeeper until the owner approves.',
         ),
       },
       pd,

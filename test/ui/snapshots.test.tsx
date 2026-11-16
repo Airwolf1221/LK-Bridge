@@ -382,14 +382,15 @@ describe('the Snapshots page', () => {
               byHand: [],
             },
           ];
+          const image = { name: 'Weeping Sea', path: ['Characters'], creates: [] };
           return (c.body as { dryRun?: boolean }).dryRun
-            ? { status: 'dry_run', old: { name: 'Weeping Sea' }, references: refs }
+            ? { status: 'dry_run', old: { name: 'Weeping Sea' }, references: refs, image }
             : {
                 status: 'proposal_captured',
                 proposalId: 'prop_img1',
                 old: {},
                 references: refs,
-                newAsset: { id: 'n1', url: null },
+                image: { ...image, stagedId: 'img_1' },
               };
         },
       }),
@@ -401,7 +402,11 @@ describe('the Snapshots page', () => {
     const card = screen.getByRole('region', { name: 'Restore a deleted image' });
     await user.click(within(card).getByRole('button', { name: 'Preview' }));
     expect(await within(card).findByText(/Main \(image blocks\)/)).toBeInTheDocument();
-    await user.click(within(card).getByRole('button', { name: 'Stage it and propose' }));
+    // v3 F3c (ADR 0051): where it goes back; nothing is sent to LegendKeeper before approval.
+    expect(within(card).getByText(/Goes back to/)).toHaveTextContent(
+      'Goes back to Characters as “Weeping Sea”. Nothing is sent to LegendKeeper until the proposal is approved',
+    );
+    await user.click(within(card).getByRole('button', { name: 'Propose it' }));
     expect(
       await within(card).findByRole('link', { name: 'Open it on the Proposals page' }),
     ).toBeInTheDocument();

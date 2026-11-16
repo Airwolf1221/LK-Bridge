@@ -64,6 +64,14 @@ export interface LmrParams {
   readonly after: readonly number[];
   /** The page's name, for the follow-up. */
   readonly page?: string;
+  /** v3 F3c (ADR 0051): which mode applied and why, in words (kept in the step's result and the answer). */
+  readonly why?: string;
+  /**
+   * v3 F3c: the edit's page text could not be measured when it was planned (the request did not hold the old text): the
+   * decision measures it when it runs, from the journal's pre-images of the `after` steps and what they sent, with the
+   * evidence the plan did hold (`known`: facts, links, chronology rows). Not a major revision: skipped.
+   */
+  readonly measure?: { readonly known?: readonly unknown[] };
 }
 
 export function isInternalStep(op: string): boolean {
@@ -953,6 +961,11 @@ const lmrParamsSchema = z
         chainFrom: z.number().int().min(1).optional(),
         after: z.array(z.number().int().min(1)).min(1).max(1000),
         page: z.string().max(500).optional(),
+        why: z.string().max(500).optional(),
+        measure: z
+          .object({ known: z.array(z.record(z.string(), z.unknown())).max(1000).optional() })
+          .strict()
+          .optional(),
       })
       .strict(),
   })

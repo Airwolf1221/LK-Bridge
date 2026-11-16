@@ -371,8 +371,10 @@ export class JobEngine {
           jobKind: 'single_op',
           steps: [{ op: def.operationId, params, options }],
           ...(opts.proposal?.prefetched ? { prefetched: opts.proposal.prefetched } : {}),
+          ...(opts.lastMajorRevision ? { mode: opts.lastMajorRevision } : {}),
         })
       : null;
+    const lmrSays = lmr ? { lastMajorRevision: lmr.note } : {};
     const lmrItems: AuthItem[] = (lmr?.steps ?? []).map((s) => {
       const p = s.params ?? {};
       const o = stepOptions(s);
@@ -391,7 +393,7 @@ export class JobEngine {
         ...(opts.proposal || lmr
           ? { extras: { ...opts.proposal, ...(lmr ? { lmrNote: lmr.note } : {}) } }
           : {}),
-        ...(lmr ? { jobOptions: { internal: true } } : {}),
+        ...(lmr && lmr.steps.length > 0 ? { jobOptions: { internal: true } } : {}),
       },
     );
     if (proposal) return proposal;
@@ -427,6 +429,7 @@ export class JobEngine {
         jobId: job.id,
         eta: hold ? null : this.clock.now() + estimate.wallClockMs,
         reason: hold ?? 'estimate',
+        ...lmrSays,
       };
     }
 
@@ -444,9 +447,15 @@ export class JobEngine {
     const last = result.last;
     // v3 F2: with the Last Major Revision steps appended, the answer is the edit's own (step 1), and a follow-up of
     // theirs (a tolerated failure) never makes the edit fail.
-    if (lmr && final.status === 'succeeded' && (result.values?.length ?? 0) > 0) {
+    if (lmr && lmr.steps.length > 0 && final.status === 'succeeded' && (result.values?.length ?? 0) > 0) {
       const requestIds = this.repo.steps(job.id).flatMap((s) => s.requestIds);
-      return { status: 'succeeded', jobId: job.id, result: result.values![0], requestIds };
+      return {
+        status: 'succeeded',
+        jobId: job.id,
+        result: result.values![0],
+        requestIds,
+        lastMajorRevision: this.lmrOutcome(job.id) ?? lmr.note,
+      };
     }
     if (last?.kind === 'succeeded' && final.status === 'succeeded') {
       // A createManyResources recovered part-way ran a continuation step: return every resource it created.
@@ -456,7 +465,7 @@ export class JobEngine {
           ? { resources: values.flatMap((v) => (v as { resources: unknown[] }).resources) }
           : last.value;
       const requestIds = this.repo.steps(job.id).flatMap((s) => s.requestIds);
-      return { status: 'succeeded', jobId: job.id, result: value, requestIds };
+      return { status: 'succeeded', jobId: job.id, result: value, requestIds, ...lmrSays };
     }
     if (final.status === 'waiting_budget') {
       return { status: 'waiting_budget', jobId: job.id, eta: final.resumeAt, reason: 'budget' };
@@ -550,11 +559,24 @@ export class JobEngine {
     if (input.steps.some((s) => s.op === LMR_STEP || s.options.decisionFrom !== undefined)) return null;
     try {
       const plan = this.lmrPlanner(input);
-      return plan && plan.steps.length > 0 ? plan : null;
+      return plan && (plan.steps.length > 0 || plan.note !== '') ? plan : null;
     } catch (e) {
       this.log.warn({ err: e, project: input.project }, 'the Last Major Revision planner failed');
       return null;
     }
+  }
+
+  /**
+   * v3 F3c (ADR 0051): what the job's `bridge.lmr` decision said when it ran (the row set to a date, or skipped and why),
+   * in words; undefined when it has not run.
+   */
+  private lmrOutcome(jobId: string): string | undefined {
+    const step = this.repo.steps(jobId).find((s) => s.opId === LMR_STEP && s.status === 'succeeded');
+    if (!step) return undefined;
+    const r = (this.repo.stepResult(step) ?? {}) as { skip?: unknown; date?: unknown; why?: unknown };
+    const why = typeof r.why === 'string' ? ` (${r.why})` : '';
+    if (typeof r.skip === 'string') return `Last Major Revision not set: ${r.skip}${why}`;
+    return typeof r.date === 'string' ? `Last Major Revision set to ${r.date}${why}` : undefined;
   }
 
   setWriteGuard(guard: WriteGuard): () => void {
@@ -845,6 +867,7 @@ export class JobEngine {
       steps: given.steps.map((s) => ({ op: s.op, params: s.params ?? {}, options: stepOptions(s) })),
       ...(given.lifecycle ? { lifecycle: given.lifecycle } : {}),
       ...(given.proposal?.prefetched ? { prefetched: given.proposal.prefetched } : {}),
+      ...(given.lastMajorRevision ? { mode: given.lastMajorRevision } : {}),
     });
     const req: BatchSubmit = lmr ? withLmr(given, lmr) : given;
     const validated: AuthItem[] = req.steps.map((s: StepSpec, i) => {
@@ -989,7 +1012,12 @@ export class JobEngine {
     );
     this.pump();
     const held = prepared.some((p) => p.def && isWriteOp(p.def)) && this.writeHold(project) !== null;
-    return { jobId: job.id, status: job.status, eta: held ? null : this.clock.now() + estimate.wallClockMs };
+    return {
+      jobId: job.id,
+      status: job.status,
+      eta: held ? null : this.clock.now() + estimate.wallClockMs,
+      ...(lmr ? { lastMajorRevision: lmr.note } : {}),
+    };
   }
 
   /** v2 C2a: one of the bridge's own steps (a read; no client ids, no idempotency key). */
@@ -1419,15 +1447,18 @@ export class JobEngine {
     for (const b of binds) {
       const source = b.step < step.stepNo ? this.repo.step(job.id, b.step) : undefined;
       const made =
-        source?.status === 'succeeded' ? (this.repo.stepResult(source) as { url?: unknown } | null) : null;
-      if (typeof made?.url !== 'string' || made.url.length === 0) {
+        source?.status === 'succeeded'
+          ? (this.repo.stepResult(source) as { url?: unknown; id?: unknown } | null)
+          : null;
+      const value = b.field === 'id' ? made?.id : made?.url;
+      if (typeof value !== 'string' || value.length === 0) {
         return new JobsError(
           'BRIDGE_ERROR',
-          `${step.opId}: step ${b.step} gave no asset address to put in place of ${b.placeholder}; nothing was sent`,
+          `${step.opId}: step ${b.step} gave no asset ${b.field === 'id' ? 'id' : 'address'} to put in place of ${b.placeholder}; nothing was sent`,
           ref,
         );
       }
-      urls.set(b.placeholder, made.url);
+      urls.set(b.placeholder, value);
     }
     const params = this.repo.stepParams(step);
     const swap = (v: unknown): unknown =>
@@ -2062,6 +2093,12 @@ export class JobEngine {
         // v3 F2: a step that can never fail the job (the Last Major Revision write) is a follow-up, not the job's error.
         if (step.options.followUp) {
           this.emitJob(jobId, 'updated');
+          // v3 F3c (ADR 0051 decision 3): a restored image's relink that failed stops the job after the upload.
+          if (step.options.followUp === 'image_relink_failed') {
+            await this.flushDeferred(job, entry.current.signal);
+            this.finish(jobId);
+            return { last, values };
+          }
           continue;
         }
         this.repo.updateJob(jobId, { lastError: errorToJson(bound) });
@@ -2099,6 +2136,13 @@ export class JobEngine {
           // the edit stays written (nothing is rolled back).
           if (step.options.followUp) {
             this.emitJob(jobId, 'updated');
+            // v3 F3c (ADR 0051 decision 3): a restored image's relink failed (the page changed since the proposal): the
+            // job stops here, after the upload. The asset stays where it was put; nothing is retried.
+            if (step.options.followUp === 'image_relink_failed') {
+              await this.flushDeferred(job, entry.current.signal);
+              this.finish(jobId);
+              return { last, values };
+            }
             continue;
           }
           this.repo.updateJob(jobId, {
@@ -2201,10 +2245,15 @@ export class JobEngine {
     const counts = this.repo.stepCounts(jobId);
     const job = this.requireJob(jobId);
     // v3 F2: steps that can never fail the job (the Last Major Revision write) are follow-ups when they fail.
-    const followUps = this.repo
-      .steps(jobId)
-      .filter((s) => s.options.followUp !== undefined && (s.status === 'failed' || s.status === 'uncertain'));
+    const allSteps = this.repo.steps(jobId);
+    const followUps = allSteps.filter(
+      (s) => s.options.followUp !== undefined && (s.status === 'failed' || s.status === 'uncertain'),
+    );
     const failed = counts.failed + counts.uncertain - followUps.length;
+    // v3 F3c (ADR 0051 decision 3): the relinks a failed one stopped are follow-ups too (never sent).
+    const unsent = followUps.some((s) => s.options.followUp === 'image_relink_failed')
+      ? allSteps.filter((s) => s.options.followUp === 'image_relink_failed' && s.status === 'pending')
+      : [];
     const status: JobStatus = failed > 0 ? 'failed' : 'succeeded';
     let result = job.result ?? {};
     if (job.kind !== 'paginate_all') {
@@ -2224,6 +2273,22 @@ export class JobEngine {
             ...(s.error?.code ? { code: s.error.code } : {}),
           })),
         };
+      if (unsent.length > 0)
+        result = {
+          ...result,
+          followUps: [
+            ...((result as { followUps?: unknown[] }).followUps ?? []),
+            ...unsent.map((s) => ({
+              kind: s.options.followUp,
+              stepNo: s.stepNo,
+              ...(typeof s.params?.path?.resourceId === 'string' ? { pageId: s.params.path.resourceId } : {}),
+              reason: 'not sent: the job stopped at an earlier relink that failed',
+            })),
+          ],
+        };
+      // v3 F3c (ADR 0051): what the Last Major Revision decision said when it ran.
+      const lmrSaid = this.lmrOutcome(jobId);
+      if (lmrSaid) result = { ...result, lastMajorRevision: lmrSaid };
       if (job.kind === 'single_op') {
         const s = this.repo.step(jobId, 1);
         if (s) result = { ...result, step: s.resultSummary, resultArtifactId: s.resultArtifactId };
@@ -2923,6 +2988,8 @@ export class JobEngine {
  * page lock; a page job holds its page already).
  */
 function withLmr(req: BatchSubmit, lmr: LmrPlan): BatchSubmit {
+  // v3 F3c: the rule (or the caller) decided not to set the row: only the note is added.
+  if (lmr.steps.length === 0) return { ...req, proposal: { ...req.proposal, lmrNote: lmr.note } };
   const holds = req.holdLock !== undefined || (req.holdDocuments?.length ?? 0) > 0;
   let holdLock = req.holdLock;
   let more = req.holdMore?.resources ?? [];
@@ -3004,7 +3071,7 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.decisionFrom && Number.isInteger(o.decisionFrom.step)
       ? { decisionFrom: { step: o.decisionFrom.step } }
       : {}),
-    ...(o.followUp === 'lmr_failed' ? { followUp: 'lmr_failed' as const } : {}),
+    ...(o.followUp === 'lmr_failed' || o.followUp === 'image_relink_failed' ? { followUp: o.followUp } : {}),
     ...(o.findOrCreate === true ? { findOrCreate: true } : {}),
     ...(o.onlyIfEmpty === true ? { onlyIfEmpty: true } : {}),
     // v2 D3: set by bridge code only.
@@ -3028,7 +3095,13 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.bindAssetUrls &&
     o.bindAssetUrls.length > 0 &&
     o.bindAssetUrls.every((b) => Number.isInteger(b.step) && typeof b.placeholder === 'string')
-      ? { bindAssetUrls: o.bindAssetUrls.map((b) => ({ step: b.step, placeholder: b.placeholder })) }
+      ? {
+          bindAssetUrls: o.bindAssetUrls.map((b) => ({
+            step: b.step,
+            placeholder: b.placeholder,
+            ...(b.field === 'id' ? { field: 'id' as const } : {}),
+          })),
+        }
       : {}),
     ...(o.fill && typeof o.fill.filler === 'string'
       ? { fill: { filler: o.fill.filler, ...(o.fill.input !== undefined ? { input: o.fill.input } : {}) } }

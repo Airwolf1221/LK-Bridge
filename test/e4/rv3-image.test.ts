@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed tool results */
 /**
  * RV3-4: restoring a deleted image sends the stored bytes through D3's upload converter (src/snapshots/image-restore.ts
  * `d.images.convert(old.bytes)`), so a PNG or JPEG comes back as a lossy WebP (quality 90, metadata and colour profile
@@ -53,7 +52,10 @@ it('RV3-4: a restored PNG image comes back byte for byte (the snapshot store’s
   const r = await call('restore_snapshot', { snapshot: snap, scope: 'image', asset: id });
   expect(r.body.status, JSON.stringify(r.body)).toBe('proposal_captured');
   expect(await approve(r)).toBe('executed');
-  const newId = String(r.body.newAsset.id);
+  // v3 F3c (ADR 0051): the new asset exists only once approved (uploaded from the bridge's server into its folder).
+  const [made] = w.assets.byName('Heraldry', S.folderA);
+  const newId = made!.id;
+  expect(newId).not.toBe(id);
   const restored = w.served.get(newId)!;
   // Safe: the same bytes as the snapshot stored (a backup brings back the original, not a lossy copy).
   expect(

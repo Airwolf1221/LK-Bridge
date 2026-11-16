@@ -149,3 +149,13 @@ export function suggestOperations(wanted: string, ids: readonly string[], n = 5)
     .slice(0, n)
     .map((x) => x.id);
 }
+
+/**
+ * v3 F3c (ADR 0051 decision 1): the caller's override of the Last Major Revision rule, on every tool that can set it.
+ */
+export const lastMajorRevisionArg = z
+  .enum(['auto', 'set', 'skip'])
+  .optional()
+  .describe(
+    'Last Major Revision: "auto" (default: set to today only for a major revision by the owner’s rule: 8+ words of page text, a heading’s wording, a real fact change, a Dependency, a chronology row’s date or description; not trims, punctuation, typos, a KCY alone), "set" (set it anyway) or "skip" (leave it). The answer and any proposal say which applied and why.',
+  );

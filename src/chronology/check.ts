@@ -237,8 +237,10 @@ export function couldBeRowOf(
  *
  * 1. the bridge's own links (a linked pair that disagrees about the date is a date mismatch, not a pair);
  * 2. the same date and the event's name is the row's description (or its start cut short);
- * 3. the same date alone, where a row and an event are the only two on that date (or equally many of each): the
- *    timeline's short name differs from the table's description by design, so wording alone is not a difference;
+ * 3. the same date alone, where a row and an event are the only two on that date left by passes 1 and 2: the
+ *    timeline's short name differs from the table's description by design, so wording alone is not a difference.
+ *    v3 F3c (ADR 0051 decision 2): two or more rows and as many events left on one date are never paired by their
+ *    order (F2.1 still did): they stay unpaired, a tie the owner settles;
  * 4. v2 E6: the same chronology event with a different date, by score: the same start and end (a range against a
  *    range) first, then (v3 F2.1, with `kcyOf`) the same start with both ends in the same year, then the same start with
  *    a compatible shape, then the name, then the same start alone. A candidate is taken only when it is the one best
@@ -250,7 +252,8 @@ export function couldBeRowOf(
  * matches one event (two plain rows and one event: the name decides, or nothing does); and after pass 3, a date where
  * rows and events are not equally many is settled by the plain rows: when the plain rows of that date are exactly as
  * many as its events, they take them (`plain`: "plain row preferred over qualified anchor"), and the qualified rows
- * anchored there are left to be offered events of their own (the Arkona Selyros 40th, 4A 605 case).
+ * anchored there are left to be offered events of their own (the Arkona Selyros 40th, 4A 605 case). v3 F3c: only when
+ * that is one plain row and one event.
  *
  * Rows the owner marked table-only (`tableOnly`, by row id) take no part. What is left over is reported as rows without
  * an event and events without a row.
@@ -307,7 +310,7 @@ export function matchRowsAndEvents(
     const rivals = [...named].filter(([r, es]) => r !== row && es.includes(hit));
     if (rivals.length === 0 && freeEvents.has(hit)) take(row, hit, 'date+name');
   }
-  // Pass 3: by date alone, one to one inside a group of the same date and the same number on each side.
+  // Pass 3: by date alone, where one row and one event are left on a date (never two or more by their order).
   const key = (d: { start: number; end: number | null; detail: number }) =>
     `${d.start}|${d.end ?? ''}|${d.detail}`;
   const rowsByDate = new Map<string, AgeRow[]>();
@@ -324,15 +327,19 @@ export function matchRowsAndEvents(
   for (const [k, rs] of rowsByDate) {
     const es = eventsByDate.get(k);
     if (!es) continue;
-    if (es.length === rs.length) {
-      rs.forEach((r, i) => take(r, es[i]!, 'date'));
+    // v3 F3c (ADR 0051 decision 2): what links (pass 1) and unique names (pass 2) left of a date is paired by the date
+    // alone only when it is ONE row and ONE event. Two or more of each are never paired by their order: they stay
+    // unpaired, a tie the owner settles (F2.1's "Use this event" and "Pair with this row").
+    if (es.length === 1 && rs.length === 1) {
+      take(rs[0]!, es[0]!, 'date');
       continue;
     }
+    if (es.length === rs.length) continue;
     // v3 F2.1: a plain row beats a qualified anchor. The event's date and shape are exactly the plain row's date; the
-    // qualified rows anchored on it (`Before Selyros 40th, 4A 605; …`) are unpaired and offered new events.
+    // qualified rows anchored on it (`Before Selyros 40th, 4A 605; …`) are unpaired and offered new events. v3 F3c: only
+    // one plain row and one event (two of each would again be paired by order).
     const plain = rs.filter((r) => r.date !== null && !r.reading);
-    if (plain.length > 0 && plain.length < rs.length && plain.length === es.length)
-      plain.forEach((r, i) => take(r, es[i]!, 'plain'));
+    if (plain.length === 1 && plain.length < rs.length && es.length === 1) take(plain[0]!, es[0]!, 'plain');
   }
   // Pass 4: the same chronology event with a different date, by score. Every row of the age is a possible rival for
   // the shape guard, a table-only one too: its event is still more likely its own than another shape's row's.

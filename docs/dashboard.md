@@ -605,8 +605,12 @@ the bridge's own copies of the selected project's pages.
   know: the write is sent again without it) shows **couldn't be restored exactly** beside its state, with each field
   listed.
 - **Restore a deleted image**: a snapshot and the image's old asset id; the preview lists the pages that showed the old
-  URL; tick **Also update the pages that referred to the old URL** to include them; **Stage it and propose** uploads it
-  hidden (it comes back as a new asset with a new URL) and makes the proposal.
+  URL and where the image goes back (its folder and name, and any folder made on the way); tick **Also update the pages
+  that referred to the old URL** to include them; **Propose it** makes the proposal. Since v3 F3c
+  ([ADR 0051](adr/0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md)) nothing is sent to LegendKeeper until
+  it is approved: the image waits on the bridge's server, then one job uploads it into its folder and updates the pages
+  (it comes back as a new asset with a new URL). A page edited meanwhile is left for a hand relink, and the restore's row
+  says so (`image_relink_failed`).
 - **Restore rehearsal**: a full snapshot of this project, a sandbox project to rehearse into (never this one), sampled
   (about 50 pages) or every page, and whether to keep the copy. The picker starts on the **newest complete** full snapshot
   and marks a partial one **(partial)** (v2 E5.4). A sample copies at most 25 events of each timeline (with the lanes they

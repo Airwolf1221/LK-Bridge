@@ -1081,27 +1081,29 @@ export class ImageService {
   }
 
   /**
-   * v3 F2 (ADR 0049 decision 10): places an image staged on the server, in the order of Visual References' “Intake and
-   * approval”: the destination resolved deterministically (the plan: ambiguity refused, never the library's root), a
-   * collision check on the display name in that folder (numbered: “Name (2)”), the WebP's type, length and SHA-256 from
-   * the converted bytes, the folders found or created (when the job runs, under the asset-folder lock), the upload with
-   * the final folder and extension-free name, then the stored file's SHA-256 and the asset's folder and name verified.
-   * ONE batch job, or ONE proposal at scope `propose` (the bytes are read from the server when it runs).
+   * v3 F2 (ADR 0049 decision 10), shared since v3 F3c (ADR 0051 decision 3): the steps that upload an image staged on
+   * the bridge's server straight into its final folder: the folders found or created when the job runs (under the
+   * asset-folder lock), `createImageUpload`, the signed PUT of the server's bytes, `createImageAsset` with the final
+   * folder and name, the stored file's SHA-256 checked, and the asset read back. `assetStep` is the `createImageAsset`
+   * step's number (later steps bind its id or URL). A destination with no folder and nothing to create is the library's
+   * root (only an image restore puts one back there: placing refuses it). `name` is numbered when taken in an existing
+   * folder (“Name (2)”). `contentType` is the stored bytes' (WebP for an intake; a restore's original type).
    */
-  private async placeFromServer(p: {
-    readonly projectId: string;
+  serverPlacementSteps(p: {
     readonly row: ImageUploadRow;
-    readonly plan: AssetPlan;
-    readonly rename?: string | undefined;
-    readonly origin: JobOrigin;
+    readonly destination: Pick<AssetPlan, 'wouldCreate' | 'destination'>;
+    readonly name: string;
     readonly tool: string;
-    readonly described?: Record<string, unknown>;
-  }): Promise<{ submitted: SubmitResult | ProposalCaptured; labels: string[] }> {
+    readonly contentType?: string;
+    readonly journal?: Record<string, unknown>;
+  }): { steps: StepSpec[]; labels: string[]; assetStep: number; name: string } {
     const row = p.row;
-    const plan = p.plan;
+    const plan = p.destination;
     const creates = plan.wouldCreate;
-    const wanted = p.rename?.trim() || row.name;
-    const name = creates.length > 0 ? wanted : this.freeName(p.projectId, plan.destination.folderId, wanted);
+    const name =
+      creates.length > 0 ? p.name : this.freeName(row.projectId, plan.destination.folderId, p.name);
+    const contentType = p.contentType ?? 'image/webp';
+    const where = plan.destination.path.length > 0 ? plan.destination.path.join(' / ') : 'the library’s root';
     const steps: StepSpec[] = [];
     const labels: string[] = [];
     creates.forEach((c, i) => {
@@ -1112,21 +1114,21 @@ export class ImageService {
         },
         ...(i > 0 ? { bindFrom: { step: i, to: 'body.folderId' as const } } : {}),
         findOrCreate: true,
-        journalOperation: { tool: p.tool, write: `folder ${c.path.join(' / ')}` },
+        journalOperation: { tool: p.tool, write: `folder ${c.path.join(' / ')}`, ...p.journal },
       });
       labels.push(`create folder ${c.path.join(' / ')}`);
     });
     const contentHash = row.webp.sha256;
     steps.push({
       op: 'createImageUpload',
-      params: { body: { contentType: 'image/webp', contentLength: row.webp.bytes, contentHash } },
+      params: { body: { contentType, contentLength: row.webp.bytes, contentHash } },
     });
     labels.push('create the upload');
     steps.push({
       op: 'upload_image.put',
       params: {
         body: {
-          contentType: 'image/webp',
+          contentType,
           contentLength: row.webp.bytes,
           contentHash,
           stagedSha256: row.serverSha256!,
@@ -1135,6 +1137,7 @@ export class ImageService {
     });
     labels.push('send the file (from the bridge’s server)');
     const assetStep = steps.length + 1;
+    const folderId = creates.length > 0 ? 'pending' : plan.destination.folderId;
     steps.push({
       op: 'createImageAsset',
       params: {
@@ -1142,13 +1145,13 @@ export class ImageService {
           uploadKey: 'pending',
           name,
           ...(row.description ? { description: row.description } : {}),
-          folderId: creates.length > 0 ? 'pending' : plan.destination.folderId!,
+          ...(folderId ? { folderId } : {}),
         },
       },
       ...(creates.length > 0 ? { bindFrom: { step: creates.length, to: 'body.folderId' as const } } : {}),
-      journalOperation: { tool: p.tool, write: `image “${name}”`, stagedId: row.id },
+      journalOperation: { tool: p.tool, write: `image “${name}”`, stagedId: row.id, ...p.journal },
     });
-    labels.push(`create the image “${name}” in ${plan.destination.path.join(' / ')}`);
+    labels.push(`create the image “${name}” in ${where}`);
     steps.push({
       op: 'upload_image.verify',
       params: { body: { assetStep, contentLength: row.webp.bytes, contentHash } },
@@ -1175,6 +1178,36 @@ export class ImageService {
       },
     });
     labels.push('verify');
+    return { steps, labels, assetStep, name };
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 10): places an image staged on the server, in the order of Visual References' “Intake and
+   * approval”: the destination resolved deterministically (the plan: ambiguity refused, never the library's root), a
+   * collision check on the display name in that folder (numbered: “Name (2)”), the WebP's type, length and SHA-256 from
+   * the converted bytes, the folders found or created (when the job runs, under the asset-folder lock), the upload with
+   * the final folder and extension-free name, then the stored file's SHA-256 and the asset's folder and name verified.
+   * ONE batch job, or ONE proposal at scope `propose` (the bytes are read from the server when it runs).
+   */
+  private async placeFromServer(p: {
+    readonly projectId: string;
+    readonly row: ImageUploadRow;
+    readonly plan: AssetPlan;
+    readonly rename?: string | undefined;
+    readonly origin: JobOrigin;
+    readonly tool: string;
+    readonly described?: Record<string, unknown>;
+  }): Promise<{ submitted: SubmitResult | ProposalCaptured; labels: string[] }> {
+    const row = p.row;
+    const plan = p.plan;
+    const creates = plan.wouldCreate;
+    const wanted = p.rename?.trim() || row.name;
+    const { steps, labels, assetStep, name } = this.serverPlacementSteps({
+      row,
+      destination: plan,
+      name: wanted,
+      tool: p.tool,
+    });
     const summary = `${p.tool}: place staged image “${name}” in ${plan.destination.path.join(' / ')}${creates.length ? ` (creating ${creates.map((c) => c.name).join(' / ')})` : ''}; uploaded from the bridge’s server when approved`;
     const submitted = await this.o.engine.submit({
       kind: 'batch_ops',

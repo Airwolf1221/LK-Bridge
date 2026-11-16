@@ -35,6 +35,8 @@ import { planBlockwise, type BlockOp } from '../../pages/blockwise.js';
 import { blockwiseJob, validateBlockOp } from '../../pages/blockwise-job.js';
 import { defineTool } from './define.js';
 import { runWriteJob } from './write-job.js';
+import { lastMajorRevisionArg } from './schemas.js';
+import type { LmrMode } from '../../jobs/lmr-hook.js';
 import { pickDocument } from './read-document.js';
 import { finish, liveRead, repoContext, resolvePage } from './repo.js';
 import {
@@ -208,6 +210,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
         .describe('Keep-region block ids you deliberately remove (replace modes).'),
       dryRun: z.boolean().optional().describe('Return the plan and the Markdown diff; write nothing.'),
       detail: z.enum(['summary', 'full']).optional().describe('"full" adds the Markdown diff to the result.'),
+      lastMajorRevision: lastMajorRevisionArg,
       project: projectArg,
     }),
     annotations: WRITE_PAGE_ANNOTATIONS,
@@ -463,6 +466,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
             preview,
             counts,
             diffBody: diffBody(full0(args.detail)),
+            ...(args.lastMajorRevision ? { lastMajorRevision: args.lastMajorRevision } : {}),
           });
         }
         let run;
@@ -478,6 +482,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
               signal: mctx.signal,
               verifyAfterWrite: true,
               journalOperation,
+              ...(args.lastMajorRevision ? { lastMajorRevision: args.lastMajorRevision } : {}),
               ...(replanInput ? { replan: { planner: WRITE_PAGE_PLANNER, input: replanInput } } : {}),
               proposal: {
                 operation,
@@ -546,6 +551,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
                     }
                   : rebased),
                 ...(run.jobId ? { jobId: run.jobId } : {}),
+                ...(run.lastMajorRevision ? { lastMajorRevision: run.lastMajorRevision } : {}),
                 ...warnings,
                 ...diffBody(full),
               },
@@ -566,6 +572,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
                 eta: run.eta === null ? null : new Date(run.eta).toISOString(),
                 plannedOn: plan.version,
                 counts,
+                ...(run.lastMajorRevision ? { lastMajorRevision: run.lastMajorRevision } : {}),
                 hint:
                   'The write is accepted and has NOT failed: it runs by itself, re-checking the page’s version inside its lock (a section edit whose section ' +
                   'is unchanged is re-planned; anything else ends as a conflict). Never submit it again: follow it with bridge_job_status (wait_seconds waits for it).',
@@ -638,6 +645,7 @@ async function writeBlockwise(
     readonly preview: () => unknown;
     readonly counts: Record<string, unknown>;
     readonly diffBody: Record<string, unknown>;
+    readonly lastMajorRevision?: LmrMode;
   },
 ): Promise<McpToolResult> {
   const job = blockwiseJob({
@@ -665,6 +673,7 @@ async function writeBlockwise(
       summary: `${w.title}: ${summaryLine(w.plan)}, block by block`.slice(0, 500),
       prefetched: w.prefetched as never,
     },
+    ...(w.lastMajorRevision ? { lastMajorRevision: w.lastMajorRevision } : {}),
     head,
     preview: w.preview,
   });
