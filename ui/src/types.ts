@@ -2146,6 +2146,8 @@ export interface PackRoleRule {
   name: string;
   referenceType: string | null;
   tags: string[];
+  /** v3 F3b: a Working page's own tags (an owner page: Working and the primary tag). */
+  workingTags?: string[];
   facts: 'identity' | 'general' | 'none';
   body: 'required' | 'optional' | 'drafted';
   warnMissing: string[];
@@ -2169,6 +2171,43 @@ export interface PackTypeRules {
   assets: { subfolders: Record<string, string>; displayName: string; section: string; role: string };
 }
 
+/** v3 F3b (ADR 0052): where an owner page may live. */
+export type PackHomeRule =
+  | { kind: 'category'; level: 'continent' | 'nation' | 'world'; category: string }
+  | { kind: 'nation' }
+  | { kind: 'named'; name: string }
+  | { kind: 'under'; parent: string; label: string }
+  | { kind: 'index'; id: string; name: string }
+  | { kind: 'races'; as: 'root' | 'group' | 'race' };
+
+export interface PackOwnerKind {
+  homes: PackHomeRule[];
+  name: string;
+  referenceType: string | null;
+  specialist: string | null;
+  navigation: 'race' | 'group' | null;
+}
+
+export interface PackOwnerType {
+  name: string;
+  template: string;
+  primary: string;
+  specialist: string[];
+  homes: PackHomeRule[];
+  kinds?: Partial<Record<'race' | 'racialGroup' | 'subrace', PackOwnerKind>>;
+  note?: string;
+}
+
+export interface PackOwners {
+  tool: string;
+  facts: { required: string[]; keys: string[]; fixed: Record<string, string>; supersedes: string };
+  tags: { authoritative: string[]; working: string[] };
+  worldPrefix: string;
+  nations: string;
+  races: { root: { id: string; name: string }; navigation: string };
+  types: PackOwnerType[];
+}
+
 export interface PackRules {
   schema: 1;
   settings: { alwaysPropose: boolean };
@@ -2179,10 +2218,16 @@ export interface PackRules {
     race: Record<string, string>;
     culture: Record<string, string>;
     exceptional: string[];
+    /** v3 F3b: the owner's AU ruling. */
+    au?: { continuityType: string; tag: string };
   };
   names: { forbiddenWords: string[]; datePatterns: string[] };
   sidebar: { property: string; dependencies: string; related: string };
   types: PackTypeRules[];
+  /** v3 F3b (ADR 0052): the non-character owners. */
+  owners?: PackOwners;
+  /** v3 F3b: the owner's rulings the rules follow. */
+  rulings?: { key: string; date: string; by: string; summary: string }[];
 }
 
 export interface PackSourceStatus {
@@ -2197,6 +2242,12 @@ export interface PackSourceStatus {
   digest: string | null;
   state: 'same' | 'changed' | 'unreadable' | 'unapproved';
   reason?: string;
+  /** v3 F3b: the pinned sections, each as read now. */
+  sections?: {
+    heading: string;
+    found: string | null;
+    state: 'same' | 'changed' | 'missing' | 'unapproved';
+  }[];
 }
 
 export interface PackGovernance {
@@ -2220,8 +2271,15 @@ export interface PackView {
     documentId: string;
     name: string;
     label?: string;
+    /** v3 F3b: the sections of the document the rules depend on. */
+    sections?: string[];
   }[];
-  approved: { version: number; at: number; by: string; sources: { key: string; version: string }[] } | null;
+  approved: {
+    version: number;
+    at: number;
+    by: string;
+    sources: { key: string; version: string; sections?: { heading: string; digest: string }[] }[];
+  } | null;
   drift: {
     at: number;
     changed: { key: string; name: string; approved: string | null; current: string | null }[];

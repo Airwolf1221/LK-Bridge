@@ -96,6 +96,62 @@ describe('the Packs page', () => {
     expect(within(card).getByText(/token maps edited on the Packs page/)).toBeInTheDocument();
   });
 
+  it('v3 F3b: shows the owner table, the AU ruling and each source’s pinned sections with their state', async () => {
+    const user = userEvent.setup();
+    installApi({
+      ...baseRoutes(),
+      'GET /packs': { packs: [pack()] },
+      'GET /packs/arkona/governance': {
+        governance: {
+          state: 'changed',
+          message: 'Arkona’s governance changed: Source Formatting (pinned section “Approved Hierarchy”).',
+          version: 2,
+          approvedVersion: 1,
+          sources: [
+            {
+              key: 'source-formatting',
+              name: 'Source Formatting',
+              project: 'arkona',
+              resourceId: 'cn8v87hh',
+              documentId: 'l41y28c8',
+              approved: 'v9',
+              current: 'v10',
+              digest: 'x',
+              state: 'changed',
+              sections: [
+                { heading: 'Page Names and Templates', found: 'Page Names and Templates', state: 'same' },
+                {
+                  heading: 'Nation-Centred Territorial Navigation',
+                  found: 'Nation-Centred Territorial Navigation',
+                  state: 'same',
+                },
+                { heading: 'Approved Hierarchy', found: 'Approved Hierarchy', state: 'changed' },
+                { heading: 'Active Template Suite', found: 'Active Template Suite', state: 'same' },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    renderApp('/ui/packs');
+    const card = (await screen.findByRole('heading', { name: /Arkona/ })).closest('section')!;
+    const owners = within(card).getByRole('table', { name: 'Owner types' });
+    const polity = within(owners).getByText('Polity').closest('tr')!;
+    expect(within(polity).getByText(/<Continent> Polities; a nation index/)).toBeInTheDocument();
+    expect(
+      within(owners).getByText(/racialGroup: \{Name\} - Racial Group Reference in Races of Arkona/),
+    ).toBeInTheDocument();
+    expect(within(card).getByText(/AU in place of CANON \(Continuity Type AU\)/)).toBeInTheDocument();
+    expect(within(card).getByText(/Ruling \(2026-11-16\)/)).toBeInTheDocument();
+    const formatting = card.querySelector('[data-sections="source-formatting"]')!;
+    expect(formatting.textContent).toContain('Approved Hierarchy');
+    await user.click(within(card).getByRole('button', { name: 'Check governance now' }));
+    expect(await within(card).findByText(/Approved Hierarchy \(changed\)/)).toBeInTheDocument();
+    expect(card.querySelector('[data-sections="character-architecture"]')!.textContent).toBe(
+      'the whole page',
+    );
+  });
+
   it('warns about drift, checks the governance on request', async () => {
     const user = userEvent.setup();
     const api = installApi({

@@ -59,6 +59,11 @@ describe('the MCP surface with the official client', () => {
         // v2 C2b
         'create_character',
         'arkona_create_character',
+        // v3 F3b: the Arkona pack's owner, relationship, art and brief tools
+        'arkona_create_owner',
+        'arkona_create_relationship',
+        'arkona_add_character_art',
+        'arkona_character_brief',
         'create_document',
         'create_index',
         'create_many_resources',

@@ -54,6 +54,11 @@ describe('showLowLevelTools, per profile', () => {
         // v2 C2b: the Resources, Documents and character tools
         'create_character',
         'arkona_create_character',
+        // v3 F3b: the Arkona pack's owner, relationship, art and brief tools
+        'arkona_create_owner',
+        'arkona_create_relationship',
+        'arkona_add_character_art',
+        'arkona_character_brief',
         'create_document',
         'create_index',
         'create_many_resources',
@@ -113,13 +118,13 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 57 tools off and 57 + 3 + 2 + 89 on', async () => {
+  it('shows 61 tools off and 61 + 3 + 2 + 89 on', async () => {
     const t = w.stack.newToken('counting', 'write');
     // 61 before v2 E3b; get_resources, bridge_proposals_mine and bridge_job_wait were merged (-3) and lk_upload_image and
-    // create_bare_resource are hidden by default (-2).
-    expect(await list(t.token)).toHaveLength(57);
+    // create_bare_resource are hidden by default (-2); v3 F3b's four pack tools (+4).
+    expect(await list(t.token)).toHaveLength(61);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(57 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(61 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {
