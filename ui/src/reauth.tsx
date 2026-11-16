@@ -100,7 +100,7 @@ export function ReauthProvider({ children, totp: initialTotp }: { children: Reac
             <form ref={form} onSubmit={(e) => void submit(e)} autoComplete="off">
               <div className="dialog-body">
                 <p>
-                  This changes a key or your sign-in, so the bridge asks for your password
+                  This is a sensitive change, so the bridge asks for your password
                   {totp ? ' and an authenticator code' : ''} again. It lasts five minutes.
                 </p>
                 {error && (

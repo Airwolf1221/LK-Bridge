@@ -29,6 +29,7 @@ import { TreePage } from './pages/tree';
 import { LifecyclePage } from './pages/lifecycle';
 import { ChronologyPage } from './pages/chronology';
 import { WritersPage } from './pages/writers';
+import { PacksPage } from './pages/packs';
 
 type Theme = 'system' | 'light' | 'dark';
 
@@ -72,6 +73,7 @@ const NAV: { to: string; label: string; later?: boolean }[] = [
   { to: '/account', label: 'Account' },
   { to: '/maintenance', label: 'Maintenance Jobs' },
   { to: '/mappings', label: 'Repository Mappings' },
+  { to: '/packs', label: 'Packs' },
 ];
 
 const readTheme = (): Theme => {
@@ -109,6 +111,7 @@ function Routes({ session }: { session: SessionInfo }) {
   if (path === '/proposals') return <ProposalsPage />;
   if (path === '/clients') return <ClientsPage session={session} />;
   if (path === '/journal') return <JournalPage />;
+  if (path === '/packs') return <PacksPage />;
   if (path === '/tool-calls') return <ToolCallsPage />;
   if (path === '/projects') return <ProjectsPage />;
   if (path === '/tree') return <TreePage />;

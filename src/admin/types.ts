@@ -1,3 +1,4 @@
+import type { Packs } from '../packs/service.js';
 import type { ImageService } from '../images/service.js';
 import type { Lifecycle } from '../lifecycle/index.js';
 import type { Audits } from '../audits/index.js';
@@ -58,6 +59,8 @@ export interface AdminRuntime {
   readonly evaluation?: Evaluation;
   /** v2 E1b: the off-site copy to Google Drive (the Off-site copy page, the Overview's warning); optional for tests. */
   readonly offsite?: OffsiteService;
+  /** v3 F3a (ADR 0050): the setting packs (the Packs page); optional for tests' runtimes. */
+  readonly packs?: Packs;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */
