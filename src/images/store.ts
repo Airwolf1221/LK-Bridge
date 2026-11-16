@@ -6,7 +6,16 @@
 import type { Db } from '../db/open.js';
 
 export type UploadState = 'uploading' | 'uploaded' | 'failed' | 'discarded';
-export type UploadSource = 'data_base64' | 'url' | 'upload_id' | 'dashboard' | 'restore';
+export type UploadSource =
+  | 'data_base64'
+  | 'url'
+  | 'upload_id'
+  | 'dashboard'
+  | 'restore'
+  /** v3 F2 (ADR 0049 decision 12): a ChatGPT conversation attachment (`file`), downloaded by the bridge. */
+  | 'chatgpt_file'
+  /** v3 F2 (ADR 0049 decision 10): an image migrate-staging brought from the old LegendKeeper staging folder. */
+  | 'migrated';
 
 export interface ImageUploadRow {
   readonly projectId: string;
@@ -50,6 +59,15 @@ export interface ImageUploadRow {
   readonly discardedBy: string | null;
   readonly createdAt: number;
   readonly updatedAt: number;
+  /**
+   * v3 F2 (ADR 0049 decision 10): a staged image whose bytes wait on the bridge's server (images/staged/), not in
+   * LegendKeeper: the WebP's SHA-256 there. Null for an image staged in LegendKeeper before F2, or once placed.
+   */
+  readonly serverSha256: string | null;
+  /** v3 F2: when the dashboard first warned that it is past IMAGE_STAGING_MAX_DAYS (removed a week later). */
+  readonly expiryWarnedAt: number | null;
+  /** v3 F2: the hidden asset it had in the old LegendKeeper staging folder, after migrate-staging copied its bytes. */
+  readonly legacyAssetId: string | null;
 }
 
 interface UploadRaw {
@@ -92,6 +110,9 @@ interface UploadRaw {
   discarded_by: string | null;
   created_at: number;
   updated_at: number;
+  server_sha256: string | null;
+  expiry_warned_at: number | null;
+  legacy_asset_id: string | null;
 }
 
 const parse = <T>(t: string | null): T | null => {
@@ -145,13 +166,20 @@ function view(r: UploadRaw): ImageUploadRow {
     discardedBy: r.discarded_by,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    serverSha256: r.server_sha256 ?? null,
+    expiryWarnedAt: r.expiry_warned_at ?? null,
+    legacyAssetId: r.legacy_asset_id ?? null,
   };
 }
 
 export interface NewUpload {
   readonly projectId: string;
   readonly id: string;
-  readonly jobId: string;
+  /** Null for an image staged on the bridge's server (v3 F2): no job until it is placed. */
+  readonly jobId: string | null;
+  /** v3 F2: staged on the server, with these bytes (the row is then `uploaded` at once, with no asset). */
+  readonly serverSha256?: string;
+  readonly legacyAssetId?: string;
   readonly name: string;
   readonly description: string | null;
   readonly folderId: string | null;
@@ -190,6 +218,9 @@ export interface UploadPatch {
   discardedAt?: number | null;
   discardedBy?: string | null;
   intended?: Record<string, unknown> | null;
+  serverSha256?: string | null;
+  expiryWarnedAt?: number | null;
+  legacyAssetId?: string | null;
 }
 
 const COLUMNS: Record<keyof UploadPatch, string> = {
@@ -211,6 +242,9 @@ const COLUMNS: Record<keyof UploadPatch, string> = {
   discardedAt: 'discarded_at',
   discardedBy: 'discarded_by',
   intended: 'intended',
+  serverSha256: 'server_sha256',
+  expiryWarnedAt: 'expiry_warned_at',
+  legacyAssetId: 'legacy_asset_id',
 };
 
 // ---------------------------------------------------------------------------------------------- binary upload slots
@@ -313,12 +347,14 @@ export class ImageStore {
       .prepare(
         `INSERT INTO image_uploads (project_id, id, state, job_id, name, description, folder_id, folder_path, staged,
            intended, source, principal_id, original_format, original_sha256, original_bytes, orientation, webp_sha256,
-           webp_bytes, width, height, frames, has_alpha, conversion_mode, quality, convert_ms, created_at, updated_at)
-         VALUES (?, ?, 'uploading', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           webp_bytes, width, height, frames, has_alpha, conversion_mode, quality, convert_ms, created_at, updated_at,
+           server_sha256, legacy_asset_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         u.projectId,
         u.id,
+        u.serverSha256 ? 'uploaded' : 'uploading',
         u.jobId,
         u.name,
         u.description,
@@ -343,10 +379,93 @@ export class ImageStore {
         u.convertMs,
         now,
         now,
+        u.serverSha256 ?? null,
+        u.legacyAssetId ?? null,
       );
     const row = this.upload(u.projectId, u.id)!;
     this.notify(row, undefined);
     return row;
+  }
+
+  /** v3 F2: the record of an upload by its asset (the newest), or undefined. */
+  byAsset(projectId: string, assetId: string): ImageUploadRow | undefined {
+    const r = this.db
+      .prepare(
+        'SELECT * FROM image_uploads WHERE project_id = ? AND (asset_id = ? OR legacy_asset_id = ?) ORDER BY created_at DESC LIMIT 1',
+      )
+      .get(projectId, assetId, assetId) as UploadRaw | undefined;
+    return r ? view(r) : undefined;
+  }
+
+  // ---- v3 F2: migrate-staging requests (the CLI writes one; the running bridge's sweep runs it)
+
+  requestMigration(projectId: string, by: string): number {
+    const info = this.db
+      .prepare(
+        `INSERT INTO image_staging_migrations (project_id, state, requested_by, requested_at) VALUES (?, 'requested', ?, ?)`,
+      )
+      .run(projectId, by, this.now());
+    return Number(info.lastInsertRowid);
+  }
+
+  pendingMigrations(): { id: number; projectId: string; requestedBy: string }[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT id, project_id, requested_by FROM image_staging_migrations WHERE state = 'requested' ORDER BY id",
+        )
+        .all() as { id: number; project_id: string; requested_by: string }[]
+    ).map((r) => ({ id: r.id, projectId: r.project_id, requestedBy: r.requested_by }));
+  }
+
+  claimMigration(id: number): boolean {
+    return (
+      this.db
+        .prepare("UPDATE image_staging_migrations SET state = 'running' WHERE id = ? AND state = 'requested'")
+        .run(id).changes === 1
+    );
+  }
+
+  finishMigration(id: number, state: 'done' | 'failed', result: unknown, proposalId: string | null): void {
+    this.db
+      .prepare(
+        'UPDATE image_staging_migrations SET state = ?, result = ?, proposal_id = ?, finished_at = ? WHERE id = ?',
+      )
+      .run(state, JSON.stringify(result), proposalId, this.now(), id);
+  }
+
+  migration(id: number): { state: string; result: unknown; proposalId: string | null } | undefined {
+    const r = this.db
+      .prepare('SELECT state, result, proposal_id FROM image_staging_migrations WHERE id = ?')
+      .get(id) as { state: string; result: string | null; proposal_id: string | null } | undefined;
+    return r ? { state: r.state, result: parse(r.result), proposalId: r.proposal_id } : undefined;
+  }
+
+  /** The proposal ids earlier migrations of this project made (newest first). */
+  migrationProposals(projectId: string): string[] {
+    return (
+      this.db
+        .prepare(
+          'SELECT proposal_id FROM image_staging_migrations WHERE project_id = ? AND proposal_id IS NOT NULL ORDER BY id DESC',
+        )
+        .all(projectId) as { proposal_id: string }[]
+    ).map((r) => r.proposal_id);
+  }
+
+  /** v3 F2: the projects with any staged image (for the expiry sweep). */
+  projectsWithStaged(): string[] {
+    return (
+      this.db.prepare('SELECT DISTINCT project_id FROM image_uploads WHERE staged = 1').all() as {
+        project_id: string;
+      }[]
+    ).map((r) => r.project_id);
+  }
+
+  /** v3 F2: whether any row still keeps these bytes on the server (the same image staged twice, in two projects). */
+  serverShaInUse(sha256: string): boolean {
+    return (
+      this.db.prepare('SELECT 1 FROM image_uploads WHERE server_sha256 = ? LIMIT 1').get(sha256) !== undefined
+    );
   }
 
   upload(projectId: string, id: string): ImageUploadRow | undefined {

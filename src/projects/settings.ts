@@ -54,8 +54,14 @@ export const projectSettingsSchema = z
      * Off: the bridge re-reads, as before. The owner can switch it off without a deploy if the sandbox's B12 fails.
      */
     useEtagVersions: z.boolean().optional(),
-    /** v2 D3 (ADR 0041): the name of the asset folder (in the library's root) staged images go to. */
+    /**
+     * v2 D3 (ADR 0041): the name of the asset folder (in the library's root) staged images went to. v3 F2 (ADR 0049):
+     * staged images wait on the bridge's server now; the setting only names the old folder for migrate-staging, and
+     * retires once that folder is gone.
+     */
     imageStagingFolder: label.optional(),
+    /** v3 F2: days an unplaced staged image is kept on the server (default IMAGE_STAGING_MAX_DAYS). */
+    imageStagingMaxDays: z.number().int().min(1).max(3650).optional(),
     /**
      * v3 F2 (ADR 0049 decision 2): which edits set a page's Last Major Revision, one switch per category (src/lmr/),
      * and the housekeeping keys a set_facts change of which alone is not an edit (`;`-separated).
@@ -76,7 +82,8 @@ export const projectSettingsSchema = z
 
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>;
 
-export type SettingKind = 'resource id' | 'name' | 'names' | 'on/off' | 'role → template id' | 'rules';
+export type SettingKind =
+  'resource id' | 'name' | 'names' | 'days' | 'on/off' | 'role → template id' | 'rules';
 
 /** The settings the dashboard and later sessions may rely on, by key, with what each is for. */
 export const PROJECT_SETTING_KEYS: readonly {
@@ -189,7 +196,14 @@ export const PROJECT_SETTING_KEYS: readonly {
     kind: 'name',
     default: 'LK-Bridge staging',
     editable: true,
-    help: 'The asset folder, in the library’s root, that staged images go to (hidden until placed). Found by name, or created on first use.',
+    help: 'Retiring (v3 F2): staged images now wait on the bridge’s server. This names the old LegendKeeper staging folder, for npm run images -- migrate-staging; it can be cleared once that folder is gone.',
+  },
+  {
+    key: 'imageStagingMaxDays',
+    label: 'Images: days an unplaced staged image is kept',
+    kind: 'days',
+    editable: true,
+    help: 'After this many days an unplaced staged image is removed from the bridge’s server, a week after the Staging page first warned about it. Default IMAGE_STAGING_MAX_DAYS (90).',
   },
   {
     key: 'lmrWritePage',
@@ -327,7 +341,7 @@ export class SettingValueError extends Error {
  * Validates one editable setting from text (the CLI) or JSON (the dashboard). `null` (or the text `-`) clears it, so
  * the default applies again. Throws `SettingValueError` with a plain-language reason.
  */
-export function parseSettingValue(key: string, value: unknown): string | boolean | null {
+export function parseSettingValue(key: string, value: unknown): string | number | boolean | null {
   const def = PROJECT_SETTING_KEYS.find((k) => k.key === key);
   if (!def) {
     const known = PROJECT_SETTING_KEYS.filter((k) => k.editable).map((k) => k.key);
@@ -341,6 +355,12 @@ export function parseSettingValue(key: string, value: unknown): string | boolean
     if (['on', 'true', 'yes', '1'].includes(t)) return true;
     if (['off', 'false', 'no', '0'].includes(t)) return false;
     throw new SettingValueError(`"${key}" is on or off.`);
+  }
+  if (def.kind === 'days') {
+    const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN;
+    if (!Number.isInteger(n) || n < 1 || n > 3650)
+      throw new SettingValueError(`"${key}" is a whole number of days, 1 to 3650.`);
+    return n;
   }
   if (typeof value !== 'string') throw new SettingValueError(`"${key}" must be text.`);
   const t = value.trim();

@@ -81,7 +81,7 @@ async function upload(world: ImagesWorld, args: Record<string, unknown>, token?:
 }
 
 describe('an MCP tool stages an image', () => {
-  it('upload_image with stage: true sends the event (created, then uploaded), and the stream carries it', async () => {
+  it('upload_image with stage: true sends the event (created, already on the server), and the stream carries it', async () => {
     w = await imagesWorld();
     const bus = busEvents(w);
     const stream = await openStream(w);
@@ -92,25 +92,18 @@ describe('an MCP tool stages an image', () => {
     });
     expect(r.isError, r.text).toBe(false);
     const stagedId = String(r.body.staged_id);
-    await until(() => stream.some((f) => f.data.data.change === 'uploaded'), 'the stream carried the upload');
-    expect(bus.map((e) => e.change)).toEqual(expect.arrayContaining(['created', 'uploaded']));
-    const created = bus.find((e) => e.change === 'created')!;
-    expect(created).toMatchObject({
+    await until(() => stream.some((f) => f.data.data.change === 'created'), 'the stream carried the staging');
+    // v3 F2 (ADR 0049 decision 10): staged on the bridge's server at once: no upload job, so no `uploaded` step.
+    expect(bus.find((e) => e.change === 'created')).toMatchObject({
       projectId: PROJECT,
       stagedId,
       name: 'Agent',
-      state: 'uploading',
-      staged: 1,
-      old: 0,
-    });
-    const done = stream.find((f) => f.data.data.change === 'uploaded')!;
-    expect(done.data.data).toMatchObject({
-      projectId: PROJECT,
-      stagedId,
       state: 'uploaded',
       staged: 1,
       old: 0,
     });
+    const done = stream.find((f) => f.data.data.change === 'created')!;
+    expect(done.data.data).toMatchObject({ projectId: PROJECT, stagedId, state: 'uploaded', staged: 1 });
     expect(done.data.at).toBeGreaterThan(0);
   });
 
@@ -129,13 +122,10 @@ describe('an MCP tool stages an image', () => {
       token,
     );
     expect(r.body).toMatchObject({ status: 'proposal_captured', staging: true });
-    await until(
-      () => stream.some((f) => f.data.data.change === 'uploaded'),
-      'staged by a propose connection',
-    );
+    await until(() => stream.some((f) => f.data.data.change === 'created'), 'staged by a propose connection');
     // the placement proposal being recorded on the image is a change too
     await until(
-      () => bus.filter((e) => e.stagedId === String(r.body.staged_id)).length >= 3,
+      () => bus.filter((e) => e.stagedId === String(r.body.staged_id)).length >= 2,
       'the proposal was recorded on the image',
     );
   });
@@ -204,10 +194,16 @@ describe('a proposal’s approval places a staged image', () => {
   });
 });
 
-describe('a job fails a staged upload', () => {
-  it('sends failed, with the image no longer counted as staged', async () => {
+describe('a placement that fails', () => {
+  it('sends an update, with the image still staged on the server', async () => {
     w = await imagesWorld();
-    // LegendKeeper refuses the second step of the upload (a 422 is never retried), so the job fails.
+    const staged = await upload(w, {
+      data_base64: fixture('alpha.png').toString('base64'),
+      name: 'Doomed',
+      stage: true,
+    });
+    const stagedId = String(staged.body.staged_id);
+    // LegendKeeper refuses the image asset (a 422 is never retried), so the placement's job fails.
     for (const [re] of w.overrides) {
       if (re.source.includes('assets\\/images')) {
         w.overrides.set(re, () => ({
@@ -217,17 +213,16 @@ describe('a job fails a staged upload', () => {
       }
     }
     const bus = busEvents(w);
-    const stream = await openStream(w);
-    const r = await upload(w, {
-      data_base64: fixture('alpha.png').toString('base64'),
-      name: 'Doomed',
-      stage: true,
-    });
-    const stagedId = String(r.body.staged_id ?? '');
-    await until(() => stream.some((f) => f.data.data.change === 'failed'), 'the stream carried the failure');
-    const failed = bus.find((e) => e.change === 'failed')!;
-    expect(failed).toMatchObject({ projectId: PROJECT, state: 'failed', staged: 0 });
-    if (stagedId) expect(failed.stagedId).toBe(stagedId);
+    const p = await upload(w, { staged_id: stagedId, destination: { folder: 'Characters / Dwarves' } });
+    expect(p.isError).toBe(true);
+    await until(
+      () => bus.some((e) => e.stagedId === stagedId && e.change === 'updated'),
+      'the failure reached it',
+    );
+    const row = w.stack.runtime.images.store.upload(PROJECT, stagedId)!;
+    expect(row).toMatchObject({ staged: true, placementJobId: null });
+    expect(row.error).toMatch(/placing failed/);
+    expect(await w.stack.runtime.images.stagedImage(PROJECT, stagedId)).not.toBeNull();
   });
 });
 
@@ -248,7 +243,7 @@ describe('the dashboard’s own routes send it too (the service does, not the ro
       origin: { kind: 'ui', tool: 'staging.discard', principal: SYSTEM_PRINCIPAL },
       by: 'owner',
     });
-    expect('jobId' in submitted).toBe(true);
+    expect(submitted).toEqual({ status: 'discarded' });
     await until(() => bus.some((e) => e.change === 'discarded'), 'discarded was announced');
     expect(bus.find((e) => e.change === 'discarded')).toMatchObject({ staged: 0, state: 'discarded' });
   });

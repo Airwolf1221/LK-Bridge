@@ -133,7 +133,7 @@ export function runProjectsCommand(
         }
         return 0;
       }
-      let value: string | boolean | null;
+      let value: string | number | boolean | null;
       try {
         value = parseSettingValue(key!, valueParts.join(' '));
       } catch (e) {

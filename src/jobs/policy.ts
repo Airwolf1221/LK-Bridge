@@ -55,6 +55,11 @@ export interface PolicyContext {
    * placement. Set by the engine from bridge code only (`UploadImageSubmit.staging`); never from an agent's input.
    */
   readonly staging?: boolean;
+  /**
+   * v3 F2 (ADR 0049 decision 10): a batch that places an image staged on the bridge's server (it uploads it into its
+   * final folder). Set by the engine from bridge code only (`BatchSubmit.stagedPlacement`).
+   */
+  readonly stagedPlacement?: boolean;
 }
 
 export type PolicyDecision =

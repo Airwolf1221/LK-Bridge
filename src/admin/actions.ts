@@ -297,7 +297,7 @@ export function createAdminActions(d: AdminDeps) {
       const before = projects.find(ref);
       if (!before?.id) throw new AdminHttpError(404, 'UNKNOWN_PROJECT', `No project ${ref} with stored data`);
       if (before.status === 'archived') throw archivedError(before.name);
-      let parsed: string | boolean | null;
+      let parsed: string | number | boolean | null;
       try {
         parsed = parseSettingValue(key, value);
       } catch (e) {

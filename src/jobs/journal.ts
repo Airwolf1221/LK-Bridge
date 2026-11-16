@@ -214,6 +214,22 @@ export class WriteJournal {
     return id;
   }
 
+  /** v3 F2: adds fields to an entry's high-level operation (a folder step's `created folder` / `found existing`). */
+  annotate(id: number, extra: Readonly<Record<string, unknown>>): void {
+    const row = this.db.prepare('SELECT operation FROM write_journal WHERE id = ?').get(id) as
+      { operation: string | null } | undefined;
+    if (!row) return;
+    let op: Record<string, unknown>;
+    try {
+      op = row.operation ? (JSON.parse(row.operation) as Record<string, unknown>) : {};
+    } catch {
+      op = {};
+    }
+    this.db
+      .prepare('UPDATE write_journal SET operation = ? WHERE id = ?')
+      .run(capOperation({ ...op, ...extra }), id);
+  }
+
   setOutcome(id: number, outcome: JournalOutcome): void {
     this.db.prepare('UPDATE write_journal SET outcome = ? WHERE id = ?').run(outcome, id);
   }

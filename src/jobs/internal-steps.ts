@@ -70,6 +70,45 @@ export function isInternalStep(op: string): boolean {
   return INTERNAL_STEPS.has(op);
 }
 
+/**
+ * v3 F2 (ADR 0049 decision 10): the steps a bridge-built batch (`internal: true`) may carry that are not LegendKeeper
+ * operations: the internal steps, and the signed-URL PUT and stored-file check of an image upload (`upload_image.put`,
+ * `upload_image.verify`, run by their custom handlers), so a staged image's placement, which uploads it from the
+ * bridge's server, is one ordinary batch job or proposal. `lk_api_batch` never sets `internal`.
+ */
+export const BATCH_UPLOAD_STEPS: ReadonlySet<string> = new Set(['upload_image.put', 'upload_image.verify']);
+export function isBridgeStep(op: string): boolean {
+  return INTERNAL_STEPS.has(op) || BATCH_UPLOAD_STEPS.has(op);
+}
+
+const uploadPutParamsSchema = z
+  .object({
+    body: z
+      .object({
+        contentType: z.string().min(1).max(100),
+        contentLength: z.number().int().min(1),
+        contentHash: z.string().regex(/^[0-9a-f]{64}$/),
+        /** The WebP the bridge keeps on its server (images/staged/), read when the step runs. */
+        stagedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+      })
+      .strict(),
+  })
+  .strict();
+const uploadVerifyParamsSchema = z
+  .object({
+    body: z
+      .object({
+        assetStep: z.number().int().min(1),
+        contentLength: z.number().int().min(1).optional(),
+        contentHash: z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .optional(),
+      })
+      .strict(),
+  })
+  .strict();
+
 const id = z.string().min(1).max(256);
 const label = z.string().min(1).max(300);
 const runs = z.array(z.record(z.string(), z.unknown())).max(10_000);
@@ -418,14 +457,22 @@ export const verifyTargetSchema = z.discriminatedUnion('kind', [
     .object({
       kind: z.literal('asset'),
       label,
-      assetId: id,
+      assetId: id.optional(),
+      // v3 F2 (ADR 0049 decision 10): an asset an earlier step of the job created (a staged image's upload).
+      assetFrom: z
+        .object({ step: z.number().int().min(1) })
+        .strict()
+        .optional(),
       fields: z.record(z.string(), z.unknown()),
       folderFrom: z
         .object({ step: z.number().int().min(1) })
         .strict()
         .optional(),
     })
-    .strict(),
+    .strict()
+    .refine((t) => (t.assetId === undefined) !== (t.assetFrom === undefined), {
+      message: 'an asset target names assetId or assetFrom',
+    }),
   // v2 D1: one lane of a timeline, present with this name.
   z
     .object({
@@ -707,7 +754,9 @@ export type VerifyTarget =
   | {
       readonly kind: 'asset';
       readonly label: string;
-      readonly assetId: string;
+      readonly assetId?: string;
+      /** v3 F2: the asset an earlier step of the job created. */
+      readonly assetFrom?: { readonly step: number };
       readonly fields: Readonly<Record<string, unknown>>;
       readonly folderFrom?: { readonly step: number };
     }
@@ -804,7 +853,11 @@ export function internalStepIssues(op: string, params: unknown): { path: string;
           ? recordParamsSchema
           : op === LMR_STEP
             ? lmrParamsSchema
-            : null;
+            : op === 'upload_image.put'
+              ? uploadPutParamsSchema
+              : op === 'upload_image.verify'
+                ? uploadVerifyParamsSchema
+                : null;
   if (!schema) return [{ path: 'op', message: `${op} is not one of the bridge's own steps` }];
   const r = schema.safeParse(params);
   return r.success

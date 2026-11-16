@@ -286,6 +286,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       [UPLOAD_PUT_STEP]: createUploadPutHandler({
         putTimeoutMs: o.toolsSettings.upload.putTimeoutMs,
         guard: uploadGuard,
+        // v3 F2 (ADR 0049 decision 10): a staged image's bytes, from the image service (created below).
+        stagedBytes: (sha) => images.stagedBytes.get(sha),
       }),
       [UPLOAD_VERIFY_STEP]: createUploadVerifyHandler({ assetHosts: imageSettings.assetHosts }),
     },
@@ -622,6 +624,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     engine.registerMapChecker(name, fn as Parameters<JobEngine['registerMapChecker']>[1]),
   );
   const images = createImages({
+    // v3 F2 (ADR 0049 decision 10): migrate-staging downloads the old staged images through the project's governor.
+    lkFor: (projectId) => projects.client(projectId),
     db: o.db,
     engine,
     assets,

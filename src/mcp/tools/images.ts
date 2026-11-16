@@ -217,6 +217,7 @@ function rowAnswer(pd: ProjectDeps, r: ImageUploadRow, job: JobView | undefined)
             ? 'waiting_budget'
             : 'queued',
     ...(r.staged || r.placedAt !== null ? { staged_id: r.id } : {}),
+    ...(r.staged && r.serverSha256 ? { onServer: true } : {}),
     ...(r.assetId
       ? {
           asset: {
@@ -524,6 +525,62 @@ async function uploadBytes(
         (propose
           ? 'At scope propose the image would be staged and its placement proposed to the owner.'
           : ''),
+    };
+    return answer(render(body, pd), body);
+  }
+
+  // ---- v3 F2 (ADR 0049 decision 10): staging keeps the image on the bridge's server; nothing goes to LegendKeeper.
+  if (stage) {
+    let staged: ImageUploadRow;
+    try {
+      staged = await svc.stageOnServer({
+        projectId: pd.project.id,
+        image: img,
+        name: displayName,
+        description: args.description,
+        intended: intended ? { destination: intended.destination, path: intended.path } : null,
+        source,
+        origin: mcpOrigin(mctx, TOOL),
+      });
+    } catch (e) {
+      if (e instanceof ImageServiceError) return fail(e.code, e.message, e.details);
+      throw e;
+    }
+    if (slot) await svc.slots.consume(slot);
+    const stagedHead = { ...head, destination: { path: [], createsFolders: [], onServer: true } };
+    let body: Record<string, unknown> = { ...stagedHead, ...rowAnswer(pd, staged, undefined) };
+    if (propose && intended) {
+      const again = await planDestination(pd, mctx, svc, intended.destination);
+      if (again.ok) {
+        try {
+          const placed = await svc.place({
+            projectId: pd.project.id,
+            row: staged,
+            plan: again.plan,
+            origin: mcpOrigin(mctx, TOOL),
+            tool: TOOL,
+            described: again.described,
+          });
+          if ('proposalId' in placed.submitted) {
+            body = {
+              ...body,
+              status: 'proposal_captured',
+              proposalId: placed.submitted.proposalId,
+              hint:
+                'The image is staged on the bridge’s server (nothing is in LegendKeeper yet). Placing it is a proposal for the owner and was NOT done: when approved, it is uploaded straight into its folder. ' +
+                'Never retry it; follow it with bridge_proposal_status.',
+            };
+            return answer(render(body, pd), body);
+          }
+        } catch (e) {
+          if (!(e instanceof ImageServiceError)) throw e;
+          body = { ...body, placementError: { code: e.code, message: e.message } };
+        }
+      }
+    }
+    body = {
+      ...body,
+      hint: `Staged on the bridge’s server (nothing is in LegendKeeper until it is placed). Place it with upload_image { "staged_id": "${staged.id}"${intended ? '' : ', "destination": { … }'} }, or on the dashboard’s Staging page.`,
     };
     return answer(render(body, pd), body);
   }

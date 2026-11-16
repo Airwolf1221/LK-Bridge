@@ -286,19 +286,26 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
       return out.join(', ');
     });
 
-    // ---- 3. staging
+    // ---- 3. staging (v3 F2, ADR 0049 decision 10: on the bridge's server; nothing goes to LegendKeeper until placed)
     await check(
       '3',
-      'stage → place (move, unhide, rename, read back); stage → discard (bytes kept first)',
+      'stage on the server (nothing sent) → place (uploaded into its final folder, named, verified); stage → discard (server copy removed)',
       async () => {
-        const a = await uploadBytes('stage-a', fixture('png-named.jpg'), 'sandbox staged', [], true);
-        const asset = (await run('getAsset', { path: { assetId: a.row.assetId } })) as any;
-        if (asset.isHidden !== true) throw new Error('the staged image is not hidden');
+        const stageOnServer = async (bytes: Buffer, name: string) =>
+          svc.stageOnServer({
+            projectId: pid,
+            image: await svc.convert(bytes),
+            name,
+            source: 'data_base64',
+            origin,
+          });
+        const a = await stageOnServer(fixture('png-named.jpg'), 'sandbox staged');
+        if (a.assetId !== null || !a.serverSha256) throw new Error('the staged image reached LegendKeeper');
         const plan = svc.plan(pid, { folder: [root, 'placed'] });
         if (!plan.ok) throw new Error(plan.error.message);
         const placed = await svc.place({
           projectId: pid,
-          row: a.row,
+          row: a,
           plan: plan.plan,
           rename: 'sandbox placed',
           origin,
@@ -308,14 +315,15 @@ export async function runImagesSandbox(t: ImagesTarget, wait: WaitOptions = {}):
         const job = await waitForJob(rt.engine, pid, placed.submitted.jobId, 'placing', wait);
         if ((job.result as any)?.verified !== true)
           throw new Error('the read back did not verify the placement');
-        const b = await uploadBytes('stage-b', fixture('alpha.png'), 'sandbox discard', [], true);
-        const d = await svc.discard({ projectId: pid, row: b.row, origin, by: 'sandbox' });
-        if (!('jobId' in d)) throw new Error('discarding became a proposal');
-        await waitForJob(rt.engine, pid, d.jobId, 'discarding', wait);
-        const refs = svc.store.keptRefs(pid, b.row.assetId!);
-        if (refs.length === 0 || !(await svc.bytes.get(refs[0]!.sha256)))
-          throw new Error('the bytes were not kept');
-        return `placed ${a.row.assetId}; discarded ${b.row.assetId} (kept ${refs[0]!.sha256.slice(0, 12)}…)`;
+        const after = svc.settle(svc.store.upload(pid, a.id)!);
+        if (!after.assetId || after.storedVerified !== true)
+          throw new Error('the stored file was not verified');
+        const b = await stageOnServer(fixture('alpha.png'), 'sandbox discard');
+        const d = await svc.discard({ projectId: pid, row: b, origin, by: 'sandbox' });
+        if (!('status' in d) || d.status !== 'discarded')
+          throw new Error('discarding a server copy made a job');
+        if (await svc.stagedImage(pid, b.id)) throw new Error('the server copy was not removed');
+        return `placed ${after.assetId} (uploaded from the server, verified); discarded ${b.id} (server copy removed)`;
       },
     );
 

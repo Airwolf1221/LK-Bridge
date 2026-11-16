@@ -391,11 +391,10 @@ describe('upload_image: scope propose', () => {
       },
       token,
     );
-    expect(r.body).toMatchObject({ status: 'proposal_captured', staging: true });
+    expect(r.body).toMatchObject({ status: 'proposal_captured', staging: true, onServer: true });
     const stagedId = String(r.body.staged_id);
-    const assetId = (r.body.asset as { id: string }).id;
-    const staging = w.assets.at('LK-Bridge staging');
-    expect(w.assets.assets.get(assetId)).toMatchObject({ folderId: staging, isHidden: true });
+    // v3 F2 (ADR 0049 decision 10): staged on the bridge's server; nothing in LegendKeeper until approval.
+    expect(w.lkUploads).toHaveLength(0);
     const proposalId = String(r.body.proposalId);
     const detail = JSON.stringify(w.stack.runtime.policy.proposals.detail(proposalId));
     expect(detail).not.toContain(b64('alpha.png').slice(0, 40));
@@ -404,9 +403,13 @@ describe('upload_image: scope propose', () => {
     await waitFor(() => ['executed', 'failed', 'conflicted'].includes(proposals.get(proposalId)!.state));
     expect(proposals.get(proposalId)!.state).toBe('executed');
     const folder = w.assets.at('Characters', 'Beastkin', 'Foxians', 'Asagiri Miyabi');
-    expect(w.assets.assets.get(assetId)).toMatchObject({ folderId: folder, isHidden: false });
     const row = w.stack.runtime.images.staged(PROJECT, stagedId)!;
-    expect(row).toMatchObject({ staged: false, folderId: folder });
+    expect(w.assets.assets.get(row.assetId!)).toMatchObject({
+      folderId: folder,
+      isHidden: false,
+      name: 'Proposed',
+    });
+    expect(row).toMatchObject({ staged: false, folderId: folder, storedVerified: true });
     expect(row.placedAt).not.toBeNull();
   });
 
@@ -421,7 +424,7 @@ describe('upload_image: scope propose', () => {
 });
 
 describe('reading uploads back', () => {
-  it('list_assets and browse_asset_tree show the original format, dimensions, frames, verification and staging', async () => {
+  it('list_assets shows the original format, dimensions, frames and verification; a staged image is not in LegendKeeper', async () => {
     w = await imagesWorld();
     const placed = await call(w, {
       data_base64: b64('animated.gif'),
@@ -443,20 +446,8 @@ describe('reading uploads back', () => {
       storedBytesVerified: true,
       staged: false,
     });
-    // A hidden staged image: the bridge reads with an admin key, so the tree lists it, marked as staged.
-    const browse = await w.stack.call(c, 'browse_asset_tree', {
-      project: 'test',
-      folder: 'LK-Bridge staging',
-      includeAssets: true,
-    });
-    const later = (
-      browse.body.folder as {
-        assets: { name: string; hidden?: boolean; bridgeUpload?: Record<string, unknown> }[];
-      }
-    ).assets.find((a) => a.name === 'Later');
-    expect(later).toMatchObject({
-      hidden: true,
-      bridgeUpload: { staged: true, staged_id: staged.body.staged_id as unknown, originalFormat: 'png' },
-    });
+    // v3 F2 (ADR 0049 decision 10): a staged image is on the bridge's server, so no folder of LegendKeeper holds it.
+    expect(staged.body).toMatchObject({ status: 'staged', onServer: true });
+    expect(() => w!.assets.at('LK-Bridge staging')).toThrow();
   });
 });

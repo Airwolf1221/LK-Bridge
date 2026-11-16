@@ -188,6 +188,12 @@ export interface StepOptions {
    * if the step had not been needed. The work before it stays written: nothing is rolled back.
    */
   readonly followUp?: 'lmr_failed';
+  /**
+   * v3 F2 (ADR 0049 decision 9), set by bridge code only, on a `createAssetFolder` the bridge planned: when the job runs,
+   * under the project's asset-folder lock, the parent's children are read fresh and a folder with exactly this name is
+   * used (its id bound by the steps after it) instead of creating another. A raw createAssetFolder keeps its meaning.
+   */
+  readonly findOrCreate?: boolean;
 }
 
 export interface StepSpec extends StepOptions {
@@ -267,6 +273,11 @@ export interface BatchSubmit {
    * is written until the owner approves. Nothing an agent sends reaches it (`lk_api_batch` never sets it).
    */
   readonly forceProposal?: boolean;
+  /**
+   * v3 F2 (ADR 0049 decision 10), bridge code only: the batch places an image staged on the bridge's server (it uploads
+   * it into its final folder). At scope `propose` the policy gate makes it a proposal, where any other upload is refused.
+   */
+  readonly stagedPlacement?: boolean;
 }
 
 /** C2d: one entry of `BatchSubmit.pageScope` (src/policy/page-scope.ts has the logic). */

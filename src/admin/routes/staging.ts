@@ -19,7 +19,7 @@
  */
 import * as z from 'zod';
 import { ImageError, displayNameOf } from '../../images/convert.js';
-import { ImageServiceError, type ImageService } from '../../images/service.js';
+import { STAGING_EXPIRY_WARNING_MS, ImageServiceError, type ImageService } from '../../images/service.js';
 import type { ImageUploadRow } from '../../images/store.js';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { requireReauth } from '../guard.js';
@@ -85,6 +85,17 @@ function view(svc: ImageService, r: ImageUploadRow, projectId: string, url: stri
     error: r.error,
     old: r.createdAt < Date.now() - svc.settings.images.stagingReportDays * 86_400_000,
     project: projectId,
+    // v3 F2 (ADR 0049 decision 10): waiting on the bridge's server (its thumbnail is the bridge's own copy), and when
+    // it goes if it stays unplaced (shown once the dashboard has warned).
+    onServer: r.serverSha256 !== null,
+    ...(r.serverSha256 !== null
+      ? {
+          thumbnail: `/api/admin/staging/${encodeURIComponent(r.id)}/image?project=${encodeURIComponent(projectId)}`,
+        }
+      : {}),
+    ...(r.expiryWarnedAt !== null
+      ? { removedAfter: r.expiryWarnedAt + STAGING_EXPIRY_WARNING_MS, maxDays: svc.stagingMaxDays(projectId) }
+      : {}),
   };
 }
 
@@ -95,6 +106,23 @@ function refusal(e: unknown): never {
 }
 
 export const registerStaging: Register = (api, ctx) => {
+  /**
+   * v3 F2 (ADR 0049 decision 10): a staged image's bytes from the bridge's own copy (the Staging page's thumbnail; the
+   * owner's session, as every dashboard route). Never an asset URL: the image is not in LegendKeeper.
+   */
+  api.get('/staging/:id/image', async (req, reply) => {
+    const q = parseInput(projectQuery, req.query);
+    const { id } = parseInput(z.object({ id: z.string().regex(/^img_[A-Za-z0-9_-]{8,40}$/) }), req.params);
+    const project = ctx.project(q.project);
+    const bytes = await images(ctx).stagedImage(project.id, id);
+    if (!bytes) throw new AdminHttpError(404, 'STAGED_NOT_FOUND', `No staged image ${id} on the server.`);
+    return reply
+      .header('content-type', 'image/webp')
+      .header('cache-control', 'private, max-age=300')
+      .header('x-content-type-options', 'nosniff')
+      .send(bytes);
+  });
+
   const audit = (action: string, target: string, before?: unknown, after?: unknown) =>
     ctx.deps.runtime.policy.store.audit('owner', action, target, before, after);
   const urlOf = (projectId: string, assetId: string | null) => {
@@ -166,28 +194,27 @@ export const registerStaging: Register = (api, ctx) => {
     if (dup) {
       return { deduplicated: true, image: view(svc, dup, project.id, urlOf(project.id, dup.assetId)) };
     }
-    const plan = svc.planStaging(project.id);
-    if (!plan.ok) throw new AdminHttpError(409, plan.error.code, plan.error.message, plan.error.details);
     const name = displayNameOf(q.name);
-    const started = await svc.startUpload({
-      projectId: project.id,
-      image: img,
-      name,
-      plan: plan.plan,
-      staged: true,
-      source: 'dashboard',
-      origin: ORIGIN('staging.upload'),
-    });
-    if (!started.row) throw new AdminHttpError(409, 'NOT_STAGED', 'The upload was not accepted.');
-    audit('staging.upload', started.row.id, undefined, {
+    // v3 F2 (ADR 0049 decision 10): staged on the bridge's server; nothing is sent to LegendKeeper.
+    let row;
+    try {
+      row = await svc.stageOnServer({
+        projectId: project.id,
+        image: img,
+        name,
+        source: 'dashboard',
+        origin: ORIGIN('staging.upload'),
+      });
+    } catch (e) {
+      refusal(e);
+    }
+    audit('staging.upload', row.id, undefined, {
       project: project.id,
       name,
       originalSha256: img.source.sha256,
       bytes: img.output.bytes,
-      jobId: started.row.jobId,
+      onServer: true,
     });
-    await ctx.deps.runtime.engine.wait(project.id, started.row.jobId!, WAIT_MS);
-    const row = svc.settle(svc.store.upload(project.id, started.row.id)!);
     return { deduplicated: false, image: view(svc, row, project.id, urlOf(project.id, row.assetId)) };
   });
 
@@ -315,7 +342,10 @@ export const registerStaging: Register = (api, ctx) => {
       refusal(e);
     }
     audit('staging.discard', id, { assetId: row.assetId, name: row.name }, undefined);
-    if (!('jobId' in submitted)) return { proposalId: submitted.proposalId };
+    // v3 F2: an image staged on the bridge's server is removed from it at once (nothing is in LegendKeeper).
+    if ('status' in submitted && submitted.status === 'discarded')
+      return { discarded: true, staged: svc.store.upload(project.id, id) };
+    if (!('jobId' in submitted)) return { proposalId: (submitted as { proposalId: string }).proposalId };
     const job = await ctx.deps.runtime.engine.wait(project.id, submitted.jobId, WAIT_MS);
     const now = svc.settle(svc.store.upload(project.id, id)!);
     return {

@@ -218,6 +218,9 @@ export function lockKeyFor(op: OperationDef, params: OpParams): string | null {
   return null;
 }
 
+/** v3 F2 (ADR 0049 decision 9): the per-project lock every bridge-planned asset folder is found or created under. */
+export const ASSET_FOLDER_LOCK = 'asset-folders';
+
 /** The lock key as the lock manager sees it: `<projectId>:<key>` (v2 A1). */
 export function projectLockKey(projectId: string, key: string | null): string | null {
   return key === null ? null : `${projectId}:${key}`;
@@ -288,7 +291,12 @@ export class StepExecutor {
     const store = opts.storeResult !== false;
     if (op.kind === 'read') return this.runRead(job, step, op, params, store);
 
-    const lockKey = projectLockKey(job.projectId, lockKeyFor(op, params));
+    // v3 F2 (ADR 0049 decision 9): a folder the bridge planned is found or created when the job runs, under the
+    // project's asset-folder lock (held for this step only), so two jobs placing into one missing chain make one chain.
+    const findOrCreate = op.operationId === 'createAssetFolder' && step.options.findOrCreate === true;
+    const lockKey = findOrCreate
+      ? projectLockKey(job.projectId, ASSET_FOLDER_LOCK)
+      : projectLockKey(job.projectId, lockKeyFor(op, params));
     // v2 C2a: the job already holds this lock for its whole run (BatchSubmit.holdLock); it is not taken again. v2 C2c:
     // a job may hold two (the page's and one of its documents').
     const held: readonly string[] =
@@ -298,7 +306,7 @@ export class StepExecutor {
           ? [opts.heldLock]
           : opts.heldLock;
     const ownLock = lockKey !== null && !held.includes(lockKey);
-    if (ownLock && held.length > 0) {
+    if (ownLock && held.length > 0 && !findOrCreate) {
       return this.fail(
         job,
         step,
@@ -321,6 +329,13 @@ export class StepExecutor {
           signal,
         );
         this.d.setJobWaiting(job.id, null);
+      }
+      if (findOrCreate && step.status !== 'running' && !step.maybeSent && step.firstSentAt === null) {
+        const found = await this.findFolder(job, step, params);
+        if (found) {
+          releaseLock?.();
+          return found;
+        }
       }
       releaseSlot = await this.d.writers.acquire(
         {
@@ -345,11 +360,89 @@ export class StepExecutor {
     try {
       const hold = step.status === 'running' ? null : this.d.writeHold(job.projectId);
       if (hold) return { kind: 'held', reason: hold };
-      return await this.runWrite(job, step, op, params, ref, store);
+      const out = await this.runWrite(job, step, op, params, ref, store);
+      if (findOrCreate && out.kind === 'succeeded') {
+        const entry = this.d.journal.entryIdForStep(job.id, step.stepNo);
+        if (entry !== undefined && entry !== null)
+          this.d.journal.annotate(entry, { folder: 'created folder' });
+      }
+      return out;
     } finally {
       releaseSlot();
       releaseLock?.();
     }
+  }
+
+  /**
+   * v3 F2 (ADR 0049 decision 9): the parent's children read fresh, inside the asset-folder lock; a folder whose name is
+   * exactly the planned one (byte for byte, as LegendKeeper stores names: sandbox A9) is used instead of creating one.
+   * The step then succeeds with that folder (`found: true`; the steps after it bind its id as they would a new one's),
+   * and the journal says so (`not_applied`: nothing was sent). Null when there is none, or the parent cannot be listed
+   * (the create then answers for itself, as before: a parent deleted since the plan fails it with LegendKeeper's error).
+   */
+  private async findFolder(job: JobView, step: StepView, params: OpParams): Promise<StepOutcome | null> {
+    const body = (params.body ?? {}) as { name?: unknown; folderId?: unknown };
+    if (typeof body.name !== 'string') return null;
+    const parent = typeof body.folderId === 'string' && body.folderId !== '' ? body.folderId : null;
+    const stats = newCallStats();
+    let match: Record<string, unknown> | undefined;
+    try {
+      let cursor: string | undefined;
+      for (let page = 0; page < 100 && !match; page++) {
+        const r = await this.readOp(
+          job,
+          step,
+          'listAssets',
+          { query: { limit: 100, ...(parent ? { folderId: parent } : {}), ...(cursor ? { cursor } : {}) } },
+          stats,
+        );
+        if (!r.exists) return null;
+        const b = (r.body ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
+        const items = Array.isArray(b.data) ? (b.data as Record<string, unknown>[]) : [];
+        match = items.find(
+          (x) =>
+            x?.type === 'FOLDER' &&
+            x.name === body.name &&
+            (x.folderId ?? null) === parent &&
+            typeof x.id === 'string',
+        );
+        if (b.hasMore !== true || typeof b.nextCursor !== 'string') break;
+        cursor = b.nextCursor;
+      }
+    } catch (e) {
+      if (e instanceof BudgetWaitError) throw e;
+      return null;
+    }
+    if (!match) return null;
+    const journalId = this.d.journal.record({
+      projectId: job.projectId,
+      jobId: job.id,
+      stepNo: step.stepNo,
+      opId: step.opId,
+      principalId: job.principalId,
+      profile: job.profile,
+      approvedBy: job.approvedBy,
+      risk: 'safe',
+      targetKind: 'Assets',
+      targetId: String(match.id),
+      resourceId: null,
+      documentId: null,
+      version: null,
+      params,
+      operation: {
+        ...(step.options.journalOperation ?? {}),
+        folder: 'found existing folder',
+        folderId: String(match.id),
+      },
+    });
+    this.d.journal.setOutcome(journalId, 'not_applied');
+    return this.succeed(job, step, stats, {
+      id: match.id,
+      name: match.name,
+      folderId: match.folderId ?? null,
+      type: 'FOLDER',
+      found: true,
+    });
   }
 
   // ------------------------------------------------------------------------------------------ custom steps
@@ -1037,7 +1130,15 @@ export class StepExecutor {
         } else if (t.kind === 'asset') {
           // v2 D3 (ADR 0041): an asset read back with getAsset: its folder (or the folder an earlier step of the job
           // created), hidden flag and name.
-          const r = await this.readOp(job, step, 'getAsset', { path: { assetId: t.assetId } }, stats);
+          let assetId = t.assetId;
+          if (t.assetFrom) {
+            const src = this.d.repo.step(job.id, t.assetFrom.step);
+            const made = src ? (this.d.repo.stepResult(src) as { id?: unknown } | null) : null;
+            assetId = typeof made?.id === 'string' ? made.id : undefined;
+          }
+          const r = assetId
+            ? await this.readOp(job, step, 'getAsset', { path: { assetId } }, stats)
+            : { exists: false, body: undefined };
           if (!r.exists) diffs.push({ path: t.label, expected: 'present', actual: '(gone)' });
           else {
             const a = (r.body ?? {}) as Record<string, unknown>;

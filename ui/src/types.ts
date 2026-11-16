@@ -1398,6 +1398,12 @@ export interface StagedImageView {
   discarding: { jobId: string } | null;
   error: string | null;
   old: boolean;
+  /** v3 F2: waiting on the bridge's server (not in LegendKeeper), with its thumbnail from the bridge's own copy. */
+  onServer?: boolean;
+  thumbnail?: string;
+  /** v3 F2: when it goes if it stays unplaced (once warned), and the project's maximum age in days. */
+  removedAfter?: number;
+  maxDays?: number;
 }
 
 export interface StagingResponse {

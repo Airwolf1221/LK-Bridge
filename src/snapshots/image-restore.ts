@@ -231,6 +231,8 @@ export async function restoreImage(
       source: 'restore',
       origin,
       priority: 'P1',
+      // v3 F2 (ADR 0049 decision 10): the restore's proposal names the new asset's URL, so it is staged in LegendKeeper.
+      stageIn: 'legendkeeper',
     });
     if (!started.row)
       throw new RestoreError('NOT_STAGED', 'The image could not be staged; nothing was proposed.');

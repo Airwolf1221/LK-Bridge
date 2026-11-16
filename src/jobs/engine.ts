@@ -45,6 +45,7 @@ import {
   internalPolicyMeta,
   internalReads,
   internalStepIssues,
+  isBridgeStep,
   isInternalStep,
   LMR_STEP,
   type DocumentChecker,
@@ -818,7 +819,11 @@ export class JobEngine {
       const params = s.params ?? {};
       const options = stepOptions(s);
       // v2 C2a: the bridge's own check and verify steps, only when bridge code asks for them (never lk_api_batch).
-      if ((given.internal === true || (lmr !== null && i >= base)) && isInternalStep(s.op)) {
+      // v3 F2: an image placement's upload steps too (isBridgeStep), only in a batch bridge code built.
+      if (
+        (given.internal === true && isBridgeStep(s.op)) ||
+        (lmr !== null && i >= base && isInternalStep(s.op))
+      ) {
         const issues = internalStepIssues(s.op, params);
         if (issues.length > 0) {
           throw new InvalidParamsError(
@@ -917,6 +922,7 @@ export class JobEngine {
       },
       req.lifecycle,
       req.forceProposal === true,
+      req.stagedPlacement === true ? { stagedPlacement: true } : {},
     );
     if (proposal) return proposal;
     if (this.draining) throw new DrainingError();
@@ -1038,7 +1044,9 @@ export class JobEngine {
       const params: OpParams = {
         body: { name, ...(i === 0 && req.folderId !== undefined ? { folderId: req.folderId } : {}) },
       };
-      const options: StepOptions = i === 0 ? {} : { bindFrom: { step: i, to: 'body.folderId' } };
+      // v3 F2 (ADR 0049 decision 9): found or created when the job runs, under the asset-folder lock.
+      const options: StepOptions =
+        i === 0 ? { findOrCreate: true } : { findOrCreate: true, bindFrom: { step: i, to: 'body.folderId' } };
       return { def: this.validate('createAssetFolder', params), params, options };
     });
     const assetBody = {
@@ -1892,7 +1900,8 @@ export class JobEngine {
     for (;;) {
       job = this.requireJob(jobId);
       let step = this.repo.nextStep(jobId);
-      if (step && job.kind === 'upload_image' && this.bindUploadStep(jobId, step)) {
+      // v3 F2: a staged image's placement (a batch) uploads it too, so its createImageAsset takes the upload key as well.
+      if (step && job.kind !== 'paginate_all' && this.bindUploadStep(jobId, step)) {
         step = this.repo.nextStep(jobId);
       }
       if (!step) {
@@ -2144,6 +2153,23 @@ export class JobEngine {
         const hidden = all.find((s) => s.opId === 'updateAsset');
         if (hidden) result = { ...result, hidden: hidden.status === 'succeeded' };
       }
+      // v3 F2 (ADR 0049 decision 9): each planned folder, and whether the job found it or created it.
+      const folderSteps = this.repo
+        .steps(jobId)
+        .filter((s) => s.options.findOrCreate === true && s.status === 'succeeded');
+      if (folderSteps.length > 0)
+        result = {
+          ...result,
+          foldersUsed: folderSteps.map((s) => {
+            const r = (s.resultSummary ?? {}) as { id?: unknown; name?: unknown; found?: unknown };
+            return {
+              stepNo: s.stepNo,
+              id: r.id ?? null,
+              name: r.name ?? (s.params?.body as { name?: unknown } | undefined)?.name ?? null,
+              outcome: r.found === true ? 'found existing folder' : 'created folder',
+            };
+          }),
+        };
       // v2 C1: what the read after each verified page write found, on the job itself. v2 C2a: and what every generic
       // verify step found (`bridge.verify`), the same way.
       const verifications = this.repo
@@ -2584,7 +2610,7 @@ export class JobEngine {
     meta: Omit<ProposalMeta, 'kind' | 'origin' | 'project'>,
     lifecycle?: LifecycleMarker,
     forceProposal = false,
-    extra: { readonly staging?: boolean } = {},
+    extra: { readonly staging?: boolean; readonly stagedPlacement?: boolean } = {},
   ): Promise<ProposalCaptured | null> {
     const principal = origin.principal ?? SYSTEM_PRINCIPAL;
     const batch = jobKind === 'batch_ops';
@@ -2600,6 +2626,7 @@ export class JobEngine {
           phase: 'entry',
           ...(batch ? { stepIndex: i } : {}),
           ...(extra.staging === true ? { staging: true } : {}),
+          ...(extra.stagedPlacement === true ? { stagedPlacement: true } : {}),
         });
       } catch (e) {
         decision = {
@@ -2886,6 +2913,7 @@ function stepOptions(o: StepOptions): StepOptions {
       ? { decisionFrom: { step: o.decisionFrom.step } }
       : {}),
     ...(o.followUp === 'lmr_failed' ? { followUp: 'lmr_failed' as const } : {}),
+    ...(o.findOrCreate === true ? { findOrCreate: true } : {}),
     // v2 D3: set by bridge code only.
     ...(o.bindFrom &&
     Number.isInteger(o.bindFrom.step) &&
