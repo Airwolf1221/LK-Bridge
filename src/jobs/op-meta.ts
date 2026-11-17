@@ -259,7 +259,9 @@ export const OP_META: Readonly<Record<string, OpMeta>> = {
   createImageUpload: key(),
   createImageAsset: key(),
   getAsset: read,
-  updateAsset: patch('asset'),
+  // v3 F3.4 (ADR 0055 decision F): the asset as it was (its folder, name and hidden flag), so a revert of an image
+  // placement or an asset move can put it back. One read per updateAsset (a rare write).
+  updateAsset: patch('asset', 'pre-image'),
   // CR-2026-11 (CR-01): the asset's record (not its bytes, nor a folder's contents: open for D3 and E1).
   deleteAsset: gone('asset', 'pre-image'),
   // Calendars

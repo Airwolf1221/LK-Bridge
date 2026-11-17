@@ -31,7 +31,19 @@ const primaryOwner = (name: string, category: string, worldToo = false) => ({
 
 const rules: PackRules = packRulesSchema.parse({
   schema: 1,
-  settings: { alwaysPropose: true },
+  // v3 F3.4 (ADR 0055 decision D): per tool. A package of the three creation tools makes several pages at once, so it
+  // stays a proposal; adding art and an appraisal fix follow the agent's scope (direct at `write`). Any other tool:
+  // `alwaysPropose`.
+  settings: {
+    alwaysPropose: true,
+    tools: {
+      arkona_create_character: 'propose',
+      arkona_create_owner: 'propose',
+      arkona_create_relationship: 'propose',
+      arkona_add_character_art: 'scope',
+      arkona_appraisal_fix: 'scope',
+    },
+  },
   tags: {
     authoritative: 'CANON',
     working: 'Working',
@@ -497,9 +509,10 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   prefix: 'arkona_',
   // v3 F3b (ADR 0052): the owner tools' seed. A pack stored from F3a's or F3b's seed is offered these rules as a new
   // version. `-f3b1` (ADR 0052 amendment, 16 November 2026): the pinned headings exactly as the pages have them, and a
-  // Working owner keeps its specialist tag. `-f3d` (ADR 0053, 17 November 2026): the lifecycle tag leads on Arkona.
-  seed: 'arkona-2026-11-17-f3d',
-  supersedes: ['arkona-2026-11-16', 'arkona-2026-11-16-f3b', 'arkona-2026-11-16-f3b1'],
+  // Working owner keeps its specialist tag. `-f3d` (ADR 0053, 17 November 2026; session F3.3): the lifecycle tag leads on
+  // Arkona. `-f3-4` (ADR 0055, 17 November 2026; session F3.4): the per-tool "always propose" switches.
+  seed: 'arkona-2026-11-17-f3-4',
+  supersedes: ['arkona-2026-11-16', 'arkona-2026-11-16-f3b', 'arkona-2026-11-16-f3b1', 'arkona-2026-11-17-f3d'],
   rules,
   governance: [
     {

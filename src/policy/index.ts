@@ -117,4 +117,17 @@ export { createMcpAccessControl, mcpOrigin, proposalTools, type ProposalToolsOpt
 export { PolicyError, type PolicyErrorCode } from './errors.js';
 export { canonicalJson, hashJson, isLiveApprovalToken, isCanonicalApproval } from './approval.js';
 export { buildPageSummary, type PageSummaryEntry } from './page-summary.js';
+export {
+  DEFAULT_WRITE_RAILS,
+  RAIL_DELETES,
+  RAIL_LABELS,
+  RAIL_NAMES,
+  railsFrom,
+  railsVerdict,
+  mergeRails,
+  pagesTouched,
+  type RailName,
+  type RailVerdict,
+  type WriteRails,
+} from './rails.js';
 export * from './types.js';

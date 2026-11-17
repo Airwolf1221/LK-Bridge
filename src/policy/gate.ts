@@ -16,9 +16,17 @@
  * Approved proposals: see approval.ts. A valid token for the proposal containing the operation wins over the
  * proposer's (possibly since lowered) scope; `approvedBy` or a token that is not valid is refused outright.
  */
-import type { OpParams, Principal } from '../jobs/types.js';
-import type { PolicyContext, PolicyDecision, PolicyGate, PolicyOpMeta } from '../jobs/policy.js';
+import type { JobKind, OpParams, Principal } from '../jobs/types.js';
+import type {
+  PolicyContext,
+  PolicyDecision,
+  PolicyGate,
+  PolicyOpMeta,
+  RailDecision,
+  RailRequestItem,
+} from '../jobs/policy.js';
 import { isLiveApprovalToken } from './approval.js';
+import { railsVerdict } from './rails.js';
 import type { PolicyStore } from './store.js';
 import type { ResolvedPrincipal, Scope } from './types.js';
 
@@ -34,6 +42,13 @@ export interface PolicyGateOptions {
 }
 
 export const SYSTEM_PRINCIPAL_ID = 'system';
+
+/** v3 F3.4 (ADR 0055): what the rails need from the repository tree (set once the tree exists). */
+export interface RailLookups {
+  /** How many pages lie under a page (its descendants), or null when the tree does not know. */
+  readonly descendants?: (projectId: string, resourceId: string) => number | null;
+  readonly pageName?: (projectId: string, resourceId: string) => string | null;
+}
 
 /** The message an agent sees when its connection is read-only. */
 export function readOnlyReason(profile: string): string {
@@ -60,6 +75,7 @@ export class LivePolicyGate implements PolicyGate {
   >();
   private readonly cacheMs: number;
   private readonly now: () => number;
+  private railLookups: RailLookups = {};
 
   constructor(private readonly o: PolicyGateOptions) {
     this.cacheMs = Math.min(Math.max(o.cacheMs ?? 1000, 0), 1000);
@@ -148,6 +164,31 @@ export class LivePolicyGate implements PolicyGate {
       default:
         return deny(readOnlyReason(resolved.principal.profile));
     }
+  }
+
+  /** v3 F3.4: the tree's answers the rails use (a cascade's pages, page names for the reason). */
+  setRailLookups(l: RailLookups): void {
+    this.railLookups = l;
+  }
+
+  /**
+   * v3 F3.4 (ADR 0055): the safety rails of the principal's profile, read live (the same cache as the scope), for a
+   * request that would run directly. Only an agent at scope `write` has rails; anyone else gets null (the gate itself
+   * decides for them).
+   */
+  rails(
+    principal: Principal,
+    items: readonly RailRequestItem[],
+    ctx: { readonly project: string; readonly jobKind: JobKind },
+  ): RailDecision | null {
+    if (principal.principalId === SYSTEM_PRINCIPAL_ID) return null;
+    const r = this.resolve(principal.principalId);
+    if (!r?.active || r.scope !== 'write') return null;
+    const l = this.railLookups;
+    return railsVerdict(r.rails, items, {
+      ...(l.descendants ? { descendants: (id: string) => l.descendants!(ctx.project, id) } : {}),
+      ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
+    });
   }
 }
 

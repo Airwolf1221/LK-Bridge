@@ -65,8 +65,10 @@ import {
   type PolicyOpMeta,
   type ProposalJobOptions,
   type ProposalMeta,
+  type ProposalExtras,
   type ProposalSink,
   type ProposedOp,
+  type RailDecision,
 } from './policy.js';
 import { createJobQueries, JobsRepo, type ErrorInput, type NewStep } from './repo.js';
 import {
@@ -400,6 +402,13 @@ export class JobEngine {
     checkSubmitGuards(def, params, options, this.guardContext(project));
     for (const it of lmrItems)
       if (it.def) checkSubmitGuards(it.def, it.params, it.options, this.guardContext(project));
+    // v3 F3.4 (ADR 0055 decision E): a direct updateBlock whose Last Major Revision is measured when it runs reads its
+    // block first (one read), so the rule has the "before" a typo fix is judged by.
+    const readFirst = readBeforeSteps([
+      { op: def.operationId, params, options },
+      ...lmrItems.map((it) => ({ op: it.opId, params: it.params, options: it.options })),
+    ]).has(0);
+    const runOptions: StepOptions = readFirst ? { ...options, readBefore: true } : options;
     const estimate = this.estimateFor(
       project,
       [{ def, params }, ...lmrItems.flatMap((it) => (it.def ? [{ def: it.def, params: it.params }] : []))],
@@ -413,7 +422,7 @@ export class JobEngine {
     if (this.draining) throw new DrainingError();
 
     const prepared = [
-      this.prepare(def, params, options),
+      this.prepare(def, params, runOptions),
       ...lmrItems.map((it) =>
         it.def
           ? this.prepare(it.def, it.params, it.options)
@@ -421,8 +430,21 @@ export class JobEngine {
       ),
     ];
     const hold = isWriteOp(def) ? this.writeHold(project) : null;
+    // v3 F3.4 (ADR 0055): what the Review page shows of a direct write.
+    const review = isWriteOp(def) ? reviewNote(origin, opts.proposal) : undefined;
+    const reviewOptions = review ? { review } : undefined;
     if (slow || hold) {
-      const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', prepared, 'queued');
+      const job = this.createJob(
+        project,
+        'single_op',
+        title,
+        origin,
+        priority,
+        'stop',
+        prepared,
+        'queued',
+        reviewOptions,
+      );
       this.pump();
       return {
         status: 'queued',
@@ -434,7 +456,17 @@ export class JobEngine {
     }
 
     // Inline write: recorded as a one-step job and run now, through the same slots, locks and guards.
-    const job = this.createJob(project, 'single_op', title, origin, priority, 'stop', prepared, 'running');
+    const job = this.createJob(
+      project,
+      'single_op',
+      title,
+      origin,
+      priority,
+      'stop',
+      prepared,
+      'running',
+      reviewOptions,
+    );
     const onAbort = () => this.cancelJob(job.id);
     opts.signal?.addEventListener('abort', onAbort, { once: true });
     let result: RunnerResult;
@@ -919,6 +951,8 @@ export class JobEngine {
     // lock (`holdDocuments`, a chronology event's table, timeline and Main). All the job-level locks are one sorted,
     // deduplicated list: the first is stored as `heldLock`, the rest as `heldMore`, and all are taken in that order.
     const heldDocs = [...new Set(req.holdDocuments ?? [])].map((d) => projectLockKey(project, `doc:${d}`)!);
+    // v3 F3.4 (ADR 0055): assets held for the whole job (a revert's image moves).
+    const heldAssets = [...new Set(req.holdAssets ?? [])].map((a) => projectLockKey(project, `asset:${a}`)!);
     const heldKeys = [
       ...new Set([
         ...(heldPage ? [heldPage] : []),
@@ -927,6 +961,7 @@ export class JobEngine {
         ...(req.holdMore?.resources ?? []).map((id) => projectLockKey(project, `res:${id}`)!),
         ...(req.holdMore?.documents ?? []).map((id) => projectLockKey(project, `doc:${id}`)!),
         ...heldDocs,
+        ...heldAssets,
       ]),
     ].sort();
     const heldLock = heldKeys[0] ?? null;
@@ -983,9 +1018,16 @@ export class JobEngine {
     if (this.draining) throw new DrainingError();
     const guard = this.guardContext(project);
     for (const v of validated) if (v.def) checkSubmitGuards(v.def, v.params, v.options, guard);
-    const prepared = validated.map((v) =>
-      v.def ? this.prepare(v.def, v.params, v.options) : this.prepareInternal(v.opId, v.params, v.options),
+    // v3 F3.4 (ADR 0055 decision E): see readBeforeSteps.
+    const readFirst = readBeforeSteps(
+      validated.map((v) => ({ op: v.opId, params: v.params, options: v.options })),
     );
+    const prepared = validated.map((v, i) =>
+      v.def
+        ? this.prepare(v.def, v.params, readFirst.has(i) ? { ...v.options, readBefore: true } : v.options)
+        : this.prepareInternal(v.opId, v.params, v.options),
+    );
+    const review = reviewNote(origin, req.proposal);
     const job = this.createJob(
       project,
       'batch_ops',
@@ -995,13 +1037,15 @@ export class JobEngine {
       onError,
       prepared,
       'queued',
-      heldLock || req.lifecycle || req.pageScope
+      heldLock || req.lifecycle || req.pageScope || review
         ? {
             ...(heldLock ? { [HELD_LOCK]: heldLock } : {}),
             ...(heldMore.length > 0 ? { [HELD_MORE]: heldMore } : {}),
             ...(req.lifecycle ? { [LIFECYCLE_OPTION]: req.lifecycle } : {}),
             // C2d (ADR 0036 decision 5): read by the page-scope guard inside the lock.
             ...(req.pageScope ? { pageScope: req.pageScope } : {}),
+            // v3 F3.4 (ADR 0055): what the Review page shows of a direct write.
+            ...(review ? { review } : {}),
           }
         : undefined,
     );
@@ -1656,6 +1700,40 @@ export class JobEngine {
       status: st.status,
       maybeSent: st.maybeSent || st.firstSentAt !== null,
       params: this.repo.stepParams(st),
+    }));
+  }
+
+  /**
+   * v3 F3.4 (ADR 0055): every step of a job as the engine holds it (its params and its result in full, from their
+   * artefacts when stored apart, and its options), for the review of direct writes and their revert. Undefined for a
+   * job of another project. Read-only.
+   */
+  stepRecords(
+    projectId: string,
+    jobId: string,
+  ):
+    | readonly {
+        readonly stepNo: number;
+        readonly opId: string;
+        readonly opKind: string;
+        readonly status: string;
+        readonly maybeSent: boolean;
+        readonly params: OpParams;
+        readonly options: StepOptions;
+        readonly result: unknown;
+      }[]
+    | undefined {
+    const job = this.repo.job(jobId);
+    if (!job || job.projectId !== projectId) return undefined;
+    return this.repo.steps(jobId).map((st) => ({
+      stepNo: st.stepNo,
+      opId: st.opId,
+      opKind: st.opKind,
+      status: st.status,
+      maybeSent: st.maybeSent || st.firstSentAt !== null,
+      params: this.repo.stepParams(st),
+      options: st.options,
+      result: st.status === 'succeeded' ? this.repo.stepResult(st) : null,
     }));
   }
 
@@ -2842,6 +2920,33 @@ export class JobEngine {
         canonical = { reason: verdict.reason, changes: verdict.changes };
       }
     }
+    // v3 F3.4 (ADR 0055): a request that would run directly at scope `write` meets the agent profile's safety rails
+    // (deletes, bulk changes, renames and moves, asset deletes and moves). A rail only ever ADDS a proposal: it is not
+    // asked about a request already proposed, approved work or the bridge's own; a rail that cannot be judged fails
+    // closed (a proposal).
+    let rail: RailDecision | null = null;
+    if (
+      !propose &&
+      this.policyGate.rails &&
+      origin.approval === undefined &&
+      principal.principalId !== SYSTEM_PRINCIPAL.principalId &&
+      (jobKind === 'single_op' || jobKind === 'batch_ops') &&
+      items.some((it) => it.meta.kind !== 'read')
+    ) {
+      try {
+        rail = await this.policyGate.rails(
+          principal,
+          items.map((it) => ({ opId: it.opId, kind: it.meta.kind, params: it.params, options: it.options })),
+          { project, jobKind },
+        );
+      } catch (e) {
+        rail = {
+          reason: `proposed because: the safety rails could not be judged (${e instanceof Error ? e.message : String(e)})`,
+          hits: [],
+        };
+      }
+      if (rail) propose = true;
+    }
     if (!propose) return null;
     const ops: ProposedOp[] = items.map(({ opId, params, options }) => ({
       op: opId,
@@ -2855,12 +2960,14 @@ export class JobEngine {
         origin,
         project,
         ...(canonical ? { canonical } : {}),
+        ...(rail ? { rail } : {}),
       });
       return {
         status: 'proposal_captured',
         proposalId,
         ...(summary !== undefined ? { summary } : {}),
         ...(canonical ? { canonical } : {}),
+        ...(rail ? { proposedBecause: rail.reason } : {}),
       };
     } catch (e) {
       if (e instanceof PolicyDeniedError) throw this.policyDenied(e, principal, project);
@@ -2980,6 +3087,41 @@ export class JobEngine {
   get database(): Db {
     return this.db;
   }
+}
+
+/**
+ * v3 F3.4 (ADR 0055 decision A): what the Review page shows of a job an agent runs directly at scope `write`: the
+ * summary its proposal would have shown (the tool's own, when it gives one) and the pages it names, briefly. Kept with
+ * the job's options; undefined for anyone else's work (the bridge's own, approved proposals).
+ */
+function reviewNote(
+  origin: JobOrigin,
+  extras: ProposalExtras | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+  const who = origin.principal?.principalId;
+  if (who === undefined || who === SYSTEM_PRINCIPAL.principalId) return undefined;
+  if (origin.approval !== undefined || origin.approvedBy !== undefined) return undefined;
+  const ops = extras?.operations ?? (extras?.operation ? [extras.operation] : []);
+  const pages = ops
+    .map((o) => {
+      const page = o.page as { id?: unknown; name?: unknown } | undefined;
+      if (!page || typeof page.id !== 'string') return null;
+      const parts = Array.isArray(o.pageParts)
+        ? (o.pageParts as unknown[]).filter((x): x is string => typeof x === 'string').slice(0, 10)
+        : [];
+      return {
+        id: page.id,
+        ...(typeof page.name === 'string' ? { name: page.name.slice(0, 300) } : {}),
+        ...(parts.length > 0 ? { parts } : {}),
+      };
+    })
+    .filter((x) => x !== null)
+    .slice(0, 50);
+  return {
+    ...(typeof extras?.summary === 'string' ? { summary: extras.summary.slice(0, 500) } : {}),
+    ...(extras?.lmrNote ? { lmrNote: extras.lmrNote.slice(0, 500) } : {}),
+    ...(pages.length > 0 ? { pages } : {}),
+  };
 }
 
 /**
@@ -3106,7 +3248,30 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(o.fill && typeof o.fill.filler === 'string'
       ? { fill: { filler: o.fill.filler, ...(o.fill.input !== undefined ? { input: o.fill.input } : {}) } }
       : {}),
+    // v3 F3.4 (ADR 0055): set by the engine only (readBeforeSteps).
+    ...(o.readBefore === true ? { readBefore: true } : {}),
   };
+}
+
+/**
+ * v3 F3.4 (ADR 0055 decision E): the steps (0-based) of a request about to run directly that must read their target
+ * before they write: an `updateBlock` named by a Last Major Revision decision that measures the edit when it runs
+ * (`measure`: the page has, or may have, the row and the mode is `auto`), and that keeps no pre-image of its own. Such
+ * a write sends only the fields it changes, so without the read the rule had no "before" and counted every edit.
+ */
+function readBeforeSteps(steps: readonly { op: string; params?: OpParams; options?: StepOptions }[]): Set<number> {
+  const out = new Set<number>();
+  for (const s of steps) {
+    if (s.op !== LMR_STEP) continue;
+    const b = (s.params?.body ?? {}) as { after?: unknown; measure?: unknown };
+    if (b.measure === undefined || !Array.isArray(b.after)) continue;
+    for (const n of b.after) {
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > steps.length) continue;
+      const t = steps[n - 1]!;
+      if (t.op === 'updateBlock' && t.options?.journalPreImage === undefined) out.add(n - 1);
+    }
+  }
+  return out;
 }
 
 /**

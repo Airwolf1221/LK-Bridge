@@ -40,6 +40,7 @@ import type { LmrMode } from '../../jobs/lmr-hook.js';
 import { pickDocument } from './read-document.js';
 import { finish, liveRead, repoContext, resolvePage } from './repo.js';
 import {
+  railBody,
   errorFromThrown,
   errorResult,
   mcpOrigin,
@@ -597,6 +598,7 @@ export function writePageTool(deps: ToolDeps): McpToolProvider {
                   'The change needs the owner’s approval and was NOT made. The owner sees this exact plan and its Markdown diff; if the page changes before ' +
                   'approval, the proposal becomes conflicted rather than being applied. Never retry it; tell the user it is waiting, and follow it with ' +
                   'bridge_proposal_status.',
+                ...railBody(run),
                 ...warnings,
                 ...diffBody(full),
               },

@@ -203,6 +203,11 @@ export interface AgentProposalView {
   readonly canonicalReason: string | null;
   /** v2 C2a: the pages it affects, one plain line each. */
   readonly pages: readonly string[];
+  /**
+   * v3 F3.4 (ADR 0055): at scope `write`, the profile's safety rail that made this write a proposal, in words (absent
+   * for any other proposal).
+   */
+  readonly proposedBecause?: string;
 }
 
 export function newProposalId(): string {
@@ -248,6 +253,7 @@ function toView(r: Row, opCount: number): ProposalView {
     canonicalApprovedBy: (r.canonical_approved_by as string | null) ?? null,
     canonicalApprovedAt: r.canonical_approved_at == null ? null : Number(r.canonical_approved_at),
     pages: parseJson<PageSummaryEntry[]>(r.page_summary, []).map((e) => e.label),
+    proposedBecause: (r.proposed_because as string | null | undefined) ?? null,
   };
 }
 
@@ -636,8 +642,8 @@ export class ProposalService implements ProposalSink {
         .prepare(
           `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
              priority, on_error, summary, state, created_at, updated_at, expires_at, operation, operations,
-             page_summary, requires_canonical, canonical_changes, job_options)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             page_summary, requires_canonical, canonical_changes, job_options, proposed_because)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -660,6 +666,7 @@ export class ProposalService implements ProposalSink {
           meta.canonical ? 1 : 0,
           meta.canonical ? JSON.stringify(meta.canonical) : null,
           jobOptions ? JSON.stringify(jobOptions) : null,
+          meta.rail ? meta.rail.reason.slice(0, REASON_MAX) : null,
         );
       const insert = this.store.db.prepare(
         `INSERT INTO proposal_ops (proposal_id, project_id, idx, op_id, op_kind, params, params_hash, options,
@@ -1669,6 +1676,7 @@ export class ProposalService implements ProposalSink {
       requiresCanonicalApproval: p.requiresCanonicalApproval,
       canonicalReason: p.requiresCanonicalApproval ? (this.canonicalOf(p.id)?.reason ?? null) : null,
       pages: p.pages,
+      ...(p.proposedBecause ? { proposedBecause: p.proposedBecause } : {}),
     };
   }
 

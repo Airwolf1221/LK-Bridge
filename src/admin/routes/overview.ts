@@ -82,6 +82,8 @@ export const registerOverview: Register = (api, ctx) => {
       },
       errorsLastHour: { count: errors.length, capped: errors.length >= 1000 },
       pendingProposals: pending.length,
+      // v3 F3.4 (ADR 0055): agents' direct writes at scope `write` the owner has not reviewed yet.
+      unreviewedDirectWrites: id && deps.runtime.review ? deps.runtime.review.store.count(id, { state: 'unreviewed' }) : 0,
       writes: {
         state: controls.draining ? 'draining' : controls.writesPaused ? 'paused' : 'running',
         perMinute: budget?.writesPerMinute ?? 0,

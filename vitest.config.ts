@@ -34,6 +34,7 @@ export default defineConfig({
       'test/e4/**/*.test.ts', // v2 E4: the second independent review's regression tests (docs/reviews/E4-2026-11.md)
       'test/lmr/**/*.test.ts', // v3 F2: Last Major Revision on every substantial edit (ADR 0049)
       'test/packs/**/*.test.ts', // v3 F3a: setting packs and the Arkona character tool (ADR 0050)
+      'test/review/**/*.test.ts', // v3 F3.4: write scope: the review of direct writes, Revert, the rails (ADR 0055)
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

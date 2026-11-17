@@ -1,0 +1,509 @@
+/**
+ * Revert a finished direct-write job (v3 F3.4, ADR 0055 decision B), owner-initiated, from the Review page or the Jobs
+ * page. It generalises the block-by-block undo (ADR 0046 decision 1, src/pages/undo.ts) to every kind of change an agent
+ * makes at scope `write` that the bridge can put back from its own record (src/review/targets.ts and revert-plan.ts).
+ *
+ * - **Never reverted:** a deletion (restore_resource, which already exists, is named instead); anything that was a
+ *   proposal (the owner approved it before it happened, canon and lifecycle changes included); a job still running; a
+ *   revert (a revert is never itself reverted).
+ * - **Only when nothing has changed since:** each target is read live and compared with the state the job left, by
+ *   content; a target that differs is not reverted and the answer lists it with what changed. An outside edit is never
+ *   overwritten. The rest of the job is reverted only when the owner confirms a partial revert (`confirmPartial`); the
+ *   default is all or nothing.
+ * - **One job:** run by the system principal at P1, holding every page, document and asset it writes for its whole run;
+ *   each target's part checks it again inside those locks before its first write, chains its If-Match, is journalled
+ *   like any write (`job.revert`) and verified. Last Major Revision is put back only where the job set it (its decision
+ *   kept the value before); the revert sets no date of its own (`lastMajorRevision: "skip"`).
+ * - **Audited** (`job.revert`: the job, the targets and the outcome; once when submitted or refused, once when it ends)
+ *   and needs the owner's re-authentication (the admin route). Its result points to the journal and the snapshots.
+ */
+import type { Db } from '../db/open.js';
+import type { JobEngine } from '../jobs/engine.js';
+import { JobsError } from '../jobs/errors.js';
+import type { DocumentChecker, RegisteredChecker } from '../jobs/internal-steps.js';
+import { stableJson } from '../jobs/sidebar-state.js';
+import { SYSTEM_PRINCIPAL, TERMINAL_JOB_STATUSES, type JobView, type OpParams, type StepSpec } from '../jobs/types.js';
+import { compareStoredBlocks } from '../jobs/verify-blocks.js';
+import { withoutVersions } from '../pages/blockwise.js';
+import type { PolicyStore } from '../policy/store.js';
+import type { ImageService } from '../images/service.js';
+import { planChronology, type ChronologyAccess } from './revert-chronology.js';
+import {
+  notRevertible,
+  planBlocks,
+  planFactsTarget,
+  planImage,
+  planLmr,
+  planMove,
+  planResource,
+  planText,
+  resourceDiffs,
+  REVERT_BLOCKS_CHECKER,
+  REVERT_CHECKER,
+  REVERT_TOOL,
+  shiftStep,
+  type PlanIo,
+  type TargetCheck,
+  type TargetPlan,
+} from './revert-plan.js';
+import type { ReviewService } from './service.js';
+import type { BlockTarget, Target } from './targets.js';
+
+type Obj = Record<string, unknown>;
+const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export { REVERT_TOOL } from './revert-plan.js';
+
+export class RevertError extends Error {
+  override readonly name = 'RevertError';
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+export interface RevertPreview {
+  readonly jobId: string;
+  readonly projectId: string;
+  readonly eligible: { readonly ok: true } | { readonly ok: false; readonly code: string; readonly message: string };
+  readonly targets: readonly TargetCheck[];
+  /** Targets that would be written back now. */
+  readonly ready: number;
+  /** Targets that would not (changed since, gone, not revertible): a revert of the rest needs `confirmPartial`. */
+  readonly notReverted: number;
+}
+
+export type RevertResult =
+  | {
+      readonly status: 'submitted';
+      readonly revertJobId: string;
+      readonly partial: boolean;
+      readonly targets: readonly TargetCheck[];
+      readonly message: string;
+    }
+  | {
+      readonly status: 'refused';
+      readonly code: string;
+      readonly message: string;
+      readonly targets: readonly TargetCheck[];
+    };
+
+export interface RevertDeps {
+  readonly db: Db;
+  readonly engine: Pick<
+    JobEngine,
+    'submit' | 'events' | 'queries' | 'internalRead' | 'stepResults' | 'registerAsyncChecker' | 'registerChecker'
+  >;
+  readonly review: ReviewService;
+  readonly policy: Pick<PolicyStore, 'audit'>;
+  readonly now: () => number;
+  readonly chronology?: ChronologyAccess;
+  readonly images?: Pick<ImageService, 'store' | 'stagingFolderName'>;
+  readonly log?: { warn(o: unknown, m: string): void };
+}
+
+/** What the job's record keeps about a revert's images, to put them back on the Staging page once it succeeds. */
+interface ImageNote {
+  readonly assetId: string;
+  readonly stagedId: string | null;
+  /** The revert job's step that found or made the staging folder (shifted), or null for an asset moved back. */
+  readonly folderStep: number | null;
+}
+
+const isNotFound = (e: unknown): boolean => {
+  const lk = (e as { lk?: { status?: number }; status?: number } | null)?.lk;
+  return lk?.status === 404 || (e as { code?: unknown })?.code === 'NOT_FOUND';
+};
+
+export class RevertService {
+  private offs: (() => void)[] = [];
+
+  constructor(private readonly d: RevertDeps) {}
+
+  /** Registers the in-lock checks and follows revert jobs to their end. Returns a detach. */
+  start(): () => void {
+    this.offs.push(this.d.engine.registerAsyncChecker(REVERT_CHECKER, revertChecker));
+    this.offs.push(this.d.engine.registerChecker(REVERT_BLOCKS_CHECKER, blocksChecker));
+    this.offs.push(
+      this.d.engine.events.on('job', (e: { type: string; job: JobView }) => {
+        if (e.job.origin.tool !== REVERT_TOOL || !TERMINAL_JOB_STATUSES.has(e.job.status)) return;
+        try {
+          this.finished(e.job);
+        } catch (err) {
+          this.d.log?.warn({ err, jobId: e.job.id }, 'a revert could not be settled');
+        }
+      }),
+    );
+    return () => this.stop();
+  }
+
+  stop(): void {
+    for (const off of this.offs) off();
+    this.offs = [];
+  }
+
+  // ---------------------------------------------------------------------------------------------- eligibility
+
+  private eligibility(
+    projectId: string,
+    jobId: string,
+  ): { ok: true; job: JobView } | { ok: false; code: string; message: string } {
+    const job = this.d.engine.queries.getJob(projectId, jobId);
+    if (!job) return { ok: false, code: 'JOB_NOT_FOUND', message: `There is no job ${jobId} in this project.` };
+    if (job.origin.tool === REVERT_TOOL)
+      return {
+        ok: false,
+        code: 'IS_A_REVERT',
+        message: `Job ${jobId} is a revert, and a revert is never itself reverted. The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold every target as it was before it.`,
+      };
+    if (!this.d.review.store.get(projectId, jobId)) {
+      if (job.approvedBy !== null)
+        return {
+          ok: false,
+          code: 'WAS_A_PROPOSAL',
+          message: `Job ${jobId} ran from a proposal the owner approved (seen before it happened; canon and lifecycle changes are always such proposals), so Revert does not apply. The journal and the snapshots hold what it changed.`,
+        };
+      return {
+        ok: false,
+        code: 'NOT_A_DIRECT_WRITE',
+        message: `Job ${jobId} is not an agent’s direct write at scope write (the bridge’s own work, or a read): Revert does not apply.`,
+      };
+    }
+    if (!TERMINAL_JOB_STATUSES.has(job.status))
+      return {
+        ok: false,
+        code: 'JOB_RUNNING',
+        message: `Job ${jobId} is still ${job.status}: a revert waits until it has finished (or been cancelled).`,
+      };
+    const prev = this.d.db
+      .prepare(`SELECT state, revert_job_id FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
+      .get(projectId, jobId) as { state: string; revert_job_id: string } | undefined;
+    if (prev?.state === 'submitted')
+      return { ok: false, code: 'REVERT_RUNNING', message: `A revert of job ${jobId} is running (job ${prev.revert_job_id}).` };
+    if (prev?.state === 'succeeded')
+      return { ok: false, code: 'ALREADY_REVERTED', message: `Job ${jobId} has been reverted (job ${prev.revert_job_id}).` };
+    return { ok: true, job };
+  }
+
+  // ---------------------------------------------------------------------------------------------- planning
+
+  private io(projectId: string, jobId: string): PlanIo {
+    const cache = new Map<string, Promise<{ exists: boolean; body: unknown }>>();
+    return {
+      jobId,
+      stagingFolder: this.d.images?.stagingFolderName(projectId) ?? 'LK-Bridge staging',
+      read: (op: string, params: OpParams) => {
+        const key = `${op} ${stableJson(params)}`;
+        let p = cache.get(key);
+        if (!p) {
+          p = this.d.engine
+            .internalRead(projectId, op, params, { priority: 'P1', notFoundIsAnswer: true })
+            .then((body) => ({ exists: true, body }))
+            .catch((e: unknown) => {
+              if (isNotFound(e)) return { exists: false, body: null };
+              throw new RevertError(
+                'READ_FAILED',
+                `A target could not be read (${op}): ${e instanceof Error ? e.message : String(e)}. Nothing was reverted; try again.`,
+              );
+            });
+          cache.set(key, p);
+        }
+        return p;
+      },
+    };
+  }
+
+  private async plan(projectId: string, jobId: string): Promise<{
+    eligible: RevertPreview['eligible'];
+    plans: TargetPlan[];
+  }> {
+    const el = this.eligibility(projectId, jobId);
+    if (!el.ok) return { eligible: { ok: false, code: el.code, message: el.message }, plans: [] };
+    const targets = this.d.review.targets(projectId, jobId) ?? [];
+    const io = this.io(projectId, jobId);
+    const plans: TargetPlan[] = [];
+    const blocksByDoc = new Map<string, BlockTarget[]>();
+    for (const t of targets) {
+      if (t.kind === 'block') {
+        blocksByDoc.set(t.documentId, [...(blocksByDoc.get(t.documentId) ?? []), t]);
+        continue;
+      }
+      plans.push(await this.planOne(t, io, projectId));
+    }
+    for (const ts of blocksByDoc.values()) plans.push(...(await planBlocks(ts, io)));
+    return { eligible: { ok: true }, plans };
+  }
+
+  private async planOne(t: Target, io: PlanIo, projectId: string): Promise<TargetPlan> {
+    switch (t.kind) {
+      case 'text':
+        return planText(t, io);
+      case 'facts':
+        return planFactsTarget(t, io);
+      case 'lmr':
+        return planLmr(t, io);
+      case 'resource':
+        return planResource(t, io);
+      case 'move':
+        return planMove(t, io);
+      case 'image':
+        return planImage(t, io);
+      case 'chronology':
+        return planChronology(t, io, projectId, this.d.chronology);
+      case 'block':
+        return planBlocks([t], io).then((x) => x[0]!);
+      case 'none':
+        return notRevertible(t, t.reason, {
+          ...(t.deletion ? { deletion: true } : {}),
+          instead: t.instead ?? null,
+          journal: t.journal,
+        });
+    }
+  }
+
+  /** What a revert would do now: each target, read live (reads only; nothing is written). */
+  async preview(projectId: string, jobId: string): Promise<RevertPreview> {
+    const { eligible, plans } = await this.plan(projectId, jobId);
+    const targets = plans.map((p) => p.check);
+    return {
+      jobId,
+      projectId,
+      eligible,
+      targets,
+      ready: targets.filter((c) => c.state === 'ready').length,
+      notReverted: targets.filter((c) => c.state !== 'ready' && c.state !== 'nothing_to_do').length,
+    };
+  }
+
+  // ---------------------------------------------------------------------------------------------- reverting
+
+  /** The owner's revert (the admin route re-authenticates first). See the module comment. */
+  async revert(
+    actor: 'owner',
+    projectId: string,
+    jobId: string,
+    o: { readonly confirmPartial?: boolean } = {},
+  ): Promise<RevertResult> {
+    if (actor !== 'owner') throw new RevertError('NOT_OWNER', 'Only the owner reverts a job.');
+    const { eligible, plans } = await this.plan(projectId, jobId);
+    const targets = plans.map((p) => p.check);
+    const summary = targets.map((c) => ({ key: c.key, what: c.what, state: c.state }));
+    const refuse = (code: string, message: string): RevertResult => {
+      this.d.policy.audit('owner', 'job.revert', jobId, undefined, { outcome: 'refused', code, targets: summary });
+      return { status: 'refused', code, message, targets };
+    };
+    if (!eligible.ok) return refuse(eligible.code, eligible.message);
+    const readyPlans = plans.filter((p) => p.check.state === 'ready');
+    const others = targets.filter((c) => c.state !== 'ready' && c.state !== 'nothing_to_do');
+    if (readyPlans.length === 0) {
+      if (others.length > 0 && others.every((c) => c.deletion === true))
+        return refuse(
+          'DELETION',
+          `Job ${jobId} deleted what it changed, and a deletion is never reverted: use restore_resource (a page) or the journal’s pre-images (bridge_journal_lookup with jobId ${jobId}).`,
+        );
+      if (others.length === 0)
+        return refuse('NOTHING_TO_REVERT', `Everything job ${jobId} changed is already as it was before it.`);
+      return refuse(
+        'NOTHING_TO_REVERT',
+        `Nothing of job ${jobId} can be reverted: ${others.map((c) => `${c.what} (${c.detail})`).join('; ')}.`,
+      );
+    }
+    if (others.length > 0 && o.confirmPartial !== true)
+      return refuse(
+        'PARTIAL_REVERT_NEEDS_CONFIRMATION',
+        `${others.length} of the ${targets.length} things job ${jobId} changed cannot be reverted (listed with why). The default is all or nothing: confirm a partial revert to revert the other ${readyPlans.length}.`,
+      );
+
+    // ONE job: every ready target's part, its step numbers shifted, every lock held for the whole run.
+    const steps: StepSpec[] = [];
+    const images: ImageNote[] = [];
+    for (const p of readyPlans) {
+      const offset = steps.length;
+      for (const s of p.steps ?? []) steps.push(shiftStep(s, offset));
+      if (p.image)
+        images.push({
+          assetId: p.image.assetId,
+          stagedId: p.image.stagedId,
+          folderStep: p.image.folderStep === null ? null : p.image.folderStep + offset,
+        });
+    }
+    const resources = [...new Set(readyPlans.flatMap((p) => p.resources ?? []))];
+    const documents = [...new Set(readyPlans.flatMap((p) => p.documents ?? []))];
+    const assets = [...new Set(readyPlans.flatMap((p) => p.assets ?? []))];
+    let jobIdOfRevert: string;
+    try {
+      const r = await this.d.engine.submit({
+        kind: 'batch_ops',
+        project: projectId,
+        steps,
+        onError: 'stop',
+        priority: 'P1',
+        origin: {
+          kind: 'ui',
+          client: 'dashboard',
+          tool: REVERT_TOOL,
+          detail: `revert:${jobId}`,
+          principal: SYSTEM_PRINCIPAL,
+        },
+        title: `Revert of job ${jobId}`,
+        internal: true,
+        lastMajorRevision: 'skip',
+        ...(resources.length > 0
+          ? {
+              holdLock: { resourceId: resources[0]! },
+              ...(resources.length > 1 || documents.length > 0
+                ? { holdMore: { resources: resources.slice(1), documents } }
+                : {}),
+            }
+          : documents.length > 0
+            ? { holdDocuments: documents }
+            : {}),
+        ...(assets.length > 0 ? { holdAssets: assets } : {}),
+      });
+      if (!('jobId' in r)) return refuse('NOT_SUBMITTED', 'The revert was not accepted as a job; nothing was written.');
+      jobIdOfRevert = r.jobId;
+    } catch (e) {
+      const code = e instanceof JobsError ? (e.code ?? 'REFUSED') : 'REFUSED';
+      return refuse(code, `The revert was refused before anything was written: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const partial = others.length > 0;
+    this.d.db
+      .prepare(
+        `INSERT INTO job_reverts (project_id, job_id, revert_job_id, state, partial, targets, created_at, created_by)
+         VALUES (?, ?, ?, 'submitted', ?, ?, ?, 'owner')`,
+      )
+      .run(projectId, jobId, jobIdOfRevert, partial ? 1 : 0, JSON.stringify({ targets, images }), this.d.now());
+    this.d.policy.audit('owner', 'job.revert', jobId, undefined, {
+      outcome: 'submitted',
+      revertJobId: jobIdOfRevert,
+      partial,
+      targets: summary,
+    });
+    return {
+      status: 'submitted',
+      revertJobId: jobIdOfRevert,
+      partial,
+      targets,
+      message:
+        `Revert job ${jobIdOfRevert} submitted: ${readyPlans.length} target${readyPlans.length === 1 ? '' : 's'} written back` +
+        (partial ? `; ${others.length} not (listed with why)` : '') +
+        `. Each is checked again inside the job before it is written. The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold everything as it was, if you need to go further.`,
+    };
+  }
+
+  /** A revert job ended: its record, the audit, the review item, and its images back on the Staging page. */
+  private finished(job: JobView): void {
+    const row = this.d.db
+      .prepare('SELECT id, project_id, job_id, state, targets FROM job_reverts WHERE revert_job_id = ?')
+      .get(job.id) as { id: number; project_id: string; job_id: string; state: string; targets: string } | undefined;
+    if (!row || row.state !== 'submitted') return;
+    const state = job.status === 'succeeded' ? 'succeeded' : job.status === 'cancelled' ? 'cancelled' : 'failed';
+    this.d.db
+      .prepare('UPDATE job_reverts SET state = ?, finished_at = ? WHERE id = ?')
+      .run(state, this.d.now(), row.id);
+    this.d.policy.audit('system', 'job.revert', row.job_id, undefined, {
+      outcome: state,
+      revertJobId: job.id,
+      ...(job.lastError ? { error: job.lastError.message } : {}),
+    });
+    if (state !== 'succeeded') return;
+    this.d.review.markReverted(row.project_id, row.job_id);
+    let note: { images?: ImageNote[] } = {};
+    try {
+      note = JSON.parse(row.targets) as { images?: ImageNote[] };
+    } catch {
+      note = {};
+    }
+    const images = this.d.images;
+    if (!images || !note.images?.length) return;
+    const results = this.d.engine.stepResults(row.project_id, job.id) ?? [];
+    for (const im of note.images) {
+      const rec = (im.stagedId ? images.store.upload(row.project_id, im.stagedId) : undefined) ??
+        images.store.byAsset(row.project_id, im.assetId);
+      if (!rec) continue;
+      const folder = im.folderStep === null ? null : (results.find((s) => s.stepNo === im.folderStep)?.value as Obj | null);
+      const folderId = folder && typeof folder.id === 'string' ? folder.id : rec.folderId;
+      // Back on the Staging page: a staged asset in LegendKeeper's staging folder, hidden, to place again or discard.
+      images.store.updateUpload(row.project_id, rec.id, {
+        staged: true,
+        assetId: im.assetId,
+        folderId,
+        ...(im.folderStep !== null ? { folderPath: [images.stagingFolderName(row.project_id)] } : {}),
+        placedAt: null,
+        placedBy: null,
+        placementJobId: null,
+        placementProposalId: null,
+        serverSha256: null,
+      });
+    }
+  }
+}
+
+// ------------------------------------------------------------------------------------------------ in-lock checks
+
+/** A page's fields, or an asset's place, exactly as the job left them (inside the revert job's locks). */
+const revertChecker: RegisteredChecker = async (ctx) => {
+  const input = (ctx.input ?? {}) as {
+    kind?: string;
+    resourceId?: string;
+    assetId?: string;
+    fields?: Record<string, unknown>;
+  };
+  if (input.kind === 'resource' && input.resourceId) {
+    const r = await ctx.read('getResource', { path: { resourceId: input.resourceId } });
+    if (!r.exists) return { differences: [{ path: ctx.label, expected: 'present', actual: '(gone)' }] };
+    return { differences: resourceDiffs(input.fields ?? {}, isObj(r.body) ? r.body : {}) };
+  }
+  if (input.kind === 'asset' && input.assetId) {
+    const r = await ctx.read('getAsset', { path: { assetId: input.assetId } });
+    if (!r.exists) return { differences: [{ path: ctx.label, expected: 'present', actual: '(gone)' }] };
+    const live = isObj(r.body) ? r.body : {};
+    const f = (input.fields ?? {}) as { folderId?: string | null; name?: string | null; isHidden?: boolean };
+    const now = {
+      folderId: typeof live.folderId === 'string' && live.folderId !== '' ? live.folderId : null,
+      name: typeof live.name === 'string' ? live.name : null,
+      isHidden: live.isHidden === true,
+    };
+    const differences = [];
+    if (f.folderId !== undefined && now.folderId !== f.folderId)
+      differences.push({ path: 'folder', expected: f.folderId, actual: now.folderId });
+    if (f.isHidden !== undefined && now.isHidden !== f.isHidden)
+      differences.push({ path: 'hidden', expected: f.isHidden, actual: now.isHidden });
+    if (typeof f.name === 'string' && now.name !== f.name) differences.push({ path: 'name', expected: f.name, actual: now.name });
+    return { differences };
+  }
+  return { differences: [{ path: ctx.label, expected: 'a revert target', actual: 'nothing to check' }] };
+};
+
+/** Single blocks of a document exactly as the job left them (gives the document's version, for If-Match). */
+const blocksChecker: DocumentChecker = (ctx) => {
+  const input = (ctx.input ?? {}) as { blocks?: { id: string; expect: Obj | null }[] };
+  const find = (list: readonly unknown[], id: string): Obj | null => {
+    for (const b of list) {
+      if (!isObj(b)) continue;
+      if (b.id === id) return b;
+      if (Array.isArray(b.children)) {
+        const f = find(b.children as unknown[], id);
+        if (f) return f;
+      }
+    }
+    return null;
+  };
+  const differences = [];
+  for (const b of input.blocks ?? []) {
+    const found = find(ctx.document.blocks, b.id);
+    if (b.expect === null) {
+      if (found) differences.push({ path: b.id, expected: 'absent', actual: 'present' });
+      continue;
+    }
+    if (!found) {
+      differences.push({ path: b.id, expected: 'present', actual: '(gone)' });
+      continue;
+    }
+    if (!compareStoredBlocks([b.expect], withoutVersions([found])).ok)
+      differences.push({ path: b.id, expected: 'the block as the job left it', actual: 'changed since' });
+  }
+  return { differences };
+};

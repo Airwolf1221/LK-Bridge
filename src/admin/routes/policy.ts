@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES } from '../../policy/index.js';
 import { redactDeep } from '../redact.js';
+import { requireReauth } from '../guard.js';
 import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const scope = z.enum(SCOPES);
@@ -182,6 +183,34 @@ export const registerPolicy: Register = (api, ctx) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ show: z.boolean() }), req.body);
     return { profile: actions.setShowLowLevelTools(id, b.show) };
+  });
+
+  /**
+   * v3 F3.4 (ADR 0055): a profile's safety rails at scope `write` (the kinds of change that still become proposals).
+   * A partial change keeps the other switches. Re-authentication first (a rail switched off lets more go straight
+   * through), then the owner's confirmation; audited `profile.set_rails`.
+   */
+  api.put('/clients/profiles/:id/rails', (req) => {
+    requireReauth(ctx.deps.services, req);
+    const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    const b = parseInput(
+      z
+        .object({
+          rails: z
+            .object({
+              deletes: z.boolean().optional(),
+              bulk: z.boolean().optional(),
+              bulkPages: z.number().int().min(1).max(1000).optional(),
+              renamesMoves: z.boolean().optional(),
+              assets: z.boolean().optional(),
+            })
+            .strict(),
+          confirm: z.literal(true),
+        })
+        .strict(),
+      req.body,
+    );
+    return { profile: actions.setRails(id, b.rails) };
   });
 
   api.put('/clients/default-scope', (req) => {

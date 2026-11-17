@@ -39,6 +39,8 @@ import {
 } from './mcp/tools/index.js';
 import type { GuardOptions } from './mcp/tools/upload-http.js';
 import { footerFor } from './mcp/tools/shape.js';
+import { ReviewService } from './review/service.js';
+import { RevertService } from './review/revert.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
@@ -142,6 +144,10 @@ export interface Runtime {
   readonly offsite: OffsiteService;
   /** v3 F3a (ADR 0050): the setting packs (rules, attachments, governance, the owner's approval). */
   readonly packs: Packs;
+  /** v3 F3.4 (ADR 0055): the review queue of agents' direct writes at scope `write`. */
+  readonly review: ReviewService;
+  /** v3 F3.4 (ADR 0055): the owner's revert of a finished direct-write job. */
+  readonly reverts: RevertService;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -388,6 +394,23 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     }
   };
   policy.proposals.setPageNames(pageName);
+  // v3 F3.4 (ADR 0055): the safety rails count a cascade's pages and name pages from the repository tree.
+  policy.gate.setRailLookups({
+    pageName,
+    descendants: (projectId, resourceId) => {
+      try {
+        const status = tree.queries.status(projectId).status;
+        if (status !== 'ready' && status !== 'stale') return null;
+        if (!tree.queries.node(projectId, resourceId).data) return null;
+        return Math.max(
+          0,
+          tree.queries.subtree(projectId, resourceId, { limit: 100_000 }).data.entries.length - 1,
+        );
+      } catch {
+        return null;
+      }
+    },
+  });
   // v3 F2 (ADR 0049 decision 2): a substantial edit also sets its page's Last Major Revision, in the same job and
   // proposal. The planner reads nothing: the tree's sidebar summary says where the row is.
   const unregisterLmr = engine.setLmrPlanner(
@@ -706,6 +729,51 @@ export function createRuntime(o: RuntimeOptions): Runtime {
   });
   images.start();
 
+  // v3 F3.4 (ADR 0055): the review of agents' direct writes at scope `write`, and the owner's revert of one.
+  const review = new ReviewService({
+    db: o.db,
+    engine,
+    policy: policy.store,
+    now: () => (o.clock ?? systemClock).now(),
+    pageName,
+    documentName: (projectId, resourceId, documentId) => {
+      try {
+        return tree.queries.node(projectId, resourceId).data?.documents.find((d) => d.id === documentId)?.name ?? null;
+      } catch {
+        return null;
+      }
+    },
+    folderName: (projectId, id) => {
+      if (id === null) return null;
+      try {
+        return assets.queries.folder(projectId, id).data?.name ?? null;
+      } catch {
+        return null;
+      }
+    },
+    chronology: chronology.store,
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachReview = review.attach();
+  const reverts = new RevertService({
+    db: o.db,
+    engine,
+    review,
+    policy: policy.store,
+    now: () => (o.clock ?? systemClock).now(),
+    chronology: {
+      readiness: (projectId) => {
+        const r = chronology.readiness(projectId);
+        return r.ok ? { ok: true, config: r.config } : { ok: false, message: r.message };
+      },
+      calendar: (projectId, calendarId) => chronology.calendar(projectId, calendarId),
+      remember: (projectId, definition) => chronology.remember(projectId, definition),
+    },
+    images,
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachReverts = reverts.start();
+
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
   const maintenance = createMaintenance({
@@ -854,6 +922,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     rehearsals,
     offsite,
     packs,
+    review,
+    reverts,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -888,6 +958,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       for (const off of detachSnapshotCheckers) off();
       for (const off of detachAuditCheckers) off();
       detachBlockwiseUndo();
+      detachReverts();
+      detachReview();
       detachRestores();
       unregisterPackEngine();
       detachPackTools();

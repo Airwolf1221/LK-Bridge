@@ -366,9 +366,10 @@ export function runResultBody(
  * owner's canonical approval (whatever the scope), and why.
  */
 export function canonicalBody(
-  r: { readonly canonical?: { readonly reason: string } },
+  r: { readonly canonical?: { readonly reason: string }; readonly proposedBecause?: string },
   lead = 'The change needs the owner’s approval and was not made.',
 ): Record<string, unknown> {
+  if (!r.canonical && r.proposedBecause) return railBody(r);
   if (r.canonical) {
     return {
       requiresCanonicalApproval: true,
@@ -381,6 +382,20 @@ export function canonicalBody(
   return {
     hint: `${lead} Never retry it; tell the user it is waiting for approval, and follow it with bridge_proposal_status.`,
   };
+}
+
+/**
+ * v3 F3.4 (ADR 0055): what an agent at scope `write` is told when its profile's safety rail (deletes, bulk changes,
+ * renames and moves, asset deletes and moves) made a write a proposal.
+ */
+export const RAIL_HINT =
+  'Your scope is "write", but the owner keeps this kind of change for approval (a safety rail on your profile), so it was NOT made: ' +
+  'it waits for the owner. Never retry it, and never split it up or take another route to get round the rail; tell the user, ' +
+  'and follow it with bridge_proposal_status.';
+
+/** v3 F3.4: the rail's reason and the hint, when a safety rail made the write a proposal; else nothing. */
+export function railBody(r: { readonly proposedBecause?: string }): Record<string, unknown> {
+  return r.proposedBecause ? { proposedBecause: r.proposedBecause, hint: RAIL_HINT } : {};
 }
 
 // ------------------------------------------------------------------------------------------------ summaries

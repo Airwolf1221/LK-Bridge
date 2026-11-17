@@ -114,6 +114,12 @@ export async function packWorld(
     readonly approve?: boolean;
     /** v3 F3b: false leaves out Mehrana I and II's shared alias (the evaluation scenarios' world has one Mehrana). */
     readonly mehranaAlias?: boolean;
+    /**
+     * v3 F3.4 (ADR 0055 decision D): `propose` (the default) switches every write tool to "always propose", as every
+     * package was before F3.4, so the earlier tests keep testing the proposal path; `seed` keeps the seed's switches
+     * (adding art follows the agent's scope).
+     */
+    readonly toolModes?: 'propose' | 'seed';
   } = {},
 ): Promise<PackWorld> {
   // As the chronology tests do, this world's per-minute limits are raised: its files make many calls in a minute.
@@ -462,6 +468,8 @@ export async function packWorld(
   };
   const packs = w.stack.runtime.packs;
   packs.ensureSeeded();
+  if (o.toolModes !== 'seed')
+    packs.commands.setToolModes('owner', 'arkona', { arkona_add_character_art: 'propose' });
   packs.store.setGovernance('arkona', [
     {
       key: 'character-architecture',

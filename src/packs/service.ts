@@ -30,6 +30,8 @@ import { PackStore } from './store.js';
 import {
   PackError,
   packRulesSchema,
+  packToolMode,
+  type PackToolMode,
   type GovernanceSource,
   type Pack,
   type PackApproval,
@@ -105,9 +107,22 @@ export interface PackView extends Pack {
     readonly served: boolean;
   })[];
   readonly tools: readonly string[];
+  /**
+   * v3 F3.4 (ADR 0055 decision D): each write tool's switch, as the Packs page shows it: `propose` (every package is a
+   * proposal whatever the agent's scope) or `scope` (it follows the agent's scope), and whether that is the tool's own
+   * switch or `alwaysPropose` (the default for a tool not named).
+   */
+  readonly toolModes: readonly {
+    readonly tool: string;
+    readonly mode: PackToolMode;
+    readonly source: 'switch' | 'default';
+  }[];
 }
 
 const ACTOR_OWNER = 'owner';
+
+/** v3 F3.4: pack tools that never write (their switch would mean nothing), by the name after the prefix. */
+const READ_ONLY_PACK_TOOLS: ReadonlySet<string> = new Set(['character_brief']);
 
 export interface Packs {
   readonly store: PackStore;
@@ -165,6 +180,12 @@ export interface Packs {
     ): Promise<{ pack: Pack; governance: GovernanceStatus }>;
     /** Replaces a pack's rules (the owner's command, used by the tests; never an agent). A new version. Audited. */
     replaceRules(actor: string, packId: string, rules: PackRules, reason: string): Pack;
+    /**
+     * v3 F3.4 (ADR 0055 decision D): the owner sets write tools' switches (`propose`: always a proposal; `scope`: the
+     * agent's scope). A new version, waiting for approval as usual (until then every package is refused, as for any
+     * new version). Audited as `pack.set_tool_modes` with the switches before and after. Unchanged: the pack as it is.
+     */
+    setToolModes(actor: string, packId: string, modes: Readonly<Record<string, PackToolMode>>): Pack;
   };
 }
 
@@ -354,7 +375,22 @@ export function createPacks(d: PacksDeps): Packs {
         served: active.has(a.projectId),
       })),
       tools: toolsOf(pack),
+      toolModes: toolModesOf(pack),
     };
+  };
+
+  /** v3 F3.4: the write tools' switches (the pack's own write tools, then any other tool a switch names). */
+  const toolModesOf = (pack: Pack): PackView['toolModes'] => {
+    const named = pack.rules.settings.tools ?? {};
+    const names = [
+      ...toolsOf(pack).filter((t) => !READ_ONLY_PACK_TOOLS.has(t.slice(pack.prefix.length))),
+      ...Object.keys(named),
+    ];
+    return [...new Set(names)].map((tool) => ({
+      tool,
+      mode: packToolMode(pack.rules, tool),
+      source: named[tool] !== undefined ? ('switch' as const) : ('default' as const),
+    }));
   };
 
   const readSource = async (
@@ -712,6 +748,35 @@ export function createPacks(d: PacksDeps): Packs {
           pack.id,
           { version: pack.version, race: pack.rules.tags.race, culture: pack.rules.tags.culture },
           { version: after.version, race, culture },
+        );
+        changed();
+        return after;
+      },
+      setToolModes(actor, packId, modes) {
+        if (actor !== ACTOR_OWNER) throw new PackError('NOT_OWNER', 'Only the owner edits a pack.');
+        const pack = requirePack(packId);
+        const known = new Set(toolModesOf(pack).map((t) => t.tool));
+        const before = pack.rules.settings.tools ?? {};
+        const next: Record<string, PackToolMode> = { ...before };
+        for (const [tool, mode] of Object.entries(modes)) {
+          if (!known.has(tool))
+            throw new PackError(
+              'UNKNOWN_TOOL',
+              `${pack.name} has no write tool “${tool}”. Its write tools: ${[...known].join(', ')}.`,
+            );
+          if (mode !== 'propose' && mode !== 'scope')
+            throw new PackError('INVALID_INPUT', `${tool}: “propose” (always a proposal) or “scope” (the agent's scope).`);
+          next[tool] = mode;
+        }
+        if (stableJson(next) === stableJson(before)) return pack;
+        const rules = packRulesSchema.parse({ ...pack.rules, settings: { ...pack.rules.settings, tools: next } });
+        const after = store.newVersion(pack.id, rules, 'tool switches changed on the Packs page');
+        d.audit(
+          actor,
+          'pack.set_tool_modes',
+          pack.id,
+          { version: pack.version, tools: before },
+          { version: after.version, tools: next },
         );
         changed();
         return after;
