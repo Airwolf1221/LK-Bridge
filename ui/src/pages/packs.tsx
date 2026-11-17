@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react';
-import { api } from '../api';
+import { ApiError, api } from '../api';
 import { Badge, Button, Empty, ErrorNote, Loading, PageHeader, useAction, useConfirm } from '../components';
 import { useApi } from '../hooks';
 import { useReauth } from '../reauth';
@@ -12,6 +12,11 @@ import type { PackGovernance, PackHomeRule, PackOwners, PackView, PacksResponse 
  * for your password again: **Approve this pack version** (records every governance source's document version, read now)
  * and **Save token maps** (race and culture → tag token: a new version, which then waits for approval). Until the
  * current version is approved and every source is as approved, the pack's tools compute no tags (fail closed).
+ *
+ * ADR 0052 amendment (16 November 2026): when a pinned section cannot be found (an approval refused with
+ * GOVERNANCE_SECTION_MISSING, or a governance check after a page renamed a pinned heading), each missing heading is shown
+ * beside a picker of that page's actual headings, in order with their levels. **Re-map** (password again, audited) makes
+ * a new version holding the new mapping, which the owner then approves with the rest of the version.
  */
 const STATE_TONE: Record<PackGovernance['state'], 'ok' | 'warn' | 'bad'> = {
   current: 'ok',
@@ -81,7 +86,12 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
         () =>
           withReauth(() =>
             api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/approve`, { confirm: true }),
-          ),
+          ).catch((e: unknown) => {
+            // A pinned heading not found: show the governance as read, with the picker for each missing heading.
+            if (e instanceof ApiError && e.code === 'GOVERNANCE_SECTION_MISSING' && e.extra.governance)
+              setGov(e.extra.governance as PackGovernance);
+            throw e;
+          }),
         `${pack.name} version ${pack.version} approved.`,
       ).then((x) => {
         if (x) setGov(x.governance);
@@ -134,6 +144,17 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
           Check governance now
         </button>
       </div>
+
+      {gov ? (
+        <PinRemap
+          pack={pack}
+          gov={gov}
+          onRemapped={(g) => {
+            setGov(g);
+            onChanged();
+          }}
+        />
+      ) : null}
 
       <h3>Governance sources</h3>
       <div className="table-wrap">
@@ -222,6 +243,137 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * ADR 0052 amendment: each pinned heading the page no longer has, beside a picker of the page's actual headings (in order,
+ * indented by level). Re-mapping asks for a confirmation and the password again; the new mapping is a new version.
+ */
+function PinRemap({
+  pack,
+  gov,
+  onRemapped,
+}: {
+  pack: PackView;
+  gov: PackGovernance;
+  onRemapped: (g: PackGovernance) => void;
+}) {
+  const missing = gov.sources.flatMap((s) =>
+    (s.sections ?? []).filter((x) => x.state === 'missing').map((x) => ({ source: s, heading: x.heading })),
+  );
+  if (missing.length === 0) return null;
+  return (
+    <section aria-labelledby={`pack-${pack.id}-remap`} data-remap>
+      <h3 id={`pack-${pack.id}-remap`}>Pinned headings not found</h3>
+      <p className="note note-bad">
+        The pack’s rules were derived from these sections, and the page no longer has a heading by that name.
+        If the section was renamed, pick its heading as the page has it now: the new mapping becomes part of a
+        new pack version, which you then approve. If the section was removed, check the rules first.
+      </p>
+      <div className="table-wrap">
+        <table aria-label="Pinned headings not found">
+          <thead>
+            <tr>
+              <th>Page</th>
+              <th>Pinned as</th>
+              <th>The page’s heading</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {missing.map((m) => (
+              <RemapRow
+                key={`${m.source.key}:${m.heading}`}
+                pack={pack}
+                source={m.source}
+                heading={m.heading}
+                pinned={pack.governance.find((g) => g.key === m.source.key)?.sections ?? []}
+                onRemapped={onRemapped}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function RemapRow({
+  pack,
+  source,
+  heading,
+  pinned,
+  onRemapped,
+}: {
+  pack: PackView;
+  source: PackGovernance['sources'][number];
+  heading: string;
+  pinned: string[];
+  onRemapped: (g: PackGovernance) => void;
+}) {
+  const confirm = useConfirm();
+  const withReauth = useReauth();
+  const { run, busy } = useAction();
+  const [to, setTo] = useState('');
+  const outline = source.outline ?? [];
+  const remap = () =>
+    void confirm({
+      title: `Re-map “${heading}”?`,
+      message: (
+        <p>
+          {source.name}’s pinned section “{heading}” becomes “{to}”. This makes version {pack.version + 1} of
+          the {pack.name} pack; its tools compute no tags until you approve that version.
+        </p>
+      ),
+      confirmLabel: 'Re-map this heading',
+    }).then((ok) => {
+      if (!ok) return;
+      void run(
+        () =>
+          withReauth(() =>
+            api.post<{ governance: PackGovernance }>(`/packs/${pack.id}/sections`, {
+              source: source.key,
+              from: heading,
+              to,
+              confirm: true,
+            }),
+          ),
+        `Pinned heading re-mapped: approve version ${pack.version + 1} to use it.`,
+      ).then((x) => {
+        if (x) onRemapped(x.governance);
+      });
+    });
+  const label = `The page’s heading for “${heading}”`;
+  return (
+    <tr data-remap-row={`${source.key}:${heading}`}>
+      <td>{source.name}</td>
+      <td>{heading}</td>
+      <td>
+        {outline.length === 0 ? (
+          <span className="muted">The page has no headings.</span>
+        ) : (
+          <select aria-label={label} value={to} onChange={(e) => setTo(e.target.value)}>
+            <option value="">Choose a heading…</option>
+            {outline.map((h, i) => (
+              <option
+                key={i}
+                value={h.heading}
+                disabled={pinned.includes(h.heading) && h.heading !== heading}
+              >
+                {'\u00a0\u00a0'.repeat(Math.max(0, h.level - 1))}
+                {h.heading} (level {h.level})
+              </option>
+            ))}
+          </select>
+        )}
+      </td>
+      <td>
+        <Button busy={busy} disabled={to === ''} onClick={remap}>
+          Re-map
+        </Button>
+      </td>
+    </tr>
   );
 }
 

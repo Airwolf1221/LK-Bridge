@@ -109,7 +109,8 @@ describe('the Packs page', () => {
       'GET /packs/arkona/governance': {
         governance: {
           state: 'changed',
-          message: 'Arkona’s governance changed: Source Formatting (pinned section “Approved Hierarchy”).',
+          message:
+            'Arkona’s governance changed: Source Formatting (pinned section “Approved Hierarchy and Standardised Navigation”).',
           version: 2,
           approvedVersion: 1,
           sources: [
@@ -130,8 +131,16 @@ describe('the Packs page', () => {
                   found: 'Nation-Centred Territorial Navigation',
                   state: 'same',
                 },
-                { heading: 'Approved Hierarchy', found: 'Approved Hierarchy', state: 'changed' },
-                { heading: 'Active Template Suite', found: 'Active Template Suite', state: 'same' },
+                {
+                  heading: 'Approved Hierarchy and Standardised Navigation',
+                  found: 'Approved Hierarchy and Standardised Navigation',
+                  state: 'changed',
+                },
+                {
+                  heading: 'Active Template Suite and Sidebar Collections',
+                  found: 'Active Template Suite and Sidebar Collections',
+                  state: 'same',
+                },
               ],
             },
           ],
@@ -149,9 +158,13 @@ describe('the Packs page', () => {
     expect(within(card).getByText(/AU in place of CANON \(Continuity Type AU\)/)).toBeInTheDocument();
     expect(within(card).getByText(/Ruling \(2026-11-16\)/)).toBeInTheDocument();
     const formatting = card.querySelector('[data-sections="source-formatting"]')!;
-    expect(formatting.textContent).toContain('Approved Hierarchy');
+    expect(formatting.textContent).toContain('Approved Hierarchy and Standardised Navigation');
     await user.click(within(card).getByRole('button', { name: 'Check governance now' }));
-    expect(await within(card).findByText(/Approved Hierarchy \(changed\)/)).toBeInTheDocument();
+    expect(
+      await within(card).findByText(/Approved Hierarchy and Standardised Navigation \(changed\)/),
+    ).toBeInTheDocument();
+    // Nothing is missing: no picker.
+    expect(within(card).queryByRole('table', { name: 'Pinned headings not found' })).toBeNull();
     expect(card.querySelector('[data-sections="character-architecture"]')!.textContent).toBe(
       'the whole page',
     );
@@ -271,5 +284,118 @@ describe('the Packs page', () => {
     expect(sent.confirm).toBe(true);
     expect(sent.race.Starborn).toBe('Starborn');
     expect(sent.race['Sun Elf']).toBe('Sun Elf');
+  });
+
+  it('ADR 0052 amendment: an approval refused for a missing pinned heading shows a picker of the page’s headings; re-mapping asks for the password and sends the choice', async () => {
+    const user = userEvent.setup();
+    const outline = [
+      { heading: 'Controlled Native Tagging Standard', level: 1 },
+      { heading: 'Exact Tag Grammar', level: 2 },
+      { heading: 'Closed Primary Categories and Specialist Functions', level: 2 },
+      { heading: 'Specialist Functions', level: 3 },
+    ];
+    const missingGov = {
+      state: 'rules_changed',
+      message: 'The Arkona pack’s rules changed since the owner approved version 1 (now version 2).',
+      version: 2,
+      approvedVersion: 1,
+      sources: [
+        {
+          key: 'tagging-standard',
+          name: 'Controlled Native Tagging Standard',
+          project: 'arkona',
+          resourceId: 'cn8v87hh',
+          documentId: 'bfrv43jr',
+          approved: 'v18',
+          current: 'v18',
+          digest: 'x',
+          state: 'same',
+          sections: [
+            { heading: 'Exact Tag Grammar', found: 'Exact Tag Grammar', state: 'unapproved' },
+            { heading: 'Closed Primary Categories', found: null, state: 'missing' },
+          ],
+          outline,
+        },
+      ],
+    };
+    const gate = needsReauth(() => ({
+      pack: pack({ version: 3 }),
+      governance: {
+        ...missingGov,
+        version: 3,
+        sources: [{ ...missingGov.sources[0], outline: undefined, sections: [] }],
+      },
+    }));
+    const api = installApi({
+      ...baseRoutes(),
+      'GET /packs': {
+        packs: [
+          pack({
+            governance: ARKONA_PACK.governance.map((g) =>
+              g.key === 'tagging-standard'
+                ? { ...g, sections: ['Exact Tag Grammar', 'Closed Primary Categories'] }
+                : g,
+            ),
+          }),
+        ],
+      },
+      'POST /packs/arkona/approve': {
+        status: 409,
+        body: {
+          error: {
+            code: 'GOVERNANCE_SECTION_MISSING',
+            message:
+              'The pack cannot be approved: Controlled Native Tagging Standard has no section “Closed Primary Categories”.',
+            missing: [
+              {
+                source: 'Controlled Native Tagging Standard',
+                key: 'tagging-standard',
+                heading: 'Closed Primary Categories',
+              },
+            ],
+            outline: { 'tagging-standard': outline },
+            governance: missingGov,
+          },
+        },
+      },
+      'POST /packs/arkona/sections': gate.route,
+      'POST /security/reauth': gate.reauth,
+    });
+    renderApp('/ui/packs');
+    await user.click(await screen.findByRole('button', { name: 'Approve this pack version' }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Approve this version' }),
+    );
+    const table = await screen.findByRole('table', { name: 'Pinned headings not found' });
+    const row = within(table).getByText('Closed Primary Categories').closest('tr')!;
+    const picker = within(row).getByLabelText('The page’s heading for “Closed Primary Categories”');
+    // The page's headings, in order, with their levels; a heading already pinned cannot be chosen.
+    const options = within(picker).getAllByRole('option').slice(1);
+    expect(options.map((o) => o.textContent?.replace(/\u00a0/g, ' ').trim())).toEqual([
+      'Controlled Native Tagging Standard (level 1)',
+      'Exact Tag Grammar (level 2)',
+      'Closed Primary Categories and Specialist Functions (level 2)',
+      'Specialist Functions (level 3)',
+    ]);
+    expect(options[1]).toBeDisabled();
+    const remap = within(row).getByRole('button', { name: 'Re-map' });
+    expect(remap).toBeDisabled();
+    await user.selectOptions(picker, 'Closed Primary Categories and Specialist Functions');
+    await user.click(remap);
+    const confirm = await screen.findByRole('alertdialog');
+    expect(confirm).toHaveTextContent(/becomes “Closed Primary Categories and Specialist Functions”/);
+    await user.click(within(confirm).getByRole('button', { name: 'Re-map this heading' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
+    await user.type(within(dialog).getByLabelText('Password'), PASSWORD);
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await screen.findByText(/Pinned heading re-mapped: approve version 3 to use it\./);
+    expect(api.find('POST', '/packs/arkona/sections').at(-1)!.body).toEqual({
+      source: 'tagging-standard',
+      from: 'Closed Primary Categories',
+      to: 'Closed Primary Categories and Specialist Functions',
+      confirm: true,
+    });
+    // Nothing is missing any more: the picker goes.
+    expect(screen.queryByRole('table', { name: 'Pinned headings not found' })).toBeNull();
   });
 });

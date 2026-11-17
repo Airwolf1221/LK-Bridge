@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased: v3 F3b.1 (16 November 2026): the pinned headings, re-mapping a pin, Working owners' specialist
+
+An amendment to [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md#f3b1-amendment-16-november-2026)
+(no new ADR, no migration). Nothing was run against a live system: mocks and fixtures only.
+
+- **Fixed: the new Arkona pack version could not be approved** ("Source Formatting has no section “Approved
+  Hierarchy”…"). The F3b handoff abbreviated three headings. The seed now pins the six headings exactly as the pages
+  have them: Page Names and Templates, Nation-Centred Territorial Navigation, Approved Hierarchy and Standardised
+  Navigation, Active Template Suite and Sidebar Collections (Source Formatting); Exact Tag Grammar, Closed Primary
+  Categories and Specialist Functions (Tagging Standard). Matching stays whole-heading: no prefix or fuzzy match.
+- **Re-map a pinned heading on the Packs page.** When approval fails with `GOVERNANCE_SECTION_MISSING`, or a governance
+  page renames a pinned heading, each missing heading is shown beside a picker of that page's actual headings (in
+  order, with their levels). Choosing one asks for the password again, is audited (`pack.remap_section`, old and new
+  heading) and makes a new pack version, so the mapping is approved with the version. API:
+  `POST /api/admin/packs/:id/sections`.
+- **A Working owner keeps its specialist tag** (the owner's ruling): `Working, Culture, Language`, not
+  `Working, Culture`; nothing is held any more. An owner archived with `archive_page` keeps its primary and specialist
+  (only the status tag is swapped; the bridge-wide tool still adds `Archived` last).
+- **The seed `arkona-2026-11-16-f3b1`** supersedes F3a's and F3b's seeds: start-up offers it as a new version (token
+  maps kept). After deploying, approve it once on the Packs page; it should succeed first time.
+
 ## Unreleased: v3 F3b (16 November 2026): Arkona pack: owners, relationships, art and the brief
 
 [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md) (Proposed), carrying out the owner-approved

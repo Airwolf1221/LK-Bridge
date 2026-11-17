@@ -50,10 +50,48 @@ One versioned JSON document, its **rules** (`src/packs/types.ts` checks its shap
 
 Beside the rules a pack keeps its **governance sources** (the pages its rules were derived from: for Arkona, the
 Character Architecture, Source Formatting and Controlled Native Tagging Standard v1.8 documents on the AI REPOSITORY
-page, and since v3 F3b the **sections** of them the rules depend on: Source Formatting's Page Names and Templates,
-Nation-Centred Territorial Navigation, Approved Hierarchy and Active Template Suite, and the Tagging Standard's Exact Tag
-Grammar and Closed Primary Categories), the projects it is **attached** to with the template ids it uses in each, every
-**version** of its rules, and the owner's **approval**.
+page, and since v3 F3b the **sections** of them the rules depend on, pinned by their exact headings, below), the
+projects it is **attached** to with the template ids it uses in each, every **version** of its rules, and the owner's
+**approval**.
+
+### The pinned sections
+
+Arkona's seed pins six sections, by the headings exactly as the pages have them (read on 16 November 2026; ADR 0052,
+amendment):
+
+| Page                                                     | Pinned heading                                     |
+| -------------------------------------------------------- | -------------------------------------------------- |
+| Source Formatting (`cn8v87hh/l41y28c8`)                  | Page Names and Templates                           |
+| Source Formatting                                        | Nation-Centred Territorial Navigation              |
+| Source Formatting                                        | Approved Hierarchy and Standardised Navigation     |
+| Source Formatting                                        | Active Template Suite and Sidebar Collections      |
+| Controlled Native Tagging Standard (`cn8v87hh/bfrv43jr`) | Exact Tag Grammar                                  |
+| Controlled Native Tagging Standard                       | Closed Primary Categories and Specialist Functions |
+
+A pinned heading matches a page heading **as a whole**: case, spacing, punctuation, a leading number ("3.", "B)") and
+"&" for "and" are ignored, but there is no prefix or nearest match, so "Approved Hierarchy" does not find "Approved
+Hierarchy and Standardised Navigation". A pinned section must be unambiguous. (F3b's seed, `arkona-2026-11-16-f3b`,
+pinned three of them abbreviated, so its version could not be approved; the seed `arkona-2026-11-16-f3b1` replaces it.)
+
+### Re-mapping a pinned heading
+
+When a pinned heading is not on its page (an approval refused with `GOVERNANCE_SECTION_MISSING`, or a governance check
+after a page renamed a pinned heading), the Packs page shows each missing heading beside a picker of that page's actual
+headings, in order with their levels. Choosing one and pressing **Re-map** (the password again) re-maps the pin:
+
+- the new heading must be one of the page's headings as read now (matched whole, as above); one already pinned on that
+  page cannot be chosen;
+- the mapping becomes part of a **new pack version** (`pack_versions`, its reason "pinned section of … re-mapped on the
+  Packs page: “old” → “new”"), which waits for the owner's approval like any other: the owner approves the mapping and
+  the version together, and the approval records the section's digest under its new heading;
+- it is audited (`pack.remap_section`, the old heading in `before`, the new one in `after`, with the versions).
+
+A renamed governance heading is therefore an expected drift, not a dead end. If a section was removed rather than
+renamed, the rules derived from it need checking first: re-map only to the section that now says the same thing. A
+later seed that names its own pinned headings replaces a re-mapped one when it is offered (and the owner approves it).
+API: `POST /api/admin/packs/:id/sections` `{ source, from, to, confirm: true }` (re-authenticated). Refusals:
+`SECTION_NOT_PINNED` (`from` is not pinned), `HEADING_NOT_FOUND` (`to` is not on the page now, with its outline),
+`SECTION_ALREADY_PINNED`, `SOURCE_NOT_FOUND`, `GOVERNANCE_UNREADABLE`.
 
 Storage (migration `3000`; v3 F3b needs no migration, its additions live in the rules and governance JSON):
 `packs` (the current rules, governance, approval, drift), `pack_projects` (attachments and template ids),
@@ -65,8 +103,8 @@ packages cannot both create it).
 
 1. **Seeded once.** At start the bridge stores each pack it knows (`src/packs/arkona.ts`, data) if it is not stored yet
    (audited `pack.seed`). After that the stored copy is the owner's: it is never overwritten by code. **A new seed is
-   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-16-f3b` supersedes F3a's
-   `arkona-2026-11-16`), and a pack stored from one of them is given the new seed's rules as a NEW version at start
+   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-16-f3b1` supersedes F3a's
+   `arkona-2026-11-16` and F3b's `arkona-2026-11-16-f3b`), and a pack stored from one of them is given the new seed's rules as a NEW version at start
    (audited `pack.seed_upgrade`), keeping the owner's token maps and the governance sources' places, taking the seed's
    source names and pinned sections, and adding to each attachment the template roles the new rules need. It waits for
    the owner's approval like any other version.
@@ -81,9 +119,10 @@ packages cannot both create it).
    again).
 3. **Approved** by the owner on the Packs page: the current version, with each governance source's document version read
    at that moment and (v3 F3b) a digest of each pinned section (`pack.approve`, re-authenticated). An approval is refused
-   when a pinned section cannot be found on its page (`GOVERNANCE_SECTION_MISSING`, listing the page's headings; a heading
-   renumbered, recased or written with "&" for "and" is still found). Until a version is approved, the pack's tools
-   compute nothing.
+   when a pinned section cannot be found on its page (`GOVERNANCE_SECTION_MISSING`, listing the page's headings and its
+   outline; a heading renumbered, recased or written with "&" for "and" is still found, a shortened one is not); the
+   owner re-maps the pin on the Packs page ([above](#re-mapping-a-pinned-heading)). Until a version is approved, the
+   pack's tools compute nothing.
 
 A pack's tools are listed to agents only while the pack is attached to a project the bridge serves, and refuse any other
 project (`PACK_NOT_ATTACHED`).
@@ -101,8 +140,9 @@ derived" and must "compare policy version/digest before writing". So:
   page shows an alert (`pack.drift` is audited when a check first sees it). The owner reads the changed page, adjusts
   the token maps if needed, and approves again.
 - since v3 F3b the message names the **pinned section** that changed ("Source Formatting (pinned section “Approved
-  Hierarchy”)"), or says the change is outside the pinned sections; the Packs page shows each section's state. The
-  document's version still decides: a change anywhere on a governance page stops the pack, as before.
+  Hierarchy and Standardised Navigation”)"), or says the change is outside the pinned sections; the Packs page shows
+  each section's state, and a picker for a pinned heading the page no longer has. The document's version still decides:
+  a change anywhere on a governance page stops the pack, as before.
 
 ## Editing a pack
 
@@ -125,11 +165,19 @@ then add the tag with `update_resource` if the page should have it now.
 | Relationship                      | status, `Character`, `Relationship` (never a participant's race)         |
 | `[INDEX]` of a character          | none                                                                     |
 | Owner page (v3 F3b)               | status, its type's primary tag, at most one specialist tag               |
-| Owner page, Working (v3 F3b)      | `Working`, its type's primary tag                                        |
+| Owner page, Working or Archived   | `Working` or `Archived`, its type's primary tag, its specialist (if any) |
 | Index made by the owner tool      | none                                                                     |
 
 The status is `CANON` for an Authoritative page and `Working` for a Working one (which never carries `CANON`). An agent
 never types a tag: an extra one is refused (`TAG_NOT_ALLOWED`).
+
+**Working owners keep the specialist (the owner, 16 November 2026).** A Working or Archived owner's tags are the
+lifecycle tag, then the primary, then the specialist if any (`Working, Culture, Language`; with no specialist,
+`Working, Culture`), as the Tagging Standard preserves "actually meaningful existing subject tags… after the lifecycle
+marker" and as F3a's Working characters keep their identity tokens. F3b held a Working owner's specialist and reported
+it; it is no longer held. Archiving (`archive_page`) swaps only the status tag, so an Archived owner keeps its primary
+and specialist; that general tool still adds `Archived` at the end of the list (`Culture, Language, Archived`), which
+changing would alter every project's lifecycle tools (left for later, ADR 0052).
 
 **The AU ruling (the owner, 16 November 2026).** An AU page (Continuity Type AU) carries the status tag `AU` in place
 of `CANON`, and Continuity Type AU stays in its facts; everything after the status tag follows the same grammar. A
@@ -265,20 +313,20 @@ pinned governance sections.
 
 ## When a package is refused
 
-| Code                                   | What to do                                                                                               |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `PACK_NOT_CURRENT`                     | The owner checks the governance pages and approves the pack again on the Packs page                      |
-| `PACK_NOT_ATTACHED`                    | Use a project the pack is attached to (the message names them)                                           |
-| `PACK_TEMPLATE_UNSET`, `…_UNKNOWN`     | The owner refreshes the project's templates (Repository Mappings) and approves the pack again            |
-| `TEMPLATES_NOT_READ`                   | The owner refreshes the project's templates (Repository Mappings)                                        |
-| `LIFECYCLE_NOT_CONFIGURED`             | The owner confirms the Working index (Projects page, Lifecycle), or the package uses `"authoritative"`   |
-| `IDENTITY_INCOMPLETE`                  | The agent asks the owner for the missing values; never guesses                                           |
-| `CHARACTER_EXISTS`                     | Call again with `target` (the existing character's name or id)                                           |
-| `PACK_GOVERNANCE_CHANGED` (in the job) | A governance page changed after the proposal: approve the pack again, then ask for a new package         |
-| `GOVERNANCE_SECTION_MISSING` (approve) | A pinned section is not on its page: the owner restores the heading, or the pack's sections change       |
-| `HOME_NOT_ALLOWED`                     | Choose one of the allowed homes listed; `homeOverride` only on the owner's decision                      |
-| `NATION_NEEDS_INDEX`                   | Call again with `promoteNation: true` (the nation's index made in the same proposal)                     |
-| `OWNER_FACTS_INCOMPLETE`               | The agent asks the owner for Reference Type, Scope or Temporal Scope; never guesses                      |
-| `CHARACTER_NOT_FOUND`                  | Make the character first with `arkona_create_character`                                                  |
-| `RELATIONSHIP_EXISTS`                  | Edit the relationship page the message names with `write_page`                                           |
-| `STAGED_IMAGE_BUSY`                    | The image is in another package: stage the art again with `upload_image { stage: true }`, no destination |
+| Code                                   | What to do                                                                                                  |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `PACK_NOT_CURRENT`                     | The owner checks the governance pages and approves the pack again on the Packs page                         |
+| `PACK_NOT_ATTACHED`                    | Use a project the pack is attached to (the message names them)                                              |
+| `PACK_TEMPLATE_UNSET`, `…_UNKNOWN`     | The owner refreshes the project's templates (Repository Mappings) and approves the pack again               |
+| `TEMPLATES_NOT_READ`                   | The owner refreshes the project's templates (Repository Mappings)                                           |
+| `LIFECYCLE_NOT_CONFIGURED`             | The owner confirms the Working index (Projects page, Lifecycle), or the package uses `"authoritative"`      |
+| `IDENTITY_INCOMPLETE`                  | The agent asks the owner for the missing values; never guesses                                              |
+| `CHARACTER_EXISTS`                     | Call again with `target` (the existing character's name or id)                                              |
+| `PACK_GOVERNANCE_CHANGED` (in the job) | A governance page changed after the proposal: approve the pack again, then ask for a new package            |
+| `GOVERNANCE_SECTION_MISSING` (approve) | A pinned heading is not on its page: the owner re-maps it on the Packs page (a new version), or restores it |
+| `HOME_NOT_ALLOWED`                     | Choose one of the allowed homes listed; `homeOverride` only on the owner's decision                         |
+| `NATION_NEEDS_INDEX`                   | Call again with `promoteNation: true` (the nation's index made in the same proposal)                        |
+| `OWNER_FACTS_INCOMPLETE`               | The agent asks the owner for Reference Type, Scope or Temporal Scope; never guesses                         |
+| `CHARACTER_NOT_FOUND`                  | Make the character first with `arkona_create_character`                                                     |
+| `RELATIONSHIP_EXISTS`                  | Edit the relationship page the message names with `write_page`                                              |
+| `STAGED_IMAGE_BUSY`                    | The image is in another package: stage the art again with `upload_image { stage: true }`, no destination    |

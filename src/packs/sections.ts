@@ -4,8 +4,11 @@
  * approval records each one's digest, and a drift report says which pinned section changed. A section is its heading
  * and every top-level block after it up to the next heading of its level or higher.
  *
- * Headings are matched loosely (case, spacing, punctuation, a leading number such as "3." or "B)", "&" for "and"), so
- * a renumbered or recapitalised heading is still found; a pinned section that cannot be found is reported by name.
+ * A pinned heading matches a document heading only as a whole (never a prefix, never a nearest guess): case, spacing,
+ * punctuation, a leading number such as "3." or "B)" and "&" for "and" are ignored, so a renumbered or recapitalised
+ * heading is still found, but "Approved Hierarchy" does not find "Approved Hierarchy and Standardised Navigation". A
+ * pinned section that cannot be found is reported by name, with the document's outline (`outlineOf`), so the owner can
+ * re-map the pin on the Packs page (ADR 0052, amendment of 16 November 2026).
  */
 import { createHash } from 'node:crypto';
 import { stableJson } from '../jobs/sidebar-state.js';
@@ -81,6 +84,27 @@ export function headingsOf(blocks: unknown, max = 40): string[] {
     if (typeof b !== 'object' || b === null || (b as Obj).kind !== 'heading') continue;
     const t = runsText(b as Obj).trim();
     if (t) out.push(t);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/** One heading of a document's outline: its text and its level (1 when the block has none). */
+export interface OutlineHeading {
+  readonly heading: string;
+  readonly level: number;
+}
+
+/**
+ * The document's headings in order, with their levels (ADR 0052 amendment: the Packs page's picker for re-mapping a pin),
+ * at most `max`. Empty headings are left out.
+ */
+export function outlineOf(blocks: unknown, max = 200): OutlineHeading[] {
+  const out: OutlineHeading[] = [];
+  for (const b of Array.isArray(blocks) ? blocks : []) {
+    if (typeof b !== 'object' || b === null || (b as Obj).kind !== 'heading') continue;
+    const t = runsText(b as Obj).trim();
+    if (t) out.push({ heading: t, level: levelOf(b as Obj) });
     if (out.length >= max) break;
   }
   return out;

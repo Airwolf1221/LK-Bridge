@@ -2149,7 +2149,7 @@ export interface PackRoleRule {
   name: string;
   referenceType: string | null;
   tags: string[];
-  /** v3 F3b: a Working page's own tags (an owner page: Working and the primary tag). */
+  /** v3 F3b: a Working page's own tags (an owner page: Working, the primary tag, then the specialist if any). */
   workingTags?: string[];
   facts: 'identity' | 'general' | 'none';
   body: 'required' | 'optional' | 'drafted';
@@ -2251,6 +2251,8 @@ export interface PackSourceStatus {
     found: string | null;
     state: 'same' | 'changed' | 'missing' | 'unapproved';
   }[];
+  /** ADR 0052 amendment: the page's headings in order, with their levels, when a pinned section is missing. */
+  outline?: { heading: string; level: number }[];
 }
 
 export interface PackGovernance {

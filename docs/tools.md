@@ -1353,8 +1353,8 @@ Subrace Reference`). Any other species and every creature: the Bestiary. `create
 - **Text and links.** As the character tool: `## Purpose` first, Source Boundaries and Unresolved Material warned about
   when missing, no placeholder section (the template's own unfilled placeholder headings are left out). Dependencies
   name current Authoritative owners only.
-- **Tags.** `CANON` (or `AU`), the primary, at most one specialist; a Working page `Working` and the primary (a
-  specialist given is held and reported until promotion).
+- **Tags.** `CANON` (or `AU`), the primary, at most one specialist; a Working page `Working`, the primary, then the
+  specialist if any (the owner, 16 November 2026: ADR 0052, F3b.1 amendment).
 
 **Refusals**: `PACK_TYPE_NOT_FOUND` (with the types), `KIND_NOT_FOR_TYPE`, `INVALID_NAME` and F3a's name, dash and text
 refusals, `OWNER_FACTS_INCOMPLETE`, `UNESTABLISHED_NEEDS_REASON`, `REFERENCE_TYPE_FIXED`, `DESCRIPTOR_FIXED`,

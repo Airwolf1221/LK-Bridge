@@ -302,8 +302,13 @@ const rules: PackRules = packRulesSchema.parse({
       'to be decided',
       'to be confirmed',
     ],
-    // Design 1.4: CANON, the primary tag, optionally the specialist; a Working page: Working and the primary tag.
-    tags: { authoritative: [STATUS, '$primary', '$specialist'], working: [STATUS, '$primary'] },
+    // Design 1.4: CANON, the primary tag, optionally the specialist. A Working page (the owner, 16 November 2026; ADR
+    // 0052 amendment): the lifecycle tag, then the primary, then the specialist if any, as the Tagging Standard keeps
+    // "actually meaningful existing subject tags… after the lifecycle marker" and as F3a's Working characters do.
+    tags: {
+      authoritative: [STATUS, '$primary', '$specialist'],
+      working: [STATUS, '$primary', '$specialist'],
+    },
     worldPrefix: 'Arkonan',
     nations: 'Polities',
     text: {
@@ -486,9 +491,11 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   id: 'arkona',
   name: 'Arkona',
   prefix: 'arkona_',
-  // v3 F3b (ADR 0052): the owner tools' seed. A pack stored from F3a's seed is offered these rules as a new version.
-  seed: 'arkona-2026-11-16-f3b',
-  supersedes: ['arkona-2026-11-16'],
+  // v3 F3b (ADR 0052): the owner tools' seed. A pack stored from F3a's or F3b's seed is offered these rules as a new
+  // version. `-f3b1` (ADR 0052 amendment, 16 November 2026): the pinned headings exactly as the pages have them, and a
+  // Working owner keeps its specialist tag.
+  seed: 'arkona-2026-11-16-f3b1',
+  supersedes: ['arkona-2026-11-16', 'arkona-2026-11-16-f3b'],
   rules,
   governance: [
     {
@@ -504,12 +511,13 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
       resourceId: 'cn8v87hh',
       documentId: 'l41y28c8',
       name: 'Source Formatting',
-      // v3 F3b: the sections the owner tools are derived from (design, header).
+      // v3 F3b: the sections the owner tools are derived from (design, header), by their exact headings as the page
+      // has them (read 16 November 2026; ADR 0052 amendment). Matched whole, never by prefix.
       sections: [
         'Page Names and Templates',
         'Nation-Centred Territorial Navigation',
-        'Approved Hierarchy',
-        'Active Template Suite',
+        'Approved Hierarchy and Standardised Navigation',
+        'Active Template Suite and Sidebar Collections',
       ],
     },
     {
@@ -519,7 +527,7 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
       documentId: 'bfrv43jr',
       name: 'Controlled Native Tagging Standard',
       label: 'v1.8',
-      sections: ['Exact Tag Grammar', 'Closed Primary Categories'],
+      sections: ['Exact Tag Grammar', 'Closed Primary Categories and Specialist Functions'],
     },
   ],
   // v3 F3b: the four templates the owner types add, by name (their ids are worked out in each project, Arkona included).
