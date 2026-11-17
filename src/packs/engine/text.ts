@@ -304,7 +304,8 @@ export function checkBody(input: {
   return { refusals, warnings };
 }
 
-function looksLikeMetadata(blocks: readonly LkBlock[]): boolean {
+/** Whether the first of these blocks is a metadata header (`Status: …` lines, a table); v3 F3c's appraisal uses it too. */
+export function looksLikeMetadata(blocks: readonly LkBlock[]): boolean {
   const first = blocks[0] as Obj | undefined;
   if (!first) return false;
   const lines = (b: Obj) =>

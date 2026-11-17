@@ -106,7 +106,7 @@ export const NOTES: Readonly<Record<string, Note>> = {
   search: N(
     'Discover',
     'browse_repository_tree; lk_api_read listResources',
-    'Guessing a page name instead of searching; concluding from a `content: true` miss that a word is absent.',
+    'Guessing a page name instead of searching; concluding from a `content: "live"` miss that a word is absent.',
   ),
   get_resource: N(
     'Discover',
@@ -205,6 +205,31 @@ export const NOTES: Readonly<Record<string, Note>> = {
     'Packs',
     'get_resource; read_document; search (one free answer instead)',
     'Reading every page of a set instead; live: true when the tree is fresh enough.',
+  ),
+  arkona_appraise_owner: N(
+    'Packs',
+    'audit_findings (the audits alone); read_document page by page (one free report instead)',
+    'live: true on a big branch; reading a judgement as a defect; fixing what the report did not offer a fix for.',
+  ),
+  arkona_change_impact: N(
+    'Packs',
+    'search (content: true) for the name; snapshot_diff',
+    'Treating a restatement candidate as proven breakage; analysing a proposal that is no longer pending.',
+  ),
+  arkona_working_digest: N(
+    'Packs',
+    'search for [BWRK]; bridge_proposal_status (one free list instead)',
+    'Reading age as staleness: age is a review signal, never a verdict.',
+  ),
+  arkona_visual_hygiene: N(
+    'Packs',
+    'browse_asset_tree; list_assets (one free list of candidates instead)',
+    'Renaming or moving an asset on a candidate without the owner; orphans from a page-scoped run.',
+  ),
+  arkona_appraisal_fix: N(
+    'Packs',
+    'write_page; set_facts; update_resource (the fix is one proposal)',
+    'Asking for a fix for a judgement finding; resubmitting a captured proposal; a fix from a stale report.',
   ),
   archive_page: N(
     'Lifecycle',

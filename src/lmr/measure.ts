@@ -45,6 +45,11 @@ export function runsText(content: unknown): string {
       if (!isObj(r)) return '';
       if (typeof r.text === 'string') return r.text;
       if (typeof r.name === 'string') return r.name;
+      // v3 F3c: a mention is the text it shows (its label), so a link dropped from words that stay is no rewording.
+      if (isObj(r.mention)) {
+        const m = r.mention;
+        return typeof m.text === 'string' ? m.text : typeof m.name === 'string' ? m.name : '';
+      }
       return '';
     })
     .join('');

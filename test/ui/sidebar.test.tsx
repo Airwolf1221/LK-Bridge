@@ -23,7 +23,7 @@ const EXPECTED: [string, string[]][] = [
   ['Backups & Recovery', ['Off-site copy', 'Snapshots']],
   ['Limits', ['Concurrent Writers', 'Request Budgets']],
   ['Monitoring', ['Errors', 'Journal', 'Tool calls']],
-  ['Quality', ['Audits', 'Evaluation']],
+  ['Quality', ['Appraisal', 'Audits', 'Evaluation']],
   ['Repository', ['Archive and lifecycle', 'Chronology', 'Repository Tree']],
   ['Setup', ['Maintenance Jobs', 'Packs', 'Projects', 'Repository Mappings', 'Settings']],
 ];

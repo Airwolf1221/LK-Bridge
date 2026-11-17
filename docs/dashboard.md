@@ -28,7 +28,7 @@ group named in `NAV` (`ui/src/app.tsx`):
 | Backups & Recovery | Off-site copy · Snapshots                                            |
 | Limits             | Concurrent Writers · Request Budgets                                 |
 | Monitoring         | Errors · Journal · Tool calls                                        |
-| Quality            | Audits · Evaluation                                                  |
+| Quality            | Appraisal · Audits · Evaluation                                      |
 | Repository         | Archive and lifecycle · Chronology · Repository Tree                 |
 | Setup              | Maintenance Jobs · Packs · Projects · Repository Mappings · Settings |
 
@@ -218,6 +218,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Lifecycle † | `GET /lifecycle/records` (`limit`, `offset`; the lifecycle record, newest first, and the link index's freshness; v2 C2c). View only                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Tool calls  | `GET /tool-calls` (filters `principalId`, `profile`, `tool`, `outcome=success\|error\|proposal\|waiting\|queued\|not_success`, `code`, `project`, `sinceMinutes`; paging `limit` (≤ 500) and `before`, answered with `nextBefore`; also the filter choices and the retention), `PUT /tool-calls/retention` (`{ days: 0-90, confirm: true }`; audited). Owner only; view only (v2 E3, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md))                                                                                                                                                                                                                                                                           |
 | Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                                                                              |
+| Appraisal † | `GET /appraisal` (the full-text index's state and freshness, the non-current areas found, the latest runs; no LegendKeeper request), `POST /appraisal/run` (`{ tool: owner\|impact\|digest\|visual, page?, under?, all?, include?, renameTo?, proposal?, sinceDays?, confirm: true }`; stores the report; no LegendKeeper request), `GET /appraisal/runs/:id`, `POST /appraisal/findings/:id/propose-fix` (`{ confirm: true }`; one live read, then ONE proposal; audited `appraisal.propose_fix`), `POST /appraisal/index/rebuild` (`{ confirm: true }`; from the snapshot store) (v3 F3c, [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md))                                                          |
 | Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)), `POST /packs/:id/sections` (`{ source, from, to, confirm: true }`: re-maps a pinned heading; a new version) ‡ (ADR 0052 amendment)                                                                                                                                                                         |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
@@ -703,6 +704,43 @@ each nightly full snapshot completes, and **Run an audit now** runs one at once.
 
 Audited: `audits.set_config`, `audits.acknowledge`, `audits.unacknowledge`, `audits.propose_fix`, `audits.recheck`. The audits'
 maintenance job `audit-run` (off by default) is on the Maintenance Jobs page.
+
+## Appraisal (v3 F3c)
+
+The **Appraisal** page (navigation: Quality; [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md)) runs
+the Arkona pack's four appraisal reports on a page or a branch and shows what they found. **Reports only: running one
+changes nothing.** A report reads the bridge's snapshot overlay (the nightly full snapshot plus the change snapshots
+since), the audits' findings, the asset tree and the bridge's own database, never LegendKeeper, so it costs no request;
+the report is kept in the bridge's database (the latest run of each tool and scope), never written to LegendKeeper.
+Shown for a project the Arkona pack is attached to (otherwise the page says the pack is not attached and **Run** is
+off).
+
+- **Full-text index**: the full snapshot it was built from and how many change snapshots were laid over it since, its
+  age, the pages, text units and references it holds, its size, how long it took to build and to take the last change
+  snapshot, and which non-current areas were found (the Legacy Canon Archive and the Design References, each by its
+  index's name, or "not found"). It is built after each nightly full snapshot and brought up to date at every search
+  and report; **Rebuild the index now** builds it again from the snapshot store (free).
+- **Run**: the tool (Owner appraisal (A2), Change impact (A3), Working digest (A4), Visual hygiene (A5)), the scope (a
+  page, a branch or everything; a page name, a path or an id), and each tool's own fields: the non-current areas to
+  include (A2), a planned new name or a pending proposal (A3), a window in days (A4).
+- **The report**: what it inspected, how fresh its data was, what it could not check, and its findings in their groups
+  (A2: Required defects, Optional polish, Architectural candidates, Blocked cases; A3: Proven breakage, Review
+  candidates; A4: Working pages, Open proposals, Approved but not promoted, Declared contradictions; A5: Candidates).
+  Each finding shows its evidence class, the rule it comes from (governance page and section), its message, and its
+  page as a **link to that page in LegendKeeper** (a new tab). Long reports are paged.
+  - **Propose a fix** appears **only** where the finding has a deterministic repair (an em dash, decorative blank
+    paragraphs, a link in a heading, an asset name with an extension, a Working or Archived page in an Authoritative
+    page's Related Sources; sibling order and tags go to the audits' own fix). It asks first, then re-reads the page live
+    (one request), checks the finding still holds, and makes ONE ordinary proposal, which you approve on the
+    [Proposals](#proposals-page-writes-v2-c1) page; Last Major Revision follows the owner's rule (a dash or a blank
+    paragraph is not a major revision). If the page changed since the report, it says so and proposes nothing.
+  - A **judgement** finding shows what has to be decided and the tool for it ("Judgement: write a Purpose section first
+    (write_page)"); it never offers a button. A report-only finding says why.
+- **Latest runs**: each tool's latest run per scope (tool, scope, when, findings, how long it took); opening one shows its
+  stored report, which says what changed since the run of that scope before it (new, still present, gone).
+
+Audited: `appraisal.propose_fix`. The page's link to LegendKeeper uses one URL pattern, `LK_PAGE_URL` in
+`ui/src/pages/appraisal.tsx`: check it opens the page after deploying.
 
 ## Off-site copy (v2 E1b)
 

@@ -46,6 +46,7 @@ import { systemClock } from './lk/index.js';
 import { createAssets, type AssetService } from './assets/index.js';
 import { createImages, imageDataDir, type ImageService } from './images/service.js';
 import { Audits, SPLIT_CHECK, SPLIT_VERIFY, splitChecker, splitVerifier } from './audits/index.js';
+import { Appraisal } from './appraisal/index.js';
 import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
 import { snapshotMapCheckers } from './snapshots/restore.js';
@@ -134,6 +135,8 @@ export interface Runtime {
   readonly snapshots: SnapshotService;
   /** v2 E2 (ADR 0044): the audits: findings only, read from the snapshots. */
   readonly audits: Audits;
+  /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (read-only; fixes are proposals). */
+  readonly appraisal: Appraisal;
   /** v2 E1a: restore proposals (always proposals) and their follow-ups. */
   readonly restores: Restores;
   /** v2 E1a: restore rehearsals into a throwaway root of a sandbox project. */
@@ -597,6 +600,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       await offsite.afterFullSnapshot();
       // v2 E2: an audit of the snapshot just completed (in the background; it reads no LegendKeeper).
       audits?.afterFullSnapshot(projectId);
+      // v3 F3c (ADR 0054): the appraisal's overlay and full-text index rebuilt from it (likewise).
+      appraisal?.afterFullSnapshot(projectId);
     },
   });
   void snapshots.start();
@@ -619,6 +624,34 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     lifecycleTags: (projectId) => packs.lifecycleRules(projectId),
   });
   audits.start();
+  // v3 F3c (ADR 0054): the appraisal tools and the full-text index, over the snapshot overlay, the audits, the asset tree
+  // and the proposals. Read-only: a fix is always ONE proposal for the owner.
+  const appraisal: Appraisal = new Appraisal({
+    db: o.db,
+    snapshots,
+    audits,
+    packs,
+    tree,
+    assets,
+    proposals: policy.proposals,
+    chronologyDocuments: (projectId) => {
+      try {
+        return (chronology.config(projectId).ages ?? []).map((a) => a.tableDocumentId);
+      } catch {
+        return [];
+      }
+    },
+    characterFolder: (projectId, subject, race) => {
+      const r = images.plan(projectId, { for_character: { name: subject, race } });
+      return r.ok ? r.plan.destination.path : null;
+    },
+    engine,
+    projectSettings: (projectId) => projectStore.byId(projectId)?.settings ?? {},
+    assetHosts: imageSettings.assetHosts,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
   const detachAuditCheckers = [
     engine.registerChecker(SPLIT_CHECK, splitChecker),
     engine.registerChecker(SPLIT_VERIFY, splitVerifier),
@@ -771,6 +804,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       blockwiseUndo,
       // v3 F3a (ADR 0050): the setting packs.
       packs,
+      // v3 F3c (ADR 0054): the appraisal tools and the full-text index.
+      appraisal,
     },
   };
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
@@ -850,6 +885,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     images,
     snapshots,
     audits,
+    appraisal,
     restores,
     rehearsals,
     offsite,
