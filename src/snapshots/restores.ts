@@ -103,7 +103,7 @@ export class Restores {
   ) {}
 
   async plan(input: RestoreInput): Promise<RestorePlan> {
-    // CR-2026-11-R2 (R2-06): one restore of a deleted page at a time. While a recreate or an undelete of the page is still
+    // CR-2026-11-R2 (R2-48): one restore of a deleted page at a time. While a recreate or an undelete of the page is still
     // a proposal or still running, another is refused: planned meanwhile, it is a second page (a recreate with new ids
     // beside the first, or beside the undeleted original), or a finish planned from a page the first job is still
     // writing (what that job writes after the plan would be written twice). Once it has ended, the same request
@@ -145,7 +145,7 @@ export class Restores {
     return { reads: c.reads, writes: c.writes, ...sequentialEstimate(est, c) };
   }
 
-  /** R2-06: the latest restore of the deleted page (a recreate or an undelete) still a proposal or running, or null. */
+  /** R2-48: the latest restore of the deleted page (a recreate or an undelete) still a proposal or running, or null. */
   private deletedRestoreInProgress(
     projectId: string,
     pageId: string,

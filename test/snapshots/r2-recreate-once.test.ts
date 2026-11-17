@@ -1,5 +1,5 @@
 /**
- * CR-2026-11-R2 (R2-06): a recreate (restore_snapshot, scope deleted, mode recreate; ADR 0042, ADR 0049 decision 6)
+ * CR-2026-11-R2 (R2-48): a recreate (restore_snapshot, scope deleted, mode recreate; ADR 0042, ADR 0049 decision 6)
  * promises "never a second page". While one recreate of a page from a snapshot is still a proposal, or its job is still
  * running, the same request again must be refused: planned meanwhile, it is a second recreate (with new ids, a second
  * page) or a "finish" planned from a page still being written (no lock and no check in its job: what the first job

@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON replies in tests */
 /**
- * CR-2026-11-R2 (R2-07): every change that lets an agent's connection do more needs the owner's re-authentication within
+ * CR-2026-11-R2 (R2-50): every change that lets an agent's connection do more needs the owner's re-authentication within
  * the last five minutes, as switching off a safety rail already does (ADR 0055 decision C5): raising a profile's scope,
  * raising the default scope, moving a connection to a profile with a higher scope or to one at scope `write` (whose
  * rails may be weaker), and a personal access token for a profile at scope `write`. Lowering a scope, or moving a
@@ -111,7 +111,7 @@ describe('re-authentication for every change that lets a connection do more', ()
 });
 
 describe('the Status of pages agents create (a canon setting) through the generic settings route', () => {
-  it('needs the same re-authentication as the Canon section (R2-08); other settings do not', async () => {
+  it('needs the same re-authentication as the Canon section (R2-51); other settings do not', async () => {
     await until(() => s.runtime.projects.activeIds().length === 1);
     const project = s.runtime.projects.defaultProject();
     expire();

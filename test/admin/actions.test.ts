@@ -315,7 +315,7 @@ describe('clients and access', () => {
     );
     const profile = created.result.json.profile;
     expect(profile).toMatchObject({ label: 'Test agent', scope: 'read' });
-    // CR-2026-11-R2 (R2-07): a raise needs the owner's re-authentication first (test/admin/r2-scope-reauth.test.ts).
+    // CR-2026-11-R2 (R2-50): a raise needs the owner's re-authentication first (test/admin/r2-scope-reauth.test.ts).
     stack.db
       .prepare('UPDATE auth_owner_sessions SET reauth_at = ? WHERE session_hash = ?')
       .run(Math.floor(Date.now() / 1000), stack.services.sessionHash(stack.sessionToken));

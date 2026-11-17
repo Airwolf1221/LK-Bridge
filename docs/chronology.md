@@ -189,7 +189,7 @@ pairing now settles every tie it safely can, and the owner settles the rest on t
 - **A caller's choice is remembered.** `sync_timeline_event` with `event_id` on an event that already agrees records the
   row–event link (`pairedBy: "chosen by the caller"`) and answers `linked`. It is a bridge-side record with no
   LegendKeeper write, audited as a chronology change, and a proposal (summary `link row … to event …`) at every scope
-  because it changes what the check reports (CR-2026-11-R2, R2-11: at scope `write` a direct link was never on the
+  because it changes what the check reports (CR-2026-11-R2, R2-08: at scope `write` a direct link was never on the
   Review page; ADR 0056 decision 3). The check honours stored links first, as it does the links the bridge makes, so a
   later tie on that day no longer touches the pair.
 - **None of these: make a new event.** `create_new: true` (never with `event_id`) creates the row's event even though

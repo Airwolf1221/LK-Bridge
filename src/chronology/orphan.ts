@@ -187,7 +187,7 @@ export async function planOrphanDelete(o: {
     .filter((r) => r.id !== null && couldBeRowOf(r, ev))
     .map((r) => ({ rowId: r.id!, texts: { description: r.description, date: r.dateText, kcy: r.kcyText } }));
   const nearest = nearestRows(table.rows, event.start);
-  // CR-2026-11-R2 (R2-09): an unpaired row whose Date cell cannot be read has no date to compare, so it is matched by
+  // CR-2026-11-R2 (R2-49): an unpaired row whose Date cell cannot be read has no date to compare, so it is matched by
   // its name only (`couldBeRowOf`), and it is never among the rows nearest by date. The owner sees each such row in the
   // proposal: the bridge cannot rule out that it is this event's own (marking it table-only says it is not).
   const unreadable = pairing.rows

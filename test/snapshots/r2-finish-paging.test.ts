@@ -1,5 +1,5 @@
 /**
- * CR-2026-11-R2 (R2-05): "Finish" on a recreate that stopped part-way (ADR 0049 decision 6) compares the page the
+ * CR-2026-11-R2 (R2-47): "Finish" on a recreate that stopped part-way (ADR 0049 decision 6) compares the page the
  * recreate made with the snapshot and writes only what is missing. A timeline's events come 100 to a page
  * (`listEvents` is paged); the finish must read every page, or an event already made past the first hundred is made
  * again (or, with its original id, refused, so the finish never completes).

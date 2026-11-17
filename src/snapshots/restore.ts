@@ -1921,7 +1921,7 @@ async function planFinish(
     }
     if (type === 'time') {
       const l = (await o.read('listLanes', { path: p })) as { data?: Obj[] } | undefined;
-      // CR-2026-11-R2 (R2-05): every page of the events (100 a page), or an event already made past the first hundred
+      // CR-2026-11-R2 (R2-47): every page of the events (100 a page), or an event already made past the first hundred
       // is planned again.
       const e = (await listAll(o.read, 'listEvents', p, { limit: 100 })) ?? [];
       have.lanes = new Set((l?.data ?? []).map((x) => txt(x.name)));

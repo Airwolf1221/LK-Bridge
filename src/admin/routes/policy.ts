@@ -15,7 +15,7 @@ export const registerPolicy: Register = (api, ctx) => {
   const { actions } = ctx;
   const cmd = policy.commands;
   /**
-   * CR-2026-11-R2 (R2-07): a change that lets an agent's connection do more needs the owner's re-authentication within
+   * CR-2026-11-R2 (R2-50): a change that lets an agent's connection do more needs the owner's re-authentication within
    * the last five minutes, as switching off a safety rail does (ADR 0055 decision C5; ADR 0028 decision 7): a raised
    * scope, a connection moved to a higher scope or to a profile at scope `write` (whose rails may be weaker), and a new
    * personal access token at scope `write`. Lowering a scope stays a one-click safety action.
@@ -193,7 +193,7 @@ export const registerPolicy: Register = (api, ctx) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
     const current = profileScope(id);
-    // R2-07: only a raise needs the re-authentication (a profile already at write that stays there changes nothing).
+    // R2-50: only a raise needs the re-authentication (a profile already at write that stays there changes nothing).
     if (current !== undefined && SCOPE_RANK[b.scope] > SCOPE_RANK[current])
       requireReauth(ctx.deps.services, req);
     return { profile: actions.setScope(id, b.scope, b.confirmRaise) };
@@ -236,7 +236,7 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.put('/clients/default-scope', (req) => {
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
-    // R2-07: new connections would start able to do more.
+    // R2-50: new connections would start able to do more.
     if (SCOPE_RANK[b.scope] > SCOPE_RANK[cmd.getDefaultScope('owner')]) requireReauth(ctx.deps.services, req);
     return { defaultScope: actions.setDefaultScope(b.scope, b.confirmRaise) };
   });
@@ -244,7 +244,7 @@ export const registerPolicy: Register = (api, ctx) => {
   api.put('/clients/connections/:id/profile', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ profileId: idSchema }), req.body);
-    // R2-07: to a higher scope, or to a profile at write (its rails may be weaker than the connection's now).
+    // R2-50: to a higher scope, or to a profile at write (its rails may be weaker than the connection's now).
     reauthToRaise(req, policy.store.lookupPrincipal(id)?.scope, profileScope(b.profileId));
     return { connection: redactDeep(actions.setConnectionProfile(id, b.profileId)) };
   });
@@ -289,7 +289,7 @@ export const registerPolicy: Register = (api, ctx) => {
       }),
       req.body,
     );
-    // R2-07: a new credential at scope write.
+    // R2-50: a new credential at scope write.
     if (profileScope(b.profileId) === 'write') requireReauth(ctx.deps.services, req);
     const created = actions.createPat({
       name: b.name,

@@ -308,7 +308,7 @@ describe('sync_timeline_event: refusals', () => {
       event_id: choice.id,
     });
     // It already agrees with the row (same date, detail and uri): nothing to write, but the choice is remembered
-    // (v3 F2.1): the bridge records the link, and the check pairs them from now on. CR-2026-11-R2 (R2-11): a link is a
+    // (v3 F2.1): the bridge records the link, and the check pairs them from now on. CR-2026-11-R2 (R2-08): a link is a
     // proposal at every scope (the owner sees it first); approved, it is recorded.
     expect(ok.body, ok.text).toMatchObject({ status: 'proposal_captured' });
     expect(done().writes).toBe(0);

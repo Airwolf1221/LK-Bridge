@@ -601,7 +601,7 @@ describe('a caller’s choice is remembered; create_new makes a new event', () =
     expect(refused.body.error.message).toContain(X.id);
     const before = w.mark();
     const r = await call('sync_timeline_event', { row: { row_id: A.id, age: FOURTH }, event_id: X.id });
-    // CR-2026-11-R2 (R2-11): a link is a proposal at every scope; approved, it is recorded with no LegendKeeper write.
+    // CR-2026-11-R2 (R2-08): a link is a proposal at every scope; approved, it is recorded with no LegendKeeper write.
     expect(r.body, r.text).toMatchObject({ status: 'proposal_captured' });
     expect(await h.approve(String(r.body.proposalId))).toMatchObject({ state: 'executed' });
     expect(before().writes).toBe(0);
@@ -779,7 +779,7 @@ describe('same-day pairing without guessing (v3 F3c, ADR 0051 decision 2)', () =
 
   it('once the owner picks one (a stored link), the one row and one event left pair by the date', async () => {
     const r = await call('sync_timeline_event', { row: { row_id: R1.id, age: FOURTH }, event_id: E2.id });
-    // CR-2026-11-R2 (R2-11): the owner's pick is a proposal, approved.
+    // CR-2026-11-R2 (R2-08): the owner's pick is a proposal, approved.
     expect(r.body.status, r.text).toBe('proposal_captured');
     expect(await h.approve(String(r.body.proposalId))).toMatchObject({ state: 'executed' });
     const c = await h.check();

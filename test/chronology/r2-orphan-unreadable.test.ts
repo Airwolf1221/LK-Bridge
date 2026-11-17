@@ -1,5 +1,5 @@
 /**
- * CR-2026-11-R2 (R2-09): deleting "an event without a row" (ADR 0048 decision 7) is refused beside a row that could be
+ * CR-2026-11-R2 (R2-49): deleting "an event without a row" (ADR 0048 decision 7) is refused beside a row that could be
  * its own: the same date, the same start, or its name. A row whose Date cell cannot be read has no date to compare, so
  * it is matched by its name only, and an event the owner made for it under another name is offered for deletion. The
  * proposal then shows the event and the three rows nearest it by date, never that row. The safe behaviour kept here:

@@ -714,7 +714,7 @@ function SettingEditor({
   const [draft, setDraft] = useState('');
   const { run, busy } = useAction();
   const confirm = useConfirm();
-  // CR-2026-11-R2 (R2-08): a canon setting (the Status of pages agents create) asks for the password first.
+  // CR-2026-11-R2 (R2-51): a canon setting (the Status of pages agents create) asks for the password first.
   const withReauth = useReauth();
   const shown =
     value === undefined && k.default !== undefined ? (

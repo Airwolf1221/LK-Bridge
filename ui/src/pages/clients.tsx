@@ -248,7 +248,7 @@ function ConnectionRow({
 }) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
-  // CR-2026-11-R2 (R2-07): a move to a higher scope or to a write profile asks for the password first.
+  // CR-2026-11-R2 (R2-50): a move to a higher scope or to a write profile asks for the password first.
   const withReauth = useReauth();
   const expired = conn.expiresAt !== null && conn.expiresAt <= now;
   return (
@@ -772,7 +772,7 @@ function PatCard({
   onCreated: () => void;
 }) {
   const { run, busy } = useAction();
-  // CR-2026-11-R2 (R2-07): a token for a profile at scope write asks for the password first.
+  // CR-2026-11-R2 (R2-50): a token for a profile at scope write asks for the password first.
   const withReauth = useReauth();
   const [name, setName] = useState('');
   const [profileId, setProfileId] = useState('');

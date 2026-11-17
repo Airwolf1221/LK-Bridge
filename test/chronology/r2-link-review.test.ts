@@ -1,5 +1,5 @@
 /**
- * CR-2026-11-R2 (R2-11): at scope `write` an agent's direct work is reviewed afterwards on the Review page (ADR 0055
+ * CR-2026-11-R2 (R2-08): at scope `write` an agent's direct work is reviewed afterwards on the Review page (ADR 0055
  * decision A). A chronology link the agent chooses (`sync_timeline_event` with `event_id`: "this row is that event",
  * ADR 0048 F2.1) writes nothing to LegendKeeper but changes what the chronology check pairs, repairs and offers to
  * delete from then on; at scope `propose` it is a proposal for that reason. At scope `write` its job holds only the

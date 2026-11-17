@@ -1,5 +1,5 @@
 /**
- * CR-2026-11-R2 (R2-10): "Mark all reviewed" (ADR 0055 decision A3) is "refused with REVIEW_CHANGED (409) when the set
+ * CR-2026-11-R2 (R2-09): "Mark all reviewed" (ADR 0055 decision A3) is "refused with REVIEW_CHANGED (409) when the set
  * changed in the meantime". The request carried only the count: one item marked reviewed elsewhere and a new direct
  * write arriving left the count the same, and the new item, which the owner never saw, was marked reviewed. The list
  * now answers a fingerprint of the exact set, and "Mark all reviewed" with it marks nothing when the set differs.
