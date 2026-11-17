@@ -8,7 +8,7 @@
  */
 import type { Db } from '../db/open.js';
 import type { Chronology } from '../chronology/index.js';
-import type { JobEngine } from '../jobs/index.js';
+import type { JobEngine, JobOrigin } from '../jobs/index.js';
 import { lifecycleFrom } from '../lifecycle/settings.js';
 import type { LifecycleTagRules } from '../lifecycle/tags.js';
 import type { Registry } from '../registry/index.js';
@@ -304,6 +304,11 @@ export class Audits {
       readonly createNew?: boolean;
       /** v3 F2.1: "Pair with this row" on an event in a tie: which candidate row. */
       readonly rowId?: string;
+      /**
+       * v3 F3c (ADR 0054): an agent's `arkona_appraisal_fix` handing sibling order or tags over to this fix: the
+       * proposal is the agent's own. Absent: the owner's, from the dashboard.
+       */
+      readonly origin?: JobOrigin;
     } = {},
   ): Promise<FixResult> {
     const f = this.store.get(projectId, findingId);
@@ -358,9 +363,14 @@ export class Audits {
           ? { status: 'proposal_captured', proposalId: c.proposalId, summary: c.summary, fix: kind }
           : c;
     } else {
-      r = await proposeFixVia({ engine: this.d.engine as never, now: this.d.now }, projectId, f, {
-        propertiesName: treeSettingsFrom(this.d.projectSettings(projectId)).propertiesName,
-      });
+      r = await proposeFixVia(
+        { engine: this.d.engine as never, now: this.d.now, ...(opts.origin ? { origin: opts.origin } : {}) },
+        projectId,
+        f,
+        {
+          propertiesName: treeSettingsFrom(this.d.projectSettings(projectId)).propertiesName,
+        },
+      );
     }
     this.d.audit(actor, 'audits.propose_fix', projectId, null, {
       finding: findingId,

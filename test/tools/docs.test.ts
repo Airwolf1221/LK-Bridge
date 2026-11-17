@@ -19,9 +19,10 @@ describe('docs/tools.md', () => {
     // v2 C2c's four lifecycle tools, v2 D1's calendar_date and four timeline tools, D1.1's sync_timeline_event, v2 D2's three
     // map-feature tools, v2 D3's upload_image and prepare_image_upload, and v2 E1a's three snapshot tools and v2 E2's audit_findings
     // (the policy layer adds its two proposal tools on the server), and v3 F3a's arkona_create_character and v3 F3b's
-    // arkona_create_owner, arkona_create_relationship, arkona_add_character_art and arkona_character_brief (a setting pack's).
-    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(67);
-    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(67 + 89);
-    expect(docs).toContain('156 tools');
+    // arkona_create_owner, arkona_create_relationship, arkona_add_character_art and arkona_character_brief (a setting pack's),
+    // and v3 F3c's five appraisal tools (the same pack's).
+    expect(createBridgeTools(deps, { exposePerOpTools: false })).toHaveLength(72);
+    expect(createBridgeTools(deps, { exposePerOpTools: true })).toHaveLength(72 + 89);
+    expect(docs).toContain('161 tools');
   });
 });

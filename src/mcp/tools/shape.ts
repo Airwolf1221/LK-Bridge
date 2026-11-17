@@ -9,6 +9,7 @@
  * - failures become typed `{ error: { code, message, … } }` results, never thrown exceptions.
  */
 import type { Packs } from '../../packs/service.js';
+import type { Appraisal } from '../../appraisal/service.js';
 import type { BlockwiseUndo } from '../../pages/undo.js';
 import * as z from 'zod';
 import type { ImageService } from '../../images/service.js';
@@ -89,6 +90,8 @@ export interface DiscoverServices {
   readonly blockwiseUndo?: BlockwiseUndo;
   /** v3 F3a (ADR 0050): the setting packs (their rules, attachments, governance and approval). */
   readonly packs?: Packs;
+  /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (read-only; fixes are proposals). */
+  readonly appraisal?: Appraisal;
 }
 
 /** What every tool handler needs. */

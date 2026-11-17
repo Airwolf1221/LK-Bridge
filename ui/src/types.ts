@@ -2330,6 +2330,101 @@ export interface PacksResponse {
   packs: PackView[];
 }
 
+// ------------------------------------------------------------------------------------------------ v3 F3c: Appraisal
+
+export type AppraisalToolName =
+  'arkona_appraise_owner' | 'arkona_change_impact' | 'arkona_working_digest' | 'arkona_visual_hygiene';
+
+export type AppraisalFollowUp =
+  | { kind: 'fix'; tool: 'arkona_appraisal_fix'; args: { findingId: string }; change: string; via?: 'audit' }
+  | { kind: 'judgement'; tool: string; decide: string }
+  | { kind: 'none'; reason: string };
+
+export interface AppraisalFindingView {
+  id: string;
+  tool: AppraisalToolName;
+  check: string;
+  group: string;
+  evidence: string;
+  rule: { page: string; section: string | null; rule?: string };
+  page: { id: string; name: string; path: string } | null;
+  documentId?: string | null;
+  blockId?: string | null;
+  message: string;
+  details: Record<string, unknown>;
+  followUp: AppraisalFollowUp;
+  source: { kind: string; snapshotId?: string; takenAt?: number; ageMs?: number; auditFindingId?: number };
+  labels?: { lifecycle: string | null; branch: string | null };
+}
+
+export interface AppraisalReportView {
+  tool: AppraisalToolName;
+  runId: string;
+  scope: Record<string, unknown>;
+  createdAt: string;
+  source: {
+    index: {
+      base: { id: string; takenAt: string };
+      newest: { id: string; takenAt: string };
+      changeSnapshots: number;
+      age: string;
+      ageMs: number;
+    } | null;
+    audit?: { runAt: string | null; snapshotId: string | null };
+    assetTree?: { status: string; confirmedAt: string | null };
+    pack?: { version: number; approvedVersion: number | null };
+  };
+  inspected: Record<string, unknown>;
+  couldNotCheck: string[];
+  counts: Record<string, number>;
+  findings: AppraisalFindingView[];
+  compared?: { new: number; still: number; gone: number; previousRunAt: string };
+}
+
+export interface AppraisalIndexView {
+  baseSnapshotId: string;
+  baseTakenAt: number;
+  newestSnapshotId: string;
+  newestTakenAt: number;
+  changes: number;
+  pages: number;
+  units: number;
+  refs: number;
+  unreadable: number;
+  builtAt: number;
+  buildMs: number;
+  updatedAt: number;
+  lastUpdateMs: number | null;
+  sizeBytes: number | null;
+  notes: string[];
+}
+
+export interface AppraisalRunView {
+  id: string;
+  tool: AppraisalToolName;
+  scopeKey: string;
+  scope: Record<string, unknown>;
+  actor: string;
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  counts: Record<string, number>;
+  compared: { new: number; still: number; gone: number; previousRunAt: string } | null;
+}
+
+export interface AppraisalOverviewResponse {
+  project: { id: string; name: string };
+  attached: boolean;
+  index: AppraisalIndexView | null;
+  areas: { key: string; label: string; found: { id: string; name: string }[] }[];
+  runs: AppraisalRunView[];
+  now: number;
+}
+
+export type AppraisalFixResponse =
+  | { status: 'proposal_captured'; proposalId: string; summary: string | null; fix: string; reads: number }
+  | { status: 'nothing_to_do'; message: string; reads: number };
+
 // ------------------------------------------------------------------------------------- v3 F3.4: write scope (ADR 0055)
 
 export interface ReviewCounts {

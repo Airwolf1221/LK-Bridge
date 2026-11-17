@@ -390,6 +390,54 @@ export interface EvalContext {
    * (the bridge cannot tell which words were in the text); filters and negated terms are still checked on the tree.
    */
   readonly content?: ReadonlySet<string>;
+  /**
+   * v3 F3c (ADR 0054): the full-text index's answer for each free-text term (by `textTermKey`): the pages whose text holds
+   * it. Unlike LegendKeeper's search, it says which words each page holds, so negated terms and OR are honoured on the
+   * text too: a term is satisfied by a page's name, alias or Scope, or by its text.
+   */
+  readonly text?: ReadonlyMap<string, ReadonlySet<string>>;
+}
+
+/** v3 F3c: the key of a free-text term in `EvalContext.text`. */
+export const textTermKey = (t: { readonly value: string; readonly phrase: boolean }): string =>
+  `${t.phrase ? 'p' : 'w'}:${t.value}`;
+
+/** v3 F3c: every free-text term of a query (positive and negated), once each. */
+export function textTerms(e: Expr): { value: string; phrase: boolean }[] {
+  const out = new Map<string, { value: string; phrase: boolean }>();
+  const walk = (x: Expr): void => {
+    switch (x.t) {
+      case 'text':
+        out.set(textTermKey(x), { value: x.value, phrase: x.phrase });
+        return;
+      case 'and':
+      case 'or':
+        x.items.forEach(walk);
+        return;
+      case 'not':
+        walk(x.item);
+        return;
+      default:
+        return;
+    }
+  };
+  walk(e);
+  return [...out.values()];
+}
+
+/** v3 F3c: the positive free-text terms of a query, with whether each is a phrase (for a page's hits). */
+export function positiveTerms(e: Expr, negated = false): { value: string; phrase: boolean }[] {
+  switch (e.t) {
+    case 'text':
+      return negated ? [] : [{ value: e.value, phrase: e.phrase }];
+    case 'and':
+    case 'or':
+      return e.items.flatMap((x) => positiveTerms(x, negated));
+    case 'not':
+      return positiveTerms(e.item, !negated);
+    default:
+      return [];
+  }
 }
 
 interface Result {
@@ -418,6 +466,11 @@ function evaluate(e: Expr, s: Searchable, ctx: EvalContext, negated: boolean): R
     case 'text': {
       const hit = textHit(s, e.value);
       if (hit) return { ok: true, hits: [hit] };
+      if (ctx.text) {
+        return ctx.text.get(textTermKey(e))?.has(s.node.id)
+          ? { ok: true, hits: [{ field: 'page text', tier: null }] }
+          : NO;
+      }
       if (!negated && ctx.content?.has(s.node.id)) {
         return { ok: true, hits: [{ field: 'page text', tier: null }] };
       }

@@ -1,12 +1,13 @@
 name: CI
-# v3 F3.4: CI runs on pull requests to main (not for documentation-only changes), and by hand. Not on a push to main:
-# the pull request's run already tested the merge result, and every session runs the full checks locally.
+# 17 November 2026 (the owner's request: the Actions minutes cap). Pull requests to main, and by hand (Actions, CI, Run
+# workflow). Not on pushes to main: the pull request's run already tested the merge result, and every session runs the
+# full CI locally before it finishes. A change to docs or Markdown alone does not start a run.
 on:
   pull_request:
     branches: [main]
     paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
-# A newer push to the same pull request cancels the run still going for the older one.
+# A newer push to the same pull request (or ref) cancels the run still going for the older one.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -38,24 +39,23 @@ jobs:
         run: npx vitest run test/tools/spike-v2-dryrun.test.ts test/tools/spike-wrapper.test.ts
       - name: Unit and contract tests (sandbox tests are opt-in and never run here)
         run: npm test
-      # v3 F3.4: Playwright's browsers are cached, keyed on the Playwright version, so Chromium is not downloaded on every
-      # run; the system libraries it needs are installed either way.
+      # Playwright's browsers are cached, keyed on the installed Playwright version (a new version brings its own
+      # Chromium, so a new key): a cache hit downloads no browser and installs only the system libraries Chromium needs.
       - name: Playwright version (the browser cache's key)
         id: playwright
-        run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache Playwright's browsers
         id: playwright-cache
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
-      - name: Install Chromium (downloaded only when the cache missed)
-        run: |
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            npx playwright install-deps chromium
-          else
-            npx playwright install --with-deps chromium
-          fi
+      - name: Install Chromium and its system libraries (cache miss)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium's system libraries only (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
       # v3 F3c (ADR 0051 decision 4): the one browser test made stable (5 of 5 fresh runs): a canon proposal, made by
       # promote_page, approved only with "Approve and accept as canon". The rest of the browser suite stays manual.
       - name: Browser test of canon approval (mock LegendKeeper)

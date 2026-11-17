@@ -37,6 +37,7 @@ tasks come first and the reference after. The last section, **Operations**, list
 | Make any other Arkona owner page (polity, race…)    | `arkona_create_owner` (one package; its home checked)                   | `create_resource` and `set_facts` calls           |
 | Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`                | separate creates; `upload_image` to a destination |
 | Recall who an Arkona character is                   | `arkona_character_brief` (free: the bridge's own records)               | many `get_resource` and `read_document` calls     |
+| Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact` (free, read-only)       | reading every page yourself                       |
 | Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` (rare: see Create a page)  |
 | Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                     |
 | Retire a page or a whole character                  | `archive_page` (`subtree: true` for a set)                              | `delete_resource`, `move_resource` to the archive |
@@ -66,8 +67,8 @@ loosely, but only a clear match is returned, and each miss costs a call):
 - `Edit a page's text`
 - `Change facts and links`
 - `Create a page or a character (Working first)`
-- `Setting packs (Arkona)` (the Arkona pack's five tools), and under it `Arkona characters`, `Arkona owners`,
-  `Arkona relationships, art and the brief`
+- `Setting packs (Arkona)` (the Arkona pack's ten tools), and under it `Arkona characters`, `Arkona owners`,
+  `Arkona relationships, art and the brief`, `Arkona appraisal`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -90,7 +91,7 @@ loosely, but only a clear match is returned, and each miss costs a call):
 | The layout of a part of the repository | `browse_repository_tree` (a path, a name or an id; `depth`, `kinds`) |
 | A page by part of its name             | `search` (free: from the tree)                                       |
 | Pages by tag, type, scope or place     | `search` with `tag:` `type:` `scope:` `kind:` `under:`               |
-| A page by a word in its text           | `search` with `content: true` (1 read; incomplete)                   |
+| A page by a word in its text           | `search` with `content: true` (free: the bridge's full-text index)   |
 | The tags in use                        | `list_tags`                                                          |
 | Templates, calendars                   | `list_templates`, `list_calendars`                                   |
 | Image folders and images               | `browse_asset_tree`, `list_assets`                                   |
@@ -106,9 +107,19 @@ type:"Character Core" scope:Qishen
 ```
 
 Results are ranked: exact name, name prefix, a word of the name, text inside the name, alias, then Scope. Each result
-says why it matched. **Content search is incomplete by nature**: LegendKeeper's own search is ranked, capped at 100
-results and has no operators, so a page it did not return may still contain the word. Never conclude that a word does
-not appear on any page from a content search.
+says why it matched.
+
+**Searching page text.** `content: true` also searches every page's text (blocks, sidebar facts, names and aliases)
+through the bridge's full-text index, with the same operators: free, and complete **as of the newest snapshot it names**
+(edits made in LegendKeeper since are not in it yet). A word matches words starting with it; a phrase matches exactly.
+Each result says its `lifecycle` (Authoritative, Working, Archived) and `branch`, and a page found by its text shows
+where (document, section, a snippet). The Legacy Canon Archive and the Design References are left out unless you ask
+(`include: ["legacy", "design"]`): they are not current. A result is discovery evidence, never proof on its own: read the
+page before you rely on it.
+
+`content: "live"` asks LegendKeeper's own search instead (1 read). Its content search is incomplete by nature: ranked,
+capped at 100 results, no operators, so a page it did not return may still contain the word. Never conclude that a word
+appears nowhere from a live content search.
 
 **Names and ids.** Wherever a tool takes a page, give a name or an id. A name must match exactly one page (display
 name, full name, alias or Canonical Display Name, ignoring case). If it matches several, you get the candidates with
@@ -304,7 +315,7 @@ whose answer was lost: it may have been made, so read the pages before anything 
 A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates, homes and tags,
 taken from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list
 only when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`,
-naming the projects they work on). The Arkona pack has five tools. Ask for the part you need:
+naming the projects they work on). The Arkona pack has ten tools. Ask for the part you need:
 
 | You want                                          | Use                          | Part to ask for                           |
 | ------------------------------------------------- | ---------------------------- | ----------------------------------------- |
@@ -313,8 +324,13 @@ naming the projects they work on). The Arkona pack has five tools. Ask for the p
 | Relate two existing Arkona characters             | `arkona_create_relationship` | `Arkona relationships, art and the brief` |
 | Add art to an existing Arkona character           | `arkona_add_character_art`   | `Arkona relationships, art and the brief` |
 | Recall who an Arkona character is (free, no read) | `arkona_character_brief`     | `Arkona relationships, art and the brief` |
+| Appraise pages against Source Formatting (free)   | `arkona_appraise_owner`      | `Arkona appraisal`                        |
+| See what depends on a page, a rename, a proposal  | `arkona_change_impact`       | `Arkona appraisal`                        |
+| See what is in progress (Working pages and more)  | `arkona_working_digest`      | `Arkona appraisal`                        |
+| Check the images and the asset library            | `arkona_visual_hygiene`      | `Arkona appraisal`                        |
+| Propose the fix an appraisal finding offers       | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
 
-**What every pack tool does the same way.**
+**What every pack tool that makes pages does the same way** (the appraisal tools only read: see `Arkona appraisal`).
 
 - **Preview first, then one proposal.** `dryRun: true` (or `preview: true`) writes nothing and returns the whole plan:
   pages, places, templates, facts, tags, links, images, warnings and refusals. Fix what it refuses, tell the person about
@@ -629,6 +645,40 @@ first, even on a dry run, and its `staged_id` is in the answer.
 free: the six identity fields, every page of their set with its Reference Type and Scope, their relationships, their Art
 pages with image counts, open audit findings and Unresolved Material, each with how fresh it is. `live: true` re-reads the
 identity fields (one read). Use it before you write about a character, and tell the person who is under discussion.
+
+### Arkona appraisal
+
+Four reports and one way to act on a finding. **The reports are read-only and free**: they read the bridge's snapshots
+(the nightly full snapshot plus the change snapshots since), the audits and its own records, never LegendKeeper, and they
+**write nothing and propose nothing**. Each says what it inspected, how fresh its data was and what it could not check.
+
+| You want                                                       | Use                                                     |
+| -------------------------------------------------------------- | ------------------------------------------------------- |
+| A page, a branch or everything against Source Formatting       | `arkona_appraise_owner` (`page`, `under` or `all`)      |
+| What depends on a page, a planned rename or a pending proposal | `arkona_change_impact` (`page`, `renameTo`, `proposal`) |
+| What is in progress: Working pages, open proposals and more    | `arkona_working_digest` (`since: "7d"`)                 |
+| The images and the asset library                               | `arkona_visual_hygiene` (`page` or `under` narrows it)  |
+| To act on one finding whose follow-up is a `fix`               | `arkona_appraisal_fix` (`findingId`): ONE proposal      |
+
+**Reading a report.** Findings come in groups (A2: required defects, optional polish, architectural candidates, blocked
+cases; A3: proven breakage, review candidates). Each names the rule it comes from (the governance page and section), its
+evidence class and its **`followUp`**:
+
+- `fix`: a deterministic repair. Call `arkona_appraisal_fix { "findingId": "…" }` **only when the person asks for it**. It
+  re-reads the page, checks the finding still holds (`FIX_STALE` otherwise: nothing is proposed) and makes **one
+  proposal** for the owner, whatever your scope: nothing changes until the owner approves. Never resubmit it: follow it
+  with `bridge_proposal_status`.
+- `judgement`: there is no single right repair. It names the tool you would use and what has to be decided: ask the
+  owner, never guess (a Purpose section needs the subject's purpose from the owner or its sources).
+- `none`: report only.
+
+**Keep to the evidence.** A polish item or an architectural candidate is a prompt to review, not a defect; a restatement
+(A3) is a candidate, never proof anything changed; a visual finding (A5) is a candidate, never a defect to repair; age in
+the Working digest is shown, never judged. Blocked cases say what could not be checked: do not fill the gap yourself.
+
+**Long reports** come a page at a time: pass `limit` and `offset`, or `group`; `runId` (from the answer) reads the stored
+report again without re-running it. `live: true` (A2, A3) re-reads the pages concerned first and costs reads (A2: 2 a
+page, at most 25 pages): use it only when the person needs what changed since the snapshot.
 
 ## Rename, move, delete and restore
 

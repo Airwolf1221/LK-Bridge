@@ -20,8 +20,13 @@ import {
   SearchSyntaxError,
   underValues,
   SEARCH_FIELDS,
+  positiveTerms,
+  textTermKey,
+  textTerms,
   type Expr,
 } from '../../discover/search.js';
+import { inScope, labelContext, labelsOf, type Labels } from '../../appraisal/scope.js';
+import { lifecycleFrom } from '../../lifecycle/settings.js';
 import type { NodeKind, TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.js';
 import { defineTool, READ_ANNOTATIONS, renamedTool } from './define.js';
@@ -183,19 +188,29 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
     title: 'Search the repository',
     access: 'read',
     description:
-      'Finds pages in the AI REPOSITORY by name, alias, Canonical Display Name or Scope. Use it when you do not know a page’s exact name (the tools that take a page accept a name or an id). All words must match; "quoted phrases"; OR, NOT (or -term) and ( ) combine (capitals for OR, AND, NOT). Filters: tag: type: (Reference Type) kind: (index, bsrc, bwrk, barc, unclassified) under: (a page) scope:. Ranked: exact name, prefix, word, text in a name, alias, Scope. Example: { "query": "foxian tag:elder -kind:index under:Characters" }. Cost: none. content: true also asks LegendKeeper to search page text (1 read; ranked, INCOMPLETE and with no operators: never conclude a word appears nowhere). Pages outside the AI REPOSITORY are never searched.',
+      'Finds pages in the AI REPOSITORY by name, alias, Canonical Display Name or Scope. Use it when you do not know a page’s exact name (the tools that take a page accept a name or an id). All words must match; "quoted phrases"; OR, NOT (or -term) and ( ) combine (capitals for OR, AND, NOT). Filters: tag: type: (Reference Type) kind: (index, bsrc, bwrk, barc, unclassified) under: (a page) scope:. Ranked: exact name, prefix, word, text in a name, alias, Scope. Example: { "query": "foxian tag:elder -kind:index under:Characters" }. Cost: none. ' +
+      'content: true also searches page TEXT (blocks, sidebar facts, names and aliases) through the bridge’s full-text index, with the same operators (a word matches words starting with it; a phrase exactly), each result labelled by lifecycle and branch, with its document, section and a snippet: free, and complete as of the newest snapshot it states (later app edits are not in it yet). The Legacy Canon Archive and the Design References are left out unless include names them ("legacy", "design"). Discovery evidence, never proof on its own. content: "live" asks LegendKeeper’s own search instead (1 read; ranked, INCOMPLETE, no operators). Pages outside the AI REPOSITORY are never searched.',
     inputSchema: z.object({
       query: z.string().min(1).max(500).describe('Words, "phrases", OR, NOT/-, ( ), and filters.'),
       content: z
-        .boolean()
+        .union([z.boolean(), z.literal('live')])
         .optional()
-        .describe('Also search page text through LegendKeeper (1 read, incomplete).'),
+        .describe(
+          'true: also search page text through the bridge’s full-text index (free, as of the newest snapshot); "live": LegendKeeper’s own search (1 read, incomplete).',
+        ),
+      include: z
+        .array(z.enum(['legacy', 'design']))
+        .max(2)
+        .optional()
+        .describe(
+          'With content: true, bring the Legacy Canon Archive and the Design References in (left out by default).',
+        ),
       limit: z.number().int().min(1).max(100).optional().describe('Results per page. Default 25.'),
       offset: z.number().int().min(0).optional(),
       project: projectArg,
     }),
     annotations: READ_ANNOTATIONS,
-    handler: ({ query, content, limit, offset, project }, mctx) =>
+    handler: ({ query, content, include, limit, offset, project }, mctx) =>
       withProject(deps, project, 'read', async (pd) => {
         let expr: Expr;
         try {
@@ -224,7 +239,7 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
         if (!usable) {
           // The tree cannot answer. A plain-text content search is cheap and can still be confined to the root by the
           // ancestry LegendKeeper returns with each hit; anything with operators needs the tree.
-          if (content === true && isPlainText(expr) && ctx.meta.rootId) {
+          if (content !== undefined && content !== false && isPlainText(expr) && ctx.meta.rootId) {
             const live = await liveSearch(ctx, mctx, expr);
             if (!live.ok) return live.result;
             const hits = live.hits.slice(from, from + pageSize);
@@ -254,7 +269,11 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
 
         let contentIds: Map<string, number> | undefined;
         let contentNote: Record<string, unknown> | undefined;
-        if (content === true) {
+        // v3 F3c (ADR 0054): content: true is the bridge's full-text index (each term answered on its own, so every
+        // operator holds on the text too); content: "live" is LegendKeeper's own search, as before.
+        const fts = content === true ? await fullText(pd, ctx, expr) : null;
+        if (fts && !fts.ok) contentNote = fts.note;
+        if (content === 'live') {
           if (positiveText(expr).length === 0) {
             contentNote = {
               searched: false,
@@ -277,16 +296,41 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
         const ranked = runSearch(expr, candidates, {
           under,
           ...(contentIds ? { content: new Set(contentIds.keys()) } : {}),
+          ...(fts?.ok ? { text: fts.text } : {}),
         });
-        // Pages found only through their text keep LegendKeeper's order among themselves; the score order is kept.
-        const order = contentIds;
-        const final = [...ranked].sort(
+        // Pages found only through their text keep LegendKeeper's order (or the index's relevance) among themselves.
+        const order = contentIds ?? (fts?.ok ? fts.rank : undefined);
+        const sorted = [...ranked].sort(
           (a, b) =>
             a.score - b.score ||
             (order && a.textOnly && b.textOnly
               ? (order.get(a.node.id) ?? 0) - (order.get(b.node.id) ?? 0)
               : 0),
         );
+        // The full-text search's scope (decision D1): the non-current areas only when asked for.
+        const labels = fts?.ok ? searchLabels(pd, ctx) : null;
+        const wanted = new Set<string>(include ?? []);
+        let leftOut = 0;
+        const final = labels
+          ? sorted.filter((r) => {
+              const l = labels(r.node);
+              if (inScope(l, wanted)) return true;
+              leftOut++;
+              return false;
+            })
+          : sorted;
+        if (fts?.ok)
+          contentNote = {
+            searched: true,
+            index: fts.index,
+            ...(leftOut > 0
+              ? {
+                  leftOut,
+                  leftOutNote: `${leftOut} match(es) in the Legacy Canon Archive or the Design References were left out (non-current); include: ["legacy", "design"] brings them in.`,
+                }
+              : {}),
+            note: 'The bridge’s full-text index: complete as of the newest snapshot it names (page text, sidebar facts, names and aliases); edits made in LegendKeeper since are not in it yet. Discovery evidence, never proof on its own.',
+          };
         const page = final.slice(from, from + pageSize);
         return finish(
           pd,
@@ -304,6 +348,10 @@ export function discoverTools(deps: ToolDeps): McpToolProvider[] {
               path: parentPath(r.node),
               matched: [...new Set(r.hits.map(describeHit))],
               ...(r.textOnly ? { foundBy: 'page text' } : {}),
+              ...(labels ? (({ lifecycle, branch }) => ({ lifecycle, branch }))(labels(r.node)) : {}),
+              ...(fts?.ok && r.hits.some((h) => h.field === 'page text')
+                ? { text: fts.hits(r.node.id) }
+                : {}),
             })),
             ...(contentNote ? { content: contentNote } : {}),
           },
@@ -889,6 +937,85 @@ function locate(
 }
 
 // ------------------------------------------------------------------------------------------------ search helpers
+
+/**
+ * v3 F3c (ADR 0054): the full-text index's answer for a query: each free-text term's pages, each page's best rank, and
+ * a page's hits (document, section, snippet) for the results shown. Free: the bridge's own database, brought up to date
+ * from the snapshot store first.
+ */
+async function fullText(
+  pd: ProjectDeps,
+  ctx: RepoCtx,
+  expr: Expr,
+): Promise<
+  | {
+      readonly ok: true;
+      readonly text: Map<string, Set<string>>;
+      readonly rank: Map<string, number>;
+      readonly index: unknown;
+      readonly hits: (pageId: string) => Record<string, unknown>[];
+    }
+  | { readonly ok: false; readonly note: Record<string, unknown> }
+> {
+  const a = pd.services?.appraisal;
+  if (!a)
+    return {
+      ok: false,
+      note: {
+        searched: false,
+        note: 'The full-text index is not available in this bridge; content: "live" asks LegendKeeper (1 read, incomplete).',
+      },
+    };
+  const e = await a.ensureIndex(ctx.projectId);
+  if (!e.state)
+    return {
+      ok: false,
+      note: {
+        searched: false,
+        note: 'The full-text index is built from the nightly full snapshot and there is none yet, so only names, aliases and Scope were searched. content: "live" asks LegendKeeper (1 read, incomplete).',
+      },
+    };
+  const text = new Map<string, Set<string>>();
+  const rank = new Map<string, number>();
+  const positive = new Set(positiveTerms(expr).map(textTermKey));
+  for (const t of textTerms(expr)) {
+    const pages = a.fullText.pagesFor(ctx.projectId, t);
+    text.set(textTermKey(t), new Set(pages.keys()));
+    if (!positive.has(textTermKey(t))) continue;
+    for (const [id, r] of pages) rank.set(id, Math.min(rank.get(id) ?? Infinity, r));
+  }
+  const terms = positiveTerms(expr);
+  return {
+    ok: true,
+    text,
+    rank,
+    index: a.freshness(ctx.projectId, e.state),
+    hits: (pageId) =>
+      a.fullText.hits(ctx.projectId, pageId, terms, 3).map((h) => ({
+        ...(h.documentId ? { document: h.documentId } : {}),
+        ...(h.section ? { section: h.section } : {}),
+        unit: h.unit,
+        ...(h.field ? { field: h.field } : {}),
+        snippet: h.snippet,
+      })),
+  };
+}
+
+/** v3 F3c: a tree node's lifecycle, branch and area labels (the full-text search's scope, decision D1). */
+function searchLabels(pd: ProjectDeps, ctx: RepoCtx): (n: TreeNode) => Labels {
+  const settings = pd.services?.projectSettings?.(ctx.projectId) ?? {};
+  const lc = labelContext(ctx.meta.rootId, lifecycleFrom(settings));
+  const kinds = new Map<string, string>();
+  const kindOf = (id: string): string => {
+    let k = kinds.get(id);
+    if (k === undefined) {
+      k = ctx.tree.node(ctx.projectId, id).data?.kind ?? '';
+      kinds.set(id, k);
+    }
+    return k;
+  };
+  return (n) => labelsOf({ ids: n.path.ids, names: n.path.names, kinds: n.path.ids.map(kindOf) }, lc);
+}
 
 async function liveSearch(
   ctx: RepoCtx,

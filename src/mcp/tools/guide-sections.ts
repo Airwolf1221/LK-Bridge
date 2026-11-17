@@ -186,6 +186,25 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'character brief',
       'character art',
     ],
+    // v3 F3c (ADR 0054): the appraisal part (read-only reports, fixes are proposals).
+    'Arkona appraisal': [
+      'Appraise Arkona pages, or see what a change breaks',
+      'Appraise pages against Source Formatting (free)',
+      'See what depends on a page, a rename, a proposal',
+      'See what is in progress (Working pages and more)',
+      'Check the images and the asset library',
+      'Propose the fix an appraisal finding offers',
+      'arkona_appraise_owner',
+      'arkona_change_impact',
+      'arkona_working_digest',
+      'arkona_visual_hygiene',
+      'arkona_appraisal_fix',
+      'appraisal',
+      'appraise',
+      'change impact',
+      'working digest',
+      'visual hygiene',
+    ],
     'Rename, move, delete and restore': [
       'Rename, tag, alias, hide, lock',
       'Move a page',
@@ -241,6 +260,8 @@ const KEYWORDS: Readonly<Record<string, string>> = {
   'Setting packs (Arkona)': 'package',
   'Arkona characters': 'package gate identity',
   'Arkona owners': 'home nation polity institution place species race',
+  // Not "finding": it stands for "audit" (a synonym group), which must keep leading to "Audit findings".
+  'Arkona appraisal': 'appraise appraisal impact digest hygiene',
 };
 
 interface Entry {
