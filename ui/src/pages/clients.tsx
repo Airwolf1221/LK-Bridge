@@ -27,8 +27,16 @@ const DEFAULT_RAILS: WriteRails = {
   assets: true,
 };
 const RAIL_TEXT: { key: keyof Omit<WriteRails, 'bulkPages'>; label: string; help: string }[] = [
-  { key: 'deletes', label: 'Deletes', help: 'pages, documents, timeline events, map features, assets' },
-  { key: 'bulk', label: 'Bulk changes', help: 'one request touching more than N pages' },
+  {
+    key: 'deletes',
+    label: 'Deletes',
+    help: 'pages, documents, timeline events and lanes, map features, assets, calendars, sidebar and infobox properties, board shapes; replacing a board’s content or a calendar whole',
+  },
+  {
+    key: 'bulk',
+    label: 'Bulk changes',
+    help: 'one request touching more than N pages (a copy with its children counts every page copied)',
+  },
   { key: 'renamesMoves', label: 'Renames and moves of pages', help: 'a page renamed, or moved elsewhere' },
   {
     key: 'assets',
