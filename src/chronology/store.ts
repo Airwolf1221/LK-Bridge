@@ -80,7 +80,9 @@ export type ChronologyTool =
   | 'delete_timeline_event'
   | 'sync_timeline_event'
   /** v2 E5 hotfix: the "Propose a fix" of a count mismatch (src/chronology/count.ts); no MCP tool. */
-  | 'chronology_count_fix';
+  | 'chronology_count_fix'
+  /** v3 F3.4 (ADR 0055): the owner's revert of a direct chronology change (src/review/revert-chronology.ts). */
+  | 'job_revert';
 
 /** One write a change makes, as the record keeps it (what resuming checks against the documents as they are). */
 export type TargetWrite =

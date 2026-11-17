@@ -17,7 +17,8 @@ only. Code: `src/admin/` (API, stream, static files), `ui/` (the React app), `sr
 
 ## The sidebar (v3 F3c)
 
-Overview, Jobs and Proposals (with its pending count) are always at the top. Every other page is in an expandable group;
+Overview, Jobs, Proposals (with its pending count) and, since v3 F3.4, Review (with its unreviewed count) are always at
+the top. Every other page is in an expandable group;
 the code sorts the groups by name and their pages by label (locale-aware, ignoring case), so a new page only needs its
 group named in `NAV` (`ui/src/app.tsx`):
 
@@ -97,6 +98,47 @@ hides or shows the write tools) only after the connector is disconnected and rec
 on 10 November 2026, not a guarantee); in ChatGPT, open Plugins, the bridge, and use **Refresh**. The page says so beside
 the checkbox. See [policy.md](policy.md#hiding-the-low-level-tools-v2-b2).
 
+## Review (v3 F3.4)
+
+[ADR 0055](adr/0055-write-scope-review-revert-rails.md). At scope `write` an agent's ordinary changes run at once; the
+**Review** page (top of the sidebar, beside Proposals, with a badge of the unreviewed count) lists every job an agent ran
+directly, newest first: the agent, the tool, a summary in the words a proposal would have used, and the pages it
+touched. **Show the changes** expands an item to the same diff a proposal shows (page text as a Markdown diff, facts before
+and after, links added and removed, names, tags, aliases, moves, chronology rows and events, image placements), built
+from the journal's pre-images and the job's own record, with anything Revert cannot put back and why. Filters:
+unreviewed (the default), reviewed or all; agent profile; tool. Approved proposals and pack packages (proposals by
+default) are not listed: you saw them before they happened. The Overview page shows the unreviewed count too.
+
+- **Mark reviewed** takes an item off the badge (audited `review.mark`). **Mark all reviewed (N)** marks every item the
+  filters show, after a confirmation naming N; if the set changed in the meantime nothing is marked and the page asks
+  you to look again (`REVIEW_CHANGED`; audited `review.mark_all`).
+- **Revert** (also on the Jobs page, for a finished job an agent ran directly) first shows what it would do: each thing
+  the job changed, whether it can be put back, and, for one that changed since or cannot be reverted, why. It puts back
+  page text (block by block), sidebar facts and links, chronology rows and their events (in step), names, tags, aliases
+  and moves, and image placements: the image's file is copied back to the bridge's server, so the image is back on
+  the **Staging** page, and deleting the placed image from the library is **proposed to you** on the Proposals page
+  (nothing is ever written to the `LK-Bridge staging` folder, and the revert itself deletes nothing). It never reverts
+  a deletion (it points to `restore_resource`), a proposal, a running job or
+  another revert. **All or nothing by default:** if anything cannot be put back, the dialog lists it and you tick
+  the box to revert the others anyway (**Revert the rest**). Each target is checked again inside the revert job, so an edit made
+  meanwhile is never overwritten. It asks for your password (and TOTP code) first, and is audited (`job.revert`, with
+  the targets and the outcome). The revert is one job (system, P1) on the Jobs page; its result points to the journal
+  and the snapshots if you need to go further. A reverted job is marked reviewed.
+
+## Safety rails, per profile (v3 F3.4)
+
+Each profile at scope `write` on **Clients & Access** has **Always propose** switches: even at write scope these still
+become proposals, each saying which rail sent it (`proposed because: bulk change (14 pages > 10)`):
+
+- **Deletes** (pages, documents, timeline events, map features, assets): on by default;
+- **Bulk changes**: one job touching more than **N pages** (N per profile, default 10; 1 to 1,000): on by default;
+- **Renames and moves of pages**: off by default;
+- **Asset deletes and asset moves** (placing a staged image is not a move): on by default.
+
+**Save rails for** a profile asks for confirmation and your password (and TOTP code), and is audited (`profile.set_rails`, with the
+rails before and after); a change applies at the profile's next request. The rails only ever add proposals: canon and
+lifecycle changes stay proposals whatever they say. See [policy.md](policy.md#write-scope-review-revert-and-safety-rails-v3-f34).
+
 ## Old connections (hotfix, ADR 0033)
 
 **Clients & Access** also shows, above the profile tables, "Remove all revoked and expired (N)" (only when N > 0, with a
@@ -149,8 +191,11 @@ For each pack:
 - its **state**: approved and current, not approved yet, rules changed since approval, governance changed since
   approval (with the changed sources named, as an alert), or governance unreadable. Anything but "approved and
   current" means the pack's tools compute no tags and refuse every package (`PACK_NOT_CURRENT`): they fail closed;
-- its **tools**, the approval (version, by whom, when), and whether every package is a proposal (the pack's
-  `alwaysPropose`, on for its first weeks);
+- its **tools**, the approval (version, by whom, when), and, since v3 F3.4, a switch per writing tool: **Always
+  propose** (on: a package is a proposal whatever the agent's scope) or off (it follows the agent's scope). The seed's
+  defaults: `arkona_create_character`, `arkona_create_owner` and `arkona_create_relationship` always propose;
+  `arkona_add_character_art` (and F3c's `arkona_appraisal_fix`) follow the scope. A tool with no switch keeps the pack's
+  `alwaysPropose`;
 - the **governance sources**: each page the rules were derived from (for Arkona: Character Architecture, Source
   Formatting, and the Controlled Native Tagging Standard v1.8, all on the AI REPOSITORY page), with the document version
   approved and, after **Check governance now** (one read per source), the version now; since v3 F3b also the **pinned
@@ -166,7 +211,7 @@ For each pack:
   table** (each owner type's template, primary and specialist tags and allowed homes, and the race roster's kinds);
 - its **versions**, newest first, each with its reason and whether it was approved.
 
-Three changes, each confirmed and then re-authenticated (your password, and the TOTP code if you use one), and each
+Four changes, each confirmed and then re-authenticated (your password, and the TOTP code if you use one), and each
 audited:
 
 - **Approve this pack version** records the current rules' version with each governance source's document version, read
@@ -182,6 +227,8 @@ audited:
   version (`pack.remap_section`, recording the old heading and the new one), which you then approve with **Approve this
   pack version**, so you approve the mapping and the version together. Headings match as a whole (case, punctuation
   and numbering aside), never by prefix ([packs.md](packs.md#re-mapping-a-pinned-heading)).
+- **Save tool switches** (v3 F3.4) makes a new version (`pack.set_tool_modes`), which waits for your approval like any
+  other: until then the tools refuse (`PACK_NOT_CURRENT`).
 - **Save token maps** makes a new version (`pack.set_tokens`), which waits for your approval: until then the tools fail
   closed. A token is never one of the never-tags (Unknown, Unestablished, None), and no value or token has an em or
   en dash in it (`INVALID_TOKEN`).
@@ -208,7 +255,7 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Writers     | `GET /writers` (slots, locks, waits, rate), `PUT /writers/max`, `POST /writes/pause\|resume\|drain\|undrain`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Journal †   | `GET /journal` (filters `jobId`, `resourceId`, `documentId`, `targetId`, `opId`, `principalId`, `profile`, `outcome`, `withPreImage`, `sinceMinutes`; paging `limit` (≤ 200) and `before`, answered with `nextBefore`; metadata only), `GET /journal/:id` (with the pre-image). View only                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | Proposals † | `GET /proposals` (`group` or `state`, `principalId`, `profile`), `GET /proposals/counts` (with every project's pending count), `GET /proposals/:id` (diff data, page-level summary, canonical changes), `POST /proposals/:id/approve`, `POST /proposals/:id/approve-as-canon` (`{ confirm: true }`, v2 C2a), `POST /proposals/:id/reject`, `POST /proposals/bulk` (`action`: `approve`, `reject`, or `approve-as-canon` with `{ confirm: true }`; at most 100 ids)                                                                                                                                                                                                                                                        |
-| Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Access      | `GET /clients`, `POST /clients/profiles`, `PUT /clients/profiles/:id/scope`, `PUT /clients/profiles/:id/rails` (`{ rails, confirm: true }`, v3 F3.4) ‡, `PUT /clients/default-scope`, `PUT /clients/connections/:id/profile`, `POST /clients/connections/:id/revoke`, `POST /clients/pats`                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Settings    | `GET /settings`, `PUT /settings/read-only\|expose-per-op-tools\|member-admin\|journal-retention\|tier-limits`, `GET /audit`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Maintenance | `GET /maintenance` (v2 E5.1: per-project jobs with `projects` and `runningProjectId`), `GET /maintenance/:id` (with history; `?project=` narrows it), `POST /maintenance/:id/enable\|disable\|run` (`run` takes an optional `project`, v2 E5.1), `PUT /maintenance/:id/schedule` (chunk 6, [docs/maintenance.md](maintenance.md))                                                                                                                                                                                                                                                                                                                                                                                         |
 | Mappings †  | `GET /mappings`, `POST /mappings/sets`, `GET\|PUT /mappings/sets/:id`, `POST /mappings/sets/:id/activate\|deactivate\|delete\|rules\|fields`, `PUT /mappings/rules/:id`, `PUT /mappings/fields/:id`, `POST /mappings/rules/:id/delete`, `POST /mappings/fields/:id/delete`, `GET /mappings/sets/:id/export\|preview`, `POST /mappings/import` (chunk 6, [docs/mappings.md](mappings.md))                                                                                                                                                                                                                                                                                                                                  |
@@ -219,7 +266,8 @@ All under `/api/admin`, JSON in and out, errors as `{ "error": { "code", "messag
 | Tool calls  | `GET /tool-calls` (filters `principalId`, `profile`, `tool`, `outcome=success\|error\|proposal\|waiting\|queued\|not_success`, `code`, `project`, `sinceMinutes`; paging `limit` (≤ 500) and `before`, answered with `nextBefore`; also the filter choices and the retention), `PUT /tool-calls/retention` (`{ days: 0-90, confirm: true }`; audited). Owner only; view only (v2 E3, [ADR 0045](adr/0045-tool-review-and-the-tool-call-log.md))                                                                                                                                                                                                                                                                           |
 | Audits †    | `GET /audits` (summary, latest run, runs, the catalogue), `GET /audits/findings` (`category`, `code`, `severity`, `page`, `new`, `acknowledged=hide\|only\|include`, `state=open\|gone\|all`, `group=page`, `limit`, `offset`), `GET /audits/findings/:id`, `POST /audits/run`, `POST /audits/findings/:id/acknowledge\|unacknowledge\|propose-fix\|recheck` (`{ confirm: true, project }`; acknowledge also `reason`), `GET /audits/config`, `PUT /audits/config` ‡ (v2 E2, [ADR 0044](adr/0044-audits.md))                                                                                                                                                                                                              |
 | Appraisal † | `GET /appraisal` (the full-text index's state and freshness, the non-current areas found, the latest runs; no LegendKeeper request), `POST /appraisal/run` (`{ tool: owner\|impact\|digest\|visual, page?, under?, all?, include?, renameTo?, proposal?, sinceDays?, confirm: true }`; stores the report; no LegendKeeper request), `GET /appraisal/runs/:id`, `POST /appraisal/findings/:id/propose-fix` (`{ confirm: true }`; one live read, then ONE proposal; audited `appraisal.propose_fix`), `POST /appraisal/index/rebuild` (`{ confirm: true }`; from the snapshot store) (v3 F3c, [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md))                                                          |
-| Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)), `POST /packs/:id/sections` (`{ source, from, to, confirm: true }`: re-maps a pinned heading; a new version) ‡ (ADR 0052 amendment)                                                                                                                                                                         |
+| Packs       | `GET /packs` (every pack as stored: rules, governance sources, approval, drift, attachments, tools, versions; no LegendKeeper request), `GET /packs/:id/governance` (each source read now, drift recorded), `POST /packs/:id/approve` (`{ confirm: true }`) ‡, `PUT /packs/:id/tokens` (`{ race?, culture?, confirm: true }`) ‡ (v3 F3a, [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md)), `POST /packs/:id/sections` (`{ source, from, to, confirm: true }`: re-maps a pinned heading; a new version) ‡ (ADR 0052 amendment), `PUT /packs/:id/tools` (`{ tools, confirm: true }`: the tool switches; a new version) ‡ (v3 F3.4)                                                                      |
+| Review †    | `GET /review` (`state=unreviewed\|reviewed\|all`, `profile`, `tool`, `before`, `limit`; the items, the filter choices, the counts), `GET /review/counts`, `GET /review/:jobId` (with the changes page by page), `POST /review/mark` (`{ ids }`), `POST /review/mark-all` (`{ filter, expect, confirm: true }`; 409 `REVIEW_CHANGED`); Revert: `GET /jobs/:id/revert` (the preview), `POST /jobs/:id/revert` (`{ confirm: true, confirmPartial? }`) ‡ (v3 F3.4, [ADR 0055](adr/0055-write-scope-review-revert-rails.md))                                                                                                                                                                                                   |
 | Stream      | `GET /stream` (Server-Sent Events)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Confirmations are part of the contract, not only the UI: raising a scope without `confirmRaise: true` is a `409

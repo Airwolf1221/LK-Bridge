@@ -5,18 +5,18 @@ of subject gets, from which templates, under which names and in which place, wit
 text rules its pages follow. The bridge's code holds the engine that applies any pack's rules and a few small hooks for
 what data cannot say. The first pack is **Arkona**, attached to the `arkona` and `test` projects. Its tools:
 
-| Tool                         | What it makes                                                                  | Since |
-| ---------------------------- | ------------------------------------------------------------------------------ | ----- |
-| `arkona_create_character`    | a character's set of pages, or new pages for an existing character             | F3a   |
-| `arkona_create_owner`        | one non-character owner page, typed by the owner table (below)                 | F3b   |
-| `arkona_create_relationship` | one joint relationship page for two existing characters                        | F3b   |
-| `arkona_add_character_art`   | reference images for an existing character, on its Art page                    | F3b   |
-| `arkona_character_brief`     | nothing: a read-only brief on a character, from the bridge's own records, free | F3b   |
-| `arkona_appraise_owner`      | nothing: a page, branch or everything appraised against Source Formatting      | F3c   |
-| `arkona_change_impact`       | nothing: what depends on a page, a planned rename or a pending proposal        | F3c   |
-| `arkona_working_digest`      | nothing: Working pages, open proposals, unpromoted sets, contradictions        | F3c   |
-| `arkona_visual_hygiene`      | nothing: the visual references, candidates only                                | F3c   |
-| `arkona_appraisal_fix`       | ONE proposal repairing one appraisal finding with a deterministic fix          | F3c   |
+| Tool                         | What it makes                                                                                                                               | Since |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `arkona_create_character`    | a character's set of pages, or new pages for an existing character                                                                          | F3a   |
+| `arkona_create_owner`        | one non-character owner page, typed by the owner table (below)                                                                              | F3b   |
+| `arkona_create_relationship` | one joint relationship page for two existing characters                                                                                     | F3b   |
+| `arkona_add_character_art`   | reference images for an existing character, on its Art page                                                                                 | F3b   |
+| `arkona_character_brief`     | nothing: a read-only brief on a character, from the bridge's own records, free                                                              | F3b   |
+| `arkona_appraise_owner`      | nothing: a page, branch or everything appraised against Source Formatting                                                                   | F3c   |
+| `arkona_change_impact`       | nothing: what depends on a page, a planned rename or a pending proposal                                                                     | F3c   |
+| `arkona_working_digest`      | nothing: Working pages, open proposals, unpromoted sets, contradictions                                                                     | F3c   |
+| `arkona_visual_hygiene`      | nothing: the visual references, candidates only                                                                                             | F3c   |
+| `arkona_appraisal_fix`       | Repairs one appraisal finding with a deterministic fix: at scope `write` at once (its switch follows the scope, v3 F3.4), else ONE proposal | F3c   |
 
 Design: [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md) and the owner-approved
 [character pack design](design/F3-character-pack.md) (F3a); [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md)
@@ -33,7 +33,13 @@ and the owner-approved [F3c design](design/F3c-appraisal.md) (F3c). The tools' r
 One versioned JSON document, its **rules** (`src/packs/types.ts` checks its shape):
 
 - **settings**: `alwaysPropose` (every package is a proposal for the owner, whatever the agent's scope; on for a pack's
-  first weeks).
+  first weeks), and since v3 F3.4 **`tools`**, a switch per writing tool that overrides it: `propose` (always a
+  proposal) or `scope` (follows the agent's scope: at scope `write` the package runs and the owner reviews it afterwards
+  on the Review page). The Arkona seed: `arkona_create_character`, `arkona_create_owner` and
+  `arkona_create_relationship` propose; `arkona_add_character_art` and `arkona_appraisal_fix` follow the scope; the
+  read-only tools have no switch ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D). Changing a
+  switch on the Packs page (**Save tool switches**, re-authenticated, audited `pack.set_tool_modes`) makes a new version,
+  which waits for the owner's approval like any other.
 - **tags**: the status tags (`CANON` for Authoritative, `Working` for Working, first and with no `CANON`), the AU rule
   (`au`: the Continuity Type that makes a page AU and the tag it carries in place of `CANON`; v3 F3b), the values that are
   never tags (`Unknown`, `Unestablished`, `None`), the **token maps** (a Race / Species or Naming Culture value and the
@@ -113,8 +119,10 @@ packages cannot both create it).
 
 1. **Seeded once.** At start the bridge stores each pack it knows (`src/packs/arkona.ts`, data) if it is not stored yet
    (audited `pack.seed`). After that the stored copy is the owner's: it is never overwritten by code. **A new seed is
-   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-17-f3d`, v3 F3d, supersedes
-   F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b` and F3b.1's `arkona-2026-11-16-f3b1`), and a pack stored from one of them is given the new seed's rules as a NEW version at start
+   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-17-f3-4`, v3 F3.4, the tool
+   switches, supersedes F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b`, F3b.1's `arkona-2026-11-16-f3b1` and
+   F3.3's `arkona-2026-11-17-f3d`, which was named after the wrong session), and a pack stored from one of them is given
+   the new seed's rules as a NEW version at start
    (audited `pack.seed_upgrade`), keeping the owner's token maps and the governance sources' places, taking the seed's
    source names and pinned sections, and adding to each attachment the template roles the new rules need. It waits for
    the owner's approval like any other version.
@@ -346,8 +354,10 @@ appropriate interactive follow-up; do not silently perform the repair." So:
 - **The audits are reused, never duplicated**: A2 gathers the page's open audit findings (sibling order, tags, facts,
   references, lifecycle…) and adds only the checks they do not cover.
 - **Acting on a finding** is a separate, explicit request (the owner's addition, design section F): a finding whose
-  follow-up is a `fix` can be turned into **one ordinary proposal** by `arkona_appraisal_fix` or the Appraisal page's
-  "Propose a fix", after a live re-read shows it still holds. Sibling order and tags go to the audits' own fixes. A
+  follow-up is a `fix` can be turned into **one ordinary proposal** by the Appraisal page's "Propose a fix", or by
+  `arkona_appraisal_fix`, after a live re-read shows it still holds. Since v3 F3.4 the tool follows its switch in the
+  pack's data: by default the agent's scope (at scope `write` the fix is made at once and reviewed afterwards on the
+  Review page); switched to "always propose", one proposal whatever the scope. Sibling order and tags go to the audits' own fixes. A
   `judgement` names the tool and what has to be decided, and is the owner's.
 - **Reports are not written to LegendKeeper.** The bridge keeps the latest run of each tool and scope in its own database
   for comparison, as the audits do ([dashboard.md](dashboard.md#appraisal-v3-f3c)).

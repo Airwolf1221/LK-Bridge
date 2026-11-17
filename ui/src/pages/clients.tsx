@@ -13,9 +13,128 @@ import {
 } from '../components';
 import { fmtAgo, fmtTime } from '../format';
 import { useApi, useNow, useReloadOn } from '../hooks';
-import type { ClientsResponse, Connection, Profile, Scope, SessionInfo } from '../types';
+import type { ClientsResponse, Connection, Profile, Scope, SessionInfo, WriteRails } from '../types';
+import { useReauth } from '../reauth';
 
 const RANK: Record<Scope, number> = { read: 0, propose: 1, write: 2 };
+
+/** v3 F3.4 (ADR 0055): the defaults (deletes, bulk over 10 pages, asset deletes and moves; renames and moves off). */
+const DEFAULT_RAILS: WriteRails = {
+  deletes: true,
+  bulk: true,
+  bulkPages: 10,
+  renamesMoves: false,
+  assets: true,
+};
+const RAIL_TEXT: { key: keyof Omit<WriteRails, 'bulkPages'>; label: string; help: string }[] = [
+  { key: 'deletes', label: 'Deletes', help: 'pages, documents, timeline events, map features, assets' },
+  { key: 'bulk', label: 'Bulk changes', help: 'one request touching more than N pages' },
+  { key: 'renamesMoves', label: 'Renames and moves of pages', help: 'a page renamed, or moved elsewhere' },
+  {
+    key: 'assets',
+    label: 'Asset deletes and asset moves',
+    help: 'an asset deleted, or moved to another folder',
+  },
+];
+
+/**
+ * v3 F3.4 (ADR 0055 decision C): per profile at scope `write`, the kinds of change that still become proposals. They
+ * can only add proposals; canon and lifecycle changes are proposals whatever they say. A change needs the owner's
+ * password again and is audited.
+ */
+function RailsCard({ profiles, onChanged }: { profiles: Profile[]; onChanged: () => void }) {
+  const writers = profiles.filter((p) => p.scope === 'write');
+  return (
+    <section className="card" aria-labelledby="rails-h">
+      <h2 id="rails-h">Safety rails at scope write</h2>
+      <p className="muted small-text">
+        At scope write an agent’s ordinary changes run straight away, and you review them afterwards on the
+        Review page. These switches keep some kinds of change as proposals even so. Canon and lifecycle
+        changes are always proposals, whatever the switches say. The proposal says which rail sent it.
+      </p>
+      {writers.length === 0 ? (
+        <Empty>No profile has scope write.</Empty>
+      ) : (
+        writers.map((p) => <RailsEditor key={p.id} profile={p} onChanged={onChanged} />)
+      )}
+    </section>
+  );
+}
+
+function RailsEditor({ profile, onChanged }: { profile: Profile; onChanged: () => void }) {
+  const current = profile.rails ?? DEFAULT_RAILS;
+  const [draft, setDraft] = useState<WriteRails>(current);
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const withReauth = useReauth();
+  const changed = JSON.stringify(draft) !== JSON.stringify(current);
+  const save = async () => {
+    const ok = await confirm({
+      title: `Change the safety rails of “${profile.label}”?`,
+      message: (
+        <ul>
+          {RAIL_TEXT.map((r) => (
+            <li key={r.key}>
+              {r.label}: {draft[r.key] ? 'always propose' : 'run directly'}
+              {r.key === 'bulk' && draft.bulk ? ` (more than ${draft.bulkPages} pages)` : ''}
+            </li>
+          ))}
+        </ul>
+      ),
+      confirmLabel: 'Save the rails',
+      danger: RAIL_TEXT.some((r) => current[r.key] && !draft[r.key]) || draft.bulkPages > current.bulkPages,
+    });
+    if (!ok) return;
+    const done = await run(
+      () =>
+        withReauth(() =>
+          api.put(`/clients/profiles/${encodeURIComponent(profile.id)}/rails`, {
+            rails: draft,
+            confirm: true,
+          }),
+        ),
+      'Rails saved.',
+    );
+    if (done) onChanged();
+  };
+  return (
+    <fieldset className="rails" data-profile={profile.label}>
+      <legend>{profile.label}</legend>
+      {RAIL_TEXT.map((r) => (
+        <label key={r.key} className="inline">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label={`Always propose: ${r.label} (${profile.label})`}
+            checked={draft[r.key]}
+            onChange={(e) => setDraft({ ...draft, [r.key]: e.target.checked })}
+          />{' '}
+          Always propose: {r.label} <span className="muted small-text">({r.help})</span>
+        </label>
+      ))}
+      <label className="inline">
+        N ={' '}
+        <input
+          type="number"
+          min={1}
+          max={1000}
+          aria-label={`Bulk threshold, in pages (${profile.label})`}
+          value={draft.bulkPages}
+          disabled={!draft.bulk}
+          onChange={(e) =>
+            setDraft({ ...draft, bulkPages: Math.max(1, Math.min(1000, Number(e.target.value) || 1)) })
+          }
+        />{' '}
+        pages (a request touching more is proposed)
+      </label>
+      <div className="row">
+        <Button busy={busy} disabled={!changed} onClick={() => void save()}>
+          Save rails for {profile.label}
+        </Button>
+      </div>
+    </fieldset>
+  );
+}
 const SCOPE_HELP: Record<Scope, string> = {
   read: 'reads only; writes are refused',
   propose: 'writes become proposals you approve',
@@ -50,6 +169,7 @@ export function ClientsPage({ session }: { session?: SessionInfo }) {
       <DefaultScopeCard value={d.defaultScope} onSaved={c.reload} />
       <ConnectionSettingsCard settings={d.settings} onSaved={c.reload} />
       <ProfilesCard profiles={d.profiles} kinds={d.kinds} onChanged={c.reload} />
+      <RailsCard profiles={d.profiles} onChanged={c.reload} />
       <section className="card" aria-labelledby="conn-h">
         <h2 id="conn-h">Connections, by profile</h2>
         <RemoveInactive connections={d.connections} onChanged={c.reload} />

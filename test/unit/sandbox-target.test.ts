@@ -230,7 +230,7 @@ describe('resolveReadOnlyTarget (v2 E5 hotfix: the Markdown round trip only)', (
     const scripts = readdirSync(join(root, 'scripts')).filter((f) => f.endsWith('.ts'));
     expect(scripts.filter((f) => users(`scripts/${f}`))).toEqual(['markdown-roundtrip.ts']);
     expect(read('scripts/markdown-roundtrip.ts')).not.toMatch(/resolveSandboxTarget|createSoakRuntime\(/);
-    for (const f of ['scripts/soak-sandbox.ts', 'scripts/spike-v2.ts']) {
+    for (const f of ['scripts/soak-sandbox.ts', 'scripts/spike-v2.ts', 'scripts/rehearse-write-scope.ts']) {
       expect(read(f)).toMatch(/resolveSandboxTarget\(/);
       expect(users(f)).toBe(false);
     }
@@ -314,6 +314,19 @@ describe('the scripts refuse a project that is not a sandbox (no request is made
     expect(gone.status).toBe(2);
     expect(gone.stderr).toMatch(/removed on the dashboard/);
     for (const r of [unknown, gone]) expect(`${r.stdout}${r.stderr}`).not.toContain(REAL);
+  }, 60_000);
+
+  it('rehearse:write-scope --project arkona (v3 F3.4)', () => {
+    const r = run('rehearse-write-scope.ts', ['--project', 'arkona']);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/not marked as a sandbox/);
+    expect(`${r.stdout}${r.stderr}`).not.toContain(REAL);
+  }, 60_000);
+
+  it('rehearse:write-scope without --project (v3 F3.4)', () => {
+    const r = run('rehearse-write-scope.ts', []);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/--project/);
   }, 60_000);
 
   it('soak:sandbox without --project', () => {

@@ -14,9 +14,7 @@
  * Canon (ADR 0036 decision 6, option (a), decided 11 November 2026): these edits are ordinary edits on an Authoritative
  * page, never canon-gated; only deleting a whole timeline document of an Authoritative page is canonical.
  */
-import { requireOperation } from '../../lk/registry.js';
-import { defs } from '../../lk/registry.defs.generated.js';
-import { withWriteIcon } from '../../lk/icons.js';
+import { keptEventFields } from '../../chronology/event-body.js';
 import { createHash } from 'node:crypto';
 import * as z from 'zod';
 import {
@@ -2244,32 +2242,3 @@ export function timelineTools(deps: ToolDeps): McpToolProvider[] {
 }
 
 export { uriPointsAt };
-
-/**
- * v2 E4 (RV3-5): the fields of an event that a re-made copy keeps: every field `createEvent` takes, except those the
- * update decides (id, lane, type, name, dates, detail, link) and LegendKeeper's own formatted text; icons in their write
- * form (ADR 0042 decision 9).
- */
-function keptEventFields(raw: Record<string, unknown>): Record<string, unknown> {
-  const body = (
-    requireOperation('createEvent').inputJsonSchema.properties as Record<string, unknown> | undefined
-  )?.body as { $ref?: string; properties?: Record<string, unknown> } | undefined;
-  const ref = typeof body?.$ref === 'string' ? body.$ref.split('/').pop()! : null;
-  const def = (ref ? (defs[ref] as { properties?: Record<string, unknown> } | undefined) : body) ?? {};
-  const decided = new Set([
-    'id',
-    'laneId',
-    'type',
-    'name',
-    'start',
-    'end',
-    'detail',
-    'uri',
-    'formattedStart',
-    'formattedEnd',
-  ]);
-  const out: Record<string, unknown> = {};
-  for (const k of Object.keys(def.properties ?? {}))
-    if (!decided.has(k) && raw[k] !== undefined && raw[k] !== null) out[k] = raw[k];
-  return withWriteIcon(out);
-}

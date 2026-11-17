@@ -34,7 +34,16 @@ const remapBody = z
   })
   .strict();
 
+/** v3 F3.4 (ADR 0055 decision D): the per-tool switches (`propose`: always a proposal; `scope`: the agent's scope). */
+const toolsBody = z
+  .object({
+    tools: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), z.enum(['propose', 'scope'])),
+    confirm: z.literal(true),
+  })
+  .strict();
+
 const STATUS: Readonly<Record<string, number>> = {
+  UNKNOWN_TOOL: 400,
   PACK_NOT_FOUND: 404,
   NOT_OWNER: 403,
   INVALID_TOKEN: 400,
@@ -97,6 +106,17 @@ export const registerPacks: Register = (api, ctx) => {
         to: b.to,
       });
       return { pack: packs(ctx).view(id), governance: r.governance };
+    });
+  });
+
+  /** v3 F3.4: a write tool's "always propose" switch; a new pack version, approved as usual (re-authenticated). */
+  api.put('/packs/:id/tools', async (req) => {
+    requireReauth(ctx.deps.services, req);
+    const { id } = parseInput(idParam, req.params);
+    const b = parseInput(toolsBody, req.body);
+    return guarded(() => {
+      packs(ctx).commands.setToolModes('owner', id, b.tools);
+      return { pack: packs(ctx).view(id) };
     });
   });
 

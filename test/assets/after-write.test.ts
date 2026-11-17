@@ -79,7 +79,8 @@ describe('every followed operation', () => {
     await run('updateAsset', { path: { assetId: img }, body: { name: 'Qishen, renamed' } });
     await run('updateAsset', { path: { assetId: img }, body: { folderId: w.foxians } });
     await run('updateAsset', { path: { assetId: img }, body: { isHidden: true } });
-    expect(gets() - g).toBe(3);
+    // One read back each, and (v3 F3.4, ADR 0055 decision F) one pre-image read each, so a revert can put it back.
+    expect(gets() - g).toBe(6);
     expect(store().item(P().id, img)).toMatchObject({
       name: 'Qishen, renamed',
       folder_id: w.foxians,
@@ -117,7 +118,8 @@ describe('every followed operation', () => {
     const img = m.byName('Starter map 001', w.maps)[0]!.id;
     const g = gets();
     await run('updateAsset', { path: { assetId: img }, body: { folderId: inner } });
-    expect(gets() - g).toBe(3); // the asset, then the two folders above it
+    // The pre-image (v3 F3.4, ADR 0055 decision F), the asset read back, then the two folders above it.
+    expect(gets() - g).toBe(4);
     expect(folderRow(inner)!.path.names).toEqual(['Maps to get started', 'Made in the app', 'Inner']);
     expectAssetsMatchModel(rig, 'alpha');
   });

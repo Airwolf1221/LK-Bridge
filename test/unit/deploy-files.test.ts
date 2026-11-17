@@ -42,6 +42,7 @@ describe('deploy scripts', () => {
       'env-sync.sh', // OPS1
       'offsite.sh', // v2 E1b
       'offsite-restore.sh', // v2 E1b
+      'rehearse-write-scope.sh', // v3 F3.4
     ]) {
       expect(scripts, s).toContain(s);
     }

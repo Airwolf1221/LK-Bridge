@@ -23,7 +23,7 @@ import { planPackage, type PackageInput, type PackPlan, type PlanEnv } from './e
 import { textKey } from './engine/text.js';
 import { GENERIC_HOOK, hookFor } from './hooks.js';
 import type { GovernanceStatus } from './service.js';
-import type { Pack, PackAttachment } from './types.js';
+import { packToolMode, type Pack, type PackAttachment } from './types.js';
 
 type Obj = Record<string, unknown>;
 
@@ -307,7 +307,8 @@ export async function finishPackage(
         labels: j.labels,
         title: j.summary,
         ...(j.marker ? { lifecycle: j.marker } : {}),
-        forceProposal: pack.rules.settings.alwaysPropose,
+        // v3 F3.4 (ADR 0055 decision D): the tool's switch: always a proposal, or the agent's scope.
+        forceProposal: packToolMode(pack.rules, o.tool) === 'propose',
         stagedPlacement: plan.images.length > 0,
         // v3 F3b with ADR 0051: the same override reaches the engine (whose own planner leaves this job alone while
         // it has Last Major Revision steps of its own).

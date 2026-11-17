@@ -7,7 +7,7 @@ import { StreamProvider, useStream, useStreamEvent, type SourceFactory } from '.
 import { useReloadOn } from './hooks';
 import { ProjectProvider, useProject, useScopedApi } from './project';
 import { ReauthProvider } from './reauth';
-import type { ProposalCounts, SessionInfo } from './types';
+import type { ProposalCounts, ReviewCounts, SessionInfo } from './types';
 import { AccountPage } from './pages/account';
 import { BudgetsPage } from './pages/budgets';
 import { ClientsPage } from './pages/clients';
@@ -20,6 +20,7 @@ import { MappingsPage } from './pages/mappings';
 import { OverviewPage } from './pages/overview';
 import { ProjectsPage } from './pages/projects';
 import { ProposalsPage } from './pages/proposals';
+import { ReviewPage } from './pages/review';
 import { SettingsPage } from './pages/settings';
 import { StagingPage } from './pages/staging';
 import { AuditsPage } from './pages/audits';
@@ -53,11 +54,15 @@ async function signOut(session: SessionInfo): Promise<void> {
   }
 }
 
-/** Always at the top of the sidebar, in this order (v3 F3c). Proposals carries the pending count. */
+/**
+ * Always at the top of the sidebar, in this order (v3 F3c). Proposals carries the pending count; Review (v3 F3.4, ADR
+ * 0055) the count of agents' direct writes not reviewed yet.
+ */
 export const TOP_NAV: NavItem[] = [
   { to: '/', label: 'Overview' },
   { to: '/jobs', label: 'Jobs' },
   { to: '/proposals', label: 'Proposals' },
+  { to: '/review', label: 'Review' },
 ];
 
 /**
@@ -109,6 +114,7 @@ export const ROUTES: { path: string; prefix?: boolean; render: (session: Session
   { path: '/budgets', render: () => <BudgetsPage /> },
   { path: '/writers', render: () => <WritersPage /> },
   { path: '/proposals', render: () => <ProposalsPage /> },
+  { path: '/review', render: () => <ReviewPage /> },
   { path: '/clients', render: (session) => <ClientsPage session={session} /> },
   { path: '/journal', render: () => <JournalPage /> },
   { path: '/packs', render: () => <PacksPage /> },
@@ -231,6 +237,10 @@ function Shell({ session }: { session: SessionInfo }) {
   const counts = useScopedApi<ProposalCounts>('/proposals/counts');
   useReloadOn(['proposal', 'project'], counts.reload, 500);
   const pending = counts.data?.counts.pending ?? 0;
+  // v3 F3.4 (ADR 0055): direct writes waiting for the owner's review; a job's end or a review changes it.
+  const review = useScopedApi<ReviewCounts>('/review/counts');
+  useReloadOn(['job', 'policy', 'project'], review.reload, 800);
+  const unreviewed = review.data?.unreviewed ?? 0;
   const [, setTick] = useState(0);
   useStreamEvent('unauthenticated', () => setTick((n) => n + 1));
   const live = {
@@ -251,7 +261,13 @@ function Shell({ session }: { session: SessionInfo }) {
           <small>Owner dashboard · v{session.version}</small>
         </div>
         <ProjectSwitcher counts={counts.data} />
-        <Sidebar top={TOP_NAV} items={NAV} path={path} badges={{ '/proposals': pending }} />
+        <Sidebar
+          top={TOP_NAV}
+          items={NAV}
+          path={path}
+          badges={{ '/proposals': pending, '/review': unreviewed }}
+          badgeWords={{ '/review': 'unreviewed' }}
+        />
         <div className="sidebar-foot">
           <span className="live" role="status" aria-label={`Live updates: ${live}`}>
             <span className={`dot dot-${status}`} aria-hidden="true" /> {live}

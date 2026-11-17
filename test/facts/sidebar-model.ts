@@ -119,6 +119,12 @@ export class SidebarModel {
   placeByStoredOrder = false;
   /** C2d: trim leading and trailing breaks from row values written (LegendKeeper does); off only to show the old way. */
   trimBreaks = true;
+  /**
+   * v3 F3.4: models a page made while the test runs from its first property request, with an empty sidebar, when this
+   * says the page exists (every LegendKeeper page has a sidebar). Unset (the default), only the pages given with
+   * `page()` are modelled, as the older tests assume. The write-scope rehearsal's dry run makes its pages as it runs.
+   */
+  adoptNewPages: ((id: string) => boolean) | null = null;
 
   constructor(readonly names: (id: string) => string | undefined) {}
 
@@ -251,6 +257,7 @@ export class SidebarModel {
     );
     if (!m) return undefined;
     const [, rid, propsPart, pid, rowId] = m;
+    if (!this.pages.has(rid!) && propsPart && this.adoptNewPages?.(rid!)) this.page(rid!, []);
     const sb = this.pages.get(rid!);
     if (!sb) return undefined;
     const rowsPart = /\/rows/.test(req.path);

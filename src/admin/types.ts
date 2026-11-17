@@ -21,6 +21,8 @@ import type { Rehearsals } from '../snapshots/rehearsal.js';
 import type { OffsiteService } from '../offsite/service.js';
 import type { ToolCallLog } from '../toolcalls/index.js';
 import type { Evaluation } from '../evaluation/index.js';
+import type { ReviewService } from '../review/service.js';
+import type { RevertService } from '../review/revert.js';
 
 /**
  * What the admin API needs from the running bridge. `Runtime` (src/runtime.ts) satisfies it; tests may build their own.
@@ -64,6 +66,10 @@ export interface AdminRuntime {
   readonly packs?: Packs;
   /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (the Appraisal page); optional for tests. */
   readonly appraisal?: Appraisal;
+  /** v3 F3.4 (ADR 0055): the review queue of direct writes (the Review page); optional for tests' runtimes. */
+  readonly review?: ReviewService;
+  /** v3 F3.4 (ADR 0055): Revert of a direct-write job (the Review and Jobs pages); optional for tests' runtimes. */
+  readonly reverts?: RevertService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

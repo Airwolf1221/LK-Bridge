@@ -250,6 +250,8 @@ export interface Overview {
   };
   errorsLastHour: { count: number; capped: boolean };
   pendingProposals: number;
+  /** v3 F3.4 (ADR 0055): agents' direct writes at scope `write` not reviewed yet (absent from an older bridge). */
+  unreviewedDirectWrites?: number;
   writes: { state: 'running' | 'paused' | 'draining'; perMinute: number };
   /** Null when the project has no governor now (its key is not in use). */
   budget: { queues: Record<PriorityClass, number>; gauges: TierSnapshot[] } | null;
@@ -638,7 +640,18 @@ export interface Profile {
   scope: Scope;
   /** v2 B2: shown the low-level tools in tools/list. */
   showLowLevelTools: boolean;
+  /** v3 F3.4 (ADR 0055): what still becomes a proposal at scope `write` (absent from an older bridge). */
+  rails?: WriteRails;
   connections: number;
+}
+
+/** v3 F3.4 (ADR 0055): a profile's safety rails at scope `write`. */
+export interface WriteRails {
+  deletes: boolean;
+  bulk: boolean;
+  bulkPages: number;
+  renamesMoves: boolean;
+  assets: boolean;
 }
 
 export interface Connection {
@@ -2308,6 +2321,8 @@ export interface PackView {
     attachedBy: string;
   }[];
   tools: string[];
+  /** v3 F3.4 (ADR 0055): each write tool's "always propose" switch (absent from an older bridge). */
+  toolModes?: { tool: string; mode: 'propose' | 'scope'; source: 'switch' | 'default' }[];
   versions: { version: number; reason: string; approved: unknown; createdAt: number }[];
 }
 
@@ -2409,3 +2424,92 @@ export interface AppraisalOverviewResponse {
 export type AppraisalFixResponse =
   | { status: 'proposal_captured'; proposalId: string; summary: string | null; fix: string; reads: number }
   | { status: 'nothing_to_do'; message: string; reads: number };
+
+// ------------------------------------------------------------------------------------- v3 F3.4: write scope (ADR 0055)
+
+export interface ReviewCounts {
+  project?: ProjectRef;
+  unreviewed: number;
+  byProject: Record<string, number>;
+}
+
+export interface ReviewRevert {
+  id: number;
+  revertJobId: string;
+  state: 'submitted' | 'succeeded' | 'failed' | 'cancelled';
+  partial: boolean;
+  createdAt: number;
+  finishedAt: number | null;
+}
+
+export interface ReviewItem {
+  jobId: string;
+  projectId: string;
+  createdAt: number;
+  finishedAt: number | null;
+  status: JobStatus;
+  agent: { principalId: string; name: string; profile: string };
+  tool: string | null;
+  summary: string;
+  pages: { id: string; name: string | null }[];
+  reviewed: { at: number; by: string; via: string } | null;
+  revert: ReviewRevert | null;
+}
+
+export interface ReviewChange {
+  key: string;
+  kind: string;
+  what: string;
+  steps: number[];
+  uncertain: boolean;
+  markdownDiff?: MarkdownDiff;
+  document?: { id: string; name: string | null };
+  facts?: { key: string; before: string | null; after: string | null }[];
+  links?: {
+    title: string;
+    added: { id: string; name: string | null }[];
+    removed: { id: string; name: string | null }[];
+  }[];
+  fields?: { field: string; before: unknown; after: unknown }[];
+  notRevertible?: {
+    reason: string;
+    deletion: boolean;
+    creation: boolean;
+    instead: string | null;
+    journal: number[];
+  };
+}
+
+export interface ReviewDetail extends ReviewItem {
+  pageChanges: { page: { id: string; name: string | null } | null; changes: ReviewChange[] }[];
+  revertable: { ok: boolean; reason: string | null };
+}
+
+export interface ReviewResponse {
+  project?: ProjectRef;
+  items: ReviewItem[];
+  facets: { profiles: string[]; tools: string[] };
+  counts: { unreviewed: number; matching: number };
+}
+
+export interface RevertTarget {
+  key: string;
+  kind: string;
+  page: { id: string; name: string | null } | null;
+  what: string;
+  state: 'ready' | 'changed' | 'gone' | 'not_revertible' | 'nothing_to_do';
+  detail: string;
+  differences?: { path: string; expected: unknown; actual: unknown }[];
+  deletion?: boolean;
+  instead?: string | null;
+  journal?: number[];
+}
+
+export interface RevertPreview {
+  jobId: string;
+  projectId: string;
+  eligible: { ok: true } | { ok: false; code: string; message: string };
+  targets: RevertTarget[];
+  ready: number;
+  notReverted: number;
+}

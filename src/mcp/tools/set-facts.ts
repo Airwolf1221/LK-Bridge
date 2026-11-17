@@ -25,6 +25,7 @@ import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.j
 import { defineTool } from './define.js';
 import { finish, liveRead, repoContext, resolvePage, type RepoCtx } from './repo.js';
 import {
+  railBody,
   errorFromThrown,
   errorResult,
   mcpOrigin,
@@ -404,11 +405,13 @@ export function setFactsTool(deps: ToolDeps): McpToolProvider {
                       'This change touches protected canon, so it was NOT made: it waits for the owner, who alone can accept it as canon. ' +
                       'This happens whatever your scope. Never retry it or work around it; tell the user, and follow it with bridge_proposal_status.',
                   }
-                : {
-                    hint:
-                      'The change needs the owner’s approval and was NOT made. The owner sees this plan; if the sidebar changes before approval, ' +
-                      'the proposal becomes conflicted rather than being applied. Never retry it; follow it with bridge_proposal_status.',
-                  }),
+                : r.proposedBecause
+                  ? railBody(r)
+                  : {
+                      hint:
+                        'The change needs the owner’s approval and was NOT made. The owner sees this plan; if the sidebar changes before approval, ' +
+                        'the proposal becomes conflicted rather than being applied. Never retry it; follow it with bridge_proposal_status.',
+                    }),
             },
             preview,
           );

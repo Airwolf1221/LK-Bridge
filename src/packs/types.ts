@@ -329,8 +329,17 @@ export const packRulesSchema = z
     schema: z.literal(1),
     settings: z
       .object({
-        /** Every package is a proposal for the owner, whatever the caller's scope (the pack's first weeks). */
+        /**
+         * Every package is a proposal for the owner, whatever the caller's scope (the pack's first weeks). Since v3 F3.4
+         * (ADR 0055) the default for a tool the per-tool switches (`tools`) do not name.
+         */
         alwaysPropose: z.boolean(),
+        /**
+         * v3 F3.4 (ADR 0055 decision D): per tool (its full name, `arkona_create_character`), `propose` (every package is
+         * a proposal, whatever the agent's scope) or `scope` (it follows the agent's scope: a proposal at `propose`,
+         * direct at `write`). A tool not named follows `alwaysPropose`. Changed on the Packs page: a new version.
+         */
+        tools: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,63}$/), z.enum(['propose', 'scope'])).optional(),
       })
       .strict(),
     /** The closed tag grammar's tokens. */
@@ -424,6 +433,20 @@ export const packRulesSchema = z
     }
   });
 export type PackRules = z.infer<typeof packRulesSchema>;
+
+/** v3 F3.4 (ADR 0055 decision D): how a pack tool's packages are submitted. */
+export type PackToolMode = 'propose' | 'scope';
+
+/**
+ * Whether a pack tool's packages are always proposals (`propose`) or follow the agent's scope (`scope`): its switch in
+ * `settings.tools`, else `alwaysPropose`. Canon and lifecycle changes stay proposals either way (the write guard), and
+ * an agent's safety rails still apply at scope `write`.
+ */
+export function packToolMode(rules: Pick<PackRules, 'settings'>, tool: string): PackToolMode {
+  const m = rules.settings.tools?.[tool];
+  if (m === 'propose' || m === 'scope') return m;
+  return rules.settings.alwaysPropose ? 'propose' : 'scope';
+}
 
 /** A governance document the rules were derived from. */
 export const governanceSourceSchema = z

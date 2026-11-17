@@ -35,6 +35,7 @@ export default defineConfig({
       'test/lmr/**/*.test.ts', // v3 F2: Last Major Revision on every substantial edit (ADR 0049)
       'test/packs/**/*.test.ts', // v3 F3a: setting packs and the Arkona character tool (ADR 0050)
       'test/appraisal/**/*.test.ts', // v3 F3c: the appraisal tools and the full-text search (ADR 0054)
+      'test/review/**/*.test.ts', // v3 F3.4: write scope: the review of direct writes, Revert, the rails (ADR 0055)
       'test/ui/**/*.test.{ts,tsx}',
     ],
     environment: 'node',

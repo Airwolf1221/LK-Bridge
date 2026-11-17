@@ -219,6 +219,13 @@ export interface StepOptions {
    */
   readonly findOrCreate?: boolean;
   /**
+   * v3 F3.4 (ADR 0055 decision E), set by the engine only: read the target once inside the lock before this write and
+   * keep it as the write's journal pre-image, although the caller gave its own If-Match (which otherwise makes no read).
+   * Set on a direct `updateBlock` whose page's Last Major Revision decision measures the edit when it runs (the rule
+   * needs the block's "before"); never otherwise, so a write pays the read only when the rule needs it.
+   */
+  readonly readBefore?: boolean;
+  /**
    * v3 F2 (ADR 0049 decision 9), set by bridge code only, on a `deleteAsset` of a folder: the folder's contents are read
    * when the job runs (under the asset-folder lock) and, when anything is in it, the delete is not sent (the step is
    * recorded as succeeded with `{ skipped }`): a duplicate folder is deleted only when the merge has emptied it.
@@ -281,6 +288,11 @@ export interface BatchSubmit {
    * job-level lock in one sorted order, so two jobs can never wait on each other. Needs no `holdLock`.
    */
   readonly holdDocuments?: readonly string[];
+  /**
+   * v3 F3.4 (ADR 0055), bridge code only: assets the job holds the locks of from start to end (a revert that moves
+   * placed images back beside its page writes). Taken with every other job-level lock in one sorted order.
+   */
+  readonly holdAssets?: readonly string[];
   /**
    * v2 C2c (ADR 0035), bridge code only: the job IS a lifecycle change (or a create with a lifecycle status) and makes
    * exactly these changes, which the lifecycle guard then allows. Nothing an agent sends reaches it (the tools build it;
@@ -442,6 +454,11 @@ export interface ProposalCaptured {
    * the owner's "Approve and accept as canon" can run it. `reason` says which change.
    */
   readonly canonical?: { readonly reason: string; readonly changes: readonly unknown[] };
+  /**
+   * v3 F3.4 (ADR 0055): the write would have run directly at scope `write`, but the profile's safety rails made it a
+   * proposal: which rail, in words (`proposed because: bulk change (14 pages > 10)`).
+   */
+  readonly proposedBecause?: string;
 }
 
 export interface JobError {

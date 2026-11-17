@@ -78,6 +78,7 @@ loosely, but only a clear match is returned, and each miss costs a call):
 - `Audit findings`
 - `Budgets, jobs and proposals`
 - `Canon and approval`
+- `At write scope` (what is made at once, what is still a proposal, and why)
 - `When the low-level tools are right`
 - `Reference`, and under it `What the bridge is`, `Projects`, `The repository tree`, `The tools you are shown`,
   `When something goes wrong`
@@ -327,7 +328,7 @@ naming the projects they work on). The Arkona pack has ten tools. Ask for the pa
 | See what depends on a page, a rename, a proposal  | `arkona_change_impact`       | `Arkona appraisal`                        |
 | See what is in progress (Working pages and more)  | `arkona_working_digest`      | `Arkona appraisal`                        |
 | Check the images and the asset library            | `arkona_visual_hygiene`      | `Arkona appraisal`                        |
-| Propose the fix an appraisal finding offers       | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
+| Make the fix an appraisal finding offers          | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
 
 **What every pack tool that makes pages does the same way** (the appraisal tools only read: see `Arkona appraisal`).
 
@@ -651,13 +652,13 @@ Four reports and one way to act on a finding. **The reports are read-only and fr
 (the nightly full snapshot plus the change snapshots since), the audits and its own records, never LegendKeeper, and they
 **write nothing and propose nothing**. Each says what it inspected, how fresh its data was and what it could not check.
 
-| You want                                                       | Use                                                     |
-| -------------------------------------------------------------- | ------------------------------------------------------- |
-| A page, a branch or everything against Source Formatting       | `arkona_appraise_owner` (`page`, `under` or `all`)      |
-| What depends on a page, a planned rename or a pending proposal | `arkona_change_impact` (`page`, `renameTo`, `proposal`) |
-| What is in progress: Working pages, open proposals and more    | `arkona_working_digest` (`since: "7d"`)                 |
-| The images and the asset library                               | `arkona_visual_hygiene` (`page` or `under` narrows it)  |
-| To act on one finding whose follow-up is a `fix`               | `arkona_appraisal_fix` (`findingId`): ONE proposal      |
+| You want                                                       | Use                                                                                                                    |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| A page, a branch or everything against Source Formatting       | `arkona_appraise_owner` (`page`, `under` or `all`)                                                                     |
+| What depends on a page, a planned rename or a pending proposal | `arkona_change_impact` (`page`, `renameTo`, `proposal`)                                                                |
+| What is in progress: Working pages, open proposals and more    | `arkona_working_digest` (`since: "7d"`)                                                                                |
+| The images and the asset library                               | `arkona_visual_hygiene` (`page` or `under` narrows it)                                                                 |
+| To act on one finding whose follow-up is a `fix`               | `arkona_appraisal_fix` (`findingId`): at scope `write` made at once by default (the owner's switch), else ONE proposal |
 
 **Reading a report.** Findings come in groups (A2: required defects, optional polish, architectural candidates, blocked
 cases; A3: proven breakage, review candidates). Each names the rule it comes from (the governance page and section), its
@@ -1021,6 +1022,29 @@ tell the person it is waiting for the owner, and follow it with `bridge_proposal
 runs, a page it would touch was added (for example a new page under a page being deleted with `cascade`, or under a set
 being archived), removed or moved, it does not run: the proposal becomes `conflicted` and nothing is written. Read the
 pages again and propose afresh.
+
+## At write scope
+
+Your connection's scope is set by the owner. At scope `propose` every write is a proposal. At scope `write` ordinary
+changes are **made at once**: page text, facts and links, chronology events, names, tags and aliases, new Working pages,
+image placements. The owner **reviews them afterwards** on the bridge's Review page and can revert a job from its
+journal, so write as carefully as you would for a proposal: read first, pass the version you read, change only what
+was asked.
+
+**Still a proposal at scope `write`:**
+
+- protected canon and every lifecycle change ([Canon and approval](#canon-and-approval)), always;
+- whatever the owner's **safety rails** on your profile keep for approval. By default: **deletes** (pages, documents,
+  timeline events, map features, assets), **a job that touches more than 10 pages**, and **asset deletes and moves**;
+  the owner can also keep renames and moves of pages. The result is `proposal_captured` with `proposedBecause`, for
+  example `proposed because: bulk change (14 pages > 10)`;
+- a setting pack's package (`arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship`), unless the
+  owner switched the tool to follow your scope;
+- `restore_snapshot`, always.
+
+**Never route round a rail.** Do not split a bulk change into smaller jobs, rename instead of deleting, or reach the
+same change through `lk_api_*`: tell the person the change is waiting for the owner, and follow it with
+`bridge_proposal_status`. Never retry a write that returned `proposal_captured`.
 
 ## When the low-level tools are right
 

@@ -800,6 +800,10 @@ export class Appraisal {
   /**
    * "Propose a fix": the finding's target re-read live (one read), the finding checked, then ONE ordinary proposal,
    * whatever the caller's scope. The audits' own fixes (sibling order, tags) are handed over to them. Audited.
+   *
+   * v3 F3.4 (ADR 0055 decision D): `forceProposal: false` (the pack tool, while the pack's switch says "follow the
+   * agent's scope") lets the appraisal's own fix run at scope `write`, as one job, within every guard and rail; the
+   * audits' fixes stay proposals, as the audits always make them. The default, and the dashboard, is a proposal.
    */
   async proposeFix(o: {
     readonly projectId: string;
@@ -807,6 +811,7 @@ export class Appraisal {
     readonly actor: string;
     readonly origin: JobOrigin;
     readonly read: LiveRead;
+    readonly forceProposal?: boolean;
   }): Promise<FixResult> {
     const f = this.finding(o.projectId, o.findingId);
     if (f.followUp.kind !== 'fix' || !f.fix)
@@ -838,6 +843,7 @@ export class Appraisal {
           read: o.read,
           submit: (req) => this.d.engine.submit(req as never) as unknown as Promise<Record<string, unknown>>,
           origin: o.origin,
+          forceProposal: o.forceProposal !== false,
           node: (id) => {
             try {
               return this.d.tree.queries.node(o.projectId, id).data;
@@ -872,6 +878,7 @@ export class Appraisal {
       fix: f.fix.kind,
       result: r.status,
       ...(r.status === 'proposal_captured' ? { proposalId: r.proposalId } : {}),
+      ...(r.status === 'submitted' ? { jobId: r.jobId } : {}),
     });
     return r;
   }

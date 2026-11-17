@@ -722,6 +722,8 @@ export class StepExecutor {
       date: today,
       chained,
       versions: { lmr: version },
+      // v3 F3.4 (ADR 0055): the value the row held before, so a revert of the job can put it back.
+      previous: value ?? null,
       lmr: {
         path: { resourceId: b.resourceId, propertyId: propertyId!, rowId: rowId! },
         body: { content: [{ text: today }] },
@@ -1741,7 +1743,9 @@ export class StepExecutor {
       const needRead =
         !resend &&
         meta.reader !== undefined &&
-        ((op.versioned && !callerVersion) ||
+        // v3 F3.4 (ADR 0055 decision E): the engine asked for the "before" the Last Major Revision rule measures.
+        ((step.options.readBefore === true && !journalled) ||
+          (op.versioned && !callerVersion) ||
           meta.guard !== undefined ||
           (step.options.expectCurrent !== undefined && !callerVersion) ||
           // v2 E4: a step whose pre-image the tool supplied needs no read for it.
@@ -1967,7 +1971,9 @@ export class StepExecutor {
               }
             : step.options.journalPreImage !== undefined
               ? { preImage: step.options.journalPreImage }
-              : {}),
+              : step.options.readBefore === true && current?.exists
+                ? { preImage: current.entity ?? current.body }
+                : {}),
         });
       }
 

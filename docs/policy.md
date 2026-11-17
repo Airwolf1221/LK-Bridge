@@ -31,11 +31,11 @@ Code: `src/policy/` (entry point `src/policy/index.ts`). Tests: `test/policy/`.
 
 ## Scopes
 
-| Scope     | Reads | Writes (every non-read operation)                                                                     |
-| --------- | ----- | ----------------------------------------------------------------------------------------------------- |
-| `read`    | allow | denied: `PolicyDeniedError` saying the connection is read-only and that the owner can change it       |
-| `propose` | allow | captured as a proposal; the agent gets `{ status: 'proposal_captured', proposalId, summary }`         |
-| `write`   | allow | run, within every existing guard (read-only mode, pause, If-Match, unsupported blocks, cascade, etc.) |
+| Scope     | Reads | Writes (every non-read operation)                                                                                                                                                                              |
+| --------- | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read`    | allow | denied: `PolicyDeniedError` saying the connection is read-only and that the owner can change it                                                                                                                |
+| `propose` | allow | captured as a proposal; the agent gets `{ status: 'proposal_captured', proposalId, summary }`                                                                                                                  |
+| `write`   | allow | run, within every existing guard (read-only mode, pause, If-Match, unsupported blocks, cascade, etc.); the profile's [safety rails](#write-scope-review-revert-and-safety-rails-v3-f34) keep some for approval |
 
 - Member and invite administration (`inviteMember`, `removeMember`, `revokeInvite`) is refused for every agent, at any
   scope, unless `LK_ALLOW_MEMBER_ADMIN=true`: by the engine's guard (`MEMBER_ADMIN_DISABLED`), after the gate, and at
@@ -435,6 +435,43 @@ there), which also decides the row's place and the new count; the proposal does 
 so a pending chronology proposal does not become conflicted because another event of the same age was approved first.
 Its events are captured and compared as any other target.
 
+## Write scope: review, revert and safety rails (v3 F3.4)
+
+[ADR 0055](adr/0055-write-scope-review-revert-rails.md). At scope `write` an agent's ordinary changes run at once; the
+owner reviews them afterwards and can revert one. Canon and lifecycle changes stay proposals at every scope, as above.
+
+**Safety rails** (per profile, on the dashboard's Clients & Access page, "Always propose"). Even at scope `write`, a
+request that a rail covers becomes an ordinary proposal instead of running:
+
+| Rail                             | Default    | Covers                                                                                                                                        |
+| -------------------------------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deletes                          | on         | deleting a page, a document, a timeline event or lane, a map feature, an asset, a calendar, a sidebar property, board shapes                  |
+| Bulk changes (more than N pages) | on, N = 10 | a job that writes or makes more than N pages (a cascade counts every page under its page; a cascade whose pages are not known counts as more) |
+| Renames and moves of pages       | off        | a page's name changed or the page moved (`moveResource`, `updateResource` with a parent); a page made in the same job is not counted          |
+| Asset deletes and asset moves    | on         | `deleteAsset`, and `updateAsset` to another folder; placing a staged image is not a move                                                      |
+
+- **A rail only adds a proposal.** It is asked only about a request that would otherwise run directly: never about one
+  already proposed (scope `propose`, the canon guard, a pack tool's switch), approved work, or the bridge's own. A rail
+  that cannot be judged fails closed (a proposal). It is judged in the engine at entry, after the canon and lifecycle
+  guards, with the profile's rails read live like its scope.
+- **The proposal says which rail sent it**: `proposedBecause`, for example `proposed because: bulk change (14 pages > 10)`
+  or `proposed because: delete (1 page “Mehrana al-Khalid”)`, stored with the proposal (`proposals.proposed_because`),
+  shown on the Proposals page and returned to the agent with a hint never to retry it or route round it.
+- A chronology change that re-makes an event (a date edit that removes an end deletes the event and makes it again) is
+  not a delete.
+- **Changing a rail** is an ordinary profile setting: re-authenticated, audited `profile.set_rails` with the rails before
+  and after (`PUT /api/admin/clients/profiles/:id/rails`). N is a whole number from 1 to 1,000.
+
+**Review and Revert** (the dashboard's Review page, [dashboard.md](dashboard.md#review-v3-f34)). Every job an agent ran
+directly (not approved by the owner) that wrote something is listed until the owner marks it reviewed (audited
+`review.mark`, or `review.mark_all` for a filtered set) or reverts it. Revert (`job.revert`, re-authenticated) is the
+owner's: one job, run by the system principal at P1, that puts back what the job changed when nothing has changed since,
+from the journal's pre-images and the job's own record (page text block by block, sidebar facts and links, chronology
+rows and events in step, names, tags, aliases and moves, image placements). It never reverts a deletion
+(`restore_resource`), a proposal, a running job or a revert, and never deletes an asset itself: a reverted image
+placement goes back on the Staging page (its file copied to the bridge's server, nothing written to `LK-Bridge
+staging`) and deleting the placed asset is one proposal for the owner.
+
 ## Owner commands
 
 `createPolicy(...).commands` (`src/policy/commands.ts`): plain functions for chunk 5's dashboard routes, which must
@@ -442,32 +479,33 @@ authenticate the owner (session cookie and CSRF) first. Each takes `actor: 'owne
 checked at run time). Every change writes an `audit_log` row (`at`, `actor`, `action`, `target`, `before`, `after`) and
 emits a `policy` event on the engine's event emitter; proposal state changes also emit `proposal` events.
 
-| Command                                                      | What it does                                                                                             | Audit action                                        |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| `listProfiles(actor)`                                        | Profiles with their count of active connections                                                          | –                                                   |
-| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                                 | `profile.create`                                    |
-| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                                            | `profile.set_scope`                                 |
-| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                               | `policy.set_default_scope`                          |
-| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                                 | –                                                   |
-| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                                    | `connection.set_profile`                            |
-| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                                 | `connection.revoke`                                 |
-| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                                       | –                                                   |
-| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks                | –                                                   |
-| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`). Refused for a canonical proposal     | `proposal.approve` (then `proposal.executed`, …)    |
-| `approveAsCanon(actor, id)` (v2 C2a)                         | "Approve and accept as canon": the only approval of a canonical proposal; records `canonicalApprovedBy`  | `proposal.approve_as_canon`                         |
-| `reject(actor, id, reason?)`                                 | A pending or conflicted proposal                                                                         | `proposal.reject`                                   |
-| `removeConnection(actor, id)`                                | Removes a revoked or expired connection (tombstone); an active one: `CONNECTION_ACTIVE`                  | `connection.remove`                                 |
-| `removeInactiveConnections(actor)`                           | Removes every revoked and expired connection, in one transaction                                         | `connection.remove` (each)                          |
-| `revokeStaleConnections(actor, profileId)`                   | Revokes the profile's stale connections                                                                  | `connection.revoke` (`via: 'stale'`)                |
-| `getAutoRemoveDays` / `setAutoRemoveDays(actor, days)`       | Days before the daily sweep removes dead connections (0 = never; default 30)                             | `policy.set_auto_remove_days`                       |
-| `getStaleAfterDays` / `setStaleAfterDays(actor, days)`       | Days of disuse before a connection is stale (0 = never; default 14)                                      | `policy.set_stale_after_days`                       |
-| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id. `bulkApprove` skips a canonical proposal (`skipped: true`)     | as above                                            |
-| `bulkApproveAsCanon(actor, ids)`                             | `approveAsCanon` for each id, one at a time, in order; an ordinary proposal is refused and stays pending | `proposal.approve_as_canon` each, with `bulk: true` |
-| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                                              | –                                                   |
+| Command                                                      | What it does                                                                                              | Audit action                                        |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| `listProfiles(actor)`                                        | Profiles with their count of active connections                                                           | –                                                   |
+| `createProfile(actor, { label, kind, scope? })`              | New profile (default scope unless given)                                                                  | `profile.create`                                    |
+| `setScope(actor, profileId, scope)`                          | Changes a profile's scope; applies at once to its connections                                             | `profile.set_scope`                                 |
+| `setRails(actor, profileId, change)` (v3 F3.4)               | Changes a profile's safety rails (a partial change keeps the other switches); applies at its next request | `profile.set_rails` (rails before and after)        |
+| `getDefaultScope(actor)`, `setDefaultScope(actor, scope)`    | The scope new profiles get                                                                                | `policy.set_default_scope`                          |
+| `listGrantsAndPats(actor)`                                   | Every grant and PAT with profile, scope, last use, expiry and revocation                                  | –                                                   |
+| `setConnectionProfile(actor, id, profileId)`                 | Moves a grant or PAT to another profile (for example out of `legacy`)                                     | `connection.set_profile`                            |
+| `revoke(actor, id)`                                          | Revokes a grant (its refresh and access tokens) or a PAT                                                  | `connection.revoke`                                 |
+| `listProposals(actor, filter?)`                              | By state, principal, profile, before; newest first                                                        | –                                                   |
+| `getProposal(actor, id)`                                     | With each operation's params, pre-state, proposed state, changes, lost unsupported blocks                 | –                                                   |
+| `approve(actor, id)`                                         | As above; resolves with the proposal (`executing` or `conflicted`). Refused for a canonical proposal      | `proposal.approve` (then `proposal.executed`, …)    |
+| `approveAsCanon(actor, id)` (v2 C2a)                         | "Approve and accept as canon": the only approval of a canonical proposal; records `canonicalApprovedBy`   | `proposal.approve_as_canon`                         |
+| `reject(actor, id, reason?)`                                 | A pending or conflicted proposal                                                                          | `proposal.reject`                                   |
+| `removeConnection(actor, id)`                                | Removes a revoked or expired connection (tombstone); an active one: `CONNECTION_ACTIVE`                   | `connection.remove`                                 |
+| `removeInactiveConnections(actor)`                           | Removes every revoked and expired connection, in one transaction                                          | `connection.remove` (each)                          |
+| `revokeStaleConnections(actor, profileId)`                   | Revokes the profile's stale connections                                                                   | `connection.revoke` (`via: 'stale'`)                |
+| `getAutoRemoveDays` / `setAutoRemoveDays(actor, days)`       | Days before the daily sweep removes dead connections (0 = never; default 30)                              | `policy.set_auto_remove_days`                       |
+| `getStaleAfterDays` / `setStaleAfterDays(actor, days)`       | Days of disuse before a connection is stale (0 = never; default 14)                                       | `policy.set_stale_after_days`                       |
+| `bulkApprove(actor, ids)`, `bulkReject(actor, ids, reason?)` | One at a time, in order; a result per id. `bulkApprove` skips a canonical proposal (`skipped: true`)      | as above                                            |
+| `bulkApproveAsCanon(actor, ids)`                             | `approveAsCanon` for each id, one at a time, in order; an ordinary proposal is refused and stays pending  | `proposal.approve_as_canon` each, with `bulk: true` |
+| `listAudit(actor, filter?)`                                  | The audit log, newest first                                                                               | –                                                   |
 
 The system writes its own rows with actor `system`: `proposal.conflicted`, `proposal.executed`, `proposal.failed`,
-`proposal.expired`, `proposal.approval_reverted` and `proposal.approval_interrupted`. Read-only commands are not
-audited.
+`proposal.expired`, `proposal.approval_reverted` and `proposal.approval_interrupted`; since v3 F3.4 also `job.revert`
+when a revert job ends (succeeded, failed or cancelled). Read-only commands are not audited.
 
 Errors are `PolicyError` with a stable `code`: `NOT_OWNER`, `INVALID_INPUT`, `PROFILE_EXISTS`, `PROFILE_NOT_FOUND`,
 `CONNECTION_NOT_FOUND`, `CONNECTION_ACTIVE`, `PROPOSAL_NOT_FOUND`, `INVALID_TRANSITION`, `PROPOSAL_EXPIRED`, `BRIDGE_READ_ONLY`,

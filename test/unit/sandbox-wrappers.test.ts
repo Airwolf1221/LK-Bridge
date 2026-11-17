@@ -2,9 +2,10 @@
  * OPS2 hotfix: the sandbox wrappers find a project's key exactly as the running bridge does, so they keep working after
  * `env-sync.sh --retire-imported-keys` has commented the env file's key lines out.
  *
- * Every wrapper (deploy/markdown-roundtrip.sh, spike-v2.sh, soak-sandbox.sh, sandbox-test.sh) is run end to end on a
- * fake server (test/unit/sandbox-wrapper-fixture.ts): the bridge's database with keys in the encrypted store, env files
- * in each state, and a fake LegendKeeper inside each Node process that logs only a hash of the bearer token it was sent.
+ * Every wrapper (deploy/markdown-roundtrip.sh, spike-v2.sh, soak-sandbox.sh, sandbox-test.sh, rehearse-write-scope.sh)
+ * is run end to end on a fake server (test/unit/sandbox-wrapper-fixture.ts): the bridge's database with keys in the
+ * encrypted store, env files in each state, and a fake LegendKeeper inside each Node process that logs only a hash of
+ * the bearer token it was sent.
  * For each: the key comes from the store with no env key present; the env file's key is used when nothing is stored;
  * a key in neither place, and a project that is not a sandbox (but by the round trip, which is read-only by construction:
  * ADR 0046), are refused before any request; no key and no master key

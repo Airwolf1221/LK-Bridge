@@ -245,3 +245,51 @@ describe('the dashboard’s Propose a fix', () => {
     void C;
   });
 });
+
+describe('the pack’s switch for arkona_appraisal_fix (v3 F3.4, ADR 0055 decision D)', () => {
+  it('“follow the agent’s scope” (the seed’s default): a proposal at scope propose; at scope write one job, reviewed afterwards', async () => {
+    const packs = w.stack.runtime.packs;
+    packs.commands.setToolModes('owner', 'arkona', { arkona_appraisal_fix: 'scope' });
+    // A version waiting for approval does not apply yet: the approved one still says "always propose".
+    expect(packs.toolMode('arkona', 'arkona_appraisal_fix')).toBe('propose');
+    await packs.commands.approve('owner', 'arkona');
+    expect(packs.toolMode('arkona', 'arkona_appraisal_fix')).toBe('scope');
+    await w.snapshot();
+    const fresh = await w.call('arkona_appraise_owner', { page: P.headingLink, limit: 50, project: 'test' });
+    const f = (fresh.body.findings as any[]).find((x) => x.check === 'heading_links');
+    expect(f, fresh.text).toBeDefined();
+    // At scope propose: still one proposal.
+    const t = w.stack.newToken('appraisal-proposer', 'propose');
+    const proposer = await w.stack.connect(t.token);
+    const p = await w.stack.call(proposer, 'arkona_appraisal_fix', { findingId: f.id, project: 'test' });
+    expect(p.body.status, p.text).toBe('proposal_captured');
+    w.stack.runtime.policy.commands.reject('owner', String(p.body.proposalId), 'test');
+    // At scope write: made at once, as one job no one approved, and on the Review page for the owner.
+    const r = await fix(f.id);
+    expect(['written', 'queued'], r.text).toContain(r.body.status);
+    const job = await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 30_000);
+    expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+    expect(job.approvedBy).toBeNull();
+    const heading = blocksOf(P.headingLink).find((b) => b.id === 'hl1');
+    expect(heading.content).toEqual([{ text: 'Relations with Tarim' }]);
+    const listed = w.stack.runtime.review
+      .list(PROJECT, { state: 'unreviewed', limit: 500 })
+      .map((i) => i.jobId);
+    expect(listed).toContain(job.id);
+  });
+
+  it('switched back to “always propose” and approved: one proposal at scope write too', async () => {
+    const packs = w.stack.runtime.packs;
+    packs.commands.setToolModes('owner', 'arkona', { arkona_appraisal_fix: 'propose' });
+    await packs.commands.approve('owner', 'arkona');
+    await w.snapshot();
+    const fresh = await w.call('arkona_appraise_owner', { page: P.blanks, limit: 50, project: 'test' });
+    const f = (fresh.body.findings as any[]).find((x) => x.check === 'blank_paragraphs');
+    expect(f, fresh.text).toBeDefined();
+    const before = proposals();
+    const r = await fix(f.id);
+    expect(r.body.status, r.text).toBe('proposal_captured');
+    expect(proposals()).toBe(before + 1);
+    w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
+  });
+});
