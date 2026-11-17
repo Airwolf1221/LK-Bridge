@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:sandbox": "vitest run --config vitest.sandbox.config.ts --configLoader runner --passWithNoTests",
     "soak:sandbox": "tsx scripts/soak-sandbox.ts",
+    "rehearse:write-scope": "tsx scripts/rehearse-write-scope.ts",
     "spike:v2": "tsx scripts/spike-v2.ts",
     "roundtrip": "tsx scripts/markdown-roundtrip.ts",
     "gen:registry": "tsx scripts/gen-registry.ts",

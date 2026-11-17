@@ -29,6 +29,7 @@ import {
   type StepSpec,
 } from '../../src/jobs/index.js';
 import { defaultTransport, type LkClient, type Transport } from '../../src/lk/index.js';
+import type { GuardOptions } from '../../src/mcp/tools/upload-http.js';
 import { createRuntime, type Runtime } from '../../src/runtime.js';
 import { SandboxGuardError } from './smoke.js';
 
@@ -113,6 +114,13 @@ export async function createSoakRuntime(o: {
    * the sandbox tests): writes allowed, as before.
    */
   readonly readOnly?: { readonly allowedOperations: ReadonlySet<string> };
+  /**
+   * v3 F3.4: the image hosts' address guard (the dry run of the write-scope rehearsal: the mock's storage and asset
+   * hosts on loopback, with their test certificate). Unset everywhere else: the production guard.
+   */
+  readonly uploadGuard?: GuardOptions;
+  /** v3 F3.4: image settings over the defaults (that dry run: the mock's asset host). Unset everywhere else. */
+  readonly images?: Partial<typeof DEFAULT_TOOLS_SETTINGS.images>;
 }): Promise<SoakRuntime> {
   const dir = mkdtempSync(join(tmpdir(), 'lkb-soak-'));
   const db = openDatabase(join(dir, 'soak.db'));
@@ -143,7 +151,7 @@ export async function createSoakRuntime(o: {
     // files failed at `mkdir upload-tmp`. This runtime's image directory is inside its own temporary directory.
     toolsSettings: {
       ...DEFAULT_TOOLS_SETTINGS,
-      images: { ...DEFAULT_TOOLS_SETTINGS.images, dataDir: join(dir, 'images') },
+      images: { ...DEFAULT_TOOLS_SETTINGS.images, ...o.images, dataDir: join(dir, 'images') },
       // v2 E1a: the snapshot store too (snapshots of the sandbox's own writes, the snapshot sandbox test's store).
       snapshots: { ...DEFAULT_SNAPSHOT_SETTINGS, dataDir: join(dir, 'snapshots') },
     },
@@ -157,6 +165,7 @@ export async function createSoakRuntime(o: {
     // environment, so its absence here is expected, not worth four warnings.
     secretStore: 'unused',
     ...(o.logStream ? { logStream: o.logStream } : {}),
+    ...(o.uploadGuard ? { uploadGuard: o.uploadGuard } : {}),
   });
   const close = async () => {
     await runtime.shutdown(5_000);

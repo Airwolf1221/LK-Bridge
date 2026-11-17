@@ -22,7 +22,7 @@ import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
 import { ROOT } from '../discover/world.js';
 import { PROJECT } from '../tools/helpers.js';
 import { lifecycleWorld, type LifecycleWorld } from '../lifecycle/world.js';
-import { SidebarModel } from '../resources/world.js';
+import { SidebarModel, type ResourcesWorld } from '../resources/world.js';
 
 type Obj = Record<string, unknown>;
 
@@ -140,15 +140,24 @@ const cell = (id: string, content: unknown[], header = false) => ({
 });
 
 export async function chronologyWorld(
-  o: Parameters<typeof lifecycleWorld>[0] & { confirm?: boolean } = {},
+  o: Parameters<typeof lifecycleWorld>[0] & {
+    confirm?: boolean;
+    /**
+     * v3 F3.4: the world the chronology is added to (default the lifecycle world). The write-scope rehearsal's dry run
+     * adds it to the pack world (itself the images world), so one mock serves every step of the rehearsal.
+     */
+    base?: (o: Parameters<typeof lifecycleWorld>[0]) => Promise<ResourcesWorld>;
+  } = {},
 ): Promise<ChronologyWorld> {
   const docs: { main: string; ages: Record<string, { table: string; timeline: string }>; plans: string } = {
     main: '',
     ages: {},
     plans: '',
   };
-  const w = (await lifecycleWorld({
-    ...o,
+  const { base, confirm: _confirm, ...rest } = o;
+  void _confirm;
+  const w = (await (base ?? lifecycleWorld)({
+    ...rest,
     seed: (world) => {
       const r = world.repo.seed({
         id: C.resource,

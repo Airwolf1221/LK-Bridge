@@ -1,6 +1,6 @@
 /**
  * A fake server for the sandbox wrappers (deploy/sandbox-test.sh, soak-sandbox.sh, spike-v2.sh,
- * markdown-roundtrip.sh): the bridge's database with registered projects and a key in the encrypted store, env files
+ * markdown-roundtrip.sh, rehearse-write-scope.sh): the bridge's database with registered projects and a key in the encrypted store, env files
  * in the states the owner's server can be in (keys retired into the store by `env-sync.sh --retire-imported-keys`, or
  * still in the file), and a "private Node" that records what it was asked to run and the NAMES of the variables it was
  * given, then runs the real Node with test/unit/fake-lk-fetch.ts preloaded, which answers LegendKeeper itself and logs
@@ -36,6 +36,8 @@ export const WRAPPERS = {
   'spike-v2.sh': 'spike:v2',
   'soak-sandbox.sh': 'soak:sandbox',
   'sandbox-test.sh': 'test:sandbox',
+  // v3 F3.4 (ADR 0055): the write-scope rehearsal.
+  'rehearse-write-scope.sh': 'rehearse:write-scope',
 } as const;
 export type Wrapper = keyof typeof WRAPPERS;
 
