@@ -55,3 +55,33 @@ it('the same recreate again, while the first is still a proposal, is refused: on
   expect(refused, second.text).toBe(true);
   expect(second.text).toMatch(/RESTORE_IN_PROGRESS/);
 });
+
+it('a recreate while an undelete of the same page is still a proposal is refused too: never the original and a copy', async () => {
+  const id = S.harbour;
+  const name = w.repo.live(id)!.name;
+  const snap = (await w.stack.runtime.snapshots.full(PROJECT, 'manual')).snapshotId!;
+  const del = await call('delete_resource', { page: id, confirm: true });
+  if (del.body.status === 'proposal_captured') expect(await approve(del)).toBe('executed');
+  expect(w.repo.live(id), 'deleted (soft)').toBeUndefined();
+  const undelete = await call('restore_snapshot', {
+    page: id,
+    snapshot: snap,
+    scope: 'deleted',
+    mode: 'undelete',
+  });
+  expect(undelete.body.status, undelete.text).toBe('proposal_captured');
+  const recreate = await call('restore_snapshot', {
+    page: id,
+    snapshot: snap,
+    scope: 'deleted',
+    mode: 'recreate',
+    ids: 'new',
+  });
+  const refused = recreate.body.status !== 'proposal_captured';
+  expect(await approve(undelete)).toBe('executed');
+  if (!refused) await approve(recreate);
+  const pages = [...w.repo.res.values()].filter((x) => x.deletedAt === null && x.name === name);
+  expect(pages, 'the original only').toHaveLength(1);
+  expect(refused, recreate.text).toBe(true);
+  expect(recreate.text).toMatch(/RESTORE_IN_PROGRESS/);
+});
