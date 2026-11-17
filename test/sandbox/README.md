@@ -86,7 +86,8 @@ governor at P3. Code: `spike-v2.ts` (checks), `spike-report.ts` (report layout);
 ## The write layer's assumptions (CR-2026-11)
 
 `npm run test:sandbox` (with `LKB_SANDBOX_PROJECT`, as above; on the server `deploy/sandbox-test.sh --project test`) also
-runs `assumptions.test.ts`; `npm run test:sandbox -- assumptions` runs it alone. It checks, on the real API, every
+runs `assumptions.test.ts`; `npm run test:sandbox -- assumptions.test` runs it alone (`-- assumptions` also runs round
+2, below). It checks, on the real API, every
 assumption the write layer makes about LegendKeeper that was only ever checked against the mock: the list, with what
 breaks if one is false, is [docs/reviews/CR-2026-11.md](../../docs/reviews/CR-2026-11.md), section 6. Each check
 prints PASS, FAIL or INCONCLUSIVE with what LegendKeeper answered; the run fails if any assumption FAILs or the
@@ -151,6 +152,32 @@ clean-up does.
   only if the clean-up failed (the report names the asset to delete by hand in the asset library). The signed URL is
   never printed. Five writes and one PUT to the upload host more: about 113 writes in all. The dry run models the asset
   routes' tiers at 20 and 60 a minute and checks the line.
+
+## Round 2: the newer code's assumptions (CR-2026-11-R2)
+
+`npm run test:sandbox -- assumptions-r2` (on the server `deploy/sandbox-test.sh --project test -- assumptions-r2`) runs
+`assumptions-r2.test.ts` alone, with the same guard as the smoke. It checks, on the real API, what the code merged since
+CR-2026-11 assumes about LegendKeeper and no other sandbox check confirms: the list (W1 to W12), with what breaks if one
+is false, is [docs/reviews/CR-2026-11-R2.md](../../docs/reviews/CR-2026-11-R2.md), section 6. Each check prints PASS,
+FAIL, INCONCLUSIVE or NOTED with what LegendKeeper answered; the run fails if any check FAILs or the clean-up does.
+
+- **The asset library** (W1 to W6): an image moved between two throwaway folders (its file downloaded before and after),
+  `updateAsset` partial and needing no If-Match, a hidden image listed in its folder, what a delete of a folder holding a
+  sub-folder does (NOTED), an image delete, and the root listing.
+- **Table rows and nested blocks** (W7 to W11), written exactly as the chronology and Revert write them: a row inserted
+  after another, moved (and a stale If-Match: 412, nothing moved), replaced and deleted; `getBlock` of a paragraph in a
+  table cell (the read before a direct `updateBlock`, ADR 0055 decision E); `updateBlock` with only `content`.
+- **`listEvents` pages** (W12): three events read two at a time through the cursor.
+- **What it creates and cleans up:** one throwaway root `lk-bridge assumptions-r2 <time>` with two plainly named pages
+  under it (a table page and a timeline page), four asset folders `lk-bridge assumptions-r2 F1 <time>` to `… F4 <time>`
+  and one 70-byte PNG; everything is deleted at the end, even after a failure, and the report names any id left to
+  delete by hand.
+- **Cost:** 33 writes and 56 reads, 3 downloads from the asset host and 1 PUT to the upload host (counted against the
+  mock); about a minute.
+- **Dry run:** `test/tools/assumptions-r2-dryrun.test.ts` runs it against the image test world's mock twice: once
+  answering as the spec says (every check PASS or NOTED), once answering otherwise (each check FAILs, notes or is
+  INCONCLUSIVE where it should, and the clean-up still works). It also checks that another project is refused before
+  anything is written.
 
 ## The chronology (v2 D1)
 
