@@ -106,7 +106,7 @@ export const NOTES: Readonly<Record<string, Note>> = {
   search: N(
     'Discover',
     'browse_repository_tree; lk_api_read listResources',
-    'Guessing a page name instead of searching; concluding from a `content: true` miss that a word is absent.',
+    'Guessing a page name instead of searching; concluding from a `content: "live"` miss that a word is absent.',
   ),
   get_resource: N(
     'Discover',

@@ -53,6 +53,11 @@ export interface FixDeps {
     submit(req: Record<string, unknown>): Promise<Record<string, unknown>>;
   };
   readonly now: () => number;
+  /**
+   * v3 F3c (ADR 0054): who asks, when not the owner on the dashboard: an agent's `arkona_appraisal_fix` hands sibling
+   * order and tags over to these fixes, and its proposal is the agent's own (still ONE proposal, whatever its scope).
+   */
+  readonly origin?: JobOrigin;
 }
 
 export type FixResult =
@@ -96,7 +101,7 @@ async function propose(
     steps: spec.steps,
     onError: 'stop',
     priority: 'P1',
-    origin: ORIGIN,
+    origin: d.origin ?? ORIGIN,
     title: spec.title.slice(0, 300),
     ...(spec.holdLock ? { holdLock: spec.holdLock } : {}),
     ...(spec.holdDocuments ? { holdDocuments: spec.holdDocuments } : {}),

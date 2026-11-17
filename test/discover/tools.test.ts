@@ -272,10 +272,10 @@ describe('search (tree)', () => {
   });
 });
 
-describe('search with content: true', () => {
+describe('search with content: "live" (LegendKeeper’s own search)', () => {
   it('asks LegendKeeper once, applies the operators to the combined results and removes duplicates', async () => {
     const before = w.seen.length;
-    const r = await call('search', { query: 'quietly OR kaede', content: true });
+    const r = await call('search', { query: 'quietly OR kaede', content: 'live' });
     expect(r.isError, r.text).toBe(false);
     const reads = w.seen.slice(before).filter((l) => l.startsWith('GET /search'));
     expect(reads).toHaveLength(1);
@@ -297,15 +297,15 @@ describe('search with content: true', () => {
     expect(ids.indexOf('mehran01')).toBeGreaterThan(ids.indexOf('kaede001'));
   });
   it('applies the operators to the page-text results (a filter removes them)', async () => {
-    const r = await call('search', { query: 'quietly tag:draft', content: true });
+    const r = await call('search', { query: 'quietly tag:draft', content: 'live' });
     expect(r.body.results.map((x: any) => x.id)).toEqual(['mehran01']); // Mehrana carries the draft tag
     expect(r.body.results[0].matched).toEqual(['page text', 'tag draft']);
-    const none = await call('search', { query: 'quietly -tag:draft', content: true });
+    const none = await call('search', { query: 'quietly -tag:draft', content: 'live' });
     expect(none.body.results.map((x: any) => x.id)).toEqual(['kaede001']);
   });
   it('does not ask LegendKeeper when the query has no words to search for, and says so', async () => {
     const before = w.seen.length;
-    const r = await call('search', { query: 'tag:elder', content: true });
+    const r = await call('search', { query: 'tag:elder', content: 'live' });
     expect(w.seen.slice(before).filter((l) => l.startsWith('GET /search'))).toHaveLength(0);
     expect(r.body.content).toMatchObject({ searched: false });
     expect(r.body.results.length).toBeGreaterThan(0);

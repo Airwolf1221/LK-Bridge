@@ -24,6 +24,7 @@ import { timelineTools } from './timelines.js';
 import { mapFeatureTools } from './map-features.js';
 import { snapshotTools } from './snapshots.js';
 import { auditTools } from './audits.js';
+import { appraisalTools } from './appraisal.js';
 
 export type { ToolDeps, DiscoverServices } from './shape.js';
 export { guideResources } from './guides.js';
@@ -55,6 +56,8 @@ export function createBridgeTools(deps: ToolDeps, opts: { exposePerOpTools: bool
     createCharacterTool(deps),
     // v3 F3a (ADR 0050): the setting packs' tools (listed while their pack is attached to a served project).
     ...packTools(deps),
+    // v3 F3c (ADR 0054): the Arkona pack's appraisal tools (read-only reports, and its one fix tool: proposals only).
+    ...appraisalTools(deps),
     // v2 C2c (ADR 0035): the page lifecycle.
     ...lifecycleTools(deps),
     ...documentTools(deps),
