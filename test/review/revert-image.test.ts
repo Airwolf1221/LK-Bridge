@@ -1,4 +1,3 @@
- 
 /**
  * v3 F3.4 (ADR 0055 decision B5): Revert of an image placement. Nothing is ever written to LegendKeeper's staging folder
  * (`LK-Bridge staging`), and the revert itself never deletes an asset:
