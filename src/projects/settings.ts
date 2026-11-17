@@ -63,6 +63,12 @@ export const projectSettingsSchema = z
     /** v3 F2: days an unplaced staged image is kept on the server (default IMAGE_STAGING_MAX_DAYS). */
     imageStagingMaxDays: z.number().int().min(1).max(3650).optional(),
     /**
+     * ADR 0057 decision 7 (the owner's, 17 November 2026): whether ChatGPT's file source (`file.download_url`) is
+     * fetched, through the same guarded download as `url` (default on). Separate from UPLOAD_ALLOW_URL_SOURCE (`url`
+     * only). Switching it on needs the owner's re-authentication; switching it off is one click. Audited.
+     */
+    fileSourceEnabled: z.boolean().optional(),
+    /**
      * v3 F2 (ADR 0049 decision 2): which edits set a page's Last Major Revision, one switch per category (src/lmr/),
      * and the housekeeping keys a set_facts change of which alone is not an edit (`;`-separated).
      */
@@ -204,6 +210,14 @@ export const PROJECT_SETTING_KEYS: readonly {
     kind: 'days',
     editable: true,
     help: 'After this many days an unplaced staged image is removed from the bridge’s server, a week after the Staging page first warned about it. Default IMAGE_STAGING_MAX_DAYS (90).',
+  },
+  {
+    key: 'fileSourceEnabled',
+    label: 'Images: ChatGPT’s file source',
+    kind: 'on/off',
+    default: true,
+    editable: true,
+    help: 'On: upload_image and the setting-pack tools download a ChatGPT attachment (`file`), through the same guarded download as a `url` (https, public addresses, the port allow-list). Off: refused before anything is fetched (UPLOAD_FILE_SOURCE_DISABLED). Separate from UPLOAD_ALLOW_URL_SOURCE, which covers `url` only. Switching it on asks for your password again.',
   },
   {
     key: 'lmrWritePage',

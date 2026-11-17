@@ -3,9 +3,10 @@
  * and the type registry. A pure plan: no request, no write. The upload or placement job then creates what it says.
  *
  * - `folder`: an asset folder id, or a path from the library's root (`Characters / Beastkin / Qishen / Mehrana`).
- * - `for_character` (a name and race, the rules of `create_character`): a folder named after the character is reused
- *   wherever it is (several: refused, listed); otherwise `Characters / Group / Race / Character`, or
- *   `Characters / Race / Character` for a race with no group, the names from the taxonomy's asset folder field. An unknown
+ * - `for_character` (a name and race, the rules of `create_character`): `Characters / Group / Race / Character`, or
+ *   `Characters / Race / Character` for a race with no group, the names from the taxonomy's asset folder field, and only
+ *   that exact path (ADR 0057 decision 8: a folder named after the character elsewhere is never used; an ambiguous or
+ *   blocked path is `ART_FOLDER_AMBIGUOUS`). An unknown
  *   or omitted race is `Undetermined / Unknown`; a declared race that does not resolve fails and never falls back.
  * - `for_page`: the character of a character page (Core, Reference or the character's index), by the same rules with
  *   the race read from where the page is; any other page needs an explicit `folder`.
@@ -234,8 +235,8 @@ export function planDestination(
 }
 
 /**
- * The rules of `create_character` for a declared name and race: a folder named after the character is reused wherever it
- * is; otherwise Characters / Group / Race / Name. An unknown or omitted race goes to `Undetermined / Unknown`; a declared
+ * The rules of `create_character` for a declared name and race: Characters / Group / Race / Name, that exact path only
+ * (ADR 0057 decision 8). An unknown or omitted race goes to `Undetermined / Unknown`; a declared
  * race that does not resolve fails and never falls back. `from` (for_page) is the page the character was found from.
  */
 function planForCharacter(

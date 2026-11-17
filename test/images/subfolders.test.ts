@@ -149,7 +149,8 @@ describe('upload_image with a subfolder path', () => {
       name: 'Clash',
       destination: { ...MIYABI, subfolders: 'Wardrobe / Qipao' },
     });
-    expect(r.body.error).toMatchObject({ code: 'ASSET_NAME_CONFLICT' });
+    // ADR 0057 decision 8: on a character's path, ART_FOLDER_AMBIGUOUS (the cause in the details).
+    expect(r.body.error).toMatchObject({ code: 'ART_FOLDER_AMBIGUOUS', cause: 'ASSET_NAME_CONFLICT' });
     expect(w.lkUploads).toHaveLength(before);
   });
 
@@ -260,7 +261,7 @@ describe('the dashboard’s preview (a dry run)', () => {
       destination: { ...MIYABI, subfolders: 'Wardrobe' },
     });
     expect(clash.status).toBe(409);
-    expect(clash.json.error).toMatchObject({ code: 'ASSET_NAME_CONFLICT' });
+    expect(clash.json.error).toMatchObject({ code: 'ART_FOLDER_AMBIGUOUS', cause: 'ASSET_NAME_CONFLICT' });
     const none = await post('/staging/preview?project=test', {});
     expect(none.status).toBe(400);
     expect(none.json.error).toMatchObject({ code: 'DESTINATION_REQUIRED' });

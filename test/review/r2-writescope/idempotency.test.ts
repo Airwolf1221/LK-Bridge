@@ -101,30 +101,34 @@ describe('a direct job accepted, then queued, while the owner tightens the profi
     }
   });
 
-  // Open (CR-2026-11-R2 section 7): rails are asked at entry only (ADR 0055 C3); asking them again per step is the owner's decision.
-  it.fails(
-    'G3: switching the deletes rail on stops (or proposes) a queued direct delete before it is sent',
-    async () => {
-      cmd().setRails('owner', a.profileId, { deletes: false });
-      w.stack.runtime.engine.controls.pauseWrites('test');
-      let jobId: string;
-      try {
-        const r = await call('lk_api_write', {
-          operationId: 'deleteResource',
-          params: { path: { resourceId: 'bk00000b' } },
-        });
-        expect(r.body.status, r.text).toBe('queued');
-        jobId = String(r.body.jobId);
-        // The owner switches the deletes rail back on while the delete waits.
-        cmd().setRails('owner', a.profileId, { deletes: true });
-      } finally {
-        w.stack.runtime.engine.controls.resumeWrites('test');
-      }
-      const done = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
-      expect({ status: done.status, live: w.repo.live('bk00000b') !== undefined }).toEqual({
-        status: 'failed',
-        live: true,
+  // ADR 0057 decision 6 (the owner's, 17 November 2026; WS-G3): the rails are judged when a request arrives. Switching a
+  // rail on does not stop a direct job already queued; lowering the scope is the emergency brake (G4 above).
+  it('G3: switching the deletes rail on does not stop a delete already queued (judged at entry; the brake is the scope)', async () => {
+    cmd().setRails('owner', a.profileId, { deletes: false });
+    w.stack.runtime.engine.controls.pauseWrites('test');
+    let jobId: string;
+    try {
+      const r = await call('lk_api_write', {
+        operationId: 'deleteResource',
+        params: { path: { resourceId: 'bk00000b' } },
       });
-    },
-  );
+      expect(r.body.status, r.text).toBe('queued');
+      jobId = String(r.body.jobId);
+      // The owner switches the deletes rail back on while the delete waits.
+      cmd().setRails('owner', a.profileId, { deletes: true });
+    } finally {
+      w.stack.runtime.engine.controls.resumeWrites('test');
+    }
+    const done = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
+    expect({ status: done.status, live: w.repo.live('bk00000b') !== undefined }).toEqual({
+      status: 'succeeded',
+      live: false,
+    });
+    // The next request meets the rail at once.
+    const next = await call('lk_api_write', {
+      operationId: 'deleteResource',
+      params: { path: { resourceId: 'bk00000c' } },
+    });
+    expect(next.body.status, next.text).toBe('proposal_captured');
+  });
 });

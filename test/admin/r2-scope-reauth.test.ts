@@ -135,4 +135,39 @@ describe('the Status of pages agents create (a canon setting) through the generi
     });
     expect(saved.status, saved.text).toBe(200);
   });
+
+  // ADR 0057 decision 7: ChatGPT's file source has its own switch; switching it on lets an agent make the bridge download
+  // more, so it needs the re-authentication; switching it off stays one click. Every change is audited.
+  it('fileSourceEnabled: off is one click; on (or back to the default) needs the re-authentication; audited', async () => {
+    const project = s.runtime.projects.defaultProject();
+    const audits = () =>
+      s.policy.store
+        .listAudit({ action: 'project.set_setting' })
+        .filter((a) => JSON.stringify(a).includes('fileSourceEnabled')).length;
+    const before = audits();
+    expire();
+    const off = await s.put(`/api/admin/projects/${project.name}/settings`, {
+      key: 'fileSourceEnabled',
+      value: false,
+    });
+    expect(off.status, off.text).toBe(200);
+    expect(s.runtime.projects.find(project.name)?.settings.fileSourceEnabled).toBe(false);
+    for (const value of [true, null]) {
+      const refused = await s.put(`/api/admin/projects/${project.name}/settings`, {
+        key: 'fileSourceEnabled',
+        value,
+      });
+      expect(refused.status, refused.text).toBe(403);
+      expect(refused.json.error.code).toBe('REAUTH_REQUIRED');
+    }
+    expect(s.runtime.projects.find(project.name)?.settings.fileSourceEnabled).toBe(false);
+    reauth();
+    const on = await s.put(`/api/admin/projects/${project.name}/settings`, {
+      key: 'fileSourceEnabled',
+      value: true,
+    });
+    expect(on.status, on.text).toBe(200);
+    expect(s.runtime.projects.find(project.name)?.settings.fileSourceEnabled).toBe(true);
+    expect(audits()).toBe(before + 2);
+  });
 });
