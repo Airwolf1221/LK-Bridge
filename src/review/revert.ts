@@ -22,7 +22,13 @@ import type { JobEngine } from '../jobs/engine.js';
 import { JobsError } from '../jobs/errors.js';
 import type { DocumentChecker, RegisteredChecker } from '../jobs/internal-steps.js';
 import { stableJson } from '../jobs/sidebar-state.js';
-import { SYSTEM_PRINCIPAL, TERMINAL_JOB_STATUSES, type JobView, type OpParams, type StepSpec } from '../jobs/types.js';
+import {
+  SYSTEM_PRINCIPAL,
+  TERMINAL_JOB_STATUSES,
+  type JobView,
+  type OpParams,
+  type StepSpec,
+} from '../jobs/types.js';
 import { compareStoredBlocks } from '../jobs/verify-blocks.js';
 import { withoutVersions } from '../pages/blockwise.js';
 import type { PolicyStore } from '../policy/store.js';
@@ -67,7 +73,8 @@ export class RevertError extends Error {
 export interface RevertPreview {
   readonly jobId: string;
   readonly projectId: string;
-  readonly eligible: { readonly ok: true } | { readonly ok: false; readonly code: string; readonly message: string };
+  readonly eligible:
+    { readonly ok: true } | { readonly ok: false; readonly code: string; readonly message: string };
   readonly targets: readonly TargetCheck[];
   /** Targets that would be written back now. */
   readonly ready: number;
@@ -94,7 +101,13 @@ export interface RevertDeps {
   readonly db: Db;
   readonly engine: Pick<
     JobEngine,
-    'submit' | 'events' | 'queries' | 'internalRead' | 'stepResults' | 'registerAsyncChecker' | 'registerChecker'
+    | 'submit'
+    | 'events'
+    | 'queries'
+    | 'internalRead'
+    | 'stepResults'
+    | 'registerAsyncChecker'
+    | 'registerChecker'
   >;
   readonly review: ReviewService;
   readonly policy: Pick<PolicyStore, 'audit'>;
@@ -151,7 +164,8 @@ export class RevertService {
     jobId: string,
   ): { ok: true; job: JobView } | { ok: false; code: string; message: string } {
     const job = this.d.engine.queries.getJob(projectId, jobId);
-    if (!job) return { ok: false, code: 'JOB_NOT_FOUND', message: `There is no job ${jobId} in this project.` };
+    if (!job)
+      return { ok: false, code: 'JOB_NOT_FOUND', message: `There is no job ${jobId} in this project.` };
     if (job.origin.tool === REVERT_TOOL)
       return {
         ok: false,
@@ -178,12 +192,22 @@ export class RevertService {
         message: `Job ${jobId} is still ${job.status}: a revert waits until it has finished (or been cancelled).`,
       };
     const prev = this.d.db
-      .prepare(`SELECT state, revert_job_id FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
+      .prepare(
+        `SELECT state, revert_job_id FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`,
+      )
       .get(projectId, jobId) as { state: string; revert_job_id: string } | undefined;
     if (prev?.state === 'submitted')
-      return { ok: false, code: 'REVERT_RUNNING', message: `A revert of job ${jobId} is running (job ${prev.revert_job_id}).` };
+      return {
+        ok: false,
+        code: 'REVERT_RUNNING',
+        message: `A revert of job ${jobId} is running (job ${prev.revert_job_id}).`,
+      };
     if (prev?.state === 'succeeded')
-      return { ok: false, code: 'ALREADY_REVERTED', message: `Job ${jobId} has been reverted (job ${prev.revert_job_id}).` };
+      return {
+        ok: false,
+        code: 'ALREADY_REVERTED',
+        message: `Job ${jobId} has been reverted (job ${prev.revert_job_id}).`,
+      };
     return { ok: true, job };
   }
 
@@ -215,7 +239,10 @@ export class RevertService {
     };
   }
 
-  private async plan(projectId: string, jobId: string): Promise<{
+  private async plan(
+    projectId: string,
+    jobId: string,
+  ): Promise<{
     eligible: RevertPreview['eligible'];
     plans: TargetPlan[];
   }> {
@@ -291,7 +318,11 @@ export class RevertService {
     const targets = plans.map((p) => p.check);
     const summary = targets.map((c) => ({ key: c.key, what: c.what, state: c.state }));
     const refuse = (code: string, message: string): RevertResult => {
-      this.d.policy.audit('owner', 'job.revert', jobId, undefined, { outcome: 'refused', code, targets: summary });
+      this.d.policy.audit('owner', 'job.revert', jobId, undefined, {
+        outcome: 'refused',
+        code,
+        targets: summary,
+      });
       return { status: 'refused', code, message, targets };
     };
     if (!eligible.ok) return refuse(eligible.code, eligible.message);
@@ -362,11 +393,15 @@ export class RevertService {
             : {}),
         ...(assets.length > 0 ? { holdAssets: assets } : {}),
       });
-      if (!('jobId' in r)) return refuse('NOT_SUBMITTED', 'The revert was not accepted as a job; nothing was written.');
+      if (!('jobId' in r))
+        return refuse('NOT_SUBMITTED', 'The revert was not accepted as a job; nothing was written.');
       jobIdOfRevert = r.jobId;
     } catch (e) {
       const code = e instanceof JobsError ? (e.code ?? 'REFUSED') : 'REFUSED';
-      return refuse(code, `The revert was refused before anything was written: ${e instanceof Error ? e.message : String(e)}`);
+      return refuse(
+        code,
+        `The revert was refused before anything was written: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
     const partial = others.length > 0;
     this.d.db
@@ -374,7 +409,14 @@ export class RevertService {
         `INSERT INTO job_reverts (project_id, job_id, revert_job_id, state, partial, targets, created_at, created_by)
          VALUES (?, ?, ?, 'submitted', ?, ?, ?, 'owner')`,
       )
-      .run(projectId, jobId, jobIdOfRevert, partial ? 1 : 0, JSON.stringify({ targets, images }), this.d.now());
+      .run(
+        projectId,
+        jobId,
+        jobIdOfRevert,
+        partial ? 1 : 0,
+        JSON.stringify({ targets, images }),
+        this.d.now(),
+      );
     this.d.policy.audit('owner', 'job.revert', jobId, undefined, {
       outcome: 'submitted',
       revertJobId: jobIdOfRevert,
@@ -397,9 +439,11 @@ export class RevertService {
   private finished(job: JobView): void {
     const row = this.d.db
       .prepare('SELECT id, project_id, job_id, state, targets FROM job_reverts WHERE revert_job_id = ?')
-      .get(job.id) as { id: number; project_id: string; job_id: string; state: string; targets: string } | undefined;
+      .get(job.id) as
+      { id: number; project_id: string; job_id: string; state: string; targets: string } | undefined;
     if (!row || row.state !== 'submitted') return;
-    const state = job.status === 'succeeded' ? 'succeeded' : job.status === 'cancelled' ? 'cancelled' : 'failed';
+    const state =
+      job.status === 'succeeded' ? 'succeeded' : job.status === 'cancelled' ? 'cancelled' : 'failed';
     this.d.db
       .prepare('UPDATE job_reverts SET state = ?, finished_at = ? WHERE id = ?')
       .run(state, this.d.now(), row.id);
@@ -410,7 +454,7 @@ export class RevertService {
     });
     if (state !== 'succeeded') return;
     this.d.review.markReverted(row.project_id, row.job_id);
-    let note: { images?: ImageNote[] } = {};
+    let note: { images?: ImageNote[] };
     try {
       note = JSON.parse(row.targets) as { images?: ImageNote[] };
     } catch {
@@ -420,10 +464,14 @@ export class RevertService {
     if (!images || !note.images?.length) return;
     const results = this.d.engine.stepResults(row.project_id, job.id) ?? [];
     for (const im of note.images) {
-      const rec = (im.stagedId ? images.store.upload(row.project_id, im.stagedId) : undefined) ??
+      const rec =
+        (im.stagedId ? images.store.upload(row.project_id, im.stagedId) : undefined) ??
         images.store.byAsset(row.project_id, im.assetId);
       if (!rec) continue;
-      const folder = im.folderStep === null ? null : (results.find((s) => s.stepNo === im.folderStep)?.value as Obj | null);
+      const folder =
+        im.folderStep === null
+          ? null
+          : (results.find((s) => s.stepNo === im.folderStep)?.value as Obj | null);
       const folderId = folder && typeof folder.id === 'string' ? folder.id : rec.folderId;
       // Back on the Staging page: a staged asset in LegendKeeper's staging folder, hidden, to place again or discard.
       images.store.updateUpload(row.project_id, rec.id, {
@@ -471,7 +519,8 @@ const revertChecker: RegisteredChecker = async (ctx) => {
       differences.push({ path: 'folder', expected: f.folderId, actual: now.folderId });
     if (f.isHidden !== undefined && now.isHidden !== f.isHidden)
       differences.push({ path: 'hidden', expected: f.isHidden, actual: now.isHidden });
-    if (typeof f.name === 'string' && now.name !== f.name) differences.push({ path: 'name', expected: f.name, actual: now.name });
+    if (typeof f.name === 'string' && now.name !== f.name)
+      differences.push({ path: 'name', expected: f.name, actual: now.name });
     return { differences };
   }
   return { differences: [{ path: ctx.label, expected: 'a revert target', actual: 'nothing to check' }] };

@@ -23,7 +23,13 @@ const w = (opId: string, params: RailItem['params'] = {}, options: RailItem['opt
 const page = (id: string) => ({ path: { resourceId: id } });
 const updates = (n: number) =>
   Array.from({ length: n }, (_, i) => w('updateResource', { ...page(`pg${i}`), body: { tags: ['x'] } }));
-const ALL_OFF: WriteRails = { deletes: false, bulk: false, bulkPages: 10, renamesMoves: false, assets: false };
+const ALL_OFF: WriteRails = {
+  deletes: false,
+  bulk: false,
+  bulkPages: 10,
+  renamesMoves: false,
+  assets: false,
+};
 
 describe('defaults', () => {
   it('deletes, bulk over 10 pages, and asset deletes and moves are on; renames and moves are off', () => {
@@ -100,7 +106,9 @@ describe('deletes', () => {
   });
 
   it('switched off, a delete runs directly', () => {
-    expect(railsVerdict({ ...DEFAULT_WRITE_RAILS, deletes: false }, [w('deleteResource', page('x'))])).toBeNull();
+    expect(
+      railsVerdict({ ...DEFAULT_WRITE_RAILS, deletes: false }, [w('deleteResource', page('x'))]),
+    ).toBeNull();
   });
 });
 
@@ -193,7 +201,11 @@ describe('asset deletes and moves (on by default)', () => {
     // A folder bound from a step that creates it is a move too.
     expect(
       railsVerdict(on, [
-        w('updateAsset', { path: { assetId: 'a' }, body: { isHidden: false } }, { bindFrom: { step: 1, to: 'body.folderId' } }),
+        w(
+          'updateAsset',
+          { path: { assetId: 'a' }, body: { isHidden: false } },
+          { bindFrom: { step: 1, to: 'body.folderId' } },
+        ),
       ])?.reason,
     ).toBe('proposed because: asset move (to another folder)');
   });
@@ -219,7 +231,8 @@ describe('asset deletes and moves (on by default)', () => {
     expect(railsVerdict(on, [place], { stagedPlacement: true })).toBeNull();
     expect(railsVerdict(on, [place])?.reason).toBe('proposed because: asset move (to another folder)');
     expect(
-      railsVerdict(on, [place, w('deleteAsset', { path: { assetId: 'b' } })], { stagedPlacement: true })?.reason,
+      railsVerdict(on, [place, w('deleteAsset', { path: { assetId: 'b' } })], { stagedPlacement: true })
+        ?.reason,
     ).toBe('proposed because: asset delete');
   });
 

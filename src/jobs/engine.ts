@@ -3259,7 +3259,9 @@ function stepOptions(o: StepOptions): StepOptions {
  * (`measure`: the page has, or may have, the row and the mode is `auto`), and that keeps no pre-image of its own. Such
  * a write sends only the fields it changes, so without the read the rule had no "before" and counted every edit.
  */
-function readBeforeSteps(steps: readonly { op: string; params?: OpParams; options?: StepOptions }[]): Set<number> {
+function readBeforeSteps(
+  steps: readonly { op: string; params?: OpParams; options?: StepOptions }[],
+): Set<number> {
   const out = new Set<number>();
   for (const s of steps) {
     if (s.op !== LMR_STEP) continue;

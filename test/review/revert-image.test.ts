@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * v3 F3.4 (ADR 0055 decision B): Revert of an image placement. A staged image placed at scope `write` is a new asset in
  * its folder (made from the bytes kept on the bridge); reverting the placement moves it back to staging: into the
@@ -17,7 +16,8 @@ afterEach(async () => {
 
 async function placeOne(world: ImagesWorld) {
   const c = await world.stack.connect();
-  const call = (args: Record<string, unknown>) => world.stack.call(c, 'upload_image', { project: 'test', ...args });
+  const call = (args: Record<string, unknown>) =>
+    world.stack.call(c, 'upload_image', { project: 'test', ...args });
   const staged = await call({
     data_base64: fixture('alpha.png').toString('base64'),
     name: 'Draft.png',

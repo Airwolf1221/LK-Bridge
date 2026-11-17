@@ -765,11 +765,17 @@ export function createPacks(d: PacksDeps): Packs {
               `${pack.name} has no write tool “${tool}”. Its write tools: ${[...known].join(', ')}.`,
             );
           if (mode !== 'propose' && mode !== 'scope')
-            throw new PackError('INVALID_INPUT', `${tool}: “propose” (always a proposal) or “scope” (the agent's scope).`);
+            throw new PackError(
+              'INVALID_INPUT',
+              `${tool}: “propose” (always a proposal) or “scope” (the agent's scope).`,
+            );
           next[tool] = mode;
         }
         if (stableJson(next) === stableJson(before)) return pack;
-        const rules = packRulesSchema.parse({ ...pack.rules, settings: { ...pack.rules.settings, tools: next } });
+        const rules = packRulesSchema.parse({
+          ...pack.rules,
+          settings: { ...pack.rules.settings, tools: next },
+        });
         const after = store.newVersion(pack.id, rules, 'tool switches changed on the Packs page');
         d.audit(
           actor,

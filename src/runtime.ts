@@ -738,7 +738,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     pageName,
     documentName: (projectId, resourceId, documentId) => {
       try {
-        return tree.queries.node(projectId, resourceId).data?.documents.find((d) => d.id === documentId)?.name ?? null;
+        return (
+          tree.queries.node(projectId, resourceId).data?.documents.find((d) => d.id === documentId)?.name ??
+          null
+        );
       } catch {
         return null;
       }

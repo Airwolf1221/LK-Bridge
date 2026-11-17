@@ -19,12 +19,22 @@ import { useReauth } from '../reauth';
 const RANK: Record<Scope, number> = { read: 0, propose: 1, write: 2 };
 
 /** v3 F3.4 (ADR 0055): the defaults (deletes, bulk over 10 pages, asset deletes and moves; renames and moves off). */
-const DEFAULT_RAILS: WriteRails = { deletes: true, bulk: true, bulkPages: 10, renamesMoves: false, assets: true };
+const DEFAULT_RAILS: WriteRails = {
+  deletes: true,
+  bulk: true,
+  bulkPages: 10,
+  renamesMoves: false,
+  assets: true,
+};
 const RAIL_TEXT: { key: keyof Omit<WriteRails, 'bulkPages'>; label: string; help: string }[] = [
   { key: 'deletes', label: 'Deletes', help: 'pages, documents, timeline events, map features, assets' },
   { key: 'bulk', label: 'Bulk changes', help: 'one request touching more than N pages' },
   { key: 'renamesMoves', label: 'Renames and moves of pages', help: 'a page renamed, or moved elsewhere' },
-  { key: 'assets', label: 'Asset deletes and asset moves', help: 'an asset deleted, or moved to another folder' },
+  {
+    key: 'assets',
+    label: 'Asset deletes and asset moves',
+    help: 'an asset deleted, or moved to another folder',
+  },
 ];
 
 /**
@@ -38,9 +48,9 @@ function RailsCard({ profiles, onChanged }: { profiles: Profile[]; onChanged: ()
     <section className="card" aria-labelledby="rails-h">
       <h2 id="rails-h">Safety rails at scope write</h2>
       <p className="muted small-text">
-        At scope write an agent’s ordinary changes run straight away, and you review them afterwards on the Review
-        page. These switches keep some kinds of change as proposals even so. Canon and lifecycle changes are always
-        proposals, whatever the switches say. The proposal says which rail sent it.
+        At scope write an agent’s ordinary changes run straight away, and you review them afterwards on the
+        Review page. These switches keep some kinds of change as proposals even so. Canon and lifecycle
+        changes are always proposals, whatever the switches say. The proposal says which rail sent it.
       </p>
       {writers.length === 0 ? (
         <Empty>No profile has scope write.</Empty>
@@ -78,7 +88,10 @@ function RailsEditor({ profile, onChanged }: { profile: Profile; onChanged: () =
     const done = await run(
       () =>
         withReauth(() =>
-          api.put(`/clients/profiles/${encodeURIComponent(profile.id)}/rails`, { rails: draft, confirm: true }),
+          api.put(`/clients/profiles/${encodeURIComponent(profile.id)}/rails`, {
+            rails: draft,
+            confirm: true,
+          }),
         ),
       'Rails saved.',
     );
@@ -108,7 +121,9 @@ function RailsEditor({ profile, onChanged }: { profile: Profile; onChanged: () =
           aria-label={`Bulk threshold, in pages (${profile.label})`}
           value={draft.bulkPages}
           disabled={!draft.bulk}
-          onChange={(e) => setDraft({ ...draft, bulkPages: Math.max(1, Math.min(1000, Number(e.target.value) || 1)) })}
+          onChange={(e) =>
+            setDraft({ ...draft, bulkPages: Math.max(1, Math.min(1000, Number(e.target.value) || 1)) })
+          }
         />{' '}
         pages (a request touching more is proposed)
       </label>

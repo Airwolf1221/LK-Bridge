@@ -88,7 +88,11 @@ export interface TargetPlan {
   readonly documents?: readonly string[];
   readonly assets?: readonly string[];
   /** Bridge-side follow-up once the job succeeded (an image's record back on the Staging page). */
-  readonly image?: { readonly assetId: string; readonly stagedId: string | null; readonly folderStep: number | null };
+  readonly image?: {
+    readonly assetId: string;
+    readonly stagedId: string | null;
+    readonly folderStep: number | null;
+  };
 }
 
 /** The reads a plan makes (system principal, P1; a 404 is `exists: false`). */
@@ -111,7 +115,9 @@ const journalOp = (io: PlanIo, t: Target, extra: Obj = {}) => ({
 export const nothing = (t: Target, detail: string): TargetPlan => ({
   check: { ...base(t), state: 'nothing_to_do', detail },
 });
-export const gone = (t: Target, detail: string): TargetPlan => ({ check: { ...base(t), state: 'gone', detail } });
+export const gone = (t: Target, detail: string): TargetPlan => ({
+  check: { ...base(t), state: 'gone', detail },
+});
 export const changed = (t: Target, detail: string, differences: readonly Difference[]): TargetPlan => ({
   check: { ...base(t), state: 'changed', detail, differences: differences.slice(0, 10) },
 });
@@ -128,11 +134,14 @@ const ready = (
 // ------------------------------------------------------------------------------------------------ page text
 
 export async function planText(t: TextTarget, io: PlanIo): Promise<TargetPlan> {
-  const r = await io.read('getDocumentBlocks', { path: { resourceId: t.resourceId, documentId: t.documentId } });
+  const r = await io.read('getDocumentBlocks', {
+    path: { resourceId: t.resourceId, documentId: t.documentId },
+  });
   if (!r.exists) return gone(t, 'the document is gone');
   const body = (r.body ?? {}) as { blocks?: unknown };
   const live = withoutVersions(Array.isArray(body.blocks) ? (body.blocks as unknown[]) : []);
-  if (blocksHash(live) === blocksHash(t.before)) return nothing(t, 'the page text is already as it was before the job');
+  if (blocksHash(live) === blocksHash(t.before))
+    return nothing(t, 'the page text is already as it was before the job');
   if (!t.left.some((l) => compareStoredBlocks(l, live).ok)) {
     const c = compareStoredBlocks(t.left[t.left.length - 1] ?? [], live, 5);
     return changed(
@@ -157,9 +166,18 @@ export async function planText(t: TextTarget, io: PlanIo): Promise<TargetPlan> {
       journalOperation,
       undoOf: io.jobId,
     });
-    return ready(t, `${plan.ops.length} block write${plan.ops.length === 1 ? '' : 's'}, block by block`, steps, holds);
+    return ready(
+      t,
+      `${plan.ops.length} block write${plan.ops.length === 1 ? '' : 's'}, block by block`,
+      steps,
+      holds,
+    );
   }
-  if (plan.refusal.reason === 'moved' || plan.refusal.reason === 'ids' || plan.refusal.reason === 'too_many') {
+  if (
+    plan.refusal.reason === 'moved' ||
+    plan.refusal.reason === 'ids' ||
+    plan.refusal.reason === 'too_many'
+  ) {
     // Blocks the job moved cannot be put back block by block: the page is written back whole, checked first.
     const steps: StepSpec[] = [
       {
@@ -181,13 +199,21 @@ export async function planText(t: TextTarget, io: PlanIo): Promise<TargetPlan> {
       },
       {
         op: 'replaceDocumentBlocks',
-        params: { path: { resourceId: t.resourceId, documentId: t.documentId }, body: { blocks: [...t.before] } },
+        params: {
+          path: { resourceId: t.resourceId, documentId: t.documentId },
+          body: { blocks: [...t.before] },
+        },
         ifMatchFrom: { step: 1, key: 'document' },
         verifyAfterWrite: true,
         journalOperation: { ...journalOperation, whole: true },
       },
     ];
-    return ready(t, 'the page written back whole (the job moved blocks, which cannot be put back one by one)', steps, holds);
+    return ready(
+      t,
+      'the page written back whole (the job moved blocks, which cannot be put back one by one)',
+      steps,
+      holds,
+    );
   }
   return notRevertible(t, `the page text cannot be written back: ${plan.refusal.message}`);
 }
@@ -211,7 +237,9 @@ const sameBlock = (a: Obj, b: Obj) => compareStoredBlocks([a], [b]).ok;
 /** The single blocks of one document, together (one check gives the version every write chains from). */
 export async function planBlocks(ts: readonly BlockTarget[], io: PlanIo): Promise<TargetPlan[]> {
   const t0 = ts[0]!;
-  const r = await io.read('getDocumentBlocks', { path: { resourceId: t0.resourceId, documentId: t0.documentId } });
+  const r = await io.read('getDocumentBlocks', {
+    path: { resourceId: t0.resourceId, documentId: t0.documentId },
+  });
   if (!r.exists) return ts.map((t) => gone(t, 'the document is gone'));
   const blocks = ((r.body ?? {}) as { blocks?: unknown }).blocks;
   const live = Array.isArray(blocks) ? (blocks as unknown[]) : [];
@@ -226,7 +254,12 @@ export async function planBlocks(ts: readonly BlockTarget[], io: PlanIo): Promis
     if (t.change === 'inserted') {
       if (!found) out.push(nothing(t, 'the block the job added is already gone'));
       else if (sameBlock(left, withoutVersions([found])[0]!)) readyOnes.push({ t, left });
-      else out.push(changed(t, 'the block the job added has changed since', [{ path: t.blockId, expected: left, actual: found }]));
+      else
+        out.push(
+          changed(t, 'the block the job added has changed since', [
+            { path: t.blockId, expected: left, actual: found },
+          ]),
+        );
       continue;
     }
     if (!found) {
@@ -234,9 +267,13 @@ export async function planBlocks(ts: readonly BlockTarget[], io: PlanIo): Promis
       continue;
     }
     const now = withoutVersions([found])[0]!;
-    if (t.before && sameBlock(t.before, now)) out.push(nothing(t, 'the block is already as it was before the job'));
+    if (t.before && sameBlock(t.before, now))
+      out.push(nothing(t, 'the block is already as it was before the job'));
     else if (sameBlock(left, now)) readyOnes.push({ t, left });
-    else out.push(changed(t, 'the block has changed since the job', [{ path: t.blockId, expected: left, actual: now }]));
+    else
+      out.push(
+        changed(t, 'the block has changed since the job', [{ path: t.blockId, expected: left, actual: now }]),
+      );
   }
   if (readyOnes.length === 0) return out;
   const steps: StepSpec[] = [
@@ -282,11 +319,23 @@ export async function planBlocks(ts: readonly BlockTarget[], io: PlanIo): Promis
   readyOnes.forEach((x, i) =>
     out.push(
       i === 0
-        ? ready(x.t, x.t.change === 'inserted' ? 'the block the job added, deleted' : 'the block’s content before', steps, {
-            resources: [t0.resourceId],
-            documents: [t0.documentId],
-          })
-        : { check: { ...base(x.t), state: 'ready', detail: x.t.change === 'inserted' ? 'the block the job added, deleted' : 'the block’s content before' } },
+        ? ready(
+            x.t,
+            x.t.change === 'inserted' ? 'the block the job added, deleted' : 'the block’s content before',
+            steps,
+            {
+              resources: [t0.resourceId],
+              documents: [t0.documentId],
+            },
+          )
+        : {
+            check: {
+              ...base(x.t),
+              state: 'ready',
+              detail:
+                x.t.change === 'inserted' ? 'the block the job added, deleted' : 'the block’s content before',
+            },
+          },
     ),
   );
   return out;
@@ -302,7 +351,7 @@ function rowDiffs(label: string, expected: readonly RowState[], actual: readonly
   const out: Difference[] = [];
   const match = (r: RowState, list: readonly RowState[]) =>
     (r.id !== null ? list.find((x) => x.id === r.id) : undefined) ??
-    list.find((x) => x.id === null || r.id === null ? keyOf(x.key) === keyOf(r.key) : false) ??
+    list.find((x) => (x.id === null || r.id === null ? keyOf(x.key) === keyOf(r.key) : false)) ??
     list.find((x) => keyOf(x.key) === keyOf(r.key));
   for (const e of expected) {
     const a = match(e, actual);
@@ -310,11 +359,14 @@ function rowDiffs(label: string, expected: readonly RowState[], actual: readonly
     else if (content(a) !== content(e) || keyOf(a.key) !== keyOf(e.key))
       out.push({ path: `${label} ${e.key}`, expected: e.content, actual: a.content });
   }
-  for (const a of actual) if (!match(a, expected)) out.push({ path: `${label} ${a.key}`, expected: '(no such row)', actual: a.content });
+  for (const a of actual)
+    if (!match(a, expected))
+      out.push({ path: `${label} ${a.key}`, expected: '(no such row)', actual: a.content });
   return out;
 }
 
-const itemKey = (i: { resourceId: string; documentId: string | null }) => `${i.resourceId}/${i.documentId ?? ''}`;
+const itemKey = (i: { resourceId: string; documentId: string | null }) =>
+  `${i.resourceId}/${i.documentId ?? ''}`;
 const sameItems = (a: CollectionState, b: CollectionState) =>
   a.items.map(itemKey).join(',') === b.items.map(itemKey).join(',');
 
@@ -326,7 +378,9 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
   const kv = t.property ? sidebar.find((p) => p.id === t.property!.id) : undefined;
   if (t.property && !kv) return gone(t, `the sidebar property “${t.property.title}” is gone`);
   const liveRows = kv
-    ? rowsState((kv.rows ?? []).map((x) => ({ id: x.id, rank: x.rank ?? null, key: x.key, content: x.content })))
+    ? rowsState(
+        (kv.rows ?? []).map((x) => ({ id: x.id, rank: x.rank ?? null, key: x.key, content: x.content })),
+      )
     : [];
   const diffsLeft: Difference[] = [];
   const diffsBefore: Difference[] = [];
@@ -344,18 +398,29 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
       diffsBefore.push({ path: c.title, expected: 'present', actual: '(gone)' });
       continue;
     }
-    if (!sameItems(c.left, live)) diffsLeft.push({ path: c.title, expected: c.left.items.map(itemKey), actual: live.items.map(itemKey) });
-    if (!sameItems(c.before, live)) diffsBefore.push({ path: c.title, expected: c.before.items.map(itemKey), actual: live.items.map(itemKey) });
+    if (!sameItems(c.left, live))
+      diffsLeft.push({ path: c.title, expected: c.left.items.map(itemKey), actual: live.items.map(itemKey) });
+    if (!sameItems(c.before, live))
+      diffsBefore.push({
+        path: c.title,
+        expected: c.before.items.map(itemKey),
+        actual: live.items.map(itemKey),
+      });
   }
   if (diffsBefore.length === 0) return nothing(t, 'the sidebar is already as it was before the job');
   if (diffsLeft.length > 0)
-    return changed(t, 'the sidebar has changed since the job (an outside edit is never overwritten)', diffsLeft);
+    return changed(
+      t,
+      'the sidebar has changed since the job (an outside edit is never overwritten)',
+      diffsLeft,
+    );
 
   // From the sidebar now (as the job left it) back to the sidebar before.
   const facts: FactRequest[] = [];
   if (t.rowsBefore) {
     const match = (r: RowState, list: readonly RowState[]) =>
-      (r.id !== null ? list.find((x) => x.id === r.id) : undefined) ?? list.find((x) => keyOf(x.key) === keyOf(r.key));
+      (r.id !== null ? list.find((x) => x.id === r.id) : undefined) ??
+      list.find((x) => keyOf(x.key) === keyOf(r.key));
     for (const b of t.rowsBefore) {
       const now = match(b, liveRows);
       if (!now || content(now) !== content(b)) facts.push({ key: now?.key ?? b.key, value: [...b.content] });
@@ -390,7 +455,8 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
       templateKeys: t.rowsBefore ? t.rowsBefore.map((x) => x.key) : null,
     });
   } catch (e) {
-    if (e instanceof FactsPlanError) return notRevertible(t, `the sidebar cannot be planned back: ${e.message}`);
+    if (e instanceof FactsPlanError)
+      return notRevertible(t, `the sidebar cannot be planned back: ${e.message}`);
     throw e;
   }
   if (plan.empty) return nothing(t, 'nothing to write back');
@@ -406,7 +472,9 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
 
 /** A Last Major Revision row the job set, alone: its value before. */
 export async function planLmr(t: LmrTarget, io: PlanIo): Promise<TargetPlan> {
-  const r = await io.read('listPropertyRows', { path: { resourceId: t.resourceId, propertyId: t.propertyId } });
+  const r = await io.read('listPropertyRows', {
+    path: { resourceId: t.resourceId, propertyId: t.propertyId },
+  });
   if (!r.exists) return gone(t, 'the sidebar property is gone');
   const rows = rowsState((r.body as { data?: unknown } | undefined)?.data);
   const row = rows.find((x) => x.id === t.rowId);
@@ -417,14 +485,20 @@ export async function planLmr(t: LmrTarget, io: PlanIo): Promise<TargetPlan> {
     .trim();
   if (text === t.before.trim()) return nothing(t, `${t.rowKey} already says “${t.before}”`);
   if (text !== t.after.trim())
-    return changed(t, `${t.rowKey} has changed since the job`, [{ path: t.rowKey, expected: t.after, actual: text }]);
-  const after = rows.map((x) => (x.id === t.rowId ? { ...x, content: t.before === '' ? [] : [{ text: t.before }] } : x));
+    return changed(t, `${t.rowKey} has changed since the job`, [
+      { path: t.rowKey, expected: t.after, actual: text },
+    ]);
+  const after = rows.map((x) =>
+    x.id === t.rowId ? { ...x, content: t.before === '' ? [] : [{ text: t.before }] } : x,
+  );
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,
       params: {
         body: {
-          checks: [{ label: 'rows', kind: 'propertyRows', resourceId: t.resourceId, propertyId: t.propertyId, rows }],
+          checks: [
+            { label: 'rows', kind: 'propertyRows', resourceId: t.resourceId, propertyId: t.propertyId, rows },
+          ],
         },
       },
     },
@@ -471,9 +545,11 @@ export async function planResource(t: ResourceTarget, io: PlanIo): Promise<Targe
   const r = await io.read('getResource', { path: { resourceId: t.resourceId } });
   const live = isObj(r.body) ? r.body : {};
   if (!r.exists || typeof live.deletedAt === 'string') return gone(t, 'the page is gone');
-  if (resourceDiffs(t.before, live).length === 0) return nothing(t, 'the page is already as it was before the job');
+  if (resourceDiffs(t.before, live).length === 0)
+    return nothing(t, 'the page is already as it was before the job');
   const d = resourceDiffs(t.left, live);
-  if (d.length > 0) return changed(t, 'the page has changed since the job (an outside edit is never overwritten)', d);
+  if (d.length > 0)
+    return changed(t, 'the page has changed since the job (an outside edit is never overwritten)', d);
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,
@@ -506,7 +582,14 @@ export async function planResource(t: ResourceTarget, io: PlanIo): Promise<Targe
       op: VERIFY_STEP,
       params: {
         body: {
-          targets: [{ kind: 'resource', label: t.page?.name ?? t.resourceId, resourceId: t.resourceId, fields: { ...t.before } }],
+          targets: [
+            {
+              kind: 'resource',
+              label: t.page?.name ?? t.resourceId,
+              resourceId: t.resourceId,
+              fields: { ...t.before },
+            },
+          ],
         },
       },
     },
@@ -537,7 +620,8 @@ async function anchorFor(
     });
     const b = (r.body ?? {}) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown };
     for (const x of Array.isArray(b.data) ? (b.data as Obj[]) : [])
-      if (typeof x.id === 'string' && x.id !== pageId && typeof x.rank === 'string') siblings.push({ id: x.id, rank: x.rank });
+      if (typeof x.id === 'string' && x.id !== pageId && typeof x.rank === 'string')
+        siblings.push({ id: x.id, rank: x.rank });
     if (b.hasMore !== true || typeof b.nextCursor !== 'string') break;
     cursor = b.nextCursor;
   }
@@ -554,9 +638,12 @@ export async function planMove(t: MoveTarget, io: PlanIo): Promise<TargetPlan> {
   if (!r.exists || typeof live.deletedAt === 'string') return gone(t, 'the page is gone');
   const parent = str(live.parentId) ?? null;
   const rank = str(live.rank) ?? null;
-  if (parent === t.before.parentId && rank === t.before.rank) return nothing(t, 'the page is already where it was');
+  if (parent === t.before.parentId && rank === t.before.rank)
+    return nothing(t, 'the page is already where it was');
   if (parent !== t.left.parentId)
-    return changed(t, 'the page has been moved since the job', [{ path: 'parent', expected: t.left.parentId, actual: parent }]);
+    return changed(t, 'the page has been moved since the job', [
+      { path: 'parent', expected: t.left.parentId, actual: parent },
+    ]);
   const anchor = await anchorFor(io, t.resourceId, t.before.parentId, t.before.rank);
   const steps: StepSpec[] = [
     {
@@ -583,14 +670,20 @@ export async function planMove(t: MoveTarget, io: PlanIo): Promise<TargetPlan> {
               label: t.page?.name ?? t.resourceId,
               resourceId: t.resourceId,
               fields: {},
-              ...(t.before.parentId !== null ? { placement: { parentId: t.before.parentId, ...anchor } } : {}),
+              ...(t.before.parentId !== null
+                ? { placement: { parentId: t.before.parentId, ...anchor } }
+                : {}),
             },
           ],
         },
       },
     },
   ];
-  const holds = [t.resourceId, ...(t.before.parentId ? [t.before.parentId] : []), ...(t.left.parentId ? [t.left.parentId] : [])];
+  const holds = [
+    t.resourceId,
+    ...(t.before.parentId ? [t.before.parentId] : []),
+    ...(t.left.parentId ? [t.left.parentId] : []),
+  ];
   return ready(t, 'back under its old parent, at its old place', steps, { resources: [...new Set(holds)] });
 }
 
@@ -600,13 +693,25 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
   const r = await io.read('getAsset', { path: { assetId: t.assetId } });
   const live = isObj(r.body) ? r.body : {};
   if (!r.exists || typeof live.deletedAt === 'string') return gone(t, 'the asset is gone');
-  const now = { folderId: str(live.folderId) ?? null, name: str(live.name) ?? null, isHidden: live.isHidden === true };
-  if (t.from.kind === 'asset' && now.folderId === t.from.folderId && now.isHidden === t.from.isHidden && now.name === t.from.name)
+  const now = {
+    folderId: str(live.folderId) ?? null,
+    name: str(live.name) ?? null,
+    isHidden: live.isHidden === true,
+  };
+  if (
+    t.from.kind === 'asset' &&
+    now.folderId === t.from.folderId &&
+    now.isHidden === t.from.isHidden &&
+    now.name === t.from.name
+  )
     return nothing(t, 'the asset is already where it came from');
   const d: Difference[] = [];
-  if (now.folderId !== t.left.folderId) d.push({ path: 'folder', expected: t.left.folderId, actual: now.folderId });
-  if (now.isHidden !== t.left.isHidden) d.push({ path: 'hidden', expected: t.left.isHidden, actual: now.isHidden });
-  if (t.left.name !== null && now.name !== t.left.name) d.push({ path: 'name', expected: t.left.name, actual: now.name });
+  if (now.folderId !== t.left.folderId)
+    d.push({ path: 'folder', expected: t.left.folderId, actual: now.folderId });
+  if (now.isHidden !== t.left.isHidden)
+    d.push({ path: 'hidden', expected: t.left.isHidden, actual: now.isHidden });
+  if (t.left.name !== null && now.name !== t.left.name)
+    d.push({ path: 'name', expected: t.left.name, actual: now.name });
   if (d.length > 0) return changed(t, 'the asset has changed since the job (moved, renamed or hidden)', d);
   const check: StepSpec = {
     op: EXPECT_STEP,
@@ -631,7 +736,11 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
     };
     const steps: StepSpec[] = [
       check,
-      { op: 'updateAsset', params: { path: { assetId: t.assetId }, body }, journalOperation: journalOp(io, t) },
+      {
+        op: 'updateAsset',
+        params: { path: { assetId: t.assetId }, body },
+        journalOperation: journalOp(io, t),
+      },
       {
         op: VERIFY_STEP,
         params: { body: { targets: [{ kind: 'asset', label: t.what, assetId: t.assetId, fields: body }] } },
@@ -661,15 +770,28 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
       op: VERIFY_STEP,
       params: {
         body: {
-          targets: [{ kind: 'asset', label: t.what, assetId: t.assetId, fields: { isHidden: true }, folderFrom: { step: 2 } }],
+          targets: [
+            {
+              kind: 'asset',
+              label: t.what,
+              assetId: t.assetId,
+              fields: { isHidden: true },
+              folderFrom: { step: 2 },
+            },
+          ],
         },
       },
     },
   ];
-  return ready(t, `moved to “${io.stagingFolder}”, hidden (the asset is kept; it is back on the Staging page)`, steps, {
-    assets: [t.assetId],
-    image: { assetId: t.assetId, stagedId: t.stagedId, folderStep: 2 },
-  });
+  return ready(
+    t,
+    `moved to “${io.stagingFolder}”, hidden (the asset is kept; it is back on the Staging page)`,
+    steps,
+    {
+      assets: [t.assetId],
+      image: { assetId: t.assetId, stagedId: t.stagedId, folderStep: 2 },
+    },
+  );
 }
 
 // ------------------------------------------------------------------------------------------------ joining the parts
@@ -688,7 +810,8 @@ export function shiftStep(s: StepSpec, by: number): StepSpec {
   if (s.op === VERIFY_STEP && isObj(s.params?.body) && Array.isArray(s.params.body.targets)) {
     const targets = (s.params.body.targets as Obj[]).map((t) => {
       const o: Obj = { ...t };
-      if (isObj(t.inputFrom) && typeof t.inputFrom.step === 'number') o.inputFrom = { ...t.inputFrom, step: n(t.inputFrom.step) };
+      if (isObj(t.inputFrom) && typeof t.inputFrom.step === 'number')
+        o.inputFrom = { ...t.inputFrom, step: n(t.inputFrom.step) };
       if (Array.isArray(t.inputFrom))
         o.inputFrom = (t.inputFrom as Obj[]).map((x) => ({ ...x, step: n(Number(x.step)) }));
       if (isObj(t.assetFrom)) o.assetFrom = { step: n(Number(t.assetFrom.step)) };

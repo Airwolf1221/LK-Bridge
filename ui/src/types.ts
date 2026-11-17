@@ -2370,9 +2370,19 @@ export interface ReviewChange {
   markdownDiff?: MarkdownDiff;
   document?: { id: string; name: string | null };
   facts?: { key: string; before: string | null; after: string | null }[];
-  links?: { title: string; added: { id: string; name: string | null }[]; removed: { id: string; name: string | null }[] }[];
+  links?: {
+    title: string;
+    added: { id: string; name: string | null }[];
+    removed: { id: string; name: string | null }[];
+  }[];
   fields?: { field: string; before: unknown; after: unknown }[];
-  notRevertible?: { reason: string; deletion: boolean; creation: boolean; instead: string | null; journal: number[] };
+  notRevertible?: {
+    reason: string;
+    deletion: boolean;
+    creation: boolean;
+    instead: string | null;
+    journal: number[];
+  };
 }
 
 export interface ReviewDetail extends ReviewItem {

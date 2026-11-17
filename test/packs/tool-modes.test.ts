@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
 /**
  * v3 F3.4 (ADR 0055 decision D): each pack write tool's "always propose" switch, in the pack's data. The seed's
  * defaults (the three creation tools always propose; adding art and an appraisal fix follow the agent's scope; any other
@@ -69,9 +69,9 @@ describe('the Packs page’s switches', () => {
       version: after.version,
       tools: expect.objectContaining({ arkona_add_character_art: 'propose' }),
     });
-    expect(packs().commands.setToolModes('owner', 'arkona', { arkona_add_character_art: 'propose' }).version).toBe(
-      after.version,
-    );
+    expect(
+      packs().commands.setToolModes('owner', 'arkona', { arkona_add_character_art: 'propose' }).version,
+    ).toBe(after.version);
     expect(() => packs().commands.setToolModes('owner', 'arkona', { arkona_delete_world: 'scope' })).toThrow(
       /no write tool/,
     );

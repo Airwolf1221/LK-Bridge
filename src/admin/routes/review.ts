@@ -26,7 +26,11 @@ const filterQuery = z.object({
 function services(ctx: Parameters<Register>[1]): { review: ReviewService; reverts: RevertService } {
   const { review, reverts } = ctx.deps.runtime;
   if (!review || !reverts)
-    throw new AdminHttpError(503, 'REVIEW_UNAVAILABLE', 'The review of direct writes is not available in this bridge.');
+    throw new AdminHttpError(
+      503,
+      'REVIEW_UNAVAILABLE',
+      'The review of direct writes is not available in this bridge.',
+    );
   return { review, reverts };
 }
 
@@ -69,7 +73,8 @@ export const registerReview: Register = (api, ctx) => {
     const { review } = services(ctx);
     const c = review.counts(project.id);
     const byProject: Record<string, number> = {};
-    for (const p of ctx.deps.runtime.projects.list()) if (p.id) byProject[p.name] = c.byProject.get(p.id) ?? 0;
+    for (const p of ctx.deps.runtime.projects.list())
+      if (p.id) byProject[p.name] = c.byProject.get(p.id) ?? 0;
     return { project, unreviewed: c.unreviewed, byProject };
   });
 
@@ -78,7 +83,12 @@ export const registerReview: Register = (api, ctx) => {
     const { jobId } = parseInput(z.object({ jobId: idSchema }), req.params);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     const item = services(ctx).review.detail(project.id, jobId);
-    if (!item) throw new AdminHttpError(404, 'NOT_A_DIRECT_WRITE', `Job ${jobId} is not a direct write in this project.`);
+    if (!item)
+      throw new AdminHttpError(
+        404,
+        'NOT_A_DIRECT_WRITE',
+        `Job ${jobId} is not a direct write in this project.`,
+      );
     return redactDeep({ item }, { maxString: 200_000, maxItems: 5000, maxKeys: 1000, maxDepth: 64 });
   });
 
@@ -99,7 +109,10 @@ export const registerReview: Register = (api, ctx) => {
       z
         .object({
           filter: z
-            .object({ profile: z.string().min(1).max(64).optional(), tool: z.string().min(1).max(200).optional() })
+            .object({
+              profile: z.string().min(1).max(64).optional(),
+              tool: z.string().min(1).max(200).optional(),
+            })
             .strict()
             .default({}),
           expect: z.number().int().min(0),
@@ -128,7 +141,10 @@ export const registerReview: Register = (api, ctx) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     try {
-      return redactDeep({ preview: await services(ctx).reverts.preview(project.id, id) }, { maxString: 20_000 });
+      return redactDeep(
+        { preview: await services(ctx).reverts.preview(project.id, id) },
+        { maxString: 20_000 },
+      );
     } catch (e) {
       if (e instanceof RevertError) throw new AdminHttpError(REVERT_STATUS[e.code] ?? 409, e.code, e.message);
       throw e;

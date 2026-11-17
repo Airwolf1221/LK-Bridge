@@ -5,7 +5,7 @@
  * next request); the owner's change of a rail is audited; and switching every rail off never removes a proposal the
  * canon guard asks for.
  */
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ALL_PROJECTS } from '../../src/projects/index.js';
@@ -46,7 +46,7 @@ describe('the default rails at scope write', () => {
     // The agent reads the reason back with its own proposals.
     const mine = await w.stack.call(agent, 'bridge_proposal_status', { proposalId: p.id });
     expect(mine.body.proposedBecause ?? mine.body.proposal?.proposedBecause).toBe(p.proposedBecause);
-    await w.stack.runtime.policy.commands.reject('owner', p.id, 'test');
+    w.stack.runtime.policy.commands.reject('owner', p.id, 'test');
   });
 
   it('a bulk change: 10 pages run directly, 11 become a proposal (N = 10)', async () => {
@@ -67,7 +67,7 @@ describe('the default rails at scope write', () => {
     expect(eleven.body.status, eleven.text).toBe('proposal_captured');
     expect(eleven.body.proposedBecause).toBe('proposed because: bulk change (11 pages > 10)');
     expect(writes()).toBe(before);
-    await w.stack.runtime.policy.commands.reject('owner', String(eleven.body.proposalId), 'test');
+    w.stack.runtime.policy.commands.reject('owner', String(eleven.body.proposalId), 'test');
   });
 
   it('a rename runs directly by default; once the owner switches the rail on, the next one is proposed', async () => {
@@ -90,7 +90,7 @@ describe('the default rails at scope write', () => {
     expect(proposed.body.proposedBecause).toBe(
       'proposed because: rename of a page (“Loose notes, renamed” → “Loose notes, renamed again”)',
     );
-    await cmd.reject('owner', String(proposed.body.proposalId), 'test');
+    cmd.reject('owner', String(proposed.body.proposalId), 'test');
     cmd.setRails('owner', profileId, { renamesMoves: false });
   });
 });
@@ -109,7 +109,7 @@ describe('the rails can only add proposals', () => {
     const p = proposal(String(r.body.proposalId));
     expect(p.requiresCanonicalApproval).toBe(true);
     expect(p.proposedBecause).toBeNull();
-    await cmd.reject('owner', p.id, 'test');
+    cmd.reject('owner', p.id, 'test');
   });
 
   it('every rail off: a delete runs directly (the owner chose so)', async () => {
@@ -133,6 +133,6 @@ describe('the rails can only add proposals', () => {
     expect(r.body.status, r.text).toBe('proposal_captured');
     expect(r.body.proposedBecause).toBeUndefined();
     expect(proposal(String(r.body.proposalId)).proposedBecause).toBeNull();
-    await w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
+    w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
   });
 });

@@ -709,9 +709,9 @@ function ToolSwitches({ pack, onChanged }: { pack: PackView; onChanged: () => vo
     <div className="tool-switches">
       <h3>Tools at scope write</h3>
       <p className="muted small-text">
-        Always propose: every package is a proposal for you, whatever the agent’s scope. Off: the tool follows the
-        agent’s scope (at scope write it runs directly, under the agent’s safety rails; canon and lifecycle changes
-        stay proposals).
+        Always propose: every package is a proposal for you, whatever the agent’s scope. Off: the tool follows
+        the agent’s scope (at scope write it runs directly, under the agent’s safety rails; canon and
+        lifecycle changes stay proposals).
       </p>
       <ul className="plain">
         {modes.map((t) => (

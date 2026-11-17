@@ -512,7 +512,12 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   // Working owner keeps its specialist tag. `-f3d` (ADR 0053, 17 November 2026; session F3.3): the lifecycle tag leads on
   // Arkona. `-f3-4` (ADR 0055, 17 November 2026; session F3.4): the per-tool "always propose" switches.
   seed: 'arkona-2026-11-17-f3-4',
-  supersedes: ['arkona-2026-11-16', 'arkona-2026-11-16-f3b', 'arkona-2026-11-16-f3b1', 'arkona-2026-11-17-f3d'],
+  supersedes: [
+    'arkona-2026-11-16',
+    'arkona-2026-11-16-f3b',
+    'arkona-2026-11-16-f3b1',
+    'arkona-2026-11-17-f3d',
+  ],
   rules,
   governance: [
     {

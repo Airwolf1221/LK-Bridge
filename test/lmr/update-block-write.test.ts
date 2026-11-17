@@ -86,7 +86,9 @@ const preImageOf = (jobId: string) =>
 describe('a direct updateBlock at scope write', () => {
   it('a typo fix is not a major revision: the block was read once, kept as its pre-image', async () => {
     const reads = blockReads();
-    const { job } = await updateBlock('The envoy reached the Holow Court at dusk and was received by the regent.');
+    const { job } = await updateBlock(
+      'The envoy reached the Holow Court at dusk and was received by the regent.',
+    );
     expect(blockReads()).toBe(reads + 1);
     expect(preImageOf(job.id)?.preImage?.content?.[0]?.text).toContain('Hollow Court');
     expect(JSON.stringify(job.result)).toContain('not a major revision');
@@ -102,7 +104,9 @@ describe('a direct updateBlock at scope write', () => {
 
   it('with lastMajorRevision "skip" the rule needs no "before": no read, no pre-image', async () => {
     const reads = blockReads();
-    const { job } = await updateBlock('The envoy reached the Hollow Court at dawn.', { lastMajorRevision: 'skip' });
+    const { job } = await updateBlock('The envoy reached the Hollow Court at dawn.', {
+      lastMajorRevision: 'skip',
+    });
     expect(blockReads()).toBe(reads);
     expect(preImageOf(job.id)?.preImage ?? null).toBeNull();
     expect(lmr()).toBe(OLD);

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * v3 F3.4 (ADR 0055 decision B): Revert of a direct chronology change, its table rows and timeline events kept in step
  * as the chronology tools keep them, against the mock chronology (the real server, MCP, policy, engine and the
@@ -15,11 +14,16 @@ let w: ChronologyWorld;
 let client: Client;
 let profileId: string;
 const FOURTH = 'Fourth Arkonan Age';
-const call = (tool: string, args: Record<string, unknown>) => w.stack.call(client, tool, { project: 'test', ...args });
+const call = (tool: string, args: Record<string, unknown>) =>
+  w.stack.call(client, tool, { project: 'test', ...args });
 const rt = () => w.stack.runtime;
 const waitJob = (id: string) => rt().engine.wait(PROJECT, id, 25_000);
 const jobOf = (r: { body: Record<string, unknown> }) => String(r.body.jobId);
-const eventNames = () => w.events(w.ages[FOURTH]!.timeline).map((e) => String(e.name)).sort();
+const eventNames = () =>
+  w
+    .events(w.ages[FOURTH]!.timeline)
+    .map((e) => String(e.name))
+    .sort();
 
 beforeAll(async () => {
   w = await chronologyWorld({
@@ -108,7 +112,9 @@ describe('Revert of a chronology change', () => {
     expect(w.count(FOURTH)).toBe(String(Number(before.c4) - 1));
     const job = await revert(jobId);
     expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
-    expect({ fourth: w.rows(FOURTH), third: w.rows(THIRD), c4: w.count(FOURTH), c3: w.count(THIRD) }).toEqual(before);
+    expect({ fourth: w.rows(FOURTH), third: w.rows(THIRD), c4: w.count(FOURTH), c3: w.count(THIRD) }).toEqual(
+      before,
+    );
     expect(w.events(w.ages[FOURTH]!.timeline).some((e) => String(e.name).includes('comet'))).toBe(true);
     expect(w.events(w.ages[THIRD]!.timeline).some((e) => String(e.name).includes('comet'))).toBe(false);
   });
@@ -171,10 +177,12 @@ describe('operation_id at scope write (ADR 0055 decision F)', () => {
     expect(first.body.status, first.text).toBe('proposal_captured');
     expect(first.body.proposedBecause).toMatch(/^proposed because: deletes? \(/);
     const again = await ask();
-    expect(again.body).toMatchObject({ repeated: true, proposalId: first.body.proposalId });
-    expect(rt().policy.proposals.list({ project: PROJECT, state: 'pending' }).map((p) => p.id)).toEqual([
-      first.body.proposalId,
-    ]);
+    expect(again.body).toMatchObject({ repeated: true, proposalId: String(first.body.proposalId) });
+    expect(
+      rt()
+        .policy.proposals.list({ project: PROJECT, state: 'pending' })
+        .map((p) => p.id),
+    ).toEqual([String(first.body.proposalId)]);
     rt().policy.commands.reject('owner', String(first.body.proposalId), 'test');
   });
 });

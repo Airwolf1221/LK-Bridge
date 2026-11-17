@@ -14,7 +14,6 @@
  * Canon (ADR 0036 decision 6, option (a), decided 11 November 2026): these edits are ordinary edits on an Authoritative
  * page, never canon-gated; only deleting a whole timeline document of an Authoritative page is canonical.
  */
-import { requireOperation } from '../../lk/registry.js';
 import { keptEventFields } from '../../chronology/event-body.js';
 import { createHash } from 'node:crypto';
 import * as z from 'zod';

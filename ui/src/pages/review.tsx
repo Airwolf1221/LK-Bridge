@@ -24,7 +24,14 @@ import { useNow } from '../hooks';
 import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useReauth } from '../reauth';
 import { Link } from '../router';
-import type { ReviewChange, ReviewDetail, ReviewItem, ReviewResponse, RevertPreview, RevertTarget } from '../types';
+import type {
+  ReviewChange,
+  ReviewDetail,
+  ReviewItem,
+  ReviewResponse,
+  RevertPreview,
+  RevertTarget,
+} from '../types';
 import { MarkdownDiffView } from './proposals';
 
 const STATE_TEXT: Record<RevertTarget['state'], string> = {
@@ -43,7 +50,8 @@ const STATE_TONE: Record<RevertTarget['state'], 'ok' | 'warn' | 'bad' | 'neutral
   nothing_to_do: 'neutral',
 };
 
-const show = (v: unknown) => (v === null || v === undefined ? '(none)' : typeof v === 'string' ? v : prettyJson(v));
+const show = (v: unknown) =>
+  v === null || v === undefined ? '(none)' : typeof v === 'string' ? v : prettyJson(v);
 
 /**
  * Revert a finished direct-write job (owner): reads what a revert would do now (each target read live), asks for
@@ -92,8 +100,8 @@ export function RevertButton({
       message: (
         <>
           <p>
-            Each target is checked again inside the revert job before anything is written; an outside edit is never
-            overwritten. The journal and the snapshots keep everything as it was.
+            Each target is checked again inside the revert job before anything is written; an outside edit is
+            never overwritten. The journal and the snapshots keep everything as it was.
           </p>
           <ul className="revert-targets">
             {p.targets.map((t) => (
@@ -106,7 +114,8 @@ export function RevertButton({
                   <ul className="small-text">
                     {t.differences.slice(0, 5).map((d, i) => (
                       <li key={i}>
-                        <span className="mono">{d.path}</span>: the job left {show(d.expected)}, now {show(d.actual)}
+                        <span className="mono">{d.path}</span>: the job left {show(d.expected)}, now{' '}
+                        {show(d.actual)}
                       </li>
                     ))}
                   </ul>
@@ -157,7 +166,10 @@ function ChangeBody({ c }: { c: ReviewChange }) {
         )}
       </h4>
       {c.markdownDiff && (
-        <MarkdownDiffView diff={c.markdownDiff} title={c.document?.name ? `Text of “${c.document.name}”` : 'Text'} />
+        <MarkdownDiffView
+          diff={c.markdownDiff}
+          title={c.document?.name ? `Text of “${c.document.name}”` : 'Text'}
+        />
       )}
       {c.facts && c.facts.length > 0 && (
         <table className="facts">
@@ -201,7 +213,8 @@ function ChangeBody({ c }: { c: ReviewChange }) {
       {c.notRevertible && (
         <p className="note small-text">
           Revert does not put this back: {c.notRevertible.reason}
-          {c.notRevertible.journal.length > 0 && <> (journal entries {c.notRevertible.journal.join(', ')})</>}.
+          {c.notRevertible.journal.length > 0 && <> (journal entries {c.notRevertible.journal.join(', ')})</>}
+          .
         </p>
       )}
     </div>
@@ -215,7 +228,9 @@ function ItemDetail({ jobId }: { jobId: string }) {
   const item = d.data.item;
   return (
     <div className="review-detail">
-      {item.pageChanges.length === 0 && <p className="muted">The journal no longer holds this job’s changes.</p>}
+      {item.pageChanges.length === 0 && (
+        <p className="muted">The journal no longer holds this job’s changes.</p>
+      )}
       {item.pageChanges.map((g, i) => (
         <section key={g.page?.id ?? `none-${i}`} className="review-page">
           <h3>{g.page ? (g.page.name ?? g.page.id) : 'Not on a page'}</h3>
@@ -251,9 +266,13 @@ function ItemRow({ item, onChanged }: { item: ReviewItem; onChanged: () => void 
         </div>
         <div className="row">
           {item.status !== 'succeeded' && <StatusBadge status={item.status} />}
-          {item.reviewed && <Badge tone="ok">{item.reviewed.via === 'revert' ? 'reverted' : 'reviewed'}</Badge>}
+          {item.reviewed && (
+            <Badge tone="ok">{item.reviewed.via === 'revert' ? 'reverted' : 'reviewed'}</Badge>
+          )}
           {item.revert && item.revert.state !== 'succeeded' && (
-            <Badge tone={item.revert.state === 'submitted' ? 'warn' : 'bad'}>revert {item.revert.state}</Badge>
+            <Badge tone={item.revert.state === 'submitted' ? 'warn' : 'bad'}>
+              revert {item.revert.state}
+            </Badge>
           )}
         </div>
       </div>
@@ -359,8 +378,8 @@ export function ReviewPage() {
           )}
         </div>
         <p className="muted small-text">
-          Proposals you approved are not listed (you saw them before they happened); nor are canon and lifecycle
-          changes, which are always proposals.
+          Proposals you approved are not listed (you saw them before they happened); nor are canon and
+          lifecycle changes, which are always proposals.
         </p>
       </section>
       <ErrorNote error={r.error} onRetry={r.reload} />
@@ -368,7 +387,9 @@ export function ReviewPage() {
         !r.error && <Loading />
       ) : data.items.length === 0 ? (
         <Empty>
-          {state === 'unreviewed' ? 'Nothing to review: no unreviewed direct writes.' : 'No direct writes here.'}
+          {state === 'unreviewed'
+            ? 'Nothing to review: no unreviewed direct writes.'
+            : 'No direct writes here.'}
         </Empty>
       ) : (
         <ul className="review-list" role="list">

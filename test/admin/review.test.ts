@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call -- parsed JSON */
 /**
  * v3 F3.4 (ADR 0055): the admin API of write scope. Revert needs the owner's re-authentication and is audited
  * (`job.revert`), a refusal included; the Review queue lists an agent's direct write (never the bridge's own work), its
@@ -16,7 +16,11 @@ let profileId: string;
 
 beforeAll(async () => {
   s = await startAdminStack();
-  const profile = s.policy.commands.createProfile('owner', { label: 'review-api-agent', kind: 'other', scope: 'write' });
+  const profile = s.policy.commands.createProfile('owner', {
+    label: 'review-api-agent',
+    kind: 'other',
+    scope: 'write',
+  });
   profileId = profile.id;
   const created = new PatService({
     store: new AuthStore(s.db),
@@ -113,7 +117,10 @@ describe('Revert through the API', () => {
     expect(r.json.error.targets).toHaveLength(1);
     const audit = s.audit('job.revert');
     expect(audit).toHaveLength(before + 1);
-    expect(audit[0]!).toMatchObject({ target: jobId, after: { outcome: 'refused', code: 'NOTHING_TO_REVERT' } });
+    expect(audit[0]!).toMatchObject({
+      target: jobId,
+      after: { outcome: 'refused', code: 'NOTHING_TO_REVERT' },
+    });
   });
 
   it('an unknown job is 404, audited too', async () => {
@@ -133,7 +140,13 @@ describe('the safety rails and the pack tools’ switches', () => {
     reauth();
     const ok = await s.put(path, { rails: { renamesMoves: true, bulkPages: 25 }, confirm: true });
     expect(ok.status, JSON.stringify(ok.json)).toBe(200);
-    expect(ok.json.profile.rails).toEqual({ deletes: true, bulk: true, bulkPages: 25, renamesMoves: true, assets: true });
+    expect(ok.json.profile.rails).toEqual({
+      deletes: true,
+      bulk: true,
+      bulkPages: 25,
+      renamesMoves: true,
+      assets: true,
+    });
     const a = s.audit('profile.set_rails')[0]!;
     expect(a.target).toBe(profileId);
     expect(a.after).toMatchObject({ rails: { renamesMoves: true, bulkPages: 25 } });
@@ -165,7 +178,10 @@ describe('the safety rails and the pack tools’ switches', () => {
       source: 'switch',
     });
     expect(s.audit('pack.set_tool_modes')).toHaveLength(1);
-    const unknown = await s.put('/api/admin/packs/arkona/tools', { tools: { arkona_nope: 'scope' }, confirm: true });
+    const unknown = await s.put('/api/admin/packs/arkona/tools', {
+      tools: { arkona_nope: 'scope' },
+      confirm: true,
+    });
     expect(unknown.status).toBe(400);
     expect(unknown.json.error.code).toBe('UNKNOWN_TOOL');
   });

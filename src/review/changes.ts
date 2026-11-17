@@ -23,7 +23,11 @@ export interface ChangeView {
   readonly markdownDiff?: MarkdownDiff;
   readonly document?: { readonly id: string; readonly name: string | null };
   /** Facts: every row that changed (key, before, after). */
-  readonly facts?: readonly { readonly key: string; readonly before: string | null; readonly after: string | null }[];
+  readonly facts?: readonly {
+    readonly key: string;
+    readonly before: string | null;
+    readonly after: string | null;
+  }[];
   /** Link collections: the pages added and removed. */
   readonly links?: readonly {
     readonly title: string;
@@ -85,8 +89,12 @@ function linkDiff(
   const b = new Set(before.items.map(k));
   const a = new Set(after.items.map(k));
   return {
-    added: after.items.filter((i) => !b.has(k(i))).map((i) => ({ id: i.resourceId, name: name(i.resourceId) })),
-    removed: before.items.filter((i) => !a.has(k(i))).map((i) => ({ id: i.resourceId, name: name(i.resourceId) })),
+    added: after.items
+      .filter((i) => !b.has(k(i)))
+      .map((i) => ({ id: i.resourceId, name: name(i.resourceId) })),
+    removed: before.items
+      .filter((i) => !a.has(k(i)))
+      .map((i) => ({ id: i.resourceId, name: name(i.resourceId) })),
   };
 }
 
@@ -137,7 +145,9 @@ export function changeView(t: Target, n: ChangeNames = {}): ChangeView {
         fields: [
           {
             field: 'parent',
-            before: t.before.parentId ? (pageName(t.before.parentId) ?? t.before.parentId) : '(the top level)',
+            before: t.before.parentId
+              ? (pageName(t.before.parentId) ?? t.before.parentId)
+              : '(the top level)',
             after: t.left.parentId ? (pageName(t.left.parentId) ?? t.left.parentId) : '(the top level)',
           },
         ],
@@ -145,26 +155,42 @@ export function changeView(t: Target, n: ChangeNames = {}): ChangeView {
     case 'chronology': {
       const fields: { field: string; before: unknown; after: unknown }[] = [];
       for (const w of t.record.target.writes) {
-        if (w.kind === 'row.insert') fields.push({ field: `${w.age} table row`, before: null, after: rowLine(w.texts) });
+        if (w.kind === 'row.insert')
+          fields.push({ field: `${w.age} table row`, before: null, after: rowLine(w.texts) });
         if (w.kind === 'row.replace')
           fields.push({ field: `${w.age} table row`, before: rowLine(w.before), after: rowLine(w.texts) });
         if (w.kind === 'event.create')
-          fields.push({ field: `${w.age} timeline event`, before: null, after: String(w.body.name ?? w.eventId) });
+          fields.push({
+            field: `${w.age} timeline event`,
+            before: null,
+            after: typeof w.body.name === 'string' ? w.body.name : w.eventId,
+          });
         if (w.kind === 'event.update')
-          fields.push({ field: `${w.age} timeline event`, before: t.oldEvents[w.eventId] ?? null, after: w.fields });
+          fields.push({
+            field: `${w.age} timeline event`,
+            before: t.oldEvents[w.eventId] ?? null,
+            after: w.fields,
+          });
         if (w.kind === 'count')
-          fields.push({ field: `${w.age} count (Main table)`, before: null, after: `${w.delta > 0 ? '+' : ''}${w.delta}` });
+          fields.push({
+            field: `${w.age} count (Main table)`,
+            before: null,
+            after: `${w.delta > 0 ? '+' : ''}${w.delta}`,
+          });
       }
       return { ...base, fields };
     }
     case 'image': {
-      const folder = (id: string | null) => n.folderName?.(id) ?? (id ?? '(the library’s root)');
+      const folder = (id: string | null) => n.folderName?.(id) ?? id ?? '(the library’s root)';
       return {
         ...base,
         fields: [
           {
             field: 'place',
-            before: t.from.kind === 'created' ? 'staged on the bridge (not in LegendKeeper yet)' : `${folder(t.from.folderId)}${t.from.isHidden ? ', hidden' : ''}`,
+            before:
+              t.from.kind === 'created'
+                ? 'staged on the bridge (not in LegendKeeper yet)'
+                : `${folder(t.from.folderId)}${t.from.isHidden ? ', hidden' : ''}`,
             after: `${folder(t.left.folderId)}${t.left.isHidden ? ', hidden' : ''}`,
           },
           ...(t.from.kind === 'asset' && t.from.name !== t.left.name

@@ -40,7 +40,9 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 export interface ChronologyAccess {
   readiness(
     projectId: string,
-  ): { readonly ok: true; readonly config: ChronologyConfig } | { readonly ok: false; readonly message: string };
+  ):
+    | { readonly ok: true; readonly config: ChronologyConfig }
+    | { readonly ok: false; readonly message: string };
   /** The calendar the bridge last read, or null (then it is read: `listCalendars`). */
   calendar(projectId: string, calendarId?: string): Calendar | null;
   remember(projectId: string, definition: Obj): Calendar;
@@ -49,9 +51,12 @@ export interface ChronologyAccess {
 const EVENT_FIELDS = ['name', 'start', 'end', 'detail', 'laneId', 'uri'] as const;
 
 const same = (r: AgeRow, t: { description: string; date: string; kcy: string }) =>
-  sameText(r.description, t.description) && r.dateText.trim() === t.date.trim() && r.kcyText.trim() === t.kcy.trim();
+  sameText(r.description, t.description) &&
+  r.dateText.trim() === t.date.trim() &&
+  r.kcyText.trim() === t.kcy.trim();
 
-const rowLine = (t: { description: string; date: string; kcy: string }) => `${t.description} | ${t.date} | ${t.kcy}`;
+const rowLine = (t: { description: string; date: string; kcy: string }) =>
+  `${t.description} | ${t.date} | ${t.kcy}`;
 
 export async function planChronology(
   t: ChronologyUnitTarget,
@@ -90,11 +95,18 @@ export async function planChronology(
 
   // The documents as they are now.
   const tables = new Map<string, AgeTable>();
-  for (const doc of [...new Set(t.inverse.filter((w) => w.kind.startsWith('row.')).map((w) => w.documentId))]) {
+  for (const doc of [
+    ...new Set(t.inverse.filter((w) => w.kind.startsWith('row.')).map((w) => w.documentId)),
+  ]) {
     const r = await io.read('getDocumentBlocks', { path: { resourceId, documentId: doc } });
     if (!r.exists) return gone(t, 'an age table document is gone');
     const blocks = (r.body as { blocks?: unknown } | undefined)?.blocks;
-    const table = readAgeTable(Array.isArray(blocks) ? (blocks as unknown[]) : [], cal.parser, config.style.date, config.columns);
+    const table = readAgeTable(
+      Array.isArray(blocks) ? (blocks as unknown[]) : [],
+      cal.parser,
+      config.style.date,
+      config.columns,
+    );
     if (!table) return notRevertible(t, 'an age table document has no chronology table now');
     tables.set(doc, table);
   }
@@ -109,7 +121,9 @@ export async function planChronology(
   const events = new Map<string, Obj | null>();
   for (const w of t.inverse) {
     if ((w.kind !== 'event.delete' && w.kind !== 'event.update') || events.has(w.eventId)) continue;
-    const r = await io.read('getEvent', { path: { resourceId, documentId: w.documentId, eventId: w.eventId } });
+    const r = await io.read('getEvent', {
+      path: { resourceId, documentId: w.documentId, eventId: w.eventId },
+    });
     events.set(w.eventId, r.exists && isObj(r.body) ? r.body : null);
   }
   // An event the change deleted and made again: the old one must still be gone (it is made once more, as it was).
@@ -136,21 +150,34 @@ export async function planChronology(
       atBefore.push(row === null);
       atLeft.push(row !== null && same(row, w.texts));
       if (row && !same(row, w.texts))
-        diffs.push({ path: `${w.age} row ${w.rowId}`, expected: rowLine(w.texts), actual: rowLine(texts(row)) });
+        diffs.push({
+          path: `${w.age} row ${w.rowId}`,
+          expected: rowLine(w.texts),
+          actual: rowLine(texts(row)),
+        });
     } else if (w.kind === 'row.replace') {
       const row = tables.get(w.documentId)?.rows.find((r) => r.id === w.rowId) ?? null;
       atBefore.push(row !== null && same(row, w.texts));
       atLeft.push(row !== null && same(row, w.before));
-      if (!row) diffs.push({ path: `${w.age} row ${w.rowId}`, expected: rowLine(w.before), actual: '(gone)' });
+      if (!row)
+        diffs.push({ path: `${w.age} row ${w.rowId}`, expected: rowLine(w.before), actual: '(gone)' });
       else if (!same(row, w.before) && !same(row, w.texts))
-        diffs.push({ path: `${w.age} row ${w.rowId}`, expected: rowLine(w.before), actual: rowLine(texts(row)) });
+        diffs.push({
+          path: `${w.age} row ${w.rowId}`,
+          expected: rowLine(w.before),
+          actual: rowLine(texts(row)),
+        });
     } else if (w.kind === 'row.insert') {
       // A row the change moved to another age: gone from its old table now, back there once reverted.
       const row = tables.get(w.documentId)?.rows.find((r) => r.id === w.rowId) ?? null;
       atBefore.push(row !== null && same(row, w.texts));
       atLeft.push(row === null);
       if (row && !same(row, w.texts))
-        diffs.push({ path: `${w.age} row ${w.rowId}`, expected: '(moved away by the change)', actual: rowLine(texts(row)) });
+        diffs.push({
+          path: `${w.age} row ${w.rowId}`,
+          expected: '(moved away by the change)',
+          actual: rowLine(texts(row)),
+        });
     } else if (w.kind === 'event.create') {
       atBefore.push(false);
       atLeft.push(oldGone.get(w.eventId) === true);
@@ -159,19 +186,35 @@ export async function planChronology(
     } else if (w.kind === 'event.delete') {
       const e = events.get(w.eventId) ?? null;
       const want = jobEvents.get(w.eventId) ?? {};
-      const fieldsOk = e !== null && Object.entries(want).every(([k, v]) => stableJson(e[k] ?? null) === stableJson(v ?? null));
+      const fieldsOk =
+        e !== null &&
+        Object.entries(want).every(([k, v]) => stableJson(e[k] ?? null) === stableJson(v ?? null));
       atBefore.push(e === null);
       atLeft.push(fieldsOk);
-      if (e && !fieldsOk) diffs.push({ path: `${w.age} event ${w.eventId}`, expected: want, actual: pick(e, Object.keys(want)) });
+      if (e && !fieldsOk)
+        diffs.push({
+          path: `${w.age} event ${w.eventId}`,
+          expected: want,
+          actual: pick(e, Object.keys(want)),
+        });
     } else if (w.kind === 'event.update') {
       const e = events.get(w.eventId) ?? null;
       const want = jobEvents.get(w.eventId) ?? {};
-      const leftOk = e !== null && Object.entries(want).every(([k, v]) => stableJson(e[k] ?? null) === stableJson(v ?? null));
-      const backOk = e !== null && Object.entries(w.fields).every(([k, v]) => stableJson(e[k] ?? null) === stableJson(v ?? null));
+      const leftOk =
+        e !== null &&
+        Object.entries(want).every(([k, v]) => stableJson(e[k] ?? null) === stableJson(v ?? null));
+      const backOk =
+        e !== null &&
+        Object.entries(w.fields).every(([k, v]) => stableJson(e[k] ?? null) === stableJson(v ?? null));
       atBefore.push(backOk);
       atLeft.push(leftOk);
       if (!e) diffs.push({ path: `${w.age} event ${w.eventId}`, expected: want, actual: '(gone)' });
-      else if (!leftOk && !backOk) diffs.push({ path: `${w.age} event ${w.eventId}`, expected: want, actual: pick(e, Object.keys(want)) });
+      else if (!leftOk && !backOk)
+        diffs.push({
+          path: `${w.age} event ${w.eventId}`,
+          expected: want,
+          actual: pick(e, Object.keys(want)),
+        });
     } else if (w.kind === 'count') {
       const seen = record.observed.counts?.[w.rowId];
       const row = main?.rows.find((r) => r.id === w.rowId) ?? null;
@@ -186,9 +229,14 @@ export async function planChronology(
         diffs.push({ path: `${w.age} count`, expected: seen.after, actual: row?.countText ?? '(gone)' });
     }
   }
-  if (atBefore.length > 0 && atBefore.every(Boolean)) return nothing(t, 'the chronology is already as it was before the job');
+  if (atBefore.length > 0 && atBefore.every(Boolean))
+    return nothing(t, 'the chronology is already as it was before the job');
   if (!atLeft.every(Boolean))
-    return changed(t, 'the chronology has changed since the job (an outside edit is never overwritten)', diffs);
+    return changed(
+      t,
+      'the chronology has changed since the job (an outside edit is never overwritten)',
+      diffs,
+    );
 
   // The context the chronology's job builder needs, from the documents as read now.
   const rows: Record<string, WriteContext['rows'][string]> = {};
@@ -201,7 +249,8 @@ export async function planChronology(
     const synthetic = { ...table.table.block, children: [table.table.header.block, old] };
     const parsed = readAgeTable([synthetic], cal.parser, config.style.date, config.columns)?.rows[0];
     const date = parsed?.date ?? parsed?.eventDate ?? null;
-    if (!parsed || !date) return notRevertible(t, `the row’s old date “${w.texts.date}” cannot be read by the calendar`);
+    if (!parsed || !date)
+      return notRevertible(t, `the row’s old date “${w.texts.date}” cannot be read by the calendar`);
     rows[w.rowId] = {
       sortKey: sortKey(date),
       date: { start: date.start, end: date.end, detail: date.detail },
@@ -213,7 +262,8 @@ export async function planChronology(
   for (const [doc, table] of tables) tableIds[doc] = table.table.id ?? '';
   const counts: Record<string, { paragraphId: string; text: string; age: string }> = {};
   for (const r of main?.rows ?? [])
-    if (r.id && r.countCell?.paragraphId) counts[r.id] = { paragraphId: r.countCell.paragraphId, text: r.countText, age: r.age };
+    if (r.id && r.countCell?.paragraphId)
+      counts[r.id] = { paragraphId: r.countCell.paragraphId, text: r.countText, age: r.age };
   const lanes: Record<string, { id: string; name: string }> = {};
   for (const a of config.ages) lanes[a.timelineDocumentId] = { id: a.laneId, name: a.laneName };
   const eventsNow: Record<string, Obj> = {};
@@ -231,13 +281,18 @@ export async function planChronology(
   const unlinks =
     link !== null &&
     t.inverse.some(
-      (w) => (w.kind === 'event.delete' && w.eventId === link.eventId) || (w.kind === 'row.delete' && w.rowId === link.rowId),
+      (w) =>
+        (w.kind === 'event.delete' && w.eventId === link.eventId) ||
+        (w.kind === 'row.delete' && w.rowId === link.rowId),
     );
   // An event made once more pairs with the row it belonged to (the row put back, or the row the change rewrote).
   const remade = t.inverse.find((w) => w.kind === 'event.create');
   const rowBack = t.inverse.find((w) => w.kind === 'row.insert' || w.kind === 'row.replace');
   const relink =
-    remade && remade.kind === 'event.create' && rowBack && (rowBack.kind === 'row.insert' || rowBack.kind === 'row.replace')
+    remade &&
+    remade.kind === 'event.create' &&
+    rowBack &&
+    (rowBack.kind === 'row.insert' || rowBack.kind === 'row.replace')
       ? {
           age: rowBack.age,
           tableDocumentId: rowBack.documentId,
@@ -248,7 +303,9 @@ export async function planChronology(
       : null;
   const target: ChronologyTarget = {
     writes: t.inverse,
-    ...(unlinks && link && !(relink && relink.tableDocumentId === link.tableDocumentId && relink.rowId === link.rowId)
+    ...(unlinks &&
+    link &&
+    !(relink && relink.tableDocumentId === link.tableDocumentId && relink.rowId === link.rowId)
       ? { unlink: { tableDocumentId: link.tableDocumentId, rowId: link.rowId } }
       : {}),
     ...(relink ? { link: relink } : {}),
@@ -266,7 +323,9 @@ export async function planChronology(
     },
   });
   const steps = built.steps.map((s) =>
-    s.journalOperation ? { ...s, journalOperation: { ...s.journalOperation, revertOf: io.jobId, target: t.key } } : s,
+    s.journalOperation
+      ? { ...s, journalOperation: { ...s.journalOperation, revertOf: io.jobId, target: t.key } }
+      : s,
   );
   return {
     check: {
@@ -275,7 +334,9 @@ export async function planChronology(
       page: t.page,
       what: t.what,
       state: 'ready',
-      detail: built.labels.filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l)).join('; '),
+      detail: built.labels
+        .filter((l) => !['check', 'record', 'verify', 'record complete'].includes(l))
+        .join('; '),
     },
     steps,
     resources: [resourceId],

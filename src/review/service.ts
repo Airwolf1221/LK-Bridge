@@ -130,7 +130,7 @@ export class ReviewService {
       .journalLookup(projectId, { jobId, includePreImage: true, limit: 1000 })
       .slice()
       .reverse();
-    let chronology = null;
+    let chronology: ReturnType<NonNullable<ReviewDeps['chronology']>['byJob']> | null;
     try {
       chronology = this.d.chronology?.byJob(projectId, jobId) ?? null;
     } catch {
@@ -197,10 +197,7 @@ export class ReviewService {
       : {};
     const notePages = Array.isArray(note.pages) ? (note.pages as Obj[]) : [];
     const ids = [
-      ...new Set([
-        ...notePages.map((p) => String(p.id)),
-        ...this.journalPages(row.projectId, row.jobId),
-      ]),
+      ...new Set([...notePages.map((p) => String(p.id)), ...this.journalPages(row.projectId, row.jobId)]),
     ].slice(0, 50);
     return {
       jobId: row.jobId,
@@ -231,9 +228,9 @@ export class ReviewService {
   }
 
   private optionsOf(projectId: string, jobId: string): Obj {
-    const r = this.d.db.prepare('SELECT options FROM jobs WHERE id = ? AND project_id = ?').get(jobId, projectId) as
-      | { options: string | null }
-      | undefined;
+    const r = this.d.db
+      .prepare('SELECT options FROM jobs WHERE id = ? AND project_id = ?')
+      .get(jobId, projectId) as { options: string | null } | undefined;
     if (!r?.options) return {};
     try {
       const o = JSON.parse(r.options) as unknown;
@@ -252,7 +249,10 @@ export class ReviewService {
 
   /** The unreviewed count of a project (its badge), and of every project. */
   counts(projectId: string): { unreviewed: number; byProject: Map<string, number> } {
-    return { unreviewed: this.store.count(projectId, { state: 'unreviewed' }), byProject: this.store.unreviewedByProject() };
+    return {
+      unreviewed: this.store.count(projectId, { state: 'unreviewed' }),
+      byProject: this.store.unreviewedByProject(),
+    };
   }
 
   /** One item with what it changed, page by page. Null when the job is not a direct write of this project. */
@@ -263,7 +263,10 @@ export class ReviewService {
     const item = this.item(row, names);
     if (!item) return null;
     const targets = this.targets(projectId, jobId) ?? [];
-    const groups = new Map<string, { page: { id: string; name: string | null } | null; changes: ChangeView[] }>();
+    const groups = new Map<
+      string,
+      { page: { id: string; name: string | null } | null; changes: ChangeView[] }
+    >();
     const view = (t: Target) =>
       changeView(t, {
         pageName: (id) => this.d.pageName?.(projectId, id) ?? null,
@@ -291,7 +294,8 @@ export class ReviewService {
   markReviewed(actor: 'owner', projectId: string, jobIds: readonly string[]): string[] {
     if (actor !== 'owner') throw new Error('Only the owner reviews direct writes');
     const done = this.store.markReviewed(projectId, jobIds, 'owner', 'review');
-    for (const id of done) this.d.policy.audit('owner', 'review.mark', id, { reviewed: false }, { reviewed: true });
+    for (const id of done)
+      this.d.policy.audit('owner', 'review.mark', id, { reviewed: false }, { reviewed: true });
     return done;
   }
 
@@ -310,7 +314,13 @@ export class ReviewService {
     const ids = this.store.unreviewedIds(projectId, filter, MARK_ALL_LIMIT);
     if (ids.length !== expect) return { marked: [], count: ids.length, changed: true };
     const done = this.store.markReviewed(projectId, ids, 'owner', 'bulk');
-    this.d.policy.audit('owner', 'review.mark_all', projectId, { filter, count: ids.length }, { marked: done });
+    this.d.policy.audit(
+      'owner',
+      'review.mark_all',
+      projectId,
+      { filter, count: ids.length },
+      { marked: done },
+    );
     return { marked: done, count: ids.length, changed: false };
   }
 

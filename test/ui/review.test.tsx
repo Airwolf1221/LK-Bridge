@@ -21,7 +21,10 @@ function needsReauth(then: (c: Call) => unknown) {
     route: (c: Call) =>
       confirmed
         ? then(c)
-        : { status: 403, body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } } },
+        : {
+            status: 403,
+            body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
+          },
     reauth: () => {
       confirmed = true;
       return { until: Date.now() + 300_000 };
@@ -95,7 +98,11 @@ const detail = {
 };
 
 const reviewRoutes = (items = [item()]) => ({
-  'GET /review': { items, facets: { profiles: ['claude-code'], tools: ['write_page'] }, counts: { unreviewed: items.length, matching: items.length } },
+  'GET /review': {
+    items,
+    facets: { profiles: ['claude-code'], tools: ['write_page'] },
+    counts: { unreviewed: items.length, matching: items.length },
+  },
   'GET /review/job_direct1': { item: detail },
   'GET /review/counts': { unreviewed: items.length, byProject: { baisheng: items.length } },
 });
@@ -103,9 +110,15 @@ const reviewRoutes = (items = [item()]) => ({
 describe('the Review page', () => {
   it('lists a direct write with its agent, tool, summary and pages; shows its diff; Mark reviewed sends its id', async () => {
     const user = userEvent.setup();
-    const api = installApi({ ...baseRoutes(), ...reviewRoutes(), 'POST /review/mark': { marked: ['job_direct1'] } });
+    const api = installApi({
+      ...baseRoutes(),
+      ...reviewRoutes(),
+      'POST /review/mark': { marked: ['job_direct1'] },
+    });
     renderApp('/ui/review');
-    expect(await screen.findByText('write_page append on “Ashgate” (Main): 1 block added')).toBeInTheDocument();
+    expect(
+      await screen.findByText('write_page append on “Ashgate” (Main): 1 block added'),
+    ).toBeInTheDocument();
     expect(screen.getByText(/Claude Code \(PAT\) \(claude-code\) · write_page/)).toBeInTheDocument();
     expect(screen.getByText('Pages: Ashgate')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Show the changes' }));
@@ -146,7 +159,14 @@ describe('the Review page', () => {
           ready: 1,
           notReverted: 1,
           targets: [
-            { key: 'text:d1', kind: 'text', page: { id: 'ashg0001', name: 'Ashgate' }, what: 'page text', state: 'ready', detail: '1 block write' },
+            {
+              key: 'text:d1',
+              kind: 'text',
+              page: { id: 'ashg0001', name: 'Ashgate' },
+              what: 'page text',
+              state: 'ready',
+              detail: '1 block write',
+            },
             {
               key: 'facts:ashg0001',
               kind: 'facts',
@@ -154,7 +174,9 @@ describe('the Review page', () => {
               what: 'sidebar facts',
               state: 'changed',
               detail: 'the sidebar has changed since the job',
-              differences: [{ path: 'PROPERTIES Scope', expected: 'A walled port town', actual: 'Edited by hand' }],
+              differences: [
+                { path: 'PROPERTIES Scope', expected: 'A walled port town', actual: 'Edited by hand' },
+              ],
             },
           ],
         },
@@ -175,7 +197,10 @@ describe('the Review page', () => {
     await user.click(go);
     await reauthenticate(user);
     await screen.findByText('Revert submitted.');
-    expect(api.find('POST', '/jobs/job_direct1/revert').at(-1)!.body).toEqual({ confirm: true, confirmPartial: true });
+    expect(api.find('POST', '/jobs/job_direct1/revert').at(-1)!.body).toEqual({
+      confirm: true,
+      confirmPartial: true,
+    });
   });
 
   it('a revert that cannot apply says why and sends nothing', async () => {
@@ -207,7 +232,14 @@ describe('the Overview', () => {
       ...baseRoutes(),
       'GET /overview': {
         health: { lk: { ok: true }, keyRole: 'ADMIN', plan: 'ok', checkedAt: Date.now() },
-        controls: { writesPaused: false, draining: false, readOnly: false, readOnlyOverride: null, writersMax: 2, allowMemberAdmin: false },
+        controls: {
+          writesPaused: false,
+          draining: false,
+          readOnly: false,
+          readOnlyOverride: null,
+          writersMax: 2,
+          allowMemberAdmin: false,
+        },
         activeJobs: { total: 0, running: 0, queued: 0, waiting: 0, paused: 0, uncertain: 0 },
         errorsLastHour: { count: 0, capped: false },
         pendingProposals: 0,
@@ -226,7 +258,9 @@ describe('Clients & Access: the safety rails', () => {
   it('shows each write profile’s rails (the defaults) and saves a change after the password', async () => {
     const user = userEvent.setup();
     const writer = profiles.find((p) => p.scope === 'write') ?? profiles[0]!;
-    const gate = needsReauth((c) => ({ profile: { ...writer, rails: (c.body as { rails: unknown }).rails } }));
+    const gate = needsReauth((c) => ({
+      profile: { ...writer, rails: (c.body as { rails: unknown }).rails },
+    }));
     const api = installApi({
       ...baseRoutes(),
       'GET /clients': {
@@ -243,11 +277,19 @@ describe('Clients & Access: the safety rails', () => {
     renderApp('/ui/clients');
     const deletes = await screen.findByRole('switch', { name: `Always propose: Deletes (${writer.label})` });
     expect(deletes).toBeChecked();
-    expect(screen.getByRole('switch', { name: `Always propose: Renames and moves of pages (${writer.label})` })).not.toBeChecked();
-    expect(screen.getByRole('spinbutton', { name: `Bulk threshold, in pages (${writer.label})` })).toHaveValue(10);
-    await user.click(screen.getByRole('switch', { name: `Always propose: Renames and moves of pages (${writer.label})` }));
+    expect(
+      screen.getByRole('switch', { name: `Always propose: Renames and moves of pages (${writer.label})` }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole('spinbutton', { name: `Bulk threshold, in pages (${writer.label})` }),
+    ).toHaveValue(10);
+    await user.click(
+      screen.getByRole('switch', { name: `Always propose: Renames and moves of pages (${writer.label})` }),
+    );
     await user.click(screen.getByRole('button', { name: `Save rails for ${writer.label}` }));
-    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save the rails' }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save the rails' }),
+    );
     await reauthenticate(user);
     await screen.findByText('Rails saved.');
     expect(api.find('PUT', `/clients/profiles/${writer.id}/rails`).at(-1)!.body).toEqual({
@@ -288,10 +330,14 @@ describe('Packs: the tools’ switches', () => {
     renderApp('/ui/packs');
     const create = await screen.findByRole('switch', { name: 'Always propose: arkona_create_character' });
     expect(create).toBeChecked();
-    expect(screen.getByRole('switch', { name: 'Always propose: arkona_add_character_art' })).not.toBeChecked();
+    expect(
+      screen.getByRole('switch', { name: 'Always propose: arkona_add_character_art' }),
+    ).not.toBeChecked();
     await user.click(create);
     await user.click(screen.getByRole('button', { name: 'Save tool switches' }));
-    await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save as a new version' }));
+    await user.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Save as a new version' }),
+    );
     await reauthenticate(user);
     await screen.findByText('Saved as a new version: approve it to use it.');
     expect(api.find('PUT', '/packs/arkona/tools').at(-1)!.body).toEqual({

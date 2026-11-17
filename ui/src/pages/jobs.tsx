@@ -511,7 +511,9 @@ function JobDetailView({ id }: { id: string }) {
                 {!ACTIVE.includes(job.status) &&
                   job.principalId !== 'system' &&
                   job.approvedBy === null &&
-                  job.kind !== 'paginate_all' && <RevertButton jobId={job.id} project={project} onDone={d.reload} />}
+                  job.kind !== 'paginate_all' && (
+                    <RevertButton jobId={job.id} project={project} onDone={d.reload} />
+                  )}
               </span>
             </div>
             {job.uncertain && (

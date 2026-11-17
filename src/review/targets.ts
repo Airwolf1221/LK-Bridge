@@ -21,7 +21,7 @@ import { EXPECT_STEP, LMR_STEP, VERIFY_STEP, isBridgeStep } from '../jobs/intern
 import type { JournalEntry } from '../jobs/journal.js';
 import type { CollectionState, RowState } from '../jobs/sidebar-state.js';
 import type { JobView, OpParams, StepOptions } from '../jobs/types.js';
-import { BLOCKWISE_CHECK, applyBlockOps, stepOp, withoutVersions, type BlockOp } from '../pages/blockwise.js';
+import { BLOCKWISE_CHECK, applyBlockOps, stepOp, withoutVersions } from '../pages/blockwise.js';
 import type { ChronologyRecord, TargetWrite } from '../chronology/store.js';
 import { remadeEventBody } from '../chronology/event-body.js';
 import { mintClientId } from '../jobs/ids.js';
@@ -107,7 +107,12 @@ export interface FactsTarget extends Common {
     readonly left: CollectionState;
   }[];
   /** The Last Major Revision row the job set on this property (folded in: its value before and the date). */
-  readonly lmr?: { readonly rowId: string; readonly key: string; readonly before: string; readonly after: string };
+  readonly lmr?: {
+    readonly rowId: string;
+    readonly key: string;
+    readonly before: string;
+    readonly after: string;
+  };
 }
 
 export interface LmrTarget extends Common {
@@ -179,7 +184,11 @@ export interface ImageTarget extends Common {
         readonly isHidden: boolean;
       }
     | { readonly kind: 'created' };
-  readonly left: { readonly folderId: string | null; readonly name: string | null; readonly isHidden: boolean };
+  readonly left: {
+    readonly folderId: string | null;
+    readonly name: string | null;
+    readonly isHidden: boolean;
+  };
   /** Folders the job made for it (they stay: a revert never deletes an asset). */
   readonly foldersMade: readonly string[];
 }
@@ -209,7 +218,14 @@ export type Target =
 
 // ------------------------------------------------------------------------------------------------ classification
 
-const TEXT_DOC_OPS = new Set(['replaceDocumentBlocks', 'insertBlock', 'replaceBlock', 'updateBlock', 'deleteBlock', 'moveBlock']);
+const TEXT_DOC_OPS = new Set([
+  'replaceDocumentBlocks',
+  'insertBlock',
+  'replaceBlock',
+  'updateBlock',
+  'deleteBlock',
+  'moveBlock',
+]);
 const BLOCK_ROW_OPS = new Set([
   'createBlockRow',
   'updateBlockRow',
@@ -223,11 +239,23 @@ const BLOCK_ROW_OPS = new Set([
 ]);
 const ROW_OPS = new Set(['createPropertyRow', 'updatePropertyRow', 'deletePropertyRow']);
 const PAGE_CREATES = new Set(['createResource', 'createResourceFromTemplate', 'saveResourceAsTemplate']);
-const CHRONOLOGY_OPS = new Set(['insertBlock', 'replaceBlock', 'updateBlock', 'deleteBlock', 'moveBlock', 'createEvent', 'updateEvent', 'deleteEvent']);
+const CHRONOLOGY_OPS = new Set([
+  'insertBlock',
+  'replaceBlock',
+  'updateBlock',
+  'deleteBlock',
+  'moveBlock',
+  'createEvent',
+  'updateEvent',
+  'deleteEvent',
+]);
 
 /** Deletions: what each deletes, and what to use instead. */
 const DELETIONS: Readonly<Record<string, { what: string; instead?: string }>> = {
-  deleteResource: { what: 'a page deleted', instead: 'restore_resource (or Restore in the LegendKeeper app)' },
+  deleteResource: {
+    what: 'a page deleted',
+    instead: 'restore_resource (or Restore in the LegendKeeper app)',
+  },
   deleteDocument: { what: 'a document deleted', instead: 'restoreDocument through lk_api_write' },
   deleteEvent: { what: 'a timeline event deleted' },
   deleteLane: { what: 'a timeline lane deleted' },
@@ -315,8 +343,11 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       if (id) created.add(id);
     }
     if (s.opId === 'createManyResources') {
-      for (const r of Array.isArray(b.resources) ? b.resources : []) if (isObj(r) && str(r.id)) created.add(String(r.id));
-      for (const r of Array.isArray((s.result as Obj | null)?.resources) ? ((s.result as Obj).resources as unknown[]) : [])
+      for (const r of Array.isArray(b.resources) ? b.resources : [])
+        if (isObj(r) && str(r.id)) created.add(String(r.id));
+      for (const r of Array.isArray((s.result as Obj | null)?.resources)
+        ? ((s.result as Obj).resources as unknown[])
+        : [])
         if (isObj(r) && str(r.id)) created.add(String(r.id));
     }
   }
@@ -400,8 +431,12 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     }
     // Single blocks through the low-level tools: each insert, replace or update on its own.
     for (const s of ss) {
-      const blockId = s.opId === 'insertBlock' ? str((bodyOf(s.params).block as Obj | undefined)?.id) : s.params.path?.blockId;
-      if (!blockId || (s.opId !== 'insertBlock' && s.opId !== 'replaceBlock' && s.opId !== 'updateBlock')) continue;
+      const blockId =
+        s.opId === 'insertBlock'
+          ? str((bodyOf(s.params).block as Obj | undefined)?.id)
+          : s.params.path?.blockId;
+      if (!blockId || (s.opId !== 'insertBlock' && s.opId !== 'replaceBlock' && s.opId !== 'updateBlock'))
+        continue;
       const pre = preOf(s.stepNo);
       if (s.opId !== 'insertBlock' && !isObj(pre)) continue;
       handled.add(s.stepNo);
@@ -417,7 +452,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
         documentId: docId,
         blockId,
         change: s.opId === 'insertBlock' ? 'inserted' : s.opId === 'replaceBlock' ? 'replaced' : 'updated',
-        before: s.opId === 'insertBlock' ? null : withoutVersions([pre as Obj])[0]!,
+        before: s.opId === 'insertBlock' ? null : withoutVersions([pre])[0]!,
         sent: s.opId === 'insertBlock' ? (b.block as Obj) : b,
       });
     }
@@ -425,20 +460,30 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
 
   // 4. Sidebar facts and link collections (set_facts' check and verify steps; packs use the same).
   const verifies = verifyTargets(rec.steps);
-  const rowSteps = writes.filter((s) => (ROW_OPS.has(s.opId) || s.opId === 'updateProperty') && !handled.has(s.stepNo));
-  const factPages = [...new Set(rowSteps.map((s) => s.params.path?.resourceId).filter((x): x is string => !!x))];
+  const rowSteps = writes.filter(
+    (s) => (ROW_OPS.has(s.opId) || s.opId === 'updateProperty') && !handled.has(s.stepNo),
+  );
+  const factPages = [
+    ...new Set(rowSteps.map((s) => s.params.path?.resourceId).filter((x): x is string => !!x)),
+  ];
   for (const pid of factPages) {
     if (created.has(pid)) continue;
     const ss = rowSteps.filter((s) => s.params.path?.resourceId === pid);
     const rowsCheck = checks.find((c) => c.kind === 'propertyRows' && c.resourceId === pid);
     const sidebar = verifies.find((t) => t.kind === 'sidebar' && t.resourceId === pid);
     const props = Array.isArray(sidebar?.properties) ? (sidebar.properties as Obj[]) : [];
-    const rowsProp = rowsCheck ? props.find((p) => p.id === rowsCheck.propertyId && Array.isArray(p.rows)) : undefined;
+    const rowsProp = rowsCheck
+      ? props.find((p) => p.id === rowsCheck.propertyId && Array.isArray(p.rows))
+      : undefined;
     const explained = ss.every((s) =>
       ROW_OPS.has(s.opId)
-        ? rowsCheck !== undefined && s.params.path?.propertyId === rowsCheck.propertyId && rowsProp !== undefined
-        : checks.some((c) => c.kind === 'collection' && c.resourceId === pid && c.propertyId === s.params.path?.propertyId) &&
-          props.some((p) => p.id === s.params.path?.propertyId && isObj(p.collection)),
+        ? rowsCheck !== undefined &&
+          s.params.path?.propertyId === rowsCheck.propertyId &&
+          rowsProp !== undefined
+        : checks.some(
+            (c) =>
+              c.kind === 'collection' && c.resourceId === pid && c.propertyId === s.params.path?.propertyId,
+          ) && props.some((p) => p.id === s.params.path?.propertyId && isObj(p.collection)),
     );
     if (!explained) continue; // raw row writes: reported as not revertible below
     for (const s of ss) handled.add(s.stepNo);
@@ -457,16 +502,23 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       });
     const propertyId = rowsCheck ? String(rowsCheck.propertyId) : null;
     let rowsLeft = rowsProp ? (rowsProp.rows as RowState[]) : null;
-    const lmr = propertyId ? lmrs.find((l) => l.resourceId === pid && l.propertyId === propertyId) : undefined;
+    const lmr = propertyId
+      ? lmrs.find((l) => l.resourceId === pid && l.propertyId === propertyId)
+      : undefined;
     if (lmr && rowsLeft) {
-      rowsLeft = rowsLeft.map((r) => (r.id === lmr.rowId ? { ...r, content: lmr.after === '' ? [] : [{ text: lmr.after }] } : r));
+      rowsLeft = rowsLeft.map((r) =>
+        r.id === lmr.rowId ? { ...r, content: lmr.after === '' ? [] : [{ text: lmr.after }] } : r,
+      );
       lmrs.splice(lmrs.indexOf(lmr), 1);
     }
     targets.push({
       key: `facts:${pid}`,
       kind: 'facts',
       page: page(pid),
-      what: [rowsCheck ? 'sidebar facts' : '', collections.length ? collections.map((c) => c.title).join(', ') : '']
+      what: [
+        rowsCheck ? 'sidebar facts' : '',
+        collections.length ? collections.map((c) => c.title).join(', ') : '',
+      ]
         .filter(Boolean)
         .join(' and '),
       steps: ss.map((s) => s.stepNo),
@@ -483,7 +535,9 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
 
   // 5. Names, tags, aliases and icons; and moves.
   const resSteps = writes.filter((s) => s.opId === 'updateResource' && !handled.has(s.stepNo));
-  for (const pid of [...new Set(resSteps.map((s) => s.params.path?.resourceId).filter((x): x is string => !!x))]) {
+  for (const pid of [
+    ...new Set(resSteps.map((s) => s.params.path?.resourceId).filter((x): x is string => !!x)),
+  ]) {
     if (created.has(pid)) continue;
     const ss = resSteps.filter((s) => s.params.path?.resourceId === pid);
     const pre = preOf(ss[0]!.stepNo);
@@ -517,7 +571,9 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     });
   }
   const moveSteps = writes.filter((s) => s.opId === 'moveResource' && !handled.has(s.stepNo));
-  for (const pid of [...new Set(moveSteps.map((s) => s.params.path?.resourceId).filter((x): x is string => !!x))]) {
+  for (const pid of [
+    ...new Set(moveSteps.map((s) => s.params.path?.resourceId).filter((x): x is string => !!x)),
+  ]) {
     if (created.has(pid)) continue;
     const ss = moveSteps.filter((s) => s.params.path?.resourceId === pid);
     const pre = preOf(ss[0]!.stepNo);
@@ -564,7 +620,11 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
         name: str(b.name) ?? null,
         stagedId: str(op.stagedId) ?? null,
         from: { kind: 'created' },
-        left: { folderId: str(b.folderId) ?? str(r.folderId) ?? null, name: str(b.name) ?? null, isHidden: false },
+        left: {
+          folderId: str(b.folderId) ?? str(r.folderId) ?? null,
+          name: str(b.name) ?? null,
+          isHidden: false,
+        },
         foldersMade: madeFolders,
       });
     }
@@ -661,13 +721,13 @@ function replay(before: readonly Obj[], steps: readonly StepRecord[]): Obj[][] |
   for (const s of steps) {
     const next: Obj[][] = [];
     for (const st of states) {
-      let applied: Obj[] | null = null;
+      let applied: Obj[] | null;
       if (s.opId === 'replaceDocumentBlocks') {
         const blocks = bodyOf(s.params).blocks;
         if (!Array.isArray(blocks)) return null;
         applied = withoutVersions(blocks);
       } else {
-        const op = stepOp(s.opId, s.params as { path?: Obj; body?: unknown }) as BlockOp | null;
+        const op = stepOp(s.opId, s.params);
         if (!op) return null;
         try {
           applied = applyBlockOps(st, [op]);
@@ -706,7 +766,10 @@ function chronologyUnit(
   const record = rec.chronology!;
   const tool = record.tool;
   const mine = writes.filter(
-    (s) => CHRONOLOGY_OPS.has(s.opId) && isObj(s.options.journalOperation) && isObj(s.options.journalOperation.chronology),
+    (s) =>
+      CHRONOLOGY_OPS.has(s.opId) &&
+      isObj(s.options.journalOperation) &&
+      isObj(s.options.journalOperation.chronology),
   );
   if (mine.length === 0) return null;
   const steps = mine.map((s) => s.stepNo);
@@ -729,7 +792,9 @@ function chronologyUnit(
     steps,
   });
   if (record.state !== 'complete')
-    return refuse('a chronology change that did not finish (its record is incomplete): resolve it on the Chronology page first');
+    return refuse(
+      'a chronology change that did not finish (its record is incomplete): resolve it on the Chronology page first',
+    );
   // A delete with no creation of its replacement in the same change is a deletion (never reverted). A delete paired with
   // one (an event whose end was removed is made again; a row and event moved to another age) is an edit of its shape.
   const count = (k: TargetWrite['kind']) => record.target.writes.filter((w) => w.kind === k).length;
@@ -749,7 +814,8 @@ function chronologyUnit(
         // The row moved to another age: it comes back where it was, as it was (its block, kept by the delete).
         const step = mine.find((s) => s.opId === 'deleteBlock' && s.params.path?.blockId === w.rowId);
         const old = step ? preOf(step.stepNo) : null;
-        if (!isObj(old)) return refuse(`the table row ${w.rowId} as it was before the change is not in the journal`);
+        if (!isObj(old))
+          return refuse(`the table row ${w.rowId} as it was before the change is not in the journal`);
         const block = withoutVersions([old])[0]!;
         oldRows[w.rowId] = block;
         inverse.push({
@@ -767,7 +833,8 @@ function chronologyUnit(
         // The event the change made again (or moved): made once more as it was, under a new id.
         const step = mine.find((s) => s.opId === 'deleteEvent' && s.params.path?.eventId === w.eventId);
         const old = step ? preOf(step.stepNo) : null;
-        if (!isObj(old)) return refuse(`the timeline event ${w.eventId} as it was before the change is not in the journal`);
+        if (!isObj(old))
+          return refuse(`the timeline event ${w.eventId} as it was before the change is not in the journal`);
         const id = mintClientId();
         oldEvents[id] = old;
         inverse.push({
@@ -793,7 +860,8 @@ function chronologyUnit(
       case 'row.replace': {
         const step = mine.find((s) => s.opId === 'replaceBlock' && s.params.path?.blockId === w.rowId);
         const old = step ? preOf(step.stepNo) : null;
-        if (!isObj(old)) return refuse(`the table row ${w.rowId} as it was before the change is not in the journal`);
+        if (!isObj(old))
+          return refuse(`the table row ${w.rowId} as it was before the change is not in the journal`);
         const block = withoutVersions([old])[0]!;
         oldRows[w.rowId] = block;
         inverse.push({
@@ -809,19 +877,33 @@ function chronologyUnit(
         break;
       }
       case 'event.create':
-        inverse.push({ kind: 'event.delete', age: w.age, resourceId: w.resourceId, documentId: w.documentId, eventId: w.eventId });
+        inverse.push({
+          kind: 'event.delete',
+          age: w.age,
+          resourceId: w.resourceId,
+          documentId: w.documentId,
+          eventId: w.eventId,
+        });
         break;
       case 'event.update': {
         const step = mine.find((s) => s.opId === 'updateEvent' && s.params.path?.eventId === w.eventId);
         const old = step ? preOf(step.stepNo) : null;
-        if (!isObj(old)) return refuse(`the timeline event ${w.eventId} as it was before the change is not in the journal`);
+        if (!isObj(old))
+          return refuse(`the timeline event ${w.eventId} as it was before the change is not in the journal`);
         const fields = Object.fromEntries(
           Object.keys(w.fields)
             .filter((k) => (EVENT_FIELDS as readonly string[]).includes(k))
             .map((k) => [k, old[k] ?? null]),
         );
         oldEvents[w.eventId] = fields;
-        inverse.push({ kind: 'event.update', age: w.age, resourceId: w.resourceId, documentId: w.documentId, eventId: w.eventId, fields });
+        inverse.push({
+          kind: 'event.update',
+          age: w.age,
+          resourceId: w.resourceId,
+          documentId: w.documentId,
+          eventId: w.eventId,
+          fields,
+        });
         break;
       }
       case 'count':

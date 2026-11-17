@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
 /**
  * v3 F3.4 (ADR 0055 decisions A and B) end to end, through the real server, MCP transport, policy and engine against
  * the mock LegendKeeper, at scope `write`:
@@ -48,14 +47,16 @@ beforeAll(async () => {
 });
 afterAll(async () => w.close());
 
-const call = (tool: string, args: Record<string, unknown>) => w.stack.call(agent, tool, { project: 'test', ...args });
+const call = (tool: string, args: Record<string, unknown>) =>
+  w.stack.call(agent, tool, { project: 'test', ...args });
 const rt = () => w.stack.runtime;
 const waitJob = (id: string) => rt().engine.wait(PROJECT, id, 25_000);
 const docOf = (page: string) => w.repo.liveDocs(w.repo.live(page)!).find((d) => d.name === 'Main')!.id;
-const blocksOf = (page: string) => w.repo.blocks.get(docOf(page))!.blocks as unknown[];
+const blocksOf = (page: string) => w.repo.blocks.get(docOf(page))!.blocks;
 const rows = (page: string) => w.sidebars.rows(page).map((r) => `${r.key}=${r.text}`);
 const resource = (id: string) => w.repo.live(id)!;
-const jobOf = (r: { body: Record<string, unknown> }) => String(r.body.jobId ?? (r.body.job as { id?: string })?.id);
+const jobOf = (r: { body: Record<string, unknown> }): string =>
+  typeof r.body.jobId === 'string' ? r.body.jobId : String((r.body.job as { id?: string } | undefined)?.id);
 
 /** Reverts a job as the owner and waits for the revert's own job. */
 async function revert(jobId: string, confirmPartial = false) {
@@ -68,7 +69,11 @@ async function revert(jobId: string, confirmPartial = false) {
 describe('the review queue (decision A)', () => {
   it('lists a direct write with its agent, tool, summary, pages and diff; reviewing it takes it off the count', async () => {
     const before = rt().review.store.count(PROJECT, { state: 'unreviewed' });
-    const r = await call('write_page', { page: P.ashgate, mode: 'append', markdown: 'The gate was rebuilt in stone.' });
+    const r = await call('write_page', {
+      page: P.ashgate,
+      mode: 'append',
+      markdown: 'The gate was rebuilt in stone.',
+    });
     expect(r.body.status, r.text).toBe('written');
     const jobId = jobOf(r);
     await waitJob(jobId);
@@ -88,7 +93,11 @@ describe('the review queue (decision A)', () => {
     expect(JSON.stringify(text.markdownDiff!.hunks)).toContain('The gate was rebuilt in stone.');
     expect(rt().review.markReviewed('owner', PROJECT, [jobId])).toEqual([jobId]);
     expect(rt().review.store.count(PROJECT, { state: 'unreviewed' })).toBe(before);
-    expect(rt().review.list(PROJECT).some((i) => i.jobId === jobId)).toBe(false);
+    expect(
+      rt()
+        .review.list(PROJECT)
+        .some((i) => i.jobId === jobId),
+    ).toBe(false);
     expect(rt().policy.store.listAudit({ action: 'review.mark', limit: 1 })[0]!.target).toBe(jobId);
   });
 
@@ -110,7 +119,11 @@ describe('the review queue (decision A)', () => {
     }
     await waitJob(jobId!);
     expect(rt().review.store.get(PROJECT, jobId!)).toBeNull();
-    expect(rt().review.list(PROJECT, { state: 'all' }).some((i) => i.jobId === jobId)).toBe(false);
+    expect(
+      rt()
+        .review.list(PROJECT, { state: 'all' })
+        .some((i) => i.jobId === jobId),
+    ).toBe(false);
     // Nor reverted from here: it was a proposal.
     const r = await rt().reverts.revert('owner', PROJECT, jobId!);
     expect(r).toMatchObject({ status: 'refused', code: 'WAS_A_PROPOSAL' });
@@ -155,10 +168,19 @@ describe('Revert, kind by kind (decision B)', () => {
     // Reverted: reviewed, recorded and audited.
     expect(rt().review.store.get(PROJECT, jobId)!.reviewedVia).toBe('revert');
     const audits = rt().policy.store.listAudit({ action: 'job.revert', limit: 2 });
-    expect(audits.map((a) => (a.after as { outcome: string }).outcome).sort()).toEqual(['submitted', 'succeeded']);
+    expect(audits.map((a) => (a.after as { outcome: string }).outcome).sort()).toEqual([
+      'submitted',
+      'succeeded',
+    ]);
     // A revert is never itself reverted, and a job is reverted once.
-    expect(await rt().reverts.revert('owner', PROJECT, job!.id)).toMatchObject({ status: 'refused', code: 'IS_A_REVERT' });
-    expect(await rt().reverts.revert('owner', PROJECT, jobId)).toMatchObject({ status: 'refused', code: 'ALREADY_REVERTED' });
+    expect(await rt().reverts.revert('owner', PROJECT, job!.id)).toMatchObject({
+      status: 'refused',
+      code: 'IS_A_REVERT',
+    });
+    expect(await rt().reverts.revert('owner', PROJECT, jobId)).toMatchObject({
+      status: 'refused',
+      code: 'ALREADY_REVERTED',
+    });
   });
 
   it('sidebar facts and a link collection: every row and link back, in place', async () => {
@@ -186,7 +208,11 @@ describe('Revert, kind by kind (decision B)', () => {
 
   it('a page’s name, tags and aliases, and its place among its siblings after the rename', async () => {
     const page = 'bk000002';
-    const before = { name: resource(page).name, tags: [...(resource(page).tags ?? [])], aliases: [...(resource(page).aliases ?? [])] };
+    const before = {
+      name: resource(page).name,
+      tags: [...(resource(page).tags ?? [])],
+      aliases: [...(resource(page).aliases ?? [])],
+    };
     const r = await call('update_resource', {
       page,
       name: '[BSRC] Aaa Source of the Hollow cycle',
@@ -200,13 +226,17 @@ describe('Revert, kind by kind (decision B)', () => {
     const { r: rv, job } = await revert(jobId);
     expect(rv.status, JSON.stringify(rv)).toBe('submitted');
     expect(job!.status, JSON.stringify(job!.lastError)).toBe('succeeded');
-    expect({ name: resource(page).name, tags: resource(page).tags ?? [], aliases: resource(page).aliases ?? [] }).toEqual(before);
+    expect({
+      name: resource(page).name,
+      tags: resource(page).tags ?? [],
+      aliases: resource(page).aliases ?? [],
+    }).toEqual(before);
   });
 
   it('a move: back under its old parent, at its old place', async () => {
     const page = 'bk000001';
     const parentBefore = resource(page).parentId;
-    const siblingsBefore = w.repo.children(parentBefore!).map((c) => c.id);
+    const siblingsBefore = w.repo.children(parentBefore).map((c) => c.id);
     const r = await call('move_resource', { page, to: '[INDEX] Group 0' });
     expect(r.body.status, r.text).toBe('written');
     const jobId = jobOf(r);
@@ -216,7 +246,7 @@ describe('Revert, kind by kind (decision B)', () => {
     expect(rv.status, JSON.stringify(rv)).toBe('submitted');
     expect(job!.status, JSON.stringify(job!.lastError)).toBe('succeeded');
     expect(resource(page).parentId).toBe(parentBefore);
-    expect(w.repo.children(parentBefore!).map((c) => c.id)).toEqual(siblingsBefore);
+    expect(w.repo.children(parentBefore).map((c) => c.id)).toEqual(siblingsBefore);
   });
 });
 
@@ -248,7 +278,9 @@ describe('Last Major Revision (decision B5)', () => {
 
   it('a job that did not set it leaves it alone (a minor edit)', async () => {
     setText();
-    const row = w.sidebars.pages.get(RHEASHIRA.page)!.props[0]!.rows!.find((x) => x.key === 'Last Major Revision')!;
+    const row = w.sidebars.pages
+      .get(RHEASHIRA.page)!
+      .props[0]!.rows!.find((x) => x.key === 'Last Major Revision')!;
     row.content = [{ text: '1 October 2026' }];
     const r = await call('write_page', { page: RHEASHIRA.page, mode: 'append', markdown: 'Noted.' });
     expect(r.body.status, r.text).toBe('written');
@@ -272,7 +304,9 @@ describe('Last Major Revision (decision B5)', () => {
     const jobId = jobOf(r);
     await waitJob(jobId);
     // Someone edits the Last Major Revision row in the app.
-    const row = w.sidebars.pages.get(RHEASHIRA.page)!.props[0]!.rows!.find((x) => x.key === 'Last Major Revision')!;
+    const row = w.sidebars.pages
+      .get(RHEASHIRA.page)!
+      .props[0]!.rows!.find((x) => x.key === 'Last Major Revision')!;
     row.content = [{ text: 'edited by hand' }];
     const textBefore = JSON.stringify(blocksOf(RHEASHIRA.page));
     const refused = await rt().reverts.revert('owner', PROJECT, jobId);

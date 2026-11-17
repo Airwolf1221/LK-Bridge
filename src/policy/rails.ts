@@ -55,7 +55,7 @@ export function railsFrom(text: unknown): WriteRails {
   }
   const o = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   const flag = (k: keyof WriteRails) =>
-    typeof o[k] === 'boolean' ? (o[k] as boolean) : (DEFAULT_WRITE_RAILS[k] as boolean);
+    typeof o[k] === 'boolean' ? o[k] : (DEFAULT_WRITE_RAILS[k] as boolean);
   const n = o.bulkPages;
   return {
     deletes: flag('deletes'),
@@ -94,7 +94,8 @@ export function mergeRails(current: WriteRails, change: unknown): WriteRails {
 /** One operation of a request, as the engine hands it to the gate. */
 export interface RailItem {
   readonly opId: string;
-  readonly kind: 'read' | 'write' | 'upload' | string;
+  /** The operation's kind (`read`, `write`, `upload`). */
+  readonly kind: string;
   readonly params: OpParams;
   readonly options: StepOptions;
 }
@@ -158,7 +159,11 @@ function writes(it: RailItem): boolean {
 export function pagesTouched(
   items: readonly RailItem[],
   ctx: RailContext = {},
-): { readonly pages: ReadonlySet<string>; readonly unknownCascade: boolean; readonly created: ReadonlySet<string> } {
+): {
+  readonly pages: ReadonlySet<string>;
+  readonly unknownCascade: boolean;
+  readonly created: ReadonlySet<string>;
+} {
   const pages = new Set<string>();
   const created = new Set<string>();
   let unknownCascade = false;
@@ -183,7 +188,10 @@ export function pagesTouched(
     const rid = str(it.params.path?.resourceId);
     if (!rid) return;
     pages.add(rid);
-    if (it.opId === 'deleteResource' && (it.params.query?.cascade === true || it.params.query?.cascade === 'true')) {
+    if (
+      it.opId === 'deleteResource' &&
+      (it.params.query?.cascade === true || it.params.query?.cascade === 'true')
+    ) {
       const n = ctx.descendants?.(rid) ?? null;
       if (n === null) unknownCascade = true;
       else for (let k = 0; k < n; k++) pages.add(`#under:${rid}:${k}`);
@@ -233,10 +241,7 @@ export function railsVerdict(
       const parts = [...kinds.entries()].map(([k, n]) => plural(n, k));
       hits.push({
         rail: 'deletes',
-        text:
-          total === 1
-            ? `delete (${parts[0]}${only ? ` ${only}` : ''})`
-            : `deletes (${parts.join(', ')})`,
+        text: total === 1 ? `delete (${parts[0]}${only ? ` ${only}` : ''})` : `deletes (${parts.join(', ')})`,
       });
     }
   }
@@ -263,7 +268,7 @@ export function railsVerdict(
       const body = isObj(it.params.body) ? it.params.body : {};
       if (it.opId === 'updateResource' && body.name !== undefined) {
         const from = named(rid);
-        renames.push(`${from ?? 'a page'} → “${String(body.name)}”`);
+        renames.push(`${from ?? 'a page'} → “${typeof body.name === 'string' ? body.name : ''}”`);
       }
       if (it.opId === 'moveResource') moves.push(named(rid) ?? 'a page');
     }
@@ -271,12 +276,15 @@ export function railsVerdict(
       hits.push({
         rail: 'renamesMoves',
         text:
-          renames.length === 1 ? `rename of a page (${renames[0]})` : `renames of ${plural(renames.length, 'page')}`,
+          renames.length === 1
+            ? `rename of a page (${renames[0]})`
+            : `renames of ${plural(renames.length, 'page')}`,
       });
     if (moves.length > 0)
       hits.push({
         rail: 'renamesMoves',
-        text: moves.length === 1 ? `move of a page (${moves[0]})` : `moves of ${plural(moves.length, 'page')}`,
+        text:
+          moves.length === 1 ? `move of a page (${moves[0]})` : `moves of ${plural(moves.length, 'page')}`,
       });
   }
 
@@ -291,7 +299,8 @@ export function railsVerdict(
         if (body.folderId !== undefined || it.options.bindFrom?.to === 'body.folderId') moves++;
       }
     }
-    if (deletes > 0) hits.push({ rail: 'assets', text: deletes === 1 ? 'asset delete' : `${deletes} asset deletes` });
+    if (deletes > 0)
+      hits.push({ rail: 'assets', text: deletes === 1 ? 'asset delete' : `${deletes} asset deletes` });
     if (moves > 0)
       hits.push({
         rail: 'assets',
