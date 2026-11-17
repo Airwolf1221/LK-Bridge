@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased: CI on pull requests only (17 November 2026)
+
+The owner is near the GitHub Actions minutes cap, so `.github/workflows/ci.yml` now:
+
+- **runs on pull requests to `main`, and by hand** (Actions, CI, Run workflow), no longer on pushes to `main`: the pull
+  request's run already tested the merge result, and every session runs the full CI locally before it finishes. A pull
+  request that changes only `docs/**` or Markdown files starts no run;
+- **cancels the older run** when a newer push arrives for the same pull request (`concurrency`, `cancel-in-progress`);
+- **stops a run after 30 minutes** (`timeout-minutes` on the `check` job);
+- **caches Playwright's browsers** (`~/.cache/ms-playwright`, keyed on the installed Playwright version): on a cache hit
+  the browser test downloads no Chromium and installs only the system libraries it needs.
+
+If `main`'s branch protection requires the CI check, a docs-only pull request will wait for it indefinitely (GitHub skips
+the workflow, so no status is reported): run CI on that branch by hand, or do not require the check for such pull
+requests.
+
 ## Unreleased: v3 F3c (17 November 2026): Arkona appraisal tools and full-text search
 
 [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md) (Proposed), carrying out the owner-approved
