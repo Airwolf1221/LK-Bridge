@@ -28,6 +28,7 @@ import { useProject, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
 import { useStreamEvent } from '../stream';
 import type { ClientsResponse, Job, JobDetail, JobStatus, Step } from '../types';
+import { RevertButton } from './review';
 
 const ACTIVE: JobStatus[] = ['queued', 'running', 'waiting_budget', 'waiting_lock', 'paused'];
 const HISTORY: JobStatus[] = ['succeeded', 'failed', 'cancelled'];
@@ -504,7 +505,14 @@ function JobDetailView({ id }: { id: string }) {
                 {job.cancelRequested && <Badge tone="warn">cancelling after this step</Badge>}
                 <span className="mono muted small-text">{job.id}</span>
               </div>
-              <JobControls job={job} project={project} onDone={d.reload} />
+              <span className="row">
+                <JobControls job={job} project={project} onDone={d.reload} />
+                {/* v3 F3.4 (ADR 0055): an agent's finished direct write can be reverted (the server decides what). */}
+                {!ACTIVE.includes(job.status) &&
+                  job.principalId !== 'system' &&
+                  job.approvedBy === null &&
+                  job.kind !== 'paginate_all' && <RevertButton jobId={job.id} project={project} onDone={d.reload} />}
+              </span>
             </div>
             {job.uncertain && (
               <p className="note note-bad" role="alert">

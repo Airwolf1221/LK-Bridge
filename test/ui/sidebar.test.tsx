@@ -56,17 +56,18 @@ function renderSidebar(path: string, items: readonly NavItem[] = NAV, badges: Re
 }
 
 describe('the sidebar', () => {
-  it('shows Overview, Jobs and Proposals, then the groups and their pages in alphabetical order', async () => {
-    installApi({ ...baseRoutes() });
+  it('shows Overview, Jobs, Proposals and Review, then the groups and their pages in alphabetical order', async () => {
+    installApi({ ...baseRoutes(), 'GET /review/counts': { unreviewed: 3, byProject: { test: 3 } } });
     renderApp('/ui/settings');
     await screen.findByRole('navigation', { name: 'Main' });
     const { top, groups } = rendered();
-    expect(top).toEqual(['Overview', 'Jobs', 'Proposals']);
+    expect(top).toEqual(['Overview', 'Jobs', 'Proposals', 'Review']);
     expect(groups).toEqual(EXPECTED);
-    // Proposals keeps its pending count.
+    // Proposals keeps its pending count; v3 F3.4: Review counts the direct writes not reviewed yet.
     await waitFor(() =>
       expect(within(main()).getByRole('link', { name: /^Proposals/ })).toHaveTextContent('2'),
     );
+    await waitFor(() => expect(within(main()).getByLabelText('3 unreviewed')).toBeInTheDocument());
   });
 
   it('sorts by code: a page added to a group lands in its place, and a new group in its own', () => {
@@ -202,11 +203,13 @@ describe('the sidebar', () => {
     const listId = access.getAttribute('aria-controls')!;
     expect(document.getElementById(listId)).toHaveAttribute('hidden');
 
-    // Tab order: the three top links, then the first group's button.
+    // Tab order: the four top links, then the first group's button.
     within(main()).getByRole('link', { name: 'Overview' }).focus();
     await user.tab();
     expect(within(main()).getByRole('link', { name: 'Jobs' })).toHaveFocus();
     await user.tab();
+    await user.tab();
+    expect(within(main()).getByRole('link', { name: 'Review' })).toHaveFocus();
     await user.tab();
     expect(access).toHaveFocus();
 

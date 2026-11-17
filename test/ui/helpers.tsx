@@ -416,6 +416,8 @@ export const baseRoutes = (): Routes => ({
           byProject: { baisheng: 2, test: 5 },
         };
   },
+  // v3 F3.4 (ADR 0055): the Review badge (direct writes not reviewed yet).
+  'GET /review/counts': { unreviewed: 0, byProject: {} },
   'GET /clients': {
     profiles,
     defaultScope: 'read',

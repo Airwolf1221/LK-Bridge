@@ -133,9 +133,18 @@ function PackCard({ pack, onChanged }: { pack: PackView; onChanged: () => void }
             ? `version ${approved.version} by ${approved.by}, ${new Date(approved.at).toISOString()}`
             : 'not yet'}
         </dd>
-        <dt>Every package is a proposal</dt>
-        <dd>{pack.rules.settings.alwaysPropose ? 'yes (the pack’s first weeks)' : 'no'}</dd>
+        <dt>{pack.toolModes ? 'Any other tool' : 'Every package is a proposal'}</dt>
+        <dd>
+          {pack.toolModes
+            ? pack.rules.settings.alwaysPropose
+              ? 'always propose'
+              : 'follows the agent’s scope'
+            : pack.rules.settings.alwaysPropose
+              ? 'yes (the pack’s first weeks)'
+              : 'no'}
+        </dd>
       </dl>
+      {pack.toolModes && pack.toolModes.length > 0 && <ToolSwitches pack={pack} onChanged={onChanged} />}
       <div className="row-actions">
         <Button variant="primary" busy={busy} onClick={approve}>
           Approve this pack version
@@ -648,5 +657,85 @@ function Owners({ pack, owners }: { pack: PackView; owners: PackOwners }) {
         </table>
       </div>
     </details>
+  );
+}
+
+/**
+ * v3 F3.4 (ADR 0055 decision D): each write tool's switch. "Always propose": every package of it is a proposal whatever
+ * the agent's scope. Off: it follows the agent's scope (direct at scope write, where the agent's safety rails still
+ * apply; canon and lifecycle changes stay proposals). Saving makes a new pack version, approved as usual.
+ */
+function ToolSwitches({ pack, onChanged }: { pack: PackView; onChanged: () => void }) {
+  const modes = pack.toolModes ?? [];
+  const [draft, setDraft] = useState<Record<string, 'propose' | 'scope'>>(() =>
+    Object.fromEntries(modes.map((t) => [t.tool, t.mode])),
+  );
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const withReauth = useReauth();
+  const changes = modes.filter((t) => draft[t.tool] !== t.mode);
+  const save = async () => {
+    const ok = await confirm({
+      title: `Change ${changes.length} tool switch${changes.length === 1 ? '' : 'es'}?`,
+      message: (
+        <>
+          <ul>
+            {changes.map((t) => (
+              <li key={t.tool}>
+                <span className="mono">{t.tool}</span>:{' '}
+                {draft[t.tool] === 'propose' ? 'always propose' : 'follow the agent’s scope'}
+              </li>
+            ))}
+          </ul>
+          <p>This makes a new pack version. Until you approve it, every package is refused.</p>
+        </>
+      ),
+      confirmLabel: 'Save as a new version',
+    });
+    if (!ok) return;
+    const done = await run(
+      () =>
+        withReauth(() =>
+          api.put(`/packs/${encodeURIComponent(pack.id)}/tools`, {
+            tools: Object.fromEntries(changes.map((t) => [t.tool, draft[t.tool]])),
+            confirm: true,
+          }),
+        ),
+      'Saved as a new version: approve it to use it.',
+    );
+    if (done) onChanged();
+  };
+  return (
+    <div className="tool-switches">
+      <h3>Tools at scope write</h3>
+      <p className="muted small-text">
+        Always propose: every package is a proposal for you, whatever the agent’s scope. Off: the tool follows the
+        agent’s scope (at scope write it runs directly, under the agent’s safety rails; canon and lifecycle changes
+        stay proposals).
+      </p>
+      <ul className="plain">
+        {modes.map((t) => (
+          <li key={t.tool}>
+            <label className="inline">
+              <input
+                type="checkbox"
+                role="switch"
+                aria-label={`Always propose: ${t.tool}`}
+                checked={draft[t.tool] === 'propose'}
+                onChange={(e) => setDraft({ ...draft, [t.tool]: e.target.checked ? 'propose' : 'scope' })}
+              />{' '}
+              <span className="mono">{t.tool}</span>{' '}
+              <span className="muted small-text">
+                {draft[t.tool] === 'propose' ? 'always propose' : 'follows the agent’s scope'}
+                {t.source === 'default' ? ' (the pack’s default)' : ''}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <Button busy={busy} disabled={changes.length === 0} onClick={() => void save()}>
+        Save tool switches
+      </Button>
+    </div>
   );
 }

@@ -229,6 +229,13 @@ export function OverviewPage() {
                 <Link to="/proposals">pending proposals</Link>
               </span>
             </div>
+            {/* v3 F3.4 (ADR 0055): agents' direct writes at scope write, waiting for the owner's review. */}
+            <div className="stat">
+              <span className="stat-value">{d.unreviewedDirectWrites ?? 0}</span>
+              <span className="stat-label">
+                <Link to="/review">direct writes to review</Link>
+              </span>
+            </div>
           </div>
           <p className="muted small-text">
             {d.activeJobs.running} running · {d.activeJobs.queued} queued · {d.activeJobs.waiting} waiting ·{' '}

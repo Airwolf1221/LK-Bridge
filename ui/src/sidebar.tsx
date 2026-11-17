@@ -85,12 +85,22 @@ function Badge({ n, label }: { n: number; label: string }) {
   );
 }
 
-function NavLink({ item, path, badge }: { item: NavItem; path: string; badge: number }) {
+function NavLink({
+  item,
+  path,
+  badge,
+  word = 'pending',
+}: {
+  item: NavItem;
+  path: string;
+  badge: number;
+  word?: string;
+}) {
   const current = isCurrent(item.to, path);
   return (
     <Link to={item.to} {...(current ? { 'aria-current': 'page' as const } : {})}>
       <span>{item.label}</span>
-      {badge > 0 && <Badge n={badge} label={`${badge} pending`} />}
+      {badge > 0 && <Badge n={badge} label={`${badge} ${word}`} />}
     </Link>
   );
 }
@@ -104,11 +114,14 @@ export function Sidebar({
   items,
   path,
   badges = {},
+  badgeWords = {},
 }: {
   top: readonly NavItem[];
   items: readonly NavItem[];
   path: string;
   badges?: Record<string, number>;
+  /** v3 F3.4: what a page's count counts, for its label (`3 unreviewed`); `pending` when not given. */
+  badgeWords?: Record<string, string>;
 }) {
   const groups = groupNav(items);
   const currentGroup = groups.find((g) => g.items.some((i) => isCurrent(i.to, path)))?.key;
@@ -131,7 +144,12 @@ export function Sidebar({
       <ul className="nav-top" role="list">
         {top.map((item) => (
           <li key={item.to}>
-            <NavLink item={item} path={path} badge={badgeOf(item.to)} />
+            <NavLink
+              item={item}
+              path={path}
+              badge={badgeOf(item.to)}
+              {...(badgeWords[item.to] ? { word: badgeWords[item.to] } : {})}
+            />
           </li>
         ))}
       </ul>
