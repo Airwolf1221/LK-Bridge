@@ -30,10 +30,13 @@
  *    switch), captured as a proposal, then rejected. A real package is not sent: its tags need the pack's governance
  *    sources, which live in the Arkona project, and the rehearsal never reads another project.
  * Review: the four direct writes are on the Review queue.
- * R1–R4: each is reverted as the owner reverts it (one job, from the journal) and its target read back as it was.
+ * R1–R4: each is reverted as the owner reverts it (one job, from the journal) and its target read back as it was. R4,
+ * the image (decision B5): the asset is neither moved nor hidden and nothing is written to the staging folder; the image
+ * is back on the Staging page (its file copied to the bridge's server), and deleting the placed asset is ONE proposal,
+ * which the script approves as the owner would.
  * Rails: a delete and an 11-page batch become proposals under the default rails, saying why; both are rejected.
  * Clean-up: pending proposals rejected; the HELPER deletes the chronology event; the throwaway page (cascade) and the
- * image's folders (the image in them) are deleted. A 404 or "already deleted" counts as cleaned.
+ * image's folder are deleted. A 404 or "already deleted" counts as cleaned (only when a read says so).
  *
  * Every write of the script itself goes through test/sandbox/wait.ts (a write parked for budget or queued is waited
  * for, never sent again), and every agent tool's job is waited for the same way.
@@ -339,7 +342,6 @@ export async function runWriteScopeRehearsal(
 
   // ---------------------------------------------------------------------------------------------- state
   const base = `lk-bridge write-scope ${stamp}`;
-  const stagingName = `${base} staging`;
   const pending = { proposals: [] as string[], jobs: [] as string[] };
   const made = { root: '', page: '', doc: '', deleteMe: '' };
   const chron: {
@@ -367,11 +369,20 @@ export async function runWriteScopeRehearsal(
   };
   const fixedName = `${chron.name} (fixed)`;
   const fixedDescription = `${chron.description} (fixed)`;
-  const image = { stagedId: '', assetId: '', jobId: '' };
+  const image = { stagedId: '', assetId: '', jobId: '', folderId: null as string | null };
   const jobs: Record<'1' | '2' | '3' | '4', string> = { '1': '', '2': '', '3': '', '4': '' };
   const who: { agent?: Principal; helper?: Principal } = {};
 
   // ---------------------------------------------------------------------------------------------- read-backs
+  /** The proposal a revert of `jobId` made to delete a placed image (the revert's audit records it), or null. */
+  function deletionProposal(jobId: string): string | null {
+    for (const a of rt.policy.store.listAudit({ action: 'job.revert', limit: 50 })) {
+      const after = a.after as { outcome?: string; images?: { deletionProposalId?: string | null }[] } | null;
+      if (a.target !== jobId || after?.outcome !== 'images') continue;
+      return after.images?.find((x) => typeof x.deletionProposalId === 'string')?.deletionProposalId ?? null;
+    }
+    return null;
+  }
   async function factValue(key: string): Promise<string> {
     const props = await run('listProperties', { path: { resourceId: made.page } });
     const kv = ((props?.data ?? []) as Obj[]).find((p) => p.kind === 'keyValue' && p.title === PROPERTY);
@@ -415,7 +426,6 @@ export async function runWriteScopeRehearsal(
           );
         who.agent = principal(`rehearsal agent ${stamp}`, false);
         who.helper = principal(`rehearsal helper ${stamp}`, true);
-        rt.projects.setSetting(pid, 'imageStagingFolder', stagingName);
         const root = await run('createResource', { body: { name: base, parentId: repoRoot } });
         made.root = String(root.id);
         const page = await run('createResource', { body: { name: `${base} page`, parentId: made.root } });
@@ -445,7 +455,7 @@ export async function runWriteScopeRehearsal(
         // The asset library's tree (the image's destination is planned from it): about one read per 100 assets.
         rt.assets.prepareBuild(pid, { trigger: 'rehearse-write-scope', autoConfirm: true });
         for (let i = 0; i < 1200 && rt.assets.store.activePass(pid); i++) await sleep(500);
-        return `root ${made.root}, page ${made.page} (document ${made.doc}, ${PROPERTY} Region and Colour), page to delete ${made.deleteMe}; staging folder for this run “${stagingName}”`;
+        return `root ${made.root}, page ${made.page} (document ${made.doc}, ${PROPERTY} Region and Colour), page to delete ${made.deleteMe}`;
       },
     );
     if (!setupOk || !who.agent || !who.helper) return { findings, passed: false };
@@ -574,6 +584,7 @@ export async function runWriteScopeRehearsal(
       if (!image.assetId) throw new Fails('the placed image has no asset');
       const asset = await run('getAsset', { path: { assetId: image.assetId } });
       if (asset?.isHidden === true) throw new Fails('the placed image is still hidden');
+      image.folderId = typeof asset?.folderId === 'string' ? asset.folderId : null;
       return `job ${image.jobId}: asset ${image.assetId} placed in “${base}”`;
     });
 
@@ -673,20 +684,44 @@ export async function runWriteScopeRehearsal(
     });
     await check(
       'R4',
-      'Revert moves the placed image back to staging (hidden), never deleting it',
+      'Revert puts the placed image back on the Staging page and proposes deleting it; nothing goes to the staging folder',
       async () => {
         const id = await revert('4');
+        // The bridge's follow-up comes right after the revert job: the staged record, then the deletion proposal.
+        let proposalId: string | null = null;
+        for (let i = 0; i < 300 && !proposalId; i++) {
+          proposalId = deletionProposal(jobs['4']);
+          if (!proposalId) await sleep(100);
+        }
         const asset = await run('getAsset', { path: { assetId: image.assetId } });
-        const staging = rt.assets.queries.foldersByPath(pid, [stagingName]).data[0]?.id ?? null;
-        if (!asset?.id) throw new Fails('the asset is gone');
-        if (asset.isHidden !== true) throw new Fails('the asset is not hidden');
-        if (!staging || asset.folderId !== staging)
+        if (!asset?.id || asset.deletedAt) throw new Fails('the asset is gone: a revert never deletes it');
+        if (asset.isHidden === true) throw new Fails('the asset was hidden');
+        if ((typeof asset.folderId === 'string' ? asset.folderId : null) !== image.folderId)
+          throw new Fails(`the asset was moved (to folder ${String(asset.folderId)})`);
+        const row = rt.images.staged(pid, image.stagedId);
+        if (row?.staged !== true || !row.serverSha256 || row.assetId !== null)
+          throw new Fails('the image is not back on the Staging page from the bridge’s server');
+        if (!proposalId) throw new Fails('no proposal to delete the placed image');
+        const p = rt.policy.proposals.detail(proposalId);
+        if (p?.state !== 'pending' || p.ops.map((o) => o.op).join(',') !== 'deleteAsset')
           throw new Fails(
-            `the asset is in folder ${String(asset.folderId)}, not the staging folder ${String(staging)}`,
+            `the deletion proposal is not as expected: ${JSON.stringify(p?.ops.map((o) => o.op))}`,
           );
-        if (rt.images.staged(pid, image.stagedId)?.staged !== true)
-          throw new Fails('the image is not back on the Staging page');
-        return `revert job ${id}: asset ${image.assetId} hidden in “${stagingName}”, back on the Staging page`;
+        // As the owner does on the Proposals page: approve it (the asset's bytes are kept first, as for every delete).
+        await rt.policy.commands.approve('owner', proposalId);
+        let state = rt.policy.proposals.get(proposalId)?.state;
+        for (let i = 0; i < 600 && !['executed', 'failed', 'conflicted'].includes(state ?? ''); i++) {
+          await sleep(100);
+          state = rt.policy.proposals.get(proposalId)?.state;
+        }
+        const jobOfDelete = rt.policy.proposals.get(proposalId)?.jobId;
+        if (state !== 'executed' || !jobOfDelete)
+          throw new Fails(`the approved deletion ended ${String(state)}`);
+        await waitForJob(rt.engine, pid, jobOfDelete, 'the approved deletion', wait);
+        const after = await attempt('getAsset', { path: { assetId: image.assetId } });
+        if (after.ok && after.body?.deletedAt == null)
+          throw new Fails('the approved deletion did not delete the image');
+        return `revert job ${id}: the image is back on the Staging page (its file on the bridge’s server), nothing written to the staging folder; proposal ${proposalId} deleted the placed image once approved`;
       },
     );
 
@@ -758,9 +793,8 @@ export async function runWriteScopeRehearsal(
         if (!r.ok && !(await gone('getResource', { resourceId: made.root })))
           left.push(`page ${made.root} and the pages under it (${r.error})`);
       }
-      // The image's folders (the image in one of them): the destination the placement made, the staging folder the
-      // revert made. Then the image itself, if it is somewhere else by now.
-      for (const name of [base, stagingName]) {
+      // The image's folder (the destination the placement made), then the image itself, if it is still somewhere.
+      for (const name of [base]) {
         const folder = rt.assets.queries.foldersByPath(pid, [name]).data[0];
         if (!folder) continue;
         const r = await attempt('deleteAsset', { path: { assetId: folder.id } });

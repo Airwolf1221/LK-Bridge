@@ -6,8 +6,9 @@
 - Amends: [ADR 0046](0046-e4-owner-decisions.md) decision 1 (the block-by-block undo, generalised into Revert);
   [ADR 0050](0050-setting-packs-and-the-arkona-character-tool.md) (every package a proposal whatever the scope: now a
   per-tool switch in the pack's data); [ADR 0051](0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md)
-  decision 1, "How it is measured" (a direct `updateBlock` is read first when the rule needs a "before") and, for
-  Revert only, decision 3's "nothing is ever written to `LK-Bridge staging`" (decision B5 below).
+  decision 1, "How it is measured" (a direct `updateBlock` is read first when the rule needs a "before"). Revert keeps
+  ADR 0051 decision 3's "nothing is ever written to `LK-Bridge staging`" (decision B5, the owner's ruling of 17
+  November 2026).
 - Migration: `3200_write_scope.sql` (the profiles' rails, the rail a proposal names, the Review queue, the reverts).
 - Numbered 0055: F3c (appraisal), running at the same time, takes 0054.
 - Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
@@ -66,9 +67,10 @@ lifecycle guard, unchanged).
 3. **Never reverted:** a deletion (`DELETION`: Revert says so and points to `restore_resource`, or the journal's
    pre-images); anything the canon guard handled (it was a proposal: `WAS_A_PROPOSAL`); a job still running
    (`JOB_RUNNING`); a revert (`IS_A_REVERT`); a job already reverted or being reverted. **Chosen:** Revert never deletes
-   what a job made (a page, a document, a folder, a lane, a feature, an uploaded image): it lists it as not revertible
-   ("delete it yourself if it should go"). The one exception is the chronology, where a row and event the job added
-   are removed together because the chronology tools keep them in step and the record shows they are exactly the job's.
+   what a job made (a page, a document, a folder, a lane, a feature, an image uploaded straight into its folder): it
+   lists it as not revertible ("delete it yourself if it should go"). The one exception is the chronology, where a row
+   and event the job added are removed together because the chronology tools keep them in step and the record shows
+   they are exactly the job's. A placed staged image is not deleted by Revert either: its deletion is a proposal (B5).
    Map features, document fields, lanes, board shapes and raw sidebar-row or block-row writes are not among the kinds
    Revert puts back: listed as not revertible, with the journal as the way further.
 4. **Only when nothing has changed since.** A target that differs from what the job left is not reverted; the result
@@ -76,13 +78,28 @@ lifecycle guard, unchanged).
    job's lock before it is written (registered checks `review.revert` and `review.revert.blocks`). **The default is all
    or nothing:** when any target cannot be reverted the revert is refused (`PARTIAL_REVERT_NEEDS_CONFIRMATION`) unless
    the owner confirms a partial revert; with nothing left to write it is `NOTHING_TO_REVERT`.
-5. **Images: never delete an asset.** A staged image placed directly (an upload into its folder from the bridge's
-   server) has no "before" in LegendKeeper. **Chosen:** Revert moves it into the project's staging folder in LegendKeeper
-   (found or created by name, as staging always did), hidden, and puts it back on the Staging page, where the owner
-   places it again or discards it. An asset an `updateAsset` moved goes back to its old folder, name and hidden flag
-   (its pre-image, now journalled: F). The folders a placement made stay. **Alternative considered:** hide it where it
-   is, which keeps ADR 0051's "nothing written to `LK-Bridge staging`" but leaves the image in its final folder and off
-   the Staging page; rejected because the owner would then have to find and clear it by hand.
+5. **Image placements: back on the Staging page, the deletion proposed** (the owner's ruling, 17 November 2026,
+   replacing this session's first design). Nothing is ever written to LegendKeeper's staging folder (`LK-Bridge
+staging`), and the revert itself never deletes an asset. For the placement of a staged image (one placed from the
+   bridge's server staging, an upload into its folder; or one staged the old way in LegendKeeper's staging folder, a
+   move out of it):
+   - **Before the job**, the placed asset's file is copied back into the bridge's server staging (F2's
+     `images/staged/`): one download from the asset host, no API request. It must be the very file that was staged (the
+     staged record's WebP SHA-256), so placing it again uploads exactly it. A file that cannot be downloaded or is not
+     that file refuses the revert (`IMAGE_NOT_SAVED`) before anything is written; the copy of a revert that does not go
+     ahead is removed.
+   - **The revert job** only checks, inside its lock, that the asset is still as the placement left it (folder, name,
+     not hidden). The page's blocks that show the image, when the same job wrote them, are reverted with the page's text
+     as any text is.
+   - **Once the job has succeeded**, the staged record goes back on the Staging page (staged on the server again, no
+     asset), to place again or discard, and deleting the placed asset is **ONE proposal** for the owner, by the bridge
+     (`deleteAsset`; approved, it keeps the asset's bytes first, as every asset delete does). Recorded with the revert
+     (the proposal's id) and audited (`job.revert`, outcome `images`). An asset moved, renamed or hidden since the
+     placement is not touched (`changed`).
+   - An ordinary asset move (not a placement) goes back to its old folder, name and hidden flag (its pre-image, now
+     journalled: F); one out of the staging folder that no staged record explains is not revertible, since Revert
+     never writes there. An image uploaded straight into its folder is a creation (B3). The folders a placement made
+     stay.
 6. **One job**, run by the system principal at P1, internal: If-Match chained from its own reads, every lock held for
    the whole run (pages, documents and assets), verified, journalled like any write. Its result points to the journal
    (`bridge_journal_lookup`) and the snapshots if the owner needs to go further.
@@ -123,6 +140,11 @@ lifecycle guard, unchanged).
    package makes several pages at once); `arkona_add_character_art` to **follow the agent's scope**; the appraisal tools
    (F3c) never write and have no switch; `arkona_appraisal_fix` **follows the scope** in the seed. A tool with no switch
    keeps F3a's rule (`alwaysPropose`).
+   `arkona_appraisal_fix` (F3c, wired at the merge) reads its switch from the version the owner **approved**
+   (`Packs.toolMode`; "always propose" while none is), because it does not refuse a pack waiting for approval as the
+   package tools do: following the scope, its own fix runs at scope `write` as one job (reviewed afterwards) and is a
+   proposal at `propose`; the audits' fixes it hands over (sibling order, tags) and the Appraisal page's **Propose a
+   fix** stay proposals.
 2. **Changing a switch makes a new pack version**, approved as usual (`PUT /api/admin/packs/:id/tools`, re-authenticated,
    audited `pack.set_tool_modes`; the tools refuse with `PACK_NOT_CURRENT` until the owner approves it).
 3. **The seed** is `arkona-2026-11-17-f3-4`, named after the session (F3.3's was mislabelled `arkona-2026-11-17-f3d`,
@@ -145,33 +167,33 @@ proposal's job does (the proposal's own priority); Last Major Revision, the run-
 kept: a direct job is asked again by the gate before each step (a revoked connection or a lowered scope stops it), an
 approved one is not (the owner's approval wins), as since chunk 8.
 
-| Tool                                                                           | At scope `write`                                                      | Still a proposal when …                                                                                                                          | Revert                                                       |
-| ------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ |
-| `write_page`                                                                   | runs (block by block; Last Major Revision measured)                   | never (page text is not canon-gated, ADR 0036 decision 6)                                                                                        | yes, block by block; Last Major Revision restored            |
-| `set_facts`                                                                    | runs                                                                  | canon: Status to or from Authoritative, an existing Continuity Type or Continuity changed (Status lifecycle changes are refused: the four tools) | yes: facts and links; Last Major Revision restored           |
-| `create_index`, `create_resource`, `create_bare_resource`, `create_character`  | runs (Working pages)                                                  | an Authoritative page asked for (canon); more than N pages (bulk rail)                                                                           | the pages made: no (never deletes)                           |
-| `create_many_resources`                                                        | runs                                                                  | more than N pages (bulk rail, 10); an Authoritative page (canon)                                                                                 | no (pages made)                                              |
-| `update_resource`                                                              | runs                                                                  | a rename or a move, when the renames-and-moves rail is on (off by default); status tags and prefixes are refused (lifecycle)                     | yes: name, tags, aliases, icon, lock, width; a move          |
-| `move_resource`                                                                | runs                                                                  | the renames-and-moves rail on (off by default); into or out of Working or Archived is refused (lifecycle tools)                                  | yes: back to the old parent and place                        |
-| `delete_resource`                                                              | **a proposal** (deletes rail, on)                                     | always under the default rails; an Authoritative or Archived page: canonical                                                                     | never (`restore_resource`)                                   |
-| `restore_resource`                                                             | runs                                                                  | never                                                                                                                                            | no (it would be a delete)                                    |
-| `create_document`                                                              | runs                                                                  | never                                                                                                                                            | no (made)                                                    |
-| `update_document`                                                              | runs                                                                  | never                                                                                                                                            | no (document fields are not a Revert kind)                   |
-| `delete_document`                                                              | **a proposal** (deletes rail)                                         | always under the default rails; an Authoritative page's map, timeline or board: canonical                                                        | never                                                        |
-| `create_map_feature`, `update_map_feature`                                     | runs                                                                  | never                                                                                                                                            | no (not a Revert kind)                                       |
-| `delete_map_feature`                                                           | **a proposal** (deletes rail)                                         | always under the default rails                                                                                                                   | never                                                        |
-| `create_timeline_event`, `update_timeline_event`, `sync_timeline_event`        | runs (row, event and count in one job)                                | never; a re-made event is not a delete (C4)                                                                                                      | yes, in step                                                 |
-| `delete_timeline_event`                                                        | **a proposal** (deletes rail)                                         | always under the default rails                                                                                                                   | never                                                        |
-| `create_timeline_lane`                                                         | runs                                                                  | never                                                                                                                                            | no (made)                                                    |
-| `archive_page`, `unarchive_page`, `move_to_working`, `promote_page`            | **a canonical proposal**                                              | always (the lifecycle guard's marker)                                                                                                            | not applicable                                               |
-| `upload_image`                                                                 | staging: nothing in LegendKeeper (the bridge's server); placing: runs | never; a placement is not an asset move (C4, fixed here)                                                                                         | a placement: back to staging, hidden (B5)                    |
-| `lk_upload_image`                                                              | runs (an upload)                                                      | never                                                                                                                                            | no (an asset made)                                           |
-| `prepare_image_upload`                                                         | nothing in LegendKeeper                                               | never                                                                                                                                            | not applicable                                               |
-| `lk_api_write`, `lk_api_batch`                                                 | runs                                                                  | every rail, operation by operation; canon and lifecycle as for the tools                                                                         | where the record allows; raw row writes and block deletes no |
-| `restore_snapshot`                                                             | **a proposal**                                                        | always                                                                                                                                           | not applicable                                               |
-| `arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship` | **a proposal** (switch: always propose)                               | by default; switched to follow the scope: canon as for the tools, and the bulk rail                                                              | (switched) the pages made: no                                |
-| `arkona_add_character_art`                                                     | runs (switch: follow the scope)                                       | canon as for the tools; the rails                                                                                                                | its image placement: yes; pages made: no                     |
-| `bridge_job_cancel`                                                            | cancels the agent's own job                                           | never                                                                                                                                            | not applicable                                               |
+| Tool                                                                           | At scope `write`                                                      | Still a proposal when …                                                                                                                          | Revert                                                            |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
+| `write_page`                                                                   | runs (block by block; Last Major Revision measured)                   | never (page text is not canon-gated, ADR 0036 decision 6)                                                                                        | yes, block by block; Last Major Revision restored                 |
+| `set_facts`                                                                    | runs                                                                  | canon: Status to or from Authoritative, an existing Continuity Type or Continuity changed (Status lifecycle changes are refused: the four tools) | yes: facts and links; Last Major Revision restored                |
+| `create_index`, `create_resource`, `create_bare_resource`, `create_character`  | runs (Working pages)                                                  | an Authoritative page asked for (canon); more than N pages (bulk rail)                                                                           | the pages made: no (never deletes)                                |
+| `create_many_resources`                                                        | runs                                                                  | more than N pages (bulk rail, 10); an Authoritative page (canon)                                                                                 | no (pages made)                                                   |
+| `update_resource`                                                              | runs                                                                  | a rename or a move, when the renames-and-moves rail is on (off by default); status tags and prefixes are refused (lifecycle)                     | yes: name, tags, aliases, icon, lock, width; a move               |
+| `move_resource`                                                                | runs                                                                  | the renames-and-moves rail on (off by default); into or out of Working or Archived is refused (lifecycle tools)                                  | yes: back to the old parent and place                             |
+| `delete_resource`                                                              | **a proposal** (deletes rail, on)                                     | always under the default rails; an Authoritative or Archived page: canonical                                                                     | never (`restore_resource`)                                        |
+| `restore_resource`                                                             | runs                                                                  | never                                                                                                                                            | no (it would be a delete)                                         |
+| `create_document`                                                              | runs                                                                  | never                                                                                                                                            | no (made)                                                         |
+| `update_document`                                                              | runs                                                                  | never                                                                                                                                            | no (document fields are not a Revert kind)                        |
+| `delete_document`                                                              | **a proposal** (deletes rail)                                         | always under the default rails; an Authoritative page's map, timeline or board: canonical                                                        | never                                                             |
+| `create_map_feature`, `update_map_feature`                                     | runs                                                                  | never                                                                                                                                            | no (not a Revert kind)                                            |
+| `delete_map_feature`                                                           | **a proposal** (deletes rail)                                         | always under the default rails                                                                                                                   | never                                                             |
+| `create_timeline_event`, `update_timeline_event`, `sync_timeline_event`        | runs (row, event and count in one job)                                | never; a re-made event is not a delete (C4)                                                                                                      | yes, in step                                                      |
+| `delete_timeline_event`                                                        | **a proposal** (deletes rail)                                         | always under the default rails                                                                                                                   | never                                                             |
+| `create_timeline_lane`                                                         | runs                                                                  | never                                                                                                                                            | no (made)                                                         |
+| `archive_page`, `unarchive_page`, `move_to_working`, `promote_page`            | **a canonical proposal**                                              | always (the lifecycle guard's marker)                                                                                                            | not applicable                                                    |
+| `upload_image`                                                                 | staging: nothing in LegendKeeper (the bridge's server); placing: runs | never; a placement is not an asset move (C4, fixed here)                                                                                         | a placement: back on the Staging page, its deletion proposed (B5) |
+| `lk_upload_image`                                                              | runs (an upload)                                                      | never                                                                                                                                            | no (an asset made)                                                |
+| `prepare_image_upload`                                                         | nothing in LegendKeeper                                               | never                                                                                                                                            | not applicable                                                    |
+| `lk_api_write`, `lk_api_batch`                                                 | runs                                                                  | every rail, operation by operation; canon and lifecycle as for the tools                                                                         | where the record allows; raw row writes and block deletes no      |
+| `restore_snapshot`                                                             | **a proposal**                                                        | always                                                                                                                                           | not applicable                                                    |
+| `arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship` | **a proposal** (switch: always propose)                               | by default; switched to follow the scope: canon as for the tools, and the bulk rail                                                              | (switched) the pages made: no                                     |
+| `arkona_add_character_art`                                                     | runs (switch: follow the scope)                                       | canon as for the tools; the rails                                                                                                                | its image placement: yes; pages made: no                          |
+| `bridge_job_cancel`                                                            | cancels the agent's own job                                           | never                                                                                                                                            | not applicable                                                    |
 
 **What the audit fixed:**
 
@@ -182,9 +204,8 @@ approved one is not (the owner's approval wins), as since chunk 8.
 4. A chronology date edit that removes an end re-makes the event (delete, then create): the deletes rail would have
    proposed it and Revert would have refused it as a deletion. The rail now treats the pair as one change, and Revert
    re-makes the old event (C4, B2).
-5. Placing an image staged in the project's staging folder in LegendKeeper (older staged images, and every image a
-   revert puts back) moves the asset: the asset rail would have proposed every such placement. It is now marked as a
-   placement by bridge code and not counted (C4).
+5. Placing an image staged the old way, in the project's staging folder in LegendKeeper, moves the asset: the asset
+   rail would have proposed every such placement. It is now marked as a placement by bridge code and not counted (C4).
 
 ## Decision G: a write-scope rehearsal (written, not run)
 
@@ -195,8 +216,9 @@ one. It runs the bridge's code on a temporary database that starts as a **read-o
 repository tree and packs from the bridge's database (no tree build; nothing written to the bridge's database), with a
 temporary write-scoped agent (default rails) and a helper (rails off) that only makes and removes the throwaway
 chronology event. Steps: an edited sentence, a changed fact, a chronology fix, a placed staged image (each direct); a
-pack package still a proposal; the four on the Review queue; each reverted and read back; a delete and an 11-page batch
-proposed by the default rails; clean-up. PASS, FAIL, NOTED, INCONCLUSIVE or SKIPPED for each step; exit 0, 1 or 2.
+pack package still a proposal; the four on the Review queue; each reverted and read back (the image back on the Staging
+page, the placed asset's deletion proposed, which the script approves as the owner would); a delete and an 11-page
+batch proposed by the default rails; clean-up. PASS, FAIL, NOTED, INCONCLUSIVE or SKIPPED for each step; exit 0, 1 or 2.
 
 **Chosen:** a wrapper of its own (`deploy/rehearse-write-scope.sh`, the soak's form) rather than
 `sandbox-test.sh -- write-scope`: the rehearsal is an npm script, as the soak is, not a vitest file. **Step 5 checks the
@@ -214,5 +236,7 @@ rejected). A dry run against the mock passes every step and leaves nothing behin
 - One more read per `updateAsset`, and per direct `updateBlock` on a page with a Last Major Revision row in `auto`.
 - In the tests, the test stack's default profile (`tools-test`) has its rails off, so the earlier tests keep testing the
   direct writes they were written for; every profile a test makes with `newToken` keeps the defaults.
-- Left for F3c's merge: `arkona_appraisal_fix` should take its proposal-or-not from `packToolMode` (the seed already says
-  `scope`), as the other pack tools now do.
+- Reverting an image placement leaves the placed asset where it is until the owner approves the proposal to delete it;
+  meanwhile the image is also back on the Staging page (rejecting the proposal keeps both).
+- F3c's test worlds switch `arkona_appraisal_fix` to "always propose" by default (as `arkona_add_character_art`), so
+  its earlier tests keep testing the proposal path; the "follow the scope" path has tests of its own.

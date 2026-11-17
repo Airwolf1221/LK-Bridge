@@ -468,7 +468,9 @@ directly (not approved by the owner) that wrote something is listed until the ow
 owner's: one job, run by the system principal at P1, that puts back what the job changed when nothing has changed since,
 from the journal's pre-images and the job's own record (page text block by block, sidebar facts and links, chronology
 rows and events in step, names, tags, aliases and moves, image placements). It never reverts a deletion
-(`restore_resource`), a proposal, a running job or a revert, and never deletes an asset.
+(`restore_resource`), a proposal, a running job or a revert, and never deletes an asset itself: a reverted image
+placement goes back on the Staging page (its file copied to the bridge's server, nothing written to `LK-Bridge
+staging`) and deleting the placed asset is one proposal for the owner.
 
 ## Owner commands
 

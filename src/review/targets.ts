@@ -170,12 +170,16 @@ export interface ImageTarget extends Common {
   readonly kind: 'image';
   readonly assetId: string;
   readonly name: string | null;
-  /** The staged image it came from (server staging), when the job's record names it. */
+  /** The staged image it came from (its record on the Staging page), when the job's record names it. */
   readonly stagedId: string | null;
   /**
-   * Where it came from: an asset the job moved (its folder, name and hidden flag before), or the bridge's own staging
-   * (the job made the asset in its folder: it goes back to the project's staging folder in LegendKeeper, hidden).
+   * v3 F3.4 (ADR 0055 decision B5): the placement of a staged image (made from the bridge's server staging, or moved out
+   * of LegendKeeper's staging folder). Reverted by copying its file back into the bridge's server staging (back on the
+   * Staging page) and proposing the placed asset's deletion to the owner; nothing is written to the staging folder.
+   * False: an ordinary asset move, put back where it was.
    */
+  readonly placement: boolean;
+  /** Where it came from: an asset the job moved (its folder, name and hidden flag before), or one the job made. */
   readonly from:
     | {
         readonly kind: 'asset';
@@ -318,6 +322,13 @@ function verifyTargets(steps: readonly StepRecord[]): Obj[] {
 export interface TargetDeps {
   readonly pageName?: (resourceId: string) => string | null;
   readonly documentName?: (resourceId: string, documentId: string) => string | null;
+  /**
+   * v3 F3.4 (ADR 0055 decision B5): the staged image this job placed by moving its asset (an image staged in
+   * LegendKeeper's staging folder before F2), when the bridge's record says so: its staged id; else null.
+   */
+  readonly placedStaged?: (assetId: string) => string | null;
+  /** Whether a folder is the project's staging folder in LegendKeeper (Revert never writes there). */
+  readonly isStagingFolder?: (folderId: string | null) => boolean;
 }
 
 /** The job's targets (see the module comment), in the order of their first step. */
@@ -609,6 +620,21 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       handled.add(s.stepNo);
       const b = bodyOf(s.params);
       const op = isObj(s.options.journalOperation) ? s.options.journalOperation : {};
+      const stagedId = str(op.stagedId) ?? null;
+      if (!stagedId) {
+        // An image uploaded straight into its folder (no staged image behind it): a creation.
+        targets.push({
+          key: `none:${s.stepNo}`,
+          kind: 'none',
+          page: null,
+          what: `image “${str(b.name) ?? assetId}”`,
+          steps: [s.stepNo],
+          reason: `an image uploaded straight into its folder: Revert does not delete what a job made (delete it yourself if it should go)`,
+          creation: true,
+          journal: entriesOf(s.stepNo).map((e) => e.id),
+        });
+        continue;
+      }
       targets.push({
         key: `image:${assetId}`,
         kind: 'image',
@@ -618,7 +644,8 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
         ...(wrote(s) === 'maybe' ? { uncertain: true } : {}),
         assetId,
         name: str(b.name) ?? null,
-        stagedId: str(op.stagedId) ?? null,
+        stagedId,
+        placement: true,
         from: { kind: 'created' },
         left: {
           folderId: str(b.folderId) ?? str(r.folderId) ?? null,
@@ -642,16 +669,34 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
         name: str(pre.name) ?? null,
         isHidden: pre.isHidden === true,
       };
+      const stagedId = d.placedStaged?.(assetId) ?? null;
+      if (!stagedId && d.isStagingFolder?.(from.folderId) === true) {
+        // Out of the staging folder by hand, with no staged record behind it: putting it back would write there.
+        targets.push({
+          key: `none:${s.stepNo}`,
+          kind: 'none',
+          page: null,
+          what: `asset “${str(b.name) ?? from.name ?? assetId}”`,
+          steps: [s.stepNo],
+          reason:
+            'an asset moved out of the staging folder that no staged image records: Revert never writes to the staging folder (move it yourself if it should go back)',
+          journal: entriesOf(s.stepNo).map((e) => e.id),
+        });
+        continue;
+      }
       targets.push({
         key: `image:${assetId}`,
         kind: 'image',
         page: null,
-        what: `asset “${str(b.name) ?? from.name ?? assetId}”`,
+        what: stagedId
+          ? `image “${str(b.name) ?? from.name ?? assetId}”`
+          : `asset “${str(b.name) ?? from.name ?? assetId}”`,
         steps: [s.stepNo],
         ...(wrote(s) === 'maybe' ? { uncertain: true } : {}),
         assetId,
         name: str(b.name) ?? from.name,
-        stagedId: null,
+        stagedId,
+        placement: stagedId !== null,
         from,
         left: {
           folderId: b.folderId === undefined ? from.folderId : (str(b.folderId) ?? null),

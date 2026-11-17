@@ -788,6 +788,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       }
     },
     chronology: chronology.store,
+    images,
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReview = review.attach();

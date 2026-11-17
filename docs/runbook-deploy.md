@@ -842,10 +842,11 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/rehearse-write-scope.sh --project tes
   approved version's switches, and a package-shaped job captured as a proposal and rejected: a real package needs the
   pack's governance pages, which are in the Arkona project, which the rehearsal never reads; NOTED if the new pack
   version is not approved yet); **review** the four on the Review queue; **R1 to R4** each reverted and read back as it
-  was; **rail-delete** and **rail-bulk** a delete and an 11-page batch proposed by the default rails (then rejected);
+  was (R4, the image: not moved or hidden and nothing written to `LK-Bridge staging`; back on the Staging page from the
+  bridge's server, with ONE proposal to delete the placed image, which the script approves as you would); **rail-delete** and **rail-bulk** a delete and an 11-page batch proposed by the default rails (then rejected);
   **cleanup**.
 - **Clean-up**: the chronology event is deleted, the throwaway page with everything under it (cascade), and the image's
-  two asset folders (`lk-bridge write-scope <time>` and `lk-bridge write-scope <time> staging`) with the image in them. If
+  asset folder (`lk-bridge write-scope <time>`; the image itself was deleted when R4 approved its proposal). If
   anything cannot be removed the report says what, to delete by hand in LegendKeeper, and the exit code is 1.
 - Exit code: 0 when no step failed (NOTED and SKIPPED are not failures), 1 when one did, 2 when it refused to run.
 - Without the wrapper: `DB_PATH=… LK_PROJECT_TEST_API_KEY=… npm run rehearse:write-scope -- --project test` (from a

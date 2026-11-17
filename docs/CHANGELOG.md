@@ -11,8 +11,9 @@ against a live system: mocks and fixtures only; the new rehearsal script was run
   listed. The Overview page shows the unreviewed count.
 - **Revert** (Review page and Jobs page; re-authenticated; audited `job.revert`): one job, run by the system at P1, puts
   back what a finished direct-write job changed: page text block by block, sidebar facts and links, chronology rows and
-  their events in step, names, tags, aliases and moves, image placements (back to staging, hidden; an asset is never
-  deleted), and the page's previous Last Major Revision when the job changed it. Only what has not changed since; all
+  their events in step, names, tags, aliases and moves, image placements (the image back on the Staging page from the
+  bridge's server and the placed asset's deletion proposed to you; nothing written to `LK-Bridge staging`; the revert
+  itself deletes nothing), and the page's previous Last Major Revision when the job changed it. Only what has not changed since; all
   or nothing unless you confirm a partial revert. Never a deletion (`restore_resource`), a proposal, a running job or a
   revert.
 - **Safety rails per profile** (Clients & Access, "Always propose"; re-authenticated; audited `profile.set_rails`): even
@@ -20,7 +21,8 @@ against a live system: mocks and fixtures only; the new rehearsal script was run
   deletes and moves (on) become proposals that say why (`proposed because: bulk change (14 pages > 10)`). The rails only
   add proposals; canon and lifecycle stay proposals whatever they say.
 - **Pack tool switches** (Packs page; a new version, approved as usual): `arkona_create_character`, `_owner` and
-  `_relationship` always propose; `arkona_add_character_art` follows the agent's scope. The seed
+  `_relationship` always propose; `arkona_add_character_art` and F3c's `arkona_appraisal_fix` follow the agent's scope
+  (the appraisal fix reads its switch from the approved version; the Appraisal page's Propose a fix always proposes). The seed
   `arkona-2026-11-17-f3-4` supersedes F3.3's mislabelled `arkona-2026-11-17-f3d`.
 - **A direct `updateBlock` is measured for Last Major Revision**: read first (one read) when the page has the row and the
   mode is `auto`, so a typo fix at scope `write` is minor.

@@ -13,8 +13,10 @@
  * - a Last Major Revision row alone: its value before;
  * - a page's name, tags, aliases and icon: their values before; a move: back under the old parent, at its old place
  *   among its siblings (by rank);
- * - an image the job placed: moved back to where it came from (a staged asset back to its folder and hidden; an asset
- *   the job made from a staged image into the project's staging folder, hidden). Never deleted.
+ * - an image the job placed from staging (v3 F3.4, decision B5): its file copied back into the bridge's server staging,
+ *   so it is back on the Staging page, and the placed asset's deletion proposed to the owner; the revert job itself only
+ *   checks, inside its lock, that the asset is still as the placement left it. Nothing is written to LegendKeeper's
+ *   staging folder, and Revert itself never deletes an asset. An ordinary asset move goes back where it was.
  */
 import { planFacts, FactsPlanError, type FactRequest, type LinkRequest } from '../facts/plan.js';
 import { expandFacts } from '../facts/expand.js';
@@ -87,11 +89,17 @@ export interface TargetPlan {
   readonly resources?: readonly string[];
   readonly documents?: readonly string[];
   readonly assets?: readonly string[];
-  /** Bridge-side follow-up once the job succeeded (an image's record back on the Staging page). */
+  /**
+   * v3 F3.4 (ADR 0055 decision B5): the bridge-side part of reverting an image placement: its file copied into the
+   * bridge's server staging before the job, then, once the job succeeded, its staged record back on the Staging page and
+   * the placed asset's deletion proposed to the owner.
+   */
   readonly image?: {
     readonly assetId: string;
-    readonly stagedId: string | null;
-    readonly folderStep: number | null;
+    readonly stagedId: string;
+    readonly name: string | null;
+    /** The asset's file URL, as the plan's read gave it (the copy is downloaded from it). */
+    readonly url: unknown;
   };
 }
 
@@ -99,8 +107,6 @@ export interface TargetPlan {
 export interface PlanIo {
   readonly jobId: string;
   read(op: string, params: OpParams): Promise<{ readonly exists: boolean; readonly body: unknown }>;
-  /** The project's staging folder name in the asset library (`LK-Bridge staging` by default). */
-  readonly stagingFolder: string;
 }
 
 const base = (t: Target) => ({ key: t.key, kind: t.kind, page: t.page, what: t.what });
@@ -699,6 +705,7 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
     isHidden: live.isHidden === true,
   };
   if (
+    !t.placement &&
     t.from.kind === 'asset' &&
     now.folderId === t.from.folderId &&
     now.isHidden === t.from.isHidden &&
@@ -728,70 +735,39 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
       },
     },
   };
-  if (t.from.kind === 'asset') {
-    const body = {
-      folderId: t.from.folderId,
-      isHidden: t.from.isHidden,
-      ...(t.from.name !== null && t.from.name !== t.left.name ? { name: t.from.name } : {}),
-    };
-    const steps: StepSpec[] = [
-      check,
+  if (t.placement && t.stagedId) {
+    // v3 F3.4 (decision B5): the staged image back on the Staging page from the bridge's server, and the placed asset's
+    // deletion proposed to the owner. The job only checks, inside its lock, that the asset is as the placement left it.
+    return ready(
+      t,
+      'its file goes back to the Staging page (kept on the bridge’s server), and deleting the placed image from the library is proposed to you; nothing is written to the staging folder',
+      [check],
       {
-        op: 'updateAsset',
-        params: { path: { assetId: t.assetId }, body },
-        journalOperation: journalOp(io, t),
+        assets: [t.assetId],
+        image: { assetId: t.assetId, stagedId: t.stagedId, name: t.name, url: live.url },
       },
-      {
-        op: VERIFY_STEP,
-        params: { body: { targets: [{ kind: 'asset', label: t.what, assetId: t.assetId, fields: body }] } },
-      },
-    ];
-    return ready(t, 'moved back to where it came from', steps, {
-      assets: [t.assetId],
-      image: { assetId: t.assetId, stagedId: t.stagedId, folderStep: null },
-    });
+    );
   }
-  // The job made it from an image staged on the bridge: it goes to the staging folder, hidden (never deleted).
+  if (t.from.kind !== 'asset') return changed(t, 'the image has no staged record to go back to', []);
+  // An ordinary asset move: back to its folder, name and hidden flag (never the staging folder: see jobTargets).
+  const body = {
+    folderId: t.from.folderId,
+    isHidden: t.from.isHidden,
+    ...(t.from.name !== null && t.from.name !== t.left.name ? { name: t.from.name } : {}),
+  };
   const steps: StepSpec[] = [
     check,
     {
-      op: 'createAssetFolder',
-      params: { body: { name: io.stagingFolder } },
-      findOrCreate: true,
-      journalOperation: journalOp(io, t, { write: `folder ${io.stagingFolder}` }),
-    },
-    {
       op: 'updateAsset',
-      params: { path: { assetId: t.assetId }, body: { isHidden: true } },
-      bindFrom: { step: 2, to: 'body.folderId' },
-      journalOperation: journalOp(io, t, { write: `back to ${io.stagingFolder}, hidden` }),
+      params: { path: { assetId: t.assetId }, body },
+      journalOperation: journalOp(io, t),
     },
     {
       op: VERIFY_STEP,
-      params: {
-        body: {
-          targets: [
-            {
-              kind: 'asset',
-              label: t.what,
-              assetId: t.assetId,
-              fields: { isHidden: true },
-              folderFrom: { step: 2 },
-            },
-          ],
-        },
-      },
+      params: { body: { targets: [{ kind: 'asset', label: t.what, assetId: t.assetId, fields: body }] } },
     },
   ];
-  return ready(
-    t,
-    `moved to “${io.stagingFolder}”, hidden (the asset is kept; it is back on the Staging page)`,
-    steps,
-    {
-      assets: [t.assetId],
-      image: { assetId: t.assetId, stagedId: t.stagedId, folderStep: 2 },
-    },
-  );
+  return ready(t, 'moved back to where it was', steps, { assets: [t.assetId] });
 }
 
 // ------------------------------------------------------------------------------------------------ joining the parts

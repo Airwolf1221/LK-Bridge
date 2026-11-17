@@ -113,16 +113,29 @@ export interface RevertDeps {
   readonly policy: Pick<PolicyStore, 'audit'>;
   readonly now: () => number;
   readonly chronology?: ChronologyAccess;
-  readonly images?: Pick<ImageService, 'store' | 'stagingFolderName'>;
+  /**
+   * v3 F3.4 (ADR 0055 decision B5): the staged images, to put a reverted placement's file back into the bridge's server
+   * staging and its record back on the Staging page.
+   */
+  readonly images?: Pick<ImageService, 'store' | 'copyPlacedToStaging' | 'restage' | 'dropCopy'>;
   readonly log?: { warn(o: unknown, m: string): void };
 }
 
-/** What the job's record keeps about a revert's images, to put them back on the Staging page once it succeeds. */
+/**
+ * What the revert's record keeps about each image placement it reverts (v3 F3.4, decision B5): the copy of its file
+ * already in the bridge's server staging; once the job has succeeded, its staged record goes back on the Staging page
+ * and the placed asset's deletion is proposed to the owner (the proposal's id is added here).
+ */
 interface ImageNote {
   readonly assetId: string;
-  readonly stagedId: string | null;
-  /** The revert job's step that found or made the staging folder (shifted), or null for an asset moved back. */
-  readonly folderStep: number | null;
+  readonly stagedId: string;
+  readonly name: string | null;
+  /** The copy of its file in the bridge's server staging (made before the job). */
+  readonly copy: { readonly sha256: string; readonly bytes: number };
+  /** The proposal to delete the placed asset (once the job has succeeded). */
+  readonly deletionProposalId?: string | null;
+  /** Why the follow-up did not happen, if it did not. */
+  readonly problem?: string;
 }
 
 const isNotFound = (e: unknown): boolean => {
@@ -217,7 +230,6 @@ export class RevertService {
     const cache = new Map<string, Promise<{ exists: boolean; body: unknown }>>();
     return {
       jobId,
-      stagingFolder: this.d.images?.stagingFolderName(projectId) ?? 'LK-Bridge staging',
       read: (op: string, params: OpParams) => {
         const key = `${op} ${stableJson(params)}`;
         let p = cache.get(key);
@@ -347,18 +359,29 @@ export class RevertService {
         `${others.length} of the ${targets.length} things job ${jobId} changed cannot be reverted (listed with why). The default is all or nothing: confirm a partial revert to revert the other ${readyPlans.length}.`,
       );
 
+    // v3 F3.4 (decision B5): each image placement's file is copied back into the bridge's server staging FIRST, so a
+    // file that cannot be saved refuses the revert before anything is written.
+    const images: ImageNote[] = [];
+    for (const p of readyPlans) {
+      if (!p.image) continue;
+      try {
+        if (!this.d.images) throw new Error('the staged images are not available here');
+        const copy = await this.d.images.copyPlacedToStaging(projectId, p.image.stagedId, p.image.url);
+        images.push({ assetId: p.image.assetId, stagedId: p.image.stagedId, name: p.image.name, copy });
+      } catch (e) {
+        await this.dropCopies(images);
+        return refuse(
+          'IMAGE_NOT_SAVED',
+          `${p.check.what}: ${e instanceof Error ? e.message : String(e)} Nothing was reverted: the image stays where it is.`,
+        );
+      }
+    }
+
     // ONE job: every ready target's part, its step numbers shifted, every lock held for the whole run.
     const steps: StepSpec[] = [];
-    const images: ImageNote[] = [];
     for (const p of readyPlans) {
       const offset = steps.length;
       for (const s of p.steps ?? []) steps.push(shiftStep(s, offset));
-      if (p.image)
-        images.push({
-          assetId: p.image.assetId,
-          stagedId: p.image.stagedId,
-          folderStep: p.image.folderStep === null ? null : p.image.folderStep + offset,
-        });
     }
     const resources = [...new Set(readyPlans.flatMap((p) => p.resources ?? []))];
     const documents = [...new Set(readyPlans.flatMap((p) => p.documents ?? []))];
@@ -393,10 +416,13 @@ export class RevertService {
             : {}),
         ...(assets.length > 0 ? { holdAssets: assets } : {}),
       });
-      if (!('jobId' in r))
+      if (!('jobId' in r)) {
+        await this.dropCopies(images);
         return refuse('NOT_SUBMITTED', 'The revert was not accepted as a job; nothing was written.');
+      }
       jobIdOfRevert = r.jobId;
     } catch (e) {
+      await this.dropCopies(images);
       const code = e instanceof JobsError ? (e.code ?? 'REFUSED') : 'REFUSED';
       return refuse(
         code,
@@ -431,7 +457,11 @@ export class RevertService {
       message:
         `Revert job ${jobIdOfRevert} submitted: ${readyPlans.length} target${readyPlans.length === 1 ? '' : 's'} written back` +
         (partial ? `; ${others.length} not (listed with why)` : '') +
-        `. Each is checked again inside the job before it is written. The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold everything as it was, if you need to go further.`,
+        `. Each is checked again inside the job before it is written.` +
+        (images.length > 0
+          ? ` Once it succeeds, ${images.length === 1 ? 'the placed image goes' : `the ${images.length} placed images go`} back to the Staging page (${images.length === 1 ? 'its file is' : 'their files are'} already copied to the bridge’s server), and deleting ${images.length === 1 ? 'it' : 'them'} from the library is proposed to you on the Proposals page.`
+          : '') +
+        ` The journal (bridge_journal_lookup with jobId ${jobId}) and the snapshots hold everything as it was, if you need to go further.`,
     };
   }
 
@@ -452,39 +482,97 @@ export class RevertService {
       revertJobId: job.id,
       ...(job.lastError ? { error: job.lastError.message } : {}),
     });
-    if (state !== 'succeeded') return;
-    this.d.review.markReverted(row.project_id, row.job_id);
-    let note: { images?: ImageNote[] };
+    let note: { targets?: unknown; images?: ImageNote[] };
     try {
-      note = JSON.parse(row.targets) as { images?: ImageNote[] };
+      note = JSON.parse(row.targets) as { targets?: unknown; images?: ImageNote[] };
     } catch {
       note = {};
     }
-    const images = this.d.images;
-    if (!images || !note.images?.length) return;
-    const results = this.d.engine.stepResults(row.project_id, job.id) ?? [];
-    for (const im of note.images) {
-      const rec =
-        (im.stagedId ? images.store.upload(row.project_id, im.stagedId) : undefined) ??
-        images.store.byAsset(row.project_id, im.assetId);
-      if (!rec) continue;
-      const folder =
-        im.folderStep === null
-          ? null
-          : (results.find((s) => s.stepNo === im.folderStep)?.value as Obj | null);
-      const folderId = folder && typeof folder.id === 'string' ? folder.id : rec.folderId;
-      // Back on the Staging page: a staged asset in LegendKeeper's staging folder, hidden, to place again or discard.
-      images.store.updateUpload(row.project_id, rec.id, {
-        staged: true,
+    const notes = note.images ?? [];
+    if (state !== 'succeeded') {
+      // The revert did not go ahead: the copies of the images' files are not wanted.
+      void this.dropCopies(notes);
+      return;
+    }
+    this.d.review.markReverted(row.project_id, row.job_id);
+    if (notes.length > 0) void this.afterImages(row.id, row.project_id, row.job_id, note, notes);
+  }
+
+  /**
+   * v3 F3.4 (ADR 0055 decision B5): once a revert job has succeeded, each image placement it reverted goes back on the
+   * Staging page (its staged record, from the copy of its file on the bridge's server), and deleting the placed asset is
+   * proposed to the owner: ONE proposal per image, by the bridge, never run without the owner's approval. Nothing is
+   * written to LegendKeeper here, and nothing to its staging folder. Recorded with the revert and audited.
+   */
+  private async afterImages(
+    revertId: number,
+    projectId: string,
+    jobId: string,
+    note: { targets?: unknown; images?: ImageNote[] },
+    notes: readonly ImageNote[],
+  ): Promise<void> {
+    const done: ImageNote[] = [];
+    for (const im of notes) {
+      try {
+        if (!this.d.images?.restage(projectId, im.stagedId, im.copy.sha256))
+          throw new Error(`there is no staged image ${im.stagedId} any more`);
+        const label = im.name ?? im.assetId;
+        const summary = `Revert of job ${jobId}: delete the placed image “${label}” from the library (its file is back on the Staging page)`;
+        const r = await this.d.engine.submit({
+          kind: 'batch_ops',
+          project: projectId,
+          steps: [
+            {
+              op: 'deleteAsset',
+              params: { path: { assetId: im.assetId } },
+              journalOperation: { tool: REVERT_TOOL, revertOf: jobId, write: `the placed image “${label}”` },
+            },
+          ],
+          onError: 'stop',
+          priority: 'P1',
+          origin: { kind: 'ui', client: 'dashboard', tool: REVERT_TOOL, detail: `revert:${jobId}` },
+          title: summary.slice(0, 300),
+          forceProposal: true,
+          proposal: { summary },
+        });
+        const proposalId = 'proposalId' in r && typeof r.proposalId === 'string' ? r.proposalId : null;
+        if (!proposalId) throw new Error('the deletion was not captured as a proposal');
+        done.push({ ...im, deletionProposalId: proposalId });
+      } catch (e) {
+        const problem = e instanceof Error ? e.message : String(e);
+        this.d.log?.warn(
+          { err: e, jobId, assetId: im.assetId },
+          'a reverted image placement could not be followed up',
+        );
+        done.push({ ...im, deletionProposalId: null, problem });
+      }
+    }
+    try {
+      this.d.db
+        .prepare('UPDATE job_reverts SET targets = ? WHERE id = ?')
+        .run(JSON.stringify({ ...note, images: done }), revertId);
+    } catch {
+      // the record keeps the copies as they were; the audit row below says what happened
+    }
+    this.d.policy.audit('system', 'job.revert', jobId, undefined, {
+      outcome: 'images',
+      images: done.map((im) => ({
         assetId: im.assetId,
-        folderId,
-        ...(im.folderStep !== null ? { folderPath: [images.stagingFolderName(row.project_id)] } : {}),
-        placedAt: null,
-        placedBy: null,
-        placementJobId: null,
-        placementProposalId: null,
-        serverSha256: null,
-      });
+        stagedId: im.stagedId,
+        deletionProposalId: im.deletionProposalId ?? null,
+        ...(im.problem ? { problem: im.problem } : {}),
+      })),
+    });
+  }
+
+  /** Removes the copies of images' files made for a revert that did not go ahead. */
+  private async dropCopies(notes: readonly ImageNote[]): Promise<void> {
+    for (const im of notes) {
+      try {
+        await this.d.images?.dropCopy(im.copy.sha256);
+      } catch (e) {
+        this.d.log?.warn({ err: e, stagedId: im.stagedId }, 'a copy of an image’s file could not be removed');
+      }
     }
   }
 }

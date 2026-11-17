@@ -115,8 +115,10 @@ default) are not listed: you saw them before they happened. The Overview page sh
 - **Revert** (also on the Jobs page, for a finished job an agent ran directly) first shows what it would do: each thing
   the job changed, whether it can be put back, and, for one that changed since or cannot be reverted, why. It puts back
   page text (block by block), sidebar facts and links, chronology rows and their events (in step), names, tags, aliases
-  and moves, and image placements (the image goes back to the staging folder, hidden, and onto the Staging page; an
-  asset is never deleted). It never reverts a deletion (it points to `restore_resource`), a proposal, a running job or
+  and moves, and image placements: the image's file is copied back to the bridge's server, so the image is back on
+  the **Staging** page, and deleting the placed image from the library is **proposed to you** on the Proposals page
+  (nothing is ever written to the `LK-Bridge staging` folder, and the revert itself deletes nothing). It never reverts
+  a deletion (it points to `restore_resource`), a proposal, a running job or
   another revert. **All or nothing by default:** if anything cannot be put back, the dialog lists it and you tick
   the box to revert the others anyway (**Revert the rest**). Each target is checked again inside the revert job, so an edit made
   meanwhile is never overwritten. It asks for your password (and TOTP code) first, and is audited (`job.revert`, with

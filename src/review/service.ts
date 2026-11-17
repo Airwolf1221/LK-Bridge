@@ -12,6 +12,7 @@ import type { Db } from '../db/open.js';
 import type { ChronologyStore } from '../chronology/store.js';
 import type { JobEngine } from '../jobs/engine.js';
 import { SYSTEM_PRINCIPAL, TERMINAL_JOB_STATUSES, type JobView } from '../jobs/types.js';
+import type { ImageService } from '../images/service.js';
 import type { PolicyStore } from '../policy/store.js';
 import { changeView, type ChangeView } from './changes.js';
 import { ReviewStore, type DirectWriteRow, type ReviewFilter } from './store.js';
@@ -32,6 +33,11 @@ export interface ReviewDeps {
   readonly documentName?: (projectId: string, resourceId: string, documentId: string) => string | null;
   readonly folderName?: (projectId: string, id: string | null) => string | null;
   readonly chronology?: Pick<ChronologyStore, 'byJob'>;
+  /**
+   * v3 F3.4 (ADR 0055 decision B5): the staged images' records and the staging folder's name, to tell the placement of
+   * a staged image from an ordinary asset move.
+   */
+  readonly images?: Pick<ImageService, 'store' | 'stagingFolderName'>;
   readonly log?: { warn(o: unknown, m: string): void };
 }
 
@@ -142,9 +148,21 @@ export class ReviewService {
   targets(projectId: string, jobId: string): Target[] | null {
     const rec = this.record(projectId, jobId);
     if (!rec) return null;
+    const images = this.d.images;
     return jobTargets(rec, {
       pageName: (id) => this.d.pageName?.(projectId, id) ?? null,
       documentName: (r, doc) => this.d.documentName?.(projectId, r, doc) ?? null,
+      ...(images
+        ? {
+            placedStaged: (assetId: string) => {
+              const row = images.store.byAsset(projectId, assetId);
+              return row && row.placementJobId === jobId ? row.id : null;
+            },
+            isStagingFolder: (folderId: string | null) =>
+              folderId !== null &&
+              this.d.folderName?.(projectId, folderId) === images.stagingFolderName(projectId),
+          }
+        : {}),
     });
   }
 

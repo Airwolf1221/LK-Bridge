@@ -420,6 +420,79 @@ export class ImageService {
     };
   }
 
+  // ============================================================================================ revert (v3 F3.4)
+
+  /**
+   * v3 F3.4 (ADR 0055 decision B5): the Revert of an image placement copies the placed asset's file back into the
+   * bridge's server staging (images/staged/): one download from LegendKeeper's asset host, no API request. It must be the
+   * very file that was staged (the staged record's WebP SHA-256), so placing it again uploads exactly it. The record is
+   * not changed here (`restage` does that once the revert job has succeeded) and nothing is written to LegendKeeper.
+   * Throws `ImageServiceError` (`IMAGE_NOT_SAVED`, or `STAGING_DISK_LOW`): the revert is then refused, nothing written.
+   */
+  async copyPlacedToStaging(
+    projectId: string,
+    stagedId: string,
+    url: unknown,
+  ): Promise<{ readonly sha256: string; readonly bytes: number }> {
+    const row = this.store.upload(projectId, stagedId);
+    if (!row)
+      throw new ImageServiceError('IMAGE_NOT_SAVED', `There is no staged image ${stagedId} to put back.`);
+    const lk = this.o.lkFor?.(projectId);
+    if (!lk) throw new ImageServiceError('PROJECT_UNAVAILABLE', 'The project is not served now.');
+    let got: Awaited<ReturnType<typeof downloadAsset>>;
+    try {
+      got = await downloadAsset(lk, url, {
+        hosts: this.o.images.assetHosts,
+        priority: 'P1',
+        opId: 'job.revert',
+      });
+    } catch (e) {
+      throw new ImageServiceError(
+        'IMAGE_NOT_SAVED',
+        `The placed image’s file could not be downloaded to the bridge’s staging: ${(e as Error).message}`,
+      );
+    }
+    const sha256 = createHash('sha256').update(got.bytes).digest('hex');
+    if (sha256 !== row.webp.sha256)
+      throw new ImageServiceError(
+        'IMAGE_NOT_SAVED',
+        `The file LegendKeeper keeps for it (${sha256.slice(0, 12)}…) is not the one that was staged (${row.webp.sha256.slice(0, 12)}…), so it cannot go back to the Staging page as it was.`,
+      );
+    await this.checkStagingDisk(got.bytes.length);
+    await this.stagedBytes.put(got.bytes);
+    return { sha256, bytes: got.bytes.length };
+  }
+
+  /**
+   * v3 F3.4 (ADR 0055 decision B5): a reverted placement's staged record, back on the Staging page from the copy
+   * `copyPlacedToStaging` made: staged on the bridge's server again (no asset), to place again or discard. The asset
+   * that was placed is not touched here: its deletion is a proposal for the owner.
+   */
+  restage(projectId: string, stagedId: string, sha256: string): ImageUploadRow | undefined {
+    return this.store.updateUpload(projectId, stagedId, {
+      state: 'uploaded',
+      staged: true,
+      serverSha256: sha256,
+      assetId: null,
+      folderId: null,
+      folderPath: null,
+      placedAt: null,
+      placedBy: null,
+      placementJobId: null,
+      placementProposalId: null,
+      storedVerified: null,
+      storedSha256: null,
+      verifyReason: null,
+      error: null,
+      expiryWarnedAt: null,
+    });
+  }
+
+  /** v3 F3.4: removes the copy of a revert that did not go ahead (unless a staged record uses that file). */
+  async dropCopy(sha256: string): Promise<void> {
+    if (!this.store.serverShaInUse(sha256)) await this.stagedBytes.remove(sha256);
+  }
+
   /** Kept bytes past their retention are removed (hourly). */
   async expireKept(): Promise<number> {
     const gone = this.store.expireKept(this.o.now());
