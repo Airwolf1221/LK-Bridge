@@ -961,6 +961,17 @@ A Status in `facts` must agree with `status` (`INVALID_FACTS`). No lifecycle rec
   the tool would leave it (`NOTHING_TO_DO`), and a name already taken in the destination (`NAME_TAKEN`);
 - refuses a second request for the same page while one waits or runs (`DUPLICATE_REQUEST`, `LIFECYCLE_IN_PROGRESS`).
 
+**Where the tags go (v3 F3d, [ADR 0053](adr/0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md)).**
+By default (`append`, ADR 0035) the outgoing status or lifecycle tag is removed and the incoming one added **last**;
+every other tag stays where it is. On a project whose approved setting pack says the lifecycle tag leads
+(`lifecycleTagPosition`: Arkona), the incoming tag goes **first** and every other tag keeps its order after it:
+`move_to_working` `Culture, CANON, Language` → `Working, Culture, Language`; `archive_page` `Magic, CANON` →
+`Archived, Magic`; `promote_page` `Working, Culture` → `CANON, Culture`; `unarchive_page` puts what its target needs where
+`Archived` was, first. **The status tag** of an Authoritative page is `CANON`, or `AU` for a page whose Continuity Type
+is AU on a project whose approved pack carries the owner's AU ruling (Arkona): `promote_page` and `unarchive_page` (back
+to Authoritative) write that one, and `move_to_working` and `archive_page` remove either. Both rules hold for whole sets
+(an index, with no Continuity Type, takes `CANON`).
+
 **`archive_page`** `{ page, dryRun?, project }`: an Authoritative `[BSRC]` or Working `[BWRK]` page becomes
 `[BARC] {name}` directly under `[INDEX] Archived` (alphabetical), in one job:
 
@@ -980,11 +991,13 @@ A Status in `facts` must agree with `status` (`INVALID_FACTS`). No lifecycle rec
   and the original Scope (the prefix alone when there was none), Temporal Scope `Former Main CANON. Retired on {date}.`
   (from Authoritative) or `Former Working concept. Retired on {date}.` (from Working), Last Major Revision today. A
   missing row is added;
-- **tags**: the outgoing status tag (`CANON` or `Working`) removed and `Archived` added; other tags untouched.
+- **tags**: the outgoing status tag (`CANON`, `AU` under the AU ruling, or `Working`) removed and `Archived` added
+  (last, or first where the pack says the lifecycle tag leads); other tags untouched.
 
 **`unarchive_page`** `{ page, destination?, previousState?, restore?, dryRun?, project }`: reverses an archiving
 **from its lifecycle record**. A formerly Authoritative page goes back under its previous parent (alphabetical) as
-`[BSRC]`, with its recorded Status, Continuity Type, Scope and Temporal Scope and the `CANON` tag; a formerly Working
+`[BSRC]`, with its recorded Status, Continuity Type, Scope and Temporal Scope and the `CANON` tag (`AU` for an AU page
+under the AU ruling; first where the lifecycle tag leads); a formerly Working
 page goes back under `[INDEX] Working` as `[BWRK]` with Status `Working`, the `Working` tag and its other recorded
 values. Last Major Revision becomes today (a recorded fact that was absent is removed again). The archive note is
 removed **only if it is still exactly as inserted**; otherwise it stays and the result flags it. A Scope edited since
@@ -995,13 +1008,15 @@ page) `destination`; without them the call is refused with `NO_LIFECYCLE_RECORD`
 anything but a `[BARC]` page (`NOT_ARCHIVED`).
 
 **`move_to_working`** `{ page, dryRun?, project }`: an Authoritative `[BSRC]` page becomes `[BWRK]` directly under
-`[INDEX] Working`, Status `Working`, `CANON` swapped for `Working`. Nothing else changes; the record keeps where it was.
+`[INDEX] Working`, Status `Working`, the status tag (`CANON`, or `AU`) swapped for `Working` (first where the lifecycle
+tag leads). Nothing else changes; the record keeps where it was.
 Only from `[BSRC]` (`NOT_AUTHORITATIVE`). A Character Core under its own character index moves **alone** (the index and
 its other pages stay; the result flags it, and `promote_page` takes it back).
 
 **`promote_page`** `{ page, destination, dryRun?, project }`: a Working `[BWRK]` page becomes `[BSRC]` under
 `destination` (required; alphabetical), Status `Authoritative`, Last Major Revision today, Continuity Type kept when
-`CANON` or `AU` and otherwise set to `CANON`, `Working` swapped for `CANON`. Without `destination` it is refused with
+`CANON` or `AU` and otherwise set to `CANON`, `Working` swapped for `CANON` (for an AU page `AU`, under the AU ruling;
+first where the lifecycle tag leads). Without `destination` it is refused with
 `DESTINATION_REQUIRED` and, when the page came from `move_to_working`, `suggestedDestination`: the place it was in
 (never used unless you pass it). A Working character's Core (or compact page) under its own `[INDEX] {name}` takes
 that index with it to the destination (normally its race index). v2 E4 ([ADR 0046](adr/0046-e4-owner-decisions.md)
@@ -1372,6 +1387,12 @@ Subrace Reference`). Any other species and every creature: the Bestiary. `create
   name current Authoritative owners only.
 - **Tags.** `CANON` (or `AU`), the primary, at most one specialist; a Working page `Working`, the primary, then the
   specialist if any (the owner, 16 November 2026: ADR 0052, F3b.1 amendment).
+- **Routing lines** (v3 F3d, ADR 0053). An Authoritative owner filed directly into an existing home gets one line in the
+  home's "How to Use This Index" section, in the same proposal and F3a's pattern (`- [<page name>](lk://resources/<id>):
+<Scope>`, appended, never a rewrite). A home with no such section gets none, and the preview's notes say so. With
+  `promoteNation`, the Polities index's line that links the nation's Reference is pointed to the new `[INDEX] <Nation>`
+  (the rest of the line kept); no such line, or several: unchanged, and said. A Working owner gets no line until it is
+  promoted. ADR 0051's rule decides the index's Last Major Revision.
 
 **Refusals**: `PACK_TYPE_NOT_FOUND` (with the types), `KIND_NOT_FOR_TYPE`, `INVALID_NAME` and F3a's name, dash and text
 refusals, `OWNER_FACTS_INCOMPLETE`, `UNESTABLISHED_NEEDS_REASON`, `REFERENCE_TYPE_FIXED`, `DESCRIPTOR_FIXED`,

@@ -86,6 +86,31 @@ There, `CANON` is itself a problem: the finding's tag signal expects "no CANON (
 evidence names the area (`canonExemptArea`: its id and name). Status and the other status tags are checked as
 everywhere. A page outside a listed index still needs `CANON`.
 
+## The lifecycle tag leads (`lifecycle_tag_not_leading`, category Lifecycle; v3 F3d)
+
+[ADR 0053](adr/0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md). Only on a project whose approved
+setting pack says the lifecycle tag leads (`lifecycleTagPosition`: Arkona). A `[BWRK]` or `[BARC]` page is reported when
+its lifecycle tag (`Working` or `Archived`) is not its first tag, or when it still carries a status tag (`CANON`, or `AU`
+under the AU ruling). The evidence gives its tags, whether the lifecycle tag is first, and the status tags found.
+
+**Propose a fix** (`reorder_tags`, ONE ordinary proposal) reorders the tags and nothing else: the lifecycle tag first,
+every other tag in its order (a leftover status tag included). The page is read live first and must still hold exactly
+the tags the audit saw, in any order (`FIX_STALE` otherwise); the job checks them again in the lock and verifies the
+order. Nothing is added, removed or renamed, so it needs no canonical approval. A page whose lifecycle tag already leads
+but which still carries a status tag is reported with **no fix**: removing a status tag is the lifecycle tools' (the
+guard refuses it on any other route), and the page's `lifecycle_inconsistent` finding names it as well.
+
+After the pack version carrying the rule is approved, each finding is a page the bridge archived or moved to Working
+before v3 F3d (`Culture, Language, Archived`).
+
+## The AU status tag (`au_status_tag_mismatch`, category Lifecycle; v3 F3d)
+
+Only on a project whose approved setting pack carries the owner's AU ruling (`tags.au`: Arkona). An Authoritative page
+whose Continuity Type is AU carries `AU` as its status tag; any other Authoritative page carries `CANON`. `AU` on a
+non-AU page, or `CANON` on an AU page, is this finding (evidence: the Continuity Type, the tag expected and the one found).
+No fix: a status tag is changed only by the lifecycle tools. A page with neither is `lifecycle_inconsistent`, naming the
+one it expects; `AU` on a Working or Archived page is a `lifecycle_inconsistent` tag problem, as `CANON` is.
+
 ## Duplicate asset folders (`duplicate_asset_folders`, category Asset library; v3 F2)
 
 [ADR 0049](adr/0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 9. Read-only, from the bridge's
@@ -134,7 +159,7 @@ row the template audit reports is the audit's, not a second appraisal finding).
   category, severity and evidence, and names the run it came from; the report says when the audit ran on an older
   snapshot than the appraisal's, and when no audit has run yet.
 - **"Propose a fix" is handed over** for sibling order and the tags (the fix kinds `move_resource`, `add_tags`, and
-  `reorder_tags` once F3.3's lifecycle-tag order lands): the appraisal's follow-up is the audit's own fix, and
+  F3d's `reorder_tags`, the lifecycle tag put first; ADR 0053): the appraisal's follow-up is the audit's own fix, and
   `arkona_appraisal_fix` (or the Appraisal page's button) calls it, so there is one repair for one finding. Any other
   audit fix stays on the Audits page; the appraisal shows that finding as a judgement, naming the tool and what has to be
   decided.

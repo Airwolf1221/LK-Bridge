@@ -104,7 +104,7 @@ describe('the six exact headings', () => {
     p.ensureSeeded();
     const after = p.get('arkona')!;
     expect(after.version).toBe(v + 1);
-    expect(after.seed).toBe('arkona-2026-11-16-f3b1');
+    expect(after.seed).toBe(ARKONA_PACK.seed);
     expect(after.governance.find((g) => g.key === 'source-formatting')!.sections).toEqual([
       ...PINNED.formatting,
     ]);

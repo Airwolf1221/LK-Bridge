@@ -470,7 +470,11 @@ export function previewOf(
                   change: `${c.section}: +${c.images.length} image(s), each with its label and interpretation`,
                   images: c.images.map((i) => i.name),
                 }
-              : { page: c.page.rawName, change: `${c.section}: +${c.lines.length} line(s)`, lines: c.lines },
+              : {
+                  page: c.page.rawName,
+                  change: c.what ? `${c.section}: ${c.what}` : `${c.section}: +${c.lines.length} line(s)`,
+                  lines: c.lines,
+                },
     ),
     assets: plan.images.map((i) => ({
       staged_id: i.stagedId,

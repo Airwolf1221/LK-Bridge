@@ -15,6 +15,8 @@
   decision 14).
 - Migration: **none**. The pack's rules are one JSON document in the `packs` table already; the new seed reaches a stored
   pack as a new version at start (decision 12), which the owner approves.
+- The items this ADR and its F3b.1 amendment left for later (the lifecycle tag's place, AU in `promote_page` and the
+  lifecycle audit, the owner tool's routing line) are done in [ADR 0053](0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md).
 - Amended by the **F3b.1 amendment** below (16 November 2026: the six pinned headings exactly as the pages have them,
   re-mapping a pin on the Packs page, and a Working owner keeps its specialist tag). Decisions 5, 11 and 12 are read
   with it.

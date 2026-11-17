@@ -254,6 +254,13 @@ export type ExistingChange =
       readonly markdown: string;
       readonly sectionHash: string;
       readonly section: string;
+      /**
+       * v3 F3d (ADR 0053): `replace_section` when an existing line is rewritten (the Polities index's line for a nation
+       * `promoteNation` indexes now points to the new index); absent, the lines are appended (F3a).
+       */
+      readonly mode?: 'append_to_section' | 'replace_section';
+      /** v3 F3d: what the change does, in words, for the preview, the step's label and the proposal. */
+      readonly what?: string;
     }
   | {
       /**
@@ -1965,25 +1972,44 @@ export function planImages(
   return out;
 }
 
-/** The existing index's routing section gains a line per new page (append, never a rewrite); missing: warned. */
-async function routingChange(
-  env: PlanEnv,
+/** What a routing change needs of the plan's environment (F3a's character tool and F3b's owner tool alike). */
+export type RoutingEnv = Pick<PlanEnv, 'pd' | 'mctx' | 'tool' | 'ctx'> & {
+  readonly type: Pick<TypeRules, 'index'>;
+};
+
+/** One routing line, F3a's pattern: `- [<page name>](lk://resources/<id>): <Scope>`. */
+export const routingLine = (c: {
+  readonly rawName: string;
+  readonly id: string;
+  readonly scope: string | null;
+}) =>
+  `- [${c.rawName.replace(/\[/g, '\\[').replace(/\]/g, '\\]')}](lk://resources/${c.id})${c.scope ? `: ${c.scope}` : ''}`;
+
+/** An index's routing section as read now: its document, version, blocks and the section, or why not (said). */
+async function routingSection(
+  env: RoutingEnv,
   index: TreeNode,
-  children: readonly PlannedPage[],
   refuse: (code: string, message: string, more?: Obj) => void,
   warn: (code: string, message: string, more?: Obj) => void,
-): Promise<ExistingChange | null> {
-  const { pd, type } = env;
+  /** What is left undone, in words: after "no main page document; " and "section, so ". */
+  undone: { readonly noDocument: string; readonly noSection: string },
+): Promise<{
+  doc: { id: string };
+  version: string;
+  blocks: LkBlock[];
+  md: string;
+  title: string;
+} | null> {
   const doc =
     index.documents.find((d) => d.name === 'Main' && (d.type === 'page' || d.type === 'blank')) ??
     (index.documents.filter((d) => d.type === 'page').length === 1
       ? index.documents.find((d) => d.type === 'page')
       : undefined);
   if (!doc) {
-    warn('ROUTING_SKIPPED', `${index.rawName} has no main page document; its routing lines were not added.`);
+    warn('ROUTING_SKIPPED', `${index.rawName} has no main page document; ${undone.noDocument}.`);
     return null;
   }
-  const read = await liveRead(pd, env.mctx, env.tool, 'getDocumentBlocks', {
+  const read = await liveRead(env.pd, env.mctx, env.tool, 'getDocumentBlocks', {
     path: { resourceId: index.id, documentId: doc.id },
   });
   if (!read.ok) {
@@ -1992,20 +2018,117 @@ async function routingChange(
   }
   const body = read.value as { version?: string; blocks?: LkBlock[] };
   const blocks = body.blocks ?? [];
-  const md = toMarkdown({ blocks }).markdown;
-  const want = textKey(type.index.routing);
+  const want = textKey(env.type.index.routing);
   const found = sectionsOf(blocks).find((s) => s.heading && textKey(s.title) === want);
   if (!found) {
     warn(
       'ROUTING_SECTION_MISSING',
-      `${index.rawName} has no “${type.index.routing}” section, so no routing lines were added (add them with write_page).`,
+      `${index.rawName} has no “${env.type.index.routing}” section, so ${undone.noSection}.`,
     );
     return null;
   }
-  const lines = children.map(
-    (c) =>
-      `- [${c.rawName.replace(/\[/g, '\\[').replace(/\]/g, '\\]')}](lk://resources/${c.id})${c.scope ? `: ${c.scope}` : ''}`,
-  );
+  return {
+    doc,
+    version: body.version ?? '',
+    blocks,
+    md: toMarkdown({ blocks }).markdown,
+    title: found.title,
+  };
+}
+
+/**
+ * v3 F3d (ADR 0053): the Polities index's line for a nation that `promoteNation` gives its own index now points to that
+ * index: the one routing line that links the nation's Reference has its link replaced by one to the new index (the rest
+ * of the line, its Scope, kept), as one section rewrite with the in-lock re-plan. No such line, or several: nothing is
+ * changed and the preview says so.
+ */
+export async function repointRoutingLine(
+  env: RoutingEnv,
+  index: TreeNode,
+  from: { readonly id: string; readonly rawName: string },
+  to: { readonly id: string; readonly rawName: string },
+  refuse: (code: string, message: string, more?: Obj) => void,
+  say: (code: string, message: string, more?: Obj) => void,
+): Promise<ExistingChange | null> {
+  const r = await routingSection(env, index, refuse, say, {
+    noDocument: `its line for ${from.rawName} was not changed`,
+    noSection: `no line for ${from.rawName} was changed (edit it with write_page if it lists the nation)`,
+  });
+  if (!r) return null;
+  let section: string;
+  try {
+    section = getSection(r.md, r.title).markdown;
+  } catch {
+    say(
+      'ROUTING_SECTION_AMBIGUOUS',
+      `${index.rawName}: “${r.title}” could not be read as one section; its line for ${from.rawName} was not changed.`,
+    );
+    return null;
+  }
+  const link = new RegExp(`\\[((?:[^\\]\\\\]|\\\\.)*)\\]\\(lk://resources/${from.id}\\)`, 'g');
+  const lines = section.split('\n');
+  const hits = lines.map((l, i) => (/^\s*[-*+]\s/.test(l) && l.match(link) ? i : -1)).filter((i) => i >= 0);
+  if (hits.length !== 1) {
+    say(
+      hits.length === 0 ? 'ROUTING_LINE_MISSING' : 'ROUTING_LINE_AMBIGUOUS',
+      `${index.rawName}: ${hits.length === 0 ? `no routing line links ${from.rawName}` : `${hits.length} routing lines link ${from.rawName}`}, so none was pointed to ${to.rawName} (edit it with write_page if needed).`,
+    );
+    return null;
+  }
+  const label = to.rawName.replace(/\[/g, '\\[').replace(/\]/g, '\\]');
+  const before = lines[hits[0]!]!;
+  const after = before.replace(link, `[${label}](lk://resources/${to.id})`);
+  lines[hits[0]!] = after;
+  const markdown = lines.join('\n');
+  let planned: LkBlock[];
+  try {
+    const ctx = env.pd.services ? pageConverterContext(env.pd.services, env.ctx.projectId) : undefined;
+    planned = applyEdit(
+      { blocks: r.blocks },
+      { mode: 'replace_section', section: r.title, markdown },
+      ctx ?? {},
+    ).blocks;
+  } catch (e) {
+    say(
+      'ROUTING_SECTION_AMBIGUOUS',
+      `${index.rawName}: its line for ${from.rawName} could not be changed (${e instanceof Error ? e.message : String(e)}); edit it with write_page.`,
+    );
+    return null;
+  }
+  return {
+    planned,
+    kind: 'routing',
+    mode: 'replace_section',
+    page: env.ctx.types.resolveOne(index.id),
+    documentId: r.doc.id,
+    version: r.version,
+    blocks: r.blocks,
+    lines: [after.trim()],
+    markdown,
+    sectionHash: createHash('sha256').update(section).digest('hex'),
+    section: r.title,
+    what: `its line for ${from.rawName} now points to ${to.rawName}`,
+  };
+}
+
+/** The existing index's routing section gains a line per new page (append, never a rewrite); missing: warned. */
+export async function routingChange(
+  env: RoutingEnv,
+  index: TreeNode,
+  children: readonly Pick<PlannedPage, 'rawName' | 'id' | 'scope'>[],
+  refuse: (code: string, message: string, more?: Obj) => void,
+  warn: (code: string, message: string, more?: Obj) => void,
+): Promise<ExistingChange | null> {
+  const r = await routingSection(env, index, refuse, warn, {
+    noDocument: 'its routing lines were not added',
+    noSection: 'no routing lines were added (add them with write_page)',
+  });
+  if (!r) return null;
+  const { blocks, md } = r;
+  const doc = r.doc;
+  const body = { version: r.version };
+  const found = { title: r.title };
+  const lines = children.map(routingLine);
   let sectionMd: string;
   let planned: LkBlock[];
   try {

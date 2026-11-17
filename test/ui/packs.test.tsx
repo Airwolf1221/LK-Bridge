@@ -157,6 +157,10 @@ describe('the Packs page', () => {
     ).toBeInTheDocument();
     expect(within(card).getByText(/AU in place of CANON \(Continuity Type AU\)/)).toBeInTheDocument();
     expect(within(card).getByText(/Ruling \(2026-11-16\)/)).toBeInTheDocument();
+    // v3 F3d (ADR 0053): where the lifecycle tag goes, per project.
+    expect(
+      within(card).getByText('first (it leads) on arkona; last on every other project'),
+    ).toBeInTheDocument();
     const formatting = card.querySelector('[data-sections="source-formatting"]')!;
     expect(formatting.textContent).toContain('Approved Hierarchy and Standardised Navigation');
     await user.click(within(card).getByRole('button', { name: 'Check governance now' }));

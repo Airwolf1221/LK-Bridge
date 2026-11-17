@@ -12,6 +12,8 @@
  * - `set_facts`: one fact, through the tool's own planner (`planFacts`, `expandFacts`), only where the finding named the
  *   right value (the audit offers none when the value is ambiguous);
  * - `add_tags`: the missing required tags added to the page's tags (`updateResource`, additive; never a removal);
+ * - `reorder_tags` (v3 F3d, ADR 0053): the page's own tags in a new order, the lifecycle tag first (`updateResource`;
+ *   nothing added, removed or renamed, so the lifecycle guard sees no status tag change);
  * - `split_paragraph`: a paragraph with embedded line breaks split into separate paragraphs block by block
  *   (`insertBlock` for the new parts, each after the one before, then `replaceBlock` cutting the original to its first part: a
  *   refused insert loses nothing), as one proposal whose compare-and-swap is inside the
@@ -342,6 +344,84 @@ async function fixTags(d: FixDeps, projectId: string, f: Finding): Promise<FixRe
   });
 }
 
+// ============================================================================================ reorder_tags
+
+/** The same tags (each as often), whatever the order. */
+const sameTagSet = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && [...a].sort().join('\u0000') === [...b].sort().join('\u0000');
+
+/**
+ * v3 F3d (ADR 0053): a Working or Archived page's tags reordered so the lifecycle tag leads, every other tag (a status tag
+ * included) in its order. Re-read live: the page must still hold exactly the tags the audit saw (in any order), else the
+ * fix is stale; checked again inside the lock, and verified after.
+ */
+async function fixReorder(d: FixDeps, projectId: string, f: Finding): Promise<FixResult> {
+  const pageId = String(f.fix!.args.pageId);
+  const seen = (f.fix!.args.tags as unknown[]).filter((t): t is string => typeof t === 'string');
+  const order = (f.fix!.args.order as unknown[]).filter((t): t is string => typeof t === 'string');
+  if (!sameTagSet(seen, order))
+    throw new AuditError('FIX_NOT_APPLICABLE', 'The new order is not the same tags; nothing was proposed.');
+  const res = (await read(d, projectId, 'getResource', { path: { resourceId: pageId } })) as Obj | undefined;
+  if (!isObj(res)) throw stale(`The page ${pageId} is gone.`);
+  const live = Array.isArray(res.tags)
+    ? (res.tags as unknown[]).filter((t): t is string => typeof t === 'string')
+    : [];
+  if (!sameTagSet(live, seen))
+    throw stale(`The page's tags are now ${live.join(', ') || '(none)'}, not ${seen.join(', ')}.`, {
+      tags: live,
+    });
+  if (live.join('\u0000') === order.join('\u0000'))
+    return { status: 'nothing_to_do', message: 'The page’s tags are already in that order.' };
+  const name = String(res.name);
+  const title = `Reorder the tags of ${name}: ${order.join(', ')}`;
+  const steps: StepSpec[] = [
+    {
+      op: EXPECT_STEP,
+      params: {
+        body: { checks: [{ label: 'page', kind: 'resource', resourceId: pageId, name, tags: live }] },
+      },
+    },
+    {
+      op: 'updateResource',
+      params: { path: { resourceId: pageId }, body: { tags: order } },
+      journalOperation: {
+        tool: 'update_resource',
+        page: { id: pageId, name },
+        from: 'audits.propose_fix',
+        write: 'tags reordered',
+      },
+    },
+    {
+      op: VERIFY_STEP,
+      params: {
+        body: {
+          targets: [
+            {
+              kind: 'resource',
+              label: name,
+              resourceId: pageId,
+              fields: { tags: order },
+            } satisfies VerifyTarget,
+          ],
+        },
+      },
+    },
+  ];
+  return propose(d, projectId, {
+    steps,
+    title,
+    holdLock: { resourceId: pageId },
+    operation: {
+      tool: 'update_resource',
+      fromAudit: f.code,
+      changes: { tags: { before: live, after: order, reorderOnly: true } },
+    },
+    page: { id: pageId, name },
+    pageParts: ['tags reordered'],
+    fix: 'reorder_tags',
+  });
+}
+
 // ============================================================================================ split_paragraph
 
 const runsKey = (runs: unknown): string =>
@@ -616,6 +696,8 @@ export async function proposeFix(
       return fixTags(d, projectId, f);
     case 'split_paragraph':
       return fixSplit(d, projectId, f);
+    case 'reorder_tags':
+      return fixReorder(d, projectId, f);
     case 'chronology_sync':
     case 'chronology_count':
     case 'chronology_orphan':

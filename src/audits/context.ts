@@ -4,6 +4,7 @@
  * functions of it, so each is tested with a hand-made context.
  */
 import type { LifecycleConfig } from '../lifecycle/index.js';
+import type { LifecycleTagRules } from '../lifecycle/tags.js';
 import type { RegistryType, TaxonomyEntry } from '../registry/index.js';
 import { ProjectTree } from '../registry/tree-view.js';
 import type { TreeSettings } from '../tree/classify.js';
@@ -36,6 +37,11 @@ export interface AuditContext {
   readonly now: number;
   readonly treeSettings: TreeSettings;
   readonly lifecycle: LifecycleConfig;
+  /**
+   * v3 F3d (ADR 0053): where the lifecycle tag goes and the AU ruling, from the project's approved pack (absent: the
+   * defaults, `append` and no ruling).
+   */
+  readonly lifecycleTags?: LifecycleTagRules;
   readonly types: readonly RegistryType[];
   readonly entries: (typeId: string) => readonly TaxonomyEntry[];
   readonly rules: readonly AuditRule[];

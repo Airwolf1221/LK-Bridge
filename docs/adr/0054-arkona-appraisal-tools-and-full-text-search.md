@@ -14,11 +14,11 @@
   placeholders, roles, templates, headings, the overload heuristic), [ADR 0046](0046-e4-owner-decisions.md) decision 1
   (block-by-block writes) and [ADR 0051](0051-v3-f3c-major-revisions-same-day-ties-and-image-restore.md) (Last Major
   Revision only for real revisions).
-- Migration: **`3200_appraisal.sql`**: the materialised overlay and its FTS5 table, the references and images, the
-  index's state, and the stored runs and their findings. 3100 is left free: F3.3 (still running) may need one, and
-  migrations are applied in version order with gaps allowed.
-- Numbered 0054: F3.3 (the lifecycle tag position, AU in the lifecycle tools, routing lines; its branch commits as
-  "F3d") takes 0053.
+- Migration: **`3100_appraisal.sql`**: the materialised overlay and its FTS5 table, the references and images, the
+  index's state, and the stored runs and their findings.
+- Numbered 0054: F3.3 (the lifecycle tag position, AU in the lifecycle tools, routing lines), which ran alongside this
+  session and landed first as "F3d" (#63), took 0053. `main` with it was merged in before finishing (decision 3 and its
+  test take its new finding in).
 - Nothing in this session touched a live system: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak,
   spike or round-trip script.
 
@@ -152,9 +152,10 @@ room:
 - **The audits, gathered, never re-checked**: every open finding of the page from the audits' store, except those about
   the audits' own configuration (`rules`, `audit`) and the tooling notices (`collection_blocks`, `unsupported_blocks`,
   `inline_icon_page`: about what the bridge can write back, not the page's quality). Grouped by severity (`info` is
-  polish, the rest required; an inaccessible target is Inaccessible). F3.3's new lifecycle findings are gathered like
-  the others once it lands; its "lifecycle tag not leading" fix only reorders tags, so it is handed over like the tag
-  fixes (decision 8).
+  polish, the rest required; an inaccessible target is Inaccessible). F3d's new lifecycle findings (ADR 0053) are
+  gathered like the others: "lifecycle tag not leading" appears as a tag finding (`tag_grammar`) whose reorder-only fix
+  is handed over like the tag fixes (decision 8); when the page still carries a status tag, which a reorder cannot
+  remove, the audit offers no fix and it stays a judgement, the owner's (`test/appraisal/lifecycle-lead.test.ts`).
 - **Chosen: a branch or everything leaves out the non-current areas** (the Legacy Canon Archive, the Design References,
   and Archived pages) unless `include` names them (`legacy`, `design`, `archived`), as D1 does for the search. A page
   named on its own is always appraised.
@@ -272,8 +273,10 @@ most 25; A3: 1 read). "Propose a fix": 1 read, then the proposal's own cost when
 ## Tests
 
 `test/appraisal/`: `fulltext.test.ts` (phrases, OR, NOT, brackets; the exclusion and `include`; freshness; an
-incremental update; `content: "live"`), `owner.test.ts` (each check against its fixture page, the clean page silent,
+incremental update; `content: "live"`), `overlay.test.ts` (a partial full snapshot as the base, its missing piece
+recorded), `owner.test.ts` (each check against its fixture page, the clean page silent,
 groups, evidence and rules, the audits gathered and not duplicated, branch paging and stored runs), `impact.test.ts`,
 `digest-visual.test.ts`, `fixes.test.ts` (each proposal exactly, stale findings, Last Major Revision skipped for the
-dash and blank-paragraph fixes, the handovers, no button for a judgement), `no-writes.test.ts` (no tool writes),
+dash and blank-paragraph fixes, the handovers, no button for a judgement), `lifecycle-lead.test.ts` (F3d's finding
+gathered and its fix handed over), `no-writes.test.ts` (no tool writes),
 `scale.test.ts` (the figures above); `test/ui/appraisal.test.tsx` and the sidebar's Quality group.

@@ -221,7 +221,7 @@ export class Appraisal {
     if (!e.state)
       throw new AppraisalError(
         'NO_SNAPSHOT',
-        'There is no complete full snapshot yet, so there is nothing to appraise (the first nightly snapshot makes one).',
+        'There is no full snapshot yet, so there is nothing to appraise (the first nightly snapshot makes one).',
       );
     const settings = this.d.projectSettings(projectId);
     const ts = treeSettingsFrom(settings);

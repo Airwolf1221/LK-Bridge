@@ -28,6 +28,11 @@ export interface LifecycleTarget {
   readonly facts: Readonly<Partial<Record<keyof LifecycleFacts, string | null>>>;
   readonly tagsRemove: readonly string[];
   readonly tagsAdd: readonly string[];
+  /**
+   * v3 F3d (ADR 0053): where `tagsAdd` goes: `lead` (first, every other tag in its order) on a project whose pack says
+   * so; absent or `append`, last (ADR 0035). Kept with the target, so a resume places the tags as the change began.
+   */
+  readonly tagPosition?: 'lead' | 'append';
   /** Archive: the note to insert. Unarchive: the note to remove (only if unchanged). */
   readonly note?: {
     readonly action: 'insert' | 'remove';

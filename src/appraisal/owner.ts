@@ -604,7 +604,7 @@ function auditDraft(p: LoadedPage, f: AuditFinding): Draft {
     ageMs: f.source.ageMs,
     ...('snapshotId' in f.source ? { snapshotId: f.source.snapshotId } : {}),
   };
-  // Design section F: sibling order and the tags hand over to the audits' own fixes (by the fix's kind, so F3.3's
+  // Design section F: sibling order and the tags hand over to the audits' own fixes (by the fix's kind, so F3d's
   // lifecycle-tag order, a `lifecycle` finding whose fix only reorders tags, is handed over too); any other audit
   // finding's fix stays the owner's, on the Audits page.
   const tagOrOrder =
@@ -670,8 +670,7 @@ function auditDraft(p: LoadedPage, f: AuditFinding): Draft {
 
 /**
  * The audits' fixes A2 hands over (design section F): sibling order (`move_resource`), the missing required tags
- * (`add_tags`) and the lifecycle tag put first (`reorder_tags`, F3.3's, ADR 0053). Strings, so a kind not yet built in
- * this bridge simply never matches.
+ * (`add_tags`) and the lifecycle tag put first (`reorder_tags`, F3d's, ADR 0053).
  */
 const HANDOVER_FIXES: ReadonlySet<string> = new Set(['move_resource', 'add_tags', 'reorder_tags']);
 

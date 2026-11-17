@@ -5,10 +5,13 @@
  * at each run. The appraisal tools answer per request, so that overlay is **materialised** in the bridge's database
  * once and kept current:
  *
- * - **built** from the newest complete full snapshot and the change snapshots after it (the audits' own rules: a change
- *   snapshot's page entry replaces the pieces it took and keeps the rest; a page it records as deleted leaves);
+ * - **built** from the newest full snapshot and the change snapshots after it (the audits' own rules: a change
+ *   snapshot's page entry replaces the pieces it took and keeps the rest; a page it records as deleted leaves). Unlike
+ *   the audits, a **partial** full snapshot is taken as the base too (the service's source lists it): one image whose
+ *   bytes could not be taken must not leave the appraisal a day behind. The pieces it lacks are recorded per page
+ *   (`unreadable`), and the reports list those pages as blocked cases, never guessed;
  * - **updated** from each later change snapshot, page by page (only the pages it took are re-indexed);
- * - **rebuilt** when a newer complete full snapshot exists (the snapshot service's `afterFull` hook starts it at once;
+ * - **rebuilt** when a newer full snapshot exists (the snapshot service's `afterFull` hook starts it at once;
  *   any appraisal or search finds it out of date otherwise), and when a change snapshot turns up older than one already
  *   laid over (two jobs' snapshots indexed out of order: never merged out of order).
  *
@@ -81,7 +84,7 @@ export interface OverlayTemplate {
 /** What `ensure` did: nothing to do, a build, or change snapshots applied. */
 export interface EnsureOutcome {
   readonly state: IndexState | null;
-  /** `no_snapshot`: no complete full snapshot exists yet (the first nightly snapshot makes one). */
+  /** `no_snapshot`: no full snapshot exists yet (the first nightly snapshot makes one). */
   readonly reason?: 'no_snapshot';
   readonly built?: boolean;
   readonly applied?: number;
@@ -313,7 +316,7 @@ export class AppraisalIndex {
   }
 
   /**
-   * Brings the overlay up to date: built when there is none or a newer complete full snapshot exists (or `rebuild`),
+   * Brings the overlay up to date: built when there is none or a newer full snapshot exists (or `rebuild`),
    * else each change snapshot it has not seen laid over, page by page. Reads the snapshot store only.
    */
   ensure(projectId: string, o: { readonly rebuild?: boolean } = {}): Promise<EnsureOutcome> {

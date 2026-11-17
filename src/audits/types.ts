@@ -64,7 +64,12 @@ export type FixKind =
    */
   | 'chronology_pair'
   /** v3 F2 (ADR 0049 decision 9): duplicate asset folders merged into the earliest, the emptied ones deleted. */
-  | 'merge_asset_folders';
+  | 'merge_asset_folders'
+  /**
+   * v3 F3d (ADR 0053): `update_resource` with the page's own tags in a new order, the lifecycle tag first; nothing added,
+   * removed or renamed (a status tag a Working or Archived page still carries is left for the owner).
+   */
+  | 'reorder_tags';
 
 export interface FixSpec {
   readonly kind: FixKind;
@@ -313,6 +318,19 @@ export const CODES = {
     category: 'lifecycle',
     severity: 'error',
     title: 'A set’s lifecycle change stopped part-way',
+  },
+  // v3 F3d (ADR 0053): a project whose pack says the lifecycle tag leads (Arkona).
+  lifecycle_tag_not_leading: {
+    category: 'lifecycle',
+    severity: 'warning',
+    title: 'The lifecycle tag of a Working or Archived page is not first, or a status tag is still there',
+    fix: 'reorder_tags',
+  },
+  // v3 F3d (ADR 0053): the owner's AU ruling (a project whose pack carries it).
+  au_status_tag_mismatch: {
+    category: 'lifecycle',
+    severity: 'error',
+    title: 'The status tag does not match the Continuity Type (AU on a non-AU page, or CANON on an AU page)',
   },
   lifecycle_not_configured: {
     category: 'audit',

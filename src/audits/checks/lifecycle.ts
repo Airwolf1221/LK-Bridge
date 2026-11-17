@@ -9,6 +9,12 @@
  * - `[BWRK]` / Working / Working / directly under `[INDEX] Working`;
  * - `[BARC]` / Archived / Archived / directly under `[INDEX] Archived`;
  *
+ * v3 F3d (ADR 0053): on a project whose approved pack carries the AU ruling, an Authoritative page whose Continuity Type
+ * is AU carries `AU` as its status tag, not CANON: AU on a non-AU page, or CANON on an AU page, is its own finding
+ * (`au_status_tag_mismatch`), and AU on a Working or Archived page is a lifecycle problem as CANON is. On a project whose
+ * pack says the lifecycle tag leads (Arkona), a `[BWRK]` or `[BARC]` page whose lifecycle tag is not first, or which
+ * still carries a status tag, is `lifecycle_tag_not_leading`; its fix only reorders the tags.
+ *
  * and, the one exception, a whole set kept together: under an archived set's index (any `[INDEX]` page under
  * `[INDEX] Archived`) every content page is `[BARC]`; under a Working set's index (any `[INDEX]` under `[INDEX] Working`)
  * every content page is `[BWRK]`; a set's indexes carry the set's status tag and no Status. An incomplete lifecycle record
@@ -23,6 +29,13 @@
  * re-implemented and nothing is read from LegendKeeper: the check is a separate job with its own schedule.
  */
 import { areaOf, canonExemptionOfPage } from '../../lifecycle/settings.js';
+import {
+  authoritativeTags,
+  DEFAULT_TAG_RULES,
+  isAuPage,
+  leadingProblem,
+  statusTagFor,
+} from '../../lifecycle/tags.js';
 import { contentPages, fact, factAmbiguous, type AuditContext } from '../context.js';
 import type { AuditPage } from '../model.js';
 import { nameKey } from '../model.js';
@@ -55,6 +68,9 @@ export function lifecycleCheck(ctx: AuditContext): FindingDraft[] {
     archived: lc.tags.archived,
   };
   const hasTag = (p: AuditPage, tag: string) => p.tags.some((t) => nameKey(t) === nameKey(tag));
+  // v3 F3d (ADR 0053): the project's tag rules (where the lifecycle tag goes; the AU ruling).
+  const rules = ctx.lifecycleTags ?? DEFAULT_TAG_RULES;
+  const au = rules.au;
 
   for (const p of contentPages(ctx)) {
     const node = ctx.snapshotTree.node(p.id);
@@ -114,11 +130,63 @@ export function lifecycleCheck(ctx: AuditContext): FindingDraft[] {
           expected: `no ${tagOf.authoritative} (${exempt.name} area)`,
           found: p.tags,
         });
+    } else if (state === 'authoritative' && au) {
+      // v3 F3d (ADR 0053): the AU ruling: AU for an AU page, CANON otherwise; the other one is its own finding.
+      const ct = fact(ctx, p, lc.fields.continuityType);
+      const want = statusTagFor(lc, rules, ct);
+      const other = isAuPage(rules, ct) ? lc.tags.canon : au.tag;
+      if (hasTag(p, other))
+        out.push({
+          code: 'au_status_tag_mismatch',
+          pageId: p.id,
+          message: `“${p.rawName}” has ${lc.fields.continuityType} ${ct ?? '(none)'}, so its status tag is ${want}, not ${other} (the owner’s AU ruling).`,
+          evidence: { continuityType: ct, expected: want, unexpected: other, found: p.tags },
+        });
+      else if (!hasTag(p, want)) problems.push({ signal: 'tag', expected: want, found: p.tags });
     } else if (!hasTag(p, tagOf[state]))
       problems.push({ signal: 'tag', expected: tagOf[state], found: p.tags });
     for (const other of ['authoritative', 'working', 'archived'] as const)
       if (other !== state && hasTag(p, tagOf[other]))
         problems.push({ signal: 'tag', expected: `not ${tagOf[other]}`, found: p.tags });
+    // v3 F3d: under the AU ruling, AU is a status tag too: never on a Working or Archived page.
+    if (
+      au &&
+      state !== 'authoritative' &&
+      nameKey(au.tag) !== nameKey(tagOf.authoritative) &&
+      hasTag(p, au.tag)
+    )
+      problems.push({ signal: 'tag', expected: `not ${au.tag}`, found: p.tags });
+    // v3 F3d (ADR 0053): on a project whose pack says so, the lifecycle tag leads and no status tag stays beside it.
+    if (rules.position === 'lead' && state !== 'authoritative') {
+      const lp = leadingProblem(p.tags, tagOf[state], authoritativeTags(lc, rules));
+      if (lp) {
+        const why = [
+          ...(lp.notFirst ? [`${tagOf[state]} is not its first tag`] : []),
+          ...(lp.statusTags.length ? [`it still carries ${lp.statusTags.join(' and ')}`] : []),
+        ];
+        out.push({
+          code: 'lifecycle_tag_not_leading',
+          pageId: p.id,
+          message: `“${p.rawName}” is ${lc.status[state]}: ${why.join(', and ')} (tags: ${p.tags.join(', ')}). The lifecycle tag leads on this project.`,
+          evidence: {
+            lifecycleTag: tagOf[state],
+            tags: p.tags,
+            notFirst: lp.notFirst,
+            statusTags: lp.statusTags,
+            ...(lp.reordered ? { reordered: lp.reordered } : {}),
+          },
+          ...(lp.reordered
+            ? {
+                fix: {
+                  kind: 'reorder_tags' as const,
+                  args: { pageId: p.id, tags: [...p.tags], order: lp.reordered },
+                  summary: `Put ${tagOf[state]} first on “${p.displayName}”: ${lp.reordered.join(', ')} (a reorder only).`,
+                },
+              }
+            : {}),
+        });
+      }
+    }
     let underSet = false;
     if (confirmed) {
       const want = state === 'authoritative' ? null : state;

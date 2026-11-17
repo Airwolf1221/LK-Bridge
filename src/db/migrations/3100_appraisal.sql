@@ -1,6 +1,7 @@
 -- v3 F3c (ADR 0054): the Arkona pack's appraisal tools and the full-text search. Everything here is the bridge's OWN
 -- data, derived from the snapshot store (never from LegendKeeper), and can be rebuilt from it at any time: the overlay of
--- the newest complete full snapshot and the change snapshots since, as the audits read it (ADR 0044), materialised so the
+-- the newest full snapshot (a partial one too, its missing pieces listed) and the change snapshots since, laid over as the
+-- audits lay them (ADR 0044), materialised so the
 -- appraisal tools and the `search` tool's full-text index answer without reading every snapshot piece again.
 --
 -- Nothing here is written to LegendKeeper, and no report is kept anywhere but here (Repository Automation: reports

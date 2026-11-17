@@ -4,7 +4,7 @@
 
 [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md) (Proposed), carrying out the owner-approved
 [F3c design](design/F3c-appraisal.md) (D1 to D4 as written, with the owner's addition, section F; now with an "as built"
-section). Migration `3200_appraisal.sql`. Nothing was run against a live system: every test uses the mock LegendKeeper
+section). Migration `3100_appraisal.sql`. Nothing was run against a live system: every test uses the mock LegendKeeper
 and fixtures built from the shapes the design quotes.
 
 - **Full-text search over the snapshots (A1).** The bridge keeps the newest full snapshot plus every change snapshot
@@ -17,7 +17,8 @@ and fixtures built from the shapes the design quotes.
   is what `content: true` used to mean.
 - **`arkona_appraise_owner` (A2)**: a page, a branch or everything against Source Formatting, in Repository
   Automation's four groups (required defects, optional polish, architectural candidates, blocked cases), each finding
-  naming its rule and evidence class. The page's open audit findings are gathered, never re-checked.
+  naming its rule and evidence class. The page's open audit findings are gathered, never re-checked, F3d's "lifecycle
+  tag not leading" included (its reorder-only fix handed over to the audit's).
 - **`arkona_change_impact` (A3)**: what depends on a page, a planned rename or a pending proposal: proven breakage
   (links to pages that are or will be deleted, archived or Working; mentions and chronology rows a rename breaks) and
   review candidates (incoming links and mentions, chronology rows, textual restatements found through the index).
@@ -46,6 +47,35 @@ phrase in about 1 ms, and takes about 21 MB of the bridge's database.
 page once a full snapshot exists), then try the Appraisal page on one branch. Check that a finding's page link opens the
 page in LegendKeeper (the link's pattern could not be checked from here). Agents that relied on `content: true` reaching
 LegendKeeper now get the index; `content: "live"` keeps the old behaviour.
+
+## Unreleased: v3 F3d (17 November 2026): the lifecycle tag leads on Arkona, AU in the lifecycle, owner routing lines
+
+[ADR 0053](adr/0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md) (Proposed). No migration. Nothing was
+run against a live system: mocks and fixtures only.
+
+- **The lifecycle tag leads on Arkona** (the owner's decision; the Controlled Native Tagging Standard v1.8). A setting
+  pack now says per project where the four lifecycle tools put the lifecycle tag (`lifecycleTagPosition`, `lead` or
+  `append`; a project not named is `append`). Arkona's pack says `lead`: `move_to_working` gives `Working, Culture,
+Language` (not `Culture, Language, Working`), `archive_page` `Archived, Magic`, `promote_page` `CANON, Culture`, and
+  `unarchive_page` puts what its target needs first. Whole sets alike. Every other project, the test world included, is
+  unchanged.
+- **AU in the lifecycle tools** (F3b's leftover): on a project whose pack carries the AU ruling, `promote_page` and
+  `unarchive_page` (back to Authoritative) give an AU page `AU`, any other page `CANON`; `move_to_working` and
+  `archive_page` remove either. The guard now protects `AU` as it does `CANON`. AU pages can be promoted once the new
+  pack version is approved.
+- **Two new audit findings**: `lifecycle_tag_not_leading` (a `[BWRK]` or `[BARC]` page whose lifecycle tag is not
+  first, or which still carries a status tag; "Propose a fix" reorders the tags only) and `au_status_tag_mismatch` (`AU`
+  on a non-AU page, or `CANON` on an AU page).
+- **`arkona_create_owner` adds a routing line** to the home index it files an Authoritative owner into, as the
+  character tool does; with `promoteNation` the Polities index's line for the nation now points to the nation's new
+  index. A home with no routing section gets none, and the preview says so. One more read to plan.
+- **Raw block edits are measured for Last Major Revision.** An `updateBlock` proposed through `lk_api_write` or
+  `lk_api_batch` keeps the block as captured as its "before", so a typo or a KCY-only fix no longer sets the date.
+- **The canon banner speaks plainly.** A lifecycle change on the Proposals page reads "Promote: Status would be set to
+  Authoritative; name [BWRK] → [BSRC]; tags Working → CANON", not raw JSON.
+- **The seed `arkona-2026-11-17-f3d`** supersedes F3b.1's. **After deploying**: approve the new pack version on the Packs
+  page; then run the audit and look for "lifecycle tag not leading" (each is a page the bridge archived or moved to
+  Working before this fix; its fix reorders the tags). After that, AU pages can be promoted.
 
 ## Unreleased: v3 F3b.1 (16 November 2026): the pinned headings, re-mapping a pin, Working owners' specialist
 
