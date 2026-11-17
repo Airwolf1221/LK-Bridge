@@ -476,6 +476,10 @@ const rules: PackRules = packRulesSchema.parse({
       },
     ],
   },
+  // v3 F3d (ADR 0053; the owner's decision of 17 November 2026): on Arkona the lifecycle tag LEADS, as the Controlled
+  // Native Tagging Standard v1.8 orders it ("a leading, exact-case native tag Working … Archived"): archive_page writes
+  // `Archived, Magic`, not `Magic, Archived`. Every other attached project (the test world) keeps `append` (ADR 0035).
+  lifecycleTagPosition: { arkona: 'lead' },
   rulings: [
     {
       key: 'au-status-tag',
@@ -493,9 +497,9 @@ export const ARKONA_PACK: PackSeed = Object.freeze({
   prefix: 'arkona_',
   // v3 F3b (ADR 0052): the owner tools' seed. A pack stored from F3a's or F3b's seed is offered these rules as a new
   // version. `-f3b1` (ADR 0052 amendment, 16 November 2026): the pinned headings exactly as the pages have them, and a
-  // Working owner keeps its specialist tag.
-  seed: 'arkona-2026-11-16-f3b1',
-  supersedes: ['arkona-2026-11-16', 'arkona-2026-11-16-f3b'],
+  // Working owner keeps its specialist tag. `-f3d` (ADR 0053, 17 November 2026): the lifecycle tag leads on Arkona.
+  seed: 'arkona-2026-11-17-f3d',
+  supersedes: ['arkona-2026-11-16', 'arkona-2026-11-16-f3b', 'arkona-2026-11-16-f3b1'],
   rules,
   governance: [
     {

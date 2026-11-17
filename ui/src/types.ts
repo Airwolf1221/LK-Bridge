@@ -503,6 +503,12 @@ export interface ProtectedChange {
   page?: string;
   text?: string;
   unchecked?: string;
+  /**
+   * v2 C2c: a lifecycle change. The marker's own entry names the tool (`promote_page`) and its pages, with no text; the
+   * guard's entries name what changed (`status`, `prefix`, `tag`) with a text.
+   */
+  lifecycle?: string;
+  pages?: { id: string; to: string | null }[];
 }
 
 /** v2 C2a: set_facts' high-level operation, as a proposal keeps it. */
@@ -2231,6 +2237,8 @@ export interface PackRules {
   owners?: PackOwners;
   /** v3 F3b: the owner's rulings the rules follow. */
   rulings?: { key: string; date: string; by: string; summary: string }[];
+  /** v3 F3d (ADR 0053): where the lifecycle tools put the lifecycle tag, per project name (absent: append). */
+  lifecycleTagPosition?: Record<string, 'lead' | 'append'>;
 }
 
 export interface PackSourceStatus {

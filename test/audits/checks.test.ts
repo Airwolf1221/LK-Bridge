@@ -582,6 +582,103 @@ describe('lifecycle consistency', () => {
     expect(codes(out)).toEqual(['lifecycle_inconsistent', 'lifecycle_not_configured']);
   });
 
+  // v3 F3d (ADR 0053): the AU ruling, and the lifecycle tag leading, on a project whose approved pack says so.
+  const AU = { position: 'append' as const, au: { continuityType: 'AU', tag: 'AU' }, source: null };
+  const LEAD = { ...AU, position: 'lead' as const };
+  const auth = (id: string, ct: string, tags: string[]) =>
+    page({
+      id,
+      name: `[BSRC] ${id}`,
+      parent: 'chars',
+      facts: { Status: 'Authoritative', 'Continuity Type': ct },
+      tags,
+    });
+
+  it('the AU ruling: AU on an AU page and CANON on another are right; the swap either way is its own finding', () => {
+    expect(
+      run([auth('au1', 'AU', ['AU', 'Culture']), auth('ca1', 'CANON', ['CANON'])], { lifecycleTags: AU }),
+    ).toEqual([]);
+    const out = run([auth('au2', 'AU', ['CANON', 'Culture']), auth('ca2', 'CANON', ['AU'])], {
+      lifecycleTags: AU,
+    });
+    expect(codes(out)).toEqual(['au_status_tag_mismatch', 'au_status_tag_mismatch']);
+    expect(out.find((f) => f.pageId === 'au2')!.evidence).toMatchObject({
+      continuityType: 'AU',
+      expected: 'AU',
+      unexpected: 'CANON',
+    });
+    expect(out.find((f) => f.pageId === 'ca2')!.message).toContain('so its status tag is CANON, not AU');
+    // Missing altogether: the ordinary lifecycle finding, naming the tag it expects.
+    const missing = run([auth('au3', 'AU', ['Culture'])], { lifecycleTags: AU });
+    expect(codes(missing)).toEqual(['lifecycle_inconsistent']);
+    expect(missing[0]!.evidence).toMatchObject({ problems: [{ signal: 'tag', expected: 'AU' }] });
+    // AU on a Working page is a status tag where none belongs.
+    const working = run(
+      [
+        page({
+          id: 'wau',
+          name: '[BWRK] Wau',
+          parent: 'work',
+          facts: { Status: 'Working' },
+          tags: ['Working', 'AU'],
+        }),
+      ],
+      { lifecycleTags: AU },
+    );
+    expect(working[0]!.evidence).toMatchObject({ problems: [{ signal: 'tag', expected: 'not AU' }] });
+  });
+
+  it('without the ruling an AU page carries CANON, as before (AU is just a tag)', () => {
+    expect(run([auth('au4', 'AU', ['CANON', 'AU'])])).toEqual([]);
+    expect(codes(run([auth('au5', 'AU', ['AU'])]))).toEqual(['lifecycle_inconsistent']);
+  });
+
+  it('lead: a [BWRK] or [BARC] page whose lifecycle tag is not first, or still has a status tag, with a reorder-only fix', () => {
+    const late = page({
+      id: 'r1',
+      name: '[BARC] R1',
+      parent: 'arch',
+      facts: { Status: 'Archived' },
+      tags: ['Culture', 'Language', 'Archived'],
+    });
+    const leading = page({
+      id: 'r2',
+      name: '[BARC] R2',
+      parent: 'arch',
+      facts: { Status: 'Archived' },
+      tags: ['Archived', 'Magic'],
+    });
+    const stillCanon = page({
+      id: 'w1',
+      name: '[BWRK] W1',
+      parent: 'work',
+      facts: { Status: 'Working' },
+      tags: ['Working', 'Character', 'CANON'],
+    });
+    const out = run([late, leading, stillCanon], { lifecycleTags: LEAD });
+    const lead = out.filter((f) => f.code === 'lifecycle_tag_not_leading');
+    expect(lead.map((f) => f.pageId).sort()).toEqual(['r1', 'w1']);
+    const r1 = lead.find((f) => f.pageId === 'r1')!;
+    expect(r1.message).toContain('Archived is not its first tag');
+    expect(r1.fix).toMatchObject({
+      kind: 'reorder_tags',
+      args: {
+        pageId: 'r1',
+        tags: ['Culture', 'Language', 'Archived'],
+        order: ['Archived', 'Culture', 'Language'],
+      },
+    });
+    // The lifecycle tag already leads: the status tag is reported, and a reorder cannot remove it (no fix).
+    const w1 = lead.find((f) => f.pageId === 'w1')!;
+    expect(w1.message).toContain('it still carries CANON');
+    expect(w1.fix).toBeUndefined();
+    // Authoritative pages and set indexes are not this finding's; an append project has none.
+    expect(
+      run([late, stillCanon], { lifecycleTags: AU }).some((f) => f.code === 'lifecycle_tag_not_leading'),
+    ).toBe(false);
+    expect(run([late]).some((f) => f.code === 'lifecycle_tag_not_leading')).toBe(false);
+  });
+
   it('incomplete lifecycle and set records are reported with their pages, never fixed', () => {
     const out = run([good.bsrc], {
       incompleteRecords: [

@@ -292,6 +292,98 @@ describe('a lifecycle proposal', () => {
   });
 });
 
+describe('the canon banner of a lifecycle proposal (v3 F3d, ADR 0053)', () => {
+  const promote = (tags: { before: string[]; after: string[]; removed: string[]; added: string[] }) => ({
+    tool: 'promote_page',
+    page: { id: 'skyferr1', name: '[BWRK] Sky Ferry' },
+    pageParts: ['renamed to [BSRC] Sky Ferry'],
+    lifecycle: {
+      page: { id: 'skyferr1', name: '[BWRK] Sky Ferry' },
+      action: 'promote_page',
+      newName: '[BSRC] Sky Ferry',
+      newParent: { id: 'locs0001', name: '[INDEX] Locations' },
+      facts: [
+        { key: 'Status', before: 'Working', after: 'Authoritative', change: 'changed' },
+        { key: 'Last Major Revision', before: '2026-11-01', after: '2026-11-17', change: 'changed' },
+      ],
+      tags,
+    },
+  });
+  const proposalWith = (op: Record<string, unknown>) => ({
+    proposal: {
+      id: 'prop_p',
+      principalId: 'pat_abc',
+      principalLabel: 'Claude',
+      profile: 'Scribe',
+      title: 'promote_page',
+      summary: 'promote_page: [BWRK] Sky Ferry → [BSRC] Sky Ferry',
+      state: 'pending',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      expiresAt: Date.now() + 86_400_000,
+      decidedAt: null,
+      rejectReason: null,
+      jobId: null,
+      conflict: null,
+      error: null,
+      opCount: 6,
+      requiresCanonicalApproval: true,
+      canonicalApprovedBy: null,
+      canonicalApprovedAt: null,
+      pages: [],
+      ops: [],
+      operations: [op],
+      pageSummary: [],
+      canonical: {
+        reason: 'promote_page changes a page’s lifecycle state',
+        changes: [
+          { lifecycle: 'promote_page', pages: [{ id: 'skyferr1', to: 'authoritative' }] },
+          {
+            lifecycle: 'status',
+            page: '[BWRK] Sky Ferry',
+            resourceId: 'skyferr1',
+            text: 'Status would be set to Authoritative',
+          },
+        ],
+      },
+    },
+  });
+
+  it('says the lifecycle change in words, never as raw JSON', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /proposals': { proposals: [] },
+      'GET /proposals/prop_p': proposalWith(
+        promote({ before: ['Working'], after: ['CANON'], removed: ['Working'], added: ['CANON'] }),
+      ),
+    });
+    renderApp('/ui/proposals?id=prop_p');
+    const banner = await screen.findByRole('alert', { name: 'Protected canon' });
+    expect(banner).toHaveTextContent(
+      'Promote: Status would be set to Authoritative; name [BWRK] → [BSRC]; tags Working → CANON',
+    );
+    expect(banner).not.toHaveTextContent('{"lifecycle"');
+  });
+
+  it('on a project where the lifecycle tag leads, says which tag comes first', async () => {
+    installApi({
+      ...baseRoutes(),
+      'GET /proposals': { proposals: [] },
+      'GET /proposals/prop_p': proposalWith(
+        promote({
+          before: ['Working', 'Culture', 'Language'],
+          after: ['AU', 'Culture', 'Language'],
+          removed: ['Working'],
+          added: ['AU'],
+        }),
+      ),
+    });
+    renderApp('/ui/proposals?id=prop_p');
+    const banner = await screen.findByRole('alert', { name: 'Protected canon' });
+    expect(banner).toHaveTextContent('tags Working → AU (AU first)');
+  });
+});
+
 describe('the Archive and lifecycle page', () => {
   it('lists each change, read-only, with its previous state and links to the journal', async () => {
     installApi({

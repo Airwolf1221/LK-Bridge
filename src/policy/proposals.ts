@@ -669,6 +669,15 @@ export class ProposalService implements ProposalSink {
       let budget = PROPOSAL_PRE_STATE_BUDGET_BYTES;
       ops.forEach((o, i) => {
         const c = captured[i]!;
+        // v3 F3d (ADR 0053): an `updateBlock` (lk_api_write, lk_api_batch) sends only the fields it changes, so the
+        // journal kept no "before" and ADR 0051's rule counted every such edit. The block as captured now is that
+        // "before": kept as the step's journal pre-image (approval re-reads the target and ends conflicted if it
+        // changed), the run-time measure then judges a typo or a KCY-only fix as any other edit.
+        const given = stepOptions(o);
+        const options =
+          o.op === 'updateBlock' && c.snap?.exists === true && given.journalPreImage === undefined
+            ? { ...given, journalPreImage: c.snap.state }
+            : given;
         const pre = c.snap
           ? capJson(c.snap.state, Math.min(PRE_STATE_MAX_BYTES, budget))
           : { text: null, truncated: false };
@@ -681,7 +690,7 @@ export class ProposalService implements ProposalSink {
           defs[i]?.kind ?? 'read',
           JSON.stringify(o.params),
           hashJson(o.params),
-          JSON.stringify(stepOptions(o)),
+          JSON.stringify(options),
           c.target ? JSON.stringify(c.target) : null,
           c.snap ? (c.snap.exists ? 1 : 0) : null,
           c.snap?.version ?? null,

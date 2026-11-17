@@ -47,6 +47,9 @@ One versioned JSON document, its **rules** (`src/packs/types.ts` checks its shap
   allowed homes.
 - **rulings** (v3 F3b): the owner's rulings the rules carry, each with its key, date, who made it and what it says (the
   AU status tag, 16 November 2026).
+- **lifecycleTagPosition** (v3 F3d): where the four lifecycle tools put the lifecycle tag, per attached project by its
+  name: `lead` or `append` (a project not named: `append`). Arkona's seed says `{ "arkona": "lead" }`
+  ([below](#the-lifecycle-tag-and-au-in-the-lifecycle-tools-v3-f3d)).
 
 Beside the rules a pack keeps its **governance sources** (the pages its rules were derived from: for Arkona, the
 Character Architecture, Source Formatting and Controlled Native Tagging Standard v1.8 documents on the AI REPOSITORY
@@ -103,8 +106,8 @@ packages cannot both create it).
 
 1. **Seeded once.** At start the bridge stores each pack it knows (`src/packs/arkona.ts`, data) if it is not stored yet
    (audited `pack.seed`). After that the stored copy is the owner's: it is never overwritten by code. **A new seed is
-   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-16-f3b1` supersedes F3a's
-   `arkona-2026-11-16` and F3b's `arkona-2026-11-16-f3b`), and a pack stored from one of them is given the new seed's rules as a NEW version at start
+   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-17-f3d`, v3 F3d, supersedes
+   F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b` and F3b.1's `arkona-2026-11-16-f3b1`), and a pack stored from one of them is given the new seed's rules as a NEW version at start
    (audited `pack.seed_upgrade`), keeping the owner's token maps and the governance sources' places, taking the seed's
    source names and pinned sections, and adding to each attachment the template roles the new rules need. It waits for
    the owner's approval like any other version.
@@ -176,16 +179,47 @@ lifecycle tag, then the primary, then the specialist if any (`Working, Culture, 
 `Working, Culture`), as the Tagging Standard preserves "actually meaningful existing subject tags… after the lifecycle
 marker" and as F3a's Working characters keep their identity tokens. F3b held a Working owner's specialist and reported
 it; it is no longer held. Archiving (`archive_page`) swaps only the status tag, so an Archived owner keeps its primary
-and specialist; that general tool still adds `Archived` at the end of the list (`Culture, Language, Archived`), which
-changing would alter every project's lifecycle tools (left for later, ADR 0052).
+and specialist. Since v3 F3d the lifecycle tag leads on Arkona there too (`Archived, Culture, Language`): see
+[below](#the-lifecycle-tag-and-au-in-the-lifecycle-tools-v3-f3d).
 
 **The AU ruling (the owner, 16 November 2026).** An AU page (Continuity Type AU) carries the status tag `AU` in place
 of `CANON`, and Continuity Type AU stays in its facts; everything after the status tag follows the same grammar. A
 Working or Archived AU page leads with `Working` or `Archived`, so neither `CANON` nor `AU` appears on it. It holds for
 every pack tool (`arkona_create_character` changed with it) and is recorded in the pack's `rulings` with its date and in
 `tags.au`. The Tagging Standard does not record it yet: when it does, the pack sees governance drift and the owner
-approves it again. Outside the pack tools, `promote_page` and the lifecycle audit do not know the ruling yet (left for
-later, ADR 0052).
+approves it again. Since v3 F3d the lifecycle tools, the lifecycle audit and the guard apply it too
+([below](#the-lifecycle-tag-and-au-in-the-lifecycle-tools-v3-f3d)).
+
+## The lifecycle tag and AU in the lifecycle tools (v3 F3d)
+
+[ADR 0053](adr/0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md). Two rules reach the bridge-wide
+lifecycle tools (`archive_page`, `unarchive_page`, `move_to_working`, `promote_page`), the lifecycle audit and the
+lifecycle guard from the pack attached to a project, from its **approved** version only (a version waiting for approval
+does not apply; a project with no approved pack keeps ADR 0035's behaviour):
+
+- **`lifecycleTagPosition`** (`lead` or `append`, per project name). Arkona's seed says `{ "arkona": "lead" }`, as the
+  Controlled Native Tagging Standard v1.8 orders Working and Archived pages ("a leading, exact-case native tag … preserve
+  actually meaningful existing subject tags in their original relative order after the lifecycle marker"); the test world
+  is not named, so it keeps `append`. With `lead`:
+
+  | Tool              | Before                     | After                                                       |
+  | ----------------- | -------------------------- | ----------------------------------------------------------- |
+  | `move_to_working` | `Culture, CANON, Language` | `Working, Culture, Language`                                |
+  | `archive_page`    | `Magic, CANON`             | `Archived, Magic`                                           |
+  | `archive_page`    | `Working, Character`       | `Archived, Character`                                       |
+  | `promote_page`    | `Working, Culture`         | `CANON, Culture` (`AU, Culture` for an AU page)             |
+  | `unarchive_page`  | `Archived, Magic`          | `CANON, Magic` (or `AU`, or `Working`, as its target needs) |
+
+  Whole sets alike. With `append` (every other project), ADR 0035's order: the incoming tag last.
+
+- **The AU ruling** (`tags.au`): `promote_page` and `unarchive_page` (back to Authoritative) give a page whose Continuity
+  Type is AU the status tag `AU`, any other page `CANON`; `move_to_working` and `archive_page` remove either. The audit
+  reports `AU` on a non-AU page or `CANON` on an AU page (`au_status_tag_mismatch`), and the guard treats `AU` as a
+  status tag (only the lifecycle tools add or remove it). A pack without the ruling: `CANON`, as before.
+
+On a `lead` project the audit reports a `[BWRK]` or `[BARC]` page whose lifecycle tag is not first, or which still
+carries a status tag (`lifecycle_tag_not_leading`); its fix reorders the tags only ([audits.md](audits.md)). After the
+new version is approved, every page the bridge archived or moved to Working before shows up there.
 
 ## The character tool, in short
 

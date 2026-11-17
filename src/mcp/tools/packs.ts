@@ -342,7 +342,8 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
         '`home` is REQUIRED: the index it goes in (name, id or path), checked against the type’s allowed homes (HOME_NOT_ALLOWED lists suitable ones nearby; homeOverride { reason } only when the owner decided otherwise). A nation that is only a compact Reference needs its own index first: `nation` + `promoteNation: true` makes it in the same proposal; `createSubindex` names one national subindex to make. Reference Type, Scope and Temporal Scope are required: if one is unknown, ASK THE OWNER. ' +
         'dryRun shows the full preview and writes nothing; otherwise ONE proposal for the owner whatever your scope (canonical for status "authoritative" or a move of canon). Never resubmit it: follow it with bridge_proposal_status. ' +
         'Example: { "type": "Polity", "name": "Sultanate of Tarim", "descriptor": "Historical Polity Reference", "home": "Salahad Polities", "referenceType": "Historical Polity Reference", "scope": "A coastal sultanate", "temporalScope": "4A 100 - 4A 400", "markdown": "## Purpose\n…", "dryRun": true, "project": "test" }. ' +
-        'Cost: 4 reads to plan (3 of them the pack’s governance); the job about 20 reads and 13 writes for one page (one write per sidebar row); with promoteNation 7 reads to plan, the job about 31 and 16.',
+        'An Authoritative owner gets one routing line in its home index’s routing section (as characters do); with promoteNation the Polities index’s line for the nation is pointed to the new index. ' +
+        'Cost: 4 reads to plan (5 for an Authoritative owner: the home’s routing text; 3 of them the pack’s governance); the job about 20 reads and 13 writes for one page (one write per sidebar row), one more write for a routing line; with promoteNation 8 reads to plan, the job about 31 and 16.',
       inputSchema: z.object({
         type: z
           .string()

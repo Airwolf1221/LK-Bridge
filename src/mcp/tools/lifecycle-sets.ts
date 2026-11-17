@@ -49,6 +49,7 @@ import {
   type SetPage,
 } from '../../lifecycle/index.js';
 import { key, subjectOf } from '../../registry/names.js';
+import { authoritativeTags, statusTagFor } from '../../lifecycle/tags.js';
 import { SiblingSim } from '../../resources/plan.js';
 import { KIND_PREFIX, classifyName, isPageKind, type TreeNode } from '../../tree/index.js';
 import type { McpToolContext, McpToolResult } from '../server.js';
@@ -59,6 +60,8 @@ import {
   archiveTarget,
   factsOf,
   mainDocument,
+  positionOf,
+  tagRulesOf,
   planPage,
   readPage,
   refuse,
@@ -248,6 +251,9 @@ async function planSet(
       ? settings.factsPropertyName
       : 'PROPERTIES';
   const date = open?.date ?? isoDate(Date.now());
+  // v3 F3d (ADR 0053): where the lifecycle tag goes and the AU ruling, from the project's approved pack.
+  const rules = tagRulesOf(pd, pid);
+  const leaving = (s: SetState) => (s === 'authoritative' ? authoritativeTags(c, rules) : [stateTag(c, s)]);
   const rootPage = pages[0]!;
   const lifecycleArea = (n: TreeNode): 'working' | 'archived' | null =>
     n.id === idx.working.id || n.path.ids.includes(idx.working.id)
@@ -521,7 +527,8 @@ async function planSet(
       flags.push(
         `goes beneath ${ctx.tree.node(pid, exemptUnder).data?.rawName ?? exemptUnder}, whose pages are Authoritative without ${c.tags.canon}: no ${c.tags.canon} tag is added`,
       );
-    const addTag = (t: string) => (exemptUnder && same(t, c.tags.canon) ? [] : [t]);
+    const addTag = (t: string) =>
+      exemptUnder && authoritativeTags(c, rules).some((x) => same(t, x)) ? [] : [t];
     // Each page's own target.
     const archRecs = setRecordOf
       ? new Map(lc.store.setRecords(pid, setRecordOf.id).map((x) => [x.pageId, x]))
@@ -550,6 +557,7 @@ async function planSet(
             parentId,
             date,
             doc,
+            rules,
           );
         } else {
           const block = {
@@ -561,8 +569,9 @@ async function planSet(
             name: p.name,
             parentId,
             facts: {},
-            tagsRemove: [c.tags.canon, c.tags.working],
+            tagsRemove: [...authoritativeTags(c, rules), c.tags.working],
             tagsAdd: [c.tags.archived],
+            ...positionOf(rules),
             note: { action: 'insert', blockId: block.id, documentId: doc.id, block },
           };
         }
@@ -583,8 +592,15 @@ async function planSet(
                     lastMajorRevision: date,
                     ...(keepCt ? {} : { continuityType: c.continuityTypes.canon }),
                   },
-          tagsRemove: [stateTag(c, fromState)],
-          tagsAdd: addTag(stateTag(c, to)),
+          tagsRemove: leaving(fromState),
+          // v3 F3d (ADR 0053): a content page made Authoritative carries its Continuity Type's status tag (AU under the
+          // ruling); an index has no Continuity Type, so CANON.
+          tagsAdd: addTag(
+            to === 'authoritative' && role === 'page'
+              ? statusTagFor(c, rules, keepCt ? ct : c.continuityTypes.canon)
+              : stateTag(c, to),
+          ),
+          ...positionOf(rules),
         };
       } else {
         // unarchive: from each page's own record of the set's archiving.
@@ -631,7 +647,10 @@ async function planSet(
               lastMajorRevision: date,
             },
             tagsRemove: [c.tags.archived],
-            tagsAdd: addTag(stateTag(c, back)),
+            tagsAdd: addTag(
+              back === 'authoritative' ? statusTagFor(c, rules, restore.continuityType) : stateTag(c, back),
+            ),
+            ...positionOf(rules),
             ...(note ? { note } : {}),
           };
         } else {
@@ -643,6 +662,7 @@ async function planSet(
             tagsAdd: (rec.tagsRemoved.length > 0 ? [...rec.tagsRemoved] : [stateTag(c, back)]).flatMap(
               addTag,
             ),
+            ...positionOf(rules),
             ...(note ? { note } : {}),
           };
         }

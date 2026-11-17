@@ -325,6 +325,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         summaryLabel: `${c.page.rawName}: ${c.why.join('; ')}`,
       });
     } else if (c.kind === 'routing') {
+      // v3 F3d (ADR 0053): a line rewritten in place (the Polities line of a promoted nation) or lines appended (F3a).
+      const said = c.what ?? `${c.section}: ${c.lines.length} line(s) added`;
       steps.push({
         op: 'replaceDocumentBlocks',
         params: {
@@ -336,18 +338,17 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         replan: {
           planner: WRITE_PAGE_PLANNER,
           input: {
-            mode: 'append_to_section',
+            mode: c.mode ?? 'append_to_section',
             section: c.section,
             markdown: c.markdown,
             sectionHash: c.sectionHash,
           },
         },
-        journalOperation: journal(
-          { id: c.page.id, name: c.page.rawName },
-          `${c.section}: ${c.lines.length} line(s) added`,
-        ),
+        journalOperation: journal({ id: c.page.id, name: c.page.rawName }, said),
       });
-      labels.push(`${c.page.rawName}: ${c.section} +${c.lines.length}`);
+      labels.push(
+        c.what ? `${c.page.rawName}: ${c.what}` : `${c.page.rawName}: ${c.section} +${c.lines.length}`,
+      );
       const e = editOf(edits, c.page.id, c.page.rawName);
       e.after.push(steps.length);
       e.evidence.push({ kind: 'text', before: textUnits(c.blocks), after: textUnits(c.planned) });
@@ -356,8 +357,10 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         tool,
         pack: pack.id,
         page: { id: c.page.id, name: c.page.rawName },
-        pageParts: [`${c.section}: ${c.lines.length} line(s) added`],
-        summaryLabel: `${c.page.rawName}: ${c.section} gains ${c.lines.length} line(s)`,
+        pageParts: [said],
+        summaryLabel: c.what
+          ? `${c.page.rawName}: ${c.what}`
+          : `${c.page.rawName}: ${c.section} gains ${c.lines.length} line(s)`,
         lines: c.lines,
       });
     }

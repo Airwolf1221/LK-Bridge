@@ -15,6 +15,7 @@ import { stableJson } from '../jobs/sidebar-state.js';
 import type { ProjectView } from '../projects/types.js';
 import type { Registry } from '../registry/index.js';
 import { cleanPrefixes, templateBaseKey } from '../registry/names.js';
+import { DEFAULT_TAG_RULES, type LifecycleTagRules } from '../lifecycle/tags.js';
 import { PACK_SEEDS } from './arkona.js';
 import { hookFor } from './hooks.js';
 import {
@@ -120,6 +121,13 @@ export interface Packs {
   /** The packs attached to a project. */
   forProject(projectId: string): Pack[];
   attachment(packId: string, projectId: string): PackAttachment | null;
+  /**
+   * v3 F3d (ADR 0053): the lifecycle tag rules of a project, from the APPROVED version of the packs attached to it (the
+   * first by pack id that says anything): where the lifecycle tag goes (`lifecycleTagPosition`, by the project's name)
+   * and the AU ruling (`tags.au`). A project with no attached pack, or none approved yet, gets the defaults (`append`,
+   * no AU ruling: ADR 0035 exactly). Read by the lifecycle tools, the lifecycle guard and the audit. Never throws.
+   */
+  lifecycleRules(projectId: string): LifecycleTagRules;
   /** The full tool names of a pack (`arkona_create_character`). */
   toolsOf(pack: Pack): string[];
   /** Whether a pack tool is listed: its pack is attached to at least one project served now. */
@@ -555,6 +563,35 @@ export function createPacks(d: PacksDeps): Packs {
         .map((a) => store.get(a.packId))
         .filter((p): p is Pack => p !== null),
     attachment: (packId, projectId) => store.attachment(packId, projectId),
+    lifecycleRules: (projectId) => {
+      try {
+        const name = projectName(projectId).toLowerCase();
+        let position: LifecycleTagRules['position'] | null = null;
+        let au: LifecycleTagRules['au'] = null;
+        let source: LifecycleTagRules['source'] = null;
+        for (const a of store.attachments().filter((x) => x.projectId === projectId)) {
+          const pack = store.get(a.packId);
+          if (!pack?.approved) continue;
+          // The rules the owner approved (a newer version waiting for approval does not apply yet).
+          const rules =
+            pack.approved.version === pack.version
+              ? pack.rules
+              : store.rulesAt(pack.id, pack.approved.version);
+          if (!rules) continue;
+          const here = Object.entries(rules.lifecycleTagPosition ?? {}).find(
+            ([k]) => k.toLowerCase() === name,
+          )?.[1];
+          if (position === null && here !== undefined) position = here;
+          if (au === null && rules.tags.au) au = { ...rules.tags.au };
+          if (source === null && (here !== undefined || rules.tags.au))
+            source = { pack: pack.id, version: pack.approved.version };
+        }
+        return { position: position ?? 'append', au, source };
+      } catch (e) {
+        d.log?.warn({ err: e, projectId }, 'the lifecycle tag rules could not be read; the defaults apply');
+        return DEFAULT_TAG_RULES;
+      }
+    },
     toolsOf,
     toolListed: (packId) => {
       const active = new Set(d.projects.activeIds());

@@ -711,8 +711,10 @@ page should no longer depend on this one.
 **Side routes are refused.** Changing Status to or from `Working` or `Archived` (or `Working` to `Authoritative`) with
 `set_facts` or any low-level tool, renaming a page to or from `[BWRK]` or `[BARC]`, and moving a page into, out of or
 between `[INDEX] Working` and `[INDEX] Archived` are all refused (`POLICY_DENIED`), naming the tool to use instead.
-**The status tags are guarded too**: adding or removing `CANON`, `Working` or `Archived` (in any case or spelling) with
-`update_resource`, a low-level tool or a create body is refused, naming the lifecycle tool to use. Other changes to
+**The status tags are guarded too**: adding or removing `CANON`, `Working` or `Archived` (in any case or spelling), and
+`AU` where the project's pack carries the AU ruling, with `update_resource`, a low-level tool or a create body is
+refused, naming the lifecycle tool to use. The tools place the tags themselves: an AU page is promoted with `AU`, and
+where the pack says so (Arkona) the lifecycle tag goes first (`Archived, Magic`). Other changes to
 Working and Archived pages (their text, other facts, links, other tags) work as usual.
 
 **Stopped part-way.** If a lifecycle job stops part-way, the result says which steps ran. Call the same tool on the

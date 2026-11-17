@@ -53,6 +53,13 @@ import {
   type LifecycleState,
   type LifecycleTarget,
 } from '../../lifecycle/index.js';
+import {
+  authoritativeTags,
+  DEFAULT_TAG_RULES,
+  placeTags,
+  statusTagFor,
+  type LifecycleTagRules,
+} from '../../lifecycle/tags.js';
 import { key } from '../../registry/names.js';
 import { SiblingSim } from '../../resources/plan.js';
 import { KIND_PREFIX, classifyName, isPageKind, type TreeNode } from '../../tree/index.js';
@@ -183,18 +190,23 @@ export function mainDocument(p: PageNow) {
   );
 }
 
-/** `tags` with `remove` taken out (any case) and `add` put in (if missing). */
+/** `tags` with `remove` taken out (any case) and `add` put in (if missing), last (ADR 0035; `placeTags` for `lead`). */
 export function tagsAfter(
   tags: readonly string[],
   remove: readonly string[],
   add: readonly string[],
 ): string[] {
-  const r = new Set(remove.map((t) => t.toLocaleLowerCase('en-GB')));
-  const out = tags.filter((t) => !r.has(t.toLocaleLowerCase('en-GB')));
-  for (const a of add)
-    if (!out.some((t) => t.toLocaleLowerCase('en-GB') === a.toLocaleLowerCase('en-GB'))) out.push(a);
-  return out;
+  return placeTags(tags, remove, add, 'append');
 }
+
+/** v3 F3d (ADR 0053): a project's lifecycle tag rules (where the tag goes, the AU ruling), from its approved pack. */
+export function tagRulesOf(pd: ProjectDeps, projectId: string): LifecycleTagRules {
+  return pd.services?.packs?.lifecycleRules(projectId) ?? DEFAULT_TAG_RULES;
+}
+
+/** v3 F3d: the target's `tagPosition` for a project's rules (only `lead` is written: an `append` target is as before). */
+export const positionOf = (r: LifecycleTagRules): { tagPosition?: 'lead' } =>
+  r.position === 'lead' ? { tagPosition: 'lead' } : {};
 
 // ============================================================================================ the plan
 
@@ -489,7 +501,8 @@ export async function planPage(
   const journal = (write: string) => ({ tool, page: { id: page.node.id, name: page.name }, write });
 
   // --- the rename and the tags (one write).
-  const newTags = tagsAfter(page.tags, target.tagsRemove, target.tagsAdd);
+  // v3 F3d (ADR 0053): `lead` puts the incoming tag first (every other tag in its order); otherwise last (ADR 0035).
+  const newTags = placeTags(page.tags, target.tagsRemove, target.tagsAdd, target.tagPosition ?? 'append');
   const tagsChange = JSON.stringify(newTags) !== JSON.stringify(page.tags);
   const renameChange = page.name !== target.name;
   const updateBody: Obj = {
@@ -838,7 +851,13 @@ async function runLifecycle(
     c: LifecycleConfig,
     idx: { working: TreeNode; archived: TreeNode },
     page: PageNow,
-    o: { readonly propertyTitle: string; readonly date: string; readonly incomplete: LifecycleRecord | null },
+    o: {
+      readonly propertyTitle: string;
+      readonly date: string;
+      readonly incomplete: LifecycleRecord | null;
+      /** v3 F3d (ADR 0053): where the lifecycle tag goes, and the AU ruling, from the project's approved pack. */
+      readonly rules: LifecycleTagRules;
+    },
   ) => Plan | Answer,
 ): Promise<McpToolResult> {
   const tool = TOOL[action];
@@ -914,7 +933,8 @@ async function runLifecycle(
             ? settings.factsPropertyName
             : 'PROPERTIES';
         const date = incomplete?.date ?? isoDate(Date.now());
-        const planned = planFor(pd, ctx, c, idx, read.value, { propertyTitle, date, incomplete });
+        const rules = tagRulesOf(pd, ctx.projectId);
+        const planned = planFor(pd, ctx, c, idx, read.value, { propertyTitle, date, incomplete, rules });
         if ('kind' in planned) return planned;
         const o2 = { resume: planned.record.resumeOf !== undefined };
         const built = await build(pd, mctx, ctx, c, propertyTitle, planned);
@@ -990,6 +1010,8 @@ export function archiveTarget(
   archiveId: string,
   date: string,
   doc: { id: string },
+  /** v3 F3d (ADR 0053): the project's tag rules (the AU status tag removed too; `lead` puts Archived first). */
+  rules: LifecycleTagRules = DEFAULT_TAG_RULES,
 ): LifecycleTarget {
   const block = {
     id: mintClientId(),
@@ -1016,8 +1038,9 @@ export function archiveTarget(
       ),
       lastMajorRevision: date,
     },
-    tagsRemove: [from === 'authoritative' ? c.tags.canon : c.tags.working],
+    tagsRemove: from === 'authoritative' ? authoritativeTags(c, rules) : [c.tags.working],
     tagsAdd: [c.tags.archived],
+    ...positionOf(rules),
     note: { action: 'insert', blockId: block.id, documentId: doc.id, block },
   };
 }
@@ -1096,7 +1119,7 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Archive a page',
     access: 'write',
     description:
-      'Retires an Authoritative [BSRC] or Working [BWRK] page to [INDEX] Archived as [BARC]: moves, renames and re-tags it, adds a dated note at the top of its page document, and sets Status Archived, Continuity Type NON-CURRENT and Scope. Use it to retire a design, not delete_resource. A page with pages under it is refused unless `subtree: true`, which archives the whole set (a character’s index, Core and specialist pages) as ONE proposal. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. Lists the pages that link to it (never edited): tell the person. dryRun shows the whole plan. A change that stopped part-way resumes when you call the same tool again. Cost: about 6 reads to propose; the job about 15 reads and 8 writes once approved.',
+      'Retires an Authoritative [BSRC] or Working [BWRK] page to [INDEX] Archived as [BARC]: moves, renames and re-tags it (Archived replaces the status tag; first on a project whose pack says the lifecycle tag leads), adds a dated note at the top of its page document, and sets Status Archived, Continuity Type NON-CURRENT and Scope. Use it to retire a design, not delete_resource. A page with pages under it is refused unless `subtree: true`, which archives the whole set (a character’s index, Core and specialist pages) as ONE proposal. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. Lists the pages that link to it (never edited): tell the person. dryRun shows the whole plan. A change that stopped part-way resumes when you call the same tool again. Cost: about 6 reads to propose; the job about 15 reads and 8 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The page to archive (name or id); with subtree, the root of the set.'),
       subtree: subtreeArg,
@@ -1153,7 +1176,7 @@ function archivePageTool(deps: ToolDeps): McpToolProvider {
                   `“${page.name}” has no page document for the archive note; nothing was done.`,
                 );
               }
-              target = archiveTarget(c, page, facts, from, idx.archived.id, o.date, doc);
+              target = archiveTarget(c, page, facts, from, idx.archived.id, o.date, doc, o.rules);
             }
             const twin = ctx.tree
               .children(ctx.projectId, target.parentId)
@@ -1405,7 +1428,14 @@ function unarchivePageTool(deps: ToolDeps): McpToolProvider {
                 lastMajorRevision: o.date,
               },
               tagsRemove: [c.tags.archived],
-              tagsAdd: state === 'working' ? [c.tags.working] : exemptUnder ? [] : [c.tags.canon],
+              // v3 F3d (ADR 0053): back to Authoritative, the status tag of its Continuity Type (AU under the ruling).
+              tagsAdd:
+                state === 'working'
+                  ? [c.tags.working]
+                  : exemptUnder
+                    ? []
+                    : [statusTagFor(c, o.rules, restore.continuityType)],
+              ...positionOf(o.rules),
               ...(note ? { note } : {}),
             };
             const twin = ctx.tree
@@ -1449,7 +1479,7 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
     title: 'Move a page back to Working',
     access: 'write',
     description:
-      'Takes an Authoritative [BSRC] page back to Working for rework: moves it under [INDEX] Working as [BWRK], Status Working, tag CANON swapped for Working. The record keeps where it was (promote_page offers it as the destination). `subtree: true` moves a whole Authoritative set as ONE proposal; a Character Core under its own index moves alone. Lists the pages that link to it (never edited). ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 3 reads to propose; the job about 11 reads and 3 writes once approved.',
+      'Takes an Authoritative [BSRC] page back to Working for rework: moves it under [INDEX] Working as [BWRK], Status Working, its status tag (CANON, or AU under the AU ruling) swapped for Working (first where the pack says the lifecycle tag leads). The record keeps where it was (promote_page offers it as the destination). `subtree: true` moves a whole Authoritative set as ONE proposal; a Character Core under its own index moves alone. Lists the pages that link to it (never edited). ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 3 reads to propose; the job about 11 reads and 3 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The [BSRC] page (name or id); with subtree, the root of the set.'),
       subtree: subtreeArg,
@@ -1495,8 +1525,10 @@ function moveToWorkingTool(deps: ToolDeps): McpToolProvider {
                   name: `${KIND_PREFIX.bwrk}${page.displayName}`,
                   parentId: idx.working.id,
                   facts: { status: c.status.working },
-                  tagsRemove: [c.tags.canon],
+                  // v3 F3d (ADR 0053): the status tag, CANON or (under the AU ruling) AU, gives way to Working.
+                  tagsRemove: authoritativeTags(c, o.rules),
                   tagsAdd: [c.tags.working],
+                  ...positionOf(o.rules),
                 };
             const twin = ctx.tree
               .children(ctx.projectId, idx.working.id)
@@ -1542,7 +1574,7 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
     title: 'Promote a Working page',
     access: 'write',
     description:
-      'Makes a Working [BWRK] page Authoritative (canon): moves it to `destination` (required, an [INDEX]; a dry run suggests where it was before move_to_working), renames it [BSRC], sets Status Authoritative and Last Major Revision, swaps the Working tag for CANON (no CANON beneath an index the owner lists as Authoritative without CANON). A Working character’s Core takes its [INDEX] with it. `subtree: true` promotes a whole Working set (a character’s index and all its pages) as ONE proposal; any page of that character left flat under [INDEX] Working is listed as an outsider: move_resource it into the set first. This is the only way to make a page canon: never set Status to Authoritative with set_facts. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 2 reads to propose; the job about 11 reads and 5 writes once approved.',
+      'Makes a Working [BWRK] page Authoritative (canon): moves it to `destination` (required, an [INDEX]; a dry run suggests where it was before move_to_working), renames it [BSRC], sets Status Authoritative and Last Major Revision, swaps the Working tag for CANON, or AU for a page whose Continuity Type is AU where the pack carries the AU ruling (first where the pack says the lifecycle tag leads; none beneath an index the owner lists as Authoritative without CANON). A Working character’s Core takes its [INDEX] with it. `subtree: true` promotes a whole Working set (a character’s index and all its pages) as ONE proposal; any page of that character left flat under [INDEX] Working is listed as an outsider: move_resource it into the set first. This is the only way to make a page canon: never set Status to Authoritative with set_facts. ALWAYS a proposal that only the owner can accept as canon, whatever your scope; never retry it, follow it with bridge_proposal_status. dryRun shows the plan. Cost: about 2 reads to propose; the job about 11 reads and 5 writes once approved.',
     inputSchema: z.object({
       page: pageRef.describe('The [BWRK] page (name or id); with subtree, the root of the Working set.'),
       subtree: subtreeArg,
@@ -1701,7 +1733,9 @@ function promotePageTool(deps: ToolDeps): McpToolProvider {
                 ...(keepCt ? {} : { continuityType: c.continuityTypes.canon }),
               },
               tagsRemove: [c.tags.working],
-              tagsAdd: exemptUnder ? [] : [c.tags.canon],
+              // v3 F3d (ADR 0053): AU for a page whose Continuity Type is (and stays) AU under the ruling, else CANON.
+              tagsAdd: exemptUnder ? [] : [statusTagFor(c, o.rules, keepCt ? ct : c.continuityTypes.canon)],
+              ...positionOf(o.rules),
               ...(mover ? { moveIndex: mover } : {}),
             };
             return {

@@ -10,6 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
+import { approveTagRules } from '../packs/tag-rules.js';
 import { A, auditsWorld, type AuditsWorld, type MockBlock } from './world.js';
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -367,6 +368,57 @@ describe('Propose a fix: the additive tag fix', () => {
     });
     expect(w.repo.live(A.apple)!.tags).not.toContain('CANON');
     expect(w.stack.db.prepare('SELECT COUNT(*) AS n FROM proposals').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('Propose a fix: the lifecycle tag leads (v3 F3d, ADR 0053)', () => {
+  const LEAD = 'leadwrk1';
+  const world = () =>
+    auditsWorld({
+      seed: (x) =>
+        x.repo.seed({
+          id: LEAD,
+          name: '[BWRK] Lead Page',
+          parentId: A.zoo,
+          tags: ['Culture', 'Working', 'CANON'],
+        }),
+    });
+
+  it('reorders only: the lifecycle tag first, the status tag left where it was for the owner, once approved', async () => {
+    w = await world();
+    approveTagRules(w.stack.runtime, { lead: true });
+    await w.snapshotAndAudit();
+    const f = finding('lifecycle_tag_not_leading', LEAD);
+    expect(f.evidence).toMatchObject({ lifecycleTag: 'Working', notFirst: true, statusTags: ['CANON'] });
+    expect(f.fix).toMatchObject({ kind: 'reorder_tags', args: { order: ['Working', 'Culture', 'CANON'] } });
+    const r = await audits().proposeFix('owner', PROJECT, f.id);
+    expect(r).toMatchObject({ status: 'proposal_captured', fix: 'reorder_tags' });
+    if (r.status !== 'proposal_captured') throw new Error('not captured');
+    // An ordinary proposal: no status tag is added or removed, so nothing is canonical.
+    expect(pol().proposals.get(r.proposalId)!.requiresCanonicalApproval).toBe(false);
+    expect(await approve(r.proposalId)).toEqual({ state: 'executed', jobStatus: 'succeeded' });
+    expect(w.repo.live(LEAD)!.tags).toEqual(['Working', 'Culture', 'CANON']);
+    // The status tag is still there: still a finding, with no fix (a reorder cannot remove it).
+    await w.snapshotAndAudit();
+    const after = finding('lifecycle_tag_not_leading', LEAD);
+    expect(after.evidence).toMatchObject({ notFirst: false, statusTags: ['CANON'] });
+    expect(after.fix).toBeNull();
+  });
+
+  it('a page whose tags changed since the audit is refused as stale, and nothing is proposed', async () => {
+    w = await world();
+    approveTagRules(w.stack.runtime, { lead: true });
+    await w.snapshotAndAudit();
+    const f = finding('lifecycle_tag_not_leading', LEAD);
+    w.repo.live(LEAD)!.tags = ['Culture', 'Working'];
+    await expect(audits().proposeFix('owner', PROJECT, f.id)).rejects.toMatchObject({ code: 'FIX_STALE' });
+    expect(w.stack.db.prepare('SELECT COUNT(*) AS n FROM proposals').get()).toEqual({ n: 0 });
+  });
+
+  it('a project whose pack does not say so has no such finding', async () => {
+    w = await world();
+    await w.snapshotAndAudit();
+    expect(stillThere('lifecycle_tag_not_leading', LEAD)).toBe(false);
   });
 });
 
