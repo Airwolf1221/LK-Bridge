@@ -4,6 +4,16 @@ Status: **Proposed** (CR-2026-11-R2, 17 November 2026). Where a fix needed one o
 implemented and marked "implemented"; the owner confirms it or chooses another. The findings are in
 [docs/reviews/CR-2026-11-R2.md](../reviews/CR-2026-11-R2.md).
 
+- Amends (the findings' fixes, each in the review): [ADR 0036](0036-cr-2026-11-owner-decisions.md) decision 3 (a
+  lifecycle index name is refused whatever the lifecycle marker) and decision 7 (a template copy takes its template's
+  tags, so they are judged); [ADR 0048](0048-chronology-ii.md) decision 7 (the orphan delete lists rows whose date cannot
+  be read) and F2.1 (a chosen link is a proposal at every scope); [ADR 0054](0054-arkona-appraisal-tools-and-full-text-search.md)
+  (the approved version's rules only; the fixes check inside their jobs); [ADR 0055](0055-write-scope-review-revert-rails.md)
+  decisions A2 (a low-level job's summary), B (Revert compares in full, checks first, one at a time, the confirmed set),
+  C1 (the deletes and bulk rails widened) and D1 (the stricter switch); [ADR 0041](0041-image-pipeline.md) and [ADR
+  0049](0049-v3-f2-last-major-revision-default-project-and-staging.md) decision 9 (canonical folder names) and the server
+  staging (one placement at a time, a rate per connection, files kept while needed).
+
 ## Context
 
 The owner moved Claude and ChatGPT to scope `write` on Arkona on 17 November 2026. The second independent review
@@ -72,3 +82,20 @@ Harbour` to `[BSRC] Old Port`) is still direct. The review's brief counted "rena
 Miyabi`) receives every later image for her. Options: (a) as now (the Staging page and the Review page show where each
    image went); (b) prefer the Characters path, and reuse a same-named folder elsewhere only when the bridge made it, or
    recorded it, for that character.
+9. **A restore counted as one page by the bulk rail (open, R2-03).** LegendKeeper restores every page deleted by the
+   same delete, but the bulk rail counts the restored page only: a restore that brings back 16 pages runs directly at
+   scope `write` (a restore that brings back an Authoritative page is now a canonical proposal: R2-10). Options: (a) count
+   the pages from the same restore set the canon guard reads (the bridge's journal of its own delete, the snapshots, the
+   tree), failing closed when it cannot be told; (b) record the subtree of every cascade delete the bridge makes, and fail
+   closed for any other restore of a page known to have had children; (c) as now (a restore undoes a delete, and the
+   Review page lists it). Recommended: (a).
+
+## Residual risks (accepted, or for a later session)
+
+- A page added under a page after the last full snapshot and then deleted with it in the app is not in any restore set
+  the bridge can read: a restore of the parent brings it back unjudged (the restore set is "known" from the snapshot).
+- A plain page (no prefix, no status tag) created under an index the owner moved into a lifecycle area in the app, before
+  the tree's sweep: the tree is trusted for a page that belongs in no area.
+- A move's or create's ancestors above the parent still come from the repository tree, as CR-13 left them.
+- The in-process holds of R2-21 (one revert at a time) and R2-38 (one placement at a time) do not survive a restart; a
+  restart between the hold and the record leaves at most a refusal to retry.
