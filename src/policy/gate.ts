@@ -26,7 +26,7 @@ import type {
   RailRequestItem,
 } from '../jobs/policy.js';
 import { isLiveApprovalToken } from './approval.js';
-import { railsVerdict } from './rails.js';
+import { isLowLevelTool, listsSent, railsVerdict } from './rails.js';
 import type { PolicyStore } from './store.js';
 import type { ResolvedPrincipal, Scope } from './types.js';
 
@@ -53,6 +53,16 @@ export interface RailLookups {
    * added in the app since its last sweep), listed until more than `limit` are found; null when they cannot be listed.
    */
   readonly liveDescendants?: (projectId: string, resourceId: string, limit: number) => Promise<number | null>;
+  /**
+   * ADR 0057 decision 9: how many pages a restore of a page may bring back with it (the restore set the canon guard reads,
+   * not counting the page itself); null when the set is not known.
+   */
+  readonly restored?: (projectId: string, resourceId: string) => Promise<number | null>;
+  /**
+   * ADR 0057 decision 4: whether a whole-list write (`LIST_WRITES`) drops an entry LegendKeeper holds now, read live;
+   * null when it cannot be told.
+   */
+  readonly drops?: (projectId: string, item: RailRequestItem) => Promise<boolean | null>;
 }
 
 /** The pages whose descendants a request's rails count: a cascade delete's page, a copy's source (with its children). */
@@ -188,9 +198,9 @@ export class LivePolicyGate implements PolicyGate {
     }
   }
 
-  /** v3 F3.4: the tree's answers the rails use (a cascade's pages, page names for the reason). */
+  /** v3 F3.4: the tree's answers the rails use (a cascade's pages, page names for the reason); merged with earlier ones. */
   setRailLookups(l: RailLookups): void {
-    this.railLookups = l;
+    this.railLookups = { ...this.railLookups, ...l };
   }
 
   /**
@@ -201,15 +211,43 @@ export class LivePolicyGate implements PolicyGate {
   async rails(
     principal: Principal,
     items: readonly RailRequestItem[],
-    ctx: { readonly project: string; readonly jobKind: JobKind; readonly stagedPlacement?: boolean },
+    ctx: {
+      readonly project: string;
+      readonly jobKind: JobKind;
+      readonly stagedPlacement?: boolean;
+      /** The tool the request came through (`origin.tool`). */
+      readonly tool?: string;
+    },
   ): Promise<RailDecision | null> {
     if (principal.principalId === SYSTEM_PRINCIPAL_ID) return null;
     const r = this.resolve(principal.principalId);
     if (!r?.active || r.scope !== 'write') return null;
     const l = this.railLookups;
+    const writes = (it: RailRequestItem) =>
+      it.kind !== 'read' && !it.opId.startsWith('bridge.') && !it.opId.startsWith('upload_image.');
+    // ADR 0057 decision 9: a restore counts every page its restore set says may come back (read before the verdict; an
+    // unknown set, or none to read, fails closed).
+    const restored = new Map<string, number | null>();
+    if (r.rails.bulk)
+      for (const it of items) {
+        const rid = it.params.path?.resourceId;
+        if (it.opId !== 'restoreResource' || !writes(it) || !rid || restored.has(rid)) continue;
+        restored.set(rid, l.restored ? await l.restored(ctx.project, rid).catch(() => null) : null);
+      }
+    // ADR 0057 decision 4: a whole-list write through a low-level tool is a removal when it drops an entry held now.
+    const lowLevel = isLowLevelTool(ctx.tool);
+    const drops = new Map<number, boolean | null>();
+    if (r.rails.deletes && lowLevel)
+      for (const [i, it] of items.entries()) {
+        if (!writes(it) || listsSent(it.opId, it.params.body).length === 0) continue;
+        drops.set(i, l.drops ? await l.drops(ctx.project, it).catch(() => null) : null);
+      }
     const base = {
       ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
       ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
+      restored: (id: string) => restored.get(id) ?? null,
+      lowLevel,
+      drops: (i: number) => drops.get(i) ?? null,
     };
     const fromTree = (id: string) => l.descendants?.(ctx.project, id) ?? null;
     const verdict = railsVerdict(r.rails, items, { ...base, descendants: fromTree });

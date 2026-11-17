@@ -130,36 +130,64 @@ describe('renaming canon (ADR 0035 decision 11, ADR 0036 decision 1, CR-14)', ()
     });
   });
 
-  it('C2a (design probe): renaming an Authoritative page keeping its prefix is at least reviewable', async () => {
+  // ADR 0057 decision 5 (WS-C2a): renaming an Authoritative page is a canonical proposal, even keeping its [BSRC] prefix,
+  // by every route.
+  it('C2a: update_resource renaming [BSRC] Tide Tables to [BSRC] Tide Almanac is a canonical proposal', async () => {
     const r = await call('update_resource', { page: L.tides, name: '[BSRC] Tide Almanac' });
-    // ADR 0055 F: renames run directly at write scope (renames-and-moves rail off by default). Recorded here only.
-    expect(['written', 'proposal_captured']).toContain(r.body.status);
+    expect({ safe: safe(r), name: w.repo.live(L.tides)!.name }, r.text).toEqual({
+      safe: true,
+      name: '[BSRC] Tide Tables',
+    });
+    expect(r.body.status, r.text).toBe('proposal_captured');
   });
 
-  it('C3: moving an Authoritative page into the templates root (out of the repository) is refused or proposed', async () => {
-    // The world's `/templates$` override (listTemplates) also answers getResource('templates') with the template list,
-    // an object with no parentId, which the guard reads as "not in a lifecycle area". LegendKeeper's `templates` is a
-    // virtual parent, not a resource: model getResource('templates') as 404 (first in the map) so the guard's own
-    // decision is what is judged. (Without this the bridge sends the move; see the report, INCONCLUSIVE.)
-    const rest = [...w.overrides.entries()];
-    w.overrides.clear();
-    w.overrides.set(/\/resources\/templates$/, (req) =>
-      req.method === 'GET'
-        ? { status: 404, body: { code: 'NOT_FOUND', message: 'not a resource' } }
-        : undefined,
-    );
-    for (const [k, v] of rest) w.overrides.set(k, v);
+  it.each([
+    [
+      'lk_api_write',
+      {
+        operationId: 'updateResource',
+        params: { path: { resourceId: L.guild }, body: { name: '[BSRC] Harbour Guildhall' } },
+      },
+    ],
+    [
+      'lk_api_batch',
+      {
+        calls: [
+          {
+            operationId: 'updateResource',
+            params: { path: { resourceId: L.guild }, body: { name: '[BSRC] Harbour Guildhall' } },
+          },
+        ],
+      },
+    ],
+  ])('C2a: %s renaming an Authoritative page keeping [BSRC] is a canonical proposal', async (tool, args) => {
+    const r = await call(tool, args);
+    expect({ safe: safe(r), name: w.repo.live(L.guild)!.name }, r.text).toEqual({
+      safe: true,
+      name: '[BSRC] Harbour Guild',
+    });
+    expect(r.body.status, r.text).toBe('proposal_captured');
+    expect(r.body.canonical?.reason ?? r.text).toMatch(/an Authoritative page/);
+  });
+
+  it('C2a (control): renaming a Working page runs directly (the renames rail is off by default)', async () => {
+    const r = await call('update_resource', { page: L.ferry, name: '[BWRK] Sky Ferry Line' });
+    if (typeof r.body.jobId === 'string') await w.stack.runtime.engine.wait(PROJECT, r.body.jobId, 20_000);
+    expect(r.body.status, r.text).not.toBe('proposal_captured');
+    expect(w.repo.live(L.ferry)!.name).toBe('[BWRK] Sky Ferry Line');
+  });
+
+  it('C3: moving an Authoritative page into the templates root (out of the repository) is refused', async () => {
+    // W18: LegendKeeper accepts the move (the page then reads parentId "templates"); the bridge refuses the destination
+    // for every caller, whatever getResource('templates') answers (the world answers it with the template list).
     const n = w.stack.mock.calls.length;
     const r = await call('lk_api_write', {
       operationId: 'moveResource',
       params: { path: { resourceId: L.guild }, body: { parentId: 'templates' } },
     });
     const sentMove = w.stack.mock.calls.slice(n).some((c) => c.method === 'POST' && c.path.includes('/move'));
-    expect(
-      { safe: r.body.status === 'proposal_captured' || r.body.error?.code === 'POLICY_DENIED', sentMove },
-      r.text,
-    ).toEqual({
-      safe: true,
+    expect({ code: String(r.body.error?.code), sentMove }, r.text).toEqual({
+      code: 'TEMPLATES_DESTINATION',
       sentMove: false,
     });
   });

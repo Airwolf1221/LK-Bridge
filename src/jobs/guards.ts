@@ -1,7 +1,8 @@
 /**
  * Data-loss and safety guards (PLAN §4 rules 2, 3, 4 and 6), applied generically from registry metadata.
  *
- * - `checkSubmitGuards` runs before anything is queued: read-only mode, member/invite admin, cascade confirmation.
+ * - `checkSubmitGuards` runs before anything is queued: read-only mode, member/invite admin, cascade confirmation, and
+ *   (W18) a move to the reserved parent `templates`.
  * - `unsupportedLoss` is the unsupported-block guard: it runs on the same read the engine makes for the If-Match
  *   version and the journal pre-image, immediately before `replaceDocumentBlocks` / `replaceBlock`.
  */
@@ -10,6 +11,7 @@ import {
   CascadeConfirmationRequiredError,
   MemberAdminDisabledError,
   ReadOnlyError,
+  TemplatesDestinationError,
   UnsupportedBlockLossError,
   type JobRef,
 } from './errors.js';
@@ -38,6 +40,15 @@ export function checkSubmitGuards(
   if (cascadeRequested(params) && options.confirm !== 'cascade') {
     throw new CascadeConfirmationRequiredError(op.operationId);
   }
+  if (op.operationId === 'moveResource' && movesToTemplates(params)) {
+    throw new TemplatesDestinationError(op.operationId);
+  }
+}
+
+/** W18: a move whose destination is the reserved parent `templates` (any case, spaces trimmed). */
+export function movesToTemplates(params: OpParams): boolean {
+  const p = (params.body as { parentId?: unknown } | undefined)?.parentId;
+  return typeof p === 'string' && p.trim().toLowerCase() === 'templates';
 }
 
 /** `cascade=true` on any operation that takes it (today only deleteResource). Strings count: LK reads the query. */

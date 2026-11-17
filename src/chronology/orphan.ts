@@ -7,8 +7,9 @@
  * with their opening words) so the owner can see what replaced it.
  *
  * It is refused when the event is paired with a row after all (`EVENT_HAS_ROW`: delete_timeline_event without `orphan`
- * deletes both, sync_timeline_event repairs a mismatch), or when an unpaired row could be its own (`PAIRING_AMBIGUOUS`:
- * pair them with sync_timeline_event and `event_id`). Inside the lock the age table must still have no such row (a row
+ * deletes both, sync_timeline_event repairs a mismatch), when an unpaired row could be its own (`PAIRING_AMBIGUOUS`:
+ * pair them with sync_timeline_event and `event_id`), or while the age's table has an unpaired row whose date cannot be
+ * read and that is not marked table-only (`ORPHAN_NEAR_UNREADABLE`, ADR 0057 decision 2: it could be the event's own). Inside the lock the age table must still have no such row (a row
  * edited or added since to match the event ends the proposal `conflicted`), and the event must still be exactly as read.
  *
  * Canon (ADR 0036 decision 6, option (a)): deleting an event of an Authoritative page is an ordinary content edit. The
@@ -187,12 +188,30 @@ export async function planOrphanDelete(o: {
     .filter((r) => r.id !== null && couldBeRowOf(r, ev))
     .map((r) => ({ rowId: r.id!, texts: { description: r.description, date: r.dateText, kcy: r.kcyText } }));
   const nearest = nearestRows(table.rows, event.start);
-  // CR-2026-11-R2 (R2-49): an unpaired row whose Date cell cannot be read has no date to compare, so it is matched by
-  // its name only (`couldBeRowOf`), and it is never among the rows nearest by date. The owner sees each such row in the
-  // proposal: the bridge cannot rule out that it is this event's own (marking it table-only says it is not).
+  // CR-2026-11-R2 (R2-49) and ADR 0057 decision 2 (the owner's, 17 November 2026): an unpaired row whose Date cell cannot
+  // be read has no date to compare, so it is matched by its name only (`couldBeRowOf`), and the bridge cannot rule out
+  // that it is this event's own. While the age has such a row, no event of the age is deleted as an orphan: marking the
+  // row table-only (it has no event), or fixing its date, lifts the block.
   const unreadable = pairing.rows
     .filter((r) => r.eventDate === null)
     .map((r) => ({ rowId: r.id, date: r.dateText, words: openingWords(r.description) }));
+  if (unreadable.length > 0)
+    return refuse(
+      'ORPHAN_NEAR_UNREADABLE',
+      `The ${age.name} table has ${unreadable.length} row${unreadable.length === 1 ? '' : 's'} whose date the bridge cannot read (${unreadable
+        .slice(0, 5)
+        .map((u) => `“${u.date || '(empty)'}”: ${u.words}`)
+        .join(
+          '; ',
+        )}${unreadable.length > 5 ? `; and ${unreadable.length - 5} more` : ''}), so it cannot tell whether one is the event “${event.name.slice(0, 80)}” (${eventText(event)})'s own. Fix the row's date, or mark it table-only if it has no event (the owner does that on the dashboard's Chronology page), then try again. Nothing was done.`,
+      {
+        event: { id: event.id, name: event.name, date: eventText(event) },
+        unreadable,
+      },
+    );
+  // Rows whose date cannot be read that are accounted for (paired by a link, or marked table-only): any other row whose
+  // date cannot be read found inside the lock (added, or its date made unreadable, since) stops the delete.
+  const unreadableKnown = table.rows.filter((r) => r.eventDate === null && r.id !== null).map((r) => r.id!);
   const link = links.find((l) => l.eventId === event.id) ?? null;
   const writes: TargetWrite[] = [
     {
@@ -202,6 +221,7 @@ export async function planOrphanDelete(o: {
       documentId: age.tableDocumentId,
       event: { start: ev.start, end: ev.end, detail: ev.detail, name: event.name },
       ignore,
+      unreadableKnown,
     },
     {
       kind: 'event.delete',
@@ -225,14 +245,6 @@ export async function planOrphanDelete(o: {
   };
   const date = eventText(event);
   const near = nearest.map((n) => `- ${n.date}: ${n.words}`);
-  const unread =
-    unreadable.length > 0
-      ? [
-          '',
-          `## ${age.name} - Table (rows whose date cannot be read: one could be this event's)`,
-          ...unreadable.map((n) => `- ${n.date || '(empty)'}: ${n.words}`),
-        ]
-      : [];
   const lane = `## ${age.name} - Timeline (${age.laneName})`;
   const summary = `${ORPHAN_TOOL}: delete the ${age.name} event “${openingWords(event.name, 12)}” (${date}), which has no table row`;
   return {
@@ -251,13 +263,6 @@ export async function planOrphanDelete(o: {
       age: age.name,
       event: { id: event.id, name: event.name.slice(0, 200), date, start: event.start, uri: event.uri },
       nearest,
-      ...(unreadable.length > 0
-        ? {
-            unreadable,
-            unreadableNote:
-              'These rows of the table have a Date the bridge cannot read, so it cannot tell whether one is this event’s own. Check them before approving; mark a row table-only if it has no event.',
-          }
-        : {}),
       note: 'Only the timeline event is deleted: the table (the authority) has no row for it, and the Main count (the table’s row count) does not change. The journal keeps the event.',
     },
     markdown: {
@@ -267,11 +272,8 @@ export async function planOrphanDelete(o: {
         '',
         `## ${age.name} - Table (the nearest rows)`,
         ...near,
-        ...unread,
       ].join('\n'),
-      after: [lane, '- (deleted)', '', `## ${age.name} - Table (the nearest rows)`, ...near, ...unread].join(
-        '\n',
-      ),
+      after: [lane, '- (deleted)', '', `## ${age.name} - Table (the nearest rows)`, ...near].join('\n'),
     },
   };
 }

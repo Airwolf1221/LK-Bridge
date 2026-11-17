@@ -129,6 +129,11 @@ export type TargetWrite =
         readonly rowId: string;
         readonly texts: { readonly description: string; readonly date: string; readonly kcy: string };
       }[];
+      /**
+       * ADR 0057 decision 2: the rows whose date cannot be read that the plan found accounted for (paired, or marked
+       * table-only); any other such row inside the lock stops the delete. Absent on proposals made before it.
+       */
+      readonly unreadableKnown?: readonly string[];
     }
   | {
       readonly kind: 'row.insert';

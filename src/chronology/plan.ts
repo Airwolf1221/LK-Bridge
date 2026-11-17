@@ -196,7 +196,12 @@ export function buildJob(o: {
       }
       case 'row.orphan': {
         // v2 E6 (ADR 0048): not a write: the table is locked and must still have no row for the event to delete.
-        pushTableOp(w.documentId, { op: 'orphan', event: w.event, ignore: w.ignore });
+        pushTableOp(w.documentId, {
+          op: 'orphan',
+          event: w.event,
+          ignore: w.ignore,
+          ...(w.unreadableKnown ? { unreadableKnown: w.unreadableKnown } : {}),
+        });
         break;
       }
       case 'row.insert': {
