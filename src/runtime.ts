@@ -2,7 +2,7 @@ import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mc
 import { createPacks, type Packs } from './packs/service.js';
 import { registerPackEngine } from './packs/engine/checks.js';
 import { addPackTaxonomyEntry } from './packs/taxonomy.js';
-import { deletedPageRecord } from './lifecycle/deleted.js';
+import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
 import { BlockwiseUndo } from './pages/undo.js';
 import { pino } from 'pino';
@@ -460,10 +460,25 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       return null;
     }
   };
+  // CR-2026-11-R2 (C1): the pages a restore may bring back with the page restored, for both guards (a getter: the
+  // snapshot service is made below).
+  const restoreSet = restoreSetReader({
+    engine,
+    snapshots: () => snapshots,
+    node: treeNode,
+    subtree: (projectId, id) => {
+      try {
+        return tree.queries.subtree(projectId, id, { limit: 1_000 }).data.entries.map((e) => e.node);
+      } catch {
+        return null;
+      }
+    },
+  });
   const lifecycleGuard = new LifecycleGuard({
     settings: (projectId) => projectStore.byId(projectId)?.settings,
     engine,
     node: treeNode,
+    restoreSet,
     // v2 E4 (RV2-1): what a delete recorded of a page (its name, parent and tags), so its restore can be judged.
     deletedPage: (projectId, id) => deletedPageRecord(engine, projectId, id),
     // v3 F2 (ADR 0049 decision 5): else what the newest snapshot holding it says (a page deleted in the app).
@@ -487,6 +502,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
           const s = await snapshotPageState(snapshots, projectId, id);
           return s ? { name: s.name, rows: s.rows } : null;
         },
+        restoreSet,
         // v2 C2b: a cascade delete's pages, from the repository tree (null when the tree cannot answer).
         descendants: (projectId, resourceId) => {
           try {

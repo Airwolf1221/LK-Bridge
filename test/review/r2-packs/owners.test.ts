@@ -16,7 +16,7 @@ import type { MockRequest } from '../../contract/mock-lk.js';
 import { LIFECYCLE } from '../../resources/world.js';
 import { O, ownerText, ownersWorld, PINNED, type OwnersWorld } from '../../packs/owners-world.js';
 import { approve } from '../../packs/world.js';
-import { PROJECT, liveNamed, writeAgent } from './helpers.js';
+import { PROJECT, err, liveNamed, writeAgent } from './helpers.js';
 
 let w: OwnersWorld;
 let agent: Awaited<ReturnType<typeof writeAgent>>;
@@ -59,9 +59,13 @@ describe('ATK-02: a racial group named "Archived" with its character navigation 
       markdown: ownerText('The racial group.'),
       project: 'test',
     });
-    expect(r.body.status, r.text).toBe('proposal_captured');
-    expect(r.body.requiresCanonicalApproval ?? false).toBe(false);
-    await approve(w, String(r.body.proposalId));
+    // Set-up corrected (CR-2026-11-R2, the guard half of R2-01): no lifecycle marker declares a page given a lifecycle
+    // index's name any more, so the package is refused when it is captured (POLICY_DENIED), as the same create through
+    // lk_api_write is (CR-15); nothing is proposed. Were an ordinary proposal captured, its approval is checked as before.
+    if (r.body.status === 'proposal_captured') {
+      expect(r.body.requiresCanonicalApproval ?? false).toBe(false);
+      await approve(w, String(r.body.proposalId));
+    } else expect(err(r).code, r.text).toBe('POLICY_DENIED');
     const decoys = liveNamed(w, '[INDEX] Archived')
       .filter((x) => x.id !== LIFECYCLE.archived)
       .map((x) => ({ id: x.id, parent: w.repo.res.get(x.parentId!)?.name }));
