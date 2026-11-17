@@ -49,6 +49,8 @@ const MAINTENANCE_STATUS: Readonly<Record<string, number>> = {
   INVALID_SCHEDULE: 400,
   NOT_OWNER: 403,
   PROJECT_NOT_SERVED: 409,
+  // v3 F3.5 (ADR 0056): the block-id sweep without its sandbox PASS or the override.
+  PREREQUISITE_MISSING: 409,
 };
 
 const MAPPING_STATUS: Readonly<Record<string, number>> = {

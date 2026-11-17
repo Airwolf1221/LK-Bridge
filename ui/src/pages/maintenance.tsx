@@ -166,7 +166,358 @@ export function MaintenancePage() {
           </div>
         )}
       </section>
+      {jobs.some((j) => j.id === SWEEP_ID && j.implemented) && (
+        <BlockIdSweepCard job={jobs.find((j) => j.id === SWEEP_ID)!} now={now} onChanged={list.reload} />
+      )}
     </>
+  );
+}
+
+// ------------------------------------------------------------------------------ v3 F3.5: the block-id sweep's card
+
+const SWEEP_ID = 'assign-block-ids-sweep';
+
+interface SweepCheck {
+  bridgeVersion: string;
+  project: string;
+  verdict: 'PASS' | 'NOTED' | 'FAIL';
+  detail: string | null;
+  at: number;
+}
+
+interface SweepPrerequisite {
+  ok: boolean;
+  reason: string | null;
+  version: string;
+  pass: SweepCheck | null;
+  override: { at: number; by: string } | null;
+  recent: SweepCheck[];
+}
+
+interface SweepStop {
+  projectId: string;
+  project: string;
+  resourceId: string;
+  documentId: string;
+  page: string | null;
+  jobId: string | null;
+  journalId: number | null;
+  reason: string;
+  differences: { path: string; expected: unknown; actual: unknown }[];
+  at: number;
+  acknowledgedAt: number | null;
+}
+
+interface SweepProject {
+  project: string;
+  projectId: string;
+  snapshot: { id: string; takenAt: number } | null;
+  candidates: number;
+  remaining: number;
+  unreadable: number;
+  counts: Record<'done' | 'already' | 'moved' | 'unverified' | 'failed' | 'gone' | 'error', number>;
+}
+
+interface SweepCardData {
+  statement: { key: string; title: string; text: string }[];
+  prerequisite: SweepPrerequisite;
+  maxPerRun: number;
+  stop: SweepStop | null;
+  projects: SweepProject[];
+}
+
+interface DryRunDoc {
+  resourceId: string;
+  documentId: string;
+  page: string;
+  path: string;
+  document: string | null;
+  blocks: number;
+  missing: number;
+  duplicates: number;
+  unsupported: number;
+  why: 'unverified' | 'candidate';
+  retry: boolean;
+}
+
+interface DryRunData {
+  project: string;
+  candidates: number;
+  remaining: number;
+  maxPerRun: number;
+  next: DryRunDoc[];
+  estimate: {
+    reads: number;
+    writes: number;
+    wallClockMs: number | null;
+    tightestTier: string | null;
+    fitsToday: boolean | null;
+    note: string;
+  };
+  prerequisite: SweepPrerequisite;
+  stopped: boolean;
+}
+
+const show = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify(v));
+
+/**
+ * The block-id sweep (ADR 0056): its approved-automation statement, word for word, so that enabling the job is the
+ * owner's informed approval; prerequisite 2 and the override; the candidates per project from the latest snapshot; the
+ * most documents a run does; a dry run; and a stop after a verification failure, in red, with the journal entry.
+ */
+function BlockIdSweepCard({
+  job,
+  now,
+  onChanged,
+}: {
+  job: MaintenanceJob;
+  now: number;
+  onChanged: () => void;
+}) {
+  const card = useApi<{ card: SweepCardData }>(`/maintenance/${SWEEP_ID}/card`);
+  useReloadOn(['policy', 'job'], card.reload, 800);
+  const { run, busy } = useAction();
+  const withReauth = useReauth();
+  const { selected } = useProject();
+  const [dry, setDry] = useState<DryRunData | null>(null);
+  const [limit, setLimit] = useState<string | null>(null);
+  if (card.error) return <ErrorNote error={card.error} onRetry={card.reload} />;
+  if (!card.data) return <Loading />;
+  const c = card.data.card;
+  const pre = c.prerequisite;
+  const stop = c.stop;
+  const reload = () => {
+    card.reload();
+    onChanged();
+  };
+  const limitValue = limit ?? String(c.maxPerRun);
+  const limitOk = /^\d+$/.test(limitValue) && Number(limitValue) >= 1 && Number(limitValue) <= 500;
+  return (
+    <section className="card" aria-labelledby="sweep-title" data-card={SWEEP_ID}>
+      <h2 id="sweep-title">{job.name}: an approved narrow automation</h2>
+      {stop && stop.acknowledgedAt === null && (
+        <div className="note note-bad" role="alert" aria-label="The sweep stopped">
+          <strong>Stopped: verification failed</strong> on {stop.page ? `“${stop.page}”` : stop.resourceId} (
+          {stop.project}, document <span className="mono">{stop.documentId}</span>) {fmtAgo(stop.at, now)}.
+          The job disabled itself. {stop.reason}.
+          {stop.differences.length > 0 && (
+            <ul className="plain small-text">
+              {stop.differences.slice(0, 5).map((d, i) => (
+                <li key={i}>
+                  <span className="mono">{d.path}</span>: expected {show(d.expected)}, found {show(d.actual)}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div>
+            Restore from journal:{' '}
+            {stop.journalId !== null ? (
+              <>
+                entry <strong>#{stop.journalId}</strong> holds the whole document as it was before the call
+              </>
+            ) : (
+              <>the job’s journal entry holds the document as it was</>
+            )}
+            {stop.jobId && (
+              <>
+                {' '}
+                (
+                <Link
+                  to={`/journal?jobId=${encodeURIComponent(stop.jobId)}&project=${encodeURIComponent(stop.project)}`}
+                >
+                  journal
+                </Link>
+                {' · '}
+                <JobLink jobId={stop.jobId} projectId={stop.projectId} />)
+              </>
+            )}
+            ; the night’s full snapshot holds it too (Snapshots page). Enabling the job again acknowledges
+            this stop.
+          </div>
+        </div>
+      )}
+      {stop && stop.acknowledgedAt !== null && (
+        <p className="muted small-text">
+          Last stop {fmtAgo(stop.at, now)} on {stop.page ?? stop.documentId} ({stop.project}), acknowledged{' '}
+          {fmtAgo(stop.acknowledgedAt, now)}.
+        </p>
+      )}
+      <h3>What enabling it approves</h3>
+      <ol aria-label="Approved-automation statement">
+        {c.statement.map((p) => (
+          <li key={p.key} data-point={p.key}>
+            <strong>{p.title}.</strong> {p.text}
+          </li>
+        ))}
+      </ol>
+      <h3>Prerequisite: the sandbox check</h3>
+      {pre.pass ? (
+        <p>
+          <Badge tone="ok">PASS</Badge> recorded for bridge version{' '}
+          <span className="mono">{pre.version}</span> {fmtAgo(pre.pass.at, now)} (project {pre.pass.project}).
+        </p>
+      ) : (
+        <p>
+          <Badge tone={pre.override ? 'warn' : 'bad'}>no PASS</Badge> for bridge version{' '}
+          <span className="mono">{pre.version}</span>. Run the sandbox check (docs/runbook-deploy.md, “The
+          block-id sweep’s sandbox check”), or set the override.
+        </p>
+      )}
+      {pre.recent.length > 0 && (
+        <ul className="plain small-text" aria-label="Recent sandbox checks">
+          {pre.recent.map((r, i) => (
+            <li key={i}>
+              <Badge tone={r.verdict === 'PASS' ? 'ok' : r.verdict === 'NOTED' ? 'warn' : 'bad'}>
+                {r.verdict}
+              </Badge>{' '}
+              version <span className="mono">{r.bridgeVersion}</span>, {r.project}, {fmtAgo(r.at, now)}
+              {r.detail && <div className="muted">{r.detail}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <label className="row" htmlFor="sweep-override">
+        <input
+          id="sweep-override"
+          type="checkbox"
+          checked={pre.override !== null}
+          disabled={busy}
+          onChange={(e) => {
+            const on = e.target.checked;
+            void run(
+              () =>
+                on
+                  ? withReauth(() => api.put(`/maintenance/${SWEEP_ID}/override`, { on }))
+                  : api.put(`/maintenance/${SWEEP_ID}/override`, { on }),
+              on ? 'Override set (audited).' : 'Override cleared.',
+            ).then(reload);
+          }}
+        />
+        Override: enable without a sandbox PASS (asks for your password; audited)
+      </label>
+      {pre.override && (
+        <p className="muted small-text">
+          Override set {fmtAgo(pre.override.at, now)} by {pre.override.by}.
+        </p>
+      )}
+      <h3>Candidates (from the latest snapshot)</h3>
+      {c.projects.length === 0 ? (
+        <Empty>No project is served.</Empty>
+      ) : (
+        <div className="table-wrap">
+          <table aria-label="Candidates per project">
+            <thead>
+              <tr>
+                <th>Project</th>
+                <th>Snapshot</th>
+                <th>Candidates</th>
+                <th>Still to do</th>
+                <th>Done</th>
+                <th>Edited since read</th>
+                <th>Unverified</th>
+              </tr>
+            </thead>
+            <tbody>
+              {c.projects.map((p) => (
+                <tr key={p.projectId} data-project={p.project}>
+                  <td>{p.project}</td>
+                  <td>
+                    {p.snapshot ? fmtAgo(p.snapshot.takenAt, now) : <span className="muted">none yet</span>}
+                  </td>
+                  <td>{p.candidates}</td>
+                  <td>{p.remaining}</td>
+                  <td>{p.counts.done}</td>
+                  <td>{p.counts.moved}</td>
+                  <td>{p.counts.unverified}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <form
+        className="row"
+        aria-label="Documents a run"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (limitOk)
+            void run(
+              () => api.put(`/maintenance/${SWEEP_ID}/limit`, { maxPerRun: Number(limitValue) }),
+              'Saved.',
+            ).then(() => {
+              setLimit(null);
+              reload();
+            });
+        }}
+      >
+        <label htmlFor="sweep-limit">At most</label>
+        <input
+          id="sweep-limit"
+          type="number"
+          min={1}
+          max={500}
+          value={limitValue}
+          onChange={(e) => setLimit(e.target.value)}
+        />
+        <span>documents a run (N)</span>
+        <Button busy={busy} disabled={!limitOk || limitValue === String(c.maxPerRun)} type="submit">
+          Save
+        </Button>
+      </form>
+      <div className="row">
+        <Button
+          busy={busy}
+          onClick={() =>
+            void run(() =>
+              api.post<{ dryRun: DryRunData }>(
+                `/maintenance/${SWEEP_ID}/dry-run`,
+                selected ? { project: selected } : {},
+              ),
+            ).then((r) => r && setDry(r.dryRun))
+          }
+        >
+          {selected ? `Dry run for ${selected}` : 'Dry run'}
+        </Button>
+        <span className="muted small-text">Lists what the next run would do. Writes nothing.</span>
+      </div>
+      {dry && <DryRunView dry={dry} />}
+    </section>
+  );
+}
+
+function DryRunView({ dry }: { dry: DryRunData }) {
+  return (
+    <div aria-label="Dry run">
+      <h3>Dry run: {dry.project}</h3>
+      <p>
+        The next run would work on <strong>{dry.next.length}</strong> of {dry.remaining} documents still to do
+        ({dry.candidates} candidates in the latest snapshot; at most {dry.maxPerRun} a run). About{' '}
+        {dry.estimate.reads} reads and {dry.estimate.writes} writes at P3
+        {dry.estimate.wallClockMs !== null && <>, about {fmtDuration(dry.estimate.wallClockMs)}</>}
+        {dry.estimate.fitsToday === false && <> (more than today’s budget)</>}. Nothing was written.
+      </p>
+      {!dry.prerequisite.ok && (
+        <div className="note note-warn">The job cannot run yet: {dry.prerequisite.reason}.</div>
+      )}
+      {dry.stopped && <div className="note note-bad">The sweep is stopped after a verification failure.</div>}
+      <p className="muted small-text">{dry.estimate.note}</p>
+      {dry.next.length === 0 ? (
+        <Empty>Nothing to do.</Empty>
+      ) : (
+        <ol className="small-text">
+          {dry.next.map((d) => (
+            <li key={d.documentId} data-document={d.documentId}>
+              <strong>{d.path}</strong>
+              {d.document ? ` (${d.document})` : ''}: {d.missing} of {d.blocks} blocks without an id
+              {d.duplicates > 0 ? `, ${d.duplicates} ids used twice` : ''}
+              {d.unsupported > 0 ? `, ${d.unsupported} unsupported` : ''}
+              {d.why === 'unverified' && <Badge tone="warn">checked first: outcome not known</Badge>}
+              {d.retry && d.why === 'candidate' && <> (retried: edited since the last read)</>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
   );
 }
 

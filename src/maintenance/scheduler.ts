@@ -37,7 +37,9 @@ export type MaintenanceErrorCode =
   | 'INVALID_SCHEDULE'
   | 'NOT_OWNER'
   /** v2 E5.1: Run now for a project the bridge does not serve now. */
-  | 'PROJECT_NOT_SERVED';
+  | 'PROJECT_NOT_SERVED'
+  /** v3 F3.5 (ADR 0056): the job's prerequisite for enabling it is missing (`MaintenanceJobDef.canEnable`). */
+  | 'PREREQUISITE_MISSING';
 
 export class MaintenanceError extends Error {
   constructor(
@@ -175,6 +177,9 @@ export class MaintenanceScheduler {
   setEnabled(id: string, enabled: boolean): MaintenanceJobView {
     const def = this.def(id);
     if (!def.implemented && enabled) throw new MaintenanceError('NOT_IMPLEMENTED', 'Not implemented yet');
+    // v3 F3.5 (ADR 0056): a job with a prerequisite (the block-id sweep's sandbox PASS or override) is refused without it.
+    const missing = enabled ? (def.canEnable?.() ?? null) : null;
+    if (missing !== null) throw new MaintenanceError('PREREQUISITE_MISSING', missing);
     this.ensureRow(def);
     const now = this.o.clock.now();
     const state = this.store.get(id)!;
@@ -189,6 +194,7 @@ export class MaintenanceScheduler {
     this.catchUp.delete(id);
     this.retryAt.delete(id);
     this.arm();
+    if (enabled) def.onEnabled?.();
     return this.view(def);
   }
 

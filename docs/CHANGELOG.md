@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased: v3 F3.5 (17 November 2026): the block-id sweep, an approved narrow automation
+
+[ADR 0056](adr/0056-block-id-sweep.md) (Proposed). Migration `3300_block_id_sweep.sql`. Nothing was run against a live
+system: mocks and fixtures only; the new sandbox check is written, not run.
+
+- **`assign-block-ids-sweep`** (Maintenance Jobs; it was a placeholder): gives legacy page documents (a block without an
+  id, or an id used twice) their block ids, one `assignBlockIds` call each, so `write_page`'s block-by-block path,
+  Revert and the appraisal's fixes can work on them. Off by default; nightly at 05:30 London when enabled. Candidates
+  come from the latest snapshot (no request). Each document is its own P3 job of the system (origin `maintenance`, on
+  the Jobs page, never on the Review page) under the page lock: checked inside the lock (an edit since the read: skipped,
+  retried next run), journalled with the whole document as its pre-image, and verified afterwards (everything but the
+  ids identical, `unsupported` blocks counted, every block with an id, none twice). At most N documents a run (20; set
+  on the card); a run stops early when the P3 budget says wait. Last Major Revision is never set.
+- **A verification failure stops the sweep**: the job disables itself and the card shows the page, the differences and
+  the journal entry to restore from, in red, until you enable the job again.
+- **The approved-automation statement** (scope, prerequisites, transformation, verification, concurrency, stop
+  conditions) is on the job's card word for word, as in the ADR: enabling the job is your informed approval, as Arkona's
+  Repository Automation asks.
+- **Prerequisite**: the job cannot be enabled (`409 PREREQUISITE_MISSING`) without a PASS of its sandbox check for the
+  running bridge version, or the override on its card (re-authentication; audited `blockids.override`).
+- **Dry run** on the card: the documents the next run would do, their counts and the estimated cost. Writes nothing.
+- **The sandbox check (F)**: `sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- assign-block-ids`
+  (docs/runbook-deploy.md). It records its verdict in the bridge's database. If LegendKeeper's API cannot make a legacy
+  document it reports NOTED and says what to do.
+- **The canon guard** lets the sweep's own jobs through on Authoritative pages (they change no content): an explicit,
+  narrow exception (the system principal, the sweep's maintenance origin, nothing but `assignBlockIds` and the bridge's
+  checks). An agent's `assignBlockIds` through `lk_api_write` is treated as before.
+- **The owner appraisal (A2)** lists a page still awaiting ids as optional polish: "waiting for the block-id sweep".
+- **The maintenance framework**: a job may now name a prerequisite for enabling it (`canEnable`); no placeholder is left.
+- **Departures** (ADR 0056): LegendKeeper's `assignBlockIds` takes no If-Match, so the bridge compares the version itself
+  inside the lock; whether `assignBlockIds` renews a duplicated id is not documented, so the sandbox check finds out
+  (if it does not, the sweep stops at the first such page).
+- **After deploying, in order**: run the sandbox check on the test world; look at the candidate count on the sweep's card;
+  press **Dry run** and read the list; enable the job.
+
 ## Unreleased: v3 F3.4 (17 November 2026): write scope: the Review page, Revert, safety rails, pack tool switches
 
 [ADR 0055](adr/0055-write-scope-review-revert-rails.md) (Proposed). Migration `3200_write_scope.sql`. Nothing was run

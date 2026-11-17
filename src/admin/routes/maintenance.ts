@@ -4,7 +4,25 @@
  */
 import { requireReauth } from '../guard.js';
 import * as z from 'zod';
+import { BlockIdSweepError, SWEEP_JOB_ID, type BlockIdSweep } from '../../blockids/index.js';
+import { AdminHttpError } from '../http.js';
 import { idSchema, parseInput, projectParam, type Register } from './util.js';
+
+/** v3 F3.5 (ADR 0056): the block-id sweep's own routes, under its job's path. */
+const SWEEP = `/maintenance/${SWEEP_JOB_ID}`;
+
+/** The sweep's errors as HTTP answers (the owner's input, or a sweep the runtime did not build). */
+function sweepCall<T>(sweep: BlockIdSweep | null, fn: (s: BlockIdSweep) => T): T {
+  if (!sweep)
+    throw new AdminHttpError(409, 'NOT_RUNNING', 'The block-id sweep is not running on this bridge.');
+  try {
+    return fn(sweep);
+  } catch (e) {
+    if (e instanceof BlockIdSweepError)
+      throw new AdminHttpError(e.code === 'NOT_OWNER' ? 403 : 400, e.code, e.message);
+    throw e;
+  }
+}
 
 /** v2 E4 (RV1-4): the maintenance jobs that keep the backups (switching one off needs re-authentication). */
 const PROTECTING_JOBS = /^(snapshot-|offsite)/;
@@ -13,6 +31,35 @@ export const registerMaintenance: Register = (api, ctx) => {
   const { maintenance } = ctx.deps.runtime;
   const cmd = maintenance.commands;
   const params = z.object({ id: idSchema });
+
+  // ------------------------------------------------------------------------------ v3 F3.5: the block-id sweep's card
+
+  /**
+   * The card: the six-point approved-automation statement, prerequisite 2 (the sandbox PASS for this bridge version, or
+   * the override), the most documents a run does, a standing stop, and each served project's candidates from its latest
+   * snapshot (no LegendKeeper request).
+   */
+  api.get(`${SWEEP}/card`, async () => ({ card: await sweepCall(maintenance.blockIds, (s) => s.card()) }));
+
+  /** What the next run would do in one project (documents, counts, estimated cost). Writes nothing, reads nothing. */
+  api.post(`${SWEEP}/dry-run`, async (req) => {
+    const body = parseInput(z.object({ project: projectParam }).strict(), req.body ?? {});
+    const p = ctx.project(body.project);
+    return { dryRun: await sweepCall(maintenance.blockIds, (s) => s.dryRun(p.id)) };
+  });
+
+  /** The owner's override of the sandbox check: setting it needs re-authentication; both ways are audited. */
+  api.put(`${SWEEP}/override`, (req) => {
+    const body = parseInput(z.object({ on: z.boolean() }).strict(), req.body);
+    if (body.on) requireReauth(ctx.deps.services, req);
+    return { prerequisite: sweepCall(maintenance.blockIds, (s) => s.setOverride('owner', body.on)) };
+  });
+
+  /** The most documents one run does (1 to 500; default 20). Audited. */
+  api.put(`${SWEEP}/limit`, (req) => {
+    const body = parseInput(z.object({ maxPerRun: z.unknown() }).strict(), req.body);
+    return { maxPerRun: sweepCall(maintenance.blockIds, (s) => s.setMaxPerRun('owner', body.maxPerRun)) };
+  });
 
   api.get('/maintenance', () => ({
     jobs: cmd.list('owner'),

@@ -1548,6 +1548,7 @@ Formatting, in Repository Automation's four groups: `required` defects, optional
 | `sibling_order`, `tag_grammar`: the audits' findings, gathered               | required      | the audits' fix, handed over |
 | `audit_finding`: any other open audit finding of the page, gathered          | by severity   | judgement                    |
 | `scope_overload`, `core_holds_specialist`: a pointer for A6 (F3e)            | architectural | judgement                    |
+| `block_ids_pending`: a legacy body, waiting for the block-id sweep (F3.5)    | polish        | none                         |
 | `page_unreadable`, `not_in_snapshots`, `template_unavailable`, `no_body`     | blocked       | none                         |
 
 The audits are reused, never re-checked: the page's open findings are gathered (not their own configuration notices),
