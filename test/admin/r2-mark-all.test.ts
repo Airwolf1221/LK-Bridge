@@ -53,7 +53,7 @@ it('a set that changed under the same count is not marked: the new item stays un
   // Meanwhile: one item reviewed in another tab, and a new direct write arrives. The count is still 2.
   expect((await s.post('/api/admin/review/mark', { ids: [a] })).status).toBe(200);
   const c = await directWrite(3);
-  expect(s.runtime.review!.store.count(PROJECT, { state: 'unreviewed' })).toBe(2);
+  expect(s.runtime.review.store.count(PROJECT, { state: 'unreviewed' })).toBe(2);
   const r = await s.post('/api/admin/review/mark-all', {
     filter: {},
     expect: n,
@@ -62,5 +62,5 @@ it('a set that changed under the same count is not marked: the new item stays un
   });
   expect(r.status, r.text).toBe(409);
   expect((r.json as { error: { code: string } }).error.code).toBe('REVIEW_CHANGED');
-  expect(s.runtime.review!.store.get(PROJECT, c)!.reviewedAt).toBeNull();
+  expect(s.runtime.review.store.get(PROJECT, c)!.reviewedAt).toBeNull();
 });

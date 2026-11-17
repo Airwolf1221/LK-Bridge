@@ -204,7 +204,7 @@ export function pagesTouched(
       const id = str(body.id) ?? `#new:${i}`;
       pages.add(id);
       created.add(id);
-      // CR-2026-11-R2 (B1, B2): one call copies the source and, with `includeChildren`, every page under it (up to 100).
+      // CR-2026-11-R2 (R2-01): one call copies the source and, with `includeChildren`, every page under it (up to 100).
       if (copy && body.includeChildren === true) {
         const source = copy(it, body);
         const n = source ? (ctx.descendants?.(source) ?? null) : null;

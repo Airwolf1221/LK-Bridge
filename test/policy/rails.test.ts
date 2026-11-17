@@ -75,7 +75,7 @@ describe('deletes', () => {
     ['deleteFeature', { path: { resourceId: 'pg1', documentId: 'd1', featureId: 'f1' } }, 'map feature'],
     ['deleteAsset', { path: { assetId: 'a1' } }, 'asset'],
     ['deleteCalendar', { path: { calendarId: 'c1' } }, 'calendar'],
-    // CR-2026-11-R2 (A2, A1, A3): an infobox property with its rows; the whole replaces delete what they do not send.
+    // CR-2026-11-R2 (R2-02): an infobox property with its rows; the whole replaces delete what they do not send.
     [
       'deleteBlockProperty',
       { path: { resourceId: 'pg1', documentId: 'd1', blockId: 'b1', propertyId: 'p1' } },
@@ -103,7 +103,7 @@ describe('deletes', () => {
   });
 
   it('editing text and facts is never a delete (blocks, fact rows, rows of a block)', () => {
-    // CR-2026-11-R2 (A2): deleteBlockProperty (an infobox property and its rows) left this list: it is a delete now.
+    // CR-2026-11-R2 (R2-02): deleteBlockProperty (an infobox property and its rows) left this list: it is a delete now.
     const edits = ['deleteBlock', 'deletePropertyRow', 'deleteBlockRow', 'deleteBlockPropertyRow'].map((op) =>
       w(op, { path: { resourceId: 'pg1', documentId: 'd1', blockId: 'b1' } }),
     );

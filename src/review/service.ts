@@ -29,7 +29,7 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 export const MARK_ALL_LIMIT = 1000;
 
 /**
- * CR-2026-11-R2 (R2-10): a fingerprint of the exact set "Mark all reviewed" would mark (the ids, newest first). The list
+ * CR-2026-11-R2 (R2-09): a fingerprint of the exact set "Mark all reviewed" would mark (the ids, newest first). The list
  * answers it and the request echoes it, so a set that changed under the same count (one item reviewed elsewhere, a new
  * one arrived) is refused rather than marking an item the owner never saw.
  */
@@ -77,7 +77,7 @@ export interface ReviewItem {
    * bridge's description of its operations (CR-2026-11-R2, E1), never the title the agent chose; else the job's title.
    */
   readonly summary: string;
-  /** CR-2026-11-R2 (E1): the title the agent gave a low-level job, shown only as a secondary label. */
+  /** CR-2026-11-R2 (R2-06): the title the agent gave a low-level job, shown only as a secondary label. */
   readonly agentTitle?: string;
   readonly pages: readonly { readonly id: string; readonly name: string | null }[];
   readonly reviewed: { readonly at: number; readonly by: string; readonly via: string } | null;
@@ -95,7 +95,7 @@ export interface ReviewDetail extends ReviewItem {
 }
 
 /**
- * CR-2026-11-R2 (E1): what the Review page says a job did: the tool's own summary; for a low-level job the bridge's
+ * CR-2026-11-R2 (R2-06): what the Review page says a job did: the tool's own summary; for a low-level job the bridge's
  * description of its operations, with the agent's title only beside it; else the job's title.
  */
 function summaryOf(
@@ -190,7 +190,7 @@ export class ReviewService {
     return jobTargets(rec, {
       pageName: (id) => this.d.pageName?.(projectId, id) ?? null,
       documentName: (r, doc) => this.d.documentName?.(projectId, r, doc) ?? null,
-      // CR-2026-11-R2 (F9): the staging folder by every name it can have; the folder itself is read live by Revert.
+      // CR-2026-11-R2 (R2-22): the staging folder by every name it can have; the folder itself is read live by Revert.
       stagingNames,
       ...(images
         ? {
@@ -211,7 +211,7 @@ export class ReviewService {
   }
 
   /**
-   * CR-2026-11-R2 (F3): a later job that relied on a Last Major Revision date this job set on a page: one whose own
+   * CR-2026-11-R2 (R2-18): a later job that relied on a Last Major Revision date this job set on a page: one whose own
    * decision that day was a major revision of the page (it set the date, or found it already said so), or one that wrote
    * the page's text that day. Reverts are left out (they set no date of their own).
    */
@@ -256,7 +256,7 @@ export class ReviewService {
   }
 
   /**
-   * CR-2026-11-R2 (F10): the applied (or possibly applied) journal entries of the jobs after this one, but reverts and
+   * CR-2026-11-R2 (R2-28): the applied (or possibly applied) journal entries of the jobs after this one, but reverts and
    * jobs fully reverted since (their writes no longer stand).
    */
   private laterWrites(projectId: string, jobId: string): LaterWrite[] {
@@ -294,7 +294,7 @@ export class ReviewService {
     });
   }
 
-  /** CR-2026-11-R2 (E1): a low-level job's operations, in the words a proposal of them would use. */
+  /** CR-2026-11-R2 (R2-06): a low-level job's operations, in the words a proposal of them would use. */
   private opsSummary(projectId: string, jobId: string): string | null {
     const ops = (this.d.engine.stepRecords(projectId, jobId) ?? [])
       .filter((st) => st.opKind !== 'read' && !isBridgeStep(st.opId) && st.options.decisionFrom === undefined)
@@ -481,7 +481,7 @@ export class ReviewService {
     return { marked: done, count: ids.length, changed: false };
   }
 
-  /** R2-10: the count and the fingerprint of the set "Mark all reviewed" would mark now, for a filter. */
+  /** R2-09: the count and the fingerprint of the set "Mark all reviewed" would mark now, for a filter. */
   markAllSet(projectId: string, filter: ReviewFilter): { count: number; fingerprint: string } {
     const ids = this.store.unreviewedIds(projectId, filter, MARK_ALL_LIMIT);
     return { count: ids.length, fingerprint: markAllFingerprint(ids) };

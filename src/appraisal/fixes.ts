@@ -97,18 +97,18 @@ export interface FixDeps {
   readonly assetsIn: (folderId: string | null) => readonly { readonly id: string; readonly name: string }[];
   readonly propertiesName: string;
   /**
-   * CR-2026-11-R2 (R2-06): the Related Sources collection's name in the pack's APPROVED rules: a finding made under other
+   * CR-2026-11-R2 (R2-32): the Related Sources collection's name in the pack's APPROVED rules: a finding made under other
    * rules (a version waiting for approval) is stale for the Related Sources fix.
    */
   readonly relatedName?: string;
-  /** CR-2026-11-R2 (R2-05): the lifecycle's Status key and values, to judge a linked page read live. */
+  /** CR-2026-11-R2 (R2-31): the lifecycle's Status key and values, to judge a linked page read live. */
   readonly status?: {
     readonly key: string;
     readonly values: { readonly authoritative: string; readonly working: string; readonly archived: string };
   };
 }
 
-/** CR-2026-11-R2 (R2-04, R2-05): the checks a fix's job makes before it writes (registered with the job engine). */
+/** CR-2026-11-R2 (R2-30, R2-31): the checks a fix's job makes before it writes (registered with the job engine). */
 export const FIX_CHECKS = { asset: 'appraisal.fix.asset', related: 'appraisal.fix.related' } as const;
 
 /** Registers the fixes' in-job checks (`FIX_CHECKS`); returns the unregisters. */
@@ -127,7 +127,7 @@ const staleInJob = (message: string, details: Obj = {}): RegisteredCheckResult =
   },
 });
 
-/** R2-04: the asset still has the name and folder the fix read (an owner's rename or move is never overwritten). */
+/** R2-30: the asset still has the name and folder the fix read (an owner's rename or move is never overwritten). */
 async function assetCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
   const input = (ctx.input ?? {}) as { assetId?: string; name?: string; folderId?: string | null };
   const r = await ctx.read('getAsset', { path: { assetId: asText(input.assetId) } });
@@ -160,7 +160,7 @@ function rowValue(res: Obj, property: string, key: string): string | null {
 }
 
 /**
- * R2-05: a linked page read live is Working or Archived: its name's prefix says so and its Status (when it has the row)
+ * R2-31: a linked page read live is Working or Archived: its name's prefix says so and its Status (when it has the row)
  * does not say otherwise. Anything else (a page unarchived or promoted in the app, a page gone) is not judged
  * non-current.
  */
@@ -181,7 +181,7 @@ function liveNonCurrent(
   return { ok: true, name, why: '' };
 }
 
-/** R2-05: inside the job, the linked page is still Working or Archived (read live). */
+/** R2-31: inside the job, the linked page is still Working or Archived (read live). */
 async function relatedCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
   const input = (ctx.input ?? {}) as {
     targetId?: string;
@@ -551,7 +551,7 @@ async function fixAsset(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
       { existing: taken },
     );
   const steps: StepSpec[] = [
-    // CR-2026-11-R2 (R2-04): inside the job, the asset still has the name and folder read here (an owner's rename or move
+    // CR-2026-11-R2 (R2-30): inside the job, the asset still has the name and folder read here (an owner's rename or move
     // meanwhile stops the fix; checked again if the job is held before it writes).
     {
       op: EXPECT_STEP,
@@ -600,7 +600,7 @@ async function fixRelated(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
   const pageId = f.page!.id;
   const targetId = asText(f.fix?.args.targetId);
   const title = asText(f.fix?.args.propertyTitle) || 'Related Sources';
-  // CR-2026-11-R2 (R2-06): the collection must be the Related Sources of the pack's APPROVED rules.
+  // CR-2026-11-R2 (R2-32): the collection must be the Related Sources of the pack's APPROVED rules.
   if (d.relatedName !== undefined && textKey(title) !== textKey(d.relatedName))
     throw stale(
       `The pack's approved rules name the Related Sources collection “${d.relatedName}”, not “${title}” (this finding was made under other rules).`,
@@ -611,7 +611,7 @@ async function fixRelated(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
   const target = d.node(targetId);
   if (target && target.kind !== 'bwrk' && target.kind !== 'barc')
     throw stale(`“${target.rawName}” is no longer Working or Archived.`, { target: target.rawName });
-  // CR-2026-11-R2 (R2-05): the linked page read live (the tree may not have seen it unarchived or promoted in the app).
+  // CR-2026-11-R2 (R2-31): the linked page read live (the tree may not have seen it unarchived or promoted in the app).
   const tread = await d.read('getResource', { path: { resourceId: targetId } });
   const live = liveNonCurrent(isObj(tread) ? tread : null, {
     propertiesName: d.propertiesName,
@@ -657,7 +657,7 @@ async function fixRelated(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
     facts: {},
     links: { [title]: { remove: [target?.rawName ?? targetId] } },
   });
-  // R2-05: inside the job, before the link goes, the linked page is read again and must still be Working or Archived
+  // R2-31: inside the job, before the link goes, the linked page is read again and must still be Working or Archived
   // (one more check in the facts plan's own first step, its check of the sidebar).
   const linked = {
     label: 'linked page',
@@ -685,7 +685,7 @@ async function fixRelated(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
     pageParts: job.pageParts,
     prefetched: [{ op: 'listProperties', path, body }],
     fix: 'related_noncurrent',
-    // R2-05: the page's sidebar and the linked page, both read live.
+    // R2-31: the page's sidebar and the linked page, both read live.
     reads: 2,
   });
 }

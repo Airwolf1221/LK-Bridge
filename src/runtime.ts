@@ -414,7 +414,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         return null;
       }
     },
-    // CR-2026-11-R2 (B7): the pages under a page as LegendKeeper holds them now (as the canon guard lists a cascade at
+    // CR-2026-11-R2 (R2-04): the pages under a page as LegendKeeper holds them now (as the canon guard lists a cascade at
     // entry, CR-09), only when the tree's count would let the request run directly; at most about `limit` + 1 reads.
     liveDescendants: async (projectId, resourceId, limit) => {
       const below = await listSubtree(
@@ -460,7 +460,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       return null;
     }
   };
-  // CR-2026-11-R2 (C1): the pages a restore may bring back with the page restored, for both guards (a getter: the
+  // CR-2026-11-R2 (R2-10): the pages a restore may bring back with the page restored, for both guards (a getter: the
   // snapshot service is made below).
   const restoreSet = restoreSetReader({
     engine,

@@ -197,7 +197,7 @@ describe('the Review page', () => {
     await user.click(go);
     await reauthenticate(user);
     await screen.findByText('Revert submitted.');
-    // CR-2026-11-R2 (F6): a partial revert names the targets the owner confirmed (the preview's ready set).
+    // CR-2026-11-R2 (R2-23): a partial revert names the targets the owner confirmed (the preview's ready set).
     expect(api.find('POST', '/jobs/job_direct1/revert').at(-1)!.body).toEqual({
       confirm: true,
       confirmPartial: true,

@@ -60,13 +60,13 @@ const rowLine = (t: { description: string; date: string; kcy: string }) =>
   `${t.description} | ${t.date} | ${t.kcy}`;
 
 /**
- * CR-2026-11-R2 (F1): a row compared whole with a block (as a verify compares blocks: links, marks and inline icons
+ * CR-2026-11-R2 (R2-16): a row compared whole with a block (as a verify compares blocks: links, marks and inline icons
  * count), never by its words alone. No block to compare with: not the same.
  */
 const sameRow = (r: AgeRow, block: Obj | undefined): boolean =>
   block !== undefined && compareStoredBlocks([block], withoutVersions([r.row.block])).ok;
 
-/** CR-2026-11-R2 (F1): an event compared by every stored field (colour, icon, image too); unknown: not the same. */
+/** CR-2026-11-R2 (R2-16): an event compared by every stored field (colour, icon, image too); unknown: not the same. */
 const sameEvent = (a: Obj | null | undefined, b: Obj | null): boolean =>
   !!a && !!b && EVENT_STORED_FIELDS.every((k) => stableJson(a[k] ?? null) === stableJson(b[k] ?? null));
 
@@ -271,7 +271,7 @@ export async function planChronology(
   for (const a of config.ages) lanes[a.timelineDocumentId] = { id: a.laneId, name: a.laneName };
   const eventsNow: Record<string, Obj> = {};
   for (const [id, e] of events) if (e) eventsNow[id] = e;
-  // CR-2026-11-R2 (F1): inside the lock, each row the revert deletes or writes back must still be exactly the block read
+  // CR-2026-11-R2 (R2-16): inside the lock, each row the revert deletes or writes back must still be exactly the block read
   // now (which is the job's, as checked above), and each event every stored field it has now.
   const rowBlocks: Record<string, Obj> = {};
   for (const w of t.inverse) {

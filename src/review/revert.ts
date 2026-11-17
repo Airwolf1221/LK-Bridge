@@ -152,9 +152,9 @@ const isNotFound = (e: unknown): boolean => {
 
 export class RevertService {
   private offs: (() => void)[] = [];
-  /** CR-2026-11-R2 (F7): the jobs a revert is being prepared for (until its record says `submitted`). */
+  /** CR-2026-11-R2 (R2-21): the jobs a revert is being prepared for (until its record says `submitted`). */
   private readonly reserved = new Set<string>();
-  /** CR-2026-11-R2 (F6): the ready set the owner was last shown, by job (bounded). */
+  /** CR-2026-11-R2 (R2-23): the ready set the owner was last shown, by job (bounded). */
   private readonly shown = new Map<string, readonly string[]>();
 
   constructor(private readonly d: RevertDeps) {}
@@ -319,7 +319,7 @@ export class RevertService {
   async preview(projectId: string, jobId: string): Promise<RevertPreview> {
     const { eligible, plans } = await this.plan(projectId, jobId);
     const targets = plans.map((p) => p.check);
-    // CR-2026-11-R2 (F6): what the owner is shown is what a partial revert may revert (and nothing else).
+    // CR-2026-11-R2 (R2-23): what the owner is shown is what a partial revert may revert (and nothing else).
     if (eligible.ok)
       this.remember(
         projectId,
@@ -344,7 +344,7 @@ export class RevertService {
   /**
    * The owner's revert (the admin route re-authenticates first). See the module comment.
    *
-   * CR-2026-11-R2 (F7): one revert of a job at a time. The job is reserved here, before anything is awaited, and stays
+   * CR-2026-11-R2 (R2-21): one revert of a job at a time. The job is reserved here, before anything is awaited, and stays
    * reserved until its `job_reverts` row says `submitted` (or the revert is refused): a second request meanwhile (a
    * double click, two tabs) is refused with `REVERT_RUNNING`.
    */
@@ -414,7 +414,7 @@ export class RevertService {
           `${others.length} of the ${targets.length} things job ${jobId} changed cannot be reverted (listed with why). The default is all or nothing: confirm a partial revert to revert the other ${readyPlans.length}.`,
         );
       }
-      // CR-2026-11-R2 (F6): a partial revert reverts exactly the targets the owner confirmed (the ready set of the
+      // CR-2026-11-R2 (R2-23): a partial revert reverts exactly the targets the owner confirmed (the ready set of the
       // preview, sent with the request; else the one last shown), or nothing.
       const seen = o.confirmed
         ? [...new Set(o.confirmed)].sort()
@@ -433,7 +433,7 @@ export class RevertService {
       }
     }
 
-    // CR-2026-11-R2 (F3): a Last Major Revision date goes back only together with the edit that justified it. When that
+    // CR-2026-11-R2 (R2-18): a Last Major Revision date goes back only together with the edit that justified it. When that
     // edit is not reverted (a confirmed partial revert), the date stays: the page's major revision still stands.
     const keptLmr = new Set<string>();
     for (const p of readyPlans) {
@@ -482,7 +482,7 @@ export class RevertService {
       }
     }
 
-    // ONE job, every lock held for the whole run. CR-2026-11-R2 (F5): every target's check runs first, in one go, before
+    // ONE job, every lock held for the whole run. CR-2026-11-R2 (R2-20): every target's check runs first, in one go, before
     // the first write (and again if the job takes its locks back before anything is sent): a target changed since is
     // caught before ANY target is written, so a revert stays all or nothing.
     const steps = checksFirst(readyPlans.map((p) => p.steps ?? []));
@@ -571,7 +571,7 @@ export class RevertService {
     };
   }
 
-  /** CR-2026-11-R2 (F6): the ready set the owner was last shown for a job (a preview, or a refusal listing it). */
+  /** CR-2026-11-R2 (R2-23): the ready set the owner was last shown for a job (a preview, or a refusal listing it). */
   private remember(projectId: string, jobId: string, readyKeys: readonly string[]): void {
     const key = reservationKey(projectId, jobId);
     this.shown.delete(key);
@@ -586,7 +586,7 @@ export class RevertService {
       .get(job.id) as
       { id: number; project_id: string; job_id: string; state: string; targets: string } | undefined;
     if (!row || row.state !== 'submitted') return;
-    // CR-2026-11-R2 (F11): a revert whose own verify found a target not as planned did not fully revert: it is settled
+    // CR-2026-11-R2 (R2-25): a revert whose own verify found a target not as planned did not fully revert: it is settled
     // failed (and the item stays unreviewed), whatever the job's status.
     const mismatch =
       job.status === 'succeeded'
@@ -718,7 +718,7 @@ export class RevertService {
 const reservationKey = (projectId: string, jobId: string) => `${projectId}\u0000${jobId}`;
 
 /**
- * CR-2026-11-R2 (F5): the targets' parts joined into one job with every part's leading check (`bridge.expect`) first, in
+ * CR-2026-11-R2 (R2-20): the targets' parts joined into one job with every part's leading check (`bridge.expect`) first, in
  * one go, then each part's writes and verify in order; the step numbers each step names are mapped to the new order.
  */
 export function checksFirst(parts: readonly (readonly StepSpec[])[]): StepSpec[] {
@@ -766,7 +766,7 @@ const revertChecker: RegisteredChecker = async (ctx) => {
       differences.push({ path: 'hidden', expected: f.isHidden, actual: now.isHidden });
     if (typeof f.name === 'string' && now.name !== f.name)
       differences.push({ path: 'name', expected: f.name, actual: now.name });
-    // CR-2026-11-R2 (F9): the folder it goes back to, read now: never a staging folder, nor one whose name is unknown.
+    // CR-2026-11-R2 (R2-22): the folder it goes back to, read now: never a staging folder, nor one whose name is unknown.
     const into = (ctx.input as { into?: { folderId?: string; notNamed?: string[] } }).into;
     if (into?.folderId) {
       const g = await ctx.read('getAsset', { path: { assetId: into.folderId } });

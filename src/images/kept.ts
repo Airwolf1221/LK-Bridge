@@ -68,7 +68,7 @@ export class ByteStore {
     await rm(this.pathOf(sha256), { force: true });
   }
 
-  /** CR-2026-11-R2 (B1): the same, at once (decided and done in one tick, where the caller cannot wait). */
+  /** CR-2026-11-R2 (R2-42): the same, at once (decided and done in one tick, where the caller cannot wait). */
   removeSync(sha256: string): void {
     rmSync(this.pathOf(sha256), { force: true });
   }

@@ -320,7 +320,7 @@ export class PackStore {
   }
 
   /**
-   * CR-2026-11-R2 (R2-02): whether a job ran from the owner's approval (`approved`), directly at the agent's scope
+   * CR-2026-11-R2 (R2-29): whether a job ran from the owner's approval (`approved`), directly at the agent's scope
    * (`direct`), or is not known (`unknown`), for the job's re-check of the tool's switch.
    */
   jobApproval(projectId: string, jobId: string): 'approved' | 'direct' | 'unknown' {

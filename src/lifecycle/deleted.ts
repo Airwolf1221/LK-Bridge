@@ -4,7 +4,7 @@
  * read before it (the resource, when it read one). The lifecycle guard judges a restore by it: the page lands back under
  * that parent, and its own state (prefix, status tag) says which lifecycle area it belongs in.
  *
- * CR-2026-11-R2 (C1): `restoreSetReader`, the pages a restore may bring back WITH the page (LegendKeeper restores "every
+ * CR-2026-11-R2 (R2-10): `restoreSetReader`, the pages a restore may bring back WITH the page (LegendKeeper restores "every
  * descendant deleted by the same operation"), for both guards.
  */
 import type { JobEngine } from '../jobs/index.js';
@@ -18,7 +18,7 @@ const strings = (v: unknown): string[] | undefined =>
   Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : undefined;
 const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 
-/** CR-2026-11-R2 (C1): a page a restore may bring back with the page restored (deleted with it, as far as is known). */
+/** CR-2026-11-R2 (R2-10): a page a restore may bring back with the page restored (deleted with it, as far as is known). */
 export interface RestoredWith {
   readonly id: string;
   readonly name: string | null;
@@ -114,7 +114,7 @@ async function lastState(
 }
 
 /**
- * CR-2026-11-R2 (C1): the pages a restore of `id` may bring back with it. LegendKeeper lists no deleted page, so they come
+ * CR-2026-11-R2 (R2-10): the pages a restore of `id` may bring back with it. LegendKeeper lists no deleted page, so they come
  * from the bridge's own records: the journal of a delete the bridge made (`delete_resource` keeps the subtree; a low-level
  * delete without cascade took nothing with it), the newest snapshots holding the page (a full snapshot holds the whole
  * tree as it was, so the pages under the page when it was deleted in the app since; the change snapshot after a delete

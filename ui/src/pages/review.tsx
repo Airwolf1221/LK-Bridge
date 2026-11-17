@@ -139,7 +139,7 @@ export function RevertButton({
         withReauth(() =>
           api.post<{ revert: { revertJobId: string; message: string } }>(
             withProject(`/jobs/${encodeURIComponent(jobId)}/revert`, project),
-            // CR-2026-11-R2 (F6): a partial revert names the targets the owner confirmed; refused if they changed.
+            // CR-2026-11-R2 (R2-23): a partial revert names the targets the owner confirmed; refused if they changed.
             partial
               ? {
                   confirm: true,
@@ -331,7 +331,7 @@ export function ReviewPage() {
   const markAll = async () => {
     if (!data) return;
     const n = state === 'unreviewed' ? data.counts.matching : data.counts.unreviewed;
-    // CR-2026-11-R2 (R2-10): the set the owner confirms, exactly (a changed set under the same count is refused).
+    // CR-2026-11-R2 (R2-09): the set the owner confirms, exactly (a changed set under the same count is refused).
     const fingerprint = state === 'unreviewed' ? data.markAll?.fingerprint : undefined;
     const ok = await confirm({
       title: `Mark ${n} item${n === 1 ? '' : 's'} reviewed?`,

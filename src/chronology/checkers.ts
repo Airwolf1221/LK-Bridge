@@ -60,7 +60,7 @@ export type TableOp =
       readonly rowId: string;
       readonly texts: RowTexts;
       /**
-       * CR-2026-11-R2 (F1): the row's whole block as it must still be (a revert: as the job left it), compared as a
+       * CR-2026-11-R2 (R2-16): the row's whole block as it must still be (a revert: as the job left it), compared as a
        * verify compares blocks (links, marks, inline icons count), not only its words. Absent: the words only.
        */
       readonly block?: Obj;
@@ -82,7 +82,7 @@ export type TableOp =
       readonly op: 'replace';
       readonly rowId: string;
       readonly before: RowTexts;
-      /** CR-2026-11-R2 (F1): the row's whole block as it must still be, when given (see `delete`). */
+      /** CR-2026-11-R2 (R2-16): the row's whole block as it must still be, when given (see `delete`). */
       readonly block?: Obj;
       /** The key of the move's body (only when the row's date changes, so its place may too). */
       readonly moveKey?: string;
@@ -165,7 +165,7 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
       sameText(r.description, texts.description) &&
       r.dateText.trim() === texts.date.trim() &&
       r.kcyText.trim() === texts.kcy.trim();
-    // CR-2026-11-R2 (F1): the whole row, when the op names the block it must be.
+    // CR-2026-11-R2 (R2-16): the whole row, when the op names the block it must be.
     const sameBlock = (r: AgeRow, block: Obj | undefined) =>
       block === undefined || compareStoredBlocks([block], withoutVersions([r.row.block])).ok;
     const wholeRow = (r: AgeRow) => ({

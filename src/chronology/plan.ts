@@ -57,18 +57,18 @@ export interface WriteContext {
   /** Rows whose date changes (their place may too): moved before they are replaced. */
   readonly moves?: ReadonlySet<string>;
   /**
-   * CR-2026-11-R2 (F1): a revert's rows, whole: each row it deletes or replaces must still be exactly this block inside
+   * CR-2026-11-R2 (R2-16): a revert's rows, whole: each row it deletes or replaces must still be exactly this block inside
    * the lock (not only its words). The chronology tools leave it unset.
    */
   readonly rowBlocks?: Readonly<Record<string, Obj>>;
   /**
-   * CR-2026-11-R2 (F1): a revert's events are compared inside the lock by every stored field (`EVENT_STORED_FIELDS`, an
+   * CR-2026-11-R2 (R2-16): a revert's events are compared inside the lock by every stored field (`EVENT_STORED_FIELDS`, an
    * absent one as null), not only the six the tools write. The chronology tools leave it unset.
    */
   readonly exactEvents?: boolean;
 }
 
-/** CR-2026-11-R2 (F1): every field LegendKeeper stores on an event (its `Event` schema), the id excepted. */
+/** CR-2026-11-R2 (R2-16): every field LegendKeeper stores on an event (its `Event` schema), the id excepted. */
 export const EVENT_STORED_FIELDS = [
   'laneId',
   'rank',
@@ -138,7 +138,7 @@ export function buildJob(o: {
     timeline: c.columns.timeline,
   };
   const tableAge = new Map<string, string>();
-  // CR-2026-11-R2 (F1): a revert compares every stored field (absent ones as null); the tools the six they write.
+  // CR-2026-11-R2 (R2-16): a revert compares every stored field (absent ones as null); the tools the six they write.
   const eventFields = (now: Obj): Obj =>
     o.ctx.exactEvents === true
       ? Object.fromEntries(EVENT_STORED_FIELDS.map((k) => [k, now[k] ?? null]))

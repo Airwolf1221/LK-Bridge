@@ -50,7 +50,7 @@ export interface FoundSection {
   /** SHA-256 of the section's blocks (stable JSON), or null when it is not there (or is ambiguous). */
   readonly digest: string | null;
   /**
-   * CR-2026-11-R2 (R2-07): how many headings of the document match the pin (0, 1, or more). Two or more are AMBIGUOUS: no
+   * CR-2026-11-R2 (R2-33): how many headings of the document match the pin (0, 1, or more). Two or more are AMBIGUOUS: no
    * digest, reported as a pinned change, and the owner's approval is refused until one heading is left.
    */
   readonly matches: number;
@@ -60,7 +60,7 @@ export interface FoundSection {
 const levelOf = (b: Obj): number => (typeof b.level === 'number' ? b.level : 1);
 
 /**
- * Each pinned heading's section in a document's top-level blocks. CR-2026-11-R2 (R2-07): a pin must be unambiguous, so a
+ * Each pinned heading's section in a document's top-level blocks. CR-2026-11-R2 (R2-33): a pin must be unambiguous, so a
  * heading that appears twice or more has no section (`digest` null, `matches` > 1), never its first match.
  */
 export function pinnedSections(blocks: unknown, headings: readonly string[]): FoundSection[] {

@@ -2451,7 +2451,7 @@ export interface ReviewItem {
   agent: { principalId: string; name: string; profile: string };
   tool: string | null;
   summary: string;
-  /** CR-2026-11-R2 (E1): the title the agent gave a low-level job (a secondary label, never the summary). */
+  /** CR-2026-11-R2 (R2-06): the title the agent gave a low-level job (a secondary label, never the summary). */
   agentTitle?: string;
   pages: { id: string; name: string | null }[];
   reviewed: { at: number; by: string; via: string } | null;
@@ -2492,7 +2492,7 @@ export interface ReviewResponse {
   items: ReviewItem[];
   facets: { profiles: string[]; tools: string[] };
   counts: { unreviewed: number; matching: number };
-  /** CR-2026-11-R2 (R2-10): the set "Mark all reviewed" would mark, sent back with it. */
+  /** CR-2026-11-R2 (R2-09): the set "Mark all reviewed" would mark, sent back with it. */
   markAll?: { count: number; fingerprint: string };
 }
 

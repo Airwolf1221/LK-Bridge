@@ -323,7 +323,7 @@ export interface CanonicalGuardDeps {
     readonly rows: readonly { readonly key: string; readonly content: readonly Record<string, unknown>[] }[];
   } | null>;
   /**
-   * CR-2026-11-R2 (C1): the pages a restore of a page may bring back WITH it (LegendKeeper restores every page deleted by
+   * CR-2026-11-R2 (R2-10): the pages a restore of a page may bring back WITH it (LegendKeeper restores every page deleted by
    * the same delete), from the bridge's records (src/lifecycle/deleted.ts). Each is judged as a new page's facts; when
    * they cannot be known, the restore needs canonical approval. Absent: only the page itself is judged.
    */
@@ -451,7 +451,7 @@ export class CanonicalGuard implements WriteGuard {
             page: `${back.name} (restored from a snapshot)`,
           });
       }
-      // CR-2026-11-R2 (C1): LegendKeeper restores every page deleted by the same delete with it; each of them is judged
+      // CR-2026-11-R2 (R2-10): LegendKeeper restores every page deleted by the same delete with it; each of them is judged
       // as a new page's facts too (as CR-09 judges every page of a cascade delete).
       if (this.d.restoreSet) {
         if (reshapes(it.i))
@@ -678,7 +678,7 @@ export class CanonicalGuard implements WriteGuard {
   }
 
   /**
-   * CR-2026-11-R2 (C1): the protected changes of the pages a restore of `rid` may bring back with it, each judged as a new
+   * CR-2026-11-R2 (R2-10): the protected changes of the pages a restore of `rid` may bring back with it, each judged as a new
    * page's facts (its newest snapshot's rows), and what could not be told. A page the tree still holds is read live
    * (`gone`), as it may not be deleted at all. A page the bridge's own delete took is not judged: that delete was judged
    * page by page (canon in it needed the owner's canonical approval), and restoring brings back what was approved (the
@@ -726,7 +726,7 @@ export class CanonicalGuard implements WriteGuard {
   }
 
   /**
-   * CR-2026-11-R2 (C1): a restore, judged again inside its lock: the page and every page it may bring back with it, as
+   * CR-2026-11-R2 (R2-10): a restore, judged again inside its lock: the page and every page it may bring back with it, as
    * the records and LegendKeeper say now (a page the tree holds may have been deleted with it since the entry check).
    */
   private async restoreInLock(input: WriteGuardInLock): Promise<void> {
@@ -1033,7 +1033,7 @@ export async function listSubtree(
                 id: r.id,
                 name: typeof r.name === 'string' ? r.name : null,
                 parentId,
-                // CR-2026-11-R2 (D1): a template's pages are copied with their tags.
+                // CR-2026-11-R2 (R2-13): a template's pages are copied with their tags.
                 tags: Array.isArray(r.tags) ? r.tags.filter((t): t is string => typeof t === 'string') : [],
               });
               next.push(r.id);

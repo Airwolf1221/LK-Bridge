@@ -496,7 +496,7 @@ export function appraisalTools(deps: ToolDeps): McpToolProvider[] {
           if (!s.ok) return s.result;
           try {
             const origin = mcpOrigin(mctx, 'arkona_appraisal_fix');
-            // v3 F3.4 (ADR 0055 decision D): the pack's switch, from the version the owner approved; CR-2026-11-R2 (R2-11):
+            // v3 F3.4 (ADR 0055 decision D): the pack's switch, from the version the owner approved; CR-2026-11-R2 (R2-35):
             // a switch to "always propose" waiting for approval applies at once (the stricter of the two).
             const mode = pd.services?.packs?.strictToolMode('arkona', 'arkona_appraisal_fix') ?? 'propose';
             const r = await s.a.proposeFix({

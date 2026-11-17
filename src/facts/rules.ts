@@ -264,7 +264,7 @@ const LOOKALIKES: Readonly<Record<string, string>> = {
 const LOOKALIKE_RE = new RegExp(`[${Object.keys(LOOKALIKES).join('')}]`, 'gu');
 
 /**
- * CR-2026-11-R2 (R2-10): letters of other blocks that read as Latin letters, as Unicode's confusables list (UTS #39) maps
+ * CR-2026-11-R2 (R2-15): letters of other blocks that read as Latin letters, as Unicode's confusables list (UTS #39) maps
  * them: Latin letter small capitals (ᴀ ʙ ᴄ …), and the Cherokee and Lisu letters shaped like Latin capitals (Ꭺ Ꮯ, ꓮ ꓚ …),
  * which cover every letter of the status tags, the lifecycle prefixes and the protected keys. Lower-casing turns a
  * Cherokee capital into a Cherokee small letter of the same shape, so both are listed.

@@ -168,7 +168,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         packId: pack.id,
         version: pack.version,
         sources: pack.approved?.sources ?? [],
-        // CR-2026-11-R2 (R2-02): the tool, so a direct job re-reads its switch when it checks (again) before writing.
+        // CR-2026-11-R2 (R2-29): the tool, so a direct job re-reads its switch when it checks (again) before writing.
         tool,
       },
     },
@@ -195,7 +195,7 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         ...(plan.absent.present?.length ? { present: plan.absent.present } : {}),
         ...(plan.absent.kind ? { kind: plan.absent.kind } : {}),
         ...(plan.absent.images?.length ? { images: plan.absent.images } : {}),
-        // CR-2026-11-R2 (R2-08): each image's own pending placement proposal this package takes over (a direct job runs
+        // CR-2026-11-R2 (R2-34): each image's own pending placement proposal this package takes over (a direct job runs
         // before that proposal is withdrawn: it is withdrawn once the job has succeeded).
         ...(plan.takeovers?.length ? { takeovers: plan.takeovers } : {}),
       },

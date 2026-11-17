@@ -2052,7 +2052,7 @@ export class StepExecutor {
         }
         // A failure after the write may have applied: find out now rather than leave it ambiguous. A batch create is
         // not atomic (LK's guide): a failure part-way, or DUPLICATE_ID on a retry, leaves some items created.
-        // CR-2026-11-R2 (S1): DUPLICATE_ID on a first, unambiguous send is a refusal, not an ambiguous outcome:
+        // CR-2026-11-R2 (R2-05): DUPLICATE_ID on a first, unambiguous send is a refusal, not an ambiguous outcome:
         // LegendKeeper checks every item before it creates any, so an id is held by something this step never sent.
         const batch = meta.clientId === 'body.resources[].id';
         const mayHaveApplied =
@@ -2209,7 +2209,7 @@ export class StepExecutor {
   }
 
   /**
-   * CR-2026-11-R2 (S1): whether this step's request (or its items) may have been sent before: the step was sent (or
+   * CR-2026-11-R2 (R2-05): whether this step's request (or its items) may have been sent before: the step was sent (or
    * may have been) by an earlier attempt, or it continues a batch the step before it sent (the items a partial
    * `createManyResources` left missing, with their same ids).
    */
@@ -2225,7 +2225,7 @@ export class StepExecutor {
   }
 
   /**
-   * CR-2026-11-R2 (S1): a page found under a client id counts as this step's only when it is the page the step planned
+   * CR-2026-11-R2 (R2-05): a page found under a client id counts as this step's only when it is the page the step planned
    * (its name and its parent as sent): anyone can create a page with a free id, so an id that exists proves nothing.
    * Null when it matches (or the entity is not a page); otherwise what differs.
    */

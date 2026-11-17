@@ -469,7 +469,7 @@ export class ImageStore {
   }
 
   /**
-   * CR-2026-11-R2 (B1, B10): whether a staged record still waiting (to be placed or discarded) needs these bytes. A
+   * CR-2026-11-R2 (R2-42, R2-43): whether a staged record still waiting (to be placed or discarded) needs these bytes. A
    * record that is placed or discarded may still name its file until the file is removed; it needs it no more.
    */
   serverShaNeeded(sha256: string, except?: { readonly projectId: string; readonly id: string }): boolean {

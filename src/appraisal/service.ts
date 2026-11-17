@@ -81,7 +81,7 @@ export interface AppraisalDeps {
     subject: string,
     race: string | null,
   ) => readonly string[] | null;
-  /** CR-2026-11-R2 (R2-04, R2-05): with `registerAsyncChecker`, the fixes' checks inside their jobs are registered. */
+  /** CR-2026-11-R2 (R2-30, R2-31): with `registerAsyncChecker`, the fixes' checks inside their jobs are registered. */
   readonly engine: Pick<JobEngine, 'internalRead' | 'submit'> &
     Partial<Pick<JobEngine, 'registerAsyncChecker'>>;
   readonly projectSettings: (projectId: string) => Readonly<ProjectSettings>;
@@ -173,7 +173,7 @@ export class Appraisal {
     });
     this.fullText = new FullText(d.db);
     this.store = new AppraisalStore(d.db, d.now);
-    // CR-2026-11-R2 (R2-04, R2-05): what a fix re-checks inside its job, before it writes (and again after a hold).
+    // CR-2026-11-R2 (R2-30, R2-31): what a fix re-checks inside its job, before it writes (and again after a hold).
     if (d.engine.registerAsyncChecker) registerFixCheckers(d.engine.registerAsyncChecker.bind(d.engine));
   }
 
@@ -203,7 +203,7 @@ export class Appraisal {
   }
 
   /**
-   * The pack's rules (the appraisal's data), when the pack is attached to the project. CR-2026-11-R2 (R2-06): the rules
+   * The pack's rules (the appraisal's data), when the pack is attached to the project. CR-2026-11-R2 (R2-32): the rules
    * of the version the owner APPROVED (a version waiting for approval does not apply, as for the lifecycle rules); the
    * current rules only while no version is approved yet (the reports still work, and every fix is then a proposal).
    */
@@ -217,7 +217,7 @@ export class Appraisal {
     return this.approvedRules() ?? pack.rules;
   }
 
-  /** CR-2026-11-R2 (R2-06): the approved version's rules, or null when none is approved (or it cannot be read). */
+  /** CR-2026-11-R2 (R2-32): the approved version's rules, or null when none is approved (or it cannot be read). */
   approvedRules(): PackRules | null {
     const pack = this.d.packs.get(PACK_ID);
     if (!pack?.approved) return null;
@@ -232,7 +232,7 @@ export class Appraisal {
   private packSource(): ReportSource['pack'] {
     const pack = this.d.packs.get(PACK_ID);
     if (!pack) return undefined;
-    // CR-2026-11-R2 (R2-06): `version` is the version whose rules the report applied (the approved one when there is).
+    // CR-2026-11-R2 (R2-32): `version` is the version whose rules the report applied (the approved one when there is).
     return {
       version: pack.approved?.version ?? pack.version,
       approvedVersion: pack.approved?.version ?? null,
@@ -861,7 +861,7 @@ export class Appraisal {
           : { status: 'nothing_to_do', message: a.message, reads: 1 };
     } else {
       const settings = this.d.projectSettings(o.projectId);
-      // CR-2026-11-R2 (R2-06): a fix is checked against the APPROVED rules; with none approved it is a proposal.
+      // CR-2026-11-R2 (R2-32): a fix is checked against the APPROVED rules; with none approved it is a proposal.
       const approved = this.approvedRules();
       const lifecycle = lifecycleFrom(settings);
       r = await proposeAppraisalFix(

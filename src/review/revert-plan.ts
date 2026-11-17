@@ -128,7 +128,7 @@ export const gone = (t: Target, detail: string): TargetPlan => ({
 export const changed = (t: Target, detail: string, differences: readonly Difference[]): TargetPlan => ({
   check: { ...base(t), state: 'changed', detail, differences: differences.slice(0, 10) },
 });
-/** CR-2026-11-R2 (F10): a target a later job wrote again: changed since the job, whatever its content now. */
+/** CR-2026-11-R2 (R2-28): a target a later job wrote again: changed since the job, whatever its content now. */
 export const changedLater = (t: Target): TargetPlan =>
   changed(
     t,
@@ -367,7 +367,7 @@ const content = (r: RowState) => stableJson(normaliseContent(r.content));
 
 /**
  * A row's match in a list: by id; by key only when one side has no id (a row the bridge created, whose id the plan could
- * not know). CR-2026-11-R2 (F12): two rows that both have ids and differ are never the same row, whatever their key.
+ * not know). CR-2026-11-R2 (R2-26): two rows that both have ids and differ are never the same row, whatever their key.
  */
 const matchRow = (r: RowState, list: readonly RowState[]) =>
   (r.id !== null ? list.find((x) => x.id === r.id) : undefined) ??
@@ -401,7 +401,7 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
   const sidebar = sidebarFrom(r.body);
   const kv = t.property ? sidebar.find((p) => p.id === t.property!.id) : undefined;
   if (t.property && !kv) return gone(t, `the sidebar property “${t.property.title}” is gone`);
-  // CR-2026-11-R2 (F2): set_facts' planner finds a property by its title, so the revert is planned only while the job's
+  // CR-2026-11-R2 (R2-17): set_facts' planner finds a property by its title, so the revert is planned only while the job's
   // own property (and each of its link collections) still carries the title it had at the job: renamed, another
   // property could carry that title now, and the revert would write into it.
   const renamed: Difference[] = [];
@@ -453,7 +453,7 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
       diffsLeft,
     );
 
-  // From the sidebar now (as the job left it) back to the sidebar before. CR-2026-11-R2 (F3): a Last Major Revision date
+  // From the sidebar now (as the job left it) back to the sidebar before. CR-2026-11-R2 (R2-18): a Last Major Revision date
   // a later job relied on stays (the row is left as the job left it).
   const keepLmr = t.lmr && t.lmr.keptFor !== null ? t.lmr.rowId : null;
   const facts: FactRequest[] = [];
@@ -503,7 +503,7 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
     facts: { revertOf: io.jobId },
     links: {},
   });
-  // CR-2026-11-R2 (F2): every write and check of the plan names one of the job's own properties, or nothing is planned.
+  // CR-2026-11-R2 (R2-17): every write and check of the plan names one of the job's own properties, or nothing is planned.
   const own = new Set([...(t.property ? [t.property.id] : []), ...t.collections.map((c) => c.propertyId)]);
   const named = job.steps.flatMap((st) => {
     const body = st.params?.body;
@@ -526,7 +526,7 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
 }
 
 /**
- * A Last Major Revision row the job set, alone: its value before. CR-2026-11-R2 (F3): only when it can be put back
+ * A Last Major Revision row the job set, alone: its value before. CR-2026-11-R2 (R2-18): only when it can be put back
  * exactly (the value's runs, or a plain value), only while the row is still exactly what the job wrote, and only when no
  * later job relied on the date (its own major revision the same day): otherwise it is left as it is. Whether the edit
  * that justified the date is reverted too is decided with the whole revert (src/review/revert.ts).
@@ -713,7 +713,7 @@ export async function planMove(t: MoveTarget, io: PlanIo): Promise<TargetPlan> {
   const rank = str(live.rank) ?? null;
   if (parent === t.before.parentId && rank === t.before.rank)
     return nothing(t, 'the page is already where it was');
-  // CR-2026-11-R2 (F4): where the job left it is its parent AND its place among its siblings (its rank): a page dragged
+  // CR-2026-11-R2 (R2-19): where the job left it is its parent AND its place among its siblings (its rank): a page dragged
   // elsewhere under the same parent has been moved since, and is not moved back.
   if (t.left.rank === null)
     return notRevertible(
@@ -840,7 +840,7 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
   }
   if (t.from.kind !== 'asset') return changed(t, 'the image has no staged record to go back to', []);
   if (t.laterWrite) return changedLater(t);
-  // CR-2026-11-R2 (F9): never into a staging folder. The folder it goes back to is read live and must be one whose name
+  // CR-2026-11-R2 (R2-22): never into a staging folder. The folder it goes back to is read live and must be one whose name
   // can be told apart from the staging folder's, by the project's setting and by the default: anything else fails closed.
   const names = [...t.stagingNames, DEFAULT_STAGING_FOLDER];
   if (t.from.folderId !== null) {
@@ -908,7 +908,7 @@ export function shiftStep(s: StepSpec, by: number): StepSpec {
 }
 
 /**
- * CR-2026-11-R2 (F9): whether a folder's name is a staging folder's (the project's setting or the default), compared as
+ * CR-2026-11-R2 (R2-22): whether a folder's name is a staging folder's (the project's setting or the default), compared as
  * a person reads it: Unicode-normalised, invisible characters and case ignored, spaces collapsed.
  */
 export function isStagingName(name: string, names: readonly string[]): boolean {

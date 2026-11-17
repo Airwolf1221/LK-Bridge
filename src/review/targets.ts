@@ -70,7 +70,7 @@ interface Common {
   /** A write of it may or may not have been applied (its outcome is unknown). */
   readonly uncertain?: boolean;
   /**
-   * CR-2026-11-R2 (F10): a later job wrote this target again (an applied, or possibly applied, journal entry of its own
+   * CR-2026-11-R2 (R2-28): a later job wrote this target again (an applied, or possibly applied, journal entry of its own
    * on it): the job that did. Revert then treats it as changed since the job, whatever its content.
    */
   readonly laterWrite?: string;
@@ -119,9 +119,9 @@ export interface FactsTarget extends Common {
     readonly key: string;
     readonly before: string;
     readonly after: string;
-    /** CR-2026-11-R2 (F3): the job's steps whose writes made the edit major (the date goes back only with them). */
+    /** CR-2026-11-R2 (R2-18): the job's steps whose writes made the edit major (the date goes back only with them). */
     readonly justifiedBy: readonly number[];
-    /** CR-2026-11-R2 (F3): a later job relied on the date (its own major revision the same day): why it stays. */
+    /** CR-2026-11-R2 (R2-18): a later job relied on the date (its own major revision the same day): why it stays. */
     readonly keptFor: string | null;
   };
 }
@@ -137,13 +137,13 @@ export interface LmrTarget extends Common {
   readonly before: string;
   readonly after: string;
   /**
-   * CR-2026-11-R2 (F3): the value before exactly as it was (its runs: a link, a mention), when the job's decision
+   * CR-2026-11-R2 (R2-18): the value before exactly as it was (its runs: a link, a mention), when the job's decision
    * recorded them; null when it recorded its plain text only.
    */
   readonly beforeRuns: readonly Obj[] | null;
-  /** CR-2026-11-R2 (F3): the job's steps whose writes made the edit major (the date goes back only with them). */
+  /** CR-2026-11-R2 (R2-18): the job's steps whose writes made the edit major (the date goes back only with them). */
   readonly justifiedBy: readonly number[];
-  /** CR-2026-11-R2 (F3): a later job relied on the date (its own major revision the same day): why it stays. */
+  /** CR-2026-11-R2 (R2-18): a later job relied on the date (its own major revision the same day): why it stays. */
   readonly keptFor: string | null;
 }
 
@@ -172,7 +172,7 @@ export interface MoveTarget extends Common {
   readonly kind: 'move';
   readonly resourceId: string;
   readonly before: { readonly parentId: string | null; readonly rank: string | null };
-  /** CR-2026-11-R2 (F4): where the job left it: its parent and its rank (null when the move's answer had none). */
+  /** CR-2026-11-R2 (R2-19): where the job left it: its parent and its rank (null when the move's answer had none). */
   readonly left: { readonly parentId: string | null; readonly rank: string | null };
 }
 
@@ -186,12 +186,12 @@ export interface ChronologyUnitTarget extends Common {
   /** For each event the inverse updates: its fields before the job. */
   readonly oldEvents: Readonly<Record<string, Obj>>;
   /**
-   * CR-2026-11-R2 (F1): for each row the job wrote (added or changed), its block as the job left it: Revert compares the
+   * CR-2026-11-R2 (R2-16): for each row the job wrote (added or changed), its block as the job left it: Revert compares the
    * row whole (links, marks, inline icons), not only its words.
    */
   readonly leftRows: Readonly<Record<string, Obj>>;
   /**
-   * CR-2026-11-R2 (F1): for each event the job made or changed, the event as LegendKeeper answered the job's write (every
+   * CR-2026-11-R2 (R2-16): for each event the job made or changed, the event as LegendKeeper answered the job's write (every
    * stored field: colour, icon, image too), or null when the answer is not recorded.
    */
   readonly leftEvents: Readonly<Record<string, Obj | null>>;
@@ -227,7 +227,7 @@ export interface ImageTarget extends Common {
   /** Folders the job made for it (they stay: a revert never deletes an asset). */
   readonly foldersMade: readonly string[];
   /**
-   * CR-2026-11-R2 (F9): the names a staging folder has (the project's setting and the default): an ordinary move is put
+   * CR-2026-11-R2 (R2-22): the names a staging folder has (the project's setting and the default): an ordinary move is put
    * back only into a folder read live whose name is none of them.
    */
   readonly stagingNames: readonly string[];
@@ -366,14 +366,14 @@ export interface TargetDeps {
   readonly placedStaged?: (assetId: string) => string | null;
   /** Whether a folder is the project's staging folder in LegendKeeper (Revert never writes there). */
   readonly isStagingFolder?: (folderId: string | null) => boolean;
-  /** CR-2026-11-R2 (F9): the staging folder's names (the project's setting and the default). */
+  /** CR-2026-11-R2 (R2-22): the staging folder's names (the project's setting and the default). */
   readonly stagingNames?: () => readonly string[];
   /**
-   * CR-2026-11-R2 (F3): a later job that relied on a Last Major Revision date the job set (its own decision the same day
+   * CR-2026-11-R2 (R2-18): a later job that relied on a Last Major Revision date the job set (its own decision the same day
    * on that page, or a later write to that page's text that day): its id, else null.
    */
   readonly laterLmr?: (resourceId: string, date: string) => string | null;
-  /** CR-2026-11-R2 (F10): the applied (or possibly applied) journal entries of later jobs. */
+  /** CR-2026-11-R2 (R2-28): the applied (or possibly applied) journal entries of later jobs. */
   readonly laterWrites?: () => readonly LaterWrite[];
 }
 
@@ -441,7 +441,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     if (!write || wrote(write) === 'no') continue;
     const key = str(bodyOf(s.params).key) ?? 'Last Major Revision';
     const after = bodyOf(s.params).after;
-    // CR-2026-11-R2 (F3): the value before exactly (its runs), when the decision recorded them.
+    // CR-2026-11-R2 (R2-18): the value before exactly (its runs), when the decision recorded them.
     const runs = Array.isArray(r.previousContent)
       ? r.previousContent
       : Array.isArray(r.previous)
@@ -580,7 +580,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       });
     const propertyId = rowsCheck ? String(rowsCheck.propertyId) : null;
     let rowsLeft = rowsProp ? (rowsProp.rows as RowState[]) : null;
-    // CR-2026-11-R2 (F13): a job that failed part-way left what its row writes that succeeded wrote, not its plan: the
+    // CR-2026-11-R2 (R2-27): a job that failed part-way left what its row writes that succeeded wrote, not its plan: the
     // rows it left are worked out by replaying those writes on the rows before (as the page text is).
     if (rowsCheck && Array.isArray(rowsCheck.rows)) {
       const all = rec.steps.filter(
@@ -693,7 +693,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     const last = ss[ss.length - 1]!;
     const lastBody = bodyOf(last.params);
     const parentLeft = lastBody.parentId === undefined ? parentBefore : (str(lastBody.parentId) ?? null);
-    // CR-2026-11-R2 (F4): its place as the job left it (the move's answer: the page with its rank).
+    // CR-2026-11-R2 (R2-19): its place as the job left it (the move's answer: the page with its rank).
     const rankLeft = isObj(last.result) ? (str(last.result.rank) ?? null) : null;
     for (const s of ss) handled.add(s.stepNo);
     targets.push({
@@ -812,7 +812,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       });
     }
   }
-  // CR-2026-11-R2 (F8): a folder is part of a placement only when the same job placed an image into it (or into a folder
+  // CR-2026-11-R2 (R2-24): a folder is part of a placement only when the same job placed an image into it (or into a folder
   // it made inside it, as a chain). Any other folder the job made is a creation, listed as not revertible below.
   const placedIn = new Set<string>();
   for (const t of targets) {
@@ -892,7 +892,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
   return marked.sort((a, b) => (a.steps[0] ?? 0) - (b.steps[0] ?? 0));
 }
 
-/** CR-2026-11-R2 (F13): the rows after the row writes that were applied (in order), from the rows before. */
+/** CR-2026-11-R2 (R2-27): the rows after the row writes that were applied (in order), from the rows before. */
 function replayRows(before: readonly RowState[], steps: readonly StepRecord[]): RowState[] {
   let rows: RowState[] = before.map((r) => ({ ...r }));
   for (const s of steps) {
@@ -1119,7 +1119,7 @@ function chronologyUnit(
     }
   }
   if (inverse.length === 0) return null;
-  // CR-2026-11-R2 (F1): what the job left, whole: each row block it wrote, and each event as LegendKeeper answered the
+  // CR-2026-11-R2 (R2-16): what the job left, whole: each row block it wrote, and each event as LegendKeeper answered the
   // job's last write of it (null when that answer is not recorded: then the event cannot be compared, and is not reverted).
   const leftRows: Record<string, Obj> = {};
   const leftEvents: Record<string, Obj | null> = {};
@@ -1165,7 +1165,7 @@ function idsOf(e: LaterWrite): Set<string> {
 }
 
 /**
- * CR-2026-11-R2 (F10): the later job that wrote a target again, if any. Each kind is matched at its own grain: a page's
+ * CR-2026-11-R2 (R2-28): the later job that wrote a target again, if any. Each kind is matched at its own grain: a page's
  * text by its document, a single block by its id, a sidebar by the properties the job wrote (and a Last Major Revision
  * row by its own id), a page's fields or place by the page, a chronology change by its rows and events (not the Main
  * count, which every later change moves), an asset by its id.

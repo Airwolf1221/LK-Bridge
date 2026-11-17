@@ -64,7 +64,7 @@ export interface LifecycleChange {
   readonly tool: string;
   readonly stepIndex?: number;
   /**
-   * CR-2026-11-R2 (R2-03): no lifecycle marker declares it (a page created outside the lifecycle area its own state or
+   * CR-2026-11-R2 (R2-14): no lifecycle marker declares it (a page created outside the lifecycle area its own state or
    * its marker gives it, as LegendKeeper holds that area now).
    */
   readonly undeclarable?: true;
@@ -265,7 +265,7 @@ export interface LifecycleGuardDeps {
    */
   readonly tagRules?: (projectId: string) => LifecycleTagRules;
   /**
-   * CR-2026-11-R2 (C1): the pages a restore of a page may bring back with it (src/lifecycle/deleted.ts). Absent: only the
+   * CR-2026-11-R2 (R2-10): the pages a restore of a page may bring back with it (src/lifecycle/deleted.ts). Absent: only the
    * page itself is judged.
    */
   readonly restoreSet?: (projectId: string, id: string) => Promise<RestoreSet>;
@@ -302,7 +302,7 @@ const BSRC_LEAVE_TOOL =
   'archive_page or move_to_working to take a page out of canon (a rename that keeps the [BSRC] prefix is an ordinary edit)';
 
 /**
- * CR-2026-11 (CR-16) and CR-2026-11-R2 (C2b): a rename that no lifecycle prefix change covers but that makes a page
+ * CR-2026-11 (CR-16) and CR-2026-11-R2 (R2-12): a rename that no lifecycle prefix change covers but that makes a page
  * `[BSRC]` (Authoritative by its prefix), or takes the `[BSRC]` prefix off one (both read loosely, as `looseKind` does):
  * canon, so the owner's canonical approval. A rename that keeps `[BSRC]` stays an ordinary edit (ADR 0055).
  */
@@ -584,7 +584,7 @@ export class LifecycleGuard implements WriteGuard {
     const out: LifecycleChange[] = [];
     const top = this.moveChange(c, rid, rec.name, own, landing, stepIndex);
     if (top) out.push(top);
-    // CR-2026-11-R2 (C1): every page deleted with it comes back with it, under its old parent: each is judged as a move
+    // CR-2026-11-R2 (R2-10): every page deleted with it comes back with it, under its old parent: each is judged as a move
     // from the area its own state says to the area it lands in (the restored page's, unless a lifecycle index on the way
     // places it). What cannot be told about them makes the canon guard's canonical proposal.
     const set = this.d.restoreSet ? await this.d.restoreSet(project, rid).catch(() => null) : null;
@@ -619,7 +619,7 @@ export class LifecycleGuard implements WriteGuard {
   }
 
   /**
-   * CR-2026-11-R2 (R2-03): the areas of pages a job created, as judged inside the lock when it created them, so a page it
+   * CR-2026-11-R2 (R2-14): the areas of pages a job created, as judged inside the lock when it created them, so a page it
    * creates under one later needs no read (a restarted job reads it). Bounded.
    */
   private readonly madeIn = new Map<string, Area | 'unknown'>();
@@ -630,7 +630,7 @@ export class LifecycleGuard implements WriteGuard {
   }
 
   /**
-   * CR-2026-11-R2 (R2-03): inside the lock, the lifecycle area a page created under `parentId` lands in, as LegendKeeper
+   * CR-2026-11-R2 (R2-14): inside the lock, the lifecycle area a page created under `parentId` lands in, as LegendKeeper
    * holds it now: an index by its id; a page the job created, where it was created; else the tree's place for the parent,
    * and, when it matters (the page belongs in an area, or the tree places the parent in one), the parent itself read
    * live (the owner may have moved it in the app since the tree read it) and its parent's area. `unknown` when the read
@@ -666,7 +666,7 @@ export class LifecycleGuard implements WriteGuard {
   }
 
   /**
-   * CR-2026-11-R2 (R2-03): a page that belongs in a lifecycle area (by its prefix or status tag, or the state its marker
+   * CR-2026-11-R2 (R2-14): a page that belongs in a lifecycle area (by its prefix or status tag, or the state its marker
    * gives it) created anywhere else: no marker declares it. A plain page whose area cannot be told counts as a crossing.
    */
   private landingChange(
@@ -812,11 +812,11 @@ export class LifecycleGuard implements WriteGuard {
         'saveResourceAsTemplate',
       ].includes(it.op),
     );
-    // CR-2026-11 (CR-17): templates saved earlier in the same request: the name a copy of one takes; CR-2026-11-R2 (D1):
+    // CR-2026-11 (CR-17): templates saved earlier in the same request: the name a copy of one takes; CR-2026-11-R2 (R2-13):
     // and its tags (its page's; null when they could not be read).
     const savedNames = new Map<string, string>();
     const savedTags = new Map<string, string[] | null>();
-    // CR-2026-11-R2 (D1): a copy whose tags the bridge's own job sets itself: a lifecycle marker that declares any state
+    // CR-2026-11-R2 (R2-13): a copy whose tags the bridge's own job sets itself: a lifecycle marker that declares any state
     // for it (`to: null`), or retags it later in the same request (an agent's request has no marker).
     const retagged = (id: string, i: number) =>
       input.lifecycle !== undefined &&
@@ -942,7 +942,7 @@ export class LifecycleGuard implements WriteGuard {
             const t = await tpl();
             raw = typeof t?.name === 'string' ? t.name : '';
           }
-          // CR-2026-11-R2 (D1): a template copy takes the template's tags (a template saved earlier in the request, its
+          // CR-2026-11-R2 (R2-13): a template copy takes the template's tags (a template saved earlier in the request, its
           // page's), judged as a create's tags. Not when the bridge's own job sets the copy's tags itself (a lifecycle
           // marker's job retagging it later in the request, as the creation tools do) or declares any lifecycle state
           // for it (`to: null`, an index the job makes).
@@ -1013,7 +1013,7 @@ export class LifecycleGuard implements WriteGuard {
             } else {
               for (const d of below) {
                 out.push(...this.createChanges(c, d.id, d.name ?? '', area, i, true));
-                // CR-2026-11-R2 (D1): each copied with its tags.
+                // CR-2026-11-R2 (R2-13): each copied with its tags.
                 tagChanges(d.id, `${d.name ?? d.id} (copied with the template)`, [], d.tags, i);
                 const sb = await readLive(d.id);
                 const sc = sb ? statusChange(c, [], statusValues(c, sb), true) : null;
@@ -1041,7 +1041,7 @@ export class LifecycleGuard implements WriteGuard {
           const n = typeof body.name === 'string' ? body.name : await this.nameNow(input.project, src);
           if (n !== null) savedNames.set(tid, n);
           sidebars.set(tid, await read(src));
-          // CR-2026-11-R2 (D1): "the copy takes the resource's fields": its tags too.
+          // CR-2026-11-R2 (R2-13): "the copy takes the resource's fields": its tags too.
           if (tagsGuarded) savedTags.set(tid, await this.tagsNow(input.project, src, internal));
         }
         continue;
@@ -1245,8 +1245,8 @@ export class LifecycleGuard implements WriteGuard {
         text: `the status tag ${t.tag} would be ${t.added ? 'added' : 'removed'}`,
         tool: t.tool,
       });
-    // CR-2026-11-R2 (R2-03): a create, judged again on where its page lands as LegendKeeper holds it now (the tree may
-    // not have seen the parent moved in the app), with its name (R2-01: a lifecycle index's name is never declared).
+    // CR-2026-11-R2 (R2-14): a create, judged again on where its page lands as LegendKeeper holds it now (the tree may
+    // not have seen the parent moved in the app), with its name (R2-11: a lifecycle index's name is never declared).
     if (input.opId === 'createResource' || input.opId === 'createManyResources') {
       const items =
         input.opId === 'createManyResources'
@@ -1280,7 +1280,7 @@ export class LifecycleGuard implements WriteGuard {
       const id = typeof body.id === 'string' ? body.id : '(new)';
       // CR-2026-11 (CR-17): a copy given no name takes the template's, judged on the template as it is now (it may have
       // been saved earlier in the same request), with the Status it carries. CR-2026-11-R2: every copy is judged here,
-      // named or not (R2-01, R2-03); one an agent asks for (no lifecycle marker: the bridge's own jobs set their copies'
+      // named or not (R2-11, R2-14); one an agent asks for (no lifecycle marker: the bridge's own jobs set their copies'
       // tags themselves) with the template's tags too (D1).
       const own = marker === undefined;
       const t =
@@ -1319,7 +1319,7 @@ export class LifecycleGuard implements WriteGuard {
       }
       for (const d of below) {
         for (const ch of this.createChanges(c, d.id, d.name ?? '', area, 0, true)) refuse(ch);
-        // CR-2026-11-R2 (D1): each copied with its tags.
+        // CR-2026-11-R2 (R2-13): each copied with its tags.
         if (tagsGuarded)
           for (const tc of statusTagChanges(c, [], d.tags, this.auTag(project)))
             tagChange(d.id, d.name ?? d.id, tc);
@@ -1494,9 +1494,9 @@ function touchesKey(input: WriteGuardInLock, k: string): boolean {
 /** Whether the job's marker declares this change (the page, and the state it moves to when the change tells one). */
 function declares(marker: LifecycleMarker | undefined, ch: LifecycleChange): boolean {
   if (!marker) return false;
-  // CR-2026-11-R2 (R2-01): no marker declares a lifecycle index change (a page given a lifecycle index's name, or the index
+  // CR-2026-11-R2 (R2-11): no marker declares a lifecycle index change (a page given a lifecycle index's name, or the index
   // itself changed: the owner's by hand, ADR 0036 decision 3), nor a page created outside the lifecycle area its own
-  // state or its marker gives it (R2-03); a page's `to: null` (an index the job makes) covers only where it is placed.
+  // state or its marker gives it (R2-14); a page's `to: null` (an index the job makes) covers only where it is placed.
   // C2b: a canon change only a canonical marker declares (whose job the owner approves as canon).
   if (ch.what === 'index' || ch.undeclarable === true) return false;
   if (ch.what === 'canon' && !marker.canonical) return false;

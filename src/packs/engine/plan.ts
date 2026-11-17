@@ -420,7 +420,7 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       where,
       title: p.title !== undefined ? replaceDashes(p.title.trim(), where, 'title', replacements) : undefined,
       label: p.label !== undefined ? replaceDashes(p.label.trim(), where, 'label', replacements) : undefined,
-      // CR-2026-11-R2 (R2-13): the Scope is one line (line breaks collapsed), in its row and in a routing line.
+      // CR-2026-11-R2 (R2-37): the Scope is one line (line breaks collapsed), in its row and in a routing line.
       scope:
         p.scope !== undefined ? replaceDashes(oneLine(p.scope), where, 'Scope', replacements) : undefined,
       referenceType:
@@ -1984,7 +1984,7 @@ export type RoutingEnv = Pick<PlanEnv, 'pd' | 'mctx' | 'tool' | 'ctx'> & {
 };
 
 /**
- * One routing line, F3a's pattern: `- [<page name>](lk://resources/<id>): <Scope>`. CR-2026-11-R2 (R2-13): ONE line:
+ * One routing line, F3a's pattern: `- [<page name>](lk://resources/<id>): <Scope>`. CR-2026-11-R2 (R2-37): ONE line:
  * any line break in the name or Scope is collapsed to a space, so a Scope can never add a heading or a paragraph.
  */
 export const routingLine = (c: {

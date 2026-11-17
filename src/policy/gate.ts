@@ -49,7 +49,7 @@ export interface RailLookups {
   readonly descendants?: (projectId: string, resourceId: string) => number | null;
   readonly pageName?: (projectId: string, resourceId: string) => string | null;
   /**
-   * CR-2026-11-R2 (B7): how many pages lie under a page as LegendKeeper holds them now (the tree may not have seen pages
+   * CR-2026-11-R2 (R2-04): how many pages lie under a page as LegendKeeper holds them now (the tree may not have seen pages
    * added in the app since its last sweep), listed until more than `limit` are found; null when they cannot be listed.
    */
   readonly liveDescendants?: (projectId: string, resourceId: string, limit: number) => Promise<number | null>;
@@ -213,7 +213,7 @@ export class LivePolicyGate implements PolicyGate {
     };
     const fromTree = (id: string) => l.descendants?.(ctx.project, id) ?? null;
     const verdict = railsVerdict(r.rails, items, { ...base, descendants: fromTree });
-    // CR-2026-11-R2 (B7): a request the tree's counts would let run directly although it deletes a cascade or copies a
+    // CR-2026-11-R2 (R2-04): a request the tree's counts would let run directly although it deletes a cascade or copies a
     // page with its children is counted again on the pages LegendKeeper holds now (the larger count wins; a listing
     // that cannot be made fails closed). Only then: a request already proposed costs no reads.
     if (verdict !== null || !r.rails.bulk || !l.liveDescendants) return verdict;

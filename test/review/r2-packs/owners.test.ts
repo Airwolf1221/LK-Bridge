@@ -59,7 +59,7 @@ describe('ATK-02: a racial group named "Archived" with its character navigation 
       markdown: ownerText('The racial group.'),
       project: 'test',
     });
-    // Set-up corrected (CR-2026-11-R2, the guard half of R2-01): no lifecycle marker declares a page given a lifecycle
+    // Set-up corrected (CR-2026-11-R2, the guard half of R2-11): no lifecycle marker declares a page given a lifecycle
     // index's name any more, so the package is refused when it is captured (POLICY_DENIED), as the same create through
     // lk_api_write is (CR-15); nothing is proposed. Were an ordinary proposal captured, its approval is checked as before.
     if (r.body.status === 'proposal_captured') {

@@ -119,7 +119,8 @@ describe('pages made or brought back in bulk that the bulk rail counts as one', 
     expect(r.body.proposedBecause).toMatch(/bulk change/);
   });
 
-  // Open (CR-2026-11-R2 section 7): LegendKeeper has no trash listing, so how many pages a restore brings back is not known (owner's decision).
+  // Open (CR-2026-11-R2 section 7, R2-03): the bulk rail counts a restore as one page; counting it from the restore set the
+  // canon guard reads (R2-10) is ADR 0056 decision 9, the owner's.
   it.fails(
     'B3: restore_resource of a page deleted with 15 pages under it (16 pages back) is a proposal',
     async () => {
@@ -173,7 +174,7 @@ describe('pages made or brought back in bulk that the bulk rail counts as one', 
     expect(writeCallsSince(w, n)).toEqual([]);
   });
 
-  // Open (CR-2026-11-R2 section 7): as B3, the pages a restore brings back cannot be counted before it runs (owner's decision).
+  // Open (CR-2026-11-R2 section 7, R2-03): as B3, through the low-level route (ADR 0056 decision 9).
   it.fails(
     'B6: restoreResource through lk_api_write (same cascade, low-level route) is a proposal',
     async () => {

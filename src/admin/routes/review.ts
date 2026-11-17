@@ -64,7 +64,7 @@ export const registerReview: Register = (api, ctx) => {
         unreviewed: review.store.count(project.id, { state: 'unreviewed' }),
         matching: review.store.count(project.id, where),
       },
-      // CR-2026-11-R2 (R2-10): the exact set "Mark all reviewed" would mark for these filters, echoed by the request.
+      // CR-2026-11-R2 (R2-09): the exact set "Mark all reviewed" would mark for these filters, echoed by the request.
       markAll: review.markAllSet(project.id, {
         ...(q.profile ? { profile: q.profile } : {}),
         ...(q.tool ? { tool: q.tool } : {}),
@@ -121,7 +121,7 @@ export const registerReview: Register = (api, ctx) => {
             .strict()
             .default({}),
           expect: z.number().int().min(0),
-          // R2-10: the fingerprint the list answered for this set (the dashboard always sends it).
+          // R2-09: the fingerprint the list answered for this set (the dashboard always sends it).
           fingerprint: z
             .string()
             .regex(/^[0-9a-f]{32}$/)
@@ -175,7 +175,7 @@ export const registerReview: Register = (api, ctx) => {
         .object({
           confirm: z.literal(true),
           confirmPartial: z.boolean().default(false),
-          // CR-2026-11-R2 (F6): the targets the owner confirmed (the preview's ready set): a partial revert reverts
+          // CR-2026-11-R2 (R2-23): the targets the owner confirmed (the preview's ready set): a partial revert reverts
           // exactly these, and is refused (409 REVERT_CHANGED) when what can be reverted now differs.
           confirmed: z.array(z.string().min(1).max(600)).max(1000).optional(),
         })

@@ -302,7 +302,7 @@ export async function restoreImage(
   // ---- the bytes wait on the bridge's server (or the copy a previous call staged there: the same original)
   // v2 E4 (RV3-4): the snapshot store's bytes, exactly (never re-encoded: a PNG or JPEG would come back as lossy WebP).
   const image = await asStoredImage(old.bytes);
-  // CR-2026-11-R2 (F6): only a record an earlier restore of THIS asset staged, holding exactly the snapshot's bytes, is
+  // CR-2026-11-R2 (R2-39): only a record an earlier restore of THIS asset staged, holding exactly the snapshot's bytes, is
   // reused. Never another staged image of the same original (an agent's holds its converted WebP, and is its own).
   const own = (r: ImageUploadRow) =>
     r.source === 'restore' &&
@@ -332,7 +332,7 @@ export async function restoreImage(
       throw e;
     }
   }
-  // CR-2026-11-R2 (E1): one restore (or placement) of the staged image at a time, decided on its record as it is now.
+  // CR-2026-11-R2 (R2-38): one restore (or placement) of the staged image at a time, decided on its record as it is now.
   if (!d.images.holdStaged(input.projectId, row.id))
     throw new RestoreError(
       'RESTORE_PENDING',

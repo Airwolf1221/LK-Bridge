@@ -82,7 +82,7 @@ export interface SourceStatus {
   readonly sections?: readonly {
     readonly heading: string;
     readonly found: string | null;
-    /** CR-2026-11-R2 (R2-07): `ambiguous`: two or more headings of the page match the pin (no section is chosen). */
+    /** CR-2026-11-R2 (R2-33): `ambiguous`: two or more headings of the page match the pin (no section is chosen). */
     readonly state: 'same' | 'changed' | 'missing' | 'unapproved' | 'ambiguous';
   }[];
   /**
@@ -152,7 +152,7 @@ export interface Packs {
    */
   toolMode(packId: string, tool: string): PackToolMode;
   /**
-   * CR-2026-11-R2 (R2-02, R2-11): the stricter of the approved version's switch and the current version's (one waiting
+   * CR-2026-11-R2 (R2-29, R2-35): the stricter of the approved version's switch and the current version's (one waiting
    * for approval): `propose` when either says so. A switch the owner tightened applies at once; one loosened waits for
    * the approval. `propose` while none is approved or the pack is not known (fails closed).
    */
@@ -718,7 +718,7 @@ export function createPacks(d: PacksDeps): Packs {
             },
           );
         }
-        // CR-2026-11-R2 (R2-07): a pin must be unambiguous: a heading the page has twice or more is refused until one is
+        // CR-2026-11-R2 (R2-33): a pin must be unambiguous: a heading the page has twice or more is refused until one is
         // left (the owner renames the other on the page, or re-maps the pin to a heading the page has once).
         const ambiguous = status.sources.flatMap((s) =>
           (s.sections ?? [])
@@ -905,7 +905,7 @@ export function createPacks(d: PacksDeps): Packs {
             `${src.name} has no heading “${change.to}” now; pick one of its headings.`,
             { outline },
           );
-        // CR-2026-11-R2 (R2-07): never re-map to a heading the page has more than once (the pin would be ambiguous).
+        // CR-2026-11-R2 (R2-33): never re-map to a heading the page has more than once (the pin would be ambiguous).
         if (hits.length > 1)
           throw new PackError(
             'HEADING_AMBIGUOUS',
