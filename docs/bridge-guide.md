@@ -820,7 +820,8 @@ The full list of forms is in docs/chronology.md.
   already agrees answers `nothing_to_do`. `description` may be the row's opening words (at least 20 characters, the
   start of exactly one row of that date); no such row is `ROW_NOT_FOUND`. If several events could be the row's it
   refuses (`PAIRING_AMBIGUOUS`) naming each candidate's name, date and id: tell the person, then pass `event_id` to pair
-  it with one (an event that already agrees is linked: `linked`, no LegendKeeper write, and the choice is remembered),
+  it with one (an event that already agrees is linked, with no LegendKeeper write: a proposal for the owner at every
+  scope, since it changes what the check pairs; once approved the choice is remembered),
   or `create_new: true` to make a new event instead. Use it for what the chronology check
   reports (a row without an event, a row and event that disagree about the date). A repair that turns a range event
   into a single date, or the reverse, is refused (`SHAPE_CHANGE_UNCONFIRMED`, saying `range → single day`) until you
