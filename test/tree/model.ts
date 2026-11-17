@@ -634,6 +634,24 @@ export class TreeModel {
           headers: { etag: `"v${b.version}"` },
         };
       }
+      // v3 F3d: updateBlock (the fields it sends replace the block's own; its id kept).
+      if (M === 'PATCH') {
+        const ifMatch = req.headers['if-match'];
+        if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');
+        const block = {
+          ...structuredClone(at.list[at.index] as Record<string, unknown>),
+          ...structuredClone(body),
+        };
+        block.id = p[5];
+        at.list.splice(at.index, 1, block);
+        b.version++;
+        this.mutations.push({ op: 'updateBlock', id: p[5]! });
+        return {
+          status: 200,
+          body: { ...structuredClone(block), version: `v${b.version}` },
+          headers: { etag: `"v${b.version}"` },
+        };
+      }
       if (M === 'DELETE') {
         const ifMatch = req.headers['if-match'];
         if (ifMatch !== undefined && ifMatch !== `v${b.version}`) return err(412, 'VERSION_MISMATCH');

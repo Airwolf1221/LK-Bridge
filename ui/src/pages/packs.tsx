@@ -505,6 +505,15 @@ function Rules({ pack }: { pack: PackView }) {
             </dd>
           </>
         ) : null}
+        <dt>Lifecycle tag</dt>
+        <dd>
+          {Object.entries(pack.rules.lifecycleTagPosition ?? {}).filter(([, v]) => v === 'lead').length > 0
+            ? `first (it leads) on ${Object.entries(pack.rules.lifecycleTagPosition ?? {})
+                .filter(([, v]) => v === 'lead')
+                .map(([k]) => k)
+                .join(', ')}; last on every other project`
+            : 'last on every project (the lifecycle tools’ default)'}
+        </dd>
         {(pack.rules.rulings ?? []).map((r) => (
           <Fragment key={r.key}>
             <dt>Ruling ({r.date})</dt>

@@ -10,6 +10,7 @@ import type { Db } from '../db/open.js';
 import type { Chronology } from '../chronology/index.js';
 import type { JobEngine } from '../jobs/index.js';
 import { lifecycleFrom } from '../lifecycle/settings.js';
+import type { LifecycleTagRules } from '../lifecycle/tags.js';
 import type { Registry } from '../registry/index.js';
 import type { SnapshotService } from '../snapshots/service.js';
 import { treeSettingsFrom } from '../tree/classify.js';
@@ -89,6 +90,8 @@ export interface AuditDeps {
   readonly log?: { warn(obj: Record<string, unknown>, msg: string): void };
   /** v3 F2: the asset library from the bridge's asset tree (null when it is not built), for duplicate folders. */
   readonly assetLibrary?: (projectId: string) => AssetLibrary | null;
+  /** v3 F3d (ADR 0053): a project's lifecycle tag rules (`Packs.lifecycleRules`); absent: the defaults. */
+  readonly lifecycleTags?: (projectId: string) => LifecycleTagRules;
   /** Test seam: a snapshot source other than the service's own. */
   readonly source?: (projectId: string) => SnapshotSource;
 }
@@ -608,6 +611,7 @@ export class Audits {
       now: this.d.now(),
       treeSettings,
       lifecycle: lifecycleFrom(settings),
+      ...(this.d.lifecycleTags ? { lifecycleTags: this.d.lifecycleTags(projectId) } : {}),
       types,
       entries: (typeId) => registry.entries(typeId),
       rules: effectiveRules(cfg, types),

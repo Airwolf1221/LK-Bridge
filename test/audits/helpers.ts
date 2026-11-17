@@ -215,6 +215,8 @@ export function context(
     incompleteSets?: AuditContext['incompleteSets'];
     chronology?: AuditContext['chronology'];
     chronologyConfigured?: boolean;
+    /** v3 F3d (ADR 0053): the project's lifecycle tag rules (absent: the defaults). */
+    lifecycleTags?: AuditContext['lifecycleTags'];
   } = {},
 ): AuditContext {
   const entries = o.entries ?? [];
@@ -224,6 +226,7 @@ export function context(
     now: NOW,
     treeSettings: treeSettingsFrom({}),
     lifecycle: { ...DEFAULT_LIFECYCLE, ...o.lifecycle, problem: null },
+    ...(o.lifecycleTags ? { lifecycleTags: o.lifecycleTags } : {}),
     types: o.types ?? [],
     entries: (typeId) => entries.filter((e) => e.typeId === typeId),
     rules: o.rules ?? [],

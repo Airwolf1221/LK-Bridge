@@ -434,6 +434,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       const s = await snapshotPageState(snapshots, projectId, id);
       return s ? { name: s.name, parentId: s.parentId, tags: s.tags } : null;
     },
+    // v3 F3d (ADR 0053): the AU ruling's status tag is guarded on a project whose approved pack carries it.
+    tagRules: (projectId) => packs.lifecycleRules(projectId),
   });
   const unregisterGuard = engine.setWriteGuard(
     combineGuards(
@@ -613,6 +615,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
     // v3 F2 (ADR 0049 decision 9): duplicate asset folders, from the bridge's asset tree (no LegendKeeper read).
     assetLibrary: (projectId) => assetLibraryOf(assets, projectId),
+    // v3 F3d (ADR 0053): where the lifecycle tag goes and the AU ruling, from the project's approved pack.
+    lifecycleTags: (projectId) => packs.lifecycleRules(projectId),
   });
   audits.start();
   const detachAuditCheckers = [

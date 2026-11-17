@@ -221,7 +221,7 @@ describe('the new seed is offered to a pack stored from F3a’s seed', () => {
     expect(w.stack.runtime.policy.commands.listAudit('owner', { action: 'pack.seed_upgrade' })).toHaveLength(
       1,
     );
-    expect(p.store.versions('arkona')[0]!.reason).toMatch(/seed arkona-2026-11-16-f3b/);
+    expect(p.store.versions('arkona')[0]!.reason).toContain(`seed ${ARKONA_PACK.seed}`);
     // Until the owner approves it, nothing is computed.
     const refused = await w.call('arkona_create_owner', compactPolity({ dryRun: true }));
     expect(refused.body.error.code).toBe('PACK_NOT_CURRENT');

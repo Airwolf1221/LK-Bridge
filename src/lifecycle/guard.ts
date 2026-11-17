@@ -39,6 +39,7 @@ import {
 import { listSubtree } from '../facts/canonical.js';
 import { classifyName, type TreeNode } from '../tree/index.js';
 import { areaOf, lifecycleFrom, type LifecycleConfig } from './settings.js';
+import type { LifecycleTagRules } from './tags.js';
 
 type Obj = Record<string, unknown>;
 type Area = 'working' | 'archived' | null;
@@ -145,17 +146,32 @@ export function prefixChange(
 }
 
 /**
+ * The status tags by the state each names: CANON, Working, Archived, and (v3 F3d, ADR 0053) the AU ruling's tag as a
+ * second status tag of the Authoritative state, on a project whose approved pack carries the ruling.
+ */
+function statusTagKeys(c: LifecycleConfig, au: string | null): [State, string][] {
+  return [
+    ['authoritative', factKey(c.tags.canon)],
+    ...(au !== null && factKey(au) !== factKey(c.tags.canon)
+      ? [['authoritative', factKey(au)] as [State, string]]
+      : []),
+    ['working', factKey(c.tags.working)],
+    ['archived', factKey(c.tags.archived)],
+  ];
+}
+
+/**
  * C2d (ADR 0036 decision 7, the owner's): the status tags a tag list holds, by the state each names (the lifecycle
  * settings' tags compared without case, invisible characters and look-alikes, as CR-12 and CR-14 fold keys and
  * prefixes: `canon`, `ＣＡＮＯＮ` and a Cyrillic `С` read as CANON).
  */
-function statusTagStates(c: LifecycleConfig, tags: readonly string[]): Map<State, string> {
+function statusTagStates(
+  c: LifecycleConfig,
+  tags: readonly string[],
+  au: string | null = null,
+): Map<State, string> {
   const out = new Map<State, string>();
-  const want: [State, string][] = [
-    ['authoritative', factKey(c.tags.canon)],
-    ['working', factKey(c.tags.working)],
-    ['archived', factKey(c.tags.archived)],
-  ];
+  const want = statusTagKeys(c, au);
   for (const t of tags) {
     const k = factKey(t);
     for (const [s, w] of want) if (k === w && !out.has(s)) out.set(s, t);
@@ -182,9 +198,11 @@ export function statusTagChanges(
   c: LifecycleConfig,
   before: readonly string[],
   after: readonly string[],
+  /** v3 F3d (ADR 0053): the AU ruling's status tag, when the project's approved pack carries it. */
+  au: string | null = null,
 ): { readonly tag: string; readonly added: boolean; readonly to: State | null; readonly tool: string }[] {
-  const b = statusTagStates(c, before);
-  const a = statusTagStates(c, after);
+  const b = statusTagStates(c, before, au);
+  const a = statusTagStates(c, after, au);
   const out: { tag: string; added: boolean; to: State | null; tool: string }[] = [];
   for (const s of ['authoritative', 'working', 'archived'] as const) {
     if (a.has(s) && !b.has(s)) out.push({ tag: a.get(s)!, added: true, to: s, tool: TAG_TOOL_ADD[s] });
@@ -193,12 +211,7 @@ export function statusTagChanges(
   // RV2-3: the fold catches a disguised status tag being ADDED; the exact spellings catch the genuine one being SWAPPED
   // for a disguise (a look-alike added beside CANON, then CANON removed). Any tag that folds to a status tag and is added
   // or removed by its exact spelling is a change, whatever else of that state the list still holds.
-  const want: [State, string][] = [
-    ['authoritative', factKey(c.tags.canon)],
-    ['working', factKey(c.tags.working)],
-    ['archived', factKey(c.tags.archived)],
-  ];
-  for (const [s, k] of want) {
+  for (const [s, k] of statusTagKeys(c, au)) {
     if (out.some((x) => (x.added ? x.to === s : false))) continue;
     const exact = (l: readonly string[]) => l.filter((t) => factKey(t) === k);
     const bs = exact(before);
@@ -240,6 +253,11 @@ export interface LifecycleGuardDeps {
    * for a page deleted in the app, of which the bridge holds no delete record. Null when no snapshot holds it.
    */
   readonly snapshotPage?: (projectId: string, id: string) => Promise<DeletedPageRecord | null>;
+  /**
+   * v3 F3d (ADR 0053): a project's lifecycle tag rules from its approved pack (`Packs.lifecycleRules`). The AU ruling's
+   * tag is then a status tag of the Authoritative state, guarded as CANON is. Absent: no ruling.
+   */
+  readonly tagRules?: (projectId: string) => LifecycleTagRules;
 }
 
 export interface DeletedPageRecord {
@@ -302,6 +320,15 @@ export class LifecycleGuard implements WriteGuard {
 
   private config(projectId: string): LifecycleConfig {
     return lifecycleFrom(this.d.settings(projectId));
+  }
+
+  /** v3 F3d (ADR 0053): the AU ruling's status tag on this project (its approved pack's), or null. */
+  private auTag(projectId: string): string | null {
+    try {
+      return this.d.tagRules?.(projectId).au?.tag ?? null;
+    } catch {
+      return null;
+    }
   }
 
   /** Where a page (or the parent a page goes under) is, in lifecycle terms; the index itself counts as inside. */
@@ -646,7 +673,7 @@ export class LifecycleGuard implements WriteGuard {
     const tagChanges = (rid: string, page: string, before: readonly string[], after: unknown, i: number) => {
       if (!tagsGuarded || !Array.isArray(after)) return;
       const next = (after as unknown[]).filter((t): t is string => typeof t === 'string');
-      for (const t of statusTagChanges(c, before, next))
+      for (const t of statusTagChanges(c, before, next, this.auTag(input.project)))
         out.push({
           resourceId: rid,
           page,
@@ -1049,7 +1076,7 @@ export class LifecycleGuard implements WriteGuard {
             (await input.read('getResource', { path: { resourceId: rid } })) as { tags?: unknown } | undefined
           )?.tags as string[] | undefined);
       const next = (body.tags as unknown[]).filter((t): t is string => typeof t === 'string');
-      for (const t of statusTagChanges(c, Array.isArray(before) ? before : [], next))
+      for (const t of statusTagChanges(c, Array.isArray(before) ? before : [], next, this.auTag(project)))
         refuse({
           resourceId: rid,
           page: typeof current?.name === 'string' ? current.name : rid,

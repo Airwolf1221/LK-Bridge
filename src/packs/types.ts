@@ -377,6 +377,12 @@ export const packRulesSchema = z
     owners: ownersRulesSchema.optional(),
     /** v3 F3b: the owner's rulings the rules follow that the governance pages do not record yet, with their dates. */
     rulings: z.array(rulingSchema).max(20).optional(),
+    /**
+     * v3 F3d (ADR 0053): where the four lifecycle tools put the lifecycle tag, per attached project, by the project's
+     * NAME: `lead` (first, as the Controlled Native Tagging Standard orders it: `Archived, Magic`) or `append` (last, ADR
+     * 0035). A project not listed is `append`. Applies once the version holding it is approved.
+     */
+    lifecycleTagPosition: z.record(text(200), z.enum(['lead', 'append'])).optional(),
   })
   .strict()
   .superRefine((r, ctx) => {

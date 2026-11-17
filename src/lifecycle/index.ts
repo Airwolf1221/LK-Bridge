@@ -38,6 +38,7 @@ import { LifecycleStore, type LifecycleRecordInput, type LifecycleSetInput, type
 
 export * from './settings.js';
 export * from './store.js';
+export * from './tags.js';
 export { collectionLinks, mentionLinks, propertyLinks } from './links.js';
 export {
   LifecycleGuard,

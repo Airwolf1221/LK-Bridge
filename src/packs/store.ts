@@ -231,6 +231,16 @@ export class PackStore {
       .run(drift ? JSON.stringify(drift) : null, this.now(), id);
   }
 
+  /** v3 F3d (ADR 0053): the rules of one stored version (null: no such version, or rules that no longer parse). */
+  rulesAt(id: string, version: number): PackRules | null {
+    const r = this.db
+      .prepare('SELECT rules FROM pack_versions WHERE pack_id = ? AND version = ?')
+      .get(id, version) as { rules: string } | undefined;
+    if (!r) return null;
+    const parsed = packRulesSchema.safeParse(parseJson<unknown>(r.rules, null));
+    return parsed.success ? parsed.data : null;
+  }
+
   versions(
     id: string,
   ): { version: number; reason: string; approved: PackApproval | null; createdAt: number }[] {

@@ -109,9 +109,11 @@ it('reads and writes per typical package', async () => {
     'compact owner, dry run: plan': [4, 0],
     'compact owner, Working: plan': [4, 0],
     'compact owner, Working: job': [20, 13],
-    'compact owner, Authoritative: plan': [4, 0],
+    // v3 F3d (ADR 0053): one more read to plan, the home index's text for its routing line.
+    'compact owner, Authoritative: plan': [5, 0],
     'compact owner, Authoritative: job': [18, 13],
-    'promoteNation: index, Reference moved, owner: plan': [7, 0],
+    // v3 F3d: one more read to plan, the Polities index's text for the nation's line.
+    'promoteNation: index, Reference moved, owner: plan': [8, 0],
     'promoteNation: index, Reference moved, owner: job': [31, 16],
     'relationship of two canon characters: plan': [14, 0],
     'relationship of two canon characters: job': [40, 15],

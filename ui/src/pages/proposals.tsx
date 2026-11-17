@@ -25,6 +25,7 @@ import type {
   ProposalCounts,
   ProposalDetail,
   ProposalOp,
+  ProtectedChange,
 } from '../types';
 
 type Tab = 'pending' | 'conflicted' | 'history';
@@ -805,6 +806,57 @@ function PageSummaryView({ p }: { p: ProposalDetail }) {
   );
 }
 
+const LIFECYCLE_VERB: Readonly<Record<string, string>> = {
+  archive_page: 'Archive',
+  unarchive_page: 'Unarchive',
+  move_to_working: 'Move to Working',
+  promote_page: 'Promote',
+};
+
+/** `[BWRK]` of `[BWRK] Sky Ferry`, or null. */
+const prefixOfName = (name: string): string | null => /^\s*(\[[A-Za-z]{4,5}\])/.exec(name)?.[1] ?? null;
+
+/**
+ * v3 F3d (ADR 0053): a lifecycle tool's protected change in words, from the plan the proposal already holds (its
+ * operation's `lifecycle` summary), e.g. “Promote: Status would be set to Authoritative; name [BWRK] → [BSRC]; tags
+ * Working → CANON”. Null for a change that has its own text.
+ */
+function lifecycleChangeWords(
+  c: ProtectedChange,
+  p: Pick<ProposalDetail, 'operations' | 'canonical'>,
+): string | null {
+  if (typeof c.lifecycle !== 'string' || c.text || c.unchecked) return null;
+  const verb = LIFECYCLE_VERB[c.lifecycle] ?? c.lifecycle;
+  const op = (p.operations ?? []).find(
+    (o) => o.tool === c.lifecycle && typeof o.lifecycle === 'object' && o.lifecycle !== null,
+  );
+  if (!op) {
+    // A pack tool's canonical marker (promoteNation): its reason says what is canon about it.
+    const n = c.pages?.length ?? 0;
+    return `${c.lifecycle}: ${p.canonical?.reason ?? `changes ${n} page${n === 1 ? '' : 's'}`}`;
+  }
+  if ((op as { subtree?: unknown }).subtree === true) {
+    const l = (op as unknown as SetOperation).lifecycle;
+    return `${verb} the whole set under ${l.set.root.name} (${l.set.pages} page${l.set.pages === 1 ? '' : 's'}): ${l.set.from ?? 'unknown'} → ${l.set.to}; its root goes under ${l.set.newParent.name}`;
+  }
+  const l = (op as unknown as LifecycleOperation).lifecycle;
+  const parts: string[] = [];
+  const status = l.facts.find((f) => f.key.trim().toLowerCase() === 'status');
+  if (status) parts.push(status.after ? `Status would be set to ${status.after}` : 'Status would be removed');
+  const from = prefixOfName(l.page.name);
+  const to = prefixOfName(l.newName);
+  if (from !== to) parts.push(`name ${from ?? '(no prefix)'} → ${to ?? '(no prefix)'}`);
+  const { before, after, removed, added } = l.tags;
+  if (removed.length > 0 || added.length > 0) {
+    const leads = added.length > 0 && after.length > 1 && after[0] === added[0];
+    parts.push(
+      `tags ${removed.join(', ') || '(none)'} → ${added.join(', ') || '(none)'}${leads ? ` (${added[0]} first)` : ''}`,
+    );
+  } else if (before.join('\u0000') !== after.join('\u0000'))
+    parts.push(`tags reordered: ${after.join(', ')}`);
+  return `${verb}: ${parts.join('; ')}`;
+}
+
 /** v2 C2a: the banner of a proposal that touches protected canon. */
 function CanonBanner({ p }: { p: ProposalDetail }) {
   if (!p.requiresCanonicalApproval) return null;
@@ -819,7 +871,7 @@ function CanonBanner({ p }: { p: ProposalDetail }) {
           {changes.map((c, i) => (
             <li key={i}>
               {c.page ? <strong>{c.page}: </strong> : null}
-              {c.text ?? c.unchecked ?? JSON.stringify(c)}
+              {c.text ?? c.unchecked ?? lifecycleChangeWords(c, p) ?? JSON.stringify(c)}
             </li>
           ))}
         </ul>
@@ -1075,7 +1127,7 @@ function ProposalReview({
                               </p>
                               <ul>
                                 {(p.canonical?.changes ?? []).map((c, i) => (
-                                  <li key={i}>{c.text ?? c.unchecked}</li>
+                                  <li key={i}>{c.text ?? c.unchecked ?? lifecycleChangeWords(c, p)}</li>
                                 ))}
                               </ul>
                               <p className="muted small-text">{p.summary}</p>

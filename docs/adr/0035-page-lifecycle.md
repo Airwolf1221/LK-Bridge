@@ -7,6 +7,10 @@ PLAN-v2 gains the C2c session (between C2b and the mid-point review, whose scope
 lifecycle-consistency audit for E2. No other decision in PLAN.md or PLAN-v2.md is changed; the choices below fill the
 gaps the owner's brief left.
 
+Decision 8's tags (and decisions 9 and 10's) are unchanged on every project except one whose approved setting pack says
+the lifecycle tag leads, or carries the AU ruling: [ADR 0053](0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md)
+(v3 F3d, 17 November 2026).
+
 ## Context
 
 The owner works with three kinds of page: the current canon (`[BSRC]`, Status Authoritative), material being worked on

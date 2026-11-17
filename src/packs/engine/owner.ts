@@ -51,6 +51,8 @@ import {
   identityOf,
   keysOf,
   planOnTemplate,
+  repointRoutingLine,
+  routingChange,
   withUnresolved,
   type AbsentUnder,
   type ExistingChange,
@@ -1046,10 +1048,6 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
     notes.push(
       `The new index text is drafted (Purpose, ${owners.index.routing}, ${owners.index.collection}, ${owners.index.boundaries}); it is in the preview, to edit afterwards with write_page if needed.`,
     );
-  if (home?.kind === 'node' && !working)
-    notes.push(
-      `${home.node.rawName}'s own routing text is not changed: add a line for the new page with write_page if it lists its pages.`,
-    );
 
   // ---------------------------------------------------------------------------------- changes to existing pages
   const existing: ExistingChange[] = [];
@@ -1061,6 +1059,28 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
       toName: nationPage.rawName,
       name: promote.node.rawName,
     });
+  }
+  // v3 F3d (ADR 0053): the routing lines, as F3a's character tool adds them (C2's routing lines). Not recognised: nothing
+  // added, and the preview says so (a note). ADR 0051's rule decides Last Major Revision for the edited index.
+  const routingEnv = { pd: env.pd, mctx: env.mctx, tool: env.tool, ctx, type };
+  const sayNote = (_code: string, message: string) => notes.push(message);
+  // An Authoritative owner filed directly into an existing home: one line in the home's routing section. A Working
+  // owner sits under [INDEX] Working (no line until it is promoted); a new nation index or subindex has drafted text.
+  if (!working && home?.kind === 'node' && ownerParent && 'existing' in ownerParent) {
+    const r = await routingChange(routingEnv, home.node, [ownerPage], refuse, sayNote);
+    if (r) existing.push(r);
+  }
+  // promoteNation: the Polities index's line for the nation now points to the nation's new index.
+  if (promote && nationPage) {
+    const r = await repointRoutingLine(
+      routingEnv,
+      promote.polities,
+      { id: promote.node.id, rawName: promote.node.rawName },
+      { id: nationPage.id, rawName: nationPage.rawName },
+      refuse,
+      sayNote,
+    );
+    if (r) existing.push(r);
   }
 
   if (!tagsCurrent)
