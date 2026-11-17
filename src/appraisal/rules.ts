@@ -262,6 +262,15 @@ export const CHECKS = {
     rule: AUTOMATION,
     none: 'the next full snapshot takes the templates; nothing is guessed meanwhile',
   },
+  // v3 F3.5 (ADR 0056): a legacy page (a block without an id, or an id used twice). Block-by-block writes, Revert and
+  // the appraisal's own fixes cannot work on it until the block-id sweep (a maintenance job) has given it ids.
+  block_ids_pending: {
+    title: 'The page is waiting for block ids (a legacy page)',
+    group: 'polish',
+    evidence: 'Potential Maintenance Issue',
+    rule: { ...AUTOMATION, rule: 'approved narrow automation: assign-block-ids-sweep' },
+    none: 'waiting for the block-id sweep',
+  },
   no_body: {
     title: 'The page has no page document to appraise',
     group: 'blocked',

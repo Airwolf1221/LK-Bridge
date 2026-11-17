@@ -220,7 +220,13 @@ describe('placeholders', () => {
     }
     // v2 A2: `tree-snapshot` became the real `tree-sweep` and `tree-check` jobs.
     // v2 E2: the two audit placeholders became the real `audit-run` job.
-    expect(PLACEHOLDER_IDS).toEqual(['assign-block-ids-sweep']);
+    // v3 F3.5 (ADR 0056): `assign-block-ids-sweep` became the block-id sweep: no placeholder is left.
+    expect(PLACEHOLDER_IDS).toEqual([]);
+    expect(m.maintenance.scheduler.get('assign-block-ids-sweep')).toMatchObject({
+      implemented: true,
+      enabled: false,
+      note: null,
+    });
   });
 });
 

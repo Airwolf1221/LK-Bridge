@@ -101,7 +101,14 @@ describe('the registry', () => {
       lastRun: null,
     });
     expect(r.json.jobs[6]).toMatchObject({ id: 'tree-sweep', implemented: true, scope: 'project' });
-    expect(r.json.jobs[8]).toMatchObject({ implemented: false, enabled: false, note: 'Not implemented yet' });
+    // v3 F3.5 (ADR 0056): the last placeholder became the block-id sweep (off by default, writes).
+    expect(r.json.jobs[8]).toMatchObject({
+      id: 'assign-block-ids-sweep',
+      implemented: true,
+      enabled: false,
+      writes: true,
+      note: null,
+    });
   });
 
   it('404s an unknown job', async () => {
@@ -157,26 +164,21 @@ describe('changes', () => {
     expect(stack.audit('maintenance.set_schedule').length).toBe(2);
   });
 
-  it('refuses to enable, schedule or run a placeholder, and changes nothing', async () => {
+  it('v3 F3.5: refuses to enable the block-id sweep without a sandbox PASS or the override, and changes nothing', async () => {
     const before = stack.audit().length;
-    for (const id of ['assign-block-ids-sweep']) {
-      for (const r of [
-        await stack.post(`/api/admin/maintenance/${id}/enable`),
-        await stack.post(`/api/admin/maintenance/${id}/run`),
-        await stack.put(`/api/admin/maintenance/${id}/schedule`, {
-          schedule: { kind: 'interval', everySeconds: 60 },
-        }),
-      ]) {
-        expect(r.status).toBe(409);
-        expect(r.json.error).toEqual({ code: 'NOT_IMPLEMENTED', message: 'Not implemented yet' });
-      }
-      // Disabling an already-disabled placeholder is harmless.
-      expect((await stack.post(`/api/admin/maintenance/${id}/disable`)).json.job.enabled).toBe(false);
-    }
-    // Only the (harmless) disables were audited: no enable, schedule change or run left a trace.
+    const r = await stack.post('/api/admin/maintenance/assign-block-ids-sweep/enable');
+    expect(r.status).toBe(409);
+    expect(r.json.error.code).toBe('PREREQUISITE_MISSING');
+    expect(r.json.error.message).toMatch(
+      /no recorded PASS for bridge version .* and the override is not set/,
+    );
+    expect(stack.runtime.maintenance.scheduler.get('assign-block-ids-sweep').enabled).toBe(false);
+    // Disabling it while it is off is harmless.
+    expect((await stack.post('/api/admin/maintenance/assign-block-ids-sweep/disable')).json.job.enabled).toBe(
+      false,
+    );
     const added = stack.audit().slice(0, stack.audit().length - before);
-    expect(added.length).toBe(1);
-    for (const row of added) expect(row.action).toBe('maintenance.disable');
+    expect(added.map((a: { action: string }) => a.action)).toEqual(['maintenance.disable']);
   });
 
   it('Run now answers at once, runs the job, records the run and audits it', async () => {

@@ -25,11 +25,15 @@ import {
   type LinkMaintenance,
 } from './jobs.js';
 import { MaintenanceScheduler } from './scheduler.js';
+import { SWEEP_JOB_ID } from '../blockids/statement.js';
 import type { MaintenanceJobDef } from './types.js';
+import type { BlockIdSweep } from '../blockids/index.js';
 
 export interface Maintenance {
   readonly scheduler: MaintenanceScheduler;
   readonly commands: MaintenanceCommands;
+  /** v3 F3.5 (ADR 0056): the block-id sweep (its card, dry run and settings), when the runtime built it. */
+  readonly blockIds: BlockIdSweep | null;
   start(): void;
   stop(): Promise<void>;
 }
@@ -59,6 +63,8 @@ export interface CreateMaintenanceOptions {
   readonly snapshots?: SnapshotMaintenance;
   /** v2 E2: the audits, for the `audit-run` job. */
   readonly audits?: AuditMaintenance;
+  /** v3 F3.5 (ADR 0056): the block-id sweep, for `assign-block-ids-sweep`. */
+  readonly blockIds?: BlockIdSweep;
   /** Test seam: extra job definitions registered after the built-in ones. */
   readonly extraJobs?: readonly MaintenanceJobDef[];
 }
@@ -85,22 +91,52 @@ export function createMaintenance(o: CreateMaintenanceOptions): Maintenance {
         ...(o.chronology ? { chronology: o.chronology } : {}),
         ...(o.snapshots ? { snapshots: o.snapshots } : {}),
         ...(o.audits ? { audits: o.audits } : {}),
+        ...(o.blockIds
+          ? {
+              blockIds: {
+                run: (projectId: string) => o.blockIds!.run(projectId),
+                canEnable: () => o.blockIds!.canEnable(),
+                enabled: () => o.blockIds!.enabled(),
+              },
+            }
+          : {}),
       }),
       ...(o.extraJobs ?? []),
     ],
     ...(o.log ? { log: o.log } : {}),
   });
+  // v3 F3.5 (ADR 0056): a verification failure stops the block-id sweep: the job disables itself (audited as the system's).
+  const offStop = o.blockIds?.onStop((s) => {
+    try {
+      const before = scheduler.get(SWEEP_JOB_ID);
+      if (!before.enabled) return;
+      const after = scheduler.setEnabled(SWEEP_JOB_ID, false);
+      o.policy.store.audit(
+        'system',
+        'maintenance.disable',
+        SWEEP_JOB_ID,
+        { enabled: before.enabled },
+        { enabled: after.enabled, reason: `verification failed on ${s.page ?? s.documentId} (${s.project})` },
+      );
+    } catch (e) {
+      o.log?.warn({ err: e }, 'could not disable the block-id sweep after its stop');
+    }
+  });
   return {
     scheduler,
     commands: createMaintenanceCommands({ scheduler, store: o.policy.store }),
+    blockIds: o.blockIds ?? null,
     start: () => scheduler.start(),
-    stop: () => scheduler.stop(),
+    stop: async () => {
+      offStop?.();
+      await scheduler.stop();
+    },
   };
 }
 
 export { MaintenanceScheduler, MaintenanceError, type MaintenanceErrorCode } from './scheduler.js';
 export { createMaintenanceCommands, type MaintenanceCommands } from './commands.js';
-export { builtinJobs, PLACEHOLDER_IDS, type TreeMaintenance } from './jobs.js';
+export { builtinJobs, PLACEHOLDER_IDS, type TreeMaintenance, type BlockIdMaintenance } from './jobs.js';
 export { assetJobs, type AssetMaintenance } from './asset-jobs.js';
 export {
   scheduleSchema,

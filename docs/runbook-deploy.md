@@ -853,6 +853,45 @@ sudo -u lkbridge /opt/lk-bridge/app/deploy/rehearse-write-scope.sh --project tes
   checkout with dependencies installed and a database that has the project marked as a sandbox; never on a shared
   screen). It was dry-run against the mock only (test/review/rehearsal-dryrun.test.ts), never against LegendKeeper.
 
+## The block-id sweep's sandbox check (v3 F3.5)
+
+✋ v3 F3.5 ([ADR 0056](adr/0056-block-id-sweep.md)). The block-id sweep (`assign-block-ids-sweep`, Maintenance Jobs
+page) cannot be enabled until this check has recorded a **PASS for the running bridge version** (or you set the
+override on its card). Run it on the **test world** after each deploy that changes the bridge version, before enabling
+or re-enabling the sweep. It makes about ten LegendKeeper requests (four or five writes) and takes seconds.
+
+🔒 sudo (as `lkbridge`)
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- assign-block-ids
+```
+
+- The same guard as the other sandbox checks (step 12): a project marked as a sandbox, its own key; it refuses anything
+  else.
+- **What it does.** It writes a throwaway page (`lk-bridge block-ids check <time>`) whose blocks are sent without ids,
+  and reads it back. If LegendKeeper gave them ids on the write, the API cannot make a legacy document: the verdict is
+  **NOTED** and nothing more is tried (see below). With a legacy document it checks (1) `assignBlockIds` gives every
+  block a unique id, (2) the content is unchanged, `unsupported` blocks included, (3) the document's version moves,
+  (4) a second call changes nothing. Then it deletes the throwaway page.
+- **NOTED: no legacy document to try.** Make a page in the LegendKeeper app's oldest editor form on the test world, or
+  name an existing legacy page in a **disposable copy** of a world, and run it again naming that document (it is given
+  ids; nothing else is changed):
+
+  ```bash
+  sudo -u lkbridge env LKB_BLOCKIDS_DOCUMENT=<resourceId>/<documentId> /opt/lk-bridge/app/deploy/sandbox-test.sh --project test -- assign-block-ids
+  ```
+
+- **Where the verdict goes.** Unlike the other sandbox checks, it writes ONE row to the bridge's own database (`DB_PATH`,
+  table `block_id_sandbox_checks`: the verdict, the bridge version, the project, the details), which is what the sweep's
+  prerequisite reads. Everything else uses the check's own temporary database. The service need not be stopped. The
+  verdicts are listed on the sweep's card.
+- Exit code 0 when nothing failed (NOTED is not a failure, but only a PASS lets the sweep be enabled), 1 when a check
+  failed: then do not enable the sweep; send the report.
+- It was written and type-checked, never run, in the session that built it.
+
+**After deploying F3.5, in order:** run this check on the test world; on the Maintenance Jobs page, look at the sweep's
+candidate count; press **Dry run** and read the list; then enable the job (its card states what enabling it approves).
+
 ## v2 phase 0 spike ✋
 
 A one-off check of the assumptions in `docs/PLAN-v2.md` against the **test world** (PLAN-v2, section 6, session 0): the

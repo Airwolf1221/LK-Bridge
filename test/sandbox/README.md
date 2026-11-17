@@ -351,3 +351,13 @@ The `maps` run gains M6e: three throwaway regions, each written RAW with several
 `polygon: []` or no `polygon`, recording what LegendKeeper accepts and what reads back (NOTED). Until its answer is in,
 the bridge writes one consistent form (a region that still carries a `polygon` gets it set to the first of its new
 polygons; M6d checks it), and `read_document` and the snapshots name regions that carry both.
+
+## The block-id sweep's check (v3 F3.5)
+
+`assign-block-ids.test.ts` (`… sandbox-test.sh --project test -- assign-block-ids`; ADR 0056): writes a throwaway page
+whose blocks are sent without ids and reads it back; with a legacy document it checks that `assignBlockIds` gives every
+block a unique id, changes no content (`unsupported` blocks included), moves the version and is idempotent, then deletes
+the page. When LegendKeeper gives ids on the write (no legacy document can be made through the API) it reports NOTED with
+what to do (`LKB_BLOCKIDS_DOCUMENT=<resourceId>/<documentId>` names a legacy page in a disposable copy). Unlike the other
+checks it records its verdict (PASS, NOTED or FAIL) in the bridge's own database (`DB_PATH`, `block_id_sandbox_checks`),
+with the bridge version: the sweep can be enabled only with a PASS for the running version, or the owner's override.

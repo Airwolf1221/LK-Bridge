@@ -49,6 +49,7 @@ import { createAssets, type AssetService } from './assets/index.js';
 import { createImages, imageDataDir, type ImageService } from './images/service.js';
 import { Audits, SPLIT_CHECK, SPLIT_VERIFY, splitChecker, splitVerifier } from './audits/index.js';
 import { Appraisal } from './appraisal/index.js';
+import { BlockIdSweep } from './blockids/index.js';
 import { SnapshotService } from './snapshots/index.js';
 import { Restores } from './snapshots/restores.js';
 import { snapshotMapCheckers } from './snapshots/restore.js';
@@ -675,6 +676,32 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
+  // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation. Its candidates come from the appraisal's
+  // snapshot overlay (no LegendKeeper read); each document is one P3 job with its own check and verify (two checkers).
+  const blockIds = new BlockIdSweep({
+    db: o.db,
+    engine,
+    projects,
+    version: o.version,
+    overlay: {
+      ensure: async (projectId) => {
+        const st = (await appraisal.ensureIndex(projectId)).state;
+        return st
+          ? {
+              snapshotId: st.newestSnapshotId,
+              takenAt: st.newestTakenAt,
+              stamp: `${st.baseSnapshotId}:${st.newestSnapshotId}:${st.updatedAt}:${st.pages}`,
+            }
+          : null;
+      },
+      pages: (projectId) => appraisal.index.pages(projectId),
+      piece: (sha) => snapshots.store.getJson(sha),
+    },
+    now: () => (o.clock ?? systemClock).now(),
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachBlockIds = blockIds.attach();
   const detachAuditCheckers = [
     engine.registerChecker(SPLIT_CHECK, splitChecker),
     engine.registerChecker(SPLIT_VERIFY, splitVerifier),
@@ -829,6 +856,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     chronology,
     snapshots,
     audits: { run: (projectId, trigger) => audits.run(projectId, trigger) },
+    blockIds,
   });
   maintenance.start();
   const mappings = createMappings({
@@ -997,6 +1025,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       for (const off of detachMaps) off();
       for (const off of detachSnapshotCheckers) off();
       for (const off of detachAuditCheckers) off();
+      detachBlockIds();
       detachBlockwiseUndo();
       detachReverts();
       detachReview();
