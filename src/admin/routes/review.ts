@@ -163,19 +163,31 @@ export const registerReview: Register = (api, ctx) => {
 
   /**
    * Reverts a finished direct-write job (owner, re-authenticated, confirmed). A refusal is 409 with the targets and why
-   * each is not reverted; `confirmPartial: true` reverts the rest when some cannot be.
+   * each is not reverted; `confirmPartial: true` with `confirmed` (the ready targets the owner saw) reverts exactly
+   * those when some cannot be.
    */
   api.post('/jobs/:id/revert', async (req) => {
     requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     const b = parseInput(
-      z.object({ confirm: z.literal(true), confirmPartial: z.boolean().default(false) }).strict(),
+      z
+        .object({
+          confirm: z.literal(true),
+          confirmPartial: z.boolean().default(false),
+          // CR-2026-11-R2 (F6): the targets the owner confirmed (the preview's ready set): a partial revert reverts
+          // exactly these, and is refused (409 REVERT_CHANGED) when what can be reverted now differs.
+          confirmed: z.array(z.string().min(1).max(600)).max(1000).optional(),
+        })
+        .strict(),
       req.body,
     );
     let r;
     try {
-      r = await services(ctx).reverts.revert('owner', project.id, id, { confirmPartial: b.confirmPartial });
+      r = await services(ctx).reverts.revert('owner', project.id, id, {
+        confirmPartial: b.confirmPartial,
+        ...(b.confirmed ? { confirmed: b.confirmed } : {}),
+      });
     } catch (e) {
       if (e instanceof RevertError) throw new AdminHttpError(REVERT_STATUS[e.code] ?? 409, e.code, e.message);
       throw e;

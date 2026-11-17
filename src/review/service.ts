@@ -13,11 +13,14 @@ import type { Db } from '../db/open.js';
 import type { ChronologyStore } from '../chronology/store.js';
 import type { JobEngine } from '../jobs/engine.js';
 import { SYSTEM_PRINCIPAL, TERMINAL_JOB_STATUSES, type JobView } from '../jobs/types.js';
-import type { ImageService } from '../images/service.js';
+import { DEFAULT_STAGING_FOLDER, type ImageService } from '../images/service.js';
+import { isBridgeStep, londonDate, LMR_STEP } from '../jobs/internal-steps.js';
+import { proposalSummary } from '../policy/proposals.js';
+import { isStagingName, REVERT_TOOL } from './revert-plan.js';
 import type { PolicyStore } from '../policy/store.js';
 import { changeView, type ChangeView } from './changes.js';
 import { ReviewStore, type DirectWriteRow, type ReviewFilter } from './store.js';
-import { jobTargets, type JobRecord, type Target } from './targets.js';
+import { jobTargets, type JobRecord, type LaterWrite, type Target } from './targets.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -69,8 +72,13 @@ export interface ReviewItem {
   readonly status: JobView['status'];
   readonly agent: { readonly principalId: string; readonly name: string; readonly profile: string };
   readonly tool: string | null;
-  /** In the words a proposal would have used (the tool's own summary, else the job's title). */
+  /**
+   * In the words a proposal would have used: the tool's own summary; for a low-level job (`lk_api_*`, `lk_op_*`) the
+   * bridge's description of its operations (CR-2026-11-R2, E1), never the title the agent chose; else the job's title.
+   */
   readonly summary: string;
+  /** CR-2026-11-R2 (E1): the title the agent gave a low-level job, shown only as a secondary label. */
+  readonly agentTitle?: string;
   readonly pages: readonly { readonly id: string; readonly name: string | null }[];
   readonly reviewed: { readonly at: number; readonly by: string; readonly via: string } | null;
   readonly revert: RevertSummary | null;
@@ -84,6 +92,24 @@ export interface ReviewDetail extends ReviewItem {
   }[];
   /** Whether the job is a revert itself (a revert is never reverted) or still running. */
   readonly revertable: { readonly ok: boolean; readonly reason: string | null };
+}
+
+/**
+ * CR-2026-11-R2 (E1): what the Review page says a job did: the tool's own summary; for a low-level job the bridge's
+ * description of its operations, with the agent's title only beside it; else the job's title.
+ */
+function summaryOf(
+  note: Obj,
+  tool: string | null,
+  title: string,
+  ops: () => string | null,
+): { summary: string; agentTitle?: string } {
+  if (typeof note.summary === 'string' && note.summary !== '') return { summary: note.summary };
+  if (tool !== null && /^lk_(api|op)_/.test(tool)) {
+    const said = ops();
+    if (said) return { summary: said, ...(title ? { agentTitle: title } : {}) };
+  }
+  return { summary: title };
 }
 
 /** The tool a job was made by (its origin's), for an agent's job. */
@@ -159,21 +185,122 @@ export class ReviewService {
     const rec = this.record(projectId, jobId);
     if (!rec) return null;
     const images = this.d.images;
+    const stagingNames = () =>
+      images ? [images.stagingFolderName(projectId), DEFAULT_STAGING_FOLDER] : [DEFAULT_STAGING_FOLDER];
     return jobTargets(rec, {
       pageName: (id) => this.d.pageName?.(projectId, id) ?? null,
       documentName: (r, doc) => this.d.documentName?.(projectId, r, doc) ?? null,
+      // CR-2026-11-R2 (F9): the staging folder by every name it can have; the folder itself is read live by Revert.
+      stagingNames,
       ...(images
         ? {
             placedStaged: (assetId: string) => {
               const row = images.store.byAsset(projectId, assetId);
               return row && row.placementJobId === jobId ? row.id : null;
             },
-            isStagingFolder: (folderId: string | null) =>
-              folderId !== null &&
-              this.d.folderName?.(projectId, folderId) === images.stagingFolderName(projectId),
+            isStagingFolder: (folderId: string | null) => {
+              if (folderId === null) return false;
+              const name = this.d.folderName?.(projectId, folderId);
+              return typeof name === 'string' && isStagingName(name, stagingNames());
+            },
           }
         : {}),
+      laterLmr: (resourceId, date) => this.laterLmr(projectId, rec.job, resourceId, date),
+      laterWrites: () => this.laterWrites(projectId, jobId),
     });
+  }
+
+  /**
+   * CR-2026-11-R2 (F3): a later job that relied on a Last Major Revision date this job set on a page: one whose own
+   * decision that day was a major revision of the page (it set the date, or found it already said so), or one that wrote
+   * the page's text that day. Reverts are left out (they set no date of their own).
+   */
+  private laterLmr(projectId: string, job: JobView, resourceId: string, date: string): string | null {
+    const isRevert = (id: string) => this.d.engine.queries.getJob(projectId, id)?.origin.tool === REVERT_TOOL;
+    const lmrJobs = this.d.db
+      .prepare(
+        `SELECT DISTINCT s.job_id AS id FROM steps s JOIN jobs j ON j.id = s.job_id
+         WHERE j.project_id = ? AND s.op_id = ? AND s.status = 'succeeded' AND s.job_id != ? AND j.created_at >= ?`,
+      )
+      .all(projectId, LMR_STEP, job.id, job.createdAt) as { id: string }[];
+    for (const { id } of lmrJobs) {
+      if (isRevert(id)) continue;
+      for (const st of this.d.engine.stepRecords(projectId, id) ?? []) {
+        if (st.opId !== LMR_STEP || !isObj(st.result)) continue;
+        const body = isObj(st.params.body) ? st.params.body : {};
+        if (body.resourceId !== resourceId || st.result.date !== date) continue;
+        const skip = typeof st.result.skip === 'string' ? st.result.skip : '';
+        if (isObj(st.result.lmr) || /already says/.test(skip)) return id;
+      }
+    }
+    const last = this.lastJournalId(projectId, job.id);
+    const texts = this.d.db
+      .prepare(
+        `SELECT job_id AS id, at FROM write_journal
+         WHERE project_id = ? AND resource_id = ? AND id > ? AND job_id IS NOT NULL AND job_id != ?
+           AND outcome IN ('applied', 'unknown')
+           AND op_id IN ('replaceDocumentBlocks', 'insertBlock', 'replaceBlock', 'updateBlock', 'deleteBlock', 'moveBlock')
+         ORDER BY id`,
+      )
+      .all(projectId, resourceId, last, job.id) as { id: string; at: number }[];
+    for (const r of texts) if (londonDate(r.at) === date && !isRevert(r.id)) return r.id;
+    return null;
+  }
+
+  private lastJournalId(projectId: string, jobId: string): number {
+    return (
+      this.d.db
+        .prepare('SELECT COALESCE(MAX(id), 0) AS n FROM write_journal WHERE project_id = ? AND job_id = ?')
+        .get(projectId, jobId) as { n: number }
+    ).n;
+  }
+
+  /**
+   * CR-2026-11-R2 (F10): the applied (or possibly applied) journal entries of the jobs after this one, but reverts and
+   * jobs fully reverted since (their writes no longer stand).
+   */
+  private laterWrites(projectId: string, jobId: string): LaterWrite[] {
+    const rows = this.d.db
+      .prepare(
+        `SELECT job_id, op_id, target_id, resource_id, document_id, params FROM write_journal
+         WHERE project_id = ? AND id > ? AND job_id IS NOT NULL AND job_id != ? AND outcome IN ('applied', 'unknown')
+           AND job_id NOT IN (SELECT revert_job_id FROM job_reverts WHERE project_id = ?)
+           AND job_id NOT IN (SELECT job_id FROM job_reverts WHERE project_id = ? AND state = 'succeeded' AND partial = 0)
+         ORDER BY id LIMIT 5000`,
+      )
+      .all(projectId, this.lastJournalId(projectId, jobId), jobId, projectId, projectId) as {
+      job_id: string;
+      op_id: string;
+      target_id: string | null;
+      resource_id: string | null;
+      document_id: string | null;
+      params: string | null;
+    }[];
+    return rows.map((r) => {
+      let params: unknown;
+      try {
+        params = r.params ? (JSON.parse(r.params) as unknown) : null;
+      } catch {
+        params = null;
+      }
+      return {
+        jobId: r.job_id,
+        opId: r.op_id,
+        targetId: r.target_id,
+        resourceId: r.resource_id,
+        documentId: r.document_id,
+        params,
+      };
+    });
+  }
+
+  /** CR-2026-11-R2 (E1): a low-level job's operations, in the words a proposal of them would use. */
+  private opsSummary(projectId: string, jobId: string): string | null {
+    const ops = (this.d.engine.stepRecords(projectId, jobId) ?? [])
+      .filter((st) => st.opKind !== 'read' && !isBridgeStep(st.opId) && st.options.decisionFrom === undefined)
+      .map((st) => ({ op: st.opId, params: st.params }));
+    if (ops.length === 0) return null;
+    return proposalSummary(ops).replace(/^Proposed /, '');
   }
 
   private latestRevert(projectId: string, jobId: string): RevertSummary | null {
@@ -239,7 +366,7 @@ export class ReviewService {
         profile: row.profile,
       },
       tool: row.tool,
-      summary: typeof note.summary === 'string' && note.summary !== '' ? note.summary : job.title,
+      ...summaryOf(note, row.tool, job.title, () => this.opsSummary(row.projectId, row.jobId)),
       pages: ids.map((id) => ({
         id,
         name:

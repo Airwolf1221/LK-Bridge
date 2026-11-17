@@ -104,6 +104,8 @@ describe('Last Major Revision after a revert', () => {
     expect(lmr(), 'Last Major Revision after reverting job 1 while job 2 stands').toBe(today);
   });
 
+  // CR-2026-11-R2 (R2-18 b): the decision records the row's runs as read (`previousContent`, src/jobs/step-exec.ts
+  // decideLmr), and Revert puts them back exactly (src/review/targets.ts); an empty plain value is never written blind.
   it('the value before the job is put back as it was, not as its plain text (a linked date; a mention)', async () => {
     const today = londonDate(Date.now());
     const cases: { label: string; content: Record<string, unknown>[] }[] = [

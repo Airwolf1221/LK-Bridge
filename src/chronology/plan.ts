@@ -56,7 +56,38 @@ export interface WriteContext {
   readonly expectBefore?: Readonly<Record<string, number>>;
   /** Rows whose date changes (their place may too): moved before they are replaced. */
   readonly moves?: ReadonlySet<string>;
+  /**
+   * CR-2026-11-R2 (F1): a revert's rows, whole: each row it deletes or replaces must still be exactly this block inside
+   * the lock (not only its words). The chronology tools leave it unset.
+   */
+  readonly rowBlocks?: Readonly<Record<string, Obj>>;
+  /**
+   * CR-2026-11-R2 (F1): a revert's events are compared inside the lock by every stored field (`EVENT_STORED_FIELDS`, an
+   * absent one as null), not only the six the tools write. The chronology tools leave it unset.
+   */
+  readonly exactEvents?: boolean;
 }
+
+/** CR-2026-11-R2 (F1): every field LegendKeeper stores on an event (its `Event` schema), the id excepted. */
+export const EVENT_STORED_FIELDS = [
+  'laneId',
+  'rank',
+  'type',
+  'start',
+  'end',
+  'formattedStart',
+  'formattedEnd',
+  'startDate',
+  'endDate',
+  'detail',
+  'name',
+  'uri',
+  'iconGlyph',
+  'color',
+  'imageUrl',
+  'isHidden',
+  'showOnCalendar',
+] as const;
 
 export interface BuiltJob {
   readonly steps: StepSpec[];
@@ -107,6 +138,11 @@ export function buildJob(o: {
     timeline: c.columns.timeline,
   };
   const tableAge = new Map<string, string>();
+  // CR-2026-11-R2 (F1): a revert compares every stored field (absent ones as null); the tools the six they write.
+  const eventFields = (now: Obj): Obj =>
+    o.ctx.exactEvents === true
+      ? Object.fromEntries(EVENT_STORED_FIELDS.map((k) => [k, now[k] ?? null]))
+      : Object.fromEntries(EVENT_FIELDS.filter((k) => now[k] !== undefined).map((k) => [k, now[k]]));
   const pushTableOp = (doc: string, op: TableOp) => tableOps.set(doc, [...(tableOps.get(doc) ?? []), op]);
   const pushVerify = (doc: string, v: TableVerifyInput['rows'][number]) =>
     tableVerify.set(doc, [...(tableVerify.get(doc) ?? []), v]);
@@ -191,7 +227,13 @@ export function buildJob(o: {
         break;
       }
       case 'row.delete': {
-        pushTableOp(w.documentId, { op: 'delete', rowId: w.rowId, texts: w.texts });
+        const block = o.ctx.rowBlocks?.[w.rowId];
+        pushTableOp(w.documentId, {
+          op: 'delete',
+          rowId: w.rowId,
+          texts: w.texts,
+          ...(block ? { block } : {}),
+        });
         pushVerify(w.documentId, { rowId: w.rowId, present: false });
         addWrite(
           w.documentId,
@@ -209,10 +251,12 @@ export function buildJob(o: {
       case 'row.replace': {
         const r = o.ctx.rows[w.rowId]!;
         const moveKey = o.ctx.moves?.has(w.rowId) ? `move:${w.rowId}` : undefined;
+        const block = o.ctx.rowBlocks?.[w.rowId];
         pushTableOp(w.documentId, {
           op: 'replace',
           rowId: w.rowId,
           before: w.before,
+          ...(block ? { block } : {}),
           sortKey: r.sortKey,
           date: r.date,
           description: r.description,
@@ -309,9 +353,7 @@ export function buildJob(o: {
           documentId: w.documentId,
           eventId: w.eventId,
           present: true,
-          fields: Object.fromEntries(
-            EVENT_FIELDS.filter((k) => now[k] !== undefined).map((k) => [k, now[k]]),
-          ),
+          fields: eventFields(now),
         });
         verify.push({
           kind: 'event',
@@ -341,9 +383,7 @@ export function buildJob(o: {
           documentId: w.documentId,
           eventId: w.eventId,
           present: true,
-          fields: Object.fromEntries(
-            EVENT_FIELDS.filter((k) => now[k] !== undefined).map((k) => [k, now[k]]),
-          ),
+          fields: eventFields(now),
         });
         verify.push({
           kind: 'event',

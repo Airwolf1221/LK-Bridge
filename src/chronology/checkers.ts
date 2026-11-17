@@ -18,6 +18,8 @@
 import type { DocumentCheckContext, DocumentCheckResult } from '../jobs/internal-steps.js';
 import type { StateDifference } from '../jobs/sidebar-state.js';
 import type { Calendar } from '../calendar/index.js';
+import { compareStoredBlocks } from '../jobs/verify-blocks.js';
+import { withoutVersions } from '../pages/blockwise.js';
 import { couldBeRowOf } from './orphan.js';
 import {
   anchorFor,
@@ -53,7 +55,16 @@ export type TableOp =
       readonly date: DateRef;
       readonly description: string;
     }
-  | { readonly op: 'delete'; readonly rowId: string; readonly texts: RowTexts }
+  | {
+      readonly op: 'delete';
+      readonly rowId: string;
+      readonly texts: RowTexts;
+      /**
+       * CR-2026-11-R2 (F1): the row's whole block as it must still be (a revert: as the job left it), compared as a
+       * verify compares blocks (links, marks, inline icons count), not only its words. Absent: the words only.
+       */
+      readonly block?: Obj;
+    }
   /** v2 D1.1: the row must still be exactly this (a repair that writes only the timeline); nothing is written to it. */
   | { readonly op: 'assert'; readonly rowId: string; readonly texts: RowTexts }
   /** v2 E5 hotfix: the table must still have exactly this many rows (the count fix's compare-and-swap). */
@@ -71,6 +82,8 @@ export type TableOp =
       readonly op: 'replace';
       readonly rowId: string;
       readonly before: RowTexts;
+      /** CR-2026-11-R2 (F1): the row's whole block as it must still be, when given (see `delete`). */
+      readonly block?: Obj;
       /** The key of the move's body (only when the row's date changes, so its place may too). */
       readonly moveKey?: string;
       readonly sortKey: SortKey;
@@ -152,6 +165,15 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
       sameText(r.description, texts.description) &&
       r.dateText.trim() === texts.date.trim() &&
       r.kcyText.trim() === texts.kcy.trim();
+    // CR-2026-11-R2 (F1): the whole row, when the op names the block it must be.
+    const sameBlock = (r: AgeRow, block: Obj | undefined) =>
+      block === undefined || compareStoredBlocks([block], withoutVersions([r.row.block])).ok;
+    const wholeRow = (r: AgeRow) => ({
+      description: r.description,
+      date: r.dateText,
+      kcy: r.kcyText,
+      note: 'the row is not as it must be (its links, marks or inline icons differ)',
+    });
     const duplicate = (date: DateRef, description: string, except: string | null) =>
       t.rows.find(
         (r) =>
@@ -208,9 +230,11 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
               kcy: row.kcyText,
             }),
           );
+        else if (op.op === 'delete' && !sameBlock(row, op.block))
+          differences.push(diff(`${ctx.label} row ${op.rowId}`, op.texts, wholeRow(row)));
         continue;
       }
-      if (!same(row, op.before)) {
+      if (!same(row, op.before) || !sameBlock(row, op.block)) {
         differences.push(
           diff(`${ctx.label} row ${op.rowId}`, op.before, {
             description: row.description,

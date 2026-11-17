@@ -21,7 +21,7 @@
 import { planFacts, FactsPlanError, type FactRequest, type LinkRequest } from '../facts/plan.js';
 import { expandFacts } from '../facts/expand.js';
 import { sidebarFrom } from '../facts/sidebar.js';
-import { EXPECT_STEP, VERIFY_STEP } from '../jobs/internal-steps.js';
+import { EXPECT_STEP, LMR_STEP, VERIFY_STEP } from '../jobs/internal-steps.js';
 import {
   collectionState,
   normaliseContent,
@@ -35,6 +35,7 @@ import type { OpParams, StepSpec } from '../jobs/types.js';
 import { compareStoredBlocks } from '../jobs/verify-blocks.js';
 import { BLOCKWISE_CHECK, blocksHash, planBlockwise, withoutVersions } from '../pages/blockwise.js';
 import { blockwiseJob, validateBlockOp } from '../pages/blockwise-job.js';
+import { DEFAULT_STAGING_FOLDER } from '../images/service.js';
 import type {
   BlockTarget,
   FactsTarget,
@@ -127,6 +128,13 @@ export const gone = (t: Target, detail: string): TargetPlan => ({
 export const changed = (t: Target, detail: string, differences: readonly Difference[]): TargetPlan => ({
   check: { ...base(t), state: 'changed', detail, differences: differences.slice(0, 10) },
 });
+/** CR-2026-11-R2 (F10): a target a later job wrote again: changed since the job, whatever its content now. */
+export const changedLater = (t: Target): TargetPlan =>
+  changed(
+    t,
+    `a later job (${t.laterWrite}) wrote it again: reverting this job would undo that job’s change`,
+    [{ path: t.what, expected: 'as this job left it', actual: `written again by job ${t.laterWrite}` }],
+  );
 export const notRevertible = (t: Target, detail: string, extra: Partial<TargetCheck> = {}): TargetPlan => ({
   check: { ...base(t), state: 'not_revertible', detail, ...extra },
 });
@@ -156,6 +164,7 @@ export async function planText(t: TextTarget, io: PlanIo): Promise<TargetPlan> {
       c.differences.map((d) => ({ path: d.path, expected: d.expected, actual: d.actual })),
     );
   }
+  if (t.laterWrite) return changedLater(t);
   const journalOperation = journalOp(io, t);
   const plan = planBlockwise(live, t.before, {
     validate: (op) => validateBlockOp(t.resourceId, t.documentId, op),
@@ -259,7 +268,9 @@ export async function planBlocks(ts: readonly BlockTarget[], io: PlanIo): Promis
         : ({ ...t.sent, id: t.blockId } as Obj);
     if (t.change === 'inserted') {
       if (!found) out.push(nothing(t, 'the block the job added is already gone'));
-      else if (sameBlock(left, withoutVersions([found])[0]!)) readyOnes.push({ t, left });
+      else if (sameBlock(left, withoutVersions([found])[0]!))
+        if (t.laterWrite) out.push(changedLater(t));
+        else readyOnes.push({ t, left });
       else
         out.push(
           changed(t, 'the block the job added has changed since', [
@@ -275,7 +286,9 @@ export async function planBlocks(ts: readonly BlockTarget[], io: PlanIo): Promis
     const now = withoutVersions([found])[0]!;
     if (t.before && sameBlock(t.before, now))
       out.push(nothing(t, 'the block is already as it was before the job'));
-    else if (sameBlock(left, now)) readyOnes.push({ t, left });
+    else if (sameBlock(left, now))
+      if (t.laterWrite) out.push(changedLater(t));
+      else readyOnes.push({ t, left });
     else
       out.push(
         changed(t, 'the block has changed since the job', [{ path: t.blockId, expected: left, actual: now }]),
@@ -352,13 +365,18 @@ export async function planBlocks(ts: readonly BlockTarget[], io: PlanIo): Promis
 const keyOf = (k: string) => k.normalize('NFKC').trim().toLowerCase();
 const content = (r: RowState) => stableJson(normaliseContent(r.content));
 
+/**
+ * A row's match in a list: by id; by key only when one side has no id (a row the bridge created, whose id the plan could
+ * not know). CR-2026-11-R2 (F12): two rows that both have ids and differ are never the same row, whatever their key.
+ */
+const matchRow = (r: RowState, list: readonly RowState[]) =>
+  (r.id !== null ? list.find((x) => x.id === r.id) : undefined) ??
+  list.find((x) => (x.id === null || r.id === null) && keyOf(x.key) === keyOf(r.key));
+
 /** Rows by id, else by key; the differences between what is expected and what is there. */
 function rowDiffs(label: string, expected: readonly RowState[], actual: readonly RowState[]): Difference[] {
   const out: Difference[] = [];
-  const match = (r: RowState, list: readonly RowState[]) =>
-    (r.id !== null ? list.find((x) => x.id === r.id) : undefined) ??
-    list.find((x) => (x.id === null || r.id === null ? keyOf(x.key) === keyOf(r.key) : false)) ??
-    list.find((x) => keyOf(x.key) === keyOf(r.key));
+  const match = matchRow;
   for (const e of expected) {
     const a = match(e, actual);
     if (!a) out.push({ path: `${label} ${e.key}`, expected: e.content, actual: '(no such row)' });
@@ -383,6 +401,19 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
   const sidebar = sidebarFrom(r.body);
   const kv = t.property ? sidebar.find((p) => p.id === t.property!.id) : undefined;
   if (t.property && !kv) return gone(t, `the sidebar property “${t.property.title}” is gone`);
+  // CR-2026-11-R2 (F2): set_facts' planner finds a property by its title, so the revert is planned only while the job's
+  // own property (and each of its link collections) still carries the title it had at the job: renamed, another
+  // property could carry that title now, and the revert would write into it.
+  const renamed: Difference[] = [];
+  if (t.property && kv && keyOf(kv.title) !== keyOf(t.property.title))
+    renamed.push({ path: 'title', expected: t.property.title, actual: kv.title });
+  for (const c of t.collections) {
+    const p = sidebar.find((x) => x.id === c.propertyId);
+    if (p && keyOf(p.title) !== keyOf(c.title))
+      renamed.push({ path: `${c.title} title`, expected: c.title, actual: p.title });
+  }
+  if (renamed.length > 0)
+    return changed(t, 'a sidebar property the job wrote has been renamed since (an outside edit)', renamed);
   const liveRows = kv
     ? rowsState(
         (kv.rows ?? []).map((x) => ({ id: x.id, rank: x.rank ?? null, key: x.key, content: x.content })),
@@ -414,6 +445,7 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
       });
   }
   if (diffsBefore.length === 0) return nothing(t, 'the sidebar is already as it was before the job');
+  if (t.laterWrite) return changedLater(t);
   if (diffsLeft.length > 0)
     return changed(
       t,
@@ -421,13 +453,14 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
       diffsLeft,
     );
 
-  // From the sidebar now (as the job left it) back to the sidebar before.
+  // From the sidebar now (as the job left it) back to the sidebar before. CR-2026-11-R2 (F3): a Last Major Revision date
+  // a later job relied on stays (the row is left as the job left it).
+  const keepLmr = t.lmr && t.lmr.keptFor !== null ? t.lmr.rowId : null;
   const facts: FactRequest[] = [];
   if (t.rowsBefore) {
-    const match = (r: RowState, list: readonly RowState[]) =>
-      (r.id !== null ? list.find((x) => x.id === r.id) : undefined) ??
-      list.find((x) => keyOf(x.key) === keyOf(r.key));
+    const match = matchRow;
     for (const b of t.rowsBefore) {
+      if (keepLmr !== null && b.id === keepLmr) continue;
       const now = match(b, liveRows);
       if (!now || content(now) !== content(b)) facts.push({ key: now?.key ?? b.key, value: [...b.content] });
     }
@@ -470,13 +503,34 @@ export async function planFactsTarget(t: FactsTarget, io: PlanIo): Promise<Targe
     facts: { revertOf: io.jobId },
     links: {},
   });
+  // CR-2026-11-R2 (F2): every write and check of the plan names one of the job's own properties, or nothing is planned.
+  const own = new Set([...(t.property ? [t.property.id] : []), ...t.collections.map((c) => c.propertyId)]);
+  const named = job.steps.flatMap((st) => {
+    const body = st.params?.body;
+    return [
+      ...(st.params?.path?.propertyId ? [st.params.path.propertyId] : []),
+      ...(st.op === EXPECT_STEP && isObj(body) && Array.isArray(body.checks)
+        ? (body.checks as Obj[]).map((c) => c.propertyId).filter((x): x is string => typeof x === 'string')
+        : []),
+    ];
+  });
+  if (named.some((id) => !own.has(id)))
+    return notRevertible(
+      t,
+      'the sidebar could only be planned back through a property the job did not write',
+    );
   const steps = job.steps.map((s) =>
     s.journalOperation ? { ...s, journalOperation: { ...s.journalOperation, ...journalOp(io, t) } } : s,
   );
   return ready(t, job.summary.replace(/^set_facts on /, ''), steps, { resources: [t.resourceId] });
 }
 
-/** A Last Major Revision row the job set, alone: its value before. */
+/**
+ * A Last Major Revision row the job set, alone: its value before. CR-2026-11-R2 (F3): only when it can be put back
+ * exactly (the value's runs, or a plain value), only while the row is still exactly what the job wrote, and only when no
+ * later job relied on the date (its own major revision the same day): otherwise it is left as it is. Whether the edit
+ * that justified the date is reverted too is decided with the whole revert (src/review/revert.ts).
+ */
 export async function planLmr(t: LmrTarget, io: PlanIo): Promise<TargetPlan> {
   const r = await io.read('listPropertyRows', {
     path: { resourceId: t.resourceId, propertyId: t.propertyId },
@@ -485,18 +539,30 @@ export async function planLmr(t: LmrTarget, io: PlanIo): Promise<TargetPlan> {
   const rows = rowsState((r.body as { data?: unknown } | undefined)?.data);
   const row = rows.find((x) => x.id === t.rowId);
   if (!row) return gone(t, `the ${t.rowKey} row is gone`);
+  const before: readonly Obj[] = t.beforeRuns ?? (t.before === '' ? [] : [{ text: t.before }]);
   const text = row.content
     .map((x) => (typeof x.text === 'string' ? x.text : ''))
     .join('')
     .trim();
-  if (text === t.before.trim()) return nothing(t, `${t.rowKey} already says “${t.before}”`);
-  if (text !== t.after.trim())
+  const runs = (c: readonly Obj[]) => stableJson(normaliseContent(c));
+  if (runs(row.content) === runs(before)) return nothing(t, `${t.rowKey} already says “${t.before}”`);
+  if (runs(row.content) !== runs([{ text: t.after }]))
     return changed(t, `${t.rowKey} has changed since the job`, [
       { path: t.rowKey, expected: t.after, actual: text },
     ]);
-  const after = rows.map((x) =>
-    x.id === t.rowId ? { ...x, content: t.before === '' ? [] : [{ text: t.before }] } : x,
-  );
+  if (t.keptFor !== null)
+    return nothing(
+      t,
+      `${t.rowKey} stays “${t.after}”: a later job (${t.keptFor}) made its own major revision of the page that day`,
+    );
+  if (t.laterWrite) return changedLater(t);
+  if (t.beforeRuns === null && t.before === '')
+    // An empty plain value is all the decision kept: the row may have held a mention or another value with no text.
+    return notRevertible(
+      t,
+      `${t.rowKey} cannot be put back exactly: the job kept only its plain text (empty), which may stand for a mention or another value with no text`,
+    );
+  const after = rows.map((x) => (x.id === t.rowId ? { ...x, content: [...before] } : x));
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,
@@ -512,7 +578,7 @@ export async function planLmr(t: LmrTarget, io: PlanIo): Promise<TargetPlan> {
       op: 'updatePropertyRow',
       params: {
         path: { resourceId: t.resourceId, propertyId: t.propertyId, rowId: t.rowId },
-        body: { content: t.before === '' ? null : [{ text: t.before }] },
+        body: { content: before.length === 0 ? null : [...before] },
       },
       ifMatchFrom: { step: 1, key: 'rows' },
       deferTreeReread: true,
@@ -556,6 +622,7 @@ export async function planResource(t: ResourceTarget, io: PlanIo): Promise<Targe
   const d = resourceDiffs(t.left, live);
   if (d.length > 0)
     return changed(t, 'the page has changed since the job (an outside edit is never overwritten)', d);
+  if (t.laterWrite) return changedLater(t);
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,
@@ -646,17 +713,39 @@ export async function planMove(t: MoveTarget, io: PlanIo): Promise<TargetPlan> {
   const rank = str(live.rank) ?? null;
   if (parent === t.before.parentId && rank === t.before.rank)
     return nothing(t, 'the page is already where it was');
-  if (parent !== t.left.parentId)
-    return changed(t, 'the page has been moved since the job', [
-      { path: 'parent', expected: t.left.parentId, actual: parent },
-    ]);
+  // CR-2026-11-R2 (F4): where the job left it is its parent AND its place among its siblings (its rank): a page dragged
+  // elsewhere under the same parent has been moved since, and is not moved back.
+  if (t.left.rank === null)
+    return notRevertible(
+      t,
+      'where the job left the page among its siblings is not recorded (the move’s answer had no rank)',
+    );
+  const moved: Difference[] = [];
+  if (parent !== t.left.parentId) moved.push({ path: 'parent', expected: t.left.parentId, actual: parent });
+  if (rank !== t.left.rank)
+    moved.push({ path: 'place among its siblings', expected: t.left.rank, actual: rank });
+  if (moved.length > 0)
+    return changed(t, 'the page has been moved since the job (an outside edit is never overwritten)', moved);
+  if (t.laterWrite) return changedLater(t);
   const anchor = await anchorFor(io, t.resourceId, t.before.parentId, t.before.rank);
   const steps: StepSpec[] = [
     {
       op: EXPECT_STEP,
       params: {
         body: {
-          checks: [{ label: 'place', kind: 'resource', resourceId: t.resourceId, parentId: t.left.parentId }],
+          checks: [
+            {
+              label: 'place',
+              kind: 'registered',
+              checker: REVERT_CHECKER,
+              resourceId: t.resourceId,
+              input: {
+                kind: 'resource',
+                resourceId: t.resourceId,
+                fields: { parentId: t.left.parentId, rank: t.left.rank },
+              },
+            },
+          ],
         },
       },
     },
@@ -736,6 +825,7 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
     },
   };
   if (t.placement && t.stagedId) {
+    if (t.laterWrite) return changedLater(t);
     // v3 F3.4 (decision B5): the staged image back on the Staging page from the bridge's server, and the placed asset's
     // deletion proposed to the owner. The job only checks, inside its lock, that the asset is as the placement left it.
     return ready(
@@ -749,14 +839,54 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
     );
   }
   if (t.from.kind !== 'asset') return changed(t, 'the image has no staged record to go back to', []);
+  if (t.laterWrite) return changedLater(t);
+  // CR-2026-11-R2 (F9): never into a staging folder. The folder it goes back to is read live and must be one whose name
+  // can be told apart from the staging folder's, by the project's setting and by the default: anything else fails closed.
+  const names = [...t.stagingNames, DEFAULT_STAGING_FOLDER];
+  if (t.from.folderId !== null) {
+    const f = await io.read('getAsset', { path: { assetId: t.from.folderId } });
+    const fb = isObj(f.body) ? f.body : {};
+    if (!f.exists || typeof fb.deletedAt === 'string')
+      return notRevertible(t, 'the folder it came from is gone: Revert does not make folders');
+    if (typeof fb.name !== 'string')
+      return notRevertible(
+        t,
+        'the folder it came from cannot be told apart from the staging folder (its name could not be read): Revert never writes to the staging folder',
+      );
+    if (isStagingName(fb.name, names))
+      return notRevertible(
+        t,
+        `it came from the staging folder (“${fb.name}”): Revert never writes to the staging folder (move it yourself if it should go back)`,
+      );
+  }
   // An ordinary asset move: back to its folder, name and hidden flag (never the staging folder: see jobTargets).
   const body = {
     folderId: t.from.folderId,
     isHidden: t.from.isHidden,
     ...(t.from.name !== null && t.from.name !== t.left.name ? { name: t.from.name } : {}),
   };
+  const guarded: StepSpec = {
+    op: EXPECT_STEP,
+    params: {
+      body: {
+        checks: [
+          {
+            label: 'asset',
+            kind: 'registered',
+            checker: REVERT_CHECKER,
+            input: {
+              kind: 'asset',
+              assetId: t.assetId,
+              fields: t.left,
+              ...(t.from.folderId !== null ? { into: { folderId: t.from.folderId, notNamed: names } } : {}),
+            },
+          },
+        ],
+      },
+    },
+  };
   const steps: StepSpec[] = [
-    check,
+    guarded,
     {
       op: 'updateAsset',
       params: { path: { assetId: t.assetId }, body },
@@ -774,8 +904,27 @@ export async function planImage(t: ImageTarget, io: PlanIo): Promise<TargetPlan>
 
 /** The step numbers a step names (`ifMatchFrom`, the bindings, a verify's `inputFrom`…), shifted by `by`. */
 export function shiftStep(s: StepSpec, by: number): StepSpec {
-  if (by === 0) return s;
-  const n = (x: number) => x + by;
+  return by === 0 ? s : renumberStep(s, (x) => x + by);
+}
+
+/**
+ * CR-2026-11-R2 (F9): whether a folder's name is a staging folder's (the project's setting or the default), compared as
+ * a person reads it: Unicode-normalised, invisible characters and case ignored, spaces collapsed.
+ */
+export function isStagingName(name: string, names: readonly string[]): boolean {
+  const norm = (x: string) =>
+    x
+      .normalize('NFKC')
+      .replace(/[\p{Cf}]/gu, '')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .toLowerCase();
+  const n = norm(name);
+  return names.some((x) => norm(x) === n);
+}
+
+/** The step numbers a step names (`ifMatchFrom`, the bindings, a verify's `inputFrom`…), mapped by `n`. */
+export function renumberStep(s: StepSpec, n: (x: number) => number): StepSpec {
   const out: Record<string, unknown> = { ...s };
   if (s.ifMatchFrom) out.ifMatchFrom = { ...s.ifMatchFrom, step: n(s.ifMatchFrom.step) };
   if (s.bindIds) out.bindIds = { step: n(s.bindIds.step) };
@@ -795,6 +944,17 @@ export function shiftStep(s: StepSpec, by: number): StepSpec {
       return o;
     });
     out.params = { ...s.params, body: { ...s.params.body, targets } };
+  }
+  if (s.op === LMR_STEP && isObj(s.params?.body)) {
+    const b = s.params.body;
+    out.params = {
+      ...s.params,
+      body: {
+        ...b,
+        ...(typeof b.chainFrom === 'number' ? { chainFrom: n(b.chainFrom) } : {}),
+        ...(Array.isArray(b.after) ? { after: (b.after as number[]).map(n) } : {}),
+      },
+    };
   }
   return out as unknown as StepSpec;
 }

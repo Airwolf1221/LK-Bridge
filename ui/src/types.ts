@@ -2451,6 +2451,8 @@ export interface ReviewItem {
   agent: { principalId: string; name: string; profile: string };
   tool: string | null;
   summary: string;
+  /** CR-2026-11-R2 (E1): the title the agent gave a low-level job (a secondary label, never the summary). */
+  agentTitle?: string;
   pages: { id: string; name: string | null }[];
   reviewed: { at: number; by: string; via: string } | null;
   revert: ReviewRevert | null;

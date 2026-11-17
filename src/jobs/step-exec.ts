@@ -660,6 +660,8 @@ export class StepExecutor {
   ): Promise<Record<string, unknown>> {
     let rowId = b.rowId;
     let value = b.value;
+    // CR-2026-11-R2 (R2-18): the row's runs as read (a linked date, a mention), so a revert can put them back exactly.
+    let previousContent: unknown[] | undefined;
     let version: string | undefined;
     if (b.chainFrom !== undefined && rowId !== undefined) {
       const s = this.d.repo.step(job.id, b.chainFrom);
@@ -709,6 +711,7 @@ export class StepExecutor {
       if (!row || typeof row.id !== 'string') return { skip: `the page has no ${b.key} row`, date: today };
       rowId = row.id;
       value = runsText(row.content) ?? (typeof row.text === 'string' ? row.text : '');
+      if (Array.isArray(row.content)) previousContent = row.content as unknown[];
       version = str(body.version);
     }
     if ((value ?? '').trim() === today) return { skip: `${b.key} already says ${today}`, date: today };
@@ -724,6 +727,7 @@ export class StepExecutor {
       versions: { lmr: version },
       // v3 F3.4 (ADR 0055): the value the row held before, so a revert of the job can put it back.
       previous: value ?? null,
+      ...(previousContent ? { previousContent } : {}),
       lmr: {
         path: { resourceId: b.resourceId, propertyId: propertyId!, rowId: rowId! },
         body: { content: [{ text: today }] },
