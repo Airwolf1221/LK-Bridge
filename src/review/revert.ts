@@ -544,6 +544,8 @@ export class RevertService {
           { err: e, jobId, assetId: im.assetId },
           'a reverted image placement could not be followed up',
         );
+        // Not back on the Staging page: the copy of its file is not wanted (kept while a staged record uses it).
+        await this.dropCopies([im]);
         done.push({ ...im, deletionProposalId: null, problem });
       }
     }
