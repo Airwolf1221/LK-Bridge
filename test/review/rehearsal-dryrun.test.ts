@@ -131,6 +131,10 @@ describe('the write-scope rehearsal (dry run against the mock)', () => {
       false,
     );
     expect(w.count('Fourth Arkonan Age')).toBe(countBefore);
+    // R4's re-staged copy was discarded from the Staging page.
+    expect(
+      rt.runtime.images.store.staged(rt.projectId).filter((r) => r.name.startsWith('lk-bridge write-scope')),
+    ).toEqual([]);
     // Nothing waits for the owner either: every proposal the run made was rejected.
     const pending = rt.runtime.policy.proposals.list({ project: rt.projectId, state: 'pending' });
     expect(pending).toEqual([]);
