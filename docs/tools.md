@@ -1588,10 +1588,15 @@ images labelled as one subject's Primary Reference (`primary_conflict`). An asse
 yet is a blocked case (`format_unknown`), never guessed. Default: the whole library; `page` or `under` narrows it to the
 images those pages show.
 
-**`arkona_appraisal_fix`** `{ findingId, project }`: "Propose a fix" for ONE finding whose `followUp.kind` is `fix`. It
-re-reads the page (or the asset) live, checks the finding still holds (`FIX_STALE` otherwise, with what is there now:
-nothing is proposed), and makes **one ordinary proposal** for the owner, whatever your scope (`proposal_captured`; never
-resubmit it, follow it with `bridge_proposal_status`). Nothing is applied without the owner's approval.
+**`arkona_appraisal_fix`** `{ findingId, project }`: the fix for ONE finding whose `followUp.kind` is `fix`. It re-reads
+the page (or the asset) live and checks the finding still holds (`FIX_STALE` otherwise, with what is there now: nothing
+is done). Then it follows the pack's switch for this tool (v3 F3.4, [ADR 0055](adr/0055-write-scope-review-revert-rails.md)
+decision D; the Packs page): **follow the agent's scope**, the seed's default, makes the fix at once at scope `write`, as
+one job (`written`, or `queued`: follow it with `bridge_job_status`; the owner reviews it afterwards on the Review page),
+and one proposal at scope `propose`; **always propose** makes **one ordinary proposal** for the owner whatever the scope
+(`proposal_captured`; never resubmit it, follow it with `bridge_proposal_status`). Canon, lifecycle and the safety rails
+still make a proposal (with `proposedBecause` for a rail). The handed-over audit fixes (sibling order, tags) are always
+proposals, as the audits make them, and the Appraisal page's **Propose a fix** always proposes.
 
 | Finding                                      | The proposal                                                                                |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------- |
@@ -1617,14 +1622,14 @@ and for A3 `PROPOSAL_NOT_FOUND` and `PROPOSAL_NOT_PENDING` (only a pending propo
 
 ### Costs (reads and writes)
 
-| Call                                             | Reads                                                   | Writes           |
-| ------------------------------------------------ | ------------------------------------------------------- | ---------------- |
-| `search` with `content: true`                    | 0                                                       | 0                |
-| `search` with `content: "live"`                  | 1                                                       | 0                |
-| `arkona_appraise_owner`                          | 0 (`live: true`: 2 a page, at most 25 pages)            | 0                |
-| `arkona_change_impact`                           | 0 (`live: true`: 1)                                     | 0                |
-| `arkona_working_digest`, `arkona_visual_hygiene` | 0                                                       | 0                |
-| `arkona_appraisal_fix`                           | 1 (the re-read); then the proposal's own, once approved | 0 until approved |
+| Call                                             | Reads                                                                                                                | Writes                                  |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `search` with `content: true`                    | 0                                                                                                                    | 0                                       |
+| `search` with `content: "live"`                  | 1                                                                                                                    | 0                                       |
+| `arkona_appraise_owner`                          | 0 (`live: true`: 2 a page, at most 25 pages)                                                                         | 0                                       |
+| `arkona_change_impact`                           | 0 (`live: true`: 1)                                                                                                  | 0                                       |
+| `arkona_working_digest`, `arkona_visual_hygiene` | 0                                                                                                                    | 0                                       |
+| `arkona_appraisal_fix`                           | 1 (the re-read); then the fix's own (at once at scope `write` when the switch follows the scope, else once approved) | the fix's own, at once or once approved |
 
 The full-text index is built and updated from the snapshot store (no LegendKeeper read). On a fixture of Arkona's size
 (1,500 pages) it builds in about 2 seconds, takes a five-page change snapshot in about 40 ms, answers a phrase in about

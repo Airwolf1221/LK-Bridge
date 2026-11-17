@@ -328,7 +328,7 @@ naming the projects they work on). The Arkona pack has ten tools. Ask for the pa
 | See what depends on a page, a rename, a proposal  | `arkona_change_impact`       | `Arkona appraisal`                        |
 | See what is in progress (Working pages and more)  | `arkona_working_digest`      | `Arkona appraisal`                        |
 | Check the images and the asset library            | `arkona_visual_hygiene`      | `Arkona appraisal`                        |
-| Propose the fix an appraisal finding offers       | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
+| Make the fix an appraisal finding offers          | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
 
 **What every pack tool that makes pages does the same way** (the appraisal tools only read: see `Arkona appraisal`).
 
@@ -652,13 +652,13 @@ Four reports and one way to act on a finding. **The reports are read-only and fr
 (the nightly full snapshot plus the change snapshots since), the audits and its own records, never LegendKeeper, and they
 **write nothing and propose nothing**. Each says what it inspected, how fresh its data was and what it could not check.
 
-| You want                                                       | Use                                                     |
-| -------------------------------------------------------------- | ------------------------------------------------------- |
-| A page, a branch or everything against Source Formatting       | `arkona_appraise_owner` (`page`, `under` or `all`)      |
-| What depends on a page, a planned rename or a pending proposal | `arkona_change_impact` (`page`, `renameTo`, `proposal`) |
-| What is in progress: Working pages, open proposals and more    | `arkona_working_digest` (`since: "7d"`)                 |
-| The images and the asset library                               | `arkona_visual_hygiene` (`page` or `under` narrows it)  |
-| To act on one finding whose follow-up is a `fix`               | `arkona_appraisal_fix` (`findingId`): ONE proposal      |
+| You want                                                       | Use                                                                                                                    |
+| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| A page, a branch or everything against Source Formatting       | `arkona_appraise_owner` (`page`, `under` or `all`)                                                                     |
+| What depends on a page, a planned rename or a pending proposal | `arkona_change_impact` (`page`, `renameTo`, `proposal`)                                                                |
+| What is in progress: Working pages, open proposals and more    | `arkona_working_digest` (`since: "7d"`)                                                                                |
+| The images and the asset library                               | `arkona_visual_hygiene` (`page` or `under` narrows it)                                                                 |
+| To act on one finding whose follow-up is a `fix`               | `arkona_appraisal_fix` (`findingId`): at scope `write` made at once by default (the owner's switch), else ONE proposal |
 
 **Reading a report.** Findings come in groups (A2: required defects, optional polish, architectural candidates, blocked
 cases; A3: proven breakage, review candidates). Each names the rule it comes from (the governance page and section), its

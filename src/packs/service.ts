@@ -143,6 +143,13 @@ export interface Packs {
    * no AU ruling: ADR 0035 exactly). Read by the lifecycle tools, the lifecycle guard and the audit. Never throws.
    */
   lifecycleRules(projectId: string): LifecycleTagRules;
+  /**
+   * v3 F3.4 (ADR 0055 decision D): a write tool's switch in the version of the pack the owner APPROVED (a newer version
+   * waiting for approval does not apply yet); `propose` while none is approved or the pack is not known (fails closed).
+   * For the tools that do not refuse a pack waiting for approval (`arkona_appraisal_fix`); the package tools use the
+   * current rules, which they run only once approved.
+   */
+  toolMode(packId: string, tool: string): PackToolMode;
   /** The full tool names of a pack (`arkona_create_character`). */
   toolsOf(pack: Pack): string[];
   /** Whether a pack tool is listed: its pack is attached to at least one project served now. */
@@ -599,6 +606,18 @@ export function createPacks(d: PacksDeps): Packs {
         .map((a) => store.get(a.packId))
         .filter((p): p is Pack => p !== null),
     attachment: (packId, projectId) => store.attachment(packId, projectId),
+    toolMode: (packId, tool) => {
+      try {
+        const pack = store.get(packId);
+        if (!pack?.approved) return 'propose';
+        const rules =
+          pack.approved.version === pack.version ? pack.rules : store.rulesAt(pack.id, pack.approved.version);
+        return rules ? packToolMode(rules, tool) : 'propose';
+      } catch (e) {
+        d.log?.warn({ err: e, packId, tool }, 'a pack tool switch could not be read; the tool proposes');
+        return 'propose';
+      }
+    },
     lifecycleRules: (projectId) => {
       try {
         const name = projectName(projectId).toLowerCase();

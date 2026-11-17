@@ -116,8 +116,8 @@ export async function packWorld(
     readonly mehranaAlias?: boolean;
     /**
      * v3 F3.4 (ADR 0055 decision D): `propose` (the default) switches every write tool to "always propose", as every
-     * package was before F3.4, so the earlier tests keep testing the proposal path; `seed` keeps the seed's switches
-     * (adding art follows the agent's scope).
+     * package and every appraisal fix was before F3.4, so the earlier tests keep testing the proposal path; `seed` keeps
+     * the seed's switches (adding art and an appraisal fix follow the agent's scope).
      */
     readonly toolModes?: 'propose' | 'seed';
   } = {},
@@ -469,7 +469,10 @@ export async function packWorld(
   const packs = w.stack.runtime.packs;
   packs.ensureSeeded();
   if (o.toolModes !== 'seed')
-    packs.commands.setToolModes('owner', 'arkona', { arkona_add_character_art: 'propose' });
+    packs.commands.setToolModes('owner', 'arkona', {
+      arkona_add_character_art: 'propose',
+      arkona_appraisal_fix: 'propose',
+    });
   packs.store.setGovernance('arkona', [
     {
       key: 'character-architecture',

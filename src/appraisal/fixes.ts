@@ -52,6 +52,19 @@ export type FixResult =
       readonly fix: string;
       readonly reads: number;
       readonly requiresCanonicalApproval?: boolean;
+      /** v3 F3.4 (ADR 0055 decision C): the safety rail that made it a proposal at scope `write`, in words. */
+      readonly proposedBecause?: string;
+    }
+  /**
+   * v3 F3.4 (ADR 0055 decision D): the pack's switch says the fix follows the caller's scope, and at scope `write` it was
+   * accepted as a job (the owner reviews it afterwards, on the Review page).
+   */
+  | {
+      readonly status: 'submitted';
+      readonly jobId: string;
+      readonly summary: string | null;
+      readonly fix: string;
+      readonly reads: number;
     }
   | { readonly status: 'nothing_to_do'; readonly message: string; readonly reads: number };
 
@@ -62,6 +75,12 @@ export interface FixDeps {
   readonly submit: (req: Record<string, unknown>) => Promise<Record<string, unknown>>;
   /** Who asks: the agent's own principal (MCP), or the owner's system principal (the dashboard). */
   readonly origin: JobOrigin;
+  /**
+   * v3 F3.4 (ADR 0055 decision D): whether the fix is ONE proposal whatever the caller's scope (true: the dashboard's
+   * "Propose a fix", and the pack tool while its switch says "always propose"), or follows the caller's scope (false:
+   * the pack tool's switch "follow the agent's scope"; at scope `write` it runs, still within every guard and rail).
+   */
+  readonly forceProposal: boolean;
   /** The bridge's tree (names, places, siblings): free. */
   readonly node: (id: string) => TreeNode | null;
   readonly children: (parentId: string) => readonly TreeNode[];
@@ -186,7 +205,7 @@ async function submit(
     ...(spec.holdLock ? { holdLock: spec.holdLock } : {}),
     ...(spec.holdDocuments ? { holdDocuments: spec.holdDocuments } : {}),
     internal: true,
-    forceProposal: true,
+    forceProposal: d.forceProposal,
     proposal: {
       operation: spec.operation,
       operations: [
@@ -196,16 +215,19 @@ async function submit(
       ...(spec.prefetched ? { prefetched: spec.prefetched } : {}),
     },
   });
-  if (typeof r.proposalId !== 'string')
-    throw new AppraisalError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
-  return {
-    status: 'proposal_captured',
-    proposalId: r.proposalId,
-    summary: typeof r.summary === 'string' ? r.summary : null,
-    fix: spec.fix,
-    reads: spec.reads,
-    ...(r.canonical ? { requiresCanonicalApproval: true } : {}),
-  };
+  if (typeof r.proposalId === 'string')
+    return {
+      status: 'proposal_captured',
+      proposalId: r.proposalId,
+      summary: typeof r.summary === 'string' ? r.summary : null,
+      fix: spec.fix,
+      reads: spec.reads,
+      ...(r.canonical ? { requiresCanonicalApproval: true } : {}),
+      ...(typeof r.proposedBecause === 'string' ? { proposedBecause: r.proposedBecause } : {}),
+    };
+  if (!d.forceProposal && typeof r.jobId === 'string')
+    return { status: 'submitted', jobId: r.jobId, summary: spec.title, fix: spec.fix, reads: spec.reads };
+  throw new AppraisalError('NOT_PROPOSED', 'The fix was not captured as a proposal; nothing was done.');
 }
 
 // ============================================================================================ the page name

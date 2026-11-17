@@ -193,6 +193,7 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'See what depends on a page, a rename, a proposal',
       'See what is in progress (Working pages and more)',
       'Check the images and the asset library',
+      'Make the fix an appraisal finding offers',
       'Propose the fix an appraisal finding offers',
       'arkona_appraise_owner',
       'arkona_change_impact',
