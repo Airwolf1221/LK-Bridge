@@ -48,6 +48,28 @@ export interface RailLookups {
   /** How many pages lie under a page (its descendants), or null when the tree does not know. */
   readonly descendants?: (projectId: string, resourceId: string) => number | null;
   readonly pageName?: (projectId: string, resourceId: string) => string | null;
+  /**
+   * CR-2026-11-R2 (B7): how many pages lie under a page as LegendKeeper holds them now (the tree may not have seen pages
+   * added in the app since its last sweep), listed until more than `limit` are found; null when they cannot be listed.
+   */
+  readonly liveDescendants?: (projectId: string, resourceId: string, limit: number) => Promise<number | null>;
+}
+
+/** The pages whose descendants a request's rails count: a cascade delete's page, a copy's source (with its children). */
+function countedRoots(items: readonly RailRequestItem[]): string[] {
+  const roots = new Set<string>();
+  for (const it of items) {
+    if (it.kind === 'read') continue;
+    const body = (it.params.body ?? {}) as { templateId?: unknown; includeChildren?: unknown };
+    const rid = it.params.path?.resourceId;
+    const cascade = it.params.query?.cascade === true || it.params.query?.cascade === 'true';
+    if (it.opId === 'deleteResource' && cascade && rid) roots.add(rid);
+    if (body.includeChildren !== true) continue;
+    if (it.opId === 'saveResourceAsTemplate' && rid) roots.add(rid);
+    if (it.opId === 'createResourceFromTemplate' && typeof body.templateId === 'string')
+      roots.add(body.templateId);
+  }
+  return [...roots];
 }
 
 /** The message an agent sees when its connection is read-only. */
@@ -176,19 +198,36 @@ export class LivePolicyGate implements PolicyGate {
    * request that would run directly. Only an agent at scope `write` has rails; anyone else gets null (the gate itself
    * decides for them).
    */
-  rails(
+  async rails(
     principal: Principal,
     items: readonly RailRequestItem[],
     ctx: { readonly project: string; readonly jobKind: JobKind; readonly stagedPlacement?: boolean },
-  ): RailDecision | null {
+  ): Promise<RailDecision | null> {
     if (principal.principalId === SYSTEM_PRINCIPAL_ID) return null;
     const r = this.resolve(principal.principalId);
     if (!r?.active || r.scope !== 'write') return null;
     const l = this.railLookups;
-    return railsVerdict(r.rails, items, {
-      ...(l.descendants ? { descendants: (id: string) => l.descendants!(ctx.project, id) } : {}),
+    const base = {
       ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
       ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
+    };
+    const fromTree = (id: string) => l.descendants?.(ctx.project, id) ?? null;
+    const verdict = railsVerdict(r.rails, items, { ...base, descendants: fromTree });
+    // CR-2026-11-R2 (B7): a request the tree's counts would let run directly although it deletes a cascade or copies a
+    // page with its children is counted again on the pages LegendKeeper holds now (the larger count wins; a listing
+    // that cannot be made fails closed). Only then: a request already proposed costs no reads.
+    if (verdict !== null || !r.rails.bulk || !l.liveDescendants) return verdict;
+    const roots = countedRoots(items);
+    if (roots.length === 0) return null;
+    const live = new Map<string, number | null>();
+    for (const id of roots) live.set(id, await l.liveDescendants(ctx.project, id, r.rails.bulkPages));
+    return railsVerdict(r.rails, items, {
+      ...base,
+      descendants: (id: string) => {
+        const now = live.get(id);
+        if (now === undefined) return fromTree(id);
+        return now === null ? null : Math.max(fromTree(id) ?? 0, now);
+      },
     });
   }
 }

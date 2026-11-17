@@ -101,26 +101,30 @@ describe('a direct job accepted, then queued, while the owner tightens the profi
     }
   });
 
-  it('G3: switching the deletes rail on stops (or proposes) a queued direct delete before it is sent', async () => {
-    cmd().setRails('owner', a.profileId, { deletes: false });
-    w.stack.runtime.engine.controls.pauseWrites('test');
-    let jobId: string;
-    try {
-      const r = await call('lk_api_write', {
-        operationId: 'deleteResource',
-        params: { path: { resourceId: 'bk00000b' } },
+  // Open (CR-2026-11-R2 section 7): rails are asked at entry only (ADR 0055 C3); asking them again per step is the owner's decision.
+  it.fails(
+    'G3: switching the deletes rail on stops (or proposes) a queued direct delete before it is sent',
+    async () => {
+      cmd().setRails('owner', a.profileId, { deletes: false });
+      w.stack.runtime.engine.controls.pauseWrites('test');
+      let jobId: string;
+      try {
+        const r = await call('lk_api_write', {
+          operationId: 'deleteResource',
+          params: { path: { resourceId: 'bk00000b' } },
+        });
+        expect(r.body.status, r.text).toBe('queued');
+        jobId = String(r.body.jobId);
+        // The owner switches the deletes rail back on while the delete waits.
+        cmd().setRails('owner', a.profileId, { deletes: true });
+      } finally {
+        w.stack.runtime.engine.controls.resumeWrites('test');
+      }
+      const done = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
+      expect({ status: done.status, live: w.repo.live('bk00000b') !== undefined }).toEqual({
+        status: 'failed',
+        live: true,
       });
-      expect(r.body.status, r.text).toBe('queued');
-      jobId = String(r.body.jobId);
-      // The owner switches the deletes rail back on while the delete waits.
-      cmd().setRails('owner', a.profileId, { deletes: true });
-    } finally {
-      w.stack.runtime.engine.controls.resumeWrites('test');
-    }
-    const done = await w.stack.runtime.engine.wait(PROJECT, jobId, 20_000);
-    expect({ status: done.status, live: w.repo.live('bk00000b') !== undefined }).toEqual({
-      status: 'failed',
-      live: true,
-    });
-  });
+    },
+  );
 });

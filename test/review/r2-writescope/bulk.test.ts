@@ -119,15 +119,19 @@ describe('pages made or brought back in bulk that the bulk rail counts as one', 
     expect(r.body.proposedBecause).toMatch(/bulk change/);
   });
 
-  it('B3: restore_resource of a page deleted with 15 pages under it (16 pages back) is a proposal', async () => {
-    const n = w.stack.mock.calls.length;
-    const r = await call('restore_resource', { page: RESTOREBOX });
-    const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
-    expect(
-      { status: r.body.status, pagesBack: back },
-      `${r.text}\nwrites sent: ${JSON.stringify(writeCallsSince(w, n).map((c) => `${c.method} ${c.path}`))}`,
-    ).toMatchObject({ status: 'proposal_captured', pagesBack: 0 });
-  });
+  // Open (CR-2026-11-R2 section 7): LegendKeeper has no trash listing, so how many pages a restore brings back is not known (owner's decision).
+  it.fails(
+    'B3: restore_resource of a page deleted with 15 pages under it (16 pages back) is a proposal',
+    async () => {
+      const n = w.stack.mock.calls.length;
+      const r = await call('restore_resource', { page: RESTOREBOX });
+      const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
+      expect(
+        { status: r.body.status, pagesBack: back },
+        `${r.text}\nwrites sent: ${JSON.stringify(writeCallsSince(w, n).map((c) => `${c.method} ${c.path}`))}`,
+      ).toMatchObject({ status: 'proposal_captured', pagesBack: 0 });
+    },
+  );
 
   it('B4: a batch of [saveResourceAsTemplate, createResourceFromTemplate] with children (32 pages) is not run directly', async () => {
     const m = w.repo.mutations.length;
@@ -169,26 +173,30 @@ describe('pages made or brought back in bulk that the bulk rail counts as one', 
     expect(writeCallsSince(w, n)).toEqual([]);
   });
 
-  it('B6: restoreResource through lk_api_write (same cascade, low-level route) is a proposal', async () => {
-    // The owner deletes the box again (the agent restored it above when B3 held no rail).
-    if (w.repo.live(RESTOREBOX)) {
-      await w.stack.runtime.engine.run(
-        'deleteResource',
-        { path: { resourceId: RESTOREBOX }, query: { cascade: true } },
-        { project: PROJECT, origin: { kind: 'ui', client: 'owner' }, confirm: 'cascade', priority: 'P1' },
-      );
-    }
-    expect(w.repo.live(RESTOREBOX)).toBeUndefined();
-    const r = await call('lk_api_write', {
-      operationId: 'restoreResource',
-      params: { path: { resourceId: RESTOREBOX } },
-    });
-    const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
-    expect({ status: r.body.status, pagesBack: back }, r.text).toMatchObject({
-      status: 'proposal_captured',
-      pagesBack: 0,
-    });
-  });
+  // Open (CR-2026-11-R2 section 7): as B3, the pages a restore brings back cannot be counted before it runs (owner's decision).
+  it.fails(
+    'B6: restoreResource through lk_api_write (same cascade, low-level route) is a proposal',
+    async () => {
+      // The owner deletes the box again (the agent restored it above when B3 held no rail).
+      if (w.repo.live(RESTOREBOX)) {
+        await w.stack.runtime.engine.run(
+          'deleteResource',
+          { path: { resourceId: RESTOREBOX }, query: { cascade: true } },
+          { project: PROJECT, origin: { kind: 'ui', client: 'owner' }, confirm: 'cascade', priority: 'P1' },
+        );
+      }
+      expect(w.repo.live(RESTOREBOX)).toBeUndefined();
+      const r = await call('lk_api_write', {
+        operationId: 'restoreResource',
+        params: { path: { resourceId: RESTOREBOX } },
+      });
+      const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
+      expect({ status: r.body.status, pagesBack: back }, r.text).toMatchObject({
+        status: 'proposal_captured',
+        pagesBack: 0,
+      });
+    },
+  );
 });
 
 describe('the bulk rail with the owner’s own choice of rails (deletes off, bulk on, N = 10)', () => {

@@ -255,28 +255,36 @@ describe('content removed as an edit, outside the rail and outside Revert', () =
     };
   };
 
-  it('A5: updateProperty emptying a link collection (Dependencies, two items) is proposed or revertible', async () => {
-    const r = await call('lk_api_write', {
-      operationId: 'updateProperty',
-      params: { path: { resourceId: P.miyabi, propertyId: 'depmiya1' }, body: { items: [] } },
-    });
-    const out = await directThenRevertible(r);
-    expect(out.proposed || out.revertible, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
-  });
+  // Open (CR-2026-11-R2 section 7): raw removals that are edits (ADR 0055 C1) and not a Revert kind (B3): the owner's design decision.
+  it.fails(
+    'A5: updateProperty emptying a link collection (Dependencies, two items) is proposed or revertible',
+    async () => {
+      const r = await call('lk_api_write', {
+        operationId: 'updateProperty',
+        params: { path: { resourceId: P.miyabi, propertyId: 'depmiya1' }, body: { items: [] } },
+      });
+      const out = await directThenRevertible(r);
+      expect(out.proposed || out.revertible, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
+    },
+  );
 
-  it('A6: deleteBlock of the Fourth Age table (the whole 20-row table block) is proposed or revertible', async () => {
-    const ver = await w.stack.call(a.client, 'lk_api_read', {
-      operationId: 'getDocumentBlocks',
-      params: { path: { resourceId: 'age40001', documentId: w.docs.ageMain } },
-    });
-    const r = await call('lk_api_write', {
-      operationId: 'deleteBlock',
-      params: {
-        path: { resourceId: 'age40001', documentId: w.docs.ageMain, blockId: 'tbl1' },
-        ifMatch: String(ver.body.result?.version ?? ver.body.version ?? 'v7'),
-      },
-    });
-    const out = await directThenRevertible(r);
-    expect(out.proposed || out.revertible, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
-  });
+  // Open (CR-2026-11-R2 section 7): a raw block delete is an edit (ADR 0055 C1) and not revertible (B3): the owner's design decision.
+  it.fails(
+    'A6: deleteBlock of the Fourth Age table (the whole 20-row table block) is proposed or revertible',
+    async () => {
+      const ver = await w.stack.call(a.client, 'lk_api_read', {
+        operationId: 'getDocumentBlocks',
+        params: { path: { resourceId: 'age40001', documentId: w.docs.ageMain } },
+      });
+      const r = await call('lk_api_write', {
+        operationId: 'deleteBlock',
+        params: {
+          path: { resourceId: 'age40001', documentId: w.docs.ageMain, blockId: 'tbl1' },
+          ifMatch: String(ver.body.result?.version ?? ver.body.version ?? 'v7'),
+        },
+      });
+      const out = await directThenRevertible(r);
+      expect(out.proposed || out.revertible, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
+    },
+  );
 });

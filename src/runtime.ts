@@ -64,6 +64,7 @@ import {
   WRITE_PAGE_PLANNER,
 } from './pages/index.js';
 import { CanonicalGuard } from './facts/index.js';
+import { listSubtree } from './facts/canonical.js';
 import { combineGuards } from './jobs/write-guard.js';
 import { PageScopeGuard } from './policy/page-scope.js';
 import { LifecycleGuard } from './lifecycle/guard.js';
@@ -412,6 +413,16 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       } catch {
         return null;
       }
+    },
+    // CR-2026-11-R2 (B7): the pages under a page as LegendKeeper holds them now (as the canon guard lists a cascade at
+    // entry, CR-09), only when the tree's count would let the request run directly; at most about `limit` + 1 reads.
+    liveDescendants: async (projectId, resourceId, limit) => {
+      const below = await listSubtree(
+        (opId, params) => engine.internalRead(projectId, opId, params, { priority: 'P1' }),
+        resourceId,
+        limit,
+      );
+      return below === null ? null : below.length;
     },
   });
   // v3 F2 (ADR 0049 decision 2): a substantial edit also sets its page's Last Major Revision, in the same job and

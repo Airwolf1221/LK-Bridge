@@ -5,9 +5,10 @@
  * | Rail           | What it catches                                                                                   | Default   |
  * | -------------- | ------------------------------------------------------------------------------------------------- | --------- |
  * | `deletes`      | deleting a page, a document, a timeline event or lane, a map feature, an asset, a calendar, a      | on        |
- * |                | sidebar property or board shapes (never a block, a fact row or a row of a block: those are edits)  |           |
+ * |                | sidebar or infobox property or board shapes; replacing a board's whole content or a calendar      |           |
+ * |                | (what is not sent is deleted) (never a block, a fact row or a row of a block: those are edits)     |           |
  * | `bulk`         | one request that touches more than `bulkPages` pages (a page created counts; a cascade delete      | on, N=10  |
- * |                | counts every page under it)                                                                       |           |
+ * |                | counts every page under it; a template copy with its children counts every page copied)           |           |
  * | `renamesMoves` | renaming or moving a page the request did not create                                              | off       |
  * | `assets`       | deleting an asset, or moving one to another folder                                                | on        |
  *
@@ -102,8 +103,9 @@ export interface RailItem {
 
 export interface RailContext {
   /**
-   * How many pages lie under a page (its descendants, not counting it), for a cascade delete; null when not known (then
-   * the cascade counts as more than any threshold: a rail fails closed, towards a proposal).
+   * How many pages lie under a page (its descendants, not counting it), for a cascade delete or a copy with its children
+   * (`createResourceFromTemplate`, `saveResourceAsTemplate`); null when not known (then the request counts as more than
+   * any threshold: a rail fails closed, towards a proposal).
    */
   readonly descendants?: (resourceId: string) => number | null;
   /** A page's name, for the reason (null when not known). */
@@ -128,7 +130,11 @@ export interface RailVerdict {
   readonly reason: string;
 }
 
-/** Deletes the `deletes` rail catches, with what each deletes (in words). */
+/**
+ * Deletes the `deletes` rail catches, with what each deletes (in words). CR-2026-11-R2: an infobox property (with its
+ * rows), as a sidebar property; and the two whole replaces, which delete whatever they do not send: a board's content
+ * (every shape, binding and asset not sent) and a calendar (`updateCalendar` is a PUT of the whole calendar).
+ */
 export const RAIL_DELETES: Readonly<Record<string, string>> = Object.freeze({
   deleteResource: 'page',
   deleteDocument: 'document',
@@ -138,16 +144,33 @@ export const RAIL_DELETES: Readonly<Record<string, string>> = Object.freeze({
   deleteAsset: 'asset',
   deleteCalendar: 'calendar',
   deleteProperty: 'sidebar property',
+  deleteBlockProperty: 'infobox property',
   deleteBoardShapes: 'board shapes',
+  replaceBoardContent: 'board content replaced',
+  updateCalendar: 'calendar replaced',
 });
 
-const CREATES_ONE = new Set(['createResource', 'createResourceFromTemplate', 'saveResourceAsTemplate']);
+/** Plurals that are not the noun plus `s`. */
+const PLURALS: Readonly<Record<string, string>> = Object.freeze({
+  'board shapes': 'board shapes',
+  'board content replaced': 'board contents replaced',
+  'calendar replaced': 'calendars replaced',
+});
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
 
-const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/**
+ * Creates that copy a page and, with `includeChildren`, every page under it (CR-2026-11-R2): the page whose descendants
+ * are copied too (the template, or the page saved as a template).
+ */
+const COPIES: Readonly<Record<string, (it: RailItem, body: Obj) => string | undefined>> = Object.freeze({
+  createResourceFromTemplate: (_it: RailItem, body: Obj) => str(body.templateId),
+  saveResourceAsTemplate: (it: RailItem) => str(it.params.path?.resourceId),
+});
+
+const plural = (n: number, one: string, many = PLURALS[one] ?? `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /** Whether the operation writes (bridge steps and reads never count). */
 function writes(it: RailItem): boolean {
@@ -155,25 +178,39 @@ function writes(it: RailItem): boolean {
   return it.kind !== 'read';
 }
 
-/** The pages a request touches: every page a write names, every page it creates, every page under a cascade. */
+/**
+ * The pages a request touches: every page a write names, every page it creates, every page under a cascade, and every
+ * page a copy with its children makes.
+ */
 export function pagesTouched(
   items: readonly RailItem[],
   ctx: RailContext = {},
 ): {
   readonly pages: ReadonlySet<string>;
   readonly unknownCascade: boolean;
+  /** A copy with its children whose source's pages are not known (CR-2026-11-R2: the rail then fails closed). */
+  readonly unknownCopy: boolean;
   readonly created: ReadonlySet<string>;
 } {
   const pages = new Set<string>();
   const created = new Set<string>();
   let unknownCascade = false;
+  let unknownCopy = false;
   items.forEach((it, i) => {
     if (!writes(it)) return;
     const body = isObj(it.params.body) ? it.params.body : {};
-    if (CREATES_ONE.has(it.opId)) {
+    const copy = COPIES[it.opId];
+    if (it.opId === 'createResource' || copy) {
       const id = str(body.id) ?? `#new:${i}`;
       pages.add(id);
       created.add(id);
+      // CR-2026-11-R2 (B1, B2): one call copies the source and, with `includeChildren`, every page under it (up to 100).
+      if (copy && body.includeChildren === true) {
+        const source = copy(it, body);
+        const n = source ? (ctx.descendants?.(source) ?? null) : null;
+        if (n === null) unknownCopy = true;
+        else for (let k = 0; k < n; k++) pages.add(`#copy:${i}:${k}`);
+      }
       return;
     }
     if (it.opId === 'createManyResources') {
@@ -197,7 +234,7 @@ export function pagesTouched(
       else for (let k = 0; k < n; k++) pages.add(`#under:${rid}:${k}`);
     }
   });
-  return { pages, unknownCascade, created };
+  return { pages, unknownCascade, unknownCopy, created };
 }
 
 /**
@@ -248,10 +285,13 @@ export function railsVerdict(
 
   if (rails.bulk) {
     const n = touched.pages.size;
-    if (touched.unknownCascade) {
+    if (touched.unknownCascade || touched.unknownCopy) {
+      const what = touched.unknownCascade
+        ? 'a cascade delete whose pages are not known'
+        : 'a copy with its children whose pages are not known';
       hits.push({
         rail: 'bulk',
-        text: `bulk change (a cascade delete whose pages are not known, so more than ${rails.bulkPages} pages are assumed)`,
+        text: `bulk change (${what}, so more than ${rails.bulkPages} pages are assumed)`,
       });
     } else if (n > rails.bulkPages) {
       hits.push({ rail: 'bulk', text: `bulk change (${n} pages > ${rails.bulkPages})` });
@@ -314,7 +354,8 @@ export function railsVerdict(
 
 /** The rails in words, for the dashboard and the guide. */
 export const RAIL_LABELS: Readonly<Record<RailName, string>> = Object.freeze({
-  deletes: 'Deletes (pages, documents, timeline events, map features, assets)',
+  deletes:
+    'Deletes (pages, documents, timeline events, map features, assets, calendars, properties, board content)',
   bulk: 'Bulk changes (one request touching more than N pages)',
   renamesMoves: 'Renames and moves of pages',
   assets: 'Asset deletes and asset moves',

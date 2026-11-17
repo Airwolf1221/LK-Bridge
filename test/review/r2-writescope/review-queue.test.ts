@@ -52,6 +52,9 @@ afterAll(async () => w?.close());
 describe('what the Review page says about a direct low-level batch', () => {
   it('E1: the summary is the bridge’s description of the operations, not the title the agent chose', async () => {
     const spoof = 'write_page append on “Ashgate”: fixed a typo';
+    // Set-up corrected (CR-2026-11-R2 A1 fixed): replaceBoardContent is now under the deletes rail, so the owner switches
+    // that rail off for this profile to get the direct low-level batch this test is about.
+    w.stack.runtime.policy.commands.setRails('owner', a.profileId, { deletes: false });
     const r = await w.stack.call(a.client, 'lk_api_batch', {
       title: spoof,
       calls: [
