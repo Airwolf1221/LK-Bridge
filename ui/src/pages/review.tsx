@@ -318,6 +318,8 @@ export function ReviewPage() {
   const markAll = async () => {
     if (!data) return;
     const n = state === 'unreviewed' ? data.counts.matching : data.counts.unreviewed;
+    // CR-2026-11-R2 (R2-10): the set the owner confirms, exactly (a changed set under the same count is refused).
+    const fingerprint = state === 'unreviewed' ? data.markAll?.fingerprint : undefined;
     const ok = await confirm({
       title: `Mark ${n} item${n === 1 ? '' : 's'} reviewed?`,
       message: (
@@ -334,6 +336,7 @@ export function ReviewPage() {
         api.post(withProject('/review/mark-all', selected), {
           filter: { ...(profile ? { profile } : {}), ...(tool ? { tool } : {}) },
           expect: n,
+          ...(fingerprint ? { fingerprint } : {}),
           confirm: true,
         }),
       'Marked reviewed.',

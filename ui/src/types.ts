@@ -2490,6 +2490,8 @@ export interface ReviewResponse {
   items: ReviewItem[];
   facets: { profiles: string[]; tools: string[] };
   counts: { unreviewed: number; matching: number };
+  /** CR-2026-11-R2 (R2-10): the set "Mark all reviewed" would mark, sent back with it. */
+  markAll?: { count: number; fingerprint: string };
 }
 
 export interface RevertTarget {

@@ -64,6 +64,11 @@ export const registerReview: Register = (api, ctx) => {
         unreviewed: review.store.count(project.id, { state: 'unreviewed' }),
         matching: review.store.count(project.id, where),
       },
+      // CR-2026-11-R2 (R2-10): the exact set "Mark all reviewed" would mark for these filters, echoed by the request.
+      markAll: review.markAllSet(project.id, {
+        ...(q.profile ? { profile: q.profile } : {}),
+        ...(q.tool ? { tool: q.tool } : {}),
+      }),
     });
   });
 
@@ -116,6 +121,11 @@ export const registerReview: Register = (api, ctx) => {
             .strict()
             .default({}),
           expect: z.number().int().min(0),
+          // R2-10: the fingerprint the list answered for this set (the dashboard always sends it).
+          fingerprint: z
+            .string()
+            .regex(/^[0-9a-f]{32}$/)
+            .optional(),
           confirm: z.literal(true),
         })
         .strict(),
@@ -125,7 +135,7 @@ export const registerReview: Register = (api, ctx) => {
       ...(b.filter.profile ? { profile: b.filter.profile } : {}),
       ...(b.filter.tool ? { tool: b.filter.tool } : {}),
     };
-    const r = services(ctx).review.markAll('owner', project.id, filter, b.expect);
+    const r = services(ctx).review.markAll('owner', project.id, filter, b.expect, b.fingerprint);
     if (r.changed)
       throw new AdminHttpError(
         409,

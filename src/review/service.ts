@@ -8,6 +8,7 @@
  * Recording: a listener on the engine's job events records a job when it is created by an agent principal without an
  * approval and holds a write step. Nothing here reads LegendKeeper.
  */
+import { createHash } from 'node:crypto';
 import type { Db } from '../db/open.js';
 import type { ChronologyStore } from '../chronology/store.js';
 import type { JobEngine } from '../jobs/engine.js';
@@ -23,6 +24,15 @@ const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !
 
 /** The most items "Mark all reviewed" marks in one go. */
 export const MARK_ALL_LIMIT = 1000;
+
+/**
+ * CR-2026-11-R2 (R2-10): a fingerprint of the exact set "Mark all reviewed" would mark (the ids, newest first). The list
+ * answers it and the request echoes it, so a set that changed under the same count (one item reviewed elsewhere, a new
+ * one arrived) is refused rather than marking an item the owner never saw.
+ */
+export function markAllFingerprint(ids: readonly string[]): string {
+  return createHash('sha256').update(ids.join('\n')).digest('hex').slice(0, 32);
+}
 
 export interface ReviewDeps {
   readonly db: Db;
@@ -327,10 +337,12 @@ export class ReviewService {
     projectId: string,
     filter: ReviewFilter,
     expect: number,
+    fingerprint?: string,
   ): { marked: string[]; count: number; changed: boolean } {
     if (actor !== 'owner') throw new Error('Only the owner reviews direct writes');
     const ids = this.store.unreviewedIds(projectId, filter, MARK_ALL_LIMIT);
-    if (ids.length !== expect) return { marked: [], count: ids.length, changed: true };
+    if (ids.length !== expect || (fingerprint !== undefined && markAllFingerprint(ids) !== fingerprint))
+      return { marked: [], count: ids.length, changed: true };
     const done = this.store.markReviewed(projectId, ids, 'owner', 'bulk');
     this.d.policy.audit(
       'owner',
@@ -340,6 +352,12 @@ export class ReviewService {
       { marked: done },
     );
     return { marked: done, count: ids.length, changed: false };
+  }
+
+  /** R2-10: the count and the fingerprint of the set "Mark all reviewed" would mark now, for a filter. */
+  markAllSet(projectId: string, filter: ReviewFilter): { count: number; fingerprint: string } {
+    const ids = this.store.unreviewedIds(projectId, filter, MARK_ALL_LIMIT);
+    return { count: ids.length, fingerprint: markAllFingerprint(ids) };
   }
 
   /** Marks one item reviewed because the owner reverted it (bridge code: the revert service). */
