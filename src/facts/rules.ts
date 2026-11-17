@@ -259,8 +259,53 @@ const LOOKALIKES: Readonly<Record<string, string>> = {
   χ: 'x',
   ϲ: 'c',
   ϳ: 'j',
+  ...latinLookalikes(),
 };
 const LOOKALIKE_RE = new RegExp(`[${Object.keys(LOOKALIKES).join('')}]`, 'gu');
+
+/**
+ * CR-2026-11-R2 (R2-15): letters of other blocks that read as Latin letters, as Unicode's confusables list (UTS #39) maps
+ * them: Latin letter small capitals (ᴀ ʙ ᴄ …), and the Cherokee and Lisu letters shaped like Latin capitals (Ꭺ Ꮯ, ꓮ ꓚ …),
+ * which cover every letter of the status tags, the lifecycle prefixes and the protected keys. Lower-casing turns a
+ * Cherokee capital into a Cherokee small letter of the same shape, so both are listed.
+ */
+function latinLookalikes(): Record<string, string> {
+  const byLetter: Readonly<Record<string, readonly number[]>> = {
+    a: [0x1d00, 0x13aa, 0xa4ee],
+    b: [0x0299, 0x13cf, 0x13f4, 0xa4d0],
+    c: [0x1d04, 0x13df, 0xa4da],
+    d: [0x1d05, 0x13a0, 0xa4d3],
+    e: [0x1d07, 0x13ac, 0xa4f0],
+    f: [0xa730, 0xa4dd],
+    g: [0x0262, 0x13c0, 0x13f3, 0xa4d6],
+    h: [0x029c, 0x13bb, 0x13c2, 0xa4e7],
+    i: [0x026a, 0x13a5, 0xa4f2],
+    j: [0x1d0a, 0x13ab, 0xa4d9],
+    k: [0x1d0b, 0x13e6, 0xa4d7],
+    l: [0x029f, 0x13de, 0xa4e1],
+    m: [0x1d0d, 0x13b7, 0xa4df],
+    n: [0x0274, 0xa4e0],
+    o: [0x1d0f, 0xa4f3],
+    p: [0x1d18, 0x13e2, 0xa4d1],
+    r: [0x0280, 0x13a1, 0x13d2, 0xa4e3],
+    s: [0xa731, 0x13d5, 0x13da, 0xa4e2],
+    t: [0x1d1b, 0x13a2, 0xa4d4],
+    u: [0x1d1c, 0xa4f4],
+    v: [0x1d20, 0x13d9, 0xa4e6],
+    w: [0x1d21, 0x13b3, 0x13d4, 0xa4ea],
+    x: [0xa4eb],
+    y: [0x028f, 0x13a9, 0x13bd, 0xa4ec],
+    z: [0x1d22, 0x13c3, 0xa4dc],
+  };
+  const out: Record<string, string> = {};
+  for (const [latin, points] of Object.entries(byLetter))
+    for (const p of points) {
+      const ch = String.fromCodePoint(p);
+      out[ch] = latin;
+      out[ch.toLocaleLowerCase('en-GB')] = latin;
+    }
+  return out;
+}
 
 /**
  * Text as the rules compare it (CR-2026-11, CR-12): compatibility forms folded (NFKC: fullwidth letters, ligatures),

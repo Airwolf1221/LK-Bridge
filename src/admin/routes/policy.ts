@@ -1,15 +1,32 @@
+import type { FastifyRequest } from 'fastify';
 import * as z from 'zod';
-import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES } from '../../policy/index.js';
+import { PROFILE_KINDS, PROPOSAL_STATES, SCOPES, type Scope } from '../../policy/index.js';
 import { redactDeep } from '../redact.js';
 import { requireReauth } from '../guard.js';
 import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
 
 const scope = z.enum(SCOPES);
 
+/** The order of the scopes, for telling a raise from a lowering. */
+const SCOPE_RANK: Readonly<Record<Scope, number>> = { read: 0, propose: 1, write: 2 };
+
 export const registerPolicy: Register = (api, ctx) => {
   const { policy } = ctx.deps.runtime;
   const { actions } = ctx;
   const cmd = policy.commands;
+  /**
+   * CR-2026-11-R2 (R2-50): a change that lets an agent's connection do more needs the owner's re-authentication within
+   * the last five minutes, as switching off a safety rail does (ADR 0055 decision C5; ADR 0028 decision 7): a raised
+   * scope, a connection moved to a higher scope or to a profile at scope `write` (whose rails may be weaker), and a new
+   * personal access token at scope `write`. Lowering a scope stays a one-click safety action.
+   */
+  const reauthToRaise = (req: FastifyRequest, from: Scope | undefined, to: Scope | undefined) => {
+    if (to === undefined) return;
+    if (to === 'write' || from === undefined || SCOPE_RANK[to] > SCOPE_RANK[from])
+      requireReauth(ctx.deps.services, req);
+  };
+  const profileScope = (id: string): Scope | undefined =>
+    cmd.listProfiles('owner').find((p) => p.id === id)?.scope;
 
   // ---------------------------------------------------------------------------------------------- proposals
 
@@ -175,6 +192,10 @@ export const registerPolicy: Register = (api, ctx) => {
   api.put('/clients/profiles/:id/scope', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
+    const current = profileScope(id);
+    // R2-50: only a raise needs the re-authentication (a profile already at write that stays there changes nothing).
+    if (current !== undefined && SCOPE_RANK[b.scope] > SCOPE_RANK[current])
+      requireReauth(ctx.deps.services, req);
     return { profile: actions.setScope(id, b.scope, b.confirmRaise) };
   });
 
@@ -215,12 +236,16 @@ export const registerPolicy: Register = (api, ctx) => {
 
   api.put('/clients/default-scope', (req) => {
     const b = parseInput(z.object({ scope, confirmRaise: z.boolean().default(false) }), req.body);
+    // R2-50: new connections would start able to do more.
+    if (SCOPE_RANK[b.scope] > SCOPE_RANK[cmd.getDefaultScope('owner')]) requireReauth(ctx.deps.services, req);
     return { defaultScope: actions.setDefaultScope(b.scope, b.confirmRaise) };
   });
 
   api.put('/clients/connections/:id/profile', (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const b = parseInput(z.object({ profileId: idSchema }), req.body);
+    // R2-50: to a higher scope, or to a profile at write (its rails may be weaker than the connection's now).
+    reauthToRaise(req, policy.store.lookupPrincipal(id)?.scope, profileScope(b.profileId));
     return { connection: redactDeep(actions.setConnectionProfile(id, b.profileId)) };
   });
 
@@ -264,6 +289,8 @@ export const registerPolicy: Register = (api, ctx) => {
       }),
       req.body,
     );
+    // R2-50: a new credential at scope write.
+    if (profileScope(b.profileId) === 'write') requireReauth(ctx.deps.services, req);
     const created = actions.createPat({
       name: b.name,
       profileId: b.profileId,

@@ -433,3 +433,36 @@ describe('old connections (ADR 0033)', () => {
     expect(hint).toHaveTextContent(/ChatGPT, use Plugins, then the bridge, then Refresh/);
   });
 });
+
+describe('CR-2026-11-R2 (R2-50): a raise asks for the password when the bridge says so', () => {
+  it('a scope raise refused with REAUTH_REQUIRED opens the password dialog and is sent again', async () => {
+    let confirmed = false;
+    const api = installApi({
+      ...baseRoutes(),
+      'PUT /clients/profiles/prof_claude/scope': () =>
+        confirmed
+          ? { profile: {} }
+          : {
+              status: 403,
+              body: { error: { code: 'REAUTH_REQUIRED', message: 'Confirm your password first.' } },
+            },
+      'POST /security/reauth': () => {
+        confirmed = true;
+        return { until: Date.now() + 300_000 };
+      },
+    });
+    const user = userEvent.setup();
+    renderApp('/ui/clients');
+    await user.selectOptions(await screen.findByLabelText('Scope for Claude'), 'write');
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Raise to write' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm it’s you' });
+    await user.type(within(dialog).getByLabelText('Password'), 'the owner password');
+    await user.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(api.find('PUT', '/clients/profiles/prof_claude/scope')).toHaveLength(2));
+    expect(api.find('POST', '/security/reauth')).toHaveLength(1);
+    expect(api.find('PUT', '/clients/profiles/prof_claude/scope')[1]!.body).toEqual({
+      scope: 'write',
+      confirmRaise: true,
+    });
+  });
+});

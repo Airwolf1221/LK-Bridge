@@ -29,6 +29,8 @@ import { mintClientId } from '../jobs/ids.js';
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined);
+const runsText = (runs: readonly unknown[]): string =>
+  runs.map((r) => (isObj(r) && typeof r.text === 'string' ? r.text : '')).join('');
 
 /** One step of a job, as the engine holds it (`JobEngine.stepRecords`). */
 export interface StepRecord {
@@ -67,6 +69,11 @@ interface Common {
   readonly steps: readonly number[];
   /** A write of it may or may not have been applied (its outcome is unknown). */
   readonly uncertain?: boolean;
+  /**
+   * CR-2026-11-R2 (R2-28): a later job wrote this target again (an applied, or possibly applied, journal entry of its own
+   * on it): the job that did. Revert then treats it as changed since the job, whatever its content.
+   */
+  readonly laterWrite?: string;
 }
 
 export interface TextTarget extends Common {
@@ -112,6 +119,10 @@ export interface FactsTarget extends Common {
     readonly key: string;
     readonly before: string;
     readonly after: string;
+    /** CR-2026-11-R2 (R2-18): the job's steps whose writes made the edit major (the date goes back only with them). */
+    readonly justifiedBy: readonly number[];
+    /** CR-2026-11-R2 (R2-18): a later job relied on the date (its own major revision the same day): why it stays. */
+    readonly keptFor: string | null;
   };
 }
 
@@ -125,6 +136,15 @@ export interface LmrTarget extends Common {
   /** The value before (empty when the row was empty), and the date the job wrote. */
   readonly before: string;
   readonly after: string;
+  /**
+   * CR-2026-11-R2 (R2-18): the value before exactly as it was (its runs: a link, a mention), when the job's decision
+   * recorded them; null when it recorded its plain text only.
+   */
+  readonly beforeRuns: readonly Obj[] | null;
+  /** CR-2026-11-R2 (R2-18): the job's steps whose writes made the edit major (the date goes back only with them). */
+  readonly justifiedBy: readonly number[];
+  /** CR-2026-11-R2 (R2-18): a later job relied on the date (its own major revision the same day): why it stays. */
+  readonly keptFor: string | null;
 }
 
 /** The page fields a revert of `updateResource` puts back. */
@@ -152,7 +172,8 @@ export interface MoveTarget extends Common {
   readonly kind: 'move';
   readonly resourceId: string;
   readonly before: { readonly parentId: string | null; readonly rank: string | null };
-  readonly left: { readonly parentId: string | null };
+  /** CR-2026-11-R2 (R2-19): where the job left it: its parent and its rank (null when the move's answer had none). */
+  readonly left: { readonly parentId: string | null; readonly rank: string | null };
 }
 
 export interface ChronologyUnitTarget extends Common {
@@ -164,6 +185,16 @@ export interface ChronologyUnitTarget extends Common {
   readonly oldRows: Readonly<Record<string, Obj>>;
   /** For each event the inverse updates: its fields before the job. */
   readonly oldEvents: Readonly<Record<string, Obj>>;
+  /**
+   * CR-2026-11-R2 (R2-16): for each row the job wrote (added or changed), its block as the job left it: Revert compares the
+   * row whole (links, marks, inline icons), not only its words.
+   */
+  readonly leftRows: Readonly<Record<string, Obj>>;
+  /**
+   * CR-2026-11-R2 (R2-16): for each event the job made or changed, the event as LegendKeeper answered the job's write (every
+   * stored field: colour, icon, image too), or null when the answer is not recorded.
+   */
+  readonly leftEvents: Readonly<Record<string, Obj | null>>;
 }
 
 export interface ImageTarget extends Common {
@@ -195,6 +226,11 @@ export interface ImageTarget extends Common {
   };
   /** Folders the job made for it (they stay: a revert never deletes an asset). */
   readonly foldersMade: readonly string[];
+  /**
+   * CR-2026-11-R2 (R2-22): the names a staging folder has (the project's setting and the default): an ordinary move is put
+   * back only into a folder read live whose name is none of them.
+   */
+  readonly stagingNames: readonly string[];
 }
 
 export interface NotRevertible extends Common {
@@ -282,6 +318,7 @@ const CREATIONS: Readonly<Record<string, string>> = {
   createProperty: 'a sidebar property created',
   createBoardShapes: 'board shapes created',
   createCalendar: 'a calendar created',
+  createAssetFolder: 'an asset folder created',
   restoreResource: 'a deleted page restored',
   restoreDocument: 'a deleted document restored',
 };
@@ -329,6 +366,26 @@ export interface TargetDeps {
   readonly placedStaged?: (assetId: string) => string | null;
   /** Whether a folder is the project's staging folder in LegendKeeper (Revert never writes there). */
   readonly isStagingFolder?: (folderId: string | null) => boolean;
+  /** CR-2026-11-R2 (R2-22): the staging folder's names (the project's setting and the default). */
+  readonly stagingNames?: () => readonly string[];
+  /**
+   * CR-2026-11-R2 (R2-18): a later job that relied on a Last Major Revision date the job set (its own decision the same day
+   * on that page, or a later write to that page's text that day): its id, else null.
+   */
+  readonly laterLmr?: (resourceId: string, date: string) => string | null;
+  /** CR-2026-11-R2 (R2-28): the applied (or possibly applied) journal entries of later jobs. */
+  readonly laterWrites?: () => readonly LaterWrite[];
+}
+
+/** A later job's journal entry (CR-2026-11-R2, F10). */
+export interface LaterWrite {
+  readonly jobId: string;
+  readonly opId: string;
+  readonly targetId: string | null;
+  readonly resourceId: string | null;
+  readonly documentId: string | null;
+  /** The write's input as journalled (its path, ids). */
+  readonly params: unknown;
 }
 
 /** The job's targets (see the module comment), in the order of their first step. */
@@ -383,6 +440,13 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     const write = rec.steps.find((w) => w.options.decisionFrom?.step === s.stepNo);
     if (!write || wrote(write) === 'no') continue;
     const key = str(bodyOf(s.params).key) ?? 'Last Major Revision';
+    const after = bodyOf(s.params).after;
+    // CR-2026-11-R2 (R2-18): the value before exactly (its runs), when the decision recorded them.
+    const runs = Array.isArray(r.previousContent)
+      ? r.previousContent
+      : Array.isArray(r.previous)
+        ? r.previous
+        : null;
     handled.add(write.stepNo);
     lmrs.push({
       key: `lmr:${path.resourceId}`,
@@ -395,8 +459,11 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       propertyId: path.propertyId!,
       rowId: path.rowId!,
       rowKey: key,
-      before: typeof r.previous === 'string' ? r.previous : '',
+      before: typeof r.previous === 'string' ? r.previous : runs ? runsText(runs) : '',
       after: r.date,
+      beforeRuns: runs ? runs.filter(isObj) : null,
+      justifiedBy: Array.isArray(after) ? after.filter((n): n is number => typeof n === 'number') : [],
+      keptFor: d.laterLmr?.(path.resourceId!, r.date) ?? null,
     });
   }
 
@@ -513,6 +580,28 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       });
     const propertyId = rowsCheck ? String(rowsCheck.propertyId) : null;
     let rowsLeft = rowsProp ? (rowsProp.rows as RowState[]) : null;
+    // CR-2026-11-R2 (R2-27): a job that failed part-way left what its row writes that succeeded wrote, not its plan: the
+    // rows it left are worked out by replaying those writes on the rows before (as the page text is).
+    if (rowsCheck && Array.isArray(rowsCheck.rows)) {
+      const all = rec.steps.filter(
+        (s) =>
+          ROW_OPS.has(s.opId) &&
+          s.options.decisionFrom === undefined &&
+          s.params.path?.resourceId === pid &&
+          s.params.path?.propertyId === rowsCheck.propertyId,
+      );
+      // A write LegendKeeper refused (its journal entry: not applied) wrote nothing, although it was sent.
+      const refused = (s: StepRecord) =>
+        s.status === 'failed' &&
+        entriesOf(s.stepNo).length > 0 &&
+        entriesOf(s.stepNo).every((e) => e.outcome === 'not_applied');
+      const did = (s: StepRecord) => (refused(s) ? 'no' : wrote(s));
+      if (all.some((s) => did(s) === 'no') && !all.some((s) => did(s) === 'maybe'))
+        rowsLeft = replayRows(
+          rowsCheck.rows as RowState[],
+          all.filter((s) => did(s) === 'yes'),
+        );
+    }
     const lmr = propertyId
       ? lmrs.find((l) => l.resourceId === pid && l.propertyId === propertyId)
       : undefined;
@@ -539,7 +628,18 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       rowsBefore: rowsCheck && Array.isArray(rowsCheck.rows) ? (rowsCheck.rows as RowState[]) : null,
       rowsLeft,
       collections,
-      ...(lmr ? { lmr: { rowId: lmr.rowId, key: lmr.rowKey, before: lmr.before, after: lmr.after } } : {}),
+      ...(lmr
+        ? {
+            lmr: {
+              rowId: lmr.rowId,
+              key: lmr.rowKey,
+              before: lmr.before,
+              after: lmr.after,
+              justifiedBy: lmr.justifiedBy,
+              keptFor: lmr.keptFor,
+            },
+          }
+        : {}),
     });
   }
   for (const l of lmrs) if (!created.has(l.resourceId)) targets.push(l);
@@ -590,8 +690,11 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     const pre = preOf(ss[0]!.stepNo);
     if (!isObj(pre)) continue;
     const parentBefore = str(pre.parentId) ?? null;
-    const lastBody = bodyOf(ss[ss.length - 1]!.params);
+    const last = ss[ss.length - 1]!;
+    const lastBody = bodyOf(last.params);
     const parentLeft = lastBody.parentId === undefined ? parentBefore : (str(lastBody.parentId) ?? null);
+    // CR-2026-11-R2 (R2-19): its place as the job left it (the move's answer: the page with its rank).
+    const rankLeft = isObj(last.result) ? (str(last.result.rank) ?? null) : null;
     for (const s of ss) handled.add(s.stepNo);
     targets.push({
       key: `move:${pid}`,
@@ -602,7 +705,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
       ...(uncertain(ss) ? { uncertain: true } : {}),
       resourceId: pid,
       before: { parentId: parentBefore, rank: str(pre.rank) ?? null },
-      left: { parentId: parentLeft },
+      left: { parentId: parentLeft, rank: rankLeft },
     });
   }
 
@@ -653,6 +756,7 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
           isHidden: false,
         },
         foldersMade: madeFolders,
+        stagingNames: d.stagingNames?.() ?? [],
       });
     }
     if (s.opId === 'updateAsset' && !handled.has(s.stepNo)) {
@@ -704,10 +808,30 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
           isHidden: b.isHidden === undefined ? from.isHidden : b.isHidden === true,
         },
         foldersMade: madeFolders,
+        stagingNames: d.stagingNames?.() ?? [],
       });
     }
   }
-  for (const s of folders) handled.add(s.stepNo); // part of the image's placement (they stay)
+  // CR-2026-11-R2 (R2-24): a folder is part of a placement only when the same job placed an image into it (or into a folder
+  // it made inside it, as a chain). Any other folder the job made is a creation, listed as not revertible below.
+  const placedIn = new Set<string>();
+  for (const t of targets) {
+    if (t.kind !== 'image' || !t.placement) continue;
+    if (t.left.folderId) placedIn.add(t.left.folderId);
+    for (const n of t.steps) {
+      const st = rec.steps.find((x) => x.stepNo === n);
+      const f = st && isObj(st.result) ? str(st.result.folderId) : undefined;
+      if (f) placedIn.add(f);
+    }
+  }
+  for (const s of [...folders].reverse()) {
+    const id = isObj(s.result) ? str(s.result.id) : undefined;
+    if (id && placedIn.has(id)) {
+      handled.add(s.stepNo);
+      const parent = str(bodyOf(s.params).parentId);
+      if (parent) placedIn.add(parent);
+    } else if (isObj(s.result) && s.result.found === true) handled.add(s.stepNo); // found, not made: nothing changed
+  }
   for (const s of writes) if (s.opId === 'createImageUpload') handled.add(s.stepNo); // no change in LegendKeeper
 
   // 7. Everything else the job wrote: not reverted, and why.
@@ -757,7 +881,43 @@ export function jobTargets(rec: JobRecord, d: TargetDeps = {}): Target[] {
     targets.push({ ...common, what: s.opId, reason: why });
   }
 
-  return targets.sort((a, b) => (a.steps[0] ?? 0) - (b.steps[0] ?? 0));
+  const later = d.laterWrites?.() ?? [];
+  const marked =
+    later.length === 0
+      ? targets
+      : targets.map((t) => {
+          const by = laterWriteOf(t, later);
+          return by ? { ...t, laterWrite: by } : t;
+        });
+  return marked.sort((a, b) => (a.steps[0] ?? 0) - (b.steps[0] ?? 0));
+}
+
+/** CR-2026-11-R2 (R2-27): the rows after the row writes that were applied (in order), from the rows before. */
+function replayRows(before: readonly RowState[], steps: readonly StepRecord[]): RowState[] {
+  let rows: RowState[] = before.map((r) => ({ ...r }));
+  for (const s of steps) {
+    if (wrote(s) !== 'yes') continue;
+    const b = bodyOf(s.params);
+    const rowId = s.params.path?.rowId;
+    const content = Array.isArray(b.content) ? (b.content as Obj[]) : b.content === null ? [] : undefined;
+    if (s.opId === 'updatePropertyRow')
+      rows = rows.map((r) =>
+        r.id === rowId
+          ? { ...r, ...(typeof b.key === 'string' ? { key: b.key } : {}), ...(content ? { content } : {}) }
+          : r,
+      );
+    else if (s.opId === 'deletePropertyRow') rows = rows.filter((r) => r.id !== rowId);
+    else if (s.opId === 'createPropertyRow') {
+      const res = isObj(s.result) ? s.result : {};
+      rows.push({
+        id: str(res.id) ?? null,
+        rank: str(res.rank) ?? null,
+        key: typeof b.key === 'string' ? b.key : '',
+        content: content ?? [],
+      });
+    }
+  }
+  return rows;
 }
 
 /** The states a document can be in after the job's text writes (two when one write's outcome is unknown); null when they cannot be replayed. */
@@ -959,5 +1119,89 @@ function chronologyUnit(
     }
   }
   if (inverse.length === 0) return null;
-  return { target: { ...base, kind: 'chronology', record, inverse, oldRows, oldEvents }, steps };
+  // CR-2026-11-R2 (R2-16): what the job left, whole: each row block it wrote, and each event as LegendKeeper answered the
+  // job's last write of it (null when that answer is not recorded: then the event cannot be compared, and is not reverted).
+  const leftRows: Record<string, Obj> = {};
+  const leftEvents: Record<string, Obj | null> = {};
+  for (const w of record.target.writes) {
+    if ((w.kind === 'row.insert' || w.kind === 'row.replace') && isObj(w.block))
+      leftRows[w.rowId] = withoutVersions([w.block])[0]!;
+    if (w.kind === 'event.create' || w.kind === 'event.update') {
+      const last = [...mine]
+        .reverse()
+        .find(
+          (s) =>
+            wrote(s) === 'yes' &&
+            ((s.opId === 'createEvent' && str(bodyOf(s.params).id) === w.eventId) ||
+              (s.opId === 'updateEvent' && s.params.path?.eventId === w.eventId)),
+        );
+      leftEvents[w.eventId] = last && isObj(last.result) ? last.result : null;
+    }
+  }
+  return {
+    target: { ...base, kind: 'chronology', record, inverse, oldRows, oldEvents, leftRows, leftEvents },
+    steps,
+  };
+}
+
+const ROW_WRITE_OPS = new Set([
+  'createPropertyRow',
+  'updatePropertyRow',
+  'deletePropertyRow',
+  'updateProperty',
+]);
+
+/** The ids a later write names (its target, and every id in its path). */
+function idsOf(e: LaterWrite): Set<string> {
+  const ids = new Set<string>();
+  if (e.targetId) ids.add(e.targetId);
+  const p = isObj(e.params) ? e.params : {};
+  const path = isObj(p.path) ? p.path : {};
+  for (const v of Object.values(path)) if (typeof v === 'string') ids.add(v);
+  const body = isObj(p.body) ? p.body : {};
+  if (typeof body.id === 'string') ids.add(body.id);
+  if (isObj(body.block) && typeof body.block.id === 'string') ids.add(body.block.id);
+  return ids;
+}
+
+/**
+ * CR-2026-11-R2 (R2-28): the later job that wrote a target again, if any. Each kind is matched at its own grain: a page's
+ * text by its document, a single block by its id, a sidebar by the properties the job wrote (and a Last Major Revision
+ * row by its own id), a page's fields or place by the page, a chronology change by its rows and events (not the Main
+ * count, which every later change moves), an asset by its id.
+ */
+function laterWriteOf(t: Target, later: readonly LaterWrite[]): string | undefined {
+  const hit = later.find((e) => {
+    const ids = idsOf(e);
+    switch (t.kind) {
+      case 'text':
+        return e.documentId === t.documentId;
+      case 'block':
+        return e.documentId === t.documentId && ids.has(t.blockId);
+      case 'facts': {
+        if (e.resourceId !== t.resourceId || !ROW_WRITE_OPS.has(e.opId)) return false;
+        const props = [...(t.property ? [t.property.id] : []), ...t.collections.map((c) => c.propertyId)];
+        return props.some((id) => ids.has(id));
+      }
+      case 'lmr':
+        return e.resourceId === t.resourceId && ids.has(t.rowId);
+      case 'resource':
+        return e.resourceId === t.resourceId && e.opId === 'updateResource';
+      case 'move':
+        return e.resourceId === t.resourceId && (e.opId === 'moveResource' || e.opId === 'updateResource');
+      case 'chronology': {
+        const own = new Set<string>();
+        for (const w of t.inverse) {
+          if ('rowId' in w && w.kind !== 'count') own.add(w.rowId);
+          if ('eventId' in w) own.add(w.eventId);
+        }
+        return [...ids].some((id) => own.has(id));
+      }
+      case 'image':
+        return ids.has(t.assetId);
+      case 'none':
+        return false;
+    }
+  });
+  return hit?.jobId;
 }

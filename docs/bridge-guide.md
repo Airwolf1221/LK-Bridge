@@ -820,7 +820,8 @@ The full list of forms is in docs/chronology.md.
   already agrees answers `nothing_to_do`. `description` may be the row's opening words (at least 20 characters, the
   start of exactly one row of that date); no such row is `ROW_NOT_FOUND`. If several events could be the row's it
   refuses (`PAIRING_AMBIGUOUS`) naming each candidate's name, date and id: tell the person, then pass `event_id` to pair
-  it with one (an event that already agrees is linked: `linked`, no LegendKeeper write, and the choice is remembered),
+  it with one (an event that already agrees is linked, with no LegendKeeper write: a proposal for the owner at every
+  scope, since it changes what the check pairs; once approved the choice is remembered),
   or `create_new: true` to make a new event instead. Use it for what the chronology check
   reports (a row without an event, a row and event that disagree about the date). A repair that turns a range event
   into a single date, or the reverse, is refused (`SHAPE_CHANGE_UNCONFIRMED`, saying `range → single day`) until you
@@ -1035,9 +1036,13 @@ was asked.
 
 - protected canon and every lifecycle change ([Canon and approval](#canon-and-approval)), always;
 - whatever the owner's **safety rails** on your profile keep for approval. By default: **deletes** (pages, documents,
-  timeline events, map features, assets), **a job that touches more than 10 pages**, and **asset deletes and moves**;
-  the owner can also keep renames and moves of pages. The result is `proposal_captured` with `proposedBecause`, for
-  example `proposed because: bulk change (14 pages > 10)`;
+  timeline events and lanes, map features, assets, calendars, sidebar and infobox properties, board shapes, and replacing
+  a board's content or a calendar whole), **a job that touches more than 10 pages** (a copy with its children counts
+  every page it copies), and **asset deletes and moves**; the owner can also keep renames and moves of pages. The
+  result is `proposal_captured` with `proposedBecause`, for example `proposed because: bulk change (14 pages > 10)`;
+- a chronology link you choose (`sync_timeline_event` with `event_id`), a restore that may bring back an Authoritative
+  page (`restore_resource` of a page deleted with others), and a rename that drops `[BSRC]`: canonical or ordinary
+  proposals at every scope;
 - a setting pack's package (`arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship`), unless the
   owner switched the tool to follow your scope;
 - `restore_snapshot`, always.

@@ -660,6 +660,8 @@ export class StepExecutor {
   ): Promise<Record<string, unknown>> {
     let rowId = b.rowId;
     let value = b.value;
+    // CR-2026-11-R2 (R2-18): the row's runs as read (a linked date, a mention), so a revert can put them back exactly.
+    let previousContent: unknown[] | undefined;
     let version: string | undefined;
     if (b.chainFrom !== undefined && rowId !== undefined) {
       const s = this.d.repo.step(job.id, b.chainFrom);
@@ -709,6 +711,7 @@ export class StepExecutor {
       if (!row || typeof row.id !== 'string') return { skip: `the page has no ${b.key} row`, date: today };
       rowId = row.id;
       value = runsText(row.content) ?? (typeof row.text === 'string' ? row.text : '');
+      if (Array.isArray(row.content)) previousContent = row.content as unknown[];
       version = str(body.version);
     }
     if ((value ?? '').trim() === today) return { skip: `${b.key} already says ${today}`, date: today };
@@ -724,6 +727,7 @@ export class StepExecutor {
       versions: { lmr: version },
       // v3 F3.4 (ADR 0055): the value the row held before, so a revert of the job can put it back.
       previous: value ?? null,
+      ...(previousContent ? { previousContent } : {}),
       lmr: {
         path: { resourceId: b.resourceId, propertyId: propertyId!, rowId: rowId! },
         body: { content: [{ text: today }] },
@@ -2048,12 +2052,14 @@ export class StepExecutor {
         }
         // A failure after the write may have applied: find out now rather than leave it ambiguous. A batch create is
         // not atomic (LK's guide): a failure part-way, or DUPLICATE_ID on a retry, leaves some items created.
+        // CR-2026-11-R2 (R2-05): DUPLICATE_ID on a first, unambiguous send is a refusal, not an ambiguous outcome:
+        // LegendKeeper checks every item before it creates any, so an id is held by something this step never sent.
         const batch = meta.clientId === 'body.resources[].id';
         const mayHaveApplied =
           e instanceof BridgeLkError &&
           !(e instanceof BudgetWaitError) &&
           ((stats.maybeSent && (e.classification === 'upstream' || batch)) ||
-            (batch && e.code === 'DUPLICATE_ID'));
+            (batch && e.code === 'DUPLICATE_ID' && this.sentBefore(job, step, op)));
         if (mayHaveApplied) {
           const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
           const r = await this.safeRecover(job, { ...latest, maybeSent: true }, op, meta, params);
@@ -2202,6 +2208,43 @@ export class StepExecutor {
     }
   }
 
+  /**
+   * CR-2026-11-R2 (R2-05): whether this step's request (or its items) may have been sent before: the step was sent (or
+   * may have been) by an earlier attempt, or it continues a batch the step before it sent (the items a partial
+   * `createManyResources` left missing, with their same ids).
+   */
+  private sentBefore(job: JobView, step: StepView, op: OperationDef): boolean {
+    if (step.firstSentAt !== null || step.maybeSent) return true;
+    if (step.stepNo <= 1 || step.clientIds.length === 0) return false;
+    const prev = this.d.repo.step(job.id, step.stepNo - 1);
+    return (
+      prev !== undefined &&
+      prev.opId === op.operationId &&
+      step.clientIds.some((id) => prev.clientIds.includes(id))
+    );
+  }
+
+  /**
+   * CR-2026-11-R2 (R2-05): a page found under a client id counts as this step's only when it is the page the step planned
+   * (its name and its parent as sent): anyone can create a page with a free id, so an id that exists proves nothing.
+   * Null when it matches (or the entity is not a page); otherwise what differs.
+   */
+  private notAsPlanned(op: OperationDef, meta: OpMeta, item: unknown, found: unknown): string | null {
+    if (meta.reader !== 'resource') return null;
+    const plan = (item ?? {}) as { name?: unknown; parentId?: unknown };
+    const got = (found ?? {}) as { name?: unknown; parentId?: unknown };
+    // LegendKeeper may trim a name or collapse its spaces: compared the same way on both sides.
+    const norm = (v: unknown) => (typeof v === 'string' ? v.trim().replace(/\s+/g, ' ') : null);
+    if (typeof plan.name === 'string' && norm(plan.name) !== norm(got.name))
+      return `its name is “${norm(got.name) ?? ''}”, not “${plan.name}”`;
+    const parentOf = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null);
+    // A template saved from a page is a top-level template (parent `templates`).
+    const planned = op.operationId === 'saveResourceAsTemplate' ? 'templates' : parentOf(plan.parentId);
+    const actual = parentOf(got.parentId);
+    const same = planned === actual || (planned === 'templates' && actual === null);
+    return same ? null : `it is under ${actual ?? 'the root'}, not ${planned ?? 'the root'}`;
+  }
+
   private async recoverClientId(
     job: JobView,
     step: StepView,
@@ -2210,17 +2253,32 @@ export class StepExecutor {
     params: OpParams,
   ): Promise<Recovery> {
     const ids = step.clientIds;
+    const notOurs = (id: string, why: string): Recovery => ({
+      kind: 'uncertain',
+      reason: `the id ${id} is held by a page that is not the one planned (${why}), so the write is not taken as applied`,
+    });
     if (meta.clientId !== 'body.resources[].id') {
       const one = await this.readCurrent(job, step, op, meta, params, [ids[0]!]);
-      return one.exists ? { kind: 'applied', value: one.body } : { kind: 'not-applied' };
+      if (!one.exists) return { kind: 'not-applied' };
+      const why = this.notAsPlanned(op, meta, params.body, one.body);
+      return why === null ? { kind: 'applied', value: one.body } : notOurs(ids[0]!, why);
     }
     // createManyResources is not atomic: check EVERY minted id (at most 100 reads, each through the governor).
+    const planned = new Map<string, unknown>();
+    const items = (params.body as { resources?: unknown } | undefined)?.resources;
+    for (const it of Array.isArray(items) ? (items as { id?: unknown }[]) : [])
+      if (typeof it?.id === 'string') planned.set(it.id, it);
     const found: unknown[] = [];
     const missing: string[] = [];
     for (const id of ids) {
       const cur = await this.readCurrent(job, step, op, meta, params, [id]);
-      if (cur.exists) found.push(cur.body);
-      else missing.push(id);
+      if (!cur.exists) {
+        missing.push(id);
+        continue;
+      }
+      const why = this.notAsPlanned(op, meta, planned.get(id), cur.body);
+      if (why !== null) return notOurs(id, why);
+      found.push(cur.body);
     }
     if (missing.length === 0) return { kind: 'applied', value: { resources: found } };
     if (found.length === 0) return { kind: 'not-applied' };

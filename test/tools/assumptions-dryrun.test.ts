@@ -139,8 +139,11 @@ describe('sandbox assumptions script (dry run)', () => {
     // lists and reads every page of a cascade at entry and again inside the lock (CR-09).
     // v2 E5.4: LS1 adds two writes (the label and its delete) and two reads.
     // v2 E5.5: LIM1 adds five (the folder, the upload, the asset, two deletes); its PUT goes to the upload host.
+    // CR-2026-11-R2: 531 → 589 reads, all getResource: the lifecycle guard reads a copy's template at entry and inside
+    // the lock (R2-13; two for each of the four copies, in the sandbox run too) and, in this world with its lifecycle
+    // indexes, where each created page lands (R2-14; the sandbox runtime confirms no lifecycle indexes, so none there).
     expect(writes).toBeLessThanOrEqual(120);
-    expect(reads).toBeLessThanOrEqual(540); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
+    expect(reads).toBeLessThanOrEqual(600); // v2 E4: a delete reads the page first (its pre-image, RV2-1);
     const ids = findings.map((f) => f.id);
     for (const id of [
       'A1',

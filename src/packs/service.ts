@@ -82,7 +82,8 @@ export interface SourceStatus {
   readonly sections?: readonly {
     readonly heading: string;
     readonly found: string | null;
-    readonly state: 'same' | 'changed' | 'missing' | 'unapproved';
+    /** CR-2026-11-R2 (R2-33): `ambiguous`: two or more headings of the page match the pin (no section is chosen). */
+    readonly state: 'same' | 'changed' | 'missing' | 'unapproved' | 'ambiguous';
   }[];
   /**
    * ADR 0052 amendment (16 November 2026): the document's headings in order, with their levels, when a pinned section
@@ -150,6 +151,12 @@ export interface Packs {
    * current rules, which they run only once approved.
    */
   toolMode(packId: string, tool: string): PackToolMode;
+  /**
+   * CR-2026-11-R2 (R2-29, R2-35): the stricter of the approved version's switch and the current version's (one waiting
+   * for approval): `propose` when either says so. A switch the owner tightened applies at once; one loosened waits for
+   * the approval. `propose` while none is approved or the pack is not known (fails closed).
+   */
+  strictToolMode(packId: string, tool: string): PackToolMode;
   /** The full tool names of a pack (`arkona_create_character`). */
   toolsOf(pack: Pack): string[];
   /** Whether a pack tool is listed: its pack is attached to at least one project served now. */
@@ -476,13 +483,15 @@ export function createPacks(d: PacksDeps): Packs {
                 heading: s.heading,
                 found: s.found,
                 state:
-                  s.digest === null
-                    ? ('missing' as const)
-                    : had === null
-                      ? ('unapproved' as const)
-                      : had === s.digest
-                        ? ('same' as const)
-                        : ('changed' as const),
+                  s.matches > 1
+                    ? ('ambiguous' as const)
+                    : s.digest === null
+                      ? ('missing' as const)
+                      : had === null
+                        ? ('unapproved' as const)
+                        : had === s.digest
+                          ? ('same' as const)
+                          : ('changed' as const),
               };
             });
       sources.push({
@@ -498,16 +507,23 @@ export function createPacks(d: PacksDeps): Packs {
         state,
         ...(read.reason ? { reason: read.reason } : {}),
         ...(sections ? { sections } : {}),
-        ...(sections?.some((x) => x.state === 'missing') ? { outline: read.outline } : {}),
+        ...(sections?.some((x) => x.state === 'missing' || x.state === 'ambiguous')
+          ? { outline: read.outline }
+          : {}),
       });
     }
     /** The changed pinned sections of a changed source, in words. */
     const sectionWords = (s: SourceStatus): string => {
-      const moved = (s.sections ?? []).filter((x) => x.state === 'changed' || x.state === 'missing');
+      const moved = (s.sections ?? []).filter(
+        (x) => x.state === 'changed' || x.state === 'missing' || x.state === 'ambiguous',
+      );
       if (!s.sections || s.sections.length === 0) return s.name;
       if (moved.length === 0) return `${s.name} (outside its pinned sections)`;
       return `${s.name} (pinned section${moved.length === 1 ? '' : 's'} ${moved
-        .map((x) => `“${x.heading}”${x.state === 'missing' ? ' gone' : ''}`)
+        .map(
+          (x) =>
+            `“${x.heading}”${x.state === 'missing' ? ' gone' : x.state === 'ambiguous' ? ' now appears more than once' : ''}`,
+        )
         .join(', ')})`;
     };
     const base = { sources, version: pack.version, approvedVersion: approved?.version ?? null };
@@ -563,7 +579,7 @@ export function createPacks(d: PacksDeps): Packs {
             ...(s.sections
               ? {
                   sections: s.sections
-                    .filter((x) => x.state === 'changed' || x.state === 'missing')
+                    .filter((x) => x.state === 'changed' || x.state === 'missing' || x.state === 'ambiguous')
                     .map((x) => x.heading),
                 }
               : {}),
@@ -586,6 +602,20 @@ export function createPacks(d: PacksDeps): Packs {
 
   const tokenMap = z_tokenMap;
 
+  /** v3 F3.4 (ADR 0055 decision D): a write tool's switch in the APPROVED version (see `Packs.toolMode`). */
+  const approvedToolMode = (packId: string, tool: string): PackToolMode => {
+    try {
+      const pack = store.get(packId);
+      if (!pack?.approved) return 'propose';
+      const rules =
+        pack.approved.version === pack.version ? pack.rules : store.rulesAt(pack.id, pack.approved.version);
+      return rules ? packToolMode(rules, tool) : 'propose';
+    } catch (e) {
+      d.log?.warn({ err: e, packId, tool }, 'a pack tool switch could not be read; the tool proposes');
+      return 'propose';
+    }
+  };
+
   return {
     store,
     onChange(fn) {
@@ -606,15 +636,13 @@ export function createPacks(d: PacksDeps): Packs {
         .map((a) => store.get(a.packId))
         .filter((p): p is Pack => p !== null),
     attachment: (packId, projectId) => store.attachment(packId, projectId),
-    toolMode: (packId, tool) => {
+    toolMode: approvedToolMode,
+    strictToolMode: (packId, tool) => {
+      if (approvedToolMode(packId, tool) === 'propose') return 'propose';
       try {
         const pack = store.get(packId);
-        if (!pack?.approved) return 'propose';
-        const rules =
-          pack.approved.version === pack.version ? pack.rules : store.rulesAt(pack.id, pack.approved.version);
-        return rules ? packToolMode(rules, tool) : 'propose';
-      } catch (e) {
-        d.log?.warn({ err: e, packId, tool }, 'a pack tool switch could not be read; the tool proposes');
+        return pack ? packToolMode(pack.rules, tool) : 'propose';
+      } catch {
         return 'propose';
       }
     },
@@ -683,6 +711,26 @@ export function createPacks(d: PacksDeps): Packs {
               ),
               // ADR 0052 amendment: each source's outline (headings in order, with levels) for the Packs page's
               // picker, and the governance status it was read in.
+              outline: Object.fromEntries(
+                status.sources.filter((s) => s.outline).map((s) => [s.key, s.outline]),
+              ),
+              governance: status,
+            },
+          );
+        }
+        // CR-2026-11-R2 (R2-33): a pin must be unambiguous: a heading the page has twice or more is refused until one is
+        // left (the owner renames the other on the page, or re-maps the pin to a heading the page has once).
+        const ambiguous = status.sources.flatMap((s) =>
+          (s.sections ?? [])
+            .filter((x) => x.state === 'ambiguous')
+            .map((x) => ({ source: s.name, key: s.key, heading: x.heading })),
+        );
+        if (ambiguous.length > 0) {
+          throw new PackError(
+            'GOVERNANCE_SECTION_AMBIGUOUS',
+            `The pack cannot be approved: ${ambiguous.map((m) => `${m.source} has more than one section “${m.heading}”`).join('; ')}. A pinned section must be unambiguous: rename the other heading on the governance page, or re-map the pin on the Packs page to a heading the page has once.`,
+            {
+              ambiguous,
               outline: Object.fromEntries(
                 status.sources.filter((s) => s.outline).map((s) => [s.key, s.outline]),
               ),
@@ -855,6 +903,13 @@ export function createPacks(d: PacksDeps): Packs {
           throw new PackError(
             'HEADING_NOT_FOUND',
             `${src.name} has no heading “${change.to}” now; pick one of its headings.`,
+            { outline },
+          );
+        // CR-2026-11-R2 (R2-33): never re-map to a heading the page has more than once (the pin would be ambiguous).
+        if (hits.length > 1)
+          throw new PackError(
+            'HEADING_AMBIGUOUS',
+            `${src.name} has ${hits.length} headings “${change.to}”; a pin must be unambiguous: pick a heading the page has once.`,
             { outline },
           );
         const to = hits[0]!.heading;

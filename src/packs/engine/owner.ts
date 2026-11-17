@@ -18,6 +18,7 @@
  *   placeholder headings left out, Dependencies on current Authoritative owners only.
  */
 import { factKey } from '../../facts/index.js';
+import { factValueKey } from '../../facts/rules.js';
 import type { LinkTarget } from '../../facts/plan.js';
 import { mintClientId } from '../../jobs/ids.js';
 import { readSidebar, statusValue } from '../../mcp/tools/create-support.js';
@@ -68,6 +69,7 @@ import {
   checkBody,
   isPlaceholder,
   nameProblem,
+  oneLine,
   replaceDashes,
   replaceDashesInMarkdown,
   sectionsOf,
@@ -177,6 +179,8 @@ function indexRole(rules: PackRules): RoleRule {
 
 const k = (s: string) => nameKey(cleanPrefixes(s).name.replace(/\s+/g, ' ').trim());
 const tidy = (s: string) => s.replace(/\s+/g, ' ').trim();
+/** CR-2026-11-R2 (R2-36): an invisible character (zero-width, soft hyphen, word joiner, BOM and the like). */
+const INVISIBLE = /\p{Default_Ignorable_Code_Point}/u;
 
 /** The fact a required key is given by, in the package. */
 const FIELD_OF: Readonly<Record<string, 'referenceType' | 'scope' | 'temporalScope'>> = {
@@ -235,7 +239,8 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   const fact = (v: IdentityValue | undefined, field: string) => {
     const x = identityOf(v);
     return {
-      value: x.value === null ? null : replaceDashes(x.value, 'facts', field, replacements),
+      // CR-2026-11-R2 (R2-37): Reference Type, Scope and Temporal Scope are one-line rows (line breaks collapsed).
+      value: x.value === null ? null : replaceDashes(oneLine(x.value), 'facts', field, replacements),
       reason: x.reason,
     };
   };
@@ -319,7 +324,16 @@ export async function planOwner(env: OwnerEnv, input: OwnerInput): Promise<PackP
   // ---------------------------------------------------------------------------------- continuity and status
   const fixed = owners.facts.fixed;
   const mainName = fixed['Continuity'] ?? 'Main';
-  const au = continuityIn !== null && textKey(continuityIn) !== textKey(mainName);
+  // CR-2026-11-R2 (R2-36): compared through the facts' own fold (NFKC, invisible characters removed, case, look-alikes),
+  // so "Main" spelt with a zero-width space is Main (and written as Main); an alternate universe's name with an
+  // invisible character in it is refused rather than written into the facts.
+  const au = continuityIn !== null && factValueKey(continuityIn) !== factValueKey(mainName);
+  if (au && continuityIn !== null && INVISIBLE.test(continuityIn))
+    refuse(
+      'CONTINUITY_INVISIBLE_CHARACTER',
+      `continuity “${continuityIn}” holds an invisible character (a zero-width space, a soft hyphen or the like). Type the alternate universe's name without it.`,
+      { continuity: continuityIn },
+    );
   const continuityType = au ? (rules.tags.au?.continuityType ?? 'AU') : (fixed['Continuity Type'] ?? null);
   const continuity = au ? continuityIn : mainName;
   const status: 'working' | 'authoritative' = input.status ?? 'working';

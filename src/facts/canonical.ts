@@ -29,6 +29,7 @@ import type {
 import { SYSTEM_PRINCIPAL, type OpParams } from '../jobs/types.js';
 import { ownerForcedProposal } from '../jobs/write-guard.js';
 import { classifyName } from '../tree/classify.js';
+import type { RestoreSet } from '../lifecycle/deleted.js';
 import { canonConfigFrom, factKey, factValueKey, type CanonicalRule } from './rules.js';
 import {
   SIDEBAR_WRITE_OPS,
@@ -322,6 +323,12 @@ export interface CanonicalGuardDeps {
     readonly name: string;
     readonly rows: readonly { readonly key: string; readonly content: readonly Record<string, unknown>[] }[];
   } | null>;
+  /**
+   * CR-2026-11-R2 (R2-10): the pages a restore of a page may bring back WITH it (LegendKeeper restores every page deleted by
+   * the same delete), from the bridge's records (src/lifecycle/deleted.ts). Each is judged as a new page's facts; when
+   * they cannot be known, the restore needs canonical approval. Absent: only the page itself is judged.
+   */
+  readonly restoreSet?: (projectId: string, resourceId: string) => Promise<RestoreSet>;
 }
 
 /**
@@ -377,7 +384,8 @@ export class CanonicalGuard implements WriteGuard {
           (it.op === 'deleteDocument' && rules.some((r) => r.kind === 'deleteDocument')),
       );
     const restores =
-      this.d.restoredPage !== undefined && input.items.some((it) => it.op === 'restoreResource');
+      (this.d.restoredPage !== undefined || this.d.restoreSet !== undefined) &&
+      input.items.some((it) => it.op === 'restoreResource');
     if (!restores && !guarded.some((it) => it.op !== 'saveResourceAsTemplate')) return { decision: 'allow' };
     const priority = input.origin.approval !== undefined ? 'P0' : 'P1';
     const changes: ProtectedChange[] = [];
@@ -432,19 +440,46 @@ export class CanonicalGuard implements WriteGuard {
     };
     // v3 F2 (ADR 0049 decision 5): a deleted page restored comes back with its sidebar, judged as a new page's facts.
     for (const it of input.items.map((x, i) => ({ ...x, i }))) {
-      if (it.op !== 'restoreResource' || !this.d.restoredPage) continue;
+      if (it.op !== 'restoreResource') continue;
       const rid = it.params.path?.resourceId;
       if (!rid) continue;
-      const back = await this.d.restoredPage(input.project, rid).catch(() => null);
-      if (!back) continue;
-      const rows: SidebarRow[] = back.rows.map((r) => ({ id: null, key: r.key, content: r.content }));
-      for (const c of assessFactChange(rules, [], rows))
-        changes.push({
-          ...c,
-          stepIndex: it.i,
-          resourceId: rid,
-          page: `${back.name} (restored from a snapshot)`,
+      const back = this.d.restoredPage
+        ? await this.d.restoredPage(input.project, rid).catch(() => null)
+        : null;
+      if (back) {
+        const rows: SidebarRow[] = back.rows.map((r) => ({ id: null, key: r.key, content: r.content }));
+        for (const c of assessFactChange(rules, [], rows))
+          changes.push({
+            ...c,
+            stepIndex: it.i,
+            resourceId: rid,
+            page: `${back.name} (restored from a snapshot)`,
+          });
+      }
+      // CR-2026-11-R2 (R2-10): LegendKeeper restores every page deleted by the same delete with it; each of them is judged
+      // as a new page's facts too (as CR-09 judges every page of a cascade delete).
+      if (this.d.restoreSet) {
+        if (reshapes(it.i))
+          unchecked.push({
+            i: it.i,
+            why: 'a restore in a request that also moves, creates or restores pages, so what it brings back cannot be told',
+          });
+        const found = await this.restoredWith(input.project, rid, back?.name ?? rid, async (id) => {
+          try {
+            await this.d.engine.internalRead(
+              input.project,
+              'getResource',
+              { path: { resourceId: id } },
+              { priority, notFoundIsAnswer: true },
+            );
+            return false;
+          } catch {
+            return true; // gone (404), or it cannot be told: judged as coming back
+          }
         });
+        changes.push(...found.changes.map((c) => ({ ...c, stepIndex: it.i })));
+        unchecked.push(...found.unchecked.map((why) => ({ i: it.i, why })));
+      }
     }
     for (const it of guarded) {
       if (it.op === 'saveResourceAsTemplate') {
@@ -647,6 +682,94 @@ export class CanonicalGuard implements WriteGuard {
     return { decision: 'propose_canonical', reason, changes: all };
   }
 
+  /**
+   * CR-2026-11-R2 (R2-10): the protected changes of the pages a restore of `rid` may bring back with it, each judged as a new
+   * page's facts (its newest snapshot's rows), and what could not be told. A page the tree still holds is read live
+   * (`gone`), as it may not be deleted at all. A page the bridge's own delete took is not judged: that delete was judged
+   * page by page (canon in it needed the owner's canonical approval), and restoring brings back what was approved (the
+   * owner's decision of 10 November 2026, ADR 0032 / C2b). A page deleted outside the bridge is judged by its newest
+   * snapshot; when none holds its facts it cannot be judged, so it needs canonical approval.
+   */
+  private async restoredWith(
+    project: string,
+    rid: string,
+    name: string,
+    gone: (id: string) => Promise<boolean>,
+  ): Promise<{ changes: ProtectedChange[]; unchecked: string[] }> {
+    const rules = this.rules(project);
+    const changes: ProtectedChange[] = [];
+    const unchecked: string[] = [];
+    let set: RestoreSet;
+    try {
+      set = await this.d.restoreSet!(project, rid);
+    } catch (e) {
+      return {
+        changes,
+        unchecked: [
+          `the pages deleted with ${name} could not be told (${e instanceof Error ? e.message : String(e)})`,
+        ],
+      };
+    }
+    if (!set.known)
+      unchecked.push(
+        `the pages deleted with ${name} (which a restore brings back with it) cannot be told from the bridge’s records`,
+      );
+    for (const p of set.pages) {
+      if (p.recorded) continue; // the bridge's own delete took it: restoring brings back what was approved
+      if (p.inTree && !(await gone(p.id))) continue; // still there: a restore does not touch it
+      if (p.rows === null) {
+        unchecked.push(
+          `${p.name ?? p.id}, deleted with ${name}, would come back, and no snapshot holds its facts`,
+        );
+        continue;
+      }
+      const rows: SidebarRow[] = p.rows.map((r) => ({ id: null, key: r.key, content: r.content }));
+      for (const c of assessFactChange(rules, [], rows))
+        changes.push({ ...c, resourceId: p.id, page: `${p.name ?? p.id} (restored with ${name})` });
+    }
+    return { changes, unchecked };
+  }
+
+  /**
+   * CR-2026-11-R2 (R2-10): a restore, judged again inside its lock: the page and every page it may bring back with it, as
+   * the records and LegendKeeper say now (a page the tree holds may have been deleted with it since the entry check).
+   */
+  private async restoreInLock(input: WriteGuardInLock): Promise<void> {
+    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    const project = input.job.projectId;
+    const rules = this.rules(project);
+    const rid = input.params.path?.resourceId;
+    if (rules.length === 0 || !rid) return;
+    const ref = { jobId: input.job.id, stepNo: input.step.stepNo };
+    const changes: ProtectedChange[] = [];
+    const back = this.d.restoredPage ? await this.d.restoredPage(project, rid).catch(() => null) : null;
+    if (back)
+      for (const c of assessFactChange(
+        rules,
+        [],
+        back.rows.map((r) => ({ id: null, key: r.key, content: r.content })),
+      ))
+        changes.push({ ...c, resourceId: rid, page: `${back.name} (restored from a snapshot)` });
+    if (this.d.restoreSet) {
+      const found = await this.restoredWith(
+        project,
+        rid,
+        back?.name ?? rid,
+        async (id) => (await input.read('getResource', { path: { resourceId: id } })) === undefined,
+      );
+      if (found.unchecked.length > 0 && changes.length === 0 && found.changes.length === 0)
+        throw new CanonicalApprovalRequiredError(
+          input.opId,
+          `${found.unchecked[0]!} (checked inside the lock), so the restore needs the owner’s canonical approval`,
+          [],
+          ref,
+        );
+      changes.push(...found.changes);
+    }
+    if (changes.length > 0)
+      throw new CanonicalApprovalRequiredError(input.opId, canonicalReason(changes), changes, ref);
+  }
+
   /** v2 C2c: a page's kind from its name, read live (undefined when it cannot be read; null when it is gone). */
   private async kindLive(
     project: string,
@@ -708,6 +831,7 @@ export class CanonicalGuard implements WriteGuard {
     if (input.opId === 'deleteResource') return this.deleteInLock(input);
     if (input.opId === 'deleteDocument') return this.deleteDocumentInLock(input);
     if (input.opId === 'createResourceFromTemplate') return this.copyInLock(input);
+    if (input.opId === 'restoreResource') return this.restoreInLock(input);
     if (!SIDEBAR_WRITE_OPS.has(input.opId)) return; // a template copy is checked at entry (the template is not locked)
     if (input.job.origin.canonicalApprovedBy !== undefined) return; // approved as canon (checked at entry)
     const rules = this.rules(input.job.projectId);
@@ -894,8 +1018,8 @@ export async function listSubtree(
   read: (opId: string, params: OpParams) => Promise<unknown>,
   resourceId: string,
   limit: number,
-): Promise<{ id: string; name: string | null; parentId: string }[] | null> {
-  const out: { id: string; name: string | null; parentId: string }[] = [];
+): Promise<{ id: string; name: string | null; parentId: string; tags: string[] }[] | null> {
+  const out: { id: string; name: string | null; parentId: string; tags: string[] }[] = [];
   let level = [resourceId];
   try {
     while (level.length > 0 && out.length <= limit) {
@@ -907,10 +1031,16 @@ export async function listSubtree(
             query: { parentId, limit: 100, ...(cursor ? { cursor } : {}) },
           })) as { data?: unknown; hasMore?: unknown; nextCursor?: unknown } | undefined;
           for (const r of Array.isArray(body?.data)
-            ? (body.data as { id?: unknown; name?: unknown }[])
+            ? (body.data as { id?: unknown; name?: unknown; tags?: unknown }[])
             : []) {
             if (typeof r.id === 'string' && r.id !== resourceId) {
-              out.push({ id: r.id, name: typeof r.name === 'string' ? r.name : null, parentId });
+              out.push({
+                id: r.id,
+                name: typeof r.name === 'string' ? r.name : null,
+                parentId,
+                // CR-2026-11-R2 (R2-13): a template's pages are copied with their tags.
+                tags: Array.isArray(r.tags) ? r.tags.filter((t): t is string => typeof t === 'string') : [],
+              });
               next.push(r.id);
             }
           }

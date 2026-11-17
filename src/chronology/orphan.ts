@@ -187,6 +187,12 @@ export async function planOrphanDelete(o: {
     .filter((r) => r.id !== null && couldBeRowOf(r, ev))
     .map((r) => ({ rowId: r.id!, texts: { description: r.description, date: r.dateText, kcy: r.kcyText } }));
   const nearest = nearestRows(table.rows, event.start);
+  // CR-2026-11-R2 (R2-49): an unpaired row whose Date cell cannot be read has no date to compare, so it is matched by
+  // its name only (`couldBeRowOf`), and it is never among the rows nearest by date. The owner sees each such row in the
+  // proposal: the bridge cannot rule out that it is this event's own (marking it table-only says it is not).
+  const unreadable = pairing.rows
+    .filter((r) => r.eventDate === null)
+    .map((r) => ({ rowId: r.id, date: r.dateText, words: openingWords(r.description) }));
   const link = links.find((l) => l.eventId === event.id) ?? null;
   const writes: TargetWrite[] = [
     {
@@ -219,6 +225,14 @@ export async function planOrphanDelete(o: {
   };
   const date = eventText(event);
   const near = nearest.map((n) => `- ${n.date}: ${n.words}`);
+  const unread =
+    unreadable.length > 0
+      ? [
+          '',
+          `## ${age.name} - Table (rows whose date cannot be read: one could be this event's)`,
+          ...unreadable.map((n) => `- ${n.date || '(empty)'}: ${n.words}`),
+        ]
+      : [];
   const lane = `## ${age.name} - Timeline (${age.laneName})`;
   const summary = `${ORPHAN_TOOL}: delete the ${age.name} event “${openingWords(event.name, 12)}” (${date}), which has no table row`;
   return {
@@ -237,6 +251,13 @@ export async function planOrphanDelete(o: {
       age: age.name,
       event: { id: event.id, name: event.name.slice(0, 200), date, start: event.start, uri: event.uri },
       nearest,
+      ...(unreadable.length > 0
+        ? {
+            unreadable,
+            unreadableNote:
+              'These rows of the table have a Date the bridge cannot read, so it cannot tell whether one is this event’s own. Check them before approving; mark a row table-only if it has no event.',
+          }
+        : {}),
       note: 'Only the timeline event is deleted: the table (the authority) has no row for it, and the Main count (the table’s row count) does not change. The journal keeps the event.',
     },
     markdown: {
@@ -246,8 +267,11 @@ export async function planOrphanDelete(o: {
         '',
         `## ${age.name} - Table (the nearest rows)`,
         ...near,
+        ...unread,
       ].join('\n'),
-      after: [lane, '- (deleted)', '', `## ${age.name} - Table (the nearest rows)`, ...near].join('\n'),
+      after: [lane, '- (deleted)', '', `## ${age.name} - Table (the nearest rows)`, ...near, ...unread].join(
+        '\n',
+      ),
     },
   };
 }

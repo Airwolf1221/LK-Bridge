@@ -190,7 +190,14 @@ function cleanName(
   if (typeof raw !== 'string') {
     return { ok: false, error: { code: 'INVALID_NAME', message: `${what} must be text.` } };
   }
-  const name = raw.trim();
+  // CR-2026-11-R2 (R2-44): a name the bridge writes is canonical, so two that show the same are the same bytes (the plan
+  // and the job's find-or-create still compare bytes): Unicode NFC, no zero-width space, word joiner or byte-order mark,
+  // and a no-break space (U+00A0, U+2007, U+202F) as a plain space. Case and visible spacing still make another folder.
+  const name = raw
+    .normalize('NFC')
+    .replace(/[\u200b\u2060\ufeff]/g, '')
+    .replace(/[\u00a0\u2007\u202f]/g, ' ')
+    .trim();
   if (name === '' || name.length > NAME_MAX) {
     return {
       ok: false,

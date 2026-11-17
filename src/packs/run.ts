@@ -331,11 +331,25 @@ export async function finishPackage(
       const images = pd.services?.images;
       let result = out.result;
       let body = out.body;
-      if (images && (out.jobId || out.proposalId)) {
-        // v3 F3b (design section 6): a staged image's own pending placement is withdrawn first, naming this package.
+      // CR-2026-11-R2 (R2-34): a direct job (scope write) has run (or is still waiting) by now. Its outcome decides: a
+      // job that stopped leaves the images and their own placement proposals as they were.
+      const status = out.jobId ? pd.engine.queries.getJob(pd.project.id, out.jobId)?.status : undefined;
+      const stopped = status === 'failed' || status === 'cancelled';
+      if (images && (out.proposalId || (out.jobId && !stopped))) {
+        // v3 F3b (design section 6): a staged image's own pending placement is withdrawn, naming this package, once the
+        // package is captured as a proposal or its job has succeeded (R2-34: never for a job that has not).
         const by = out.proposalId ?? out.jobId!;
         const takeovers: Obj[] = [];
         for (const tk of plan.takeovers ?? []) {
+          if (!out.proposalId && status !== 'succeeded') {
+            takeovers.push({
+              staged_id: tk.stagedId,
+              proposalId: tk.proposalId,
+              withdrawn: false,
+              note: `this package's job ${out.jobId!} places the image when it runs; its placement proposal ${tk.proposalId} is left pending until then (the owner rejects it once the job has placed the image)`,
+            });
+            continue;
+          }
           const done = images.supersedePlacement(pd.project.id, tk.stagedId, tk.proposalId, by);
           takeovers.push({
             staged_id: tk.stagedId,
@@ -348,9 +362,20 @@ export async function finishPackage(
                 }),
           });
         }
+        // CR-2026-11-R2 (R2-40): the record follows the package only while nothing else is placing or discarding the
+        // image (a placement approved or started meanwhile keeps its link; the package's job finds it busy and stops).
+        const ours = new Set(
+          [out.proposalId, out.jobId, ...(plan.takeovers ?? []).map((t) => t.proposalId)].filter(
+            (x): x is string => typeof x === 'string',
+          ),
+        );
         for (const im of plan.images) {
           const assetStep = j.assetSteps.get(im.stagedId);
           if (!assetStep) continue;
+          const now = images.store.upload(pd.project.id, im.stagedId);
+          const free = (x: string | null | undefined) => !x || ours.has(x);
+          if (now && !(free(now.placementProposalId) && free(now.placementJobId) && !now.discardJobId))
+            continue;
           images.store.updateUpload(pd.project.id, im.stagedId, {
             ...(out.jobId ? { placementJobId: out.jobId } : { placementProposalId: out.proposalId! }),
             intended: {

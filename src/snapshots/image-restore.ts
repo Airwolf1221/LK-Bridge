@@ -19,7 +19,8 @@ import { asStoredImage } from '../images/convert.js';
 import { randomBytes } from 'node:crypto';
 import type { AssetService } from '../assets/index.js';
 import type { AssetPlan } from '../assets/plan.js';
-import type { ImageService } from '../images/service.js';
+import { ImageServiceError, type ImageService } from '../images/service.js';
+import type { ImageUploadRow } from '../images/store.js';
 import type { TreeService } from '../tree/index.js';
 import type { JobEngine, JobOrigin, StepSpec } from '../jobs/index.js';
 import { replaceUrls, stripVersions, type LibraryPiece } from './canonical.js';
@@ -301,18 +302,78 @@ export async function restoreImage(
   // ---- the bytes wait on the bridge's server (or the copy a previous call staged there: the same original)
   // v2 E4 (RV3-4): the snapshot store's bytes, exactly (never re-encoded: a PNG or JPEG would come back as lossy WebP).
   const image = await asStoredImage(old.bytes);
-  let row = d.images.findDuplicate(input.projectId, old.sha);
-  if (!row || !row.staged || !row.serverSha256 || row.assetId !== null) {
-    row = await d.images.stageOnServer({
-      projectId: input.projectId,
-      image,
-      name: old.name,
-      intended: { restoreOf: input.assetId, folderId: old.folderId },
-      source: 'restore',
-      origin,
-      priority: 'P1',
-    });
+  // CR-2026-11-R2 (R2-39): only a record an earlier restore of THIS asset staged, holding exactly the snapshot's bytes, is
+  // reused. Never another staged image of the same original (an agent's holds its converted WebP, and is its own).
+  const own = (r: ImageUploadRow) =>
+    r.source === 'restore' &&
+    r.staged &&
+    r.state === 'uploaded' &&
+    r.assetId === null &&
+    r.serverSha256 === old.sha &&
+    r.webp.sha256 === old.sha &&
+    (r.intended as { restoreOf?: unknown } | null)?.restoreOf === input.assetId;
+  let row: ImageUploadRow | undefined = d.images.store
+    .byOriginal(input.projectId, old.sha)
+    .map((r) => d.images.settle(r))
+    .find(own);
+  if (!row) {
+    try {
+      row = await d.images.stageOnServer({
+        projectId: input.projectId,
+        image,
+        name: old.name,
+        intended: { restoreOf: input.assetId, folderId: old.folderId },
+        source: 'restore',
+        origin,
+        priority: 'P1',
+      });
+    } catch (e) {
+      if (e instanceof ImageServiceError) throw new RestoreError(e.code, e.message, e.details);
+      throw e;
+    }
   }
+  // CR-2026-11-R2 (R2-38): one restore (or placement) of the staged image at a time, decided on its record as it is now.
+  if (!d.images.holdStaged(input.projectId, row.id))
+    throw new RestoreError(
+      'RESTORE_PENDING',
+      'This image is being restored by another request at this moment; follow that request’s answer.',
+      { stagedId: row.id },
+    );
+  try {
+    return await proposeRestore(d, input, origin, {
+      row: d.images.store.upload(input.projectId, row.id) ?? row,
+      image,
+      old,
+      oldView,
+      refs,
+      dest,
+      notes,
+      path,
+      creates,
+    });
+  } finally {
+    d.images.releaseStaged(input.projectId, row.id);
+  }
+}
+
+/** The restore's proposal for its staged record (taken by the caller): the upload, then the references when asked. */
+async function proposeRestore(
+  d: ImageRestoreDeps,
+  input: ImageRestoreInput,
+  origin: JobOrigin,
+  o: {
+    readonly row: ImageUploadRow;
+    readonly image: Awaited<ReturnType<typeof asStoredImage>>;
+    readonly old: Awaited<ReturnType<typeof findOld>>;
+    readonly oldView: Obj;
+    readonly refs: ImageReference[];
+    readonly dest: Pick<AssetPlan, 'wouldCreate' | 'destination'>;
+    readonly notes: PlanNote[];
+    readonly path: readonly string[];
+    readonly creates: readonly string[];
+  },
+): Promise<ImageRestoreResult> {
+  const { row, image, old, oldView, refs, dest, notes, path, creates } = o;
   if (row.placementProposalId || row.placementJobId)
     throw new RestoreError(
       'RESTORE_PENDING',

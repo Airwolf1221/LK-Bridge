@@ -75,6 +75,14 @@ describe('deletes', () => {
     ['deleteFeature', { path: { resourceId: 'pg1', documentId: 'd1', featureId: 'f1' } }, 'map feature'],
     ['deleteAsset', { path: { assetId: 'a1' } }, 'asset'],
     ['deleteCalendar', { path: { calendarId: 'c1' } }, 'calendar'],
+    // CR-2026-11-R2 (R2-02): an infobox property with its rows; the whole replaces delete what they do not send.
+    [
+      'deleteBlockProperty',
+      { path: { resourceId: 'pg1', documentId: 'd1', blockId: 'b1', propertyId: 'p1' } },
+      'infobox property',
+    ],
+    ['replaceBoardContent', { path: { resourceId: 'pg1', documentId: 'd1' } }, 'board content replaced'],
+    ['updateCalendar', { path: { calendarId: 'c1' } }, 'calendar replaced'],
   ])('%s is a delete', (op, params, what) => {
     const v = railsVerdict({ ...ALL_OFF, deletes: true }, [w(op, params)]);
     expect(v?.reason).toBe(`proposed because: delete (1 ${what})`);
@@ -95,13 +103,10 @@ describe('deletes', () => {
   });
 
   it('editing text and facts is never a delete (blocks, fact rows, rows of a block)', () => {
-    const edits = [
-      'deleteBlock',
-      'deletePropertyRow',
-      'deleteBlockRow',
-      'deleteBlockProperty',
-      'deleteBlockPropertyRow',
-    ].map((op) => w(op, { path: { resourceId: 'pg1', documentId: 'd1', blockId: 'b1' } }));
+    // CR-2026-11-R2 (R2-02): deleteBlockProperty (an infobox property and its rows) left this list: it is a delete now.
+    const edits = ['deleteBlock', 'deletePropertyRow', 'deleteBlockRow', 'deleteBlockPropertyRow'].map((op) =>
+      w(op, { path: { resourceId: 'pg1', documentId: 'd1', blockId: 'b1' } }),
+    );
     expect(railsVerdict(DEFAULT_WRITE_RAILS, edits)).toBeNull();
   });
 
@@ -146,6 +151,29 @@ describe('bulk changes: the N boundary', () => {
     );
     expect(railsVerdict(rails, [cascade], { descendants: () => null })?.reason).toMatch(
       /cascade delete whose pages are not known/,
+    );
+  });
+
+  it('a copy with its children counts every page copied; one whose source cannot be counted fails closed (CR-2026-11-R2)', () => {
+    const rails = { ...ALL_OFF, bulk: true, bulkPages: 10 };
+    const fromTemplate = (includeChildren: boolean) =>
+      w('createResourceFromTemplate', { body: { templateId: 'tpl1', includeChildren, name: 'Copy' } });
+    const saved = w('saveResourceAsTemplate', {
+      path: { resourceId: 'pg1' },
+      body: { includeChildren: true },
+    });
+    // Without its children a copy is one page, whatever is under the template.
+    expect(railsVerdict(rails, [fromTemplate(false)], { descendants: () => null })).toBeNull();
+    expect(railsVerdict(rails, [fromTemplate(true)], { descendants: () => 9 })).toBeNull();
+    expect(railsVerdict(rails, [fromTemplate(true)], { descendants: () => 15 })?.reason).toBe(
+      'proposed because: bulk change (16 pages > 10)',
+    );
+    expect(railsVerdict(rails, [saved], { descendants: (id) => (id === 'pg1' ? 15 : 0) })?.reason).toBe(
+      'proposed because: bulk change (16 pages > 10)',
+    );
+    // A template is not in the repository tree: its pages are not known, so the rail fails closed.
+    expect(railsVerdict(rails, [fromTemplate(true)], { descendants: () => null })?.reason).toMatch(
+      /a copy with its children whose pages are not known/,
     );
   });
 

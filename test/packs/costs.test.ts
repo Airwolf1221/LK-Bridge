@@ -98,6 +98,7 @@ it('reads and writes per typical package', async () => {
     'developed, Working: Core, Biography, Relationship: plan': [8, 0],
     'developed, Working: Core, Biography, Relationship: job': [57, 46],
     'add an Art page with 1 image (target, Working): plan': [7, 0],
-    'add an Art page with 1 image (target, Working): job': [28, 16],
+    // CR-2026-11-R2 (R2-14): +1, the character's existing index read inside the lock (where the Working page lands).
+    'add an Art page with 1 image (target, Working): job': [29, 16],
   });
 });

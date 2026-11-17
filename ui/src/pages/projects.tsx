@@ -714,6 +714,8 @@ function SettingEditor({
   const [draft, setDraft] = useState('');
   const { run, busy } = useAction();
   const confirm = useConfirm();
+  // CR-2026-11-R2 (R2-51): a canon setting (the Status of pages agents create) asks for the password first.
+  const withReauth = useReauth();
   const shown =
     value === undefined && k.default !== undefined ? (
       <span>
@@ -729,7 +731,10 @@ function SettingEditor({
   const save = (v: string | boolean | null) => {
     const go = () =>
       void run(
-        () => api.put(`/projects/${encodeURIComponent(p.name)}/settings`, { key: k.key, value: v }),
+        () =>
+          withReauth(() =>
+            api.put(`/projects/${encodeURIComponent(p.name)}/settings`, { key: k.key, value: v }),
+          ),
         `${k.label} of ${p.name} saved.`,
       ).then((r) => {
         if (r) {

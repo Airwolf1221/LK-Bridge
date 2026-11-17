@@ -139,7 +139,14 @@ export function RevertButton({
         withReauth(() =>
           api.post<{ revert: { revertJobId: string; message: string } }>(
             withProject(`/jobs/${encodeURIComponent(jobId)}/revert`, project),
-            { confirm: true, confirmPartial: partial },
+            // CR-2026-11-R2 (R2-23): a partial revert names the targets the owner confirmed; refused if they changed.
+            partial
+              ? {
+                  confirm: true,
+                  confirmPartial: true,
+                  confirmed: p.targets.filter((t) => t.state === 'ready').map((t) => t.key),
+                }
+              : { confirm: true, confirmPartial: false },
           ),
         ),
       'Revert submitted.',
@@ -254,6 +261,12 @@ function ItemRow({ item, onChanged }: { item: ReviewItem; onChanged: () => void 
         <div>
           <p>
             <strong>{item.summary}</strong>
+            {item.agentTitle && (
+              <span className="muted small-text" title="The title the agent gave this job (its own words)">
+                {' '}
+                · agent’s title: {item.agentTitle}
+              </span>
+            )}
           </p>
           <p className="muted small-text">
             {item.agent.name} ({item.agent.profile}) · {item.tool ?? 'a tool'} ·{' '}
@@ -318,6 +331,8 @@ export function ReviewPage() {
   const markAll = async () => {
     if (!data) return;
     const n = state === 'unreviewed' ? data.counts.matching : data.counts.unreviewed;
+    // CR-2026-11-R2 (R2-09): the set the owner confirms, exactly (a changed set under the same count is refused).
+    const fingerprint = state === 'unreviewed' ? data.markAll?.fingerprint : undefined;
     const ok = await confirm({
       title: `Mark ${n} item${n === 1 ? '' : 's'} reviewed?`,
       message: (
@@ -334,6 +349,7 @@ export function ReviewPage() {
         api.post(withProject('/review/mark-all', selected), {
           filter: { ...(profile ? { profile } : {}), ...(tool ? { tool } : {}) },
           expect: n,
+          ...(fingerprint ? { fingerprint } : {}),
           confirm: true,
         }),
       'Marked reviewed.',

@@ -49,10 +49,13 @@ const STATUS: Readonly<Record<string, number>> = {
   INVALID_TOKEN: 400,
   GOVERNANCE_UNREADABLE: 409,
   GOVERNANCE_SECTION_MISSING: 409,
+  // CR-2026-11-R2 (R2-33): a pinned heading the page has more than once.
+  GOVERNANCE_SECTION_AMBIGUOUS: 409,
   SOURCE_NOT_FOUND: 404,
   SECTION_NOT_PINNED: 409,
   SECTION_ALREADY_PINNED: 409,
   HEADING_NOT_FOUND: 409,
+  HEADING_AMBIGUOUS: 409,
 };
 
 function packs(ctx: Parameters<Register>[1]): Packs {

@@ -63,6 +63,10 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
 - **Re-authentication (OPS2).** Adding, replacing or removing an API key, and changing the password or the authenticator,
   also need the owner's password (and authenticator code) within the last five minutes on the session, or the answer is
   `403 REAUTH_REQUIRED`; the dashboard asks in a dialog and retries ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)).
+  So does every change that lets an agent's connection do more (CR-2026-11-R2, R2-50; ADR 0057 decision 1): raising a
+  profile's scope or the default scope, moving a connection to a profile with a higher scope or to one at scope `write`,
+  and a personal access token for a profile at scope `write`; and the Status of pages agents create, whichever route
+  saves it (R2-51). Lowering a scope or moving a connection down stays one click.
 - **No secrets shown or logged.** An API key goes to the bridge once, from a write-only field; afterwards only its last
   four characters are shown (OPS2). The authenticator secret (while it is set up) and recovery codes are in one response
   each, marked `shownOnce`. A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
@@ -111,7 +115,8 @@ default) are not listed: you saw them before they happened. The Overview page sh
 
 - **Mark reviewed** takes an item off the badge (audited `review.mark`). **Mark all reviewed (N)** marks every item the
   filters show, after a confirmation naming N; if the set changed in the meantime nothing is marked and the page asks
-  you to look again (`REVIEW_CHANGED`; audited `review.mark_all`).
+  you to look again (`REVIEW_CHANGED`; audited `review.mark_all`). The set is compared exactly, not only its count: the
+  list answers a fingerprint of the ids (`markAll.fingerprint`) and the request sends it back (CR-2026-11-R2, R2-09).
 - **Revert** (also on the Jobs page, for a finished job an agent ran directly) first shows what it would do: each thing
   the job changed, whether it can be put back, and, for one that changed since or cannot be reverted, why. It puts back
   page text (block by block), sidebar facts and links, chronology rows and their events (in step), names, tags, aliases
@@ -124,6 +129,13 @@ default) are not listed: you saw them before they happened. The Overview page sh
   meanwhile is never overwritten. It asks for your password (and TOTP code) first, and is audited (`job.revert`, with
   the targets and the outcome). The revert is one job (system, P1) on the Jobs page; its result points to the journal
   and the snapshots if you need to go further. A reverted job is marked reviewed.
+  Since CR-2026-11-R2: a target is compared in full with what the job left (a chronology row with its links, marks and
+  inline icons, an event with every stored field, a move with its place among its siblings, a later job's write to the
+  same target), and every target is checked before the first write (R2-16, R2-19, R2-20, R2-28); the request carries the
+  targets you confirmed, and a different set is refused (`REVERT_CHANGED`, R2-23); a second revert of the same job while
+  the first is starting is refused (`REVERT_RUNNING`, R2-21); a revert whose own verify finds a difference ends failed
+  and the item stays unreviewed (R2-25); Last Major Revision goes back exactly, and only with the edit that set it
+  (R2-18). A low-level job is summarised from its operations, with the agent's own title beside it (R2-06).
 
 ## Safety rails, per profile (v3 F3.4)
 

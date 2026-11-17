@@ -86,7 +86,8 @@ governor at P3. Code: `spike-v2.ts` (checks), `spike-report.ts` (report layout);
 ## The write layer's assumptions (CR-2026-11)
 
 `npm run test:sandbox` (with `LKB_SANDBOX_PROJECT`, as above; on the server `deploy/sandbox-test.sh --project test`) also
-runs `assumptions.test.ts`; `npm run test:sandbox -- assumptions` runs it alone. It checks, on the real API, every
+runs `assumptions.test.ts`; `npm run test:sandbox -- assumptions.test` runs it alone (`-- assumptions` also runs round
+2, below). It checks, on the real API, every
 assumption the write layer makes about LegendKeeper that was only ever checked against the mock: the list, with what
 breaks if one is false, is [docs/reviews/CR-2026-11.md](../../docs/reviews/CR-2026-11.md), section 6. Each check
 prints PASS, FAIL or INCONCLUSIVE with what LegendKeeper answered; the run fails if any assumption FAILs or the
@@ -100,7 +101,9 @@ clean-up does.
   three templates, then the root. A delete the canon guard could not judge for lack of budget is tried again after a
   minute (up to three times). If something is left, the report names each id to delete by hand.
 - **Cost:** about 100 writes and up to about 500 reads (measured against the mock: 102 and 485, which includes the mock
-  world's repository tree re-reading every page written; the sandbox runtime has no tree), plus up to 12 search polls
+  world's repository tree re-reading every page written; the sandbox runtime has no tree; 117 and 589 since
+  CR-2026-11-R2, whose lifecycle guard reads a copy's template and, in the mock world, where each new page lands; on
+  the real API about 8 more reads, two for each template copy), plus up to 12 search polls
   while it waits for new text to become searchable. The clean-up's cascades are most of the reads: the canon guard lists
   and reads every page of a cascade at entry and again inside the lock. A few minutes at the bridge's write pacing.
 - **Dry run:** `test/tools/assumptions-dryrun.test.ts` runs the same script against the lifecycle test world's mock, to
@@ -151,6 +154,39 @@ clean-up does.
   only if the clean-up failed (the report names the asset to delete by hand in the asset library). The signed URL is
   never printed. Five writes and one PUT to the upload host more: about 113 writes in all. The dry run models the asset
   routes' tiers at 20 and 60 a minute and checks the line.
+
+## Round 2: the newer code's assumptions (CR-2026-11-R2)
+
+`npm run test:sandbox -- assumptions-r2` (on the server `deploy/sandbox-test.sh --project test -- assumptions-r2`) runs
+`assumptions-r2.test.ts` alone, with the same guard as the smoke. It checks, on the real API, what the code merged since
+CR-2026-11 assumes about LegendKeeper and no other sandbox check confirms, and what the second review's own fixes assume:
+the list (W1 to W18), with what breaks if one is false, is [docs/reviews/CR-2026-11-R2.md](../../docs/reviews/CR-2026-11-R2.md), section 6. Each check prints PASS,
+FAIL, INCONCLUSIVE or NOTED with what LegendKeeper answered; the run fails if any check FAILs or the clean-up does.
+
+- **The asset library** (W1 to W6): an image moved between two throwaway folders (its file downloaded before and after),
+  `updateAsset` partial and needing no If-Match, a hidden image listed in its folder, what a delete of a folder holding a
+  sub-folder does (NOTED), an image delete, and the root listing.
+- **Table rows and nested blocks** (W7 to W11), written exactly as the chronology and Revert write them: a row inserted
+  after another, moved (and a stale If-Match: 412, nothing moved), replaced and deleted; `getBlock` of a paragraph in a
+  table cell (the read before a direct `updateBlock`, ADR 0055 decision E); `updateBlock` with only `content`.
+- **`listEvents` pages** (W12): three events read two at a time through the cursor.
+- **What the second review's fixes assume** (W13 to W18): a template saved from a page carries its tags, `getResource`
+  answers the template and a copy takes its tags (the lifecycle guard's copy check); `createManyResources` with an id
+  already held makes none of its items; a template that does not exist reads 404 and is not copied; an event reads back
+  exactly as its write answered it; a move answers the rank `getResource` then gives (Revert's comparisons);
+  `getResource` of `templates` answers 404 (the guards read that virtual parent live), and what a move of a page there
+  does (NOTED).
+- **What it creates and cleans up:** one throwaway root `lk-bridge assumptions-r2 <time>` with nine plainly named pages
+  under it (a table page, a timeline page, `W13 source` tagged `lkb-w13` and its copy, `W14 held`, `W17 parent` with two
+  pages, and `W18 page`), one template `lk-bridge assumptions-r2 template W13` (outside the root, as templates are), four asset
+  folders `lk-bridge assumptions-r2 F1 <time>` to `… F4 <time>` and one 70-byte PNG; everything is deleted at the end,
+  even after a failure, and the report names any id left to delete by hand.
+- **Cost:** 52 writes and 121 reads, 3 downloads from the asset host and 1 PUT to the upload host (counted against the
+  mock); about a minute.
+- **Dry run:** `test/tools/assumptions-r2-dryrun.test.ts` runs it against the image test world's mock three times: once
+  answering as the spec says (every check PASS or NOTED), once answering otherwise for W1 to W12 and once for W13 to
+  W18 (each check FAILs, notes or is INCONCLUSIVE where it should, and the clean-up still works). It also checks that
+  another project is refused before anything is written.
 
 ## The chronology (v2 D1)
 

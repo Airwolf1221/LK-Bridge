@@ -1669,7 +1669,7 @@ function restoreResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Restore a deleted page',
     access: 'write',
     description:
-      'Restores a page deleted from the AI REPOSITORY (with everything deleted with it) and adds it back to the tree. Give its id (delete_resource’s result and bridge_journal_lookup show it). No canonical approval is needed. A page whose parent is deleted is refused: restore the parent first. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
+      'Restores a page deleted from the AI REPOSITORY (with everything deleted with it) and adds it back to the tree. Give its id (delete_resource’s result and bridge_journal_lookup show it). If the page, or a page deleted with it outside the bridge, was Authoritative (by the newest snapshot holding it), or what was deleted with it cannot be told, the restore is a proposal only the owner can accept as canon: never retry it. A page whose parent is deleted is refused: restore the parent first. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 3 reads and 1 write.',
     inputSchema: z.object({
       page: z.string().min(1).max(500).describe('The deleted page’s id (or lk://resources/<id>).'),
       dryRun: dryRunArg,

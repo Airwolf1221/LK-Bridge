@@ -188,9 +188,10 @@ pairing now settles every tie it safely can, and the owner settles the rest on t
   whose end falls in the same year as the event's end wins (**the same start and final year**).
 - **A caller's choice is remembered.** `sync_timeline_event` with `event_id` on an event that already agrees records the
   row–event link (`pairedBy: "chosen by the caller"`) and answers `linked`. It is a bridge-side record with no
-  LegendKeeper write, audited as a chronology change, and still a proposal at scope `propose` (summary `link row … to
-event …`), because it changes what the check reports. The check honours stored links first, as it does the links the
-  bridge makes, so a later tie on that day no longer touches the pair.
+  LegendKeeper write, audited as a chronology change, and a proposal (summary `link row … to event …`) at every scope
+  because it changes what the check reports (CR-2026-11-R2, R2-08: at scope `write` a direct link was never on the
+  Review page; ADR 0057 decision 3). The check honours stored links first, as it does the links the bridge makes, so a
+  later tie on that day no longer touches the pair.
 - **None of these: make a new event.** `create_new: true` (never with `event_id`) creates the row's event even though
   candidates exist; the proposal names the candidates it passed over.
 - **Refusals name the candidates.** `PAIRING_AMBIGUOUS` gives every candidate's name, date and id in its message, not
@@ -234,7 +235,10 @@ counts in the Main count.
 An event no row accounts for is the check's "event without a row". Its **Propose a fix** deletes only the event (no row,
 no count change), and names it, its date and the three rows nearest it by date. The same through MCP:
 `delete_timeline_event { event: { event_id }, orphan: true, confirm: true }`. Both refuse when the event has a row after
-all, or a row could be its own.
+all, or a row could be its own. A row whose Date cannot be read can only be matched by its name, so the proposal (and the
+tool's dry run) also lists every unpaired row of the age whose date cannot be read, under its own heading: check them
+before approving, or mark such a row table-only (CR-2026-11-R2, R2-49; whether they should block the delete is ADR 0057
+decision 2).
 
 **An event with candidate rows is not an event without a row** (v3 F2.1, the owner's report of 16 November 2026: all
 four of Arkona's "events without a row" were real events caught in ties). An unpaired event that any unpaired row could

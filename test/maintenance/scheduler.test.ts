@@ -198,8 +198,10 @@ describe('daily times across the British clocks change', () => {
     m = await maintenanceRig();
     const clock = m.rig.h.clock;
     const c = m.maintenance.commands;
-    for (const id of ['budget-sampler', 'proposal-expiry', 'sqlite-optimise']) c.disable('owner', id);
     const sched = m.maintenance.scheduler;
+    // Only journal-prune is examined, so every other job is off: the clock walks almost a year, and with the rest on it
+    // ran thousands of snapshots, sweeps and checks against the mock (about 38 s alone; over 60 s on a loaded CI runner).
+    for (const j of sched.list()) if (j.id !== 'journal-prune' && j.enabled) c.disable('owner', j.id);
     const lastRunAt = () => sched.history('journal-prune')[0]!.startedAt;
 
     // Spring forward: Sunday 28 March 2027.

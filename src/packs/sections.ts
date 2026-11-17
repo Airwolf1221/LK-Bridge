@@ -47,22 +47,32 @@ export interface FoundSection {
   readonly heading: string;
   /** The heading as the document has it, or null when it is not there. */
   readonly found: string | null;
-  /** SHA-256 of the section's blocks (stable JSON), or null when it is not there. */
+  /** SHA-256 of the section's blocks (stable JSON), or null when it is not there (or is ambiguous). */
   readonly digest: string | null;
+  /**
+   * CR-2026-11-R2 (R2-33): how many headings of the document match the pin (0, 1, or more). Two or more are AMBIGUOUS: no
+   * digest, reported as a pinned change, and the owner's approval is refused until one heading is left.
+   */
+  readonly matches: number;
 }
 
 /** A heading block's level (1 when it has none). */
 const levelOf = (b: Obj): number => (typeof b.level === 'number' ? b.level : 1);
 
-/** Each pinned heading's section in a document's top-level blocks (the first match when a heading repeats). */
+/**
+ * Each pinned heading's section in a document's top-level blocks. CR-2026-11-R2 (R2-33): a pin must be unambiguous, so a
+ * heading that appears twice or more has no section (`digest` null, `matches` > 1), never its first match.
+ */
 export function pinnedSections(blocks: unknown, headings: readonly string[]): FoundSection[] {
   const list = (Array.isArray(blocks) ? blocks : []).filter(
     (b): b is Obj => typeof b === 'object' && b !== null,
   );
   return headings.map((heading) => {
     const want = headingKey(heading);
+    const hits = list.filter((b) => b.kind === 'heading' && headingKey(runsText(b)) === want).length;
     const at = list.findIndex((b) => b.kind === 'heading' && headingKey(runsText(b)) === want);
-    if (at < 0) return { heading, found: null, digest: null };
+    if (at < 0) return { heading, found: null, digest: null, matches: 0 };
+    if (hits > 1) return { heading, found: runsText(list[at]!).trim(), digest: null, matches: hits };
     const level = levelOf(list[at]!);
     let end = at + 1;
     while (end < list.length) {
@@ -73,7 +83,7 @@ export function pinnedSections(blocks: unknown, headings: readonly string[]): Fo
     const digest = createHash('sha256')
       .update(stableJson(list.slice(at, end)))
       .digest('hex');
-    return { heading, found: runsText(list[at]!).trim(), digest };
+    return { heading, found: runsText(list[at]!).trim(), digest, matches: 1 };
   });
 }
 

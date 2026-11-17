@@ -73,7 +73,10 @@ export interface ImageServiceOptions {
   readonly dbPath: string;
   /** The proposal states, for placements proposed at scope `propose`. */
   readonly proposals?: {
-    get(id: string): { readonly state: string; readonly jobId: string | null } | undefined;
+    /** CR-2026-11-R2 (R2-40): `principalId`, who made it (a package takes over only its own principal's placement). */
+    get(
+      id: string,
+    ): { readonly state: string; readonly jobId: string | null; readonly principalId?: string } | undefined;
     /**
      * v3 F3b (ADR 0052): whether a proposal does nothing but place this one staged image (upload_image's own placement:
      * no high-level operation, and every operation it lists is that image's placement).
@@ -163,9 +166,28 @@ export class ImageService {
     readonly prepare: SlidingWindowLimiter;
     readonly upload: SlidingWindowLimiter;
     readonly ip: SlidingWindowLimiter;
+    /**
+     * CR-2026-11-R2 (R2-41): images an agent's connection stages on the bridge's server per hour, whatever the source
+     * (`data_base64`, `url`, `file`, `upload_id`, a setting pack, a restore); the owner's dashboard is not counted.
+     */
+    readonly stage: SlidingWindowLimiter;
   };
   private timers: NodeJS.Timeout[] = [];
   private detach: (() => void)[] = [];
+  /**
+   * CR-2026-11-R2 (R2-38): the staged images a placement, a discard or a restore is deciding on right now (in process: one
+   * bridge process per project, ADR 0023). Taken synchronously before the record is read again, released when the
+   * placement's job or proposal id is on the record (or the attempt failed), so two callers can never both place it.
+   */
+  private readonly deciding = new Set<string>();
+  /**
+   * CR-2026-11-R2 (R2-42): the server files a staging (or a revert's copy) is writing or about to name, by SHA-256, with
+   * how many holders. A removal never takes a held file; a staging waits for a removal of its file already under way.
+   */
+  private readonly fileHolds = new Map<string, number>();
+  private readonly fileRemovals = new Map<string, Promise<void>>();
+  /** B1: a revert's copy of a placed file, held until `restage` names it or `dropCopy` gives it up (by staged id). */
+  private readonly copyHolds = new Map<string, string>();
 
   constructor(private readonly o: ImageServiceOptions) {
     this.store = new ImageStore(o.db, o.now);
@@ -183,7 +205,122 @@ export class ImageService {
       prepare: new SlidingWindowLimiter(o.images.ratePerPrincipalPerHour, hour, o.now),
       upload: new SlidingWindowLimiter(o.images.ratePerPrincipalPerHour, hour, o.now),
       ip: new SlidingWindowLimiter(o.images.ratePerIpPerHour, hour, o.now),
+      stage: new SlidingWindowLimiter(o.images.ratePerPrincipalPerHour, hour, o.now),
     };
+  }
+
+  // ============================================================================================ CR-2026-11-R2 guards
+
+  /**
+   * E1: takes a staged image for one placement, discard or restore. Synchronous, so two callers cannot both take it;
+   * false when another holds it. Always paired with {@link releaseStaged}.
+   */
+  holdStaged(projectId: string, stagedId: string): boolean {
+    const key = `${projectId}\u0000${stagedId}`;
+    if (this.deciding.has(key)) return false;
+    this.deciding.add(key);
+    return true;
+  }
+
+  releaseStaged(projectId: string, stagedId: string): void {
+    this.deciding.delete(`${projectId}\u0000${stagedId}`);
+  }
+
+  private holdFile(sha: string): void {
+    this.fileHolds.set(sha, (this.fileHolds.get(sha) ?? 0) + 1);
+  }
+
+  private releaseFile(sha: string): void {
+    const n = (this.fileHolds.get(sha) ?? 0) - 1;
+    if (n > 0) this.fileHolds.set(sha, n);
+    else this.fileHolds.delete(sha);
+  }
+
+  /** B1: writes a server file (or finds it there) once any removal of the same file under way has finished. */
+  private async putFile(bytes: Uint8Array): Promise<string> {
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    await this.fileRemovals.get(sha)?.catch(() => undefined);
+    return this.stagedBytes.put(bytes);
+  }
+
+  /**
+   * B1: removes a server file that nothing needs: no staged record still waiting with it, no staging or revert copy
+   * holding it. The decision and the start of the removal happen together (no wait between them), and the removal is
+   * registered so a staging of the same bytes waits for it. `needed`: left for what needs it. Throws when the removal
+   * itself failed.
+   */
+  private async removeFileIfUnneeded(sha: string): Promise<'removed' | 'needed'> {
+    if (this.fileHolds.has(sha) || this.store.serverShaNeeded(sha)) return 'needed';
+    const p = this.stagedBytes.remove(sha);
+    this.fileRemovals.set(sha, p);
+    try {
+      await p;
+      return 'removed';
+    } finally {
+      if (this.fileRemovals.get(sha) === p) this.fileRemovals.delete(sha);
+    }
+  }
+
+  /**
+   * B10: a record that no longer needs its server file (discarded, expired or placed) keeps naming it until the file is
+   * gone (or another record needs it); a removal that fails leaves the name, and the minute sweep tries again.
+   */
+  private async dropFileOf(projectId: string, id: string, sha: string): Promise<void> {
+    try {
+      await this.removeFileIfUnneeded(sha);
+      this.store.updateUpload(projectId, id, { serverSha256: null });
+    } catch (err) {
+      this.o.log?.warn(
+        { err, stagedId: id },
+        'a staged image’s server file could not be removed; the minute sweep tries again',
+      );
+    }
+  }
+
+  /**
+   * B1, B10: the same decision for a placement settling (synchronous): the file is removed at once, in the same tick as
+   * the decision, unless a waiting record other than `except`, a staging or a revert's copy needs it. True when the
+   * record may stop naming it (gone, or someone else's now); false when the removal failed (the sweep tries again).
+   */
+  private dropFileNow(sha: string, except: { readonly projectId: string; readonly id: string }): boolean {
+    if (this.fileHolds.has(sha) || this.store.serverShaNeeded(sha, except)) return true;
+    try {
+      this.stagedBytes.removeSync(sha);
+      return true;
+    } catch (err) {
+      this.o.log?.warn(
+        { err, stagedId: except.id },
+        'a placed image’s server copy could not be removed; the minute sweep tries again',
+      );
+      return false;
+    }
+  }
+
+  /** B10: the files records still name although they no longer need them (a removal that failed): tried again. */
+  async sweepStagedFiles(): Promise<number> {
+    let n = 0;
+    for (const r of this.store.serverFilesToDrop()) {
+      await this.dropFileOf(r.projectId, r.id, r.sha256);
+      n++;
+    }
+    return n;
+  }
+
+  /**
+   * B11: an agent's connection stages at most IMAGE_UPLOAD_RATE_PER_PRINCIPAL images an hour on the bridge's server,
+   * whatever the source. The owner's dashboard (and the bridge itself) is not limited.
+   */
+  private takeStagingAllowance(origin: JobOrigin): void {
+    const principal = origin.principal?.principalId;
+    if (origin.kind === 'ui' || !principal || principal === 'system' || principal === 'owner') return;
+    const wait = this.rate.stage.retryAfterMs(principal);
+    if (wait > 0)
+      throw new ImageServiceError(
+        'RATE_LIMITED',
+        `Too many images staged by this connection in the last hour (IMAGE_UPLOAD_RATE_PER_PRINCIPAL). Nothing was staged; try again in ${Math.ceil(wait / 60_000)} minute(s), or place or discard what is staged.`,
+        { retryAfterSeconds: Math.ceil(wait / 1000) },
+      );
+    this.rate.stage.hit(principal);
   }
 
   get settings(): { readonly upload: ToolsSettings['upload']; readonly images: ImageSettings } {
@@ -256,10 +393,14 @@ export class ImageService {
     for (const d of this.detach.splice(0)) d();
   }
 
-  /** Expired binary uploads lose their files (every minute); v3 F2: a migrate-staging request is run. */
+  /**
+   * Expired binary uploads lose their files (every minute); v3 F2: a migrate-staging request is run; CR-2026-11-R2
+   * (B10): a staged file whose removal failed is tried again.
+   */
   async sweep(): Promise<number> {
     const n = await this.slots.sweep();
     await this.runMigrationRequests();
+    await this.sweepStagedFiles();
     return n;
   }
 
@@ -355,14 +496,19 @@ export class ImageService {
         continue;
       }
       await this.checkStagingDisk(got.bytes.length);
-      await this.stagedBytes.put(got.bytes);
-      this.store.updateUpload(projectId, row.id, {
-        serverSha256: sha,
-        legacyAssetId: item.id,
-        assetId: null,
-        folderId: null,
-        folderPath: null,
-      });
+      this.holdFile(sha); // B1: no removal takes the file before the record names it
+      try {
+        await this.putFile(got.bytes);
+        this.store.updateUpload(projectId, row.id, {
+          serverSha256: sha,
+          legacyAssetId: item.id,
+          assetId: null,
+          folderId: null,
+          folderPath: null,
+        });
+      } finally {
+        this.releaseFile(sha);
+      }
       copied.push(row.id);
       toDelete.push(item.id);
     }
@@ -459,7 +605,20 @@ export class ImageService {
         `The file LegendKeeper keeps for it (${sha256.slice(0, 12)}…) is not the one that was staged (${row.webp.sha256.slice(0, 12)}…), so it cannot go back to the Staging page as it was.`,
       );
     await this.checkStagingDisk(got.bytes.length);
-    await this.stagedBytes.put(got.bytes);
+    // CR-2026-11-R2 (R2-42): the copy is held until `restage` names it (or `dropCopy` gives it up), so no removal of the
+    // same file elsewhere takes it meanwhile.
+    const key = `${projectId}\u0000${stagedId}`;
+    const earlier = this.copyHolds.get(key);
+    this.holdFile(sha256);
+    this.copyHolds.set(key, sha256);
+    if (earlier !== undefined) this.releaseFile(earlier);
+    try {
+      await this.putFile(got.bytes);
+    } catch (e) {
+      this.copyHolds.delete(key);
+      this.releaseFile(sha256);
+      throw e;
+    }
     return { sha256, bytes: got.bytes.length };
   }
 
@@ -469,6 +628,20 @@ export class ImageService {
    * that was placed is not touched here: its deletion is a proposal for the owner.
    */
   restage(projectId: string, stagedId: string, sha256: string): ImageUploadRow | undefined {
+    const key = `${projectId}\u0000${stagedId}`;
+    const held = this.copyHolds.get(key);
+    try {
+      return this.restageRow(projectId, stagedId, sha256);
+    } finally {
+      // B1: the record names the file now (or it is gone): the copy's hold ends.
+      if (held !== undefined) {
+        this.copyHolds.delete(key);
+        this.releaseFile(held);
+      }
+    }
+  }
+
+  private restageRow(projectId: string, stagedId: string, sha256: string): ImageUploadRow | undefined {
     return this.store.updateUpload(projectId, stagedId, {
       state: 'uploaded',
       staged: true,
@@ -490,7 +663,14 @@ export class ImageService {
 
   /** v3 F3.4: removes the copy of a revert that did not go ahead (unless a staged record uses that file). */
   async dropCopy(sha256: string): Promise<void> {
-    if (!this.store.serverShaInUse(sha256)) await this.stagedBytes.remove(sha256);
+    // CR-2026-11-R2 (R2-42): the copy's hold ends; the file goes only if nothing else (a record, a staging) needs it.
+    for (const [key, sha] of this.copyHolds) {
+      if (sha !== sha256) continue;
+      this.copyHolds.delete(key);
+      this.releaseFile(sha);
+      break;
+    }
+    await this.removeFileIfUnneeded(sha256);
   }
 
   /** Kept bytes past their retention are removed (hourly). */
@@ -575,8 +755,25 @@ export class ImageService {
    */
   async stageOnServer(p: Omit<StartUpload, 'plan' | 'staged'>): Promise<ImageUploadRow> {
     const out = p.image.output;
+    this.takeStagingAllowance(p.origin);
     await this.checkStagingDisk(out.bytes);
-    const sha = await this.stagedBytes.put(out.data);
+    // CR-2026-11-R2 (R2-42): the file is held from before it is looked for until its record is in, so a removal of the
+    // same bytes (a discard, the expiry, a placement settling) can never take it in between.
+    const want = createHash('sha256').update(out.data).digest('hex');
+    this.holdFile(want);
+    let row: ImageUploadRow | undefined;
+    try {
+      const sha = await this.putFile(out.data);
+      row = this.insertStaged(p, sha);
+      return row;
+    } finally {
+      this.releaseFile(want);
+      if (!row) await this.removeFileIfUnneeded(want).catch(() => undefined);
+    }
+  }
+
+  private insertStaged(p: Omit<StartUpload, 'plan' | 'staged'>, sha: string): ImageUploadRow {
+    const out = p.image.output;
     return this.store.insertUpload({
       projectId: p.projectId,
       id: newId(),
@@ -634,7 +831,8 @@ export class ImageService {
   /** v3 F2: the bytes of a staged image on the server (the Staging page's thumbnail), or null. */
   async stagedImage(projectId: string, stagedId: string): Promise<Buffer | null> {
     const r = this.store.upload(projectId, stagedId);
-    if (!r?.serverSha256) return null;
+    // CR-2026-11-R2 (R2-43): a placed or discarded record may name its file until it is removed: not shown.
+    if (!r?.staged || !r.serverSha256) return null;
     return this.stagedBytes.get(r.serverSha256);
   }
 
@@ -665,20 +863,31 @@ export class ImageService {
           continue;
         }
         if (now - r.expiryWarnedAt < STAGING_EXPIRY_WARNING_MS) continue;
-        await this.dropStaged(r, 'expired', 'system');
+        // CR-2026-11-R2 (R2-38): never one a placement or discard is deciding on at this moment.
+        if (!this.holdStaged(projectId, r.id)) continue;
+        try {
+          const fresh = this.store.upload(projectId, r.id);
+          if (!fresh?.staged || fresh.placementJobId || fresh.placementProposalId || fresh.discardJobId)
+            continue;
+          await this.dropStaged(fresh, 'expired', 'system');
+        } finally {
+          this.releaseStaged(projectId, r.id);
+        }
         removed++;
       }
     }
     return { warned, removed };
   }
 
-  /** v3 F2: a staged image's server copy removed (discarded or expired): its bytes go unless another row needs them. */
+  /**
+   * v3 F2: a staged image's server copy removed (discarded or expired): its bytes go unless another row needs them.
+   * CR-2026-11-R2 (R2-43): the record keeps naming the file until it is gone (a failed removal is tried again).
+   */
   private async dropStaged(r: ImageUploadRow, why: 'discarded' | 'expired', by: string): Promise<void> {
     const sha = r.serverSha256;
     this.store.updateUpload(r.projectId, r.id, {
       state: 'discarded',
       staged: false,
-      serverSha256: null,
       discardedAt: this.o.now(),
       discardedBy: by,
       error:
@@ -686,7 +895,7 @@ export class ImageService {
           ? `removed from the server after ${this.stagingMaxDays(r.projectId)} days unplaced`
           : null,
     });
-    if (sha && !this.store.serverShaInUse(sha)) await this.stagedBytes.remove(sha);
+    if (sha) await this.dropFileOf(r.projectId, r.id, sha);
   }
 
   /** Submits the upload job and records the upload. */
@@ -950,11 +1159,14 @@ export class ImageService {
       const verified = v.storedBytesVerified === true;
       const sha = r.serverSha256;
       const res = (j.result ?? {}) as { verified?: unknown };
+      // CR-2026-11-R2 (R2-42, R2-43): the server copy goes now unless something else needs it; the record stops naming it
+      // only once it is gone (a removal that failed is tried again by the minute sweep).
+      const fileDone = sha ? this.dropFileNow(sha, { projectId: r.projectId, id: r.id }) : true;
       const after =
         this.store.updateUpload(r.projectId, r.id, {
           assetId,
           staged: false,
-          serverSha256: null,
+          ...(fileDone ? { serverSha256: null } : {}),
           placedAt: j.finishedAt ?? this.o.now(),
           placedBy: j.approvedBy ?? j.principalId,
           folderId: typeof a.folderId === 'string' ? a.folderId : (intended.placing?.folderId ?? null),
@@ -981,12 +1193,6 @@ export class ImageService {
           // the asset tree may not hold the row yet
         }
       }
-      if (sha && !this.store.serverShaInUse(sha))
-        void this.stagedBytes
-          .remove(sha)
-          .catch((err: unknown) =>
-            this.o.log?.warn({ err, stagedId: r.id }, 'a placed image’s server copy could not be removed'),
-          );
       return after;
     }
     return (
@@ -1035,6 +1241,30 @@ export class ImageService {
    * `updateAsset` (move, unhide, optionally rename), then a read back.
    */
   async place(p: {
+    readonly projectId: string;
+    readonly row: ImageUploadRow;
+    readonly plan: AssetPlan;
+    readonly rename?: string | undefined;
+    readonly origin: JobOrigin;
+    readonly tool: string;
+    readonly described?: Record<string, unknown>;
+  }): Promise<{ submitted: SubmitResult | ProposalCaptured; labels: string[] }> {
+    // CR-2026-11-R2 (R2-38): the caller's record may be stale (it planned the destination in between, perhaps with a live
+    // read): the image is taken for this placement first, then read again, and refused when anything else has it.
+    if (!this.holdStaged(p.projectId, p.row.id))
+      throw new ImageServiceError(
+        'STAGED_BUSY',
+        `${p.row.id} is being placed or discarded by another call at this moment; follow that call's answer.`,
+      );
+    try {
+      const fresh = this.store.upload(p.projectId, p.row.id);
+      return await this.placeHeld({ ...p, row: fresh ? this.settle(fresh) : p.row });
+    } finally {
+      this.releaseStaged(p.projectId, p.row.id);
+    }
+  }
+
+  private async placeHeld(p: {
     readonly projectId: string;
     readonly row: ImageUploadRow;
     readonly plan: AssetPlan;
@@ -1116,6 +1346,10 @@ export class ImageService {
     });
     labels.push('verify');
     const summary = `${p.tool}: place staged image “${name}” in ${plan.destination.path.join(' / ')}${creates.length ? ` (creating ${creates.map((c) => c.name).join(' / ')})` : ''}`;
+    // CR-2026-11-R2 (R2-07): the exemption covers moving a staged image OUT OF THE STAGING FOLDER only. The asset is read
+    // live right before submitting; one the owner has filed elsewhere since (or that cannot be read) is moved as any
+    // asset is, so the asset rail decides (a proposal at the default rails).
+    const fromStaging = await this.assetInStagingFolder(p.projectId, row.assetId!, p.origin);
     const submitted = await this.o.engine.submit({
       kind: 'batch_ops',
       project: p.projectId,
@@ -1127,7 +1361,7 @@ export class ImageService {
       internal: true,
       // v3 F3.4 (ADR 0055): a placement, so the safety rails do not count the move out of the staging folder as an
       // asset move (an image a revert put back in the staging folder is placed this way too).
-      stagedPlacement: true,
+      ...(fromStaging ? { stagedPlacement: true } : {}),
       proposal: {
         summary,
         operations: [
@@ -1161,6 +1395,37 @@ export class ImageService {
       error: null,
     });
     return { submitted, labels };
+  }
+
+  /**
+   * CR-2026-11-R2 (R2-07): whether an old-style staged image's asset is in the project's staging folder (the library's
+   * root folder of the `imageStagingFolder` name) now, by one live read. False when it is elsewhere, or when the folder
+   * or the asset cannot be read: the placement is then an ordinary asset move, judged by the asset rail.
+   */
+  private async assetInStagingFolder(
+    projectId: string,
+    assetId: string,
+    origin: JobOrigin,
+  ): Promise<boolean> {
+    const name = this.stagingFolderName(projectId);
+    let folderId: string | undefined;
+    try {
+      folderId = this.o.assets.store.children(projectId, null).folders.find((f) => f.name === name)?.id;
+    } catch {
+      return false;
+    }
+    if (!folderId) return false;
+    try {
+      const r = await this.o.engine.run(
+        'getAsset',
+        { path: { assetId } },
+        { project: projectId, origin, priority: 'P1' },
+      );
+      if (r.status !== 'succeeded') return false;
+      return (r.result as { folderId?: unknown } | null)?.folderId === folderId;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1360,12 +1625,26 @@ export class ImageService {
    * placement (made by upload_image at scope `propose`), still pending, and its only activity. Null when anything else
    * is going on (another package's proposal, an approved or running placement, a discard): that stays STAGED_IMAGE_BUSY.
    */
-  ownPendingPlacement(row: ImageUploadRow): string | null {
+  ownPendingPlacement(row: ImageUploadRow, principalId?: string): string | null {
     if (!row.staged || row.placementJobId || row.discardJobId || !row.placementProposalId) return null;
     const p = this.o.proposals?.get(row.placementProposalId);
     if (!p || p.state !== 'pending' || p.jobId) return null;
+    // CR-2026-11-R2 (R2-40): only the same principal's placement (the package's caller, when the planner names it;
+    // `supersedePlacement` checks the package's own principal in every case).
+    if (principalId !== undefined && p.principalId !== principalId) return null;
     if (!this.o.proposals?.isImagePlacement?.(row.placementProposalId, row.id)) return null;
     return row.placementProposalId;
+  }
+
+  /** R2-40: who made a package (its proposal's or its job's principal), or undefined when it cannot be told. */
+  private principalOf(projectId: string, by: string): string | undefined {
+    const proposal = this.o.proposals?.get(by);
+    if (proposal) return proposal.principalId;
+    try {
+      return this.o.engine.queries.getJob(projectId, by)?.principalId ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -1376,6 +1655,10 @@ export class ImageService {
   supersedePlacement(projectId: string, stagedId: string, proposalId: string, by: string): boolean {
     const row = this.store.upload(projectId, stagedId);
     if (!row || row.placementProposalId !== proposalId) return false;
+    // CR-2026-11-R2 (R2-40): a package withdraws only its own principal's placement proposal, never another agent's.
+    const owner = this.o.proposals?.get(proposalId)?.principalId;
+    const pkg = this.principalOf(projectId, by);
+    if (owner === undefined || pkg === undefined || owner !== pkg) return false;
     const ok = this.o.proposals?.supersede?.(proposalId, `superseded by package ${by}`) ?? false;
     if (ok)
       this.store.updateUpload(projectId, stagedId, {
@@ -1387,6 +1670,23 @@ export class ImageService {
 
   /** Discards a staged image: deletes the asset (its bytes are kept first, by the delete keeper). */
   async discard(p: {
+    readonly projectId: string;
+    readonly row: ImageUploadRow;
+    readonly origin: JobOrigin;
+    readonly by: string;
+  }): Promise<SubmitResult | ProposalCaptured | { readonly status: 'discarded' }> {
+    // CR-2026-11-R2 (R2-38): as for a placement, taken first and read again.
+    if (!this.holdStaged(p.projectId, p.row.id))
+      throw new ImageServiceError('STAGED_BUSY', `${p.row.id} is already being placed or discarded.`);
+    try {
+      const fresh = this.store.upload(p.projectId, p.row.id);
+      return await this.discardHeld({ ...p, row: fresh ? this.settle(fresh) : p.row });
+    } finally {
+      this.releaseStaged(p.projectId, p.row.id);
+    }
+  }
+
+  private async discardHeld(p: {
     readonly projectId: string;
     readonly row: ImageUploadRow;
     readonly origin: JobOrigin;

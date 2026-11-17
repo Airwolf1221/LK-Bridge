@@ -64,6 +64,11 @@ export const registerReview: Register = (api, ctx) => {
         unreviewed: review.store.count(project.id, { state: 'unreviewed' }),
         matching: review.store.count(project.id, where),
       },
+      // CR-2026-11-R2 (R2-09): the exact set "Mark all reviewed" would mark for these filters, echoed by the request.
+      markAll: review.markAllSet(project.id, {
+        ...(q.profile ? { profile: q.profile } : {}),
+        ...(q.tool ? { tool: q.tool } : {}),
+      }),
     });
   });
 
@@ -116,6 +121,11 @@ export const registerReview: Register = (api, ctx) => {
             .strict()
             .default({}),
           expect: z.number().int().min(0),
+          // R2-09: the fingerprint the list answered for this set (the dashboard always sends it).
+          fingerprint: z
+            .string()
+            .regex(/^[0-9a-f]{32}$/)
+            .optional(),
           confirm: z.literal(true),
         })
         .strict(),
@@ -125,7 +135,7 @@ export const registerReview: Register = (api, ctx) => {
       ...(b.filter.profile ? { profile: b.filter.profile } : {}),
       ...(b.filter.tool ? { tool: b.filter.tool } : {}),
     };
-    const r = services(ctx).review.markAll('owner', project.id, filter, b.expect);
+    const r = services(ctx).review.markAll('owner', project.id, filter, b.expect, b.fingerprint);
     if (r.changed)
       throw new AdminHttpError(
         409,
@@ -153,19 +163,31 @@ export const registerReview: Register = (api, ctx) => {
 
   /**
    * Reverts a finished direct-write job (owner, re-authenticated, confirmed). A refusal is 409 with the targets and why
-   * each is not reverted; `confirmPartial: true` reverts the rest when some cannot be.
+   * each is not reverted; `confirmPartial: true` with `confirmed` (the ready targets the owner saw) reverts exactly
+   * those when some cannot be.
    */
   api.post('/jobs/:id/revert', async (req) => {
     requireReauth(ctx.deps.services, req);
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
     const b = parseInput(
-      z.object({ confirm: z.literal(true), confirmPartial: z.boolean().default(false) }).strict(),
+      z
+        .object({
+          confirm: z.literal(true),
+          confirmPartial: z.boolean().default(false),
+          // CR-2026-11-R2 (R2-23): the targets the owner confirmed (the preview's ready set): a partial revert reverts
+          // exactly these, and is refused (409 REVERT_CHANGED) when what can be reverted now differs.
+          confirmed: z.array(z.string().min(1).max(600)).max(1000).optional(),
+        })
+        .strict(),
       req.body,
     );
     let r;
     try {
-      r = await services(ctx).reverts.revert('owner', project.id, id, { confirmPartial: b.confirmPartial });
+      r = await services(ctx).reverts.revert('owner', project.id, id, {
+        confirmPartial: b.confirmPartial,
+        ...(b.confirmed ? { confirmed: b.confirmed } : {}),
+      });
     } catch (e) {
       if (e instanceof RevertError) throw new AdminHttpError(REVERT_STATUS[e.code] ?? 409, e.code, e.message);
       throw e;

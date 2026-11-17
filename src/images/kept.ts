@@ -13,6 +13,7 @@
  * collector removes the bytes once no reference and no snapshot needs them.
  */
 import { createHash, randomBytes } from 'node:crypto';
+import { rmSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { JobsError, type AssetDeleteKeeper } from '../jobs/index.js';
@@ -65,6 +66,11 @@ export class ByteStore {
 
   async remove(sha256: string): Promise<void> {
     await rm(this.pathOf(sha256), { force: true });
+  }
+
+  /** CR-2026-11-R2 (R2-42): the same, at once (decided and done in one tick, where the caller cannot wait). */
+  removeSync(sha256: string): void {
+    rmSync(this.pathOf(sha256), { force: true });
   }
 }
 

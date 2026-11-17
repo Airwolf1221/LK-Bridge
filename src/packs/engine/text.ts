@@ -111,6 +111,12 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 export const textKey = (s: string) =>
   s.normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase('en-GB');
 
+/**
+ * CR-2026-11-R2 (R2-37): a one-line field (a Scope, a Reference Type): every run of white space, line breaks included,
+ * becomes one space, so the value can never become several lines (a heading or a paragraph) in an index's text.
+ */
+export const oneLine = (s: string): string => s.replace(/\s+/g, ' ').trim();
+
 /** The plain text of a block's runs. */
 export function blockText(b: LkBlock | Obj): string {
   const content = (b as Obj).content;

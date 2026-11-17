@@ -141,7 +141,7 @@ async function putPiece(
 }
 
 /** Every item of a paged list (`{ data, hasMore, nextCursor }`), or of a plain `{ data }` answer. */
-async function listAll(
+export async function listAll(
   read: Reader,
   op: string,
   path: Record<string, string>,

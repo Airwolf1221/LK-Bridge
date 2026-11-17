@@ -461,11 +461,38 @@ export class ImageStore {
     ).map((r) => r.project_id);
   }
 
-  /** v3 F2: whether any row still keeps these bytes on the server (the same image staged twice, in two projects). */
+  /** v3 F2: whether any row still names these bytes on the server (the same image staged twice, in two projects). */
   serverShaInUse(sha256: string): boolean {
     return (
       this.db.prepare('SELECT 1 FROM image_uploads WHERE server_sha256 = ? LIMIT 1').get(sha256) !== undefined
     );
+  }
+
+  /**
+   * CR-2026-11-R2 (R2-42, R2-43): whether a staged record still waiting (to be placed or discarded) needs these bytes. A
+   * record that is placed or discarded may still name its file until the file is removed; it needs it no more.
+   */
+  serverShaNeeded(sha256: string, except?: { readonly projectId: string; readonly id: string }): boolean {
+    return (
+      this.db
+        .prepare(
+          `SELECT 1 FROM image_uploads WHERE server_sha256 = ? AND staged = 1 AND state IN ('uploading', 'uploaded')
+           AND NOT (project_id = ? AND id = ?) LIMIT 1`,
+        )
+        .get(sha256, except?.projectId ?? '', except?.id ?? '') !== undefined
+    );
+  }
+
+  /** B10: records that still name a server file they no longer need (its removal failed): to be tried again. */
+  serverFilesToDrop(limit = 500): { projectId: string; id: string; sha256: string }[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT project_id, id, server_sha256 FROM image_uploads WHERE server_sha256 IS NOT NULL
+           AND NOT (staged = 1 AND state IN ('uploading', 'uploaded')) LIMIT ?`,
+        )
+        .all(limit) as { project_id: string; id: string; server_sha256: string }[]
+    ).map((r) => ({ projectId: r.project_id, id: r.id, sha256: r.server_sha256 }));
   }
 
   upload(projectId: string, id: string): ImageUploadRow | undefined {

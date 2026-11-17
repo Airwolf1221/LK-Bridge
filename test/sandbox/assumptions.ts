@@ -16,8 +16,10 @@
  * lists again. LIM1 (v2 E5.5, ADR 0047) runs first, while the key's write minute is nearly unused: it creates an asset
  * folder, uploads one tiny PNG into it (createImageUpload, the signed PUT, createImageAsset), deletes both by id even
  * after a failure, and records the X-RateLimit-* headers each answered as NOTED (LegendKeeper's own per-operation
- * limits on its asset routes, with their windows by the reset, to document). Cost: about 83 writes, 88 reads and one
- * PUT to the upload host (plus up to 12 search polls), about 2 minutes at the bridge's write pacing.
+ * limits on its asset routes, with their windows by the reset, to document). Cost: about 83 writes, 96 reads and one
+ * PUT to the upload host (plus up to 12 search polls), about 2 minutes at the bridge's write pacing (CR-2026-11-R2: the
+ * lifecycle guard reads each copy's template at entry and inside the lock, two reads for each of the four copies; A10's
+ * restore goes through the governor, as the engine can no longer tell this run's restore set: see A10).
  */
 import { BridgeLkError, BudgetWaitError } from '../../src/lk/errors.js';
 import { mintClientId } from '../../src/jobs/ids.js';
@@ -609,7 +611,15 @@ export async function runAssumptions(
         };
         if (!(await gone(P.id)) || !(await gone(C.id))) fail('a deleted page still reads as live');
         if ((await children(rootId)).some((x) => x.id === P.id)) fail('the deleted page is still listed');
-        await run('restoreResource', { path: { resourceId: P.id } });
+        // CR-2026-11-R2 (R2-10): sent through the governor, not the engine. The engine now judges every page a restore
+        // brings back, and this run (no repository tree, no snapshots, and a low-level cascade whose journal keeps ids
+        // only) cannot tell them, so it would ask for the owner's canonical approval; this check is about LegendKeeper's
+        // restore, on plain throwaway pages.
+        const restored = await raw('restoreResource', 'POST', `/resources/${P.id}/restore`);
+        if (restored.status < 200 || restored.status > 299)
+          throw new Unclear(
+            `restoreResource answered ${restored.status}${restored.code ? ` ${restored.code}` : ''}`,
+          );
         const c = (await run('getResource', { path: { resourceId: C.id } })) as Obj;
         const g = (await run('getResource', { path: { resourceId: G.id } })) as Obj;
         if (c.parentId !== P.id || g.parentId !== C.id)
