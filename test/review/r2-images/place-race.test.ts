@@ -140,7 +140,10 @@ describe('E1: one staged image, two placements at once', () => {
       .map((r): unknown => r.body.proposalId)
       .filter((p): p is string => typeof p === 'string');
     const pol = w.stack.runtime.policy;
-    if (proposals.length === 2) {
+    // Set-up corrected (CR-2026-11-R2 fix of E1): the owner approves the first proposal whenever there is one, so the
+    // assertion below ("whatever was approved, the record names the asset") is checked in the safe case (one proposal)
+    // too; with two, the second is rejected as a duplicate, as before.
+    if (proposals.length >= 1) {
       // The owner approves the first and rejects the second (a duplicate, as it looks on the Proposals page).
       await pol.commands.approve('owner', proposals[0]!);
       for (
@@ -149,7 +152,7 @@ describe('E1: one staged image, two placements at once', () => {
         i++
       )
         await new Promise((r) => setTimeout(r, 20));
-      pol.commands.reject('owner', proposals[1]!, 'duplicate');
+      if (proposals[1]) pol.commands.reject('owner', proposals[1], 'duplicate');
     }
     const row = w.stack.runtime.images.staged(PROJECT, id)!;
     const inLk = [...w.assets.assets.values()].filter(

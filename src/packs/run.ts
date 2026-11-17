@@ -362,9 +362,20 @@ export async function finishPackage(
                 }),
           });
         }
+        // CR-2026-11-R2 (R2-40): the record follows the package only while nothing else is placing or discarding the
+        // image (a placement approved or started meanwhile keeps its link; the package's job finds it busy and stops).
+        const ours = new Set(
+          [out.proposalId, out.jobId, ...(plan.takeovers ?? []).map((t) => t.proposalId)].filter(
+            (x): x is string => typeof x === 'string',
+          ),
+        );
         for (const im of plan.images) {
           const assetStep = j.assetSteps.get(im.stagedId);
           if (!assetStep) continue;
+          const now = images.store.upload(pd.project.id, im.stagedId);
+          const free = (x: string | null | undefined) => !x || ours.has(x);
+          if (now && !(free(now.placementProposalId) && free(now.placementJobId) && !now.discardJobId))
+            continue;
           images.store.updateUpload(pd.project.id, im.stagedId, {
             ...(out.jobId ? { placementJobId: out.jobId } : { placementProposalId: out.proposalId! }),
             intended: {

@@ -1895,7 +1895,10 @@ export function planImages(
       continue;
     }
     // v3 F3b (design section 6): the image's own pending placement is taken over; any other activity still refuses.
-    const takeover = row.placementProposalId ? images.ownPendingPlacement(row) : null;
+    // CR-2026-11-R2 (R2-40): only the caller's own: another agent's pending placement is "busy", never planned over.
+    const takeover = row.placementProposalId
+      ? images.ownPendingPlacement(row, env.mctx.principal?.principalId)
+      : null;
     if (row.placementJobId || row.discardJobId || (row.placementProposalId && !takeover)) {
       o.refuse(
         'STAGED_IMAGE_BUSY',

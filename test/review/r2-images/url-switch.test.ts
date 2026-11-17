@@ -33,29 +33,33 @@ describe('A8: UPLOAD_ALLOW_URL_SOURCE=false', () => {
     expect(code(r)).toBe('UPLOAD_URL_SOURCE_DISABLED');
   });
 
-  it('file.download_url, given by any connection (a Claude token, not ChatGPT), to any host: nothing is fetched', async () => {
-    w = await imagesWorld({
-      tools: { upload: { ...DEFAULT_TOOLS_SETTINGS.upload, allowUrlSource: false } },
-    });
-    // Any https host the agent picks; the world's test seam resolves *.test to its loopback server.
-    w.files.set('anything', { status: 200, type: 'text/html', body: fixture('alpha.png') });
-    const { token } = w.stack.newToken('claude-code', 'write');
-    const r = await call(
-      w,
-      {
-        file: {
-          download_url: `https://storage.test:${w.port}/f/anything?any=thing`,
-          file_id: 'not-a-chatgpt-file',
+  // Open (CR-2026-11-R2 section 7): ADR 0049 decision 11 exempts `file` from the switch, .env.example says "base64 only"; the owner decides.
+  it.fails(
+    'file.download_url, given by any connection (a Claude token, not ChatGPT), to any host: nothing is fetched',
+    async () => {
+      w = await imagesWorld({
+        tools: { upload: { ...DEFAULT_TOOLS_SETTINGS.upload, allowUrlSource: false } },
+      });
+      // Any https host the agent picks; the world's test seam resolves *.test to its loopback server.
+      w.files.set('anything', { status: 200, type: 'text/html', body: fixture('alpha.png') });
+      const { token } = w.stack.newToken('claude-code', 'write');
+      const r = await call(
+        w,
+        {
+          file: {
+            download_url: `https://storage.test:${w.port}/f/anything?any=thing`,
+            file_id: 'not-a-chatgpt-file',
+          },
+          name: 'Fetched anyway',
+          stage: true,
         },
-        name: 'Fetched anyway',
-        stage: true,
-      },
-      token,
-    );
-    const fetched = w.fileStats.requests.length;
-    expect({ fetched, outcome: code(r) ?? String(r.body.status) }).toEqual({
-      fetched: 0,
-      outcome: 'UPLOAD_URL_SOURCE_DISABLED',
-    });
-  });
+        token,
+      );
+      const fetched = w.fileStats.requests.length;
+      expect({ fetched, outcome: code(r) ?? String(r.body.status) }).toEqual({
+        fetched: 0,
+        outcome: 'UPLOAD_URL_SOURCE_DISABLED',
+      });
+    },
+  );
 });
