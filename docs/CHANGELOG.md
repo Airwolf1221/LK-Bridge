@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased: v3 F3c (17 November 2026): Arkona appraisal tools and full-text search
+
+[ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md) (Proposed), carrying out the owner-approved
+[F3c design](design/F3c-appraisal.md) (D1 to D4 as written, with the owner's addition, section F; now with an "as built"
+section). Migration `3200_appraisal.sql`. Nothing was run against a live system: every test uses the mock LegendKeeper
+and fixtures built from the shapes the design quotes.
+
+- **Full-text search over the snapshots (A1).** The bridge keeps the newest full snapshot plus every change snapshot
+  since in its own database, with an SQLite FTS5 index of every page's text (blocks, sidebar facts, names and aliases),
+  built after each nightly full snapshot, updated page by page from each change snapshot and brought up to date at
+  every search and report. **`search` with `content: true` now uses it**: free, complete as of the newest snapshot it
+  names, with the operators (phrases, OR, NOT, brackets), each result labelled by lifecycle and branch, a text hit with
+  its document, section and snippet. The Legacy Canon Archive and the Design References are left out unless
+  `include: ["legacy", "design"]`. **LegendKeeper's own search is now `content: "live"`** (1 read, incomplete), which
+  is what `content: true` used to mean.
+- **`arkona_appraise_owner` (A2)**: a page, a branch or everything against Source Formatting, in Repository
+  Automation's four groups (required defects, optional polish, architectural candidates, blocked cases), each finding
+  naming its rule and evidence class. The page's open audit findings are gathered, never re-checked.
+- **`arkona_change_impact` (A3)**: what depends on a page, a planned rename or a pending proposal: proven breakage
+  (links to pages that are or will be deleted, archived or Working; mentions and chronology rows a rename breaks) and
+  review candidates (incoming links and mentions, chronology rows, textual restatements found through the index).
+- **`arkona_working_digest` (A4)**: Working pages with their Status, Scope and age (shown, never judged), pending or
+  conflicted proposals, approved sets still `[BWRK]`, declared contradictions; `since` narrows it.
+- **`arkona_visual_hygiene` (A5)**: asset names with an extension, non-WebP images, misplaced images, orphans, broken
+  image blocks, uninterpreted Art images, conflicting Primary References: candidates only.
+- **Acting on a finding (section F).** Every finding carries a `followUp`: `fix`, `judgement` (the tool and what has to
+  be decided) or `none`. **`arkona_appraisal_fix { findingId }`** and **Propose a fix** on the dashboard re-read the page
+  live (one read), check the finding still holds, and make ONE ordinary proposal for the owner: an em dash in a name,
+  headings or prose; decorative blank paragraphs; a link in a heading; an asset name's extension; a Working or Archived
+  page in an Authoritative page's Related Sources. Sibling order and tags are handed to the audits' own fixes. Last
+  Major Revision follows ADR 0051's rule (these are minor). Nothing is applied without the owner's approval.
+- **The dashboard's Appraisal page** (Quality): the index's freshness, size and timings; run A2 to A5 on a page or
+  branch; the report in its groups, each page linked to LegendKeeper; Propose a fix only where there is one; the latest
+  runs (kept in the bridge's database, never written to LegendKeeper).
+- **Changed for every tool**: the Last Major Revision measure reads a mention's label as text, so dropping a heading's
+  link is not a reworded heading. The audits' "Propose a fix" records who asked (an agent's handover is the agent's).
+
+**Costs.** The search with `content: true` and the four reports: no LegendKeeper request (`live: true`: A2 2 reads a page,
+at most 25; A3 1 read). "Propose a fix": 1 read, then the proposal's own cost when approved. **Measured** on a fixture of
+Arkona's size (1,500 pages): the index builds in about 2.0 s, takes a five-page change snapshot in about 37 ms, answers a
+phrase in about 1 ms, and takes about 21 MB of the bridge's database.
+
+**After deploying.** Let the next nightly snapshot build the index (or press **Rebuild the index now** on the Appraisal
+page once a full snapshot exists), then try the Appraisal page on one branch. Check that a finding's page link opens the
+page in LegendKeeper (the link's pattern could not be checked from here). Agents that relied on `content: true` reaching
+LegendKeeper now get the index; `content: "live"` keeps the old behaviour.
+
 ## Unreleased: v3 F3b.1 (16 November 2026): the pinned headings, re-mapping a pin, Working owners' specialist
 
 An amendment to [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md#f3b1-amendment-16-november-2026)

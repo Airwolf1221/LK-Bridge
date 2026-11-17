@@ -54,7 +54,11 @@ about 29,850 tokens** (characters ÷ 4; 61 tools and about 31,100 before the own
 tools (the five pack tools about 6,530 of them: `arkona_create_character` 2,520, `arkona_create_owner` 1,730,
 `arkona_add_character_art` 1,100, `arkona_create_relationship` 850, `arkona_character_brief` 330; 66 with the low-level
 tools on), and **26, about 9,090**, in a `read` profile (the read-only `arkona_character_brief`; 29 with the low-level
-tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
+tools on). **Since v3 F3c** it lists ten ([below](#setting-packs-appraisal-and-full-text-search-v3-f3c)): **66 tools, about
+41,080 tokens** in a `propose` or `write` profile (the five appraisal tools about 2,820 of them: `arkona_appraise_owner`
+705, `arkona_change_impact` 636, `arkona_visual_hygiene` 525, `arkona_working_digest` 504, `arkona_appraisal_fix` 449;
+`search` 620 with its `content` and `include`; 71 with the low-level tools on), and **30, about 11,670**, in a `read`
+profile (the four read-only appraisal tools; 33 with the low-level tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -91,7 +95,7 @@ budget (arkona): writes 0/120·min …
 | `list_projects`             | read   | true / false / true / false                                     | none                                                                                                       |
 | `browse_repository_tree`    | read   | true / false / true / false                                     | none (the tree)                                                                                            |
 | `browse_asset_tree`         | read   | true / false / true / false                                     | none (the asset tree)                                                                                      |
-| `search`                    | read   | true / false / true / false                                     | none; 1 read with `content: true`                                                                          |
+| `search`                    | read   | true / false / true / false                                     | none (the tree; `content: true`: the full-text index); 1 read with `content: "live"`                       |
 | `get_resource`              | read   | true / false / true / false                                     | 1 read per page (none with `live: false`); `resources` runs several as one job                             |
 | `list_tags`                 | read   | true / false / true / false                                     | none (the tree)                                                                                            |
 | `list_templates`            | read   | true / false / true / false                                     | none, or 1 read per 100 templates                                                                          |
@@ -194,7 +198,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (156 tools in all with the Arkona pack's five tools, v3 F3a's `arkona_create_character` and v3 F3b's four, 158 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (161 tools in all with the Arkona pack's ten tools, v3 F3a's `arkona_create_character`, v3 F3b's four and v3 F3c's five, 163 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -259,7 +263,7 @@ each folder's `folderCount` and `assetCount`, subfolders to `depth`, and with `i
 `assetsPerFolder` (20) assets per folder (name, type, dimensions, size where LegendKeeper says). `folder` is an id, a name
 or a path (`"Characters / Beastkin / Qishen"`); a name shared by several folders is `AMBIGUOUS` with their paths. Cost: none.
 
-**`search`** `{ query, content?, limit?, offset? }`. Syntax: words (all must match), `"quoted phrases"`, `OR`, `NOT` or a
+**`search`** `{ query, content?, include?, limit?, offset? }`. Syntax: words (all must match), `"quoted phrases"`, `OR`, `NOT` or a
 leading `-`, `( )`, and the filters `name:` `tag:` `type:` (Reference Type, whole words) `kind:` (`index` / `bsrc` /
 `bwrk` / `barc` / `unclassified`) `under:` (a page name or id; pages below it) `scope:`. `NOT` binds tightest, then `AND` (spaces), then
 `OR`; `OR`, `AND` and `NOT` are operators only in capitals. A word without a filter matches the display name, aliases,
@@ -267,11 +271,24 @@ Canonical Display Name and Scope. Results are ranked exact name, name prefix, a 
 alias or Canonical Display Name, then Scope, and each result's `matched` says why. A malformed query is `SEARCH_SYNTAX`
 with `position` and an explanation. Cost: none from the tree.
 
-`content: true` also runs LegendKeeper's own search for the positive words (1 read; ranked, **incomplete by nature**,
-no operators). The bridge applies the operators to the combined results, removes duplicates and pages outside the root,
-and marks pages found only through their text (`foundBy: "page text"`, ranked after every name match). With no words to
-search for (only filters), LegendKeeper is not asked. If the tree cannot answer, a plain-text content search still works
-(live, confined to the root by each hit's ancestry); anything with operators is refused.
+**`content: true`** (v3 F3c, [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md)) also searches page
+**text** through the bridge's full-text index: free, and complete as of the newest snapshot it names (page text, sidebar
+fact values, names and aliases; edits made in LegendKeeper since are not in it yet). Each term is answered as the set of
+pages whose text holds it (a word matches words starting with it, a phrase exactly those words in order; case and accents
+ignored), so the operators combine whole pages exactly as they combine names. Pages found only through their text are
+marked (`foundBy: "page text"`, ranked after every name match, then by relevance) and carry `text` hits: document, block,
+section path and a snippet with the words marked «». Every result of such a search carries `lifecycle` (Authoritative,
+Working, Archived) and `branch` (the top-level index it sits under). The answer's `content` note gives the index's base full snapshot, its
+newest change snapshot and their age. **Scope (decision D1)**: the Legacy Canon Archive and the Design References are left
+out unless `include: ["legacy", "design"]` names them (`content.leftOut` counts what was left out). With no full snapshot
+yet, only names, aliases and Scope are searched and the note says so. Discovery evidence, never proof on its own.
+
+**`content: "live"`** runs LegendKeeper's own search for the positive words (1 read; ranked, **incomplete by nature**, no
+operators): what `content: true` did before v3 F3c. The bridge applies the operators to the combined results, removes
+duplicates and pages outside the root, and marks pages found only through their text (`foundBy: "page text"`, ranked after
+every name match). With no words to search for (only filters), LegendKeeper is not asked. If the tree cannot answer, a
+plain-text live content search still works (confined to the root by each hit's ancestry); anything with operators is
+refused.
 
 ```json
 { "query": "foxian tag:elder -kind:index under:Characters", "limit": 10 }
@@ -521,10 +538,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). **Since v3 F3b: 61 for `propose` or `write`, 26 for `read`** with the Arkona pack attached (its five tools; `arkona_character_brief` is a read tool). A `read` profile does not see the write tools |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; with the Arkona pack attached 66 and 29 since v3 F3b, 62 with F3a's one tool), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). **Since v3 F3b: 61 for `propose` or `write`, 26 for `read`** with the Arkona pack attached (its five tools; `arkona_character_brief` is a read tool). **Since v3 F3c: 66 for `propose` or `write`, 30 for `read`** (its ten tools; the four appraisal reports are read tools, `arkona_appraisal_fix` a write tool). A `read` profile does not see the write tools |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; with the Arkona pack attached 66 and 29 since v3 F3b, 62 with F3a's one tool), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -1432,6 +1449,150 @@ Measured against the mock LegendKeeper (test/packs/owner-costs.test.ts), every r
 Three of the planning reads are the pack's governance pages (read again in the job's first check). An owner page's ten
 sidebar rows are most of its writes (LegendKeeper changes one row per request). A relationship reads both characters'
 sidebars and pages to plan, and the job writes both participants' Related Sources and the hosting index's routing line.
+
+## Setting packs: appraisal and full-text search (v3 F3c)
+
+v3 F3c adds the read-only half of the Arkona pack: four appraisal reports and one way to act on a finding, and the
+`search` tool's `content: true` now searches the bridge's own full-text index. Design:
+[ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md), [packs.md](packs.md#appraisal-v3-f3c) and the
+owner-approved [F3c design](design/F3c-appraisal.md). The agent guide's part is "Arkona appraisal" (under "Setting packs
+(Arkona)").
+
+**Read-only, and free.** Repository Automation: "Automations are diagnostic and read-only by default. Report detected
+issues and the appropriate interactive follow-up; do not silently perform the repair." No appraisal tool writes to
+LegendKeeper or makes a proposal. They read the snapshot overlay (the newest full snapshot plus every change snapshot
+since, materialised in the bridge's database with its full-text index), the audits' findings, the bridge's asset tree
+and its own database: **no LegendKeeper read**, unless `live: true` (A2, A3) asks for one. Every report says what it
+inspected, how fresh its data was (`source.index`: the base full snapshot, the newest change snapshot and their age) and
+what it could not check (`couldNotCheck`, and the blocked cases); it never guesses to fill a gap.
+
+**Every finding** has a stable `id` (the same finding has the same id in every run), its `check`, its `group`, its
+`evidence` class (Confirmed deterministic defect, Potential Maintenance Issue, Explicitly Unresolved, Inaccessible,
+Incomplete, Review signal), the `rule` it comes from (`{ page, section, rule }`: the governance page and section), the
+`page` (id, name, path), a `message`, `details` (with `detail: "full"`), its `source` (snapshot, live read or audit, with
+its time), its `labels` (lifecycle and branch) and a **`followUp`**:
+
+- `{ kind: "fix", tool: "arkona_appraisal_fix", args: { findingId }, change }`: a deterministic repair; the call makes ONE
+  proposal (below);
+- `{ kind: "judgement", tool, decide }`: no single right repair. It names the tool you would use and what has to be
+  decided: ask the owner, never guess (a Purpose section needs the subject's purpose from the owner or its sources);
+- `{ kind: "none", reason }`: report only (an orphan asset candidate, a blocked case).
+
+**Long reports** come a page at a time: `limit` (default 50, at most 200), `offset`, `group` (only that group) and
+`detail`. Each run is kept (the latest per tool and scope, compared with the one before: `compared`), so `runId` reads it
+again a page at a time without re-running anything.
+
+**`search`** with `content: true` (see [Finding things](#finding-things)): the index, free, with the operators; each
+result labelled by `lifecycle` and `branch`, a page found through its text with its `text` hits (document, block, section
+path and a snippet, the words marked «»). The Legacy Canon Archive and the Design References are left out unless
+`include: ["legacy", "design"]` names them (`content.leftOut` counts them). `content: "live"` is LegendKeeper's own search
+(1 read, ranked, incomplete), as `content: true` was before.
+
+**`arkona_appraise_owner`** `{ page? | under? | all?, include?, live?, runId?, group?, offset?, limit?, detail?, project }`
+(A2): one page, a branch (the page and everything beneath it) or everything (bounded at 5,000 pages, paged) against Source
+Formatting, in Repository Automation's four groups: `required` defects, optional `polish`, `architectural` candidates,
+`blocked` cases. The checks and their groups are the owner's (D2), each naming its rule:
+
+| Check                                                                        | Group         | Follow-up                    |
+| ---------------------------------------------------------------------------- | ------------- | ---------------------------- |
+| `purpose_first`: the body does not begin with Purpose                        | required      | judgement                    |
+| `title_repeated`: the page title or a metadata header at the top of the body | required      | judgement                    |
+| `heading_links`: a link inside a heading                                     | required      | **fix**                      |
+| `literal_markdown`: Markdown pasted as text (`**`, `# `, `- `, pipe tables)  | required      | judgement                    |
+| `blank_paragraphs`: decorative blank paragraphs                              | polish        | **fix**                      |
+| `em_dash_name`, `em_dash_text`: an em dash in the name, headings or prose    | required      | **fix**                      |
+| `template_field_missing`, `field_improvised`: the template's sidebar fields  | required      | judgement                    |
+| `completion_gate`: the six identity fields (Core and Compact only)           | required      | judgement                    |
+| `boundaries_missing`: no Source Boundaries or Unresolved Material            | polish        | judgement                    |
+| `dependency_noncurrent`: a Dependency on a Working or Archived page          | required      | judgement                    |
+| `related_noncurrent`: one in an Authoritative page's Related Sources         | required      | **fix**                      |
+| `related_empty`: an empty Related Sources (a prompt to review)               | polish        | judgement                    |
+| `related_not_reciprocal`: no link back within a character's set              | polish        | judgement                    |
+| `index_incomplete`: scope statement, "why open" text, Subpages collection    | required      | judgement                    |
+| `sibling_order`, `tag_grammar`: the audits' findings, gathered               | required      | the audits' fix, handed over |
+| `audit_finding`: any other open audit finding of the page, gathered          | by severity   | judgement                    |
+| `scope_overload`, `core_holds_specialist`: a pointer for A6 (F3e)            | architectural | judgement                    |
+| `page_unreadable`, `not_in_snapshots`, `template_unavailable`, `no_body`     | blocked       | none                         |
+
+The audits are reused, never re-checked: the page's open findings are gathered (not their own configuration notices),
+and a missing row they report is not reported twice. A branch or everything leaves out the Legacy Canon Archive, the
+Design References and Archived pages unless `include` names them (`legacy`, `design`, `archived`); a page named alone
+is always appraised. `live: true` re-reads each page first (2 reads each, at most 25 pages; `LIVE_TOO_MANY` otherwise).
+
+```json
+{ "under": "Hollin Shore", "limit": 50 }
+```
+
+**`arkona_change_impact`** `{ page?, renameTo?, proposal?, live?, runId?, group?, offset?, limit?, detail?, project }`
+(A3): everything connected to a page as it is, a planned rename (`page` + `renameTo`, the new name without its prefix) or
+a pending proposal (`proposal`: each page it changes, and what it becomes), in two groups. **`proven`** breakage:
+Dependencies or an Authoritative page's Related Sources pointing at a page that is (or will be) deleted, archived or
+Working (`link_to_noncurrent`); mentions whose target is gone (`mention_target_gone`); for a rename, mentions showing the
+old name (`mention_label_mismatch`) and chronology rows naming it (`chronology_row_mismatch`). Review **`candidates`**:
+incoming links (`incoming_link`) and mentions (`incoming_mention`, including one that shows another label), chronology
+rows naming the subject (`chronology_row`), and textual restatements (`restatement`: other pages' text naming it by its
+name and aliases, through the index, without linking to it; never proof anything changed). Each with its page, section
+and snippet. A proposal that is not pending is `PROPOSAL_NOT_FOUND`; `page` or `proposal`, not both, and `renameTo` only
+with `page` (`INVALID_PARAMS`). `live: true` re-reads the subject (1 read: its name and aliases).
+
+**`arkona_working_digest`** `{ since?, runId?, group?, offset?, limit?, detail?, project }` (A4): every Working page
+(`working_page`: its Status, Scope, Last Major Revision, when the snapshots first saw it and when it last changed, with
+the age), every pending or conflicted proposal (`proposal_open`), the Working sets whose package was approved but whose
+pages are still `[BWRK]` (`approved_not_promoted`), and the Working pages whose Unresolved Material says "contradict",
+"conflict" or "supersede" (`declared_contradiction`). Age is shown, never judged: there is no "stale" threshold (D3).
+Ordered by the most recent change; `since` (`"24h"`, `"7d"`, `"2w"` or a number of days) keeps what changed in that
+window.
+
+**`arkona_visual_hygiene`** `{ page? | under?, runId?, group?, offset?, limit?, detail?, project }` (A5): every finding a
+**candidate**, never a defect: an asset name with a file extension (`asset_extension`, the one with a fix), a non-WebP
+image (`asset_not_webp`), an image outside its character's `Characters / <race path> / <Name>` folder or its Forms,
+Outfits, Details (`asset_misplaced`), orphan candidates (`asset_orphan`: no page shows them; a whole-library run only),
+image blocks whose asset is gone (`image_broken`), Art page images with no interpretation text (`art_uninterpreted`), two
+images labelled as one subject's Primary Reference (`primary_conflict`). An asset whose bytes the snapshots do not hold
+yet is a blocked case (`format_unknown`), never guessed. Default: the whole library; `page` or `under` narrows it to the
+images those pages show.
+
+**`arkona_appraisal_fix`** `{ findingId, project }`: "Propose a fix" for ONE finding whose `followUp.kind` is `fix`. It
+re-reads the page (or the asset) live, checks the finding still holds (`FIX_STALE` otherwise, with what is there now:
+nothing is proposed), and makes **one ordinary proposal** for the owner, whatever your scope (`proposal_captured`; never
+resubmit it, follow it with `bridge_proposal_status`). Nothing is applied without the owner's approval.
+
+| Finding                                      | The proposal                                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `em_dash_name`                               | `update_resource`: the name's dashes replaced with ASCII hyphens, the prefix kept           |
+| `em_dash_text`                               | block by block (write_page's path): only the blocks with a dash, every other character kept |
+| `blank_paragraphs`                           | block by block: those paragraphs deleted                                                    |
+| `heading_links`                              | block by block: each heading's text kept, its link dropped                                  |
+| `asset_extension`                            | the asset renamed without its extension; refused when its folder already holds that name    |
+| `related_noncurrent`                         | that one link removed from Related Sources (set_facts' plan)                                |
+| `sibling_order`, `tag_grammar` (from audits) | handed over to the audit's own "Propose a fix"                                              |
+
+Last Major Revision follows ADR 0051's rule: a dash, a blank paragraph or a heading's link is not a major revision, and
+a name or Related Sources never counts, so the summary says `Last Major Revision skipped: …`. A finding whose follow-up
+is a `judgement` or `none` is `NO_FIX` (ask the owner); an unknown finding id, or one no longer in the latest run of its
+scope, is `FINDING_NOT_FOUND` (run the report again); `FIX_NOT_APPLICABLE` when the repair cannot be made as it is (the
+name or asset name is already taken there, or every block concerned also holds an inline icon, which LegendKeeper's
+write format cannot write back: nothing is proposed). A live read the rate budget queued instead of running is
+`READ_DELAYED` (nothing proposed; try later). Batch fixes are not offered.
+
+**Other refusals.** `PACK_NOT_ATTACHED` (the project has no Arkona pack), `NO_SNAPSHOT` (no full snapshot yet: the first
+nightly snapshot makes one), `RUN_NOT_FOUND` (a `runId` that is no longer the latest of its scope), `LIVE_TOO_MANY`,
+and for A3 `PROPOSAL_NOT_FOUND` and `PROPOSAL_NOT_PENDING` (only a pending proposal is analysed).
+
+### Costs (reads and writes)
+
+| Call                                             | Reads                                                   | Writes           |
+| ------------------------------------------------ | ------------------------------------------------------- | ---------------- |
+| `search` with `content: true`                    | 0                                                       | 0                |
+| `search` with `content: "live"`                  | 1                                                       | 0                |
+| `arkona_appraise_owner`                          | 0 (`live: true`: 2 a page, at most 25 pages)            | 0                |
+| `arkona_change_impact`                           | 0 (`live: true`: 1)                                     | 0                |
+| `arkona_working_digest`, `arkona_visual_hygiene` | 0                                                       | 0                |
+| `arkona_appraisal_fix`                           | 1 (the re-read); then the proposal's own, once approved | 0 until approved |
+
+The full-text index is built and updated from the snapshot store (no LegendKeeper read). On a fixture of Arkona's size
+(1,500 pages) it builds in about 2 seconds, takes a five-page change snapshot in about 40 ms, answers a phrase in about
+1 ms and takes about 21 MB of the bridge's database ([ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md#decision-1-the-overlay-materialised-in-the-bridges-database-with-an-fts5-index-a1)).
 
 ## The calendar and the timelines (v2 D1)
 

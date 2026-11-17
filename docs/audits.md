@@ -118,3 +118,26 @@ A chronology fix refused because several events could be a row's own shows them 
 ADR 0049 decision 1. A linked qualified event whose name ends with a date tail the bridge wrote, which no longer says what
 its row's Date cell says although the date agrees (the cell's wording changed). **Propose a fix** goes through
 `sync_timeline_event` and makes a name-only update.
+
+## The appraisal reuses the audits (v3 F3c)
+
+[ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md). The Arkona pack's owner appraisal
+(`arkona_appraise_owner`, A2) **gathers** a page's open audit findings from the audits' store and adds only the checks
+the audits do not cover; it never runs an audit check again, and a finding is never reported twice (a missing sidebar
+row the template audit reports is the audit's, not a second appraisal finding).
+
+- **What is gathered**: every open finding of the page, from the latest audit run, except the audits' own configuration
+  notices (categories Rules and Audit) and the notices about what the bridge's tools can write back (`collection_blocks`,
+  `unsupported_blocks`, `inline_icon_page`: about the tooling, not the page's quality). Ordering findings appear as
+  `sibling_order` and tag findings as `tag_grammar` (required defects), template findings as `template_field_missing`,
+  and the rest as `audit_finding` (by severity: `info` is optional polish, the rest required defects). Each keeps its audit code,
+  category, severity and evidence, and names the run it came from; the report says when the audit ran on an older
+  snapshot than the appraisal's, and when no audit has run yet.
+- **"Propose a fix" is handed over** for sibling order and the tags (the fix kinds `move_resource`, `add_tags`, and
+  `reorder_tags` once F3.3's lifecycle-tag order lands): the appraisal's follow-up is the audit's own fix, and
+  `arkona_appraisal_fix` (or the Appraisal page's button) calls it, so there is one repair for one finding. Any other
+  audit fix stays on the Audits page; the appraisal shows that finding as a judgement, naming the tool and what has to be
+  decided.
+- **Who asked is recorded**: the audits' fix now takes the caller's origin, so a fix an agent hands over through
+  `arkona_appraisal_fix` is the agent's proposal (its connection and tool), and one from the Appraisal page the
+  owner's, as one from the Audits page always was.

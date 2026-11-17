@@ -1,4 +1,4 @@
-# Setting packs (v3 F3a and F3b)
+# Setting packs (v3 F3a, F3b and F3c)
 
 A **setting pack** holds one setting's rules as data, above the general bridge (PLAN-v2 section 10): which pages a kind
 of subject gets, from which templates, under which names and in which place, with which sidebar facts and tags, and the
@@ -12,14 +12,21 @@ what data cannot say. The first pack is **Arkona**, attached to the `arkona` and
 | `arkona_create_relationship` | one joint relationship page for two existing characters                        | F3b   |
 | `arkona_add_character_art`   | reference images for an existing character, on its Art page                    | F3b   |
 | `arkona_character_brief`     | nothing: a read-only brief on a character, from the bridge's own records, free | F3b   |
+| `arkona_appraise_owner`      | nothing: a page, branch or everything appraised against Source Formatting      | F3c   |
+| `arkona_change_impact`       | nothing: what depends on a page, a planned rename or a pending proposal        | F3c   |
+| `arkona_working_digest`      | nothing: Working pages, open proposals, unpromoted sets, contradictions        | F3c   |
+| `arkona_visual_hygiene`      | nothing: the visual references, candidates only                                | F3c   |
+| `arkona_appraisal_fix`       | ONE proposal repairing one appraisal finding with a deterministic fix          | F3c   |
 
 Design: [ADR 0050](adr/0050-setting-packs-and-the-arkona-character-tool.md) and the owner-approved
 [character pack design](design/F3-character-pack.md) (F3a); [ADR 0052](adr/0052-arkona-pack-owners-relationships-art-and-the-brief.md)
-and the owner-approved [F3b design](design/F3b-owner-tools.md) (F3b). The tools' reference:
-[tools.md](tools.md#setting-packs-arkona_create_character-v3-f3a) and
-[tools.md](tools.md#setting-packs-owners-relationships-art-and-the-brief-v3-f3b). The agents' guide: the "Setting packs
-(Arkona)" section of [bridge-guide.md](bridge-guide.md), a part per tool. The dashboard page:
-[dashboard.md](dashboard.md#packs-v3-f3a).
+and the owner-approved [F3b design](design/F3b-owner-tools.md) (F3b); [ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md)
+and the owner-approved [F3c design](design/F3c-appraisal.md) (F3c). The tools' reference:
+[tools.md](tools.md#setting-packs-arkona_create_character-v3-f3a),
+[tools.md](tools.md#setting-packs-owners-relationships-art-and-the-brief-v3-f3b) and
+[tools.md](tools.md#setting-packs-appraisal-and-full-text-search-v3-f3c). The agents' guide: the "Setting packs
+(Arkona)" section of [bridge-guide.md](bridge-guide.md), a part per tool. The dashboard pages:
+[dashboard.md](dashboard.md#packs-v3-f3a) and [Appraisal](dashboard.md#appraisal-v3-f3c).
 
 ## What a pack holds
 
@@ -280,6 +287,39 @@ proposal's summary and each page's line say what was decided and why.
   `upload_image` with a destination does at scope `propose`) withdraws that proposal once the package's is captured
   ("superseded by package prop_…", audited `proposal.superseded`) and places the image itself. Anything else is still
   `STAGED_IMAGE_BUSY`; the job checks again before it writes.
+
+## Appraisal (v3 F3c)
+
+The read-only half of the pack ([ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md)). Repository
+Automation sets the boundary: "Automations are diagnostic and read-only by default. Report detected issues and the
+appropriate interactive follow-up; do not silently perform the repair." So:
+
+- **The four reports write nothing**, to LegendKeeper or as a proposal. They read the snapshot overlay (the nightly full
+  snapshot plus the change snapshots since, kept in the bridge's database with a full-text index), the audits' findings,
+  the asset tree and the bridge's own database: free, unless `live: true` asks for a fresh read of the pages concerned.
+  Each says what it inspected, how fresh its data was and what it could not check; it never guesses.
+- **Their rules are the pack's data**, the same the creation tools use: the identity fields and placeholders of the
+  completion gate, the roles and templates (which fields a page's sidebar should hold), the first heading (`Purpose`),
+  the sections a role warns about when missing (Source Boundaries, Unresolved Material), the sidebar's names
+  (PROPERTIES, Dependencies, Related Sources), the overload domains and their threshold, the name rule for dashes. A
+  change to the pack changes both. The report names the pack version it applied (`source.pack`); the appraisal does not
+  need the pack to be current, as it never writes.
+- **Each finding names its rule** (the governance page and section: Source Formatting's Body Structure, Sidebar
+  Metadata, Page Names and Templates, Links, Dependencies and Tags, Indexes; the Tagging Standard; Character
+  Architecture; Visual References; Repository Automation) and its evidence class, in Repository Automation's groups
+  (A2: required defects, optional polish, architectural candidates, blocked cases; A3: proven breakage, review
+  candidates; A4 and A5 their own).
+- **The audits are reused, never duplicated**: A2 gathers the page's open audit findings (sibling order, tags, facts,
+  references, lifecycle…) and adds only the checks they do not cover.
+- **Acting on a finding** is a separate, explicit request (the owner's addition, design section F): a finding whose
+  follow-up is a `fix` can be turned into **one ordinary proposal** by `arkona_appraisal_fix` or the Appraisal page's
+  "Propose a fix", after a live re-read shows it still holds. Sibling order and tags go to the audits' own fixes. A
+  `judgement` names the tool and what has to be decided, and is the owner's.
+- **Reports are not written to LegendKeeper.** The bridge keeps the latest run of each tool and scope in its own database
+  for comparison, as the audits do ([dashboard.md](dashboard.md#appraisal-v3-f3c)).
+
+The full-text index also serves the general `search` tool (`content: true`), for every project with snapshots, not
+only Arkona's: the pack decides only the appraisal tools.
 
 ## Types as data, and what F3b extends
 
