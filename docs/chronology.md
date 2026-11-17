@@ -235,7 +235,10 @@ counts in the Main count.
 An event no row accounts for is the check's "event without a row". Its **Propose a fix** deletes only the event (no row,
 no count change), and names it, its date and the three rows nearest it by date. The same through MCP:
 `delete_timeline_event { event: { event_id }, orphan: true, confirm: true }`. Both refuse when the event has a row after
-all, or a row could be its own.
+all, or a row could be its own. A row whose Date cannot be read can only be matched by its name, so the proposal (and the
+tool's dry run) also lists every unpaired row of the age whose date cannot be read, under its own heading: check them
+before approving, or mark such a row table-only (CR-2026-11-R2, R2-49; whether they should block the delete is ADR 0056
+decision 2).
 
 **An event with candidate rows is not an event without a row** (v3 F2.1, the owner's report of 16 November 2026: all
 four of Arkona's "events without a row" were real events caught in ties). An unpaired event that any unpaired row could

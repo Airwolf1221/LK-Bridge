@@ -89,7 +89,12 @@ A rehearsal restores a full snapshot into a throwaway root of a sandbox project,
   captured and is kept with the restore's record. The same request again (or **Finish** on the restores list of the
   Snapshots page) compares the page it made with the snapshot and proposes only what is missing: documents it lacks (with
   their content), a page document still blank, a map's features, a timeline's lanes and events, a board's content, and
-  sidebar properties. When nothing is missing the answer is "nothing to do".
+  sidebar properties. When nothing is missing the answer is "nothing to do". A timeline's events are read page by page
+  (100 a page), so an event already made is never planned again (CR-2026-11-R2, R2-47).
+- **One restore of a deleted page at a time** (CR-2026-11-R2, R2-48). While a recreate or an undelete of a page is still a
+  proposal or still running, another restore of that deleted page is refused (`RESTORE_IN_PROGRESS`, naming the restore
+  and its proposal): planned meanwhile it would make a second page, or a finish from a page still being written. Once it
+  has ended, the same request finishes a recreate that stopped part-way.
 - Staged images (on the bridge's server since v3 F2) are unapproved: they are in no snapshot and no off-site copy.
 - A restore that changes a page's text sets its Last Major Revision (the restore category; a rehearsal never does). Since
   v3 F3c only when the change is a major revision (8 words or more of text, or a heading), measured when it runs;

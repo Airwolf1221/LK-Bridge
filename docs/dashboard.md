@@ -63,6 +63,10 @@ base-uri 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `X-Co
 - **Re-authentication (OPS2).** Adding, replacing or removing an API key, and changing the password or the authenticator,
   also need the owner's password (and authenticator code) within the last five minutes on the session, or the answer is
   `403 REAUTH_REQUIRED`; the dashboard asks in a dialog and retries ([auth.md](auth.md#managing-the-owner-account-from-the-dashboard-ops2)).
+  So does every change that lets an agent's connection do more (CR-2026-11-R2, R2-50; ADR 0056 decision 1): raising a
+  profile's scope or the default scope, moving a connection to a profile with a higher scope or to one at scope `write`,
+  and a personal access token for a profile at scope `write`; and the Status of pages agents create, whichever route
+  saves it (R2-51). Lowering a scope or moving a connection down stays one click.
 - **No secrets shown or logged.** An API key goes to the bridge once, from a write-only field; afterwards only its last
   four characters are shown (OPS2). The authenticator secret (while it is set up) and recovery codes are in one response
   each, marked `shownOnce`. A new PAT is in the response to its creation only (`201`, `shownOnce: true`); only its
@@ -111,7 +115,8 @@ default) are not listed: you saw them before they happened. The Overview page sh
 
 - **Mark reviewed** takes an item off the badge (audited `review.mark`). **Mark all reviewed (N)** marks every item the
   filters show, after a confirmation naming N; if the set changed in the meantime nothing is marked and the page asks
-  you to look again (`REVIEW_CHANGED`; audited `review.mark_all`).
+  you to look again (`REVIEW_CHANGED`; audited `review.mark_all`). The set is compared exactly, not only its count: the
+  list answers a fingerprint of the ids (`markAll.fingerprint`) and the request sends it back (CR-2026-11-R2, R2-09).
 - **Revert** (also on the Jobs page, for a finished job an agent ran directly) first shows what it would do: each thing
   the job changed, whether it can be put back, and, for one that changed since or cannot be reverted, why. It puts back
   page text (block by block), sidebar facts and links, chronology rows and their events (in step), names, tags, aliases

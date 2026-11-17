@@ -165,7 +165,9 @@ The dashboard's **Account** page ([ADR 0028](adr/0028-secrets-on-the-dashboard.m
   stored owner credentials so the env file's `OWNER_PASSWORD_HASH` applies again.
 - **Re-authentication.** Adding, replacing or removing an API key, changing the password, and enrolling, confirming or
   removing the authenticator (and making new recovery codes) need the password, and the authenticator code when it is
-  on, **within the last five minutes** on the session (`POST /api/admin/security/reauth`; the time is
+  on, **within the last five minutes** on the session (so do the dashboard's other sensitive actions listed in
+  [dashboard.md](dashboard.md), among them every change that lets an agent's connection do more: a raised scope, a
+  connection moved up or to scope `write`, a token at scope `write`; CR-2026-11-R2, R2-50) (`POST /api/admin/security/reauth`; the time is
   `auth_owner_sessions.reauth_at`), even when signed in. Otherwise the answer is `403 REAUTH_REQUIRED` and the dashboard
   asks in a dialog, then retries. Every such request also passes the Origin, CSRF and `Sec-Fetch-Site` checks of every
   admin change. Re-authentication attempts count against the **same limits as sign-in** (5 per address and 30 in all per
