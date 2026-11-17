@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- LK results are untyped JSON */
 /**
  * Round 2 of the sandbox assumptions (opt-in; `npm run test:sandbox -- assumptions-r2`): what the bridge's newer code
- * assumes about LegendKeeper and no sandbox check confirms yet, checked on a REAL sandbox project. Each check (W1 … W12)
+ * assumes about LegendKeeper and no sandbox check confirms yet, checked on a REAL sandbox project. Each check (W1 … W17)
  * reports PASS, FAIL, INCONCLUSIVE or NOTED with what LegendKeeper answered; NOTED is a fact the run records, never a
  * failure.
  *
@@ -20,6 +20,13 @@
  *   write, so one that fails does not make the next fail.
  * - W12 listEvents pages (src/chronology/check.ts readEvents, src/snapshots/restore.ts planFinish): two events of three
  *   with limit 2, then the cursor; the last two share a start, so the page boundary falls between equal starts.
+ * - What the second review's own fixes (docs/reviews/CR-2026-11-R2.md) assume: W13 a template saved from a page carries
+ *   its tags, getResource answers the template (its tags; parentId null or "templates") and a copy takes the template's
+ *   tags (the lifecycle guard's copy check, R2-13; the recovery's "as planned", R2-05); W14 createManyResources with an
+ *   id already held is refused whole, the item before the duplicate not created (R2-05); W15 a template that does not
+ *   exist reads 404 and a copy of it makes nothing (the guard's "nothing copied"); W16 an event reads back as createEvent
+ *   and updateEvent answered it, every stored field (Revert's exact comparison, R2-16); W17 moveResource answers the
+ *   page's new rank, the one getResource then gives (Revert's move comparison, R2-19).
  *
  * Safety, as assumptions.ts: it refuses to run unless the key's own project (listProjects) is exactly the sandbox project
  * (SandboxGuardError, before anything is written); every call goes through the bridge's own engine and governor (as the
@@ -27,25 +34,28 @@
  * send, through the governor's `call` and `fetch`; the signed PUT and the downloads from the asset host through the
  * governor too). Writes parked for budget or queued behind the pacing are waited for, never sent again (wait.ts).
  *
- * What it creates: ONE throwaway root resource `lk-bridge assumptions-r2 <time>` with two pages under it, `W7 table` (its
- * Main gets a paragraph and a table of three rows, then a fourth) and `W12 timeline` (a timeline document on the
- * project's first calendar: one lane, three events); and in the asset library four folders
+ * What it creates: ONE throwaway root resource `lk-bridge assumptions-r2 <time>` with these pages under it: `W7 table` (its
+ * Main gets a paragraph and a table of three rows, then a fourth), `W12 timeline` (a timeline document on the project's
+ * first calendar: one lane, three events), `W13 source` (tagged `lkb-w13`) and `W13 copy`, `W14 held`, and `W17 parent`
+ * with `W17 a` and `W17 b`; ONE template `lk-bridge assumptions-r2 template W13` (saved from `W13 source`: a top-level
+ * template, outside the root); and in the asset library four folders
  * `lk-bridge assumptions-r2 F1 <time>` to `… F4 <time>` (F1, F2 and F3 at the top level, F4 inside F3) and one 70-byte
  * PNG (`lk-bridge assumptions-r2 W1 image`, renamed by W2). Plain names only: no `[BSRC]`, `[BWRK]`, `[BARC]` or
- * `[INDEX]` prefix and no Status, so the canon and lifecycle guards never stand in the way.
+ * `[INDEX]` prefix, no Status and no status tag (`lkb-w13` is none), so the canon and lifecycle guards never stand in the
+ * way. W14 and W15 send a create LegendKeeper should refuse; a page either makes anyway is under the root.
  * What it cleans up: everything, at the end, even after a failure: the assets by id, the deepest first (W4 and W5 delete
- * theirs on the way), then each page (one small cascade each) and the root. Already gone (404, "already deleted") counts
- * as cleaned; any other failure is confirmed by a read before it is reported, and the report names each id to delete by
- * hand (pages in the tree, assets in the asset library).
+ * theirs on the way), then each page (one small cascade each), the template and the root. Already gone (404, "already
+ * deleted") counts as cleaned; any other failure is confirmed by a read before it is reported, and the report names each
+ * id to delete by hand (pages in the tree, the template among the templates, assets in the asset library).
  * Cost (counted against the mock by test/tools/assumptions-r2-dryrun.test.ts, with the sandbox test's own runtime: no
- * repository or asset tree): 33 writes and 56 reads, 3 downloads from the asset host (4 if a move changes the file's URL)
+ * repository or asset tree): 49 writes and 113 reads, 3 downloads from the asset host (4 if a move changes the file's URL)
  * and 1 PUT to the upload host (neither draws on an API tier); W6 adds a read per 100 assets if the root listing turns
  * out to be the whole library. On the asset routes' own limits (ADR 0047): 6 creates (four folders, the upload, the
  * image; about 20 a minute) and 4 deletes (about 60 a minute; 5 if a folder delete leaves its sub-folder), plus 4
  * updateAsset. About a minute at the bridge's write pacing.
  */
 import { createHash } from 'node:crypto';
-import { replaceCells } from '../../src/chronology/plan.js';
+import { EVENT_STORED_FIELDS, replaceCells } from '../../src/chronology/plan.js';
 import { buildRow, runsText } from '../../src/chronology/table.js';
 import { downloadAsset } from '../../src/images/download.js';
 import { UPLOAD_PUT_STEP } from '../../src/jobs/custom-steps.js';
@@ -81,7 +91,26 @@ const TINY_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 const same = (a: unknown, b: unknown) => stableJson(a ?? null) === stableJson(b ?? null);
 /** The report lists the checks by id (W6 runs right after W1, while the image is still in a folder). */
-const ORDER = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12', 'cleanup'];
+const ORDER = [
+  'W1',
+  'W2',
+  'W3',
+  'W4',
+  'W5',
+  'W6',
+  'W7',
+  'W8',
+  'W9',
+  'W10',
+  'W11',
+  'W12',
+  'W13',
+  'W14',
+  'W15',
+  'W16',
+  'W17',
+  'cleanup',
+];
 /** The columns of the throwaway table, as an age table's: event, date, KCY. */
 const COLS = { event: 0, date: 1, kcy: 2 } as const;
 
@@ -298,6 +327,10 @@ export async function runAssumptionsR2(
     return { id: asset.body.id as string, sha256 };
   };
 
+  /** W12's timeline and what createEvent answered for each event, for W16. */
+  let w12: { readonly tpath: Obj; readonly answers: ReadonlyMap<string, Obj> } | null = null;
+  /** Templates the run saved (outside the root): deleted at the end, after the pages. */
+  const templates: { id: string; what: string }[] = [];
   let F1: string | null = null;
   let F2: string | null = null;
   let image: string | null = null;
@@ -932,6 +965,7 @@ export async function runAssumptionsR2(
         if (lane?.id !== laneId)
           throw new Unclear(`createLane answered id ${JSON.stringify(lane?.id)}, not the ${laneId} sent`);
         const sent: string[] = [];
+        const answers = new Map<string, Obj>();
         for (const [name, start] of [
           ['W12 first', 100_000],
           ['W12 second', 200_000],
@@ -945,7 +979,9 @@ export async function runAssumptionsR2(
           if (e?.id !== id)
             throw new Unclear(`createEvent answered id ${JSON.stringify(e?.id)}, not the ${id} sent`);
           sent.push(id);
+          answers.set(id, e);
         }
+        w12 = { tpath, answers };
         // As readEvents and the restore follow it: { limit, cursor } until hasMore is false.
         const pages: Obj[] = [];
         let cursor: string | undefined;
@@ -985,6 +1021,217 @@ export async function runAssumptionsR2(
         const byStart = starts.every((s, i) => i === 0 || s >= starts[i - 1]!);
         if (problems.length > 0) fail(`${problems.join('; ')} (pages: ${JSON.stringify(pageIds)})`);
         return `page 1: 2 events, hasMore true and a nextCursor; page 2: the third, hasMore ${JSON.stringify(last.hasMore ?? null)}; each of the 3 once; ${byStart ? 'in start order' : `NOTED: not in start order (starts ${starts.join(', ')})`}${cal ? '' : ' (no calendar offered: the timeline has none)'}`;
+      },
+    );
+
+    // ===================================================================== templates and batch creates (the fixes' own)
+    // CR-2026-11-R2: R2-13's lifecycle guard judges a template copy by the tags getResource gives for its template; R2-05
+    // takes DUPLICATE_ID on a batch's first send as a refusal that made nothing; the guard takes a template getResource
+    // cannot find (404) as one LegendKeeper will not copy.
+    const W13_TAG = 'lkb-w13';
+    await check(
+      'W13',
+      'a template saved from a page carries its tags; getResource answers the template (its tags; parentId null or "templates"); a copy takes the template’s tags',
+      async () => {
+        const src = (await run('createResource', {
+          body: { name: 'W13 source', parentId: rootId, tags: [W13_TAG] },
+        })) as Obj;
+        topLevel.push(src.id as string);
+        const tid = mintClientId();
+        const saved = (await run('saveResourceAsTemplate', {
+          path: { resourceId: src.id },
+          body: { id: tid, name: 'lk-bridge assumptions-r2 template W13' },
+        })) as Obj;
+        const tplId = typeof saved?.id === 'string' ? saved.id : tid;
+        templates.push({ id: tplId, what: 'template W13' });
+        // As the lifecycle guard reads it (src/lifecycle/guard.ts): a 404 there means "no such template, nothing copied".
+        const read = await raw('getResource', 'GET', `/resources/${tplId}`);
+        if (!ok2xx(read))
+          fail(
+            `getResource answered ${answered(read)} for the template just saved: the lifecycle guard reads a 404 as "no such template" (at entry and inside the lock), so a copy of a CANON-tagged template would be judged as taking no tags`,
+          );
+        const cid = mintClientId();
+        const copy = (await run('createResourceFromTemplate', {
+          body: { templateId: tplId, id: cid, name: 'W13 copy', parentId: rootId },
+        })) as Obj;
+        const copyId = typeof copy?.id === 'string' ? copy.id : cid;
+        topLevel.push(copyId);
+        const copyRead = (await run('getResource', { path: { resourceId: copyId } })) as Obj;
+        const want = [W13_TAG];
+        const problems: string[] = [];
+        if (!same(read.body?.tags, want))
+          problems.push(
+            `the template reads with tags ${JSON.stringify(read.body?.tags ?? null)}, not its page’s ${JSON.stringify(want)}`,
+          );
+        if (!same(copyRead.tags, want))
+          problems.push(
+            `the copy reads with tags ${JSON.stringify(copyRead.tags ?? null)}, not the template’s (if a copy never takes tags, the guard's check of them is only stricter than needed)`,
+          );
+        const parent = (read.body?.parentId as unknown) ?? null;
+        if (parent !== null && parent !== 'templates')
+          problems.push(
+            `the template reads with parentId ${JSON.stringify(parent)}, not null or "templates": a saved template found after a lost answer would be taken as not the one planned (the step uncertain)`,
+          );
+        if (problems.length > 0) fail(problems.join('; '));
+        return `the template and its copy carry ${JSON.stringify(want)}; the template reads with parentId ${JSON.stringify(parent)}`;
+      },
+    );
+
+    await check(
+      'W14',
+      'createManyResources with an id already held is refused whole (409 DUPLICATE_ID): the item before the duplicate is not created',
+      async () => {
+        const held = await mk('W14 held');
+        const fresh = mintClientId();
+        // The duplicate second: a batch that creates as it goes would make the first item before it meets it.
+        const r = await raw('createManyResources', 'POST', '/resources/batch', {
+          body: {
+            resources: [
+              { id: fresh, name: 'W14 fresh', parentId: rootId },
+              { id: held.id, name: 'W14 duplicate', parentId: rootId },
+            ],
+          },
+        });
+        const now = await raw('getResource', 'GET', `/resources/${fresh}`);
+        const made = ok2xx(now) && now.body?.deletedAt == null;
+        if (made) topLevel.push(fresh);
+        if (ok2xx(r)) fail(`the batch was accepted (${answered(r)}) although ${held.id as string} is held`);
+        if (made)
+          fail(
+            `refused ${answered(r)}, but the item before the duplicate was created: a first send refused DUPLICATE_ID can leave pages, which the engine (taking it as a refusal) leaves as orphans`,
+          );
+        return `refused ${answered(r)}; the item before the duplicate was not created (getResource ${now.status})${
+          r.code === 'DUPLICATE_ID'
+            ? ''
+            : '. NOTED: not DUPLICATE_ID, so the engine never treats it as a duplicate'
+        }`;
+      },
+    );
+
+    await check(
+      'W15',
+      'getResource of a template id that does not exist answers 404, and a copy of it is refused, making nothing',
+      async () => {
+        const missing = mintClientId();
+        const looked = await raw('getResource', 'GET', `/resources/${missing}`);
+        const cid = mintClientId();
+        const r = await raw('createResourceFromTemplate', 'POST', '/resources/from-template', {
+          body: { templateId: missing, id: cid, name: 'W15 copy', parentId: rootId },
+        });
+        const now = await raw('getResource', 'GET', `/resources/${cid}`);
+        const made = ok2xx(now) && now.body?.deletedAt == null;
+        if (made) topLevel.push(cid);
+        if (ok2xx(r) || made)
+          fail(
+            `the copy answered ${answered(r)} and ${made ? 'a page was made' : 'no page was made'}: the lifecycle guard takes a template it cannot find as copying nothing`,
+          );
+        if (looked.status !== 404)
+          return {
+            verdict: 'noted',
+            detail: `getResource of the missing id answered ${answered(looked)}, not 404 (the guard then refuses the copy as unreadable: safe); the copy was refused ${answered(r)}, nothing made`,
+          };
+        return `getResource 404; the copy refused ${answered(r)}; nothing made`;
+      },
+    );
+
+    // ============================================================================== events and moves, as Revert reads them
+    // CR-2026-11-R2: R2-16 records each event as the job's last write answered it and compares every stored field with
+    // what LegendKeeper reads back (an absent field as null); R2-19 records the rank a move answered and compares it with
+    // getResource's.
+    await check(
+      'W16',
+      'an event reads back (listEvents, getEvent) exactly as createEvent and updateEvent answered it, field for field (an absent field as null)',
+      async () => {
+        if (!w12) throw new Unclear('W12 did not set up the timeline');
+        const { tpath, answers } = w12;
+        const diff = (a: Obj, b: Obj) =>
+          EVENT_STORED_FIELDS.filter((k) => !same(a[k], b[k])).map(
+            (k) => `${k}: ${JSON.stringify(a[k] ?? null)} answered, ${JSON.stringify(b[k] ?? null)} read`,
+          );
+        const listAll = async (): Promise<Map<string, Obj>> => {
+          const out = new Map<string, Obj>();
+          let cursor: string | undefined;
+          for (let i = 0; i < 4; i++) {
+            const p = (await run('listEvents', {
+              path: tpath,
+              query: { limit: 100, ...(cursor ? { cursor } : {}) },
+            })) as Obj;
+            for (const e of (Array.isArray(p?.data) ? p.data : []) as Obj[]) out.set(e.id as string, e);
+            if (p?.hasMore !== true || typeof p.nextCursor !== 'string') break;
+            cursor = p.nextCursor;
+          }
+          return out;
+        };
+        const ids = [...answers.keys()];
+        const firstId = ids[0];
+        if (!firstId) throw new Unclear('W12 made no event');
+        const problems: string[] = [];
+        const before = await listAll();
+        for (const id of ids.slice(1)) {
+          const a = answers.get(id)!;
+          const l = before.get(id);
+          if (!l) problems.push(`${String(a.name)} is not listed`);
+          else {
+            const d = diff(a, l);
+            if (d.length > 0) problems.push(`${String(a.name)}, created: ${d.join('; ')}`);
+          }
+        }
+        // The first event, updated as the chronology's repair and Revert update one (its name and detail).
+        const upd = (await run('updateEvent', {
+          path: { ...tpath, eventId: firstId },
+          body: { name: 'W12 first, renamed by W16', detail: 2 },
+        })) as Obj;
+        const got = (await run('getEvent', { path: { ...tpath, eventId: firstId } })) as Obj;
+        const d1 = diff(upd, got);
+        if (d1.length > 0) problems.push(`updated, getEvent: ${d1.join('; ')}`);
+        const after = (await listAll()).get(firstId);
+        if (!after) problems.push('the updated event is not listed');
+        else {
+          const d2 = diff(upd, after);
+          if (d2.length > 0) problems.push(`updated, listEvents: ${d2.join('; ')}`);
+        }
+        if (problems.length > 0)
+          fail(
+            `${problems.join(' | ')}. Revert would count such an event as changed since the job and refuse to revert it (safe, but no event a job wrote could be reverted)`,
+          );
+        return `${ids.length - 1} created events listed as createEvent answered them; the updated one read (getEvent and listEvents) as updateEvent answered it; ${EVENT_STORED_FIELDS.length} fields compared, an absent one as null`;
+      },
+    );
+
+    await check(
+      'W17',
+      'moveResource answers the page with its parent and its new rank, and getResource then gives the same rank',
+      async () => {
+        const P = await mk('W17 parent');
+        const a = (await run('createResource', { body: { name: 'W17 a', parentId: P.id } })) as Obj;
+        const b = (await run('createResource', { body: { name: 'W17 b', parentId: P.id } })) as Obj;
+        // A re-order under the same parent (the case R2-19 is about: the owner re-ordering a page the job moved).
+        const moved = (await run('moveResource', {
+          path: { resourceId: b.id },
+          body: { parentId: P.id, before: a.id },
+        })) as Obj;
+        const read = (await run('getResource', { path: { resourceId: b.id } })) as Obj;
+        const problems: string[] = [];
+        if (typeof moved?.rank !== 'string' || moved.rank === '')
+          problems.push(
+            `the move answered no rank (${JSON.stringify(moved?.rank ?? null)}): Revert takes a move with no recorded rank as not revertible`,
+          );
+        else if (moved.rank !== read.rank)
+          problems.push(
+            `the move answered rank ${JSON.stringify(moved.rank)}, getResource gives ${JSON.stringify(read.rank ?? null)}: Revert would find every move changed since the job`,
+          );
+        if ((moved?.parentId ?? null) !== P.id)
+          problems.push(
+            `the move answered parentId ${JSON.stringify(moved?.parentId ?? null)}, not ${String(P.id)}`,
+          );
+        if (problems.length > 0) fail(problems.join('; '));
+        const order =
+          typeof read.rank === 'string' && typeof a.rank === 'string'
+            ? read.rank < a.rank
+              ? ', now before W17 a'
+              : `; NOTED: its rank ${read.rank} is not before W17 a's ${a.rank}`
+            : '';
+        return `answered rank ${JSON.stringify(moved.rank)} and parent ${String(P.id)}; getResource gives the same rank${order}`;
       },
     );
   } finally {
@@ -1044,19 +1291,23 @@ export async function runAssumptionsR2(
       const why = await remove(id);
       if (why) left.push(`page ${id} (${why})`);
     }
+    for (const x of templates) {
+      const why = await remove(x.id);
+      if (why) left.push(`${x.what} ${x.id} (${why}; a template, outside the root)`);
+    }
     const why = await remove(rootId);
     if (why) left.push(`root ${rootId} (${why})`);
     if (left.length === 0)
       record(
         'cleanup',
-        'the throwaway root, its pages and every asset made deleted',
+        'the throwaway root, its pages, the template and every asset made deleted',
         'pass',
-        `root ${rootId} and ${topLevel.length} page(s); ${made.length} asset(s): ${made.map((a) => `${a.what} ${a.id}`).join(', ') || 'none'}`,
+        `root ${rootId} and ${topLevel.length} page(s); ${templates.length} template(s)${templates.length > 0 ? `: ${templates.map((x) => x.id).join(', ')}` : ''}; ${made.length} asset(s): ${made.map((a) => `${a.what} ${a.id}`).join(', ') || 'none'}`,
       );
     else
       record(
         'cleanup',
-        'throwaway pages and assets deleted',
+        'throwaway pages, templates and assets deleted',
         'fail',
         `left: ${left.join('; ')}. Delete them by hand.`,
       );
@@ -1075,8 +1326,8 @@ export function formatAssumptionsR2Report(findings: readonly Finding[]): string 
   const count = (v: Verdict) => findings.filter((f) => f.verdict === v && f.id !== 'cleanup').length;
   return [
     '',
-    'LK-Bridge sandbox: the newer code’s assumptions about LegendKeeper, round 2 (W1–W12: assets, table rows, nested blocks, event pages)',
-    '==================================================================================================================================',
+    'LK-Bridge sandbox: the newer code’s assumptions about LegendKeeper, round 2 (W1–W17: assets, table rows, nested blocks, events, templates, batch creates, moves)',
+    '=================================================================================================================================================================',
     ...findings.map((f) => `[${mark[f.verdict]}] (${f.id}) ${f.title}\n        ${f.detail}`),
     '',
     `${count('pass')} PASS, ${count('fail')} FAIL, ${count('inconclusive')} INCONCLUSIVE${count('noted') > 0 ? `, ${count('noted')} NOTED` : ''}`,

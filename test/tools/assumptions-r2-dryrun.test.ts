@@ -1,5 +1,5 @@
 /**
- * Round 2 of the sandbox assumptions (test/sandbox/assumptions-r2.ts, W1–W12) run as a dry run against the mock, never a
+ * Round 2 of the sandbox assumptions (test/sandbox/assumptions-r2.ts, W1–W17) run as a dry run against the mock, never a
  * real LegendKeeper, the way the opt-in test runs it: its own runtime on a temporary database (createSoakRuntime: no
  * repository or asset tree, the requests counted at the transport), against the mock of the D3 image world
  * (test/images/world.ts): the asset library model (test/assets/model.ts: listings per folder, paged; updateAsset partial;
@@ -10,10 +10,12 @@
  * What that mock does not model, and this file adds as the spec describes it (each switchable, below):
  * - moveBlock (the blocks model has none; the chronology world's has it for its own documents only);
  * - the lanes and events of a NEW timeline document (the worlds model only their own timelines): listEvents ordered by
- *   start, then id, and paged by an opaque cursor.
+ *   start, then id, and paged by an opaque cursor; updateEvent;
+ * - saveResourceAsTemplate (a top-level template copying the page's fields, its tags among them, and its sidebar), and a
+ *   template copy taking the template's tags (the spec: a copy takes the template's fields; the tree model drops them).
  *
  * It checks that the script refuses another project (SandboxGuardError, nothing written), runs every check to an
- * answer, and deletes everything it made (no new asset, no live page), in two runs:
+ * answer, and deletes everything it made (no new asset, no live page), in three runs:
  * 1. LegendKeeper as the spec describes it: every check PASSes but W4, NOTED (informational: a folder delete takes its
  *    sub-folder). Where the mock is not LegendKeeper: W2 notes that getAsset answers no version and no ETag and that a
  *    made-up If-Match is ignored (the mock ignores the header); W5 notes that the deleted image's old file URL still
@@ -22,11 +24,14 @@
  * 2. LegendKeeper answering otherwise, so the checks are seen to fail where they must and still clean up: a made-up
  *    If-Match on updateAsset refused 412 (W2 NOTED), a non-empty folder's delete refused 409 (W4 NOTED, its sub-folder
  *    deleted first), no moveBlock (the mock's generic 201: W8 FAIL), getBlock without a version (W10 FAIL; W11 then
- *    sends the document's version and PASSes), no lanes for a new timeline (W12 INCONCLUSIVE).
+ *    sends the document's version and PASSes), no lanes for a new timeline (W12 INCONCLUSIVE, so W16 too).
+ * 3. LegendKeeper answering otherwise where the second review's fixes rely on it: a copy that takes no tags (W13 FAIL), a
+ *    batch that creates the items before a duplicate id (W14 FAIL), events read back with a field their answers lacked
+ *    (W16 FAIL), a move answered without a rank (W17 FAIL).
  */
 import { Writable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { MockResponse } from '../contract/mock-lk.js';
+import type { MockRequest, MockResponse } from '../contract/mock-lk.js';
 import { imagesWorld, type ImagesWorld } from '../images/world.js';
 import { formatAssumptionsR2Report, runAssumptionsR2 } from '../sandbox/assumptions-r2.js';
 import { SandboxGuardError, type Finding, type SmokeTarget } from '../sandbox/smoke.js';
@@ -36,7 +41,25 @@ import { API_KEY } from './helpers.js';
 type Obj = Record<string, unknown>;
 
 const LIMITS = { 'key-min': 5000, 'write-min': 2000 } as const;
-const IDS = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12'];
+const IDS = [
+  'W1',
+  'W2',
+  'W3',
+  'W4',
+  'W5',
+  'W6',
+  'W7',
+  'W8',
+  'W9',
+  'W10',
+  'W11',
+  'W12',
+  'W13',
+  'W14',
+  'W15',
+  'W16',
+  'W17',
+];
 
 /** How the mock answers where LegendKeeper's behaviour is in question (default: as the spec describes it). */
 const lk = {
@@ -45,6 +68,14 @@ const lk = {
   assetIfMatch: 'ignored' as 'ignored' | '412',
   folderDelete: 'cascade' as 'cascade' | 'refuse-non-empty',
   blockVersion: true,
+  /** Run 3: a template copy takes none of the template's tags. */
+  templateTags: true,
+  /** Run 3: createManyResources creates each item in turn, so the items before a duplicate id are made. */
+  batchAtomic: true,
+  /** Run 3: an event reads back with `formattedStart`, which its write's answer did not carry. */
+  eventsExact: true,
+  /** Run 3: moveResource answers the page without its rank. */
+  moveRank: true,
 };
 
 let w: ImagesWorld;
@@ -152,10 +183,19 @@ function modelWhatIsMissing(world: ImagesWorld): void {
     events.set(did, es);
     const body = (req.body ?? {}) as Obj;
     const list = what === 'lanes' ? ls : es;
+    // Run 3: what a read gives that the write's answer did not.
+    const asRead = (e: Obj): Obj =>
+      what === 'events' && !lk.eventsExact
+        ? { ...structuredClone(e), formattedStart: String(e.start) }
+        : structuredClone(e);
     if (sub !== undefined) {
       const one = list.find((x) => x.id === sub);
-      if (req.method === 'GET')
-        return one ? { status: 200, body: structuredClone(one) } : err(404, 'NOT_FOUND');
+      if (req.method === 'GET') return one ? { status: 200, body: asRead(one) } : err(404, 'NOT_FOUND');
+      if (req.method === 'PATCH' && what === 'events') {
+        if (!one) return err(404, 'NOT_FOUND');
+        Object.assign(one, structuredClone(body));
+        return { status: 200, body: structuredClone(one) };
+      }
       return undefined;
     }
     if (req.method === 'POST') {
@@ -190,11 +230,70 @@ function modelWhatIsMissing(world: ImagesWorld): void {
     return {
       status: 200,
       body: {
-        data: structuredClone(page),
+        data: page.map(asRead),
         hasMore: more,
         nextCursor: more && last ? `ev:${String(last.start)}:${String(last.id)}` : null,
       },
     };
+  });
+
+  // saveResourceAsTemplate, as the spec describes it (the world's model has none): a top-level template copying the
+  // page's fields (its tags among them) and its sidebar.
+  const save = /\/resources\/([^/]+)\/save-as-template$/;
+  world.overrides.set(save, (req) => {
+    if (req.method !== 'POST') return undefined;
+    const src = world.repo.live(save.exec(req.path.replace(/\/$/, ''))![1]!);
+    if (!src) return err(404, 'NOT_FOUND');
+    const body = (req.body ?? {}) as { id?: string; name?: string };
+    if (body.id && world.repo.res.has(body.id)) return err(409, 'DUPLICATE_ID');
+    const t = world.repo.seed({
+      ...(body.id ? { id: body.id } : {}),
+      name: body.name ?? src.name,
+      parentId: null,
+      tags: [...src.tags],
+      props: false,
+    });
+    t.props = structuredClone(src.props);
+    const sb = world.sidebars.pages.get(src.id);
+    if (sb) world.sidebars.pages.set(t.id, structuredClone(sb));
+    return { status: 201, body: world.repo.resourceView(t) };
+  });
+  // A template copy takes the template's tags (the spec: it takes the template's fields); run 3: none. Wraps the world's
+  // own from-template route (which copies the sidebar).
+  let copyRoute: ((req: MockRequest) => MockResponse | undefined) | undefined;
+  for (const [re, fn] of world.overrides)
+    if (re.source.includes('from-template')) {
+      copyRoute = fn;
+      world.overrides.delete(re);
+    }
+  world.overrides.set(/\/resources\/from-template$/, (req) => {
+    if (req.method !== 'POST') return undefined;
+    const r = copyRoute ? copyRoute(req) : world.repo.respond(req);
+    if (!r || r.status !== 201 || !lk.templateTags) return r;
+    const tpl = world.repo.res.get(String((req.body as Obj).templateId));
+    const copy = world.repo.res.get(String((r.body as Obj).id));
+    if (!tpl || !copy) return r;
+    copy.tags = [...tpl.tags];
+    return { ...r, body: { ...(r.body as Obj), tags: [...copy.tags] } };
+  });
+  // Run 3: createManyResources creates each item in turn and stops at a duplicate id (the items before it are made).
+  world.overrides.set(/\/resources\/batch$/, (req) => {
+    if (req.method !== 'POST' || lk.batchAtomic) return undefined;
+    const out: unknown[] = [];
+    for (const item of ((req.body as Obj).resources ?? []) as Obj[]) {
+      const r = world.repo.respond({ ...req, body: { resources: [item] } });
+      if (!r || r.status !== 201) return r;
+      out.push(...((r.body as { resources: unknown[] }).resources ?? []));
+    }
+    return { status: 201, body: { resources: out } };
+  });
+  // Run 3: moveResource answers the page without its rank.
+  world.overrides.set(/\/resources\/[^/]+\/move$/, (req) => {
+    if (req.method !== 'POST' || lk.moveRank) return undefined;
+    const r = world.repo.respond(req);
+    if (!r || r.status !== 200) return r;
+    const { rank: _dropped, ...rest } = r.body as Obj;
+    return { ...r, body: rest };
   });
 
   // updateAsset with an If-Match refused (run 2), and a folder that is not empty refused a delete (run 2).
@@ -239,8 +338,12 @@ const target = (): SmokeTarget => ({
   apiKey: API_KEY,
 });
 
-/** Runs the script; returns its findings by id and what it cost, and checks it left nothing behind. */
-async function dryRun(): Promise<{
+/**
+ * Runs the script; returns its findings by id and what it cost, and checks it left nothing behind. `made`: the resources
+ * the run makes (the root, its eight pages and the template W13 saves; run 3 a ninth page, the item W14's batch makes
+ * before its duplicate).
+ */
+async function dryRun(made = 10): Promise<{
   by: Record<string, Finding>;
   report: string;
   cost: string;
@@ -269,7 +372,7 @@ async function dryRun(): Promise<{
     report,
   ).toEqual([...IDS, 'cleanup']);
   expect(by.cleanup!.verdict, report).toBe('pass');
-  // Nothing the run made is left: no asset it made, no live page (the root and both pages deleted).
+  // Nothing the run made is left: no asset it made, no live page (the root, its pages and the template deleted).
   const newAssets = [...w.assets.assets.values()].filter((a) => !assetsBefore.has(a.id));
   expect(
     newAssets.map((a) => `${a.type} ${a.name}`),
@@ -281,9 +384,9 @@ async function dryRun(): Promise<{
     report,
   ).toEqual([]);
   expect(
-    [...w.repo.res.values()].filter((r) => !resourcesBefore.has(r.id)).length,
-    'the root and its two pages were made (and deleted)',
-  ).toBe(3);
+    [...w.repo.res.values()].filter((r) => !resourcesBefore.has(r.id)).map((r) => r.name),
+    'the root, its pages and the template were made (and deleted)',
+  ).toHaveLength(made);
   expect(tally.puts).toBe(1);
   return { by, report, cost, writes, reads, downloads: tally.downloads };
 }
@@ -317,10 +420,19 @@ describe('sandbox assumptions, round 2 (dry run)', () => {
     expect(by.W10!.detail).toMatch(/the document's/);
     expect(by.W11!.detail).toMatch(/sent with If-Match from getBlock/);
     expect(by.W12!.detail).toMatch(/in start order/);
-    // The cost the header of assumptions-r2.ts states for the owner (the sandbox runtime's own count: 33 writes, 56
-    // reads, 3 downloads and the PUT on 17 November 2026), with a little room.
-    expect(writes).toBeLessThanOrEqual(36);
-    expect(reads).toBeLessThanOrEqual(64);
+    expect(by.W13!.detail).toMatch(
+      /the template and its copy carry \["lkb-w13"\]; the template reads with parentId null/,
+    );
+    expect(by.W14!.detail).toMatch(
+      /refused 409 DUPLICATE_ID; the item before the duplicate was not created \(getResource 404\)$/,
+    );
+    expect(by.W15!.detail).toMatch(/getResource 404; the copy refused 404 NOT_FOUND; nothing made/);
+    expect(by.W16!.detail).toMatch(/2 created events listed as createEvent answered them/);
+    expect(by.W17!.detail).toMatch(/getResource gives the same rank, now before W17 a$/);
+    // The cost the header of assumptions-r2.ts states for the owner (the sandbox runtime's own count: 49 writes, 113
+    // reads, 3 downloads and the PUT on 17 November 2026, W13 to W17 included), with a little room.
+    expect(writes).toBeLessThanOrEqual(52);
+    expect(reads).toBeLessThanOrEqual(124);
     expect(downloads).toBe(3);
   }, 120_000);
 
@@ -349,7 +461,9 @@ describe('sandbox assumptions, round 2 (dry run)', () => {
       expect(by.W11!.verdict, report).toBe('pass');
       expect(by.W11!.detail).toMatch(/from the document \(getBlock gave no version\)/);
       expect(by.W12!.verdict, report).toBe('inconclusive');
-      for (const id of ['W1', 'W3', 'W5', 'W6', 'W7', 'W9'])
+      expect(by.W16!.verdict, report).toBe('inconclusive');
+      expect(by.W16!.detail).toMatch(/W12 did not set up the timeline/);
+      for (const id of ['W1', 'W3', 'W5', 'W6', 'W7', 'W9', 'W13', 'W14', 'W15', 'W17'])
         expect(by[id]!.verdict, `${id}\n${report}`).toBe('pass');
     } finally {
       Object.assign(lk, {
@@ -359,6 +473,28 @@ describe('sandbox assumptions, round 2 (dry run)', () => {
         folderDelete: 'cascade',
         blockVersion: true,
       });
+    }
+  }, 120_000);
+
+  it('as LegendKeeper might answer otherwise where the second review’s fixes rely on it: those checks fail, and the run still cleans up', async () => {
+    Object.assign(lk, { templateTags: false, batchAtomic: false, eventsExact: false, moveRank: false });
+    try {
+      const { by, report } = await dryRun(11);
+      expect(by.W13!.verdict, report).toBe('fail');
+      expect(by.W13!.detail).toMatch(/the copy reads with tags \[\], not the template’s/);
+      expect(by.W14!.verdict, report).toBe('fail');
+      expect(by.W14!.detail).toMatch(
+        /refused 409 DUPLICATE_ID, but the item before the duplicate was created/,
+      );
+      expect(by.W16!.verdict, report).toBe('fail');
+      expect(by.W16!.detail).toMatch(/formattedStart: null answered, "200000" read/);
+      expect(by.W16!.detail).toMatch(/updated, getEvent: formattedStart: null answered, "100000" read/);
+      expect(by.W17!.verdict, report).toBe('fail');
+      expect(by.W17!.detail).toMatch(/the move answered no rank \(null\)/);
+      for (const id of IDS.filter((x) => !['W4', 'W13', 'W14', 'W16', 'W17'].includes(x)))
+        expect(by[id]!.verdict, `${id}\n${report}`).toBe('pass');
+    } finally {
+      Object.assign(lk, { templateTags: true, batchAtomic: true, eventsExact: true, moveRank: true });
     }
   }, 120_000);
 });
