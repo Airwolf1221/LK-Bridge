@@ -115,7 +115,15 @@ or **Run now** on the Maintenance Jobs page runs even while it is switched off.
 `planAssetDestination(projectId, request, deps)` (`src/assets/plan.ts`; bound as `runtime.assets.plan(projectId,
 request)`) says where an image for a character belongs. It is **pure**: it reads the stored asset tree and repository
 tree, writes nothing and asks LegendKeeper nothing. D3's image pipeline creates what the plan says. **Folders are never
-moved.**
+moved.** Since CR-2026-11-R2 (R2-44) every folder name the plan writes is canonical: NFC, with zero-width characters
+removed and no-break spaces written as spaces, so two names that show the same make one folder (a folder made by hand
+under a non-canonical name is still matched byte for byte).
+
+Since the same review, the staged images on the bridge's server: one placement, discard or restore of a staged image at
+a time (a second gets `STAGED_BUSY`, R2-38); an image restore reuses only its own staged record holding the snapshot's
+bytes (R2-39); `IMAGE_UPLOAD_RATE_PER_PRINCIPAL` limits stagings from every source (R2-41); a server file is kept while
+any staging or record still needs it, and a record keeps naming its file until the file is gone, the minute sweep
+trying a failed removal again (R2-42, R2-43).
 
 ```ts
 request = { characterResourceId?: string; characterName?: string; subfolders?: string[] }  // exactly one of the first two

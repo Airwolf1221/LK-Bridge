@@ -1036,9 +1036,13 @@ was asked.
 
 - protected canon and every lifecycle change ([Canon and approval](#canon-and-approval)), always;
 - whatever the owner's **safety rails** on your profile keep for approval. By default: **deletes** (pages, documents,
-  timeline events, map features, assets), **a job that touches more than 10 pages**, and **asset deletes and moves**;
-  the owner can also keep renames and moves of pages. The result is `proposal_captured` with `proposedBecause`, for
-  example `proposed because: bulk change (14 pages > 10)`;
+  timeline events and lanes, map features, assets, calendars, sidebar and infobox properties, board shapes, and replacing
+  a board's content or a calendar whole), **a job that touches more than 10 pages** (a copy with its children counts
+  every page it copies), and **asset deletes and moves**; the owner can also keep renames and moves of pages. The
+  result is `proposal_captured` with `proposedBecause`, for example `proposed because: bulk change (14 pages > 10)`;
+- a chronology link you choose (`sync_timeline_event` with `event_id`), a restore that may bring back an Authoritative
+  page (`restore_resource` of a page deleted with others), and a rename that drops `[BSRC]`: canonical or ordinary
+  proposals at every scope;
 - a setting pack's package (`arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship`), unless the
   owner switched the tool to follow your scope;
 - `restore_snapshot`, always.

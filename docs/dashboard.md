@@ -129,6 +129,13 @@ default) are not listed: you saw them before they happened. The Overview page sh
   meanwhile is never overwritten. It asks for your password (and TOTP code) first, and is audited (`job.revert`, with
   the targets and the outcome). The revert is one job (system, P1) on the Jobs page; its result points to the journal
   and the snapshots if you need to go further. A reverted job is marked reviewed.
+  Since CR-2026-11-R2: a target is compared in full with what the job left (a chronology row with its links, marks and
+  inline icons, an event with every stored field, a move with its place among its siblings, a later job's write to the
+  same target), and every target is checked before the first write (R2-16, R2-19, R2-20, R2-28); the request carries the
+  targets you confirmed, and a different set is refused (`REVERT_CHANGED`, R2-23); a second revert of the same job while
+  the first is starting is refused (`REVERT_RUNNING`, R2-21); a revert whose own verify finds a difference ends failed
+  and the item stays unreviewed (R2-25); Last Major Revision goes back exactly, and only with the edit that set it
+  (R2-18). A low-level job is summarised from its operations, with the agent's own title beside it (R2-06).
 
 ## Safety rails, per profile (v3 F3.4)
 

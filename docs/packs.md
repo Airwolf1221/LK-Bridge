@@ -395,6 +395,27 @@ relationship's pair, a page that must still be where the plan saw it, the staged
 a `taxonomy_entry` record for new character navigation, the canonical marker for a package that moves canon, and the
 pinned governance sections.
 
+## Since the second review (CR-2026-11-R2)
+
+- **A pinned heading must be unambiguous**: a governance page with the pinned heading twice is drift (`ambiguous`, named
+  in the message), the owner's approval is refused (`GOVERNANCE_SECTION_AMBIGUOUS`) and a re-map to a heading the page
+  has twice is refused (`HEADING_AMBIGUOUS`) (R2-33).
+- **A package's checks run again after a hold**: a direct package job held after its checks (writes paused, read-only, a
+  budget wait, a restart) checks the governance, what must be absent and its images again before its first write, and
+  stops (`PACK_GOVERNANCE_CHANGED`) when the tool's switch now says "always propose" (R2-29).
+- **The switch** that applies is the stricter of the approved version's and one waiting for approval: a switch to
+  "always propose" applies at once; a loosening waits for the approval (R2-35).
+- **The staged-image takeover**: a package takes over only its own agent's pending placement of an image (another
+  agent's is `STAGED_IMAGE_BUSY`), and withdraws it only once the package is a proposal or its job has succeeded
+  (R2-34, R2-40).
+- **No lifecycle index name**: a package that would make a page named as a lifecycle index is refused (R2-11).
+- **One-line fields** (a page's Scope, the owner tool's Reference Type, Scope and Temporal Scope) are kept on one line
+  (R2-37); a continuity is compared through the facts fold, and an alternate universe's name with an invisible character
+  is refused (`CONTINUITY_INVISIBLE_CHARACTER`, R2-36).
+- **Appraisal** reads the approved version's rules only; with none approved, `arkona_appraisal_fix` proposes. The asset
+  fix and the Related Sources fix check their target again inside their job (`FIX_STALE`): the Related Sources fix reads
+  the linked page live (2 reads to plan, 1 in the job) (R2-30 to R2-32).
+
 ## When a package is refused
 
 | Code                                   | What to do                                                                                                  |
