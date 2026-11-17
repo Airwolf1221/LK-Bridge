@@ -27,8 +27,17 @@ import { planFacts, FactsPlanError } from '../facts/plan.js';
 import { expandFacts } from '../facts/expand.js';
 import { sidebarFrom } from '../facts/index.js';
 import { isKnownRun } from '../audits/model.js';
-import { VERIFY_STEP, type VerifyTarget } from '../jobs/internal-steps.js';
+import { factKey } from '../facts/index.js';
+import {
+  EXPECT_STEP,
+  VERIFY_STEP,
+  type RegisteredChecker,
+  type RegisteredCheckContext,
+  type RegisteredCheckResult,
+  type VerifyTarget,
+} from '../jobs/internal-steps.js';
 import type { JobOrigin, StepSpec } from '../jobs/index.js';
+import { textKey } from '../packs/engine/text.js';
 import { stateHash } from '../jobs/sidebar-state.js';
 import { hasForbiddenDash } from '../packs/engine/text.js';
 import { planBlockwise } from '../pages/blockwise.js';
@@ -87,6 +96,108 @@ export interface FixDeps {
   /** The asset tree's assets of a folder (the rename's collision check). */
   readonly assetsIn: (folderId: string | null) => readonly { readonly id: string; readonly name: string }[];
   readonly propertiesName: string;
+  /**
+   * CR-2026-11-R2 (R2-06): the Related Sources collection's name in the pack's APPROVED rules: a finding made under other
+   * rules (a version waiting for approval) is stale for the Related Sources fix.
+   */
+  readonly relatedName?: string;
+  /** CR-2026-11-R2 (R2-05): the lifecycle's Status key and values, to judge a linked page read live. */
+  readonly status?: {
+    readonly key: string;
+    readonly values: { readonly authoritative: string; readonly working: string; readonly archived: string };
+  };
+}
+
+/** CR-2026-11-R2 (R2-04, R2-05): the checks a fix's job makes before it writes (registered with the job engine). */
+export const FIX_CHECKS = { asset: 'appraisal.fix.asset', related: 'appraisal.fix.related' } as const;
+
+/** Registers the fixes' in-job checks (`FIX_CHECKS`); returns the unregisters. */
+export function registerFixCheckers(
+  register: (name: string, checker: RegisteredChecker) => () => void,
+): (() => void)[] {
+  return [register(FIX_CHECKS.asset, assetCheck), register(FIX_CHECKS.related, relatedCheck)];
+}
+
+const staleInJob = (message: string, details: Obj = {}): RegisteredCheckResult => ({
+  differences: [],
+  refusal: {
+    code: 'FIX_STALE',
+    message: `${message} Nothing was written: the finding is out of date; run the appraisal again.`,
+    details,
+  },
+});
+
+/** R2-04: the asset still has the name and folder the fix read (an owner's rename or move is never overwritten). */
+async function assetCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
+  const input = (ctx.input ?? {}) as { assetId?: string; name?: string; folderId?: string | null };
+  const r = await ctx.read('getAsset', { path: { assetId: asText(input.assetId) } });
+  const a = isObj(r.body) ? r.body : null;
+  if (!r.exists || !a || typeof a.deletedAt === 'string') return staleInJob('The asset is gone.');
+  const folderId = typeof a.folderId === 'string' && a.folderId !== '' ? a.folderId : null;
+  if (asText(a.name) !== input.name || folderId !== (input.folderId ?? null))
+    return staleInJob(
+      `The asset changed since the fix read it (it is “${asText(a.name)}”${folderId !== (input.folderId ?? null) ? ', in another folder' : ''}).`,
+      { name: asText(a.name), folderId },
+    );
+  return { differences: [], observed: { name: asText(a.name), folderId } };
+}
+
+/** The value of a key-value row of a page's sidebar as `getResource` returns it (null: no such row). */
+function rowValue(res: Obj, property: string, key: string): string | null {
+  const props = Array.isArray(res.properties) ? (res.properties as unknown[]).filter(isObj) : [];
+  for (const p of props) {
+    if (p.kind !== 'keyValue' || factKey(asText(p.title)) !== factKey(property)) continue;
+    for (const row of Array.isArray(p.rows) ? (p.rows as unknown[]).filter(isObj) : []) {
+      if (factKey(asText(row.key)) !== factKey(key)) continue;
+      const runs = Array.isArray(row.content) ? (row.content as unknown[]).filter(isObj) : [];
+      const text = runs.length
+        ? runs.map((x) => (typeof x.text === 'string' ? x.text : '')).join('')
+        : asText(row.text);
+      return text.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * R2-05: a linked page read live is Working or Archived: its name's prefix says so and its Status (when it has the row)
+ * does not say otherwise. Anything else (a page unarchived or promoted in the app, a page gone) is not judged
+ * non-current.
+ */
+function liveNonCurrent(
+  res: Obj | null,
+  o: { readonly propertiesName: string; readonly status?: FixDeps['status'] },
+): { readonly ok: boolean; readonly name: string; readonly why: string } {
+  if (!res || typeof res.deletedAt === 'string') return { ok: false, name: '', why: 'it is gone' };
+  const name = asText(res.name);
+  const kind = classifyName(name).kind;
+  if (kind !== 'bwrk' && kind !== 'barc') return { ok: false, name, why: `it is “${name}” now` };
+  if (o.status) {
+    const v = rowValue(res, o.propertiesName, o.status.key);
+    const nonCurrent = [o.status.values.working, o.status.values.archived].map(factKey);
+    if (v !== null && v !== '' && !nonCurrent.includes(factKey(v)))
+      return { ok: false, name, why: `its ${o.status.key} is “${v}”` };
+  }
+  return { ok: true, name, why: '' };
+}
+
+/** R2-05: inside the job, the linked page is still Working or Archived (read live). */
+async function relatedCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
+  const input = (ctx.input ?? {}) as {
+    targetId?: string;
+    propertiesName?: string;
+    status?: FixDeps['status'];
+  };
+  const r = await ctx.read('getResource', { path: { resourceId: asText(input.targetId) } });
+  const live = liveNonCurrent(r.exists && isObj(r.body) ? r.body : null, {
+    propertiesName: input.propertiesName ?? 'PROPERTIES',
+    ...(input.status ? { status: input.status } : {}),
+  });
+  if (!live.ok)
+    return staleInJob(`The linked page is no longer Working or Archived (${live.why}).`, {
+      target: input.targetId ?? null,
+    });
+  return { differences: [], observed: { name: live.name } };
 }
 
 const stale = (what: string, details: Obj = {}): AppraisalError =>
@@ -440,6 +551,23 @@ async function fixAsset(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
       { existing: taken },
     );
   const steps: StepSpec[] = [
+    // CR-2026-11-R2 (R2-04): inside the job, the asset still has the name and folder read here (an owner's rename or move
+    // meanwhile stops the fix; checked again if the job is held before it writes).
+    {
+      op: EXPECT_STEP,
+      params: {
+        body: {
+          checks: [
+            {
+              label: 'asset',
+              kind: 'registered',
+              checker: FIX_CHECKS.asset,
+              input: { assetId, name, folderId },
+            },
+          ],
+        },
+      },
+    },
     {
       op: 'updateAsset',
       params: { path: { assetId }, body: { name: newName } },
@@ -472,12 +600,25 @@ async function fixRelated(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
   const pageId = f.page!.id;
   const targetId = asText(f.fix?.args.targetId);
   const title = asText(f.fix?.args.propertyTitle) || 'Related Sources';
+  // CR-2026-11-R2 (R2-06): the collection must be the Related Sources of the pack's APPROVED rules.
+  if (d.relatedName !== undefined && textKey(title) !== textKey(d.relatedName))
+    throw stale(
+      `The pack's approved rules name the Related Sources collection “${d.relatedName}”, not “${title}” (this finding was made under other rules).`,
+    );
   const node = d.node(pageId);
   if (node && node.kind !== 'bsrc')
     throw stale(`The page is no longer Authoritative (it is “${node.rawName}”).`);
   const target = d.node(targetId);
   if (target && target.kind !== 'bwrk' && target.kind !== 'barc')
     throw stale(`“${target.rawName}” is no longer Working or Archived.`, { target: target.rawName });
+  // CR-2026-11-R2 (R2-05): the linked page read live (the tree may not have seen it unarchived or promoted in the app).
+  const tread = await d.read('getResource', { path: { resourceId: targetId } });
+  const live = liveNonCurrent(isObj(tread) ? tread : null, {
+    propertiesName: d.propertiesName,
+    ...(d.status ? { status: d.status } : {}),
+  });
+  if (!live.ok)
+    throw stale(`The linked page is no longer Working or Archived (${live.why}).`, { target: targetId });
   const path = { resourceId: pageId };
   const body = await d.read('listProperties', { path });
   const sidebar = sidebarFrom(body);
@@ -511,13 +652,32 @@ async function fixRelated(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
     throw e;
   }
   if (plan.empty)
-    return { status: 'nothing_to_do', message: `“${title}” no longer lists that page.`, reads: 1 };
+    return { status: 'nothing_to_do', message: `“${title}” no longer lists that page.`, reads: 2 };
   const job = expandFacts(plan, { id: pageId, name }, sidebar, {
     facts: {},
     links: { [title]: { remove: [target?.rawName ?? targetId] } },
   });
+  // R2-05: inside the job, before the link goes, the linked page is read again and must still be Working or Archived
+  // (one more check in the facts plan's own first step, its check of the sidebar).
+  const linked = {
+    label: 'linked page',
+    kind: 'registered',
+    checker: FIX_CHECKS.related,
+    input: { targetId, propertiesName: d.propertiesName, ...(d.status ? { status: d.status } : {}) },
+  };
+  const steps = job.steps.map((s, i) => {
+    const body = (s.params?.body ?? {}) as { checks?: unknown[] };
+    return i === 0 && s.op === EXPECT_STEP && Array.isArray(body.checks)
+      ? { ...s, params: { ...s.params, body: { ...body, checks: [linked, ...body.checks] } } }
+      : s;
+  });
+  if (steps[0]?.op !== EXPECT_STEP)
+    throw new AppraisalError(
+      'FIX_NOT_APPLICABLE',
+      'The fix could not be planned with its check; nothing was done.',
+    );
   return submit(d, {
-    steps: job.steps,
+    steps,
     title: `Remove “${target?.rawName ?? targetId}” from the Related Sources of “${name}”`,
     holdLock: { resourceId: pageId },
     operation: { ...job.operation, fromAppraisal: f.id, check: f.check },
@@ -525,7 +685,8 @@ async function fixRelated(d: FixDeps, f: AppraisalFinding): Promise<FixResult> {
     pageParts: job.pageParts,
     prefetched: [{ op: 'listProperties', path, body }],
     fix: 'related_noncurrent',
-    reads: 1,
+    // R2-05: the page's sidebar and the linked page, both read live.
+    reads: 2,
   });
 }
 

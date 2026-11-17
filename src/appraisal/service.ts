@@ -25,7 +25,7 @@ import type { SnapshotService } from '../snapshots/service.js';
 import { treeSettingsFrom } from '../tree/classify.js';
 import type { TreeNode } from '../tree/index.js';
 import { workingDigest } from './digest.js';
-import { proposeAppraisalFix, type FixResult } from './fixes.js';
+import { proposeAppraisalFix, registerFixCheckers, type FixResult } from './fixes.js';
 import { FullText } from './fts.js';
 import { effectsOfProposal, impactOf, type PlannedEffect } from './impact.js';
 import { AppraisalIndex, type IndexState } from './overlay.js';
@@ -59,7 +59,7 @@ export interface AppraisalDeps {
   readonly db: Db;
   readonly snapshots: SnapshotService;
   readonly audits: Pick<Audits, 'store' | 'proposeFix'>;
-  readonly packs: Pick<Packs, 'get' | 'attachment'>;
+  readonly packs: Pick<Packs, 'get' | 'attachment'> & Partial<Pick<Packs, 'store'>>;
   readonly tree: {
     readonly queries: {
       node(projectId: string, id: string): { readonly data: TreeNode | null };
@@ -81,7 +81,9 @@ export interface AppraisalDeps {
     subject: string,
     race: string | null,
   ) => readonly string[] | null;
-  readonly engine: Pick<JobEngine, 'internalRead' | 'submit'>;
+  /** CR-2026-11-R2 (R2-04, R2-05): with `registerAsyncChecker`, the fixes' checks inside their jobs are registered. */
+  readonly engine: Pick<JobEngine, 'internalRead' | 'submit'> &
+    Partial<Pick<JobEngine, 'registerAsyncChecker'>>;
   readonly projectSettings: (projectId: string) => Readonly<ProjectSettings>;
   readonly assetHosts: readonly string[];
   readonly audit: (
@@ -171,6 +173,8 @@ export class Appraisal {
     });
     this.fullText = new FullText(d.db);
     this.store = new AppraisalStore(d.db, d.now);
+    // CR-2026-11-R2 (R2-04, R2-05): what a fix re-checks inside its job, before it writes (and again after a hold).
+    if (d.engine.registerAsyncChecker) registerFixCheckers(d.engine.registerAsyncChecker.bind(d.engine));
   }
 
   // ============================================================================================ the index (A1)
@@ -198,7 +202,11 @@ export class Appraisal {
     };
   }
 
-  /** The pack's rules (the appraisal's data), when the pack is attached to the project. */
+  /**
+   * The pack's rules (the appraisal's data), when the pack is attached to the project. CR-2026-11-R2 (R2-06): the rules
+   * of the version the owner APPROVED (a version waiting for approval does not apply, as for the lifecycle rules); the
+   * current rules only while no version is approved yet (the reports still work, and every fix is then a proposal).
+   */
   rules(projectId: string): PackRules {
     const pack = this.d.packs.get(PACK_ID);
     if (!pack || !this.d.packs.attachment(PACK_ID, projectId))
@@ -206,13 +214,29 @@ export class Appraisal {
         'PACK_NOT_ATTACHED',
         'The Arkona pack is not attached to this project, so its appraisal tools do not apply here.',
       );
-    return pack.rules;
+    return this.approvedRules() ?? pack.rules;
+  }
+
+  /** CR-2026-11-R2 (R2-06): the approved version's rules, or null when none is approved (or it cannot be read). */
+  approvedRules(): PackRules | null {
+    const pack = this.d.packs.get(PACK_ID);
+    if (!pack?.approved) return null;
+    if (pack.approved.version === pack.version) return pack.rules;
+    try {
+      return this.d.packs.store?.rulesAt(pack.id, pack.approved.version) ?? null;
+    } catch {
+      return null;
+    }
   }
 
   private packSource(): ReportSource['pack'] {
     const pack = this.d.packs.get(PACK_ID);
     if (!pack) return undefined;
-    return { version: pack.version, approvedVersion: pack.approved?.version ?? null };
+    // CR-2026-11-R2 (R2-06): `version` is the version whose rules the report applied (the approved one when there is).
+    return {
+      version: pack.approved?.version ?? pack.version,
+      approvedVersion: pack.approved?.version ?? null,
+    };
   }
 
   /** The overlay's reader for one request (or the refusal when there is no snapshot yet). */
@@ -837,13 +861,18 @@ export class Appraisal {
           : { status: 'nothing_to_do', message: a.message, reads: 1 };
     } else {
       const settings = this.d.projectSettings(o.projectId);
+      // CR-2026-11-R2 (R2-06): a fix is checked against the APPROVED rules; with none approved it is a proposal.
+      const approved = this.approvedRules();
+      const lifecycle = lifecycleFrom(settings);
       r = await proposeAppraisalFix(
         {
           projectId: o.projectId,
           read: o.read,
           submit: (req) => this.d.engine.submit(req as never) as unknown as Promise<Record<string, unknown>>,
           origin: o.origin,
-          forceProposal: o.forceProposal !== false,
+          forceProposal: o.forceProposal !== false || approved === null,
+          relatedName: (approved ?? this.rules(o.projectId)).sidebar.related,
+          status: { key: lifecycle.fields.status, values: lifecycle.status },
           node: (id) => {
             try {
               return this.d.tree.queries.node(o.projectId, id).data;

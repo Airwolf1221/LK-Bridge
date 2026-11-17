@@ -113,6 +113,7 @@ async function governanceCheck(
     packId?: string;
     version?: number;
     sources?: { key: string; version: string }[];
+    tool?: string;
   };
   const pack = input.packId ? d.packs.get(input.packId) : null;
   const refusal = (message: string, more: Obj = {}): RegisteredCheckResult => ({
@@ -120,6 +121,16 @@ async function governanceCheck(
     refusal: { code: 'PACK_GOVERNANCE_CHANGED', message, details: more },
   });
   if (!pack) return refusal('The pack this package was planned with no longer exists. Nothing was written.');
+  // CR-2026-11-R2 (R2-02): a job that runs directly (at the agent's scope, not approved by the owner) stops when the
+  // tool's switch now says "always propose", in the approved version or in one waiting for approval (the stricter). The
+  // check runs again whenever the job starts again before its first write (a hold, a budget wait, a restart).
+  if (input.tool && d.packs.store.jobApproval(ctx.projectId, ctx.jobId) === 'direct') {
+    if (d.packs.strictToolMode(pack.id, input.tool) === 'propose')
+      return refusal(
+        `${input.tool} is now switched to “always propose” on the Packs page (pack version ${pack.version}${pack.approved?.version === pack.version ? '' : ', waiting for approval'}), so this package can no longer run directly. Nothing was written: call the tool again; it will be a proposal for the owner.`,
+        { tool: input.tool, switch: 'propose' },
+      );
+  }
   if (!pack.approved || pack.approved.version !== input.version || pack.version !== input.version) {
     return refusal(
       `The ${pack.name} pack changed since this package was planned (planned on version ${input.version ?? '?'}, now version ${pack.version}${pack.approved ? `, approved version ${pack.approved.version}` : ', not approved'}). Nothing was written: plan the package again once the owner has approved the pack.`,
@@ -155,6 +166,7 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
     present?: { resourceId: string; parentId: string; name: string; code: string }[];
     kind?: 'character' | 'owner' | 'relationship' | 'art';
     images?: string[];
+    takeovers?: { stagedId: string; proposalId: string }[];
   };
   const subject = input.subject ?? '?';
   const what = (input.type ?? 'character').toLowerCase();
@@ -210,7 +222,12 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
   // v3 F3b (design section 6): every staged image the job places is still staged, on the server, placed by nothing else.
   for (const id of input.images ?? []) {
     const row = d.stagedImage?.(ctx.projectId, id);
-    const mine = (pid: string | null) => pid === null || d.proposalJob?.(pid) === ctx.jobId;
+    // CR-2026-11-R2 (R2-08): the image's own placement proposal this package takes over, still waiting (no job), is this
+    // job's to supersede: a direct job runs before it is withdrawn (withdrawn once the job has succeeded).
+    const takenOver = (pid: string) =>
+      (input.takeovers ?? []).some((t) => t.stagedId === id && t.proposalId === pid) &&
+      (d.proposalJob?.(pid) ?? null) === null;
+    const mine = (pid: string | null) => pid === null || d.proposalJob?.(pid) === ctx.jobId || takenOver(pid);
     const busy =
       !row ||
       !row.staged ||

@@ -319,6 +319,18 @@ export class PackStore {
     this.db.prepare('DELETE FROM pack_projects WHERE pack_id = ? AND project_id = ?').run(packId, projectId);
   }
 
+  /**
+   * CR-2026-11-R2 (R2-02): whether a job ran from the owner's approval (`approved`), directly at the agent's scope
+   * (`direct`), or is not known (`unknown`), for the job's re-check of the tool's switch.
+   */
+  jobApproval(projectId: string, jobId: string): 'approved' | 'direct' | 'unknown' {
+    const j = this.db
+      .prepare('SELECT approved_by, principal_id FROM jobs WHERE id = ? AND project_id = ?')
+      .get(jobId, projectId) as { approved_by: string | null; principal_id: string | null } | undefined;
+    if (!j) return 'unknown';
+    return j.approved_by ? 'approved' : 'direct';
+  }
+
   // ============================================================================================ reservations
 
   /**

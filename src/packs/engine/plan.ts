@@ -54,6 +54,7 @@ import {
   checkBody,
   isPlaceholder,
   nameProblem,
+  oneLine,
   replaceDashes,
   replaceDashesInMarkdown,
   sectionsOf,
@@ -419,7 +420,9 @@ export async function planPackage(env: PlanEnv, input: PackageInput): Promise<Pa
       where,
       title: p.title !== undefined ? replaceDashes(p.title.trim(), where, 'title', replacements) : undefined,
       label: p.label !== undefined ? replaceDashes(p.label.trim(), where, 'label', replacements) : undefined,
-      scope: p.scope !== undefined ? replaceDashes(p.scope.trim(), where, 'Scope', replacements) : undefined,
+      // CR-2026-11-R2 (R2-13): the Scope is one line (line breaks collapsed), in its row and in a routing line.
+      scope:
+        p.scope !== undefined ? replaceDashes(oneLine(p.scope), where, 'Scope', replacements) : undefined,
       referenceType:
         p.referenceType !== undefined
           ? replaceDashes(p.referenceType.trim(), where, 'Reference Type', replacements)
@@ -1977,13 +1980,18 @@ export type RoutingEnv = Pick<PlanEnv, 'pd' | 'mctx' | 'tool' | 'ctx'> & {
   readonly type: Pick<TypeRules, 'index'>;
 };
 
-/** One routing line, F3a's pattern: `- [<page name>](lk://resources/<id>): <Scope>`. */
+/**
+ * One routing line, F3a's pattern: `- [<page name>](lk://resources/<id>): <Scope>`. CR-2026-11-R2 (R2-13): ONE line:
+ * any line break in the name or Scope is collapsed to a space, so a Scope can never add a heading or a paragraph.
+ */
 export const routingLine = (c: {
   readonly rawName: string;
   readonly id: string;
   readonly scope: string | null;
-}) =>
-  `- [${c.rawName.replace(/\[/g, '\\[').replace(/\]/g, '\\]')}](lk://resources/${c.id})${c.scope ? `: ${c.scope}` : ''}`;
+}) => {
+  const scope = c.scope ? oneLine(c.scope) : '';
+  return `- [${oneLine(c.rawName).replace(/\[/g, '\\[').replace(/\]/g, '\\]')}](lk://resources/${c.id})${scope ? `: ${scope}` : ''}`;
+};
 
 /** An index's routing section as read now: its document, version, blocks and the section, or why not (said). */
 async function routingSection(

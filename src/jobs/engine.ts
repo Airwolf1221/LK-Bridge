@@ -2003,7 +2003,12 @@ export class JobEngine {
   private async runJob(jobId: string, entry: Active): Promise<RunnerResult> {
     const opts = this.repo.jobOptions(jobId);
     const heldLock = typeof opts[HELD_LOCK] === 'string' ? opts[HELD_LOCK] : null;
-    if (!heldLock) return this.runSteps(jobId, entry, null);
+    if (!heldLock) {
+      // CR-2026-11-R2 (R2-02): a job with no job-level lock (a setting pack's package, which also writes the documents of
+      // pages it creates, so it cannot hold them from its start) checks again in the same case (see recheckOnRelock).
+      this.recheckOnRelock(jobId);
+      return this.runSteps(jobId, entry, null);
+    }
     // v2 C2c: a second job-level lock (a document of the same page), always taken after the page's, so two jobs holding
     // both can never wait on each other (every job takes them in this one order; no other job holds a lock while it
     // waits for another).
@@ -2055,7 +2060,7 @@ export class JobEngine {
    * budget, paused, or the bridge restarted) after its `bridge.expect` check but before anything was sent checks again:
    * the page may have changed while the lock was free. Once a write has been sent the check is not repeated (the job's
    * own writes changed what it checked); the writes after it carry their own checks (a chained If-Match, an in-step
-   * check), as before.
+   * check), as before. CR-2026-11-R2 (R2-02): a job with no job-level lock does the same each time it starts again.
    */
   private recheckOnRelock(jobId: string): void {
     const steps = this.repo.steps(jobId);
