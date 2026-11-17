@@ -2937,7 +2937,7 @@ export class JobEngine {
         rail = await this.policyGate.rails(
           principal,
           items.map((it) => ({ opId: it.opId, kind: it.meta.kind, params: it.params, options: it.options })),
-          { project, jobKind },
+          { project, jobKind, ...(extra.stagedPlacement === true ? { stagedPlacement: true } : {}) },
         );
       } catch (e) {
         rail = {

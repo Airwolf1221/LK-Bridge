@@ -26,7 +26,13 @@ and the owner-approved [F3b design](design/F3b-owner-tools.md) (F3b). The tools'
 One versioned JSON document, its **rules** (`src/packs/types.ts` checks its shape):
 
 - **settings**: `alwaysPropose` (every package is a proposal for the owner, whatever the agent's scope; on for a pack's
-  first weeks).
+  first weeks), and since v3 F3.4 **`tools`**, a switch per writing tool that overrides it: `propose` (always a
+  proposal) or `scope` (follows the agent's scope: at scope `write` the package runs and the owner reviews it afterwards
+  on the Review page). The Arkona seed: `arkona_create_character`, `arkona_create_owner` and
+  `arkona_create_relationship` propose; `arkona_add_character_art` and `arkona_appraisal_fix` follow the scope; the
+  read-only tools have no switch ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D). Changing a
+  switch on the Packs page (**Save tool switches**, re-authenticated, audited `pack.set_tool_modes`) makes a new version,
+  which waits for the owner's approval like any other.
 - **tags**: the status tags (`CANON` for Authoritative, `Working` for Working, first and with no `CANON`), the AU rule
   (`au`: the Continuity Type that makes a page AU and the tag it carries in place of `CANON`; v3 F3b), the values that are
   never tags (`Unknown`, `Unestablished`, `None`), the **token maps** (a Race / Species or Naming Culture value and the
@@ -106,8 +112,10 @@ packages cannot both create it).
 
 1. **Seeded once.** At start the bridge stores each pack it knows (`src/packs/arkona.ts`, data) if it is not stored yet
    (audited `pack.seed`). After that the stored copy is the owner's: it is never overwritten by code. **A new seed is
-   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-17-f3d`, v3 F3d, supersedes
-   F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b` and F3b.1's `arkona-2026-11-16-f3b1`), and a pack stored from one of them is given the new seed's rules as a NEW version at start
+   offered, never imposed** (v3 F3b): a seed names the seeds it supersedes (`arkona-2026-11-17-f3-4`, v3 F3.4, the tool
+   switches, supersedes F3a's `arkona-2026-11-16`, F3b's `arkona-2026-11-16-f3b`, F3b.1's `arkona-2026-11-16-f3b1` and
+   F3.3's `arkona-2026-11-17-f3d`, which was named after the wrong session), and a pack stored from one of them is given
+   the new seed's rules as a NEW version at start
    (audited `pack.seed_upgrade`), keeping the owner's token maps and the governance sources' places, taking the seed's
    source names and pinned sections, and adding to each attachment the template roles the new rules need. It waits for
    the owner's approval like any other version.

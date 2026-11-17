@@ -107,6 +107,12 @@ export interface RailContext {
   readonly descendants?: (resourceId: string) => number | null;
   /** A page's name, for the reason (null when not known). */
   readonly pageName?: (resourceId: string) => string | null;
+  /**
+   * The request places a staged image (set by bridge code only, never from an agent's input: `BatchSubmit.stagedPlacement`).
+   * Moving the staged asset out of the staging folder is the placement itself, not a reorganisation of the library, so
+   * the asset rail does not count its `updateAsset` (an asset delete still counts).
+   */
+  readonly stagedPlacement?: boolean;
 }
 
 export interface RailHit {
@@ -280,7 +286,7 @@ export function railsVerdict(
     for (const it of items) {
       if (!writes(it)) continue;
       if (it.opId === 'deleteAsset') deletes++;
-      if (it.opId === 'updateAsset') {
+      if (it.opId === 'updateAsset' && ctx.stagedPlacement !== true) {
         const body = isObj(it.params.body) ? it.params.body : {};
         if (body.folderId !== undefined || it.options.bindFrom?.to === 'body.folderId') moves++;
       }

@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased: v3 F3.4 (17 November 2026): write scope: the Review page, Revert, safety rails, pack tool switches
+
+[ADR 0055](adr/0055-write-scope-review-revert-rails.md) (Proposed). Migration `3200_write_scope.sql`. Nothing was run
+against a live system: mocks and fixtures only; the new rehearsal script was run only as a dry run against the mock.
+
+- **Review** (a new page at the top of the sidebar, with a badge): every job an agent ran directly at scope `write`,
+  newest first, with the agent, the tool, the summary a proposal would have shown, the pages touched and the same diff;
+  **Mark reviewed** and **Mark all reviewed** (confirmed with the count). Approved proposals and pack packages are not
+  listed. The Overview page shows the unreviewed count.
+- **Revert** (Review page and Jobs page; re-authenticated; audited `job.revert`): one job, run by the system at P1, puts
+  back what a finished direct-write job changed: page text block by block, sidebar facts and links, chronology rows and
+  their events in step, names, tags, aliases and moves, image placements (back to staging, hidden; an asset is never
+  deleted), and the page's previous Last Major Revision when the job changed it. Only what has not changed since; all
+  or nothing unless you confirm a partial revert. Never a deletion (`restore_resource`), a proposal, a running job or a
+  revert.
+- **Safety rails per profile** (Clients & Access, "Always propose"; re-authenticated; audited `profile.set_rails`): even
+  at scope `write`, deletes (on), bulk changes over N pages (on, N = 10), renames and moves of pages (off) and asset
+  deletes and moves (on) become proposals that say why (`proposed because: bulk change (14 pages > 10)`). The rails only
+  add proposals; canon and lifecycle stay proposals whatever they say.
+- **Pack tool switches** (Packs page; a new version, approved as usual): `arkona_create_character`, `_owner` and
+  `_relationship` always propose; `arkona_add_character_art` follows the agent's scope. The seed
+  `arkona-2026-11-17-f3-4` supersedes F3.3's mislabelled `arkona-2026-11-17-f3d`.
+- **A direct `updateBlock` is measured for Last Major Revision**: read first (one read) when the page has the row and the
+  mode is `auto`, so a typo fix at scope `write` is minor.
+- **Write scope audited tool by tool** (ADR 0055's table). Fixed: `updateAsset` keeps a pre-image (one more read); a
+  chronology date edit that re-makes its event is not a "delete" for the rail and is revertible; placing a staged image
+  is not an "asset move" for the rail.
+- **The write-scope rehearsal**: `sudo -u lkbridge /opt/lk-bridge/app/deploy/rehearse-write-scope.sh --project test`
+  (`npm run rehearse:write-scope -- --project test`), documented in docs/runbook-deploy.md.
+- **The bridge guide** has an "At write scope" section for agents: what is made at once, what is still a proposal and
+  why, and that the owner reviews afterwards.
+- **CI** (the owner is near the GitHub Actions minutes cap): runs only on pull requests to `main` (not for changes to
+  `docs/` or Markdown alone) and by hand, no longer on a push to `main`; a newer push cancels the older run; the job
+  stops after 30 minutes; Playwright's browsers are cached by version.
+- **In the morning**: merge F3c and F3.4 (whichever finished first goes first; the other merges `main` in), deploy once;
+  approve the new pack version on the Packs page; run the rehearsal on the test world (every step should PASS); check the
+  rails on Clients & Access, then raise each agent's profile to `write` (the test world first, then Arkona); look at the
+  Review page as you go.
+
 ## Unreleased: v3 F3d (17 November 2026): the lifecycle tag leads on Arkona, AU in the lifecycle, owner routing lines
 
 [ADR 0053](adr/0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md) (Proposed). No migration. Nothing was

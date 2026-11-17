@@ -214,6 +214,18 @@ export const SECTION_ALIASES: Readonly<Record<string, Readonly<Record<string, re
       'Know what happened to a proposal or job',
     ],
     'Canon and approval': ['canon', 'approval'],
+    // v3 F3.4 (ADR 0055): what scope write makes at once and what it still proposes.
+    'At write scope': [
+      'write scope',
+      'scope write',
+      'safety rails',
+      'rails',
+      'proposedBecause',
+      'proposed because',
+      'bulk change',
+      'review',
+      'revert',
+    ],
     'When the low-level tools are right': [
       'Do something none of the above does',
       'low-level tools',

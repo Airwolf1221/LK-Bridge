@@ -1052,6 +1052,9 @@ export class ImageService {
       origin: p.origin,
       title: summary.slice(0, 300),
       internal: true,
+      // v3 F3.4 (ADR 0055): a placement, so the safety rails do not count the move out of the staging folder as an
+      // asset move (an image a revert put back in the staging folder is placed this way too).
+      stagedPlacement: true,
       proposal: {
         summary,
         operations: [

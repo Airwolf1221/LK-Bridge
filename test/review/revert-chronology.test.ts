@@ -151,3 +151,30 @@ describe('Revert of a chronology change', () => {
     rt().policy.commands.setRails('owner', profileId, { deletes: true });
   });
 });
+
+describe('operation_id at scope write (ADR 0055 decision F)', () => {
+  it('a delete the rail made a proposal is the same proposal when the request is sent again', async () => {
+    const made = await call('create_timeline_event', {
+      date: 'Kumikas 6th, 4A 881',
+      name: 'Lanterns lit',
+      description: 'The lanterns of Ashgate are lit',
+    });
+    expect(made.body.status, made.text).toBe('written');
+    await waitJob(jobOf(made));
+    const ask = () =>
+      call('delete_timeline_event', {
+        event: { date: 'Kumikas 6th, 4A 881', description: 'The lanterns of Ashgate are lit' },
+        confirm: true,
+        operation_id: 'rail-repeat-1',
+      });
+    const first = await ask();
+    expect(first.body.status, first.text).toBe('proposal_captured');
+    expect(first.body.proposedBecause).toMatch(/^proposed because: deletes? \(/);
+    const again = await ask();
+    expect(again.body).toMatchObject({ repeated: true, proposalId: first.body.proposalId });
+    expect(rt().policy.proposals.list({ project: PROJECT, state: 'pending' }).map((p) => p.id)).toEqual([
+      first.body.proposalId,
+    ]);
+    rt().policy.commands.reject('owner', String(first.body.proposalId), 'test');
+  });
+});

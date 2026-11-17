@@ -57,7 +57,9 @@ export interface PolicyContext {
   readonly staging?: boolean;
   /**
    * v3 F2 (ADR 0049 decision 10): a batch that places an image staged on the bridge's server (it uploads it into its
-   * final folder). Set by the engine from bridge code only (`BatchSubmit.stagedPlacement`).
+   * final folder). Set by the engine from bridge code only (`BatchSubmit.stagedPlacement`). v3 F3.4 (ADR 0055): also a
+   * batch that places an image staged in the project's staging folder in LegendKeeper (a move out of it), which the
+   * safety rails do not count as an asset move.
    */
   readonly stagedPlacement?: boolean;
 }
@@ -97,7 +99,7 @@ export interface PolicyGate {
   rails?(
     principal: Principal,
     items: readonly RailRequestItem[],
-    ctx: { readonly project: string; readonly jobKind: JobKind },
+    ctx: { readonly project: string; readonly jobKind: JobKind; readonly stagedPlacement?: boolean },
   ): RailDecision | null | Promise<RailDecision | null>;
 }
 

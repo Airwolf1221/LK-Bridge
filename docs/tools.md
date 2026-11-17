@@ -35,6 +35,12 @@ A refused `project` argument (below) carries the default project's footer, since
 - **Handles for big results.** A result over `MCP_RESULT_MAX_CHARS` (default 40,000 characters, far below Claude Code's 25,000-token cut-off) is stored as a job artefact (a succeeded one-step job) and comes back as `{ "status": "stored", "handle": "art_…", "preview": … }`. Page it with `bridge_result_page`.
 - **Typed errors.** A failure is `{ "error": { "code", "message", … } }` with `isError: true`. Codes include `WRONG_TOOL_FOR_OPERATION`, `UNKNOWN_OPERATION`, `INVALID_PARAMS`, `VERSION_CONFLICT` (with `currentVersion`), `UNSUPPORTED_BLOCK_LOSS` (with `blockIds`), `CASCADE_CONFIRM_REQUIRED`, `READ_ONLY`, `MEMBER_ADMIN_DISABLED`, `POLICY_DENIED`, `BUDGET_EXHAUSTED` (with `retryAt`), `LK_ERROR` (with `lkCode`, `status`, `requestId`), the project codes `UNKNOWN_PROJECT`, `PROJECT_REQUIRED` and `PROJECT_UNAVAILABLE` (each with `registered`, the project names), and the upload codes below.
 - **Not errors:** `queued`, `waiting_budget` and `proposal_captured` mean the write is accepted or waiting. Never retry it; follow it with `bridge_job_status`.
+- **At scope `write` (v3 F3.4, [ADR 0055](adr/0055-write-scope-review-revert-rails.md)).** Ordinary writes run at once and
+  the owner reviews them afterwards (the dashboard's Review page, with Revert). A write the profile's **safety rails**
+  keep for approval (by default: deletes, a job touching more than 10 pages, asset deletes and moves) comes back
+  `proposal_captured` with `proposedBecause` (`"proposed because: bulk change (14 pages > 10)"`) and a hint not to retry
+  it or route round it; canon and lifecycle changes, `restore_snapshot` and (by default) a setting pack's packages stay
+  proposals whatever the scope. The full table, tool by tool: ADR 0055, decision F.
 
 ## How the tools are described (v2 E3)
 
@@ -385,6 +391,11 @@ a major revision, measured when it runs)`. A raw `updateBlock` keeps no pre-imag
 - **Never blocks the edit.** If the date cannot be written after the content was, the job still succeeds and records a
   follow-up (`followUps: [{ kind: "lmr_failed", … }]` in its result, and an error row); the content stays written.
 - It applies to every agent and to the dashboard's own fixes, at any scope. It is not a canon-protected fact.
+
+**A direct `updateBlock` (v3 F3.4, ADR 0055 decision E).** At scope `write` an `updateBlock` that carries its own
+If-Match made no read, so the rule had no "before" and counted it a major revision. When the page has a Last Major
+Revision row and the mode is `auto`, the block is now read first (one read; it is also the write's journal pre-image),
+so a typo fix is measured as minor.
 
 ## Writing pages: `write_page` (v2 C1)
 
@@ -1187,9 +1198,13 @@ changed page (or rules edited since) stops the pack's tools until the owner appr
 
 A pack's tools carry its prefix (`arkona_`) and are listed only while the pack is attached to a project the bridge
 serves (the list changes at the next `tools/list` when that changes); called for any other project they answer
-`PACK_NOT_ATTACHED` with the projects they work on. Every call is **one proposal** for the owner, whatever the
-connection's scope, while the pack's `alwaysPropose` setting is on (its first weeks; the Arkona seed has it on); a
-package that makes canon is a canonical proposal ("Approve and accept as canon").
+`PACK_NOT_ATTACHED` with the projects they work on. Each writing tool has a switch in the pack's data (v3 F3.4,
+[ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision D), set on the Packs page: **always propose** (every
+call is **one proposal** for the owner, whatever the connection's scope) or **follow the scope** (at scope `write` it
+runs, and the owner reviews it afterwards). The seed's defaults: `arkona_create_character`, `arkona_create_owner` and
+`arkona_create_relationship` always propose; `arkona_add_character_art` follows the scope. A tool with no switch keeps
+the pack's `alwaysPropose`. A package that makes canon is a canonical proposal ("Approve and accept as canon") either
+way.
 
 **`arkona_create_character`** `{ name, depth?, status?, identity, pages, index?, target?, upgradeToCore?, lastMajorRevision?, dryRun?, preview?, operation_id?, project }`:
 a whole character from one package, by Arkona's Character Architecture, Source Formatting and Controlled Native

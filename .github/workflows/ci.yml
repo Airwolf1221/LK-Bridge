@@ -1,13 +1,21 @@
 name: CI
+# v3 F3.4: CI runs on pull requests to main (not for documentation-only changes), and by hand. Not on a push to main:
+# the pull request's run already tested the merge result, and every session runs the full checks locally.
 on:
-  push:
-    branches: [main]
   pull_request:
+    branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
+  workflow_dispatch:
+# A newer push to the same pull request cancels the run still going for the older one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # v2 E4 (backlog 7): exactly the server's Node (deploy/install-node.sh pins v24.22.2; PLAN section 3.1), from .nvmrc,
@@ -30,8 +38,26 @@ jobs:
         run: npx vitest run test/tools/spike-v2-dryrun.test.ts test/tools/spike-wrapper.test.ts
       - name: Unit and contract tests (sandbox tests are opt-in and never run here)
         run: npm test
+      # v3 F3.4: Playwright's browsers are cached, keyed on the Playwright version, so Chromium is not downloaded on every
+      # run; the system libraries it needs are installed either way.
+      - name: Playwright version (the browser cache's key)
+        id: playwright
+        run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright's browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      - name: Install Chromium (downloaded only when the cache missed)
+        run: |
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
       # v3 F3c (ADR 0051 decision 4): the one browser test made stable (5 of 5 fresh runs): a canon proposal, made by
       # promote_page, approved only with "Approve and accept as canon". The rest of the browser suite stays manual.
       - name: Browser test of canon approval (mock LegendKeeper)
-        run: npx playwright install --with-deps chromium && npm run test:e2e -- -g "v2 C2a" --trace off
+        run: npm run test:e2e -- -g "v2 C2a" --trace off
       - run: npm run build

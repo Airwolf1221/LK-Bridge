@@ -56,6 +56,38 @@ describe('Revert of an image placement', () => {
     expect(rt.images.listStaged(PROJECT).some((x) => x.id === stagedId)).toBe(true);
   });
 
+  it('an agent with the default rails places it again directly: a placement is not an asset move (ADR 0055 F)', async () => {
+    w = await imagesWorld();
+    const { stagedId, assetId, jobId } = await placeOne(w);
+    const rt = w.stack.runtime;
+    await rt.engine.wait(PROJECT, jobId, 25_000);
+    const r = await rt.reverts.revert('owner', PROJECT, jobId);
+    if (r.status !== 'submitted') throw new Error(JSON.stringify(r));
+    await rt.engine.wait(PROJECT, r.revertJobId, 25_000);
+    // A profile as the owner will raise it: scope write, the default rails (asset deletes and moves proposed).
+    const t = w.stack.newToken('image-agent-default-rails', 'write');
+    const agent = await w.stack.connect(t.token);
+    const again = await w.stack.call(agent, 'upload_image', {
+      project: 'test',
+      staged_id: stagedId,
+      name: 'Miyabi at the shrine.png',
+    });
+    expect(again.body.status, again.text).toBe('placed');
+    expect(again.body.proposedBecause).toBeUndefined();
+    const row = rt.images.staged(PROJECT, stagedId)!;
+    await rt.engine.wait(PROJECT, row.placementJobId!, 25_000);
+    expect(w.assets.assets.get(assetId)).toMatchObject({ isHidden: false });
+    expect(w.assets.assets.get(assetId)!.folderId).not.toBe(w.assets.at('LK-Bridge staging'));
+    // An asset move that is not a placement is still proposed by the rail.
+    const move = await w.stack.call(agent, 'lk_api_write', {
+      project: 'test',
+      operationId: 'updateAsset',
+      params: { path: { assetId }, body: { folderId: null } },
+    });
+    expect(move.body.status, move.text).toBe('proposal_captured');
+    expect(move.body.proposedBecause).toBe('proposed because: asset move (to another folder)');
+  });
+
   it('an asset moved since the placement is not touched', async () => {
     w = await imagesWorld();
     const { assetId, jobId } = await placeOne(w);

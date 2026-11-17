@@ -209,6 +209,20 @@ describe('asset deletes and moves (on by default)', () => {
     ).toBeNull();
   });
 
+  it('placing a staged image (bridge code marks the request) is not an asset move; a delete in it still counts', () => {
+    const on = { ...ALL_OFF, assets: true };
+    const place = w(
+      'updateAsset',
+      { path: { assetId: 'a' }, body: { isHidden: false } },
+      { bindFrom: { step: 1, to: 'body.folderId' } },
+    );
+    expect(railsVerdict(on, [place], { stagedPlacement: true })).toBeNull();
+    expect(railsVerdict(on, [place])?.reason).toBe('proposed because: asset move (to another folder)');
+    expect(
+      railsVerdict(on, [place, w('deleteAsset', { path: { assetId: 'b' } })], { stagedPlacement: true })?.reason,
+    ).toBe('proposed because: asset delete');
+  });
+
   it('several rails at once are all named', () => {
     const v = railsVerdict(DEFAULT_WRITE_RAILS, [w('deleteAsset', { path: { assetId: 'a' } })]);
     expect(v?.reason).toBe('proposed because: delete (1 asset); asset delete');

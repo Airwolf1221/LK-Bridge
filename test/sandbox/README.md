@@ -63,6 +63,17 @@ that it deletes at the end, and reports the time taken, writes per minute, 429 r
 waits and peak memory. Same guard as above. Code: `soak.ts`; dry run against the mock: `test/tools/soak-dryrun.test.ts`.
 How to run it, and why it takes about 20 minutes: docs/runbook-deploy.md, "Soak test".
 
+## The write-scope rehearsal (v3 F3.4)
+
+`npm run rehearse:write-scope -- --project <name>` (on the server: `deploy/rehearse-write-scope.sh --project test`)
+rehearses scope `write` before an agent's profile is raised to it (ADR 0055 decision G): as a temporary write-scoped
+agent it edits a sentence, changes a fact, fixes a throwaway chronology event and places a staged image (each a direct
+write), checks that a pack package is still a proposal, reverts the four and reads each target back, and checks that a
+delete and an 11-page batch become proposals under the default rails; then it cleans up. Same guard as the soak. Its
+temporary database starts as a read-only copy of the project's settings, repository tree and packs from the bridge's
+database (`copyBridgeState`). Code: `write-scope.ts`, `scripts/rehearse-write-scope.ts`; dry run against the mock:
+`test/review/rehearsal-dryrun.test.ts`. How to run it: docs/runbook-deploy.md, "Write-scope rehearsal".
+
 ## The v2 phase 0 spike
 
 `npm run spike:v2 -- --project <name>` (on the server: `deploy/spike-v2.sh --project test`) is a read-mostly script that checks ten

@@ -65,6 +65,7 @@ Afterwards: [updating](#updating), [updating the env file](#updating-the-env-fil
 
 The scripts, all in `deploy/`: `install-node.sh`, `deploy.sh`, `backup.sh`, `restore.sh` (chunk 8), `healthcheck.sh`,
 `lk-run.sh` (runs a command with the private Node and `DB_PATH` set), `sandbox-test.sh`, `soak-sandbox.sh` (chunk 8), `spike-v2.sh` (v2 phase 0),
+`rehearse-write-scope.sh` (v3 F3.4),
 `migrate-to-build-user.sh` (v1.0.1, once), `env-sync.sh` with `env-sync.mjs` (OPS1: keeps the env file in step with
 `env.template`), plus `lib.sh` (shared helpers) and the files the steps install: `lk-bridge.service`,
 `lk-bridge-backup.service`, `lk-bridge-backup.timer`, `Caddyfile.lk-bridge`, `sudoers.lk-bridge`, `env.template`.
@@ -807,6 +808,49 @@ test on`); the soak refuses any other, and any key whose own project (from `list
   `LKB_ENV_FILE=<env file>` in place of the key to find it as the bridge does (from a
   checkout with dependencies installed and a database that has the project marked as a sandbox; never on a shared
   screen).
+
+## Write-scope rehearsal ✋
+
+v3 F3.4 ([ADR 0055](adr/0055-write-scope-review-revert-rails.md) decision G). Before an agent's profile is raised from
+`propose` to `write`, rehearse write scope on the **test world**: as a temporary write-scoped agent the script makes the
+four kinds of direct write the agents will make, checks that a pack package is still a proposal, reverts the four writes
+as you would from the Review page and reads each target back, and checks that a delete and an 11-page batch become
+proposals under the default safety rails. Then it cleans up. Run it after deploying F3.4 and approving the new pack
+version on the Packs page. It makes roughly 150 to 250 LegendKeeper requests (about 30 of them writes) and takes a few
+minutes.
+
+🔒 sudo (as `lkbridge`)
+
+```bash
+sudo -u lkbridge /opt/lk-bridge/app/deploy/rehearse-write-scope.sh --project test
+```
+
+- `--project` names a project marked as a sandbox, as for the soak (step 12); it **refuses** any other, and any key whose
+  own project is not that project's stored id. The key is found as for step 12 (the encrypted store first, the env
+  file's key only when nothing is stored); the wrapper exports only `DB_PATH` and the env file's path, and nothing prints
+  a key. It shares the project's rate budget with the bridge: run it while the test world is quiet.
+- **Its own temporary database**, which starts as a **read-only copy** of the project's settings (the AI REPOSITORY, the
+  confirmed chronology, the lifecycle indexes), its stored repository tree and its packs from `bridge.db`; nothing is
+  ever written to `bridge.db`, no other project is read, and the service need not be stopped. The two temporary
+  principals (the agent, with the default rails; a helper with the rails off that only makes and removes the throwaway
+  chronology event) exist in that temporary database only.
+- **The steps**, each PASS, FAIL, NOTED, INCONCLUSIVE or SKIPPED with its cost: setup (a throwaway page
+  `lk-bridge write-scope <time>` at the top of the AI REPOSITORY with a page of three paragraphs and a PROPERTIES sidebar,
+  a page to delete, and a throwaway chronology event dated like the first dated row of the first age); **1** one sentence
+  edited (`write_page`); **2** one fact changed (`set_facts`); **3** the chronology event fixed (`update_timeline_event`,
+  its row and event in step); **4** a staged image placed (`upload_image`); **5** a pack package still a proposal (the
+  approved version's switches, and a package-shaped job captured as a proposal and rejected: a real package needs the
+  pack's governance pages, which are in the Arkona project, which the rehearsal never reads; NOTED if the new pack
+  version is not approved yet); **review** the four on the Review queue; **R1 to R4** each reverted and read back as it
+  was; **rail-delete** and **rail-bulk** a delete and an 11-page batch proposed by the default rails (then rejected);
+  **cleanup**.
+- **Clean-up**: the chronology event is deleted, the throwaway page with everything under it (cascade), and the image's
+  two asset folders (`lk-bridge write-scope <time>` and `lk-bridge write-scope <time> staging`) with the image in them. If
+  anything cannot be removed the report says what, to delete by hand in LegendKeeper, and the exit code is 1.
+- Exit code: 0 when no step failed (NOTED and SKIPPED are not failures), 1 when one did, 2 when it refused to run.
+- Without the wrapper: `DB_PATH=… LK_PROJECT_TEST_API_KEY=… npm run rehearse:write-scope -- --project test` (from a
+  checkout with dependencies installed and a database that has the project marked as a sandbox; never on a shared
+  screen). It was dry-run against the mock only (test/review/rehearsal-dryrun.test.ts), never against LegendKeeper.
 
 ## v2 phase 0 spike ✋
 

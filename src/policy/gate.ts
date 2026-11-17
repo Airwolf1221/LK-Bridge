@@ -179,7 +179,7 @@ export class LivePolicyGate implements PolicyGate {
   rails(
     principal: Principal,
     items: readonly RailRequestItem[],
-    ctx: { readonly project: string; readonly jobKind: JobKind },
+    ctx: { readonly project: string; readonly jobKind: JobKind; readonly stagedPlacement?: boolean },
   ): RailDecision | null {
     if (principal.principalId === SYSTEM_PRINCIPAL_ID) return null;
     const r = this.resolve(principal.principalId);
@@ -188,6 +188,7 @@ export class LivePolicyGate implements PolicyGate {
     return railsVerdict(r.rails, items, {
       ...(l.descendants ? { descendants: (id: string) => l.descendants!(ctx.project, id) } : {}),
       ...(l.pageName ? { pageName: (id: string) => l.pageName!(ctx.project, id) } : {}),
+      ...(ctx.stagedPlacement === true ? { stagedPlacement: true } : {}),
     });
   }
 }
