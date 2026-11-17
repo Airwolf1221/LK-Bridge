@@ -10,7 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ARKONA_PACK } from '../../src/packs/arkona.js';
 import { packToolMode } from '../../src/packs/types.js';
 import { PROJECT } from '../tools/helpers.js';
-import { compactPackage, packWorld, type PackWorld } from './world.js';
+import { approve, compactPackage, packWorld, type PackWorld } from './world.js';
 import { fixture } from '../images/world.js';
 
 describe('the seed (arkona-2026-11-17-f3-4)', () => {
@@ -108,10 +108,14 @@ describe('the runner at scope write', () => {
     w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
   });
 
-  it('a creation tool (always propose) is a proposal at write scope', async () => {
+  it('a creation tool (always propose) is a proposal at write scope; approved, it never reaches the Review page', async () => {
     const r = await w.call('arkona_create_character', compactPackage({ name: 'Asagiri Hiro' }));
     expect(r.body.status, r.text).toBe('proposal_captured');
-    w.stack.runtime.policy.commands.reject('owner', String(r.body.proposalId), 'test');
+    const done = await approve(w, String(r.body.proposalId));
+    expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
+    // ADR 0055 decision A: the owner saw the package before it happened.
+    const listed = w.stack.runtime.review.list(PROJECT, { state: 'all', limit: 500 }).map((i) => i.jobId);
+    expect(listed).not.toContain(done.jobId);
   });
 
   it('adding art (follows the scope) runs directly at write scope: a job, no proposal', async () => {
@@ -133,6 +137,11 @@ describe('the runner at scope write', () => {
     const job = await w.stack.runtime.engine.wait(PROJECT, String(r.body.jobId), 30_000);
     expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
     expect(job.approvedBy).toBeNull();
+    // A direct write: on the Review page for the owner to look at afterwards.
+    const listed = w.stack.runtime.review
+      .list(PROJECT, { state: 'unreviewed', limit: 500 })
+      .map((i) => i.jobId);
+    expect(listed).toContain(job.id);
   });
 
   it('switched to "follow the scope" and approved, a creation tool runs directly too', async () => {
