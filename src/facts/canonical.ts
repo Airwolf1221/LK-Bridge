@@ -18,6 +18,7 @@
  *   it if the row changed since the entry check read it.
  */
 import { isCanonicalApproval } from '../policy/approval.js';
+import { isBlockIdSweepRequest } from '../blockids/guard.js';
 import { CanonicalApprovalRequiredError, LkOperationError, type JobEngine } from '../jobs/index.js';
 import type {
   WriteGuard,
@@ -363,6 +364,10 @@ export class CanonicalGuard implements WriteGuard {
   }
 
   async entry(input: WriteGuardEntry): Promise<WriteGuardVerdict> {
+    // v3 F3.5 (ADR 0056 decision 6): the block-id sweep's own jobs (system principal, maintenance origin, nothing but
+    // assignBlockIds and the bridge's checks) change no content, so they pass on Authoritative pages. Narrow and
+    // explicit: anything else, an agent's assignBlockIds through lk_api_write included, is judged below as before.
+    if (isBlockIdSweepRequest(input)) return { decision: 'allow' };
     const rules = this.rules(input.project);
     if (rules.length === 0) return { decision: 'allow' };
     const guarded = input.items

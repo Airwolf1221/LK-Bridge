@@ -72,34 +72,62 @@ export interface BuiltinJobDeps {
   readonly snapshots?: SnapshotMaintenance;
   /** v2 E2: the audits. Without them the job skips, saying why. */
   readonly audits?: AuditMaintenance;
+  /** v3 F3.5 (ADR 0056): the block-id sweep. Without it the job skips, saying why. */
+  readonly blockIds?: BlockIdMaintenance;
+}
+
+/** v3 F3.5 (ADR 0056): what the block-id sweep job needs from src/blockids. */
+export interface BlockIdMaintenance {
+  run(projectId: string): Promise<MaintenanceResult>;
+  /** Why the job cannot be enabled (no sandbox PASS for this version and no override), or null. */
+  canEnable(): string | null;
+  /** The owner enabled the job (a standing stop is acknowledged). */
+  enabled(): void;
+}
+
+/**
+ * v3 F3.5 (ADR 0056): `assign-block-ids-sweep`. Off by default; it cannot be enabled without the sandbox check's PASS
+ * for this bridge version or the owner's override. Nightly at 05:30 London, after the night's full snapshot (00:30) and
+ * the checks that follow it, so its candidates come from that snapshot. It writes, so read-only mode, a writes pause and
+ * draining skip it (the scheduler's rule).
+ */
+function blockIdSweepJob(b: BlockIdMaintenance | undefined): MaintenanceJobDef {
+  return {
+    id: 'assign-block-ids-sweep',
+    name: 'Assign block IDs sweep',
+    description:
+      'Gives legacy page documents (a block without an id, or an id used twice) block ids, one assignBlockIds call per ' +
+      'document, at most N documents a run at the lowest priority, each document its own job under the page lock, ' +
+      'checked inside the lock and verified afterwards against its journalled pre-image. Candidates come from the latest ' +
+      'snapshot. Off by default: it needs the sandbox check’s PASS for this bridge version, or the owner’s override. ' +
+      'The approved-automation statement is on the card below.',
+    defaultSchedule: { kind: 'daily', time: '05:30' },
+    defaultEnabled: false,
+    implemented: true,
+    writes: true,
+    usesLk: true,
+    record: 'always',
+    scope: 'project',
+    background: true,
+    canEnable: () => (b ? b.canEnable() : 'The block-id sweep is not running on this bridge.'),
+    onEnabled: () => b?.enabled(),
+    run: (ctx) =>
+      b && ctx.project
+        ? b.run(ctx.project.id)
+        : { skipped: true, summary: 'Skipped: the block-id sweep is not running.' },
+  };
 }
 
 const NO_SNAPSHOTS: MaintenanceResult = { skipped: true, summary: 'Skipped: snapshots are not running.' };
 
 const NOT_IMPLEMENTED = 'Not implemented yet';
 
-const placeholder = (
-  id: string,
-  name: string,
-  description: string,
-  writes: boolean,
-  everySeconds = 86_400,
-): MaintenanceJobDef => ({
-  id,
-  name,
-  description,
-  defaultSchedule: { kind: 'interval', everySeconds },
-  defaultEnabled: false,
-  implemented: false,
-  writes,
-  usesLk: true,
-  record: 'always',
-  // These touch LegendKeeper and one project's data: once per served project (v2 A1).
-  scope: 'project',
-});
-
-/** Ids of the placeholders, for tests and docs. (v2 A2: `tree-snapshot` became `tree-sweep` and `tree-check`.) */
-export const PLACEHOLDER_IDS = ['assign-block-ids-sweep'] as const;
+/**
+ * Ids of the placeholders, for tests and docs. (v2 A2: `tree-snapshot` became `tree-sweep` and `tree-check`; v3 F3.5,
+ * ADR 0056: `assign-block-ids-sweep`, the last one, became the block-id sweep.) The framework still takes a placeholder
+ * (`implemented: false`): it cannot be enabled, run or rescheduled.
+ */
+export const PLACEHOLDER_IDS: readonly string[] = [];
 
 const NO_TREE: MaintenanceResult = { skipped: true, summary: 'Skipped: the repository tree is not running.' };
 
@@ -271,12 +299,8 @@ export function builtinJobs(d: BuiltinJobDeps): MaintenanceJobDef[] {
       background: true, // a full pass takes minutes: the sampler and the expiry sweep must not wait for it
       run: (ctx) => (d.tree && ctx.project ? d.tree.check(ctx.project.id, ctx.trigger) : NO_TREE),
     },
-    placeholder(
-      'assign-block-ids-sweep',
-      'Assign block IDs sweep',
-      'Will give legacy documents addressable block ids (assignBlockIds), a page at a time within the P3 budget.',
-      true,
-    ),
+    // v3 F3.5 (ADR 0056): the block-id sweep, an approved narrow automation (kept where the placeholder was).
+    blockIdSweepJob(d.blockIds),
     // v2 A4: the asset tree's refresh and check (kept after the placeholders so earlier positions do not move).
     ...assetJobs(d.assets),
     // v2 C2c (ADR 0035): the link index's sweep, for the related-pages report of archive_page and move_to_working.

@@ -5,7 +5,7 @@
  * proposal then shows the event and the three rows nearest it by date, never that row. The safe behaviour kept here:
  * the proposal (and the tool's dry run) list every unpaired row whose date cannot be read, so the owner sees the rows
  * the bridge cannot rule out before approving. (Whether such a row should block the delete is an owner decision:
- * ADR 0056 decision 2.)
+ * ADR 0057 decision 2.)
  */
 import type { Client } from '@modelcontextprotocol/client';
 import { afterAll, beforeAll, expect, it } from 'vitest';

@@ -47,7 +47,7 @@ function probe(over: Partial<MaintenanceJobDef> = {}) {
 }
 
 describe('the registry', () => {
-  it('lists the implemented jobs and the one placeholder, with schedule, last run and next run', async () => {
+  it('lists the jobs (v3 F3.5: no placeholder left), with schedule, last run and next run', async () => {
     m = await maintenanceRig();
     const jobs = m.maintenance.scheduler.list();
     expect(jobs.map((j) => j.id)).toEqual([
@@ -115,14 +115,16 @@ describe('the registry', () => {
       scope: 'project',
       scheduleText: 'Daily at 02:50 (London time)',
     });
-    for (const id of ['assign-block-ids-sweep']) {
-      expect(view(id)).toMatchObject({
-        implemented: false,
-        enabled: false,
-        nextRunAt: null,
-        note: 'Not implemented yet',
-      });
-    }
+    // v3 F3.5 (ADR 0056): the block-id sweep, implemented, off by default, nightly after the snapshot; it writes.
+    expect(view('assign-block-ids-sweep')).toMatchObject({
+      implemented: true,
+      enabled: false,
+      writes: true,
+      scope: 'project',
+      scheduleText: 'Daily at 05:30 (London time)',
+      nextRunAt: null,
+      note: null,
+    });
     // v2 E2: the audits (they read the snapshots only; off here because one runs after each full snapshot).
     expect(view('audit-run')).toMatchObject({
       implemented: true,
@@ -477,10 +479,23 @@ describe('run now', () => {
 });
 
 describe('placeholders', () => {
-  const placeholders = ['assign-block-ids-sweep'];
+  // v3 F3.5: the last built-in placeholder became the block-id sweep; the framework still takes one (a test job).
+  const PLACEHOLDER: MaintenanceJobDef = {
+    id: 'test-placeholder',
+    name: 'Test placeholder',
+    description: 'a placeholder',
+    defaultSchedule: { kind: 'interval', everySeconds: 86_400 },
+    defaultEnabled: false,
+    implemented: false,
+    writes: true,
+    usesLk: true,
+    record: 'always',
+    scope: 'project',
+  };
+  const placeholders = [PLACEHOLDER.id];
 
   it('cannot be enabled, run or rescheduled, and say so', async () => {
-    m = await maintenanceRig();
+    m = await maintenanceRig({ extraJobs: [PLACEHOLDER] });
     const c = m.maintenance.commands;
     for (const id of placeholders) {
       expect(() => c.enable('owner', id), id).toThrow('Not implemented yet');
@@ -498,13 +513,13 @@ describe('placeholders', () => {
   });
 
   it('disabling a placeholder is harmless, and an enabled flag found in the database is cleared at start', async () => {
-    m = await maintenanceRig();
+    m = await maintenanceRig({ extraJobs: [PLACEHOLDER] });
     m.rig.db
-      .prepare("UPDATE maintenance_jobs SET enabled = 1, next_run_at = 1 WHERE id = 'assign-block-ids-sweep'")
+      .prepare("UPDATE maintenance_jobs SET enabled = 1, next_run_at = 1 WHERE id = 'test-placeholder'")
       .run();
     await m.maintenance.stop();
     m.mount();
-    expect(view('assign-block-ids-sweep')).toMatchObject({ enabled: false, nextRunAt: null });
+    expect(view('test-placeholder')).toMatchObject({ enabled: false, nextRunAt: null });
   });
 
   it('unknown ids are not found', async () => {

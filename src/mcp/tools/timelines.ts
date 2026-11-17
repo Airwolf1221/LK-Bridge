@@ -2090,7 +2090,7 @@ function syncTimelineEventTool(deps: ToolDeps): McpToolProvider {
             // v3 F2.1: a link is a bridge-side record with no LegendKeeper write; it changes what the check pairs,
             // repairs and offers to delete, so it is a proposal, and done it answers `linked`. CR-2026-11-R2 (R2-08): at
             // every scope: at scope write its job holds only the bridge's own steps, which the Review page (ADR 0055
-            // decision A) never lists, so a direct link was one change the owner never saw (ADR 0056 decision 3).
+            // decision A) never lists, so a direct link was one change the owner never saw (ADR 0057 decision 3).
             ...(plan.action === 'link' ? { writtenStatus: 'linked', forceProposal: true } : {}),
           });
         });

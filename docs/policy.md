@@ -475,7 +475,7 @@ staging`) and deleting the placed asset is one proposal for the owner.
 ## The second review's changes (CR-2026-11-R2)
 
 What changed in the guards, the rails and Revert after [CR-2026-11-R2](reviews/CR-2026-11-R2.md) (owner decisions in
-[ADR 0056](adr/0056-cr-2026-11-r2-owner-decisions.md)):
+[ADR 0057](adr/0057-cr-2026-11-r2-owner-decisions.md)):
 
 - **Restores** are judged on every page they may bring back (LegendKeeper restores every page deleted by the same
   delete): from the bridge's journal of its own delete, the snapshots and the tree, at entry and inside the lock. A page
@@ -484,7 +484,7 @@ What changed in the guards, the rails and Revert after [CR-2026-11-R2](reviews/C
 - **No lifecycle marker declares a lifecycle index**: a page given `[INDEX] Working` or `[INDEX] Archived`'s name is
   refused whatever tool asks, setting-pack packages included; every template copy is judged inside the lock (R2-11).
 - **A rename that drops `[BSRC]`** is a canonical proposal, as a rename into it is (R2-12; a rename that keeps it is ADR
-  0056 decision 5).
+  0057 decision 5).
 - **Template copies take the template's tags** (and a page saved as a template its page's): they are judged as a
   create's tags, at entry and in the lock; a copy whose template's tags cannot be read is refused (R2-13).
 - **Where a page lands is judged inside the lock**, on its parent as LegendKeeper holds it now: a `[BWRK]`, `[BARC]` or

@@ -190,7 +190,7 @@ pairing now settles every tie it safely can, and the owner settles the rest on t
   row–event link (`pairedBy: "chosen by the caller"`) and answers `linked`. It is a bridge-side record with no
   LegendKeeper write, audited as a chronology change, and a proposal (summary `link row … to event …`) at every scope
   because it changes what the check reports (CR-2026-11-R2, R2-08: at scope `write` a direct link was never on the
-  Review page; ADR 0056 decision 3). The check honours stored links first, as it does the links the bridge makes, so a
+  Review page; ADR 0057 decision 3). The check honours stored links first, as it does the links the bridge makes, so a
   later tie on that day no longer touches the pair.
 - **None of these: make a new event.** `create_new: true` (never with `event_id`) creates the row's event even though
   candidates exist; the proposal names the candidates it passed over.
@@ -237,7 +237,7 @@ no count change), and names it, its date and the three rows nearest it by date. 
 `delete_timeline_event { event: { event_id }, orphan: true, confirm: true }`. Both refuse when the event has a row after
 all, or a row could be its own. A row whose Date cannot be read can only be matched by its name, so the proposal (and the
 tool's dry run) also lists every unpaired row of the age whose date cannot be read, under its own heading: check them
-before approving, or mark such a row table-only (CR-2026-11-R2, R2-49; whether they should block the delete is ADR 0056
+before approving, or mark such a row table-only (CR-2026-11-R2, R2-49; whether they should block the delete is ADR 0057
 decision 2).
 
 **An event with candidate rows is not an event without a row** (v3 F2.1, the owner's report of 16 November 2026: all

@@ -14,6 +14,7 @@
  * closed tag grammar (the audits' findings, gathered); scope overload and a Core holding a specialist block
  * (architectural candidates, a pointer only).
  */
+import { isLegacy, legacyProblems } from '../blockids/detect.js';
 import type { Finding as AuditFinding } from '../audits/types.js';
 import type { LkBlock } from '../markdown/index.js';
 import {
@@ -727,6 +728,27 @@ export async function appraisePage(ctx: OwnerContext, pageId: string): Promise<D
       message: 'The page has no page document (or it could not be read), so its body was not appraised.',
       details: { documents: p.page.documents.map((d) => ({ id: d.id, type: d.type, name: d.name })) },
     });
+  // v3 F3.5 (ADR 0056): a legacy body waits for the block-id sweep (optional polish, nothing to do but wait).
+  if (p.body && isLegacy(p.body.blocks)) {
+    const lp = legacyProblems(p.body.blocks);
+    out.push({
+      check: 'block_ids_pending',
+      pageId,
+      documentId: p.body.documentId,
+      message:
+        'The page is a legacy page (' +
+        [
+          lp.missing > 0 ? `${lp.missing} ${lp.missing === 1 ? 'block has' : 'blocks have'} no id` : null,
+          lp.duplicates.length > 0
+            ? `${lp.duplicates.length} block ${lp.duplicates.length === 1 ? 'id is' : 'ids are'} used twice`
+            : null,
+        ]
+          .filter((x) => x !== null)
+          .join(', ') +
+        '), so block-by-block writes, Revert and the appraisal’s fixes cannot work on it yet: waiting for the block-id sweep.',
+      details: { blocks: lp.blocks, missing: lp.missing, duplicates: lp.duplicates.slice(0, 20) },
+    });
+  }
   bodyChecks(ctx, p, role, out);
   await sidebarChecks(ctx, p, role, audit, out);
   boundaryChecks(p, role, out);

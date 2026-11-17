@@ -31,7 +31,7 @@ clock (`{ "kind": "weekly", "day": "sun", "time": "00:30" }`; days `mon` to `sun
 | `snapshot-full`          | daily at 00:30 (London)          | v2 E1a, per project, background: a full snapshot of every page under the AI REPOSITORY and the asset library ([ADR 0042](adr/0042-snapshots-restore-rehearsal.md), [below](#snapshots-v2-e1a)). Refused (recorded, a notice on the Snapshots page) when it would leave less free disk than `SNAPSHOT_MIN_FREE_GB`. Skips a project whose tree is not built.                                                                          |
 | `snapshot-prune`         | daily at 04:40 (London)          | v2 E1a, bridge-wide: the retention (every full snapshot for `SNAPSHOT_KEEP_FULL_DAYS` days, then one a week for `SNAPSHOT_KEEP_WEEKLY` weeks; `SNAPSHOT_KEEP_DAYS` days of change snapshots), then the collector (pieces nothing refers to, keeping the kept-bytes window).                                                                                                                                                          |
 | `snapshot-verify`        | weekly, Sunday 05:10             | v2 E1a, bridge-wide, background: re-hashes every stored piece and reads every manifest; a missing or damaged piece is a finding on the Snapshots page and makes the snapshots that use it partial.                                                                                                                                                                                                                                   |
-| `assign-block-ids-sweep` | not implemented                  | Placeholder.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `assign-block-ids-sweep` | daily at 05:30 (London), **off** | v3 F3.5, per project, background, **writes**: gives legacy page documents block ids, one `assignBlockIds` each, at most N a run, an approved narrow automation ([ADR 0056](adr/0056-block-id-sweep.md), [below](#the-block-id-sweep-v3-f35)). Cannot be enabled without the sandbox check's PASS for this bridge version, or the owner's override.                                                                                   |
 
 **v2 A2.** Chunk 6's `tree-snapshot` placeholder became the real `tree-sweep` and `tree-check` jobs (migration 0700
 removes its old rows). Both are per project, call LegendKeeper at P3 through the tree service's governed reads (the
@@ -58,9 +58,13 @@ running (in memory: the scheduler's current target, exposed as `runningProjectId
 Every job link opens in the run's own project (`/jobs/<id>?project=<name>`), whichever project is selected. The history
 shows the selected project's runs (`GET /maintenance/:id?project=<name>`), or every project's with each row named.
 
-A **placeholder** is registered so the page is complete, but it cannot be enabled, run or rescheduled: the toggle is
-disabled and says "Not implemented yet", and the API answers `409 NOT_IMPLEMENTED`. Its real logic is a later chunk's work.
-A placeholder found enabled in the database is switched off at start-up.
+A **placeholder** (a job registered with `implemented: false`) cannot be enabled, run or rescheduled: the toggle is
+disabled and says "Not implemented yet", and the API answers `409 NOT_IMPLEMENTED`. A placeholder found enabled in the
+database is switched off at start-up. Since v3 F3.5 none is registered (the last one, `assign-block-ids-sweep`, became
+the block-id sweep); the framework still takes one.
+
+**Prerequisites** (v3 F3.5): a job may say why it cannot be enabled now (`canEnable`); enabling it is then refused with
+`409 PREREQUISITE_MISSING` and the reason. The block-id sweep uses it (below).
 
 ## How the scheduler behaves
 
@@ -85,9 +89,9 @@ detail: <name> }`, so the governor's P3 floor (default: keep 50% of each tier) a
   exactly when the budget is busiest).
 - **Skipped, and the skip recorded.** A job that **writes to LegendKeeper** (`writes`) is skipped, with the reason on
   its last run and in its history, while read-only mode is on or writes are paused, and while the bridge is draining.
-  None of the implemented jobs writes to LegendKeeper (the tree jobs only read) (`journal-prune`, `proposal-prune` and `sqlite-optimise` write only the bridge's
-  own database, so they keep running under read-only mode); the rule is exercised by a test job and applies to
-  `assign-block-ids-sweep` when it is built.
+  `assign-block-ids-sweep` (v3 F3.5) is the one job that writes to LegendKeeper; the others only read it (the tree
+  jobs) or write only the bridge's own database (`journal-prune`, `proposal-prune` and `sqlite-optimise`, which keep
+  running under read-only mode). The rule is also exercised by a test job.
 - **Runs are jobs** (per-project jobs only, since v2 A1). A per-project run is recorded as an engine job in its project
   (origin `maintenance`, priority P3, visible on the Jobs page and linked from the last-run column) when its record
   policy says so. Bridge-wide runs (the five bridge-wide jobs) are in the run history only; the tree jobs' runs are jobs of their
@@ -218,6 +222,49 @@ runs):
 
 Change snapshots (after each bridge write) are not a maintenance job: they are taken at the end of the write's own job.
 
+## The block-id sweep (v3 F3.5)
+
+`assign-block-ids-sweep` ([ADR 0056](adr/0056-block-id-sweep.md); code in `src/blockids/`) gives legacy page documents
+(a block without an id, or an id used twice: the pages `write_page`'s block-by-block path, Revert and the appraisal's
+fixes refuse) their block ids, one `assignBlockIds` call per document, a few documents a night. It is an **approved
+narrow automation** in the sense of Arkona's Repository Automation: its six-point statement (scope, prerequisites,
+transformation, verification, concurrency rules and stop conditions) is on its card on the Maintenance Jobs page, word
+for word as in the ADR, so enabling the job is the owner's informed approval.
+
+- **Off by default.** Daily at 05:30 London when enabled, after the night's full snapshot. Per project; it writes, so
+  read-only mode, a writes pause and draining skip it (recorded).
+- **Prerequisite.** It cannot be enabled (`409 PREREQUISITE_MISSING`) without a PASS of its sandbox check
+  ([runbook-deploy.md](runbook-deploy.md#the-block-id-sweeps-sandbox-check-v3-f35)) recorded for the running bridge
+  version, or the owner's override (set on the card with re-authentication, audited `blockids.override`). A run without
+  either is skipped, saying why.
+- **Candidates** come from the latest snapshot (the appraisal's overlay and the snapshot store): every `page` document
+  inside the AI REPOSITORY with a block without an id or an id used twice. No LegendKeeper request. The card shows each
+  served project's count, and how many are still to do.
+- **A run**, per project: documents an earlier run left `unverified` first, then the candidates in tree order, at most
+  N (default 20, set on the card, audited `blockids.max_per_run`). For each: a P3 read of the document (its pre-image;
+  one that has meanwhile gained ids is skipped), then one P3 job of the system principal (origin `maintenance`, on the
+  Jobs page, never on the Review page) holding the page lock: the document checked inside the lock (exactly the version
+  read, or nothing is sent and the document is retried next run), `assignBlockIds` journalled with the whole document as
+  its pre-image, and the document read back and compared with it, block ids aside. Last Major Revision is never set.
+  The run stops early when the P3 budget says wait, or read-only mode, a writes pause or draining begins.
+- **Verification failure.** Anything but ids changed (a text, a mark, the order, an `unsupported` block), or a block
+  still without an id, or an id twice: the whole sweep stops, the job disables itself (audited `maintenance.disable` by
+  `system`), and the card shows the page, the differences and the journal entry to restore from, in red. Runs are
+  skipped until the owner enables the job again, which acknowledges the stop.
+- **Dry run** (on the card, for the selected project): what the next run would do (documents, counts, estimated cost).
+  It reads only the snapshot store and writes nothing.
+- **Cost.** About 4 reads (the pre-image, the read in the lock, the read back, the change snapshot) and 1 write a
+  document at P3: at most about 80 reads and 20 writes a night by default.
+- **State.** Migration `3300_block_id_sweep.sql`: `block_id_sandbox_checks` (the sandbox verdicts), `block_id_sweep_state`
+  (N, the override, the stop) and `block_id_sweep_docs` (what the sweep did to each document).
+
+| Route (owner session)                                        | Does                                                                    |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| `GET /api/admin/maintenance/assign-block-ids-sweep/card`     | The statement, the prerequisite, N, a stop, the candidates per project. |
+| `POST /api/admin/maintenance/assign-block-ids-sweep/dry-run` | `{ project? }`: the next run's documents and cost. Writes nothing.      |
+| `PUT /api/admin/maintenance/assign-block-ids-sweep/override` | `{ on }`: on needs re-authentication (`403 REAUTH_REQUIRED`). Audited.  |
+| `PUT /api/admin/maintenance/assign-block-ids-sweep/limit`    | `{ maxPerRun }`, 1 to 500. Audited.                                     |
+
 ## The off-site copy (v2 E1b)
 
 The copy to Google Drive is **not** a maintenance job of the bridge: it runs in a separate service,
@@ -248,7 +295,7 @@ the Off-site copy page, not on this one.
 | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `GET /api/admin/maintenance`                         | The registry with status, schedule, last and next run; `schedulerEnabled`.                                              |
 | `GET /api/admin/maintenance/:id`                     | One job and its recent runs.                                                                                            |
-| `POST /api/admin/maintenance/:id/enable` / `disable` | Toggle. `409 NOT_IMPLEMENTED` for a placeholder.                                                                        |
+| `POST /api/admin/maintenance/:id/enable` / `disable` | Toggle. `409 NOT_IMPLEMENTED` for a placeholder; `409 PREREQUISITE_MISSING` for a job whose prerequisite is missing.    |
 | `PUT /api/admin/maintenance/:id/schedule`            | `{ schedule: { kind: 'interval', everySeconds } \| { kind: 'daily', time: 'HH:MM' } \| null }`. `400 INVALID_SCHEDULE`. |
 | `POST /api/admin/maintenance/:id/run`                | Starts a run and answers `202` at once. `409 ALREADY_RUNNING`.                                                          |
 

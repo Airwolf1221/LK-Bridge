@@ -10,7 +10,7 @@
   ADR 0051 decision 3's "nothing is ever written to `LK-Bridge staging`" (decision B5, the owner's ruling of 17
   November 2026).
 - Migration: `3200_write_scope.sql` (the profiles' rails, the rail a proposal names, the Review queue, the reverts).
-- **Amended by [ADR 0056](0056-cr-2026-11-r2-owner-decisions.md)** (CR-2026-11-R2, 17 November 2026): the deletes and
+- **Amended by [ADR 0057](0057-cr-2026-11-r2-owner-decisions.md)** (CR-2026-11-R2, 17 November 2026): the deletes and
   bulk rails widened (C1), Revert's comparisons, order and confirmation (B), the summary of a low-level job (A2) and the
   stricter switch (D1); see [the review](../reviews/CR-2026-11-R2.md).
 - Numbered 0055: F3c (appraisal), running at the same time, takes 0054.

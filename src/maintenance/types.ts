@@ -63,6 +63,13 @@ export interface MaintenanceJobDef {
    * instead of holding up the scheduler's loop (default false: jobs run one after another).
    */
   readonly background?: boolean;
+  /**
+   * v3 F3.5 (ADR 0056): why the job cannot be enabled now, or null. Asked when the owner enables it (the block-id sweep:
+   * a sandbox PASS for this bridge version, or the owner's override). A refusal is `PREREQUISITE_MISSING`.
+   */
+  readonly canEnable?: () => string | null;
+  /** v3 F3.5: told after the owner has enabled the job (the block-id sweep acknowledges a standing stop). */
+  readonly onEnabled?: () => void;
   readonly run?: (ctx: MaintenanceContext) => Promise<MaintenanceResult> | MaintenanceResult;
 }
 

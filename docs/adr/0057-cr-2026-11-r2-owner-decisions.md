@@ -1,6 +1,7 @@
-# ADR 0056: Owner decisions from the second review (CR-2026-11-R2)
+# ADR 0057: Owner decisions from the second review (CR-2026-11-R2)
 
-Status: **Proposed** (CR-2026-11-R2, 17 November 2026). Where a fix needed one of these decisions, the safe option is
+Status: **Proposed** (CR-2026-11-R2, 17 November 2026; numbered 0057 because F3.5's block-id sweep took 0056 while the
+review ran). Where a fix needed one of these decisions, the safe option is
 implemented and marked "implemented"; the owner confirms it or chooses another. The findings are in
 [docs/reviews/CR-2026-11-R2.md](../reviews/CR-2026-11-R2.md).
 
