@@ -542,8 +542,9 @@ export class Appraisal {
     let liveName: string | undefined;
     let liveAliases: string[] | undefined;
     if (o.live && o.pageId) {
-      const r = await reader.readLive(o.pageId, o.live, this.d.now());
-      reads += 1;
+      // The name and aliases are the resource's: one read (the body stays the snapshot's).
+      const r = await reader.readLive(o.pageId, o.live, this.d.now(), { body: false });
+      reads += r.reads;
       if (r.page) {
         liveName = r.page.page.rawName;
         const a = r.page.resource?.aliases;

@@ -80,6 +80,8 @@ function collectionsOf(sidebar: unknown): Collection[] {
 export class PageReader {
   private readonly loaded = new Map<string, Promise<LoadedPage | null>>();
   private readonly kids = new Map<string, OverlayPage[]>();
+  /** Pages read live in this request (`live: true`): they stand in for the overlay's copy. */
+  private readonly live = new Map<string, OverlayPage>();
 
   constructor(private readonly d: ReaderDeps) {
     for (const p of d.pages.values()) {
@@ -100,7 +102,7 @@ export class PageReader {
   }
 
   page(id: string): OverlayPage | null {
-    return this.d.pages.get(id) ?? null;
+    return this.live.get(id) ?? this.d.pages.get(id) ?? null;
   }
 
   /** Every page of the overlay, in id order. */
@@ -130,14 +132,14 @@ export class PageReader {
     const ids: string[] = [];
     const names: string[] = [];
     const kinds: string[] = [];
-    let cur: OverlayPage | undefined = this.d.pages.get(id);
+    let cur: OverlayPage | undefined = this.live.get(id) ?? this.d.pages.get(id);
     const seen = new Set<string>();
     while (cur && !seen.has(cur.id)) {
       seen.add(cur.id);
       ids.unshift(cur.id);
       names.unshift(cur.displayName);
       kinds.unshift(cur.kind);
-      cur = cur.parentId ? this.d.pages.get(cur.parentId) : undefined;
+      cur = cur.parentId ? (this.live.get(cur.parentId) ?? this.d.pages.get(cur.parentId)) : undefined;
     }
     return { ids, names, kinds };
   }
@@ -197,13 +199,16 @@ export class PageReader {
 
   /**
    * The page read live (`live: true`): its settings and sidebar (`getResource`), then its main page document
-   * (`getDocumentBlocks`). Replaces the snapshot's copy in this reader. Returns the reads made.
+   * (`getDocumentBlocks`), unless `body: false` (the snapshot's copy of the body is kept: A3 needs only the name and
+   * aliases). Replaces the snapshot's copy in this reader. Returns the reads made.
    */
   async readLive(
     id: string,
     read: LiveRead,
     now: number,
+    opts: { readonly body?: boolean } = {},
   ): Promise<{ page: LoadedPage | null; reads: number }> {
+    const kept = opts.body === false ? await this.load(id) : null;
     let reads = 1;
     const res = await read('getResource', { path: { resourceId: id } });
     if (!isObj(res)) {
@@ -236,25 +241,17 @@ export class PageReader {
       sourceTakenAt: now,
       unreadable: [],
     };
+    this.live.set(id, page);
     const side = sidebarPiece(res.properties ?? []);
     const main = mainDocument(docs);
-    let body: LoadedPage['body'] = null;
-    if (main) {
+    let body: LoadedPage['body'] = kept?.body ?? null;
+    if (main && opts.body !== false) {
       reads++;
       const b = await read('getDocumentBlocks', { path: { resourceId: id, documentId: main.id } });
       const blocks = isObj(b) && Array.isArray(b.blocks) ? (b.blocks as Obj[]) : [];
       body = { documentId: main.id, name: main.name, blocks };
     }
-    const path = this.path(id);
-    // The live name and kind replace the snapshot's at the end of the path.
-    const livePath: LabelPath =
-      path.ids.length > 0
-        ? {
-            ids: path.ids,
-            names: [...path.names.slice(0, -1), page.displayName],
-            kinds: [...path.kinds.slice(0, -1), page.kind],
-          }
-        : { ids: [id], names: [page.displayName], kinds: [page.kind] };
+    const livePath = this.path(id);
     const loaded: LoadedPage = {
       page,
       path: livePath,

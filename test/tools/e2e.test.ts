@@ -64,6 +64,12 @@ describe('the MCP surface with the official client', () => {
         'arkona_create_relationship',
         'arkona_add_character_art',
         'arkona_character_brief',
+        // v3 F3c: the Arkona pack's appraisal tools
+        'arkona_appraise_owner',
+        'arkona_change_impact',
+        'arkona_working_digest',
+        'arkona_visual_hygiene',
+        'arkona_appraisal_fix',
         'create_document',
         'create_index',
         'create_many_resources',

@@ -74,8 +74,7 @@ CREATE VIRTUAL TABLE appraisal_fts USING fts5(
   unit UNINDEXED,
   field UNINDEXED,
   section UNINDEXED,
-  tokenize = 'unicode61 remove_diacritics 2',
-  prefix = '2 3'
+  tokenize = 'unicode61 remove_diacritics 2'
 );
 
 -- Which full-text rows belong to which page, so a page laid over by a change snapshot is re-indexed alone.

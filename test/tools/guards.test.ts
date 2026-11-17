@@ -195,8 +195,10 @@ describe('the tool list', () => {
     // v2 C2c's four lifecycle tools and v2 D1's five calendar and timeline tools and D1.1's sync_timeline_event, v2 D2's
     // three map-feature tools, v2 D3's upload_image and prepare_image_upload, and v2 E1a's list_snapshots,
     // snapshot_diff and restore_snapshot, and v2 E2's audit_findings, and v3 F3a's arkona_create_character, and v3 F3b's
-    // arkona_create_owner, arkona_create_relationship, arkona_add_character_art and arkona_character_brief.
-    expect(tools).toHaveLength(69);
+    // arkona_create_owner, arkona_create_relationship, arkona_add_character_art and arkona_character_brief, and v3
+    // F3c's arkona_appraise_owner, arkona_change_impact, arkona_working_digest, arkona_visual_hygiene and
+    // arkona_appraisal_fix.
+    expect(tools).toHaveLength(74);
     for (const t of tools) {
       expect(['read', 'write'], t.name).toContain(t.access);
       expect(t.annotations?.readOnlyHint, t.name).toBe(t.access === 'read');
@@ -214,7 +216,7 @@ describe('the tool list', () => {
       );
       const c = await on.connect();
       const { tools } = await c.listTools();
-      expect(tools).toHaveLength(61 + 3 + 2 + 89);
+      expect(tools).toHaveLength(66 + 3 + 2 + 89);
       const perOp = tools.filter((t) => t.name.startsWith('lk_op_'));
       expect(perOp).toHaveLength(89);
       const by = Object.fromEntries(tools.map((t) => [t.name, t]));

@@ -604,10 +604,12 @@ function auditDraft(p: LoadedPage, f: AuditFinding): Draft {
     ageMs: f.source.ageMs,
     ...('snapshotId' in f.source ? { snapshotId: f.source.snapshotId } : {}),
   };
-  // Design section F: sibling order and the closed-grammar tags hand over to the audits' own fixes; any other audit
+  // Design section F: sibling order and the tags hand over to the audits' own fixes (by the fix's kind, so F3.3's
+  // lifecycle-tag order, a `lifecycle` finding whose fix only reorders tags, is handed over too); any other audit
   // finding's fix stays the owner's, on the Audits page.
-  const handover = f.category === 'ordering' || f.category === 'tags';
-  const auditFix = f.fix && handover ? { findingId: f.id, summary: f.fix.summary } : undefined;
+  const tagOrOrder =
+    f.category === 'ordering' || f.category === 'tags' || HANDOVER_FIXES.has(f.fix?.kind ?? '');
+  const auditFix = f.fix && tagOrOrder ? { findingId: f.id, summary: f.fix.summary } : undefined;
   const base = {
     pageId: p.page.id,
     key: `audit:${f.id}`,
@@ -622,7 +624,8 @@ function auditDraft(p: LoadedPage, f: AuditFinding): Draft {
     ...(auditFix ? { auditFix } : {}),
   };
   if (f.category === 'ordering') return { ...base, check: 'sibling_order' };
-  if (f.category === 'tags') return { ...base, check: 'tag_grammar' };
+  if (f.category === 'tags' || (f.category === 'lifecycle' && auditFix))
+    return { ...base, check: 'tag_grammar' };
   if (f.category === 'template')
     return {
       ...base,
@@ -664,6 +667,13 @@ function auditDraft(p: LoadedPage, f: AuditFinding): Draft {
     judgement,
   };
 }
+
+/**
+ * The audits' fixes A2 hands over (design section F): sibling order (`move_resource`), the missing required tags
+ * (`add_tags`) and the lifecycle tag put first (`reorder_tags`, F3.3's, ADR 0053). Strings, so a kind not yet built in
+ * this bridge simply never matches.
+ */
+const HANDOVER_FIXES: ReadonlySet<string> = new Set(['move_resource', 'add_tags', 'reorder_tags']);
 
 /** Audit categories that are about the audit's own configuration or run, not the page: not gathered. */
 const NOT_PAGE_CATEGORIES = new Set(['rules', 'audit']);

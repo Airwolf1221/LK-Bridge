@@ -26,7 +26,7 @@ import { buildModels } from '../discover/world.js';
 import { SidebarModel } from '../resources/world.js';
 import { DEFAULT_SNAPSHOT_SETTINGS } from '../../src/config/index.js';
 import { ProjectStore } from '../../src/projects/store.js';
-import { C, IDENTITY_KEYS } from '../packs/world.js';
+import { C, IDENTITY_KEYS, TPL } from '../packs/world.js';
 import { O, OWNER_KEYS, PROJECT, ownersWorld, type OwnersWorld } from '../packs/owners-world.js';
 import type { ToolCall } from '../tools/helpers.js';
 
@@ -679,6 +679,29 @@ export async function appraisalWorld(o: Parameters<typeof ownersWorld>[0] = {}):
     para('na10', 'A plate since lost.'),
   ]);
   buildModels(w.stack, w.repo, w.assets);
+  // The tree's summary of each page's sidebar, as its build reads it from LegendKeeper (getResource): the Last Major
+  // Revision planner finds a page's row there (it reads nothing itself).
+  const setSidebar = w.stack.db.prepare('UPDATE tree_nodes SET sidebar = ? WHERE project_id = ? AND id = ?');
+  for (const [id, sbar] of sb.pages)
+    setSidebar.run(
+      JSON.stringify(
+        sbar.props.map((p) => ({
+          id: p.id,
+          kind: p.kind,
+          title: p.title,
+          ...(p.rows
+            ? {
+                rows: p.rows.map((r) => ({
+                  key: r.key,
+                  text: (r.content as { text?: string }[]).map((x) => x.text ?? '').join(''),
+                })),
+              }
+            : {}),
+        })),
+      ),
+      PROJECT,
+      id,
+    );
 
   // ---------------------------------------------------------------------------------- the audits' rule and the chronology
   w.stack.runtime.audits.setConfig('owner', PROJECT, {
@@ -688,7 +711,7 @@ export async function appraisalWorld(o: Parameters<typeof ownersWorld>[0] = {}):
         name: 'Appraisal desk polities',
         enabled: true,
         selectors: { ancestorName: 'Appraisal Desk', kind: 'bsrc', referenceType: 'Polity Reference' },
-        template: { templateName: 'AI General Source' },
+        template: { templateId: TPL.general },
       },
     ],
     tagSource: { pageId: P.tagdef, documentId: mainOf(P.tagdef) },
