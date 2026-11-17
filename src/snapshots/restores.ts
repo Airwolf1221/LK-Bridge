@@ -103,6 +103,18 @@ export class Restores {
   ) {}
 
   async plan(input: RestoreInput): Promise<RestorePlan> {
+    // CR-2026-11-R2 (R2-06): never a second recreate of a page while one is still a proposal or still running. Planned
+    // meanwhile, it is a second page (new ids), or a finish planned from a page the first job is still writing (what that
+    // job writes after the plan would be written twice). Once the first has ended, the same request finishes it.
+    if (input.scope === 'deleted' && input.mode !== 'undelete') {
+      const busy = this.recreateInProgress(input.projectId, input.pageId);
+      if (busy)
+        throw new RestoreError(
+          'RESTORE_IN_PROGRESS',
+          `A recreate of this page is still a proposal or still running (restore ${busy.id}${busy.proposalId ? `, proposal ${busy.proposalId}` : ''}). Wait until it has ended (or the owner has rejected it): a recreate that stopped part-way is then finished by the same request. Nothing was planned.`,
+          { restoreId: busy.id, ...(busy.proposalId ? { proposalId: busy.proposalId } : {}) },
+        );
+    }
     const plan = await planRestore(
       {
         ...this.o.deps(input.projectId),
@@ -129,6 +141,20 @@ export class Restores {
     }
     if (!est) return null;
     return { reads: c.reads, writes: c.writes, ...sequentialEstimate(est, c) };
+  }
+
+  /** R2-06: the latest recreate of a page that is still a proposal or still running (`proposed`), or null. */
+  private recreateInProgress(
+    projectId: string,
+    pageId: string,
+  ): { id: string; proposalId: string | null } | null {
+    const r = this.o.db
+      .prepare(
+        `SELECT id, proposal_id FROM snapshot_restores WHERE project_id = ? AND page_id = ? AND scope = 'deleted'
+           AND mode = 'recreate' AND state = 'proposed' ORDER BY created_at DESC LIMIT 1`,
+      )
+      .get(projectId, pageId) as { id: string; proposal_id: string | null } | undefined;
+    return r ? { id: r.id, proposalId: r.proposal_id } : null;
   }
 
   /**

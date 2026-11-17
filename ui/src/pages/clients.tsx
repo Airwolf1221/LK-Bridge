@@ -248,6 +248,8 @@ function ConnectionRow({
 }) {
   const { run, busy } = useAction();
   const confirm = useConfirm();
+  // CR-2026-11-R2 (R2-07): a move to a higher scope or to a write profile asks for the password first.
+  const withReauth = useReauth();
   const expired = conn.expiresAt !== null && conn.expiresAt <= now;
   return (
     <tr data-connection={conn.id}>
@@ -288,7 +290,7 @@ function ConnectionRow({
             const profileId = e.target.value;
             if (profileId)
               void run(
-                () => api.put(`/clients/connections/${conn.id}/profile`, { profileId }),
+                () => withReauth(() => api.put(`/clients/connections/${conn.id}/profile`, { profileId })),
                 'Moved to another profile.',
               ).then(onChanged);
           }}
@@ -589,6 +591,7 @@ function ScopeSelect({
 function DefaultScopeCard({ value, onSaved }: { value: Scope; onSaved: () => void }) {
   const { run, busy } = useAction();
   const change = useScopeChange();
+  const withReauth = useReauth();
   return (
     <section className="card" aria-labelledby="def-h">
       <h2 id="def-h">Default scope for new connections</h2>
@@ -602,7 +605,10 @@ function DefaultScopeCard({ value, onSaved }: { value: Scope; onSaved: () => voi
             void change('the default scope', value, s).then((r) => {
               if (r)
                 void run(
-                  () => api.put('/clients/default-scope', { scope: s, confirmRaise: r === 'raise' }),
+                  () =>
+                    withReauth(() =>
+                      api.put('/clients/default-scope', { scope: s, confirmRaise: r === 'raise' }),
+                    ),
                   'Default scope saved.',
                 ).then(onSaved);
             });
@@ -628,6 +634,7 @@ function ProfilesCard({
 }) {
   const { run, busy } = useAction();
   const change = useScopeChange();
+  const withReauth = useReauth();
   const [label, setLabel] = useState('');
   const [kind, setKind] = useState(kinds[0] ?? 'other');
   return (
@@ -660,10 +667,12 @@ function ProfilesCard({
                         if (r)
                           void run(
                             () =>
-                              api.put(`/clients/profiles/${p.id}/scope`, {
-                                scope: s,
-                                confirmRaise: r === 'raise',
-                              }),
+                              withReauth(() =>
+                                api.put(`/clients/profiles/${p.id}/scope`, {
+                                  scope: s,
+                                  confirmRaise: r === 'raise',
+                                }),
+                              ),
                             `“${p.label}” is now ${s}.`,
                           ).then(onChanged);
                       });
@@ -763,6 +772,8 @@ function PatCard({
   onCreated: () => void;
 }) {
   const { run, busy } = useAction();
+  // CR-2026-11-R2 (R2-07): a token for a profile at scope write asks for the password first.
+  const withReauth = useReauth();
   const [name, setName] = useState('');
   const [profileId, setProfileId] = useState('');
   const [days, setDays] = useState('90');
@@ -835,11 +846,13 @@ function PatCard({
             disabled={name.trim() === '' || chosen === '' || !(days === '' || /^[1-9]\d{0,3}$/.test(days))}
             onClick={() =>
               void run(() =>
-                api.post<Created>('/clients/pats', {
-                  name: name.trim(),
-                  profileId: chosen,
-                  ...(days ? { expiresInDays: Number(days) } : {}),
-                }),
+                withReauth(() =>
+                  api.post<Created>('/clients/pats', {
+                    name: name.trim(),
+                    profileId: chosen,
+                    ...(days ? { expiresInDays: Number(days) } : {}),
+                  }),
+                ),
               ).then((r) => {
                 if (r) {
                   setCreated(r);
