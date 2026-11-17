@@ -37,15 +37,14 @@ const pieces = new Map<string, unknown>([
   ],
 ]);
 const ref = (sha: string) => ({ sha256: sha, size: 1 });
-const entry = (id: string, name: string, more: Partial<PageEntry> = {}): PageEntry =>
-  ({
-    id,
-    parentId: id === 'root0001' ? null : 'root0001',
-    rank: id,
-    name,
-    kind: 'bsrc',
-    ...more,
-  }) as PageEntry;
+const entry = (id: string, name: string, more: Partial<PageEntry> = {}): PageEntry => ({
+  id,
+  parentId: id === 'root0001' ? null : 'root0001',
+  rank: id,
+  name,
+  kind: 'bsrc',
+  ...more,
+});
 
 /** The only full snapshot is partial: page B's sidebar could not be read, so it is listed as missing. */
 const partial = {
@@ -63,16 +62,16 @@ const partial = {
     entry('root0001', '[INDEX] AI REPOSITORY', {
       kind: 'index',
       resource: ref('res-root'),
-    } as Partial<PageEntry>),
+    }),
     entry('pagea001', '[BSRC] Tide Gate - Place Reference', {
       resource: ref('res-a'),
       documents: [{ id: 'doca', type: 'page', name: 'Main', ...ref('doc-a') }],
-    } as Partial<PageEntry>),
+    }),
     entry('pageb001', '[BSRC] Salt Court - Polity Reference', {
       resource: ref('res-b'),
       documents: [{ id: 'docb', type: 'page', name: 'Main', ...ref('doc-b') }],
       missing: [{ piece: 'sidebar', reason: 'LegendKeeper answered 500' }],
-    } as Partial<PageEntry>),
+    }),
   ],
   library: null,
   counts: { pages: 3, pieces: 5, logicalBytes: 0, missing: 1 },

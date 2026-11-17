@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any -- tool JSON */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-return, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- tool JSON */
 /**
  * v3 F3c (ADR 0054) with F3d (ADR 0053): on a project whose pack says the lifecycle tag leads, the audits' new
  * "lifecycle tag not leading" finding is gathered by the owner appraisal (A2) like the other audits: never re-checked,
