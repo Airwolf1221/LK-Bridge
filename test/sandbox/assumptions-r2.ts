@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-explicit-any -- LK results are untyped JSON */
 /**
  * Round 2 of the sandbox assumptions (opt-in; `npm run test:sandbox -- assumptions-r2`): what the bridge's newer code
- * assumes about LegendKeeper and no sandbox check confirms yet, checked on a REAL sandbox project. Each check (W1 … W17)
+ * assumes about LegendKeeper and no sandbox check confirms yet, checked on a REAL sandbox project. Each check (W1 … W18)
  * reports PASS, FAIL, INCONCLUSIVE or NOTED with what LegendKeeper answered; NOTED is a fact the run records, never a
  * failure.
  *
@@ -26,7 +26,8 @@
  *   id already held is refused whole, the item before the duplicate not created (R2-05); W15 a template that does not
  *   exist reads 404 and a copy of it makes nothing (the guard's "nothing copied"); W16 an event reads back as createEvent
  *   and updateEvent answered it, every stored field (Revert's exact comparison, R2-16); W17 moveResource answers the
- *   page's new rank, the one getResource then gives (Revert's move comparison, R2-19).
+ *   page's new rank, the one getResource then gives (Revert's move comparison, R2-19); W18 getResource of `templates`
+ *   answers 404 (the guards read that virtual parent live, WS-C3), and what a move of a page there does (NOTED).
  *
  * Safety, as assumptions.ts: it refuses to run unless the key's own project (listProjects) is exactly the sandbox project
  * (SandboxGuardError, before anything is written); every call goes through the bridge's own engine and governor (as the
@@ -36,19 +37,20 @@
  *
  * What it creates: ONE throwaway root resource `lk-bridge assumptions-r2 <time>` with these pages under it: `W7 table` (its
  * Main gets a paragraph and a table of three rows, then a fourth), `W12 timeline` (a timeline document on the project's
- * first calendar: one lane, three events), `W13 source` (tagged `lkb-w13`) and `W13 copy`, `W14 held`, and `W17 parent`
- * with `W17 a` and `W17 b`; ONE template `lk-bridge assumptions-r2 template W13` (saved from `W13 source`: a top-level
+ * first calendar: one lane, three events), `W13 source` (tagged `lkb-w13`) and `W13 copy`, `W14 held`, `W17 parent`
+ * with `W17 a` and `W17 b`, and `W18 page` (which W18 tries to move to `templates`); ONE template `lk-bridge assumptions-r2 template W13` (saved from `W13 source`: a top-level
  * template, outside the root); and in the asset library four folders
  * `lk-bridge assumptions-r2 F1 <time>` to `… F4 <time>` (F1, F2 and F3 at the top level, F4 inside F3) and one 70-byte
  * PNG (`lk-bridge assumptions-r2 W1 image`, renamed by W2). Plain names only: no `[BSRC]`, `[BWRK]`, `[BARC]` or
  * `[INDEX]` prefix, no Status and no status tag (`lkb-w13` is none), so the canon and lifecycle guards never stand in the
- * way. W14 and W15 send a create LegendKeeper should refuse; a page either makes anyway is under the root.
+ * way. W14 and W15 send a create LegendKeeper should refuse (a page either makes anyway is under the root), and W18 a
+ * move it may refuse; whatever they leave, the clean-up deletes by id.
  * What it cleans up: everything, at the end, even after a failure: the assets by id, the deepest first (W4 and W5 delete
  * theirs on the way), then each page (one small cascade each), the template and the root. Already gone (404, "already
  * deleted") counts as cleaned; any other failure is confirmed by a read before it is reported, and the report names each
  * id to delete by hand (pages in the tree, the template among the templates, assets in the asset library).
  * Cost (counted against the mock by test/tools/assumptions-r2-dryrun.test.ts, with the sandbox test's own runtime: no
- * repository or asset tree): 49 writes and 113 reads, 3 downloads from the asset host (4 if a move changes the file's URL)
+ * repository or asset tree): 52 writes and 121 reads, 3 downloads from the asset host (4 if a move changes the file's URL)
  * and 1 PUT to the upload host (neither draws on an API tier); W6 adds a read per 100 assets if the root listing turns
  * out to be the whole library. On the asset routes' own limits (ADR 0047): 6 creates (four folders, the upload, the
  * image; about 20 a minute) and 4 deletes (about 60 a minute; 5 if a folder delete leaves its sub-folder), plus 4
@@ -109,6 +111,7 @@ const ORDER = [
   'W15',
   'W16',
   'W17',
+  'W18',
   'cleanup',
 ];
 /** The columns of the throwaway table, as an age table's: event, date, KCY. */
@@ -1234,6 +1237,37 @@ export async function runAssumptionsR2(
         return `answered rank ${JSON.stringify(moved.rank)} and parent ${String(P.id)}; getResource gives the same rank${order}`;
       },
     );
+
+    // CR-2026-11-R2 (WS-C3): a move or create under `templates` (the templates' virtual parent) is judged by reading that
+    // parent live; the guards take a 404 as "no such parent". Answered as a page, it would be read as one in no lifecycle
+    // area, and a move of an Authoritative page there judged as a move inside the repository.
+    await check(
+      'W18',
+      'getResource of "templates" answers 404 (a virtual parent, not a resource), as the guards read it; and what a move of a page to "templates" does (NOTED)',
+      async () => {
+        const looked = await raw('getResource', 'GET', '/resources/templates');
+        const page = await mk('W18 page');
+        const moved = await raw('moveResource', 'POST', `/resources/${String(page.id)}/move`, {
+          body: { parentId: 'templates' },
+        });
+        const now = await raw('getResource', 'GET', `/resources/${String(page.id)}`);
+        const where = ok2xx(now)
+          ? ((now.body?.parentId as unknown) ?? null)
+          : `(getResource ${answered(now)})`;
+        const moveNote = ok2xx(moved)
+          ? `NOTED: the move was accepted (${answered(moved)}): the page reads with parentId ${JSON.stringify(where)}, so the guards' refusal is what keeps a page in the repository`
+          : `the move was refused (${answered(moved)}); the page reads with parentId ${JSON.stringify(where)}`;
+        if (looked.status !== 404)
+          fail(
+            `getResource of "templates" answered ${answered(looked)}${
+              looked.body !== undefined ? ` (${JSON.stringify(looked.body).slice(0, 160)})` : ''
+            }, not 404: the guards would read "templates" as a page in no lifecycle area. ${moveNote}`,
+          );
+        return ok2xx(moved)
+          ? { verdict: 'noted', detail: `getResource 404; ${moveNote}` }
+          : `getResource 404; ${moveNote}`;
+      },
+    );
   } finally {
     // ---- clean-up: the assets by id, the deepest first; then each page (one small cascade each), then the root ------
     // C2d's rule: already gone (404, "already deleted") counts as cleaned; any other failure is confirmed by a read
@@ -1326,7 +1360,7 @@ export function formatAssumptionsR2Report(findings: readonly Finding[]): string 
   const count = (v: Verdict) => findings.filter((f) => f.verdict === v && f.id !== 'cleanup').length;
   return [
     '',
-    'LK-Bridge sandbox: the newer code’s assumptions about LegendKeeper, round 2 (W1–W17: assets, table rows, nested blocks, events, templates, batch creates, moves)',
+    'LK-Bridge sandbox: the newer code’s assumptions about LegendKeeper, round 2 (W1–W18: assets, table rows, nested blocks, events, templates, batch creates, moves)',
     '=================================================================================================================================================================',
     ...findings.map((f) => `[${mark[f.verdict]}] (${f.id}) ${f.title}\n        ${f.detail}`),
     '',

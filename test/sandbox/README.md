@@ -160,7 +160,7 @@ clean-up does.
 `npm run test:sandbox -- assumptions-r2` (on the server `deploy/sandbox-test.sh --project test -- assumptions-r2`) runs
 `assumptions-r2.test.ts` alone, with the same guard as the smoke. It checks, on the real API, what the code merged since
 CR-2026-11 assumes about LegendKeeper and no other sandbox check confirms, and what the second review's own fixes assume:
-the list (W1 to W17), with what breaks if one is false, is [docs/reviews/CR-2026-11-R2.md](../../docs/reviews/CR-2026-11-R2.md), section 6. Each check prints PASS,
+the list (W1 to W18), with what breaks if one is false, is [docs/reviews/CR-2026-11-R2.md](../../docs/reviews/CR-2026-11-R2.md), section 6. Each check prints PASS,
 FAIL, INCONCLUSIVE or NOTED with what LegendKeeper answered; the run fails if any check FAILs or the clean-up does.
 
 - **The asset library** (W1 to W6): an image moved between two throwaway folders (its file downloaded before and after),
@@ -170,20 +170,22 @@ FAIL, INCONCLUSIVE or NOTED with what LegendKeeper answered; the run fails if an
   after another, moved (and a stale If-Match: 412, nothing moved), replaced and deleted; `getBlock` of a paragraph in a
   table cell (the read before a direct `updateBlock`, ADR 0055 decision E); `updateBlock` with only `content`.
 - **`listEvents` pages** (W12): three events read two at a time through the cursor.
-- **What the second review's fixes assume** (W13 to W17): a template saved from a page carries its tags, `getResource`
+- **What the second review's fixes assume** (W13 to W18): a template saved from a page carries its tags, `getResource`
   answers the template and a copy takes its tags (the lifecycle guard's copy check); `createManyResources` with an id
   already held makes none of its items; a template that does not exist reads 404 and is not copied; an event reads back
-  exactly as its write answered it; a move answers the rank `getResource` then gives (Revert's comparisons).
-- **What it creates and cleans up:** one throwaway root `lk-bridge assumptions-r2 <time>` with eight plainly named pages
-  under it (a table page, a timeline page, `W13 source` tagged `lkb-w13` and its copy, `W14 held`, and `W17 parent` with
-  two pages), one template `lk-bridge assumptions-r2 template W13` (outside the root, as templates are), four asset
+  exactly as its write answered it; a move answers the rank `getResource` then gives (Revert's comparisons);
+  `getResource` of `templates` answers 404 (the guards read that virtual parent live), and what a move of a page there
+  does (NOTED).
+- **What it creates and cleans up:** one throwaway root `lk-bridge assumptions-r2 <time>` with nine plainly named pages
+  under it (a table page, a timeline page, `W13 source` tagged `lkb-w13` and its copy, `W14 held`, `W17 parent` with two
+  pages, and `W18 page`), one template `lk-bridge assumptions-r2 template W13` (outside the root, as templates are), four asset
   folders `lk-bridge assumptions-r2 F1 <time>` to `… F4 <time>` and one 70-byte PNG; everything is deleted at the end,
   even after a failure, and the report names any id left to delete by hand.
-- **Cost:** 49 writes and 113 reads, 3 downloads from the asset host and 1 PUT to the upload host (counted against the
+- **Cost:** 52 writes and 121 reads, 3 downloads from the asset host and 1 PUT to the upload host (counted against the
   mock); about a minute.
 - **Dry run:** `test/tools/assumptions-r2-dryrun.test.ts` runs it against the image test world's mock three times: once
   answering as the spec says (every check PASS or NOTED), once answering otherwise for W1 to W12 and once for W13 to
-  W17 (each check FAILs, notes or is INCONCLUSIVE where it should, and the clean-up still works). It also checks that
+  W18 (each check FAILs, notes or is INCONCLUSIVE where it should, and the clean-up still works). It also checks that
   another project is refused before anything is written.
 
 ## The chronology (v2 D1)

@@ -1,5 +1,5 @@
 /**
- * Round 2 of the sandbox assumptions (test/sandbox/assumptions-r2.ts, W1–W17) run as a dry run against the mock, never a
+ * Round 2 of the sandbox assumptions (test/sandbox/assumptions-r2.ts, W1–W18) run as a dry run against the mock, never a
  * real LegendKeeper, the way the opt-in test runs it: its own runtime on a temporary database (createSoakRuntime: no
  * repository or asset tree, the requests counted at the transport), against the mock of the D3 image world
  * (test/images/world.ts): the asset library model (test/assets/model.ts: listings per folder, paged; updateAsset partial;
@@ -12,7 +12,9 @@
  * - the lanes and events of a NEW timeline document (the worlds model only their own timelines): listEvents ordered by
  *   start, then id, and paged by an opaque cursor; updateEvent;
  * - saveResourceAsTemplate (a top-level template copying the page's fields, its tags among them, and its sidebar), and a
- *   template copy taking the template's tags (the spec: a copy takes the template's fields; the tree model drops them).
+ *   template copy taking the template's tags (the spec: a copy takes the template's fields; the tree model drops them);
+ * - getResource of `templates` answering 404 (it is the templates' virtual parent; the world's listTemplates override
+ *   would answer it with the template list).
  *
  * It checks that the script refuses another project (SandboxGuardError, nothing written), runs every check to an
  * answer, and deletes everything it made (no new asset, no live page), in three runs:
@@ -27,7 +29,7 @@
  *    sends the document's version and PASSes), no lanes for a new timeline (W12 INCONCLUSIVE, so W16 too).
  * 3. LegendKeeper answering otherwise where the second review's fixes rely on it: a copy that takes no tags (W13 FAIL), a
  *    batch that creates the items before a duplicate id (W14 FAIL), events read back with a field their answers lacked
- *    (W16 FAIL), a move answered without a rank (W17 FAIL).
+ *    (W16 FAIL), a move answered without a rank (W17 FAIL), `templates` read as a resource (W18 FAIL).
  */
 import { Writable } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -59,6 +61,7 @@ const IDS = [
   'W15',
   'W16',
   'W17',
+  'W18',
 ];
 
 /** How the mock answers where LegendKeeper's behaviour is in question (default: as the spec describes it). */
@@ -76,6 +79,8 @@ const lk = {
   eventsExact: true,
   /** Run 3: moveResource answers the page without its rank. */
   moveRank: true,
+  /** Run 3: getResource of `templates` answers as the mock's template list does (200), not 404. */
+  templatesNotAResource: true,
 };
 
 let w: ImagesWorld;
@@ -287,6 +292,16 @@ function modelWhatIsMissing(world: ImagesWorld): void {
     }
     return { status: 201, body: { resources: out } };
   });
+  // getResource of `templates`: 404, the templates' virtual parent (first in the map: the world's listTemplates override
+  // matches the path too and would answer the template list); run 3: left to that override.
+  {
+    const rest = [...world.overrides.entries()];
+    world.overrides.clear();
+    world.overrides.set(/\/resources\/templates$/, (req) =>
+      req.method === 'GET' && lk.templatesNotAResource ? err(404, 'NOT_FOUND') : undefined,
+    );
+    for (const [k, v] of rest) world.overrides.set(k, v);
+  }
   // Run 3: moveResource answers the page without its rank.
   world.overrides.set(/\/resources\/[^/]+\/move$/, (req) => {
     if (req.method !== 'POST' || lk.moveRank) return undefined;
@@ -340,10 +355,10 @@ const target = (): SmokeTarget => ({
 
 /**
  * Runs the script; returns its findings by id and what it cost, and checks it left nothing behind. `made`: the resources
- * the run makes (the root, its eight pages and the template W13 saves; run 3 a ninth page, the item W14's batch makes
+ * the run makes (the root, its nine pages and the template W13 saves; run 3 a tenth page, the item W14's batch makes
  * before its duplicate).
  */
-async function dryRun(made = 10): Promise<{
+async function dryRun(made = 11): Promise<{
   by: Record<string, Finding>;
   report: string;
   cost: string;
@@ -429,10 +444,13 @@ describe('sandbox assumptions, round 2 (dry run)', () => {
     expect(by.W15!.detail).toMatch(/getResource 404; the copy refused 404 NOT_FOUND; nothing made/);
     expect(by.W16!.detail).toMatch(/2 created events listed as createEvent answered them/);
     expect(by.W17!.detail).toMatch(/getResource gives the same rank, now before W17 a$/);
-    // The cost the header of assumptions-r2.ts states for the owner (the sandbox runtime's own count: 49 writes, 113
-    // reads, 3 downloads and the PUT on 17 November 2026, W13 to W17 included), with a little room.
-    expect(writes).toBeLessThanOrEqual(52);
-    expect(reads).toBeLessThanOrEqual(124);
+    expect(by.W18!.detail).toMatch(
+      /^getResource 404; the move was refused \(404 NOT_FOUND\); the page reads with parentId "/,
+    );
+    // The cost the header of assumptions-r2.ts states for the owner (the sandbox runtime's own count: 52 writes, 121
+    // reads, 3 downloads and the PUT on 17 November 2026, W13 to W18 included), with a little room.
+    expect(writes).toBeLessThanOrEqual(56);
+    expect(reads).toBeLessThanOrEqual(130);
     expect(downloads).toBe(3);
   }, 120_000);
 
@@ -477,9 +495,15 @@ describe('sandbox assumptions, round 2 (dry run)', () => {
   }, 120_000);
 
   it('as LegendKeeper might answer otherwise where the second review’s fixes rely on it: those checks fail, and the run still cleans up', async () => {
-    Object.assign(lk, { templateTags: false, batchAtomic: false, eventsExact: false, moveRank: false });
+    Object.assign(lk, {
+      templateTags: false,
+      batchAtomic: false,
+      eventsExact: false,
+      moveRank: false,
+      templatesNotAResource: false,
+    });
     try {
-      const { by, report } = await dryRun(11);
+      const { by, report } = await dryRun(12);
       expect(by.W13!.verdict, report).toBe('fail');
       expect(by.W13!.detail).toMatch(/the copy reads with tags \[\], not the template’s/);
       expect(by.W14!.verdict, report).toBe('fail');
@@ -491,10 +515,18 @@ describe('sandbox assumptions, round 2 (dry run)', () => {
       expect(by.W16!.detail).toMatch(/updated, getEvent: formattedStart: null answered, "100000" read/);
       expect(by.W17!.verdict, report).toBe('fail');
       expect(by.W17!.detail).toMatch(/the move answered no rank \(null\)/);
-      for (const id of IDS.filter((x) => !['W4', 'W13', 'W14', 'W16', 'W17'].includes(x)))
+      expect(by.W18!.verdict, report).toBe('fail');
+      expect(by.W18!.detail).toMatch(/getResource of "templates" answered 200 .*, not 404/);
+      for (const id of IDS.filter((x) => !['W4', 'W13', 'W14', 'W16', 'W17', 'W18'].includes(x)))
         expect(by[id]!.verdict, `${id}\n${report}`).toBe('pass');
     } finally {
-      Object.assign(lk, { templateTags: true, batchAtomic: true, eventsExact: true, moveRank: true });
+      Object.assign(lk, {
+        templateTags: true,
+        batchAtomic: true,
+        eventsExact: true,
+        moveRank: true,
+        templatesNotAResource: true,
+      });
     }
   }, 120_000);
 });

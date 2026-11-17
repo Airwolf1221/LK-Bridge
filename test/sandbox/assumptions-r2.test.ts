@@ -1,5 +1,5 @@
 /**
- * Opt-in: round 2 of the assumptions about LegendKeeper (W1–W17: the asset library, table rows and nested blocks, event
+ * Opt-in: round 2 of the assumptions about LegendKeeper (W1–W18: the asset library, table rows and nested blocks, event
  * pages; and what the second review's fixes assume of templates, batch creates, events and moves), checked on a REAL
  * sandbox project (test/sandbox/assumptions-r2.ts). Runs with `npm run test:sandbox` when
  * LKB_SANDBOX_PROJECT names the sandbox project (on the server, `deploy/sandbox-test.sh --project test`);
@@ -19,7 +19,7 @@ import { resolveSandboxTarget } from './target.js';
 
 const projectName = process.env.LKB_SANDBOX_PROJECT;
 
-describe.skipIf(!projectName)('LegendKeeper sandbox: the newer code’s assumptions, round 2 (W1–W17)', () => {
+describe.skipIf(!projectName)('LegendKeeper sandbox: the newer code’s assumptions, round 2 (W1–W18)', () => {
   it('confirms each assumption on the real API, and cleans up', async () => {
     // Refuses (throws) before any request unless the project is a registered sandbox with a key.
     const target = resolveSandboxTarget(projectName);
