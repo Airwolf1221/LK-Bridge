@@ -23,6 +23,7 @@ import { ProposalsPage } from './pages/proposals';
 import { SettingsPage } from './pages/settings';
 import { StagingPage } from './pages/staging';
 import { AuditsPage } from './pages/audits';
+import { AppraisalPage } from './pages/appraisal';
 import { SnapshotsPage } from './pages/snapshots';
 import { OffsitePage } from './pages/offsite';
 import { AssetsPage } from './pages/assets';
@@ -75,6 +76,7 @@ export const NAV: NavItem[] = [
   { to: '/errors', label: 'Errors', group: 'Monitoring' },
   { to: '/journal', label: 'Journal', group: 'Monitoring' },
   { to: '/tool-calls', label: 'Tool calls', group: 'Monitoring' },
+  { to: '/appraisal', label: 'Appraisal', group: 'Quality' },
   { to: '/audits', label: 'Audits', group: 'Quality' },
   { to: '/evaluation', label: 'Evaluation', group: 'Quality' },
   { to: '/lifecycle', label: 'Archive and lifecycle', group: 'Repository' },
@@ -120,6 +122,7 @@ export const ROUTES: { path: string; prefix?: boolean; render: (session: Session
   { path: '/staging', render: () => <StagingPage /> },
   { path: '/snapshots', render: () => <SnapshotsPage /> },
   { path: '/audits', render: () => <AuditsPage /> },
+  { path: '/appraisal', render: () => <AppraisalPage /> },
   { path: '/offsite', render: () => <OffsitePage /> },
   { path: '/settings', render: () => <SettingsPage /> },
   { path: '/account', render: () => <AccountPage /> },

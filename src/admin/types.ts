@@ -1,4 +1,5 @@
 import type { Packs } from '../packs/service.js';
+import type { Appraisal } from '../appraisal/index.js';
 import type { ImageService } from '../images/service.js';
 import type { Lifecycle } from '../lifecycle/index.js';
 import type { Audits } from '../audits/index.js';
@@ -61,6 +62,8 @@ export interface AdminRuntime {
   readonly offsite?: OffsiteService;
   /** v3 F3a (ADR 0050): the setting packs (the Packs page); optional for tests' runtimes. */
   readonly packs?: Packs;
+  /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (the Appraisal page); optional for tests. */
+  readonly appraisal?: Appraisal;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */
