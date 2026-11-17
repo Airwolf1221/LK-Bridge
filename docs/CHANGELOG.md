@@ -1,5 +1,65 @@
 # Changelog
 
+## Unreleased: CR-2026-11-R2, the second independent review, at write scope (17 November 2026)
+
+**Critical: on the reviewed code an agent at scope `write` could damage Arkona** (R2-10, R2-11): keep Claude and
+ChatGPT at scope `propose` until this is deployed. An independent review of everything merged since CR-2026-11
+(`08feec9` to `013c988`, ADRs 0037 to 0055), after the owner moved both agents to scope `write`
+([docs/reviews/CR-2026-11-R2.md](reviews/CR-2026-11-R2.md); owner decisions in
+[ADR 0056](adr/0056-cr-2026-11-r2-owner-decisions.md), proposed). 52 findings (4 critical, 19 high, 19 medium, 10 low):
+48 fixed, each with a test that fails on the reviewed code; 4 open as owner decisions, their tests kept as
+`it.fails`. No migration; deploy normally. Nothing was run against a live system.
+
+- **Restores and the guards.** A restore is judged on every page it brings back (LegendKeeper restores the pages
+  deleted with it), at entry and inside the lock: an Authoritative page among them, or a set the bridge cannot tell,
+  makes it a canonical proposal (R2-10). No lifecycle marker covers a page named as a lifecycle index, so a pack
+  package can no longer make a decoy `[INDEX] Working` or `[INDEX] Archived` (R2-11). A rename out of `[BSRC]` is
+  canonical (R2-12); a template copy's tags are judged (R2-13); a create is judged on where the page lands now
+  (R2-14); Cherokee, Lisu and small-capital look-alikes are folded (R2-15).
+- **The rails.** `replaceBoardContent`, `updateCalendar` and `deleteBlockProperty` are deletes (R2-02); a template copy
+  or save with its children counts every page, failing closed (R2-01); a cascade or copy that would run directly is
+  counted again live (R2-04); an old-style staged image is a staged placement only while it is in the staging folder
+  (R2-07).
+- **Revert.** It compares what it reverts in full: chronology rows whole and events by every stored field (R2-16), a
+  property by its id and title (R2-17), a move by its parent and rank (R2-19), later writes by any job (R2-28); Last
+  Major Revision is put back only when right, and exactly (R2-18). Every check runs before any write (R2-20); one
+  revert of a job at a time (`REVERT_RUNNING`, R2-21); never back into `LK-Bridge staging` (R2-22); a partial revert
+  is the set the owner confirmed (`confirmed`, `REVERT_CHANGED`, R2-23); folders, verify mismatches, row identity and
+  jobs that failed part-way handled (R2-24 to R2-27).
+- **Behaviour changes for agents:** a chronology link chosen with `sync_timeline_event` `event_id` is a proposal at
+  every scope (R2-08); a low-level job is listed on the Review page by what it does, its own title shown apart
+  (R2-06); a `DUPLICATE_ID` on the first send of `createManyResources` fails the step (R2-05); `RESTORE_IN_PROGRESS` while a restore of
+  the same deleted page is pending (R2-48); `STAGED_BUSY` while a staged image is being placed (R2-38); staging is
+  rated per connection (`RATE_LIMITED`, R2-41).
+- **Packs and appraisal.** A pack job is checked again when it resumes before its first write, and stops if the tool
+  switch now says "always propose" (`PACK_GOVERNANCE_CHANGED`, R2-29); the stricter of the approved and pending switch
+  applies (R2-35); appraisal uses the approved version's rules (R2-32); the asset and Related Sources fixes check again
+  inside their jobs (`FIX_STALE`, R2-30, R2-31); an ambiguous pinned heading refuses the approval (R2-33); takeover,
+  continuity and Scope fixes (R2-34, R2-36, R2-37, R2-40).
+- **Images and snapshots.** One placement of a staged image at a time (R2-38); a snapshot restore stages its own bytes
+  (R2-39); staged files kept while any record needs them, and removed again after a failed clean-up (R2-42, R2-43);
+  canonical folder names (R2-44); a restore's Finish reads every page of events (R2-47).
+- **The dashboard.** Raising a scope, moving a connection up or to a write profile, and a token for a write profile need
+  the owner's re-authentication (R2-50; ADR 0056 decision 1); so does the Status of pages agents create (R2-51); "Mark
+  all reviewed" checks the exact set (R2-09); the orphan delete's proposal lists the rows whose date cannot be read
+  (R2-49).
+- **Open, for the owner** (ADR 0056): a restore counted as one page by the bulk rail (R2-03, decision 9);
+  `file.download_url` with URL sources off (R2-45, decision 7); a folder named after a character (R2-46, decision 8);
+  removals through the low-level tools (R2-52, decision 4); renaming canon that keeps `[BSRC]` and the rails asked at
+  entry only (decisions 5 and 6).
+- **Sandbox (opt-in, for the owner):** `test/sandbox/assumptions-r2.ts` checks on the real API 18 assumptions the newer
+  code and the fixes make (`npm run test:sandbox -- assumptions-r2`; 52 writes and 121 reads); its dry run is
+  `test/tools/assumptions-r2-dryrun.test.ts`. Round 1's A10 now restores through the governor.
+- Docs: [policy.md](policy.md) (the rails table, "The second review's changes"), [auth.md](auth.md) (the scope
+  raises), [bridge-guide.md](bridge-guide.md), [tools.md](tools.md), [dashboard.md](dashboard.md),
+  [packs.md](packs.md), [assets.md](assets.md), [snapshots.md](snapshots.md), [chronology.md](chronology.md),
+  `.env.example` (what the URL switch covers), ADR 0055 (a note).
+- Tests: `test/review/r2-*/` (the four adversarial passes), `test/admin/r2-*.test.ts`, `test/chronology/r2-*.test.ts`,
+  `test/snapshots/r2-*.test.ts`, `test/tools/assumptions-r2-dryrun.test.ts`; `test/admin/actions.test.ts`,
+  `test/chronology/sync.test.ts`, `test/chronology/ties.test.ts`, `test/packs/costs.test.ts`,
+  `test/policy/rails.test.ts`, `test/tools/assumptions-dryrun.test.ts`, `test/ui/access.test.tsx` and
+  `test/ui/review.test.tsx` updated.
+
 ## Unreleased: v3 F3.4 (17 November 2026): write scope: the Review page, Revert, safety rails, pack tool switches
 
 [ADR 0055](adr/0055-write-scope-review-revert-rails.md) (Proposed). Migration `3200_write_scope.sql`. Nothing was run
