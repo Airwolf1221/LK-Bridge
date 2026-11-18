@@ -443,12 +443,12 @@ owner reviews them afterwards and can revert one. Canon and lifecycle changes st
 **Safety rails** (per profile, on the dashboard's Clients & Access page, "Always propose"). Even at scope `write`, a
 request that a rail covers becomes an ordinary proposal instead of running:
 
-| Rail                             | Default    | Covers                                                                                                                                                                                                                                                                                |
-| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Deletes                          | on         | deleting a page, a document, a timeline event or lane, a map feature, an asset, a calendar, a sidebar or infobox property, board shapes; replacing a board's content or a calendar whole (`replaceBoardContent`, `updateCalendar`: what is not sent is deleted; CR-2026-11-R2, R2-02) |
-| Bulk changes (more than N pages) | on, N = 10 | a job that writes or makes more than N pages (a cascade counts every page under its page, and a copy with its children every page copied: R2-01; pages not known count as more; a count from the repository tree that would let the job run is taken again on the live pages: R2-04)  |
-| Renames and moves of pages       | off        | a page's name changed or the page moved (`moveResource`); a page made in the same job is not counted (a rename that drops `[BSRC]` is a canonical proposal whatever the rails: R2-12)                                                                                                 |
-| Asset deletes and asset moves    | on         | `deleteAsset`, and `updateAsset` to another folder; placing a staged image is not a move                                                                                                                                                                                              |
+| Rail                             | Default    | Covers                                                                                                                                                                                                                                                                                                                                            |
+| -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Deletes                          | on         | deleting a page, a document, a timeline event or lane, a map feature, an asset, a calendar, a sidebar or infobox property, board shapes; replacing a board's content or a calendar whole (`replaceBoardContent`, `updateCalendar`: what is not sent is deleted; CR-2026-11-R2, R2-02); and every removal through the low-level tools (below)      |
+| Bulk changes (more than N pages) | on, N = 10 | a job that writes or makes more than N pages (a cascade counts every page under its page, and a copy with its children every page copied: R2-01; a restore every page it may bring back: ADR 0057 decision 9; pages not known count as more; a count from the repository tree that would let the job run is taken again on the live pages: R2-04) |
+| Renames and moves of pages       | off        | a page's name changed or the page moved (`moveResource`); a page made in the same job is not counted (renaming an Authoritative page is a canonical proposal whatever the rails: R2-12, ADR 0057 decision 5)                                                                                                                                      |
+| Asset deletes and asset moves    | on         | `deleteAsset`, and `updateAsset` to another folder; placing a staged image is not a move                                                                                                                                                                                                                                                          |
 
 - **A rail only adds a proposal.** It is asked only about a request that would otherwise run directly: never about one
   already proposed (scope `propose`, the canon guard, a pack tool's switch), approved work, or the bridge's own. A rail
@@ -459,6 +459,26 @@ request that a rail covers becomes an ordinary proposal instead of running:
   shown on the Proposals page and returned to the agent with a hint never to retry it or route round it.
 - A chronology change that re-makes an event (a date edit that removes an end deletes the event and makes it again) is
   not a delete.
+- **Removals through the low-level tools are deletes** (ADR 0057 decision 4, the owner's, 17 November 2026; R2-52).
+  Through `lk_api_write`, `lk_api_batch` or `lk_op_*`, the deletes rail also covers `deleteBlock`, `deleteBlockRow`,
+  `deletePropertyRow` and `deleteBlockPropertyRow`, and every whole-list write that drops an entry LegendKeeper holds
+  now: `replaceDocumentBlocks` (a block not sent), and `updateProperty`, `updateBlockProperty`, `replaceBlock` or
+  `updateBlock` whose `items`, `rows` or `children` leave an entry out (read live before the verdict; a read that fails
+  counts as a removal). A list write that only adds, reorders or edits entries stays an edit. The high-level tools'
+  removals (`write_page`, `set_facts`, the chronology tools) are planned, checked and revertible, and stay edits. Revert
+  does not put a low-level removal back yet (open in ADR 0057): the journal keeps the pre-image.
+- **A restore counts every page it may bring back** (ADR 0057 decision 9; R2-03): LegendKeeper restores every page
+  deleted by the same delete, so the bulk rail counts the page and its restore set (the set the canon guard reads since
+  R2-10: the bridge's journal of its own delete, the snapshots, the tree). A set that cannot be told counts as more than
+  N (fails closed).
+- **The rails are judged when a request arrives** (ADR 0057 decision 6, the owner's: WS-G3). Switching a rail on applies
+  to the next request; it does not stop a direct job already accepted and queued. **Lowering the profile's scope is the
+  emergency brake**: a direct job is asked again by the gate before each step, so lowering the scope (to `propose` or
+  `read`) on Clients & Access stops a queued job before its next write, with one click and no re-authentication.
+- **A page never moves under `templates`** (W18, the write-scope rehearsal: LegendKeeper accepts the move and the page
+  then reads with parentId "templates", out of the repository). `moveResource` to `templates` is refused for every caller
+  at every scope, before anything is queued or proposed (`TEMPLATES_DESTINATION`): `move_resource`, `lk_api_write`,
+  `lk_api_batch`, `lk_op_moveResource`, a setting pack's package and the owner's own dashboard work.
 - **Changing a rail** is an ordinary profile setting: re-authenticated, audited `profile.set_rails` with the rails before
   and after (`PUT /api/admin/clients/profiles/:id/rails`). N is a whole number from 1 to 1,000.
 
@@ -483,8 +503,11 @@ What changed in the guards, the rails and Revert after [CR-2026-11-R2](reviews/C
   that crosses a lifecycle area is refused (R2-10).
 - **No lifecycle marker declares a lifecycle index**: a page given `[INDEX] Working` or `[INDEX] Archived`'s name is
   refused whatever tool asks, setting-pack packages included; every template copy is judged inside the lock (R2-11).
-- **A rename that drops `[BSRC]`** is a canonical proposal, as a rename into it is (R2-12; a rename that keeps it is ADR
-  0057 decision 5).
+- **A rename that drops `[BSRC]`** is a canonical proposal, as a rename into it is (R2-12). **Renaming an Authoritative
+  page** (by its `[BSRC]` prefix or its Status), even keeping `[BSRC]`, is a canonical proposal too (ADR 0057 decision 5),
+  by every route: `update_resource`, `lk_api_write`, `lk_api_batch`, `lk_op_updateResource` and the setting-pack tools
+  (an upgrade to a Core, the appraisal's name fix). Judged by the canon guard at entry and again inside the lock. A
+  Working or Archived page's rename is not affected (the renames-and-moves rail applies when it is on).
 - **Template copies take the template's tags** (and a page saved as a template its page's): they are judged as a
   create's tags, at entry and in the lock; a copy whose template's tags cannot be read is refused (R2-13).
 - **Where a page lands is judged inside the lock**, on its parent as LegendKeeper holds it now: a `[BWRK]`, `[BARC]` or
@@ -492,8 +515,21 @@ What changed in the guards, the rails and Revert after [CR-2026-11-R2](reviews/C
 - **The fold** reads Latin small capitals and Cherokee and Lisu look-alikes as the Latin letters they look like (R2-15).
 - **A job with no job-level lock** (a setting pack's package) runs its checks again when it starts again before its
   first write, as a locked job does (CR-06; R2-29).
-- **A chosen chronology link** is a proposal at every scope (R2-08).
-- **Re-authentication** for every change that lets a connection do more (R2-50, R2-51; [dashboard.md](dashboard.md)).
+- **A chosen chronology link** is a proposal at every scope (R2-08; ADR 0057 decision 3, accepted).
+- **Re-authentication** for every change that lets a connection do more (R2-50, R2-51; [dashboard.md](dashboard.md);
+  ADR 0057 decision 1, accepted).
+- **An orphan event beside a row whose date cannot be read** is not deleted (ADR 0057 decision 2; R2-49): while the age's
+  table has an unpaired row whose Date cell cannot be read and that is not marked table-only, `delete_timeline_event`
+  with `orphan` and the dashboard's "Propose a fix" refuse (`ORPHAN_NEAR_UNREADABLE`, naming the rows), since the bridge
+  cannot tell whether one of them is the event's own. Marking the row table-only, or fixing its date, lifts the block; a
+  row whose date cannot be read that appears after the proposal stops it inside the lock.
+- **ChatGPT's file source has its own switch** (ADR 0057 decision 7; R2-45): the project setting `fileSourceEnabled` (on
+  by default), separate from `UPLOAD_ALLOW_URL_SOURCE` (`url` only), with the same guarded download. Switched off, a
+  `file` is refused before anything is fetched (`UPLOAD_FILE_SOURCE_DISABLED`). Switching it on needs the owner's
+  re-authentication; switching it off is one click; both are audited (`project.set_setting`).
+- **A character's art folder comes from its exact path only** (ADR 0057 decision 8; R2-46): `Characters / Group / Race /
+Character`. A folder with the character's name anywhere else is never used; a path that is ambiguous, or blocked by an
+  asset that is not a folder, is refused (`ART_FOLDER_AMBIGUOUS`).
 
 ## Owner commands
 

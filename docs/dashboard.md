@@ -122,7 +122,9 @@ default) are not listed: you saw them before they happened. The Overview page sh
   page text (block by block), sidebar facts and links, chronology rows and their events (in step), names, tags, aliases
   and moves, and image placements: the image's file is copied back to the bridge's server, so the image is back on
   the **Staging** page, and deleting the placed image from the library is **proposed to you** on the Proposals page
-  (nothing is ever written to the `LK-Bridge staging` folder, and the revert itself deletes nothing). It never reverts
+  (nothing is ever written to the `LK-Bridge staging` folder, and the revert itself deletes nothing). A deleted image
+  is not private (W5): LegendKeeper keeps serving its file at its old URL, so approving that deletion takes the image out
+  of the library, not off the web. It never reverts
   a deletion (it points to `restore_resource`), a proposal, a running job or
   another revert. **All or nothing by default:** if anything cannot be put back, the dialog lists it and you tick
   the box to revert the others anyway (**Revert the rest**). Each target is checked again inside the revert job, so an edit made

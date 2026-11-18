@@ -107,7 +107,12 @@ describe('a full audit of the mock world', () => {
     }
     // A bridge write makes a change snapshot; the next audit lays it over the full one.
     const c = await w.stack.connect();
-    const r = await w.stack.call(c, 'update_resource', { project: 'test', page: A.apple, name: 'Apple pie' });
+    // ADR 0057 decision 5: renaming an Authoritative page is canonical, so the write here is a tag (still a change).
+    const r = await w.stack.call(c, 'update_resource', {
+      project: 'test',
+      page: A.apple,
+      tags: { add: ['apple-pie'] },
+    });
     expect(r.body.status, JSON.stringify(r.body)).toBe('written');
     await w.stack.runtime.snapshots.settled();
     await audits().run(PROJECT, 'manual');
