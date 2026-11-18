@@ -9,7 +9,7 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { ApiError } from './api';
+import { api, ApiError } from './api';
 import {
   PROJECT_STATUS_LABELS,
   STATUS_LABELS,
@@ -19,7 +19,7 @@ import {
   pct,
   prettyJson,
 } from './format';
-import type { TierSnapshot } from './types';
+import type { JobStop, ResumeView, TierSnapshot } from './types';
 
 // ------------------------------------------------------------------------------------------------ toasts
 
@@ -417,5 +417,89 @@ export function Sparkline({
       <line className="spark-base" x1="0" y1={height - 1} x2={width} y2={height - 1} />
       <polyline className="spark-line" points={pts.join(' ')} fill="none" />
     </svg>
+  );
+}
+
+/**
+ * v3 F3d (ADR 0058; the design's section 3): where a package, a rename or a recreate stopped part-way, and Resume. It
+ * continues from where the job stopped: the job's own check runs again inside its locks first, no step that succeeded
+ * runs again and nothing is made twice; a step that is no longer safe is refused with its reason. Work the owner approved
+ * resumes without a fresh approval (the plan is the one approved), and every resume is audited. Revert (the Review page)
+ * stays the other way out.
+ */
+export function ResumeCard({
+  jobId,
+  stop,
+  view,
+  resumeUrl,
+  onDone,
+}: {
+  jobId: string;
+  stop: JobStop;
+  view: ResumeView | null;
+  /** The POST route (with its project). */
+  resumeUrl: string;
+  onDone: () => void;
+}) {
+  const { run, busy } = useAction();
+  const confirm = useConfirm();
+  const what = stop.kind === 'recreate' ? 'recreate' : stop.kind === 'rename' ? 'rename' : 'package';
+  return (
+    <section className="card" aria-label="Stopped part-way">
+      <h3>Stopped part-way</h3>
+      <p>
+        This {what} stopped at step {stop.stoppedStep ?? '?'}
+        {stop.stoppedLabel ? ` (${stop.stoppedLabel})` : ''}
+        {stop.status === 'cancelled' ? ', cancelled' : ''}. Every step up to step {stop.lastVerifiedStep}
+        {stop.lastVerifiedLabel ? ` (${stop.lastVerifiedLabel})` : ''} succeeded and was verified.
+      </p>
+      {stop.reason && <p className="note note-bad">{stop.reason}</p>}
+      {stop.resumes > 0 && (
+        <p className="muted small-text">
+          Resumed {stop.resumes} time{stop.resumes === 1 ? '' : 's'}
+          {stop.lastResumedBy ? `, last by ${stop.lastResumedBy}` : ''}.
+        </p>
+      )}
+      {view && !view.resumable && view.reason && <p className="muted">{view.reason.message}</p>}
+      {view?.resumable && (
+        <Button
+          variant="primary"
+          busy={busy}
+          onClick={() => {
+            void confirm({
+              title: 'Resume it?',
+              message: (
+                <>
+                  {stop.kind === 'recreate' ? (
+                    <p>
+                      The recreate is finished as one new proposal of only what is still missing (F2’s Finish), checked
+                      against LegendKeeper again.
+                    </p>
+                  ) : (
+                    <>
+                      <p>
+                        It continues from step {view.left[0]?.stepNo ?? '?'}: {view.left.length} step
+                        {view.left.length === 1 ? '' : 's'} left. Its own check runs again first, inside its locks
+                        {view.recheck.length > 0 ? ` (step ${view.recheck.join(', ')})` : ''}; no step that succeeded is
+                        sent again, and a step that is no longer safe is refused with its reason.
+                      </p>
+                      {view.approvedBy && (
+                        <p>You approved this work; it resumes without a new approval, and the resume is recorded.</p>
+                      )}
+                    </>
+                  )}
+                </>
+              ),
+              confirmLabel: 'Resume',
+            }).then((ok) => {
+              if (ok) void run(() => api.post(resumeUrl, { confirm: true }), 'Resumed.').then(onDone);
+            });
+          }}
+        >
+          Resume
+        </Button>
+      )}
+      <span className="mono muted small-text">{jobId}</span>
+    </section>
   );
 }

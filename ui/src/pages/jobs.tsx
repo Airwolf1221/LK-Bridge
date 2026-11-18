@@ -9,6 +9,7 @@ import {
   Json,
   Loading,
   PageHeader,
+  ResumeCard,
   StatusBadge,
   useAction,
   useConfirm,
@@ -27,7 +28,7 @@ import { useApi, useNow, useReloadOn } from '../hooks';
 import { useProject, useScopedApi } from '../project';
 import { Link, useRoute } from '../router';
 import { useStreamEvent } from '../stream';
-import type { ClientsResponse, Job, JobDetail, JobStatus, Step } from '../types';
+import type { ClientsResponse, Job, JobDetail, JobStatus, JobStop, ResumeView, Step } from '../types';
 import { RevertButton } from './review';
 
 const ACTIVE: JobStatus[] = ['queued', 'running', 'waiting_budget', 'waiting_lock', 'paused'];
@@ -467,10 +468,13 @@ function JobDetailView({ id }: { id: string }) {
   const { query } = useRoute();
   const { selected, withProject } = useProject();
   const project = query.get('project') ?? selected;
-  const d = useScopedApi<{ job: JobDetail; principals?: PrincipalNames }>(
-    `/jobs/${encodeURIComponent(id)}`,
-    project,
-  );
+  const d = useScopedApi<{
+    job: JobDetail;
+    principals?: PrincipalNames;
+    /** v3 F3d (ADR 0058): where a package, a rename or a recreate stopped part-way, and whether Resume applies. */
+    stop?: JobStop;
+    resume?: ResumeView;
+  }>(`/jobs/${encodeURIComponent(id)}`, project);
   const now = useNow();
   const { set } = d;
   useStreamEvent<{ type: string; job: Job }>('job', ({ job }) => {
@@ -598,6 +602,15 @@ function JobDetailView({ id }: { id: string }) {
               </p>
             )}
           </section>
+          {d.data?.stop && !ACTIVE.includes(job.status) && job.status !== 'succeeded' && (
+            <ResumeCard
+              jobId={job.id}
+              stop={d.data.stop}
+              view={d.data.resume ?? null}
+              resumeUrl={withProject(`/jobs/${encodeURIComponent(job.id)}/resume-stopped`, project)}
+              onDone={d.reload}
+            />
+          )}
 
           <section className="card">
             <h2>Steps</h2>
