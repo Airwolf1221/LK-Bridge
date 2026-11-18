@@ -17,6 +17,7 @@ import { errorResult, render, type ProjectDeps } from '../mcp/tools/shape.js';
 import { runWriteJob } from '../mcp/tools/write-job.js';
 import type { LifecycleConfig } from '../lifecycle/settings.js';
 import { buildPackJob, type PackJob } from './engine/job.js';
+import { itemizePackage } from './engine/items.js';
 import { lmrSummary } from './engine/lmr.js';
 import { planOwner, type OwnerInput } from './engine/owner.js';
 import { planPackage, type PackageInput, type PackPlan, type PlanEnv } from './engine/plan.js';
@@ -302,10 +303,14 @@ export async function finishPackage(
         ...(plan.notes.length ? { notes: plan.notes } : {}),
         lastMajorRevision: lmrView(j),
       };
+      // v3 F3d (ADR 0058): the package as items the owner can approve one by one (everything ticked: as before).
+      const itemized = itemizePackage(plan, j);
       const out = await runWriteJob(pd, mctx, o.tool, {
-        steps: j.steps,
+        steps: itemized.steps,
         labels: j.labels,
         title: j.summary,
+        // v3 F3d: a package that stops part-way can be resumed: its own check (governance, nothing duplicated) first.
+        resumable: { kind: 'package', recheck: [1] },
         ...(j.marker ? { lifecycle: j.marker } : {}),
         // v3 F3.4 (ADR 0055 decision D): the tool's switch: always a proposal, or the agent's scope.
         forceProposal: packToolMode(pack.rules, o.tool) === 'propose',
@@ -316,6 +321,7 @@ export async function finishPackage(
         proposal: {
           operations: j.operations,
           summary: j.summary,
+          ...(itemized.items ? { items: itemized.items } : {}),
           ...(j.lmr.existing.length > 0 ? { lmrNote: lmrSummary(j.lmr.existing) } : {}),
           operation: { tool: o.tool, pack: pack.id, preview },
           prefetched: [...env.cc.sidebars.entries()].map(([resourceId, sb]) => ({

@@ -39,6 +39,15 @@ const POLICY_STATUS: Readonly<Record<string, number>> = {
   REREAD_FAILED: 502,
   CANONICAL_APPROVAL_REQUIRED: 409,
   NOT_CANONICAL: 409,
+  // v3 F3d (ADR 0058): selective approval and "propose these again".
+  NOT_ITEMIZED: 409,
+  UNKNOWN_ITEMS: 400,
+  SELECTION_NOT_CLOSED: 409,
+  NOTHING_SELECTED: 400,
+  NOTHING_LEFT_OUT: 409,
+  ALREADY_REPROPOSED: 409,
+  REPROPOSE_FAILED: 409,
+  APPROVAL_HOOK_REFUSED: 409,
 };
 
 // Chunk 6: maintenance and mapping errors.
@@ -119,7 +128,7 @@ export function describeError(err: unknown): { status: number; body: { error: Re
   if (err instanceof PolicyError) {
     return {
       status: POLICY_STATUS[err.code] ?? 400,
-      body: { error: { code: err.code, message: err.message } },
+      body: { error: { code: err.code, message: err.message, ...err.details } },
     };
   }
   if (err instanceof ProjectChangeError) {

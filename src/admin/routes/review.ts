@@ -94,7 +94,13 @@ export const registerReview: Register = (api, ctx) => {
         'NOT_A_DIRECT_WRITE',
         `Job ${jobId} is not a direct write in this project.`,
       );
-    return redactDeep({ item }, { maxString: 200_000, maxItems: 5000, maxKeys: 1000, maxDepth: 64 });
+    // v3 F3d (ADR 0058): a stopped package's Resume, beside its Revert (the alternative for a direct job).
+    const resume = ctx.deps.runtime.resume;
+    const stop = resume?.stopOf(project.id, jobId) ?? null;
+    return redactDeep(
+      { item, ...(stop ? { resume: resume!.view(project.id, jobId) } : {}) },
+      { maxString: 200_000, maxItems: 5000, maxKeys: 1000, maxDepth: 64 },
+    );
   });
 
   /** Marks items reviewed (each audited as `review.mark`). */

@@ -44,6 +44,15 @@ import {
   withoutDirectOnlyChecks,
 } from '../jobs/internal-steps.js';
 import { mintClientId } from '../jobs/ids.js';
+import {
+  closeSelection,
+  defaultSelection,
+  filterSteps,
+  ItemFilterError,
+  validateItems,
+  withStepDependencies,
+  type PlanItem,
+} from '../jobs/items.js';
 import type { ProposalMeta, ProposalSink, ProposedOp } from '../jobs/policy.js';
 import {
   TERMINAL_JOB_STATUSES,
@@ -54,6 +63,8 @@ import {
   type StepOptions,
   type StepSpec,
   type LifecycleMarker,
+  type ResumableShape,
+  type WaitForShape,
 } from '../jobs/types.js';
 import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
 import { getOperation, operationInputSchema, requireOperation } from '../lk/registry.js';
@@ -174,6 +185,15 @@ export interface ProposalDetail extends ProposalView {
   readonly pageSummary: readonly PageSummaryEntry[];
   /** v2 C2a: the protected canonical changes, when the proposal needs canonical approval. */
   readonly canonical: { readonly reason: string; readonly changes: readonly unknown[] } | null;
+  /**
+   * v3 F3d (ADR 0058): the items the proposal is made of, each with its diff and dependencies, and, once the owner
+   * decided, the ids approved and left out. Null for an ordinary proposal.
+   */
+  readonly itemPlan: {
+    readonly items: readonly PlanItem[];
+    readonly approved: readonly string[] | null;
+    readonly omitted: readonly string[] | null;
+  } | null;
 }
 
 /** v2 C1: the high-level operation kept with a proposal: each text field at most this long. */
@@ -208,6 +228,11 @@ export interface AgentProposalView {
    * for any other proposal).
    */
   readonly proposedBecause?: string;
+  /** v3 F3d (ADR 0058): a proposal made of items: how many, and once decided, how many approved and left out. */
+  readonly items?: ProposalView['items'];
+  /** v3 F3d: the proposal made of this one's left-out items, or the one whose left-out items this one proposes. */
+  readonly reproposedAs?: string;
+  readonly reproposalOf?: string;
 }
 
 export function newProposalId(): string {
@@ -254,6 +279,22 @@ function toView(r: Row, opCount: number): ProposalView {
     canonicalApprovedAt: r.canonical_approved_at == null ? null : Number(r.canonical_approved_at),
     pages: parseJson<PageSummaryEntry[]>(r.page_summary, []).map((e) => e.label),
     proposedBecause: (r.proposed_because as string | null | undefined) ?? null,
+    items: itemCounts(r),
+    reproposedAs: (r.reproposed_as as string | null | undefined) ?? null,
+    reproposalOf: (r.reproposal_of as string | null | undefined) ?? null,
+  };
+}
+
+/** v3 F3d (ADR 0058): a proposal's items, counted (the detail has them whole). */
+function itemCounts(r: Row): ProposalView['items'] {
+  const items = parseJson<unknown[] | null>(r.items, null);
+  if (!Array.isArray(items)) return null;
+  const approved = parseJson<unknown[] | null>(r.approved_items, null);
+  const omitted = parseJson<unknown[] | null>(r.omitted_items, null);
+  return {
+    total: items.length,
+    approved: Array.isArray(approved) ? approved.length : null,
+    omitted: Array.isArray(omitted) ? omitted.length : null,
   };
 }
 
@@ -271,6 +312,27 @@ interface StoredJobOptions {
   readonly holdMore?: { readonly resources?: readonly string[]; readonly documents?: readonly string[] };
   /** C2d (ADR 0036 decision 5): the pages the proposal touches without naming them, as captured. */
   readonly pageScope?: PageScope;
+  /** v3 F3d (ADR 0058): the approved job can be resumed after it stops part-way. */
+  readonly resumable?: ResumableShape;
+  /** v3 F3d (ADR 0058): assets the approved job holds the locks of (a rename's art). */
+  readonly holdAssets?: readonly string[];
+}
+
+/**
+ * v3 F3d (ADR 0058): what may act around an approval (the setting packs register them): before the approved work is
+ * submitted (a rename's new token map becomes a pack version, and its job waits for the owner to approve it), once it
+ * is submitted, and when a proposal is made of another's left-out items.
+ */
+export interface ProposalHooks {
+  beforeSubmit?(ctx: {
+    readonly proposal: ProposalView;
+    readonly operation: Readonly<Record<string, unknown>> | null;
+    readonly items: readonly PlanItem[] | null;
+    /** The items approved (every item when the whole proposal is), or null when it has none. */
+    readonly approved: readonly string[] | null;
+  }): Promise<{ readonly waitFor?: WaitForShape } | null> | { readonly waitFor?: WaitForShape } | null;
+  afterSubmit?(ctx: { readonly proposal: ProposalView; readonly jobId: string }): void;
+  afterRepropose?(ctx: { readonly original: ProposalView; readonly proposalId: string }): void;
 }
 
 /** The part of a high-level operation a list shows (never the Markdown or the page). */
@@ -499,6 +561,29 @@ export class ProposalService implements ProposalSink {
       return def;
     });
 
+    // 1b. v3 F3d (ADR 0058): a proposal made of items: each step names its items, each item its dependencies (with the
+    // ones the steps themselves imply), and every step reference resolves; checked before any read is spent.
+    let items: PlanItem[] | null = null;
+    if (meta.extras?.items && meta.extras.items.length > 0) {
+      try {
+        items = withStepDependencies(meta.extras.items, ops);
+        validateItems(items);
+        const known = new Set(items.map((i) => i.id));
+        ops.forEach((o, i) => {
+          for (const it of o.items ?? [])
+            if (!known.has(it))
+              throw new ItemFilterError(
+                `Step ${i + 1} names the item ${it}, which the proposal does not list.`,
+              );
+        });
+        filterSteps(ops, known);
+      } catch (e) {
+        if (e instanceof ItemFilterError)
+          throw new InvalidParamsError('batch_ops', [{ path: 'proposal.items', message: e.message }]);
+        throw e;
+      }
+    }
+
     // 2. Capture each target through the engine (governor, caller's priority). Reads only.
     const readOrigin: JobOrigin = {
       kind: meta.origin.kind,
@@ -616,9 +701,15 @@ export class ProposalService implements ProposalSink {
         (meta.jobOptions.holdLock ||
           meta.jobOptions.internal ||
           meta.jobOptions.lifecycle ||
+          meta.jobOptions.resumable ||
+          (meta.jobOptions.holdAssets?.length ?? 0) > 0 ||
           (meta.jobOptions.holdDocuments?.length ?? 0) > 0)) ||
       pageScope
         ? {
+            ...(meta.jobOptions?.resumable ? { resumable: meta.jobOptions.resumable } : {}),
+            ...(meta.jobOptions?.holdAssets && meta.jobOptions.holdAssets.length > 0
+              ? { holdAssets: meta.jobOptions.holdAssets.filter((a) => typeof a === 'string') }
+              : {}),
             ...(meta.jobOptions?.holdLock
               ? { holdLock: { resourceId: meta.jobOptions.holdLock.resourceId } }
               : {}),
@@ -642,8 +733,8 @@ export class ProposalService implements ProposalSink {
         .prepare(
           `INSERT INTO proposals (id, project_id, principal_id, principal_label, profile, origin, job_kind, title,
              priority, on_error, summary, state, created_at, updated_at, expires_at, operation, operations,
-             page_summary, requires_canonical, canonical_changes, job_options, proposed_because)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             page_summary, requires_canonical, canonical_changes, job_options, proposed_because, items)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -667,6 +758,7 @@ export class ProposalService implements ProposalSink {
           meta.canonical ? JSON.stringify(meta.canonical) : null,
           jobOptions ? JSON.stringify(jobOptions) : null,
           meta.rail ? meta.rail.reason.slice(0, REASON_MAX) : null,
+          items ? JSON.stringify(items) : null,
         );
       const insert = this.store.db.prepare(
         `INSERT INTO proposal_ops (proposal_id, project_id, idx, op_id, op_kind, params, params_hash, options,
@@ -894,8 +986,12 @@ export class ProposalService implements ProposalSink {
    * `executing` (with its job id), or `conflicted`. Throws `PolicyError` when it cannot be approved now; the proposal
    * then stays `pending`.
    */
-  async approve(actor: OwnerActor, id: string): Promise<ProposalView> {
-    return this.approveWith(actor, id, false, false);
+  async approve(
+    actor: OwnerActor,
+    id: string,
+    opts: { readonly items?: readonly string[] } = {},
+  ): Promise<ProposalView> {
+    return this.approveWith(actor, id, false, false, opts.items ?? null);
   }
 
   /**
@@ -908,9 +1004,42 @@ export class ProposalService implements ProposalSink {
   async approveAsCanon(
     actor: OwnerActor,
     id: string,
-    opts: { readonly bulk?: boolean } = {},
+    opts: { readonly bulk?: boolean; readonly items?: readonly string[] } = {},
   ): Promise<ProposalView> {
-    return this.approveWith(actor, id, true, opts.bulk === true);
+    return this.approveWith(actor, id, true, opts.bulk === true, opts.items ?? null);
+  }
+
+  /**
+   * v3 F3d (ADR 0058): the items of a proposal and what the owner decided (null for an ordinary proposal): the approved
+   * and left-out ids once decided.
+   */
+  itemsOf(id: string): {
+    readonly items: PlanItem[];
+    readonly approved: string[] | null;
+    readonly omitted: string[] | null;
+  } | null {
+    const r = this.store.db
+      .prepare('SELECT items, approved_items, omitted_items FROM proposals WHERE id = ?')
+      .get(id) as
+      { items: string | null; approved_items: string | null; omitted_items: string | null } | undefined;
+    const items = parseJson<PlanItem[] | null>(r?.items, null);
+    if (!r || !Array.isArray(items)) return null;
+    return {
+      items,
+      approved: parseJson<string[] | null>(r.approved_items, null),
+      omitted: parseJson<string[] | null>(r.omitted_items, null),
+    };
+  }
+
+  private readonly hooks: ProposalHooks[] = [];
+
+  /** v3 F3d (ADR 0058): adds hooks around approval (the setting packs'). Returns a remover. */
+  addHooks(h: ProposalHooks): () => void {
+    this.hooks.push(h);
+    return () => {
+      const i = this.hooks.indexOf(h);
+      if (i >= 0) this.hooks.splice(i, 1);
+    };
   }
 
   private async approveWith(
@@ -918,6 +1047,7 @@ export class ProposalService implements ProposalSink {
     id: string,
     canonical: boolean,
     bulk: boolean,
+    selection: readonly string[] | null,
   ): Promise<ProposalView> {
     assertOwner(actor);
     const engine = this.requireEngine();
@@ -941,6 +1071,54 @@ export class ProposalService implements ProposalSink {
         `Proposal ${id} makes no protected canonical change; approve it with the ordinary Approve`,
       );
     }
+    // v3 F3d (ADR 0058; the design's section 2): a selection of the proposal's items. It must already be closed (every
+    // item's dependencies selected: the dashboard drops an unticked item's dependants and shows them before the owner
+    // confirms), so the owner approves exactly the items they saw.
+    const itemSet = this.itemsOf(id);
+    let approvedItems: string[] | null = null;
+    let omittedItems: string[] | null = null;
+    if (selection !== null) {
+      if (!itemSet)
+        throw new PolicyError(
+          'NOT_ITEMIZED',
+          `Proposal ${id} is not made of items; approve or reject it whole`,
+        );
+      const known = new Set(itemSet.items.map((i) => i.id));
+      const unknown = [...new Set(selection)].filter((x) => !known.has(x));
+      if (unknown.length > 0)
+        throw new PolicyError(
+          'UNKNOWN_ITEMS',
+          `Proposal ${id} has no item ${unknown.slice(0, 5).join(', ')}${unknown.length > 5 ? ', …' : ''}`,
+          { unknown },
+        );
+      const closed = closeSelection(itemSet.items, selection);
+      if (closed.dropped.length > 0)
+        throw new PolicyError(
+          'SELECTION_NOT_CLOSED',
+          `Some selected items need items left out (${closed.dropped
+            .slice(0, 5)
+            .map((d) => `${d.id} needs ${d.because.join(', ')}`)
+            .join('; ')}); untick them too, or tick what they need. Nothing was approved.`,
+          { dropped: closed.dropped },
+        );
+      if (closed.kept.length === 0)
+        throw new PolicyError(
+          'NOTHING_SELECTED',
+          `No item of proposal ${id} is selected; reject it instead. Nothing was approved.`,
+        );
+      approvedItems = closed.kept;
+      omittedItems = itemSet.items.map((i) => i.id).filter((x) => !closed.kept.includes(x));
+    } else if (itemSet) {
+      // No selection given: the plan's own, its pre-ticked items (every item of a package; a rename's D1 (a) ticks).
+      approvedItems = defaultSelection(itemSet.items);
+      if (approvedItems.length === 0)
+        throw new PolicyError(
+          'NOTHING_SELECTED',
+          `No item of proposal ${id} is ticked by its plan; select the items to approve, or reject it. Nothing was approved.`,
+        );
+      omittedItems = itemSet.items.map((i) => i.id).filter((x) => !approvedItems!.includes(x));
+    }
+    const partial = omittedItems !== null && omittedItems.length > 0;
     // v2 A1: the proposal's own project, and only that one: its read-only flag, its availability, its data.
     const controls = engine.queries.controls(p.projectId);
     if (controls.project && !controls.project.available) {
@@ -969,15 +1147,23 @@ export class ProposalService implements ProposalSink {
         decided_at: this.now(),
         decided_by: 'owner',
         ...(canonical ? { canonical_approved_by: 'owner', canonical_approved_at: this.now() } : {}),
+        // v3 F3d: exactly what was approved and what was left out.
+        ...(approvedItems
+          ? {
+              approved_items: JSON.stringify(approvedItems),
+              omitted_items: JSON.stringify(omittedItems ?? []),
+            }
+          : {}),
       })
     ) {
       throw new PolicyError('INVALID_TRANSITION', `Proposal ${id} is no longer pending`);
     }
+    const itemsAudit = partial ? { items: { approved: approvedItems, omitted: omittedItems } } : {};
     if (canonical) {
       const changes = this.canonicalOf(id);
       this.store.audit(
         'owner',
-        'proposal.approve_as_canon',
+        partial ? 'proposal.approve_selected_as_canon' : 'proposal.approve_as_canon',
         id,
         { state: 'pending' },
         {
@@ -985,18 +1171,47 @@ export class ProposalService implements ProposalSink {
           canonicalApprovedBy: 'owner',
           canonical: changes,
           ...(bulk ? { bulk: true } : {}),
+          ...itemsAudit,
         },
       );
-    } else this.store.audit('owner', 'proposal.approve', id, { state: 'pending' }, { state: 'approved' });
+    } else
+      this.store.audit(
+        'owner',
+        partial ? 'proposal.approve_selected' : 'proposal.approve',
+        id,
+        { state: 'pending' },
+        { state: 'approved', ...itemsAudit },
+      );
     const unapprove = {
       decided_at: null,
       decided_by: null,
       canonical_approved_by: null,
       canonical_approved_at: null,
+      approved_items: null,
+      omitted_items: null,
     };
 
+    // v3 F3d: a selection runs only the approved items' steps (every reference re-mapped); the whole proposal, exactly
+    // the steps it was captured with.
+    let ops = this.opRows(id);
+    if (partial) {
+      try {
+        ops = selectedOps(ops, approvedItems!);
+      } catch (e) {
+        this.transition(id, ['approved'], 'pending', unapprove);
+        this.store.audit(
+          'system',
+          'proposal.approval_reverted',
+          id,
+          { state: 'approved' },
+          { state: 'pending' },
+        );
+        if (e instanceof ItemFilterError) throw new PolicyError('SELECTION_NOT_CLOSED', e.message);
+        throw e;
+      }
+    }
+
     // Re-read every target; any change since capture means conflict, and nothing runs.
-    const ops = this.opRows(id);
     const systemOrigin: JobOrigin = {
       kind: 'ui',
       client: 'owner',
@@ -1105,6 +1320,35 @@ export class ProposalService implements ProposalSink {
       canonical,
     );
     const jobOptions = this.jobOptionsOf(id);
+    // v3 F3d (ADR 0058): what may act before the approved work is submitted (a rename's new token map becomes a pack
+    // version, and its job waits for the owner to approve it). A hook that refuses leaves the proposal pending.
+    let waitFor: WaitForShape | undefined;
+    for (const h of this.hooks) {
+      if (!h.beforeSubmit) continue;
+      try {
+        const r = await h.beforeSubmit({
+          proposal: this.require(id),
+          operation: this.operationOf(id),
+          items: itemSet?.items ?? null,
+          approved: approvedItems,
+        });
+        if (r?.waitFor) waitFor = r.waitFor;
+      } catch (e) {
+        token.consume();
+        this.transition(id, ['approved'], 'pending', unapprove);
+        this.store.audit(
+          'system',
+          'proposal.approval_reverted',
+          id,
+          { state: 'approved' },
+          { state: 'pending' },
+        );
+        throw new PolicyError(
+          'APPROVAL_HOOK_REFUSED',
+          `${e instanceof Error ? e.message : String(e)}; the proposal stays pending`,
+        );
+      }
+    }
     const principal: Principal = { principalId: p.principalId, profile: p.profile, label: p.principalLabel };
     // CR-2026-11 (CR-03): the sidebars this re-read has just read (a page's getResource carries its properties) are
     // handed to the write guards' entry check, which would otherwise read them again a moment later. The guards still
@@ -1140,6 +1384,12 @@ export class ProposalService implements ProposalSink {
           : {}),
         ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
         ...(jobOptions?.pageScope ? { pageScope: jobOptions.pageScope } : {}),
+        // v3 F3d (ADR 0058): a package or rename that can be resumed, its assets, and what it waits for.
+        ...(jobOptions?.resumable ? { resumable: jobOptions.resumable } : {}),
+        ...(jobOptions?.holdAssets && jobOptions.holdAssets.length > 0
+          ? { holdAssets: jobOptions.holdAssets }
+          : {}),
+        ...(waitFor ? { waitFor } : {}),
         ...(prefetched.length > 0 ? { proposal: { prefetched } } : {}),
       });
     } catch (e) {
@@ -1176,9 +1426,23 @@ export class ProposalService implements ProposalSink {
       return this.require(id);
     }
     this.transition(id, ['approved'], 'executing', { job_id: result.jobId });
+    for (const h of this.hooks) {
+      try {
+        h.afterSubmit?.({ proposal: this.require(id), jobId: result.jobId });
+      } catch (e) {
+        this.o.log?.warn({ err: e, proposalId: id }, 'an approval hook failed after the job was submitted');
+      }
+    }
     const job = engine.queries.getJob(p.projectId, result.jobId);
     if (job && TERMINAL_JOB_STATUSES.has(job.status)) this.onJobFinished(job);
     return this.require(id);
+  }
+
+  /** v2 C1: the high-level operation as captured (null for a v1 proposal). */
+  private operationOf(id: string): Readonly<Record<string, unknown>> | null {
+    const r = this.store.db.prepare('SELECT operation FROM proposals WHERE id = ?').get(id) as
+      { operation: string | null } | undefined;
+    return parseJson<Record<string, unknown> | null>(r?.operation, null);
   }
 
   /**
@@ -1504,6 +1768,26 @@ export class ProposalService implements ProposalSink {
     }
   }
 
+  /** v3 F3d (ADR 0058): the proposal an approved job ran from, or null. */
+  byJob(projectId: string, jobId: string): { readonly id: string; readonly state: ProposalState } | null {
+    const r = this.store.db
+      .prepare('SELECT id, state FROM proposals WHERE job_id = ? AND project_id = ?')
+      .get(jobId, projectId) as { id: string; state: ProposalState } | undefined;
+    return r ? { id: r.id, state: r.state } : null;
+  }
+
+  /**
+   * v3 F3d (ADR 0058, decision D6): the approved job was resumed. It is the same approved plan, so no fresh approval:
+   * the proposal goes back from `failed` to `executing` and follows the job again (audited `proposal.resumed`).
+   */
+  jobResumed(projectId: string, jobId: string): boolean {
+    const p = this.byJob(projectId, jobId);
+    if (!p || p.state !== 'failed') return false;
+    if (!this.transition(p.id, ['failed'], 'executing', { error: null, finished_at: null })) return false;
+    this.store.audit('system', 'proposal.resumed', p.id, { state: 'failed' }, { state: 'executing', jobId });
+    return true;
+  }
+
   // ============================================================================================ queries
 
   state(id: string): ProposalState | undefined {
@@ -1622,7 +1906,122 @@ export class ProposalService implements ProposalSink {
       operations,
       pageSummary: parseJson<PageSummaryEntry[]>(extra?.page_summary, []),
       canonical: p.requiresCanonicalApproval ? this.canonicalOf(id) : null,
+      itemPlan: this.itemsOf(id),
     };
+  }
+
+  /**
+   * v3 F3d (ADR 0058; the design's section 2): "propose these again". A new proposal made of the items the owner left
+   * out of an approved one (their steps as planned, every reference re-mapped; the checks and read-back they share kept),
+   * by the bridge for the owner (as the dashboard's "Propose a fix" is), captured afresh: every target read again, so an
+   * item whose page changed since is refused there, before anything is proposed. Only once the approved part has been
+   * submitted, and only once (the new proposal is recorded on both).
+   */
+  async reproposeOmitted(
+    actor: OwnerActor,
+    id: string,
+    origin: JobOrigin,
+  ): Promise<{ readonly proposalId: string; readonly summary: string | null }> {
+    assertOwner(actor);
+    const engine = this.requireEngine();
+    const p = this.require(id);
+    const set = this.itemsOf(id);
+    if (!set) throw new PolicyError('NOT_ITEMIZED', `Proposal ${id} is not made of items`);
+    if (!['executing', 'executed', 'failed'].includes(p.state) || set.omitted === null)
+      throw new PolicyError(
+        'INVALID_TRANSITION',
+        `Proposal ${id} is ${p.state}: its left-out items are proposed again once the approved part has run`,
+      );
+    if (set.omitted.length === 0)
+      throw new PolicyError(
+        'NOTHING_LEFT_OUT',
+        `Every item of proposal ${id} was approved; nothing was left out`,
+      );
+    if (p.reproposedAs)
+      throw new PolicyError(
+        'ALREADY_REPROPOSED',
+        `The items left out of proposal ${id} were proposed again as ${p.reproposedAs}`,
+      );
+    const omitted = new Set(set.omitted);
+    // The left-out items, each needing only what was left out with it (what was approved has run).
+    const items: PlanItem[] = set.items
+      .filter((i) => omitted.has(i.id))
+      .map((i) => ({ ...i, dependsOn: i.dependsOn.filter((d) => omitted.has(d)) }));
+    const rows = this.opRows(id);
+    let steps: StepSpec[];
+    try {
+      steps = filterSteps(
+        rows.map((r) => ({ ...(r.options as StepOptions), op: r.op, params: r.params as OpParams })),
+        omitted,
+      ).steps;
+    } catch (e) {
+      throw new PolicyError(
+        'REPROPOSE_FAILED',
+        `The items left out of proposal ${id} cannot be proposed on their own (${e instanceof Error ? e.message : String(e)}); ask the agent to plan them again`,
+      );
+    }
+    const jobOptions = this.jobOptionsOf(id);
+    const operation = this.operationOf(id);
+    const extra = this.store.db.prepare('SELECT operations, origin FROM proposals WHERE id = ?').get(id) as
+      { operations: string | null; origin: string | null } | undefined;
+    const operations = parseJson<Record<string, unknown>[] | null>(extra?.operations, null);
+    const labels = items.slice(0, 3).map((i) => i.label);
+    const summary = `Again, the ${items.length} item${items.length === 1 ? '' : 's'} left out of ${id}: ${labels.join('; ')}${items.length > 3 ? '; …' : ''}`;
+    let r: Awaited<ReturnType<JobEngine['submit']>>;
+    try {
+      r = await engine.submit({
+        kind: 'batch_ops',
+        project: p.projectId,
+        steps,
+        onError: 'stop',
+        priority: p.priority as ProposalMeta['priority'],
+        title: summary.slice(0, 300),
+        origin,
+        internal: true,
+        forceProposal: true,
+        ...(jobOptions?.holdLock ? { holdLock: jobOptions.holdLock } : {}),
+        ...(jobOptions?.holdMore ? { holdMore: jobOptions.holdMore } : {}),
+        ...(jobOptions?.holdDocuments && jobOptions.holdDocuments.length > 0
+          ? { holdDocuments: jobOptions.holdDocuments }
+          : {}),
+        ...(jobOptions?.holdAssets && jobOptions.holdAssets.length > 0
+          ? { holdAssets: jobOptions.holdAssets }
+          : {}),
+        ...(jobOptions?.lifecycle ? { lifecycle: jobOptions.lifecycle } : {}),
+        ...(jobOptions?.resumable ? { resumable: jobOptions.resumable } : {}),
+        proposal: {
+          ...(operation ? { operation: { ...operation, reproposalOf: id } } : {}),
+          ...(operations ? { operations } : {}),
+          summary: summary.slice(0, 500),
+          items,
+        },
+      });
+    } catch (e) {
+      const msg = e instanceof JobsError ? e.message : e instanceof Error ? e.message : String(e);
+      throw new PolicyError(
+        'REPROPOSE_FAILED',
+        `The items left out of proposal ${id} could not be proposed again: ${msg}. Nothing was proposed; ask the agent to plan them again`,
+      );
+    }
+    if (!('proposalId' in r))
+      throw new PolicyError(
+        'REPROPOSE_FAILED',
+        `The items left out of proposal ${id} ran as a job (${r.jobId}) instead of a proposal`,
+      );
+    this.store.db.prepare('UPDATE proposals SET reproposed_as = ? WHERE id = ?').run(r.proposalId, id);
+    this.store.db.prepare('UPDATE proposals SET reproposal_of = ? WHERE id = ?').run(id, r.proposalId);
+    this.store.audit('owner', 'proposal.repropose', id, undefined, {
+      proposalId: r.proposalId,
+      items: items.map((i) => i.id),
+    });
+    for (const h of this.hooks) {
+      try {
+        h.afterRepropose?.({ original: this.require(id), proposalId: r.proposalId });
+      } catch (err) {
+        this.o.log?.warn({ err, proposalId: id }, 'a hook failed after the items were proposed again');
+      }
+    }
+    return { proposalId: r.proposalId, summary: r.summary ?? null };
   }
 
   /** v2 C2a: the protected changes a proposal was flagged for. */
@@ -1677,6 +2076,10 @@ export class ProposalService implements ProposalSink {
       canonicalReason: p.requiresCanonicalApproval ? (this.canonicalOf(p.id)?.reason ?? null) : null,
       pages: p.pages,
       ...(p.proposedBecause ? { proposedBecause: p.proposedBecause } : {}),
+      // v3 F3d (ADR 0058): what the owner approved of a proposal made of items, and what was left out.
+      ...(p.items ? { items: p.items } : {}),
+      ...(p.reproposedAs ? { reproposedAs: p.reproposedAs } : {}),
+      ...(p.reproposalOf ? { reproposalOf: p.reproposalOf } : {}),
     };
   }
 
@@ -1784,6 +2187,25 @@ function executionSteps(ops: readonly ProposalOpView[]): StepSpec[] {
   });
 }
 
+/**
+ * v3 F3d (ADR 0058): the operations of the approved items (src/jobs/items.ts `filterSteps`: every reference re-mapped,
+ * a chain re-chained past what was left out). Each keeps its captured target, version and fingerprint, and the index the
+ * owner saw (for a conflict's message).
+ */
+function selectedOps(rows: readonly ProposalOpView[], approved: readonly string[]): ProposalOpView[] {
+  const specs: StepSpec[] = rows.map((r) => ({
+    ...(r.options as StepOptions),
+    op: r.op,
+    params: r.params as OpParams,
+  }));
+  const f = filterSteps(specs, approved);
+  return f.steps.map((st, k) => {
+    const orig = rows[f.from[k]! - 1]!;
+    const { op: _op, params, ...options } = st;
+    return { ...orig, params: params ?? {}, options: options };
+  });
+}
+
 /** v2 C2b: the resources an operation creates with client ids (a create, a template copy, a batch). */
 function createdIds(op: string, params: OpParams): string[] {
   const body = params.body as Record<string, unknown> | undefined;
@@ -1849,6 +2271,9 @@ function stepOptions(o: StepOptions): StepOptions {
     // fitted into the template copy's content inside the lock (keeping only what Markdown cannot express there).
     ...(o.bindAssetUrls ? { bindAssetUrls: o.bindAssetUrls } : {}),
     ...(o.fill ? { fill: o.fill } : {}),
+    // v3 F3d (ADR 0058): the items each step belongs to, for the owner's selection (left out when the job runs).
+    ...(o.items && o.items.length > 0 ? { items: o.items } : {}),
+    ...(o.itemParts && o.itemParts.length > 0 ? { itemParts: o.itemParts } : {}),
   };
 }
 

@@ -105,9 +105,11 @@ import {
   type ProposalCaptured,
   type RunOptions,
   type RunResult,
+  type ResumableShape,
   type StepOptions,
   type StepSpec,
   type StepView,
+  type WaitForShape,
   type SubmitRequest,
   type SubmitResult,
   type UploadImageSubmit,
@@ -200,6 +202,10 @@ const HELD_LOCK = 'heldLock';
 const HELD_MORE = 'heldMore';
 /** v2 C2c: the lifecycle marker (`BatchSubmit.lifecycle`), stored in the job's options for the guard inside the lock. */
 export const LIFECYCLE_OPTION = 'lifecycle';
+/** v3 F3d (ADR 0058): a job that can be resumed after it stops part-way (`BatchSubmit.resumable`), in its options. */
+export const RESUMABLE_OPTION = 'resumable';
+/** v3 F3d (ADR 0058): what a job waits for before its first step (`BatchSubmit.waitFor`), in its options. */
+export const WAIT_FOR_OPTION = 'waitFor';
 
 export class JobEngine {
   readonly events = new JobEventEmitter();
@@ -228,6 +234,8 @@ export class JobEngine {
   private readonly planners = new Map<string, StepPlanner>();
   /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
   private writeGuard: WriteGuard | undefined;
+  /** v3 F3d (ADR 0058): judges a job's `waitFor` (`setWaitForCheck`). */
+  private waitForCheck: ((w: WaitForShape) => string | null) | undefined;
   /** v3 F2: the Last Major Revision planner (src/lmr/), asked about every caller's write request. */
   private lmrPlanner: LmrPlanner | undefined;
   private assetDeleteKeeper: AssetDeleteKeeper | undefined;
@@ -658,6 +666,22 @@ export class JobEngine {
    * `registered` (a setting pack's), replacing any earlier one of that name. A job whose check names a missing checker
    * fails at that check, before its writes (a verify target is `not_checked`). Returns an unregister.
    */
+  /**
+   * v3 F3d (ADR 0058): judges a job's `waitFor` (null: it may start now; else what it still waits for, in words). The
+   * setting packs register it; without it, a job with a `waitFor` waits. `poke` asks again.
+   */
+  setWaitForCheck(check: (w: WaitForShape) => string | null): () => void {
+    this.waitForCheck = check;
+    return () => {
+      if (this.waitForCheck === check) this.waitForCheck = undefined;
+    };
+  }
+
+  /** v3 F3d (ADR 0058): runs the scheduler now (something a waiting job waits for may have changed). */
+  poke(): void {
+    this.pump();
+  }
+
   registerAsyncChecker(name: string, checker: RegisteredChecker): () => void {
     this.asyncCheckers.set(name, checker);
     return () => {
@@ -983,8 +1007,17 @@ export class JobEngine {
     const priority = req.priority ?? 'P2';
     const onError: OnError = req.onError ?? 'stop';
     const title = req.title ?? `batch of ${validated.length} operation(s)`;
+    const resumable = resumableOf(req.resumable);
+    const waitFor = waitForOf(req.waitFor);
     const jobOptions: ProposalJobOptions | undefined =
-      req.holdLock || req.internal || req.lifecycle || req.pageScope || heldDocs.length > 0
+      req.holdLock ||
+      req.internal ||
+      req.lifecycle ||
+      req.pageScope ||
+      heldDocs.length > 0 ||
+      resumable ||
+      waitFor ||
+      heldAssets.length > 0
         ? {
             ...(req.holdLock ? { holdLock: { resourceId: req.holdLock.resourceId } } : {}),
             ...(heldDocs.length > 0 ? { holdDocuments: [...new Set(req.holdDocuments ?? [])] } : {}),
@@ -994,6 +1027,11 @@ export class JobEngine {
             ...(req.holdMore ? { holdMore: req.holdMore } : {}),
             ...(req.lifecycle ? { lifecycle: req.lifecycle } : {}),
             ...(req.pageScope ? { pageScope: req.pageScope } : {}),
+            // v3 F3d (ADR 0058): kept with a proposal, so its approved job can be resumed, waits as planned and holds
+            // the assets it renames.
+            ...(resumable ? { resumable } : {}),
+            ...(waitFor ? { waitFor } : {}),
+            ...(heldAssets.length > 0 ? { holdAssets: [...new Set(req.holdAssets ?? [])] } : {}),
           }
         : undefined;
     // Every step is put to the policy gate before anything is queued: one deny denies the batch, one propose
@@ -1037,7 +1075,7 @@ export class JobEngine {
       onError,
       prepared,
       'queued',
-      heldLock || req.lifecycle || req.pageScope || review
+      heldLock || req.lifecycle || req.pageScope || review || resumable || waitFor
         ? {
             ...(heldLock ? { [HELD_LOCK]: heldLock } : {}),
             ...(heldMore.length > 0 ? { [HELD_MORE]: heldMore } : {}),
@@ -1046,6 +1084,9 @@ export class JobEngine {
             ...(req.pageScope ? { pageScope: req.pageScope } : {}),
             // v3 F3.4 (ADR 0055): what the Review page shows of a direct write.
             ...(review ? { review } : {}),
+            // v3 F3d (ADR 0058): a job that can be resumed after it stops part-way, and one that waits to start.
+            ...(resumable ? { [RESUMABLE_OPTION]: resumable } : {}),
+            ...(waitFor ? { [WAIT_FOR_OPTION]: waitFor } : {}),
           }
         : undefined,
     );
@@ -1899,6 +1940,91 @@ export class JobEngine {
       this.pump();
       return this.emitJob(jobId, 'updated');
     },
+    /**
+     * v3 F3d (ADR 0058; the owner-approved design docs/design/F3d-renames.md, section 3): continues a job that stopped
+     * part-way (failed, or cancelled) from where it stopped, in the same job, so every binding to what it already did
+     * (a created page's ids, an If-Match chain) still holds. A step that succeeded is never run again, except the job's
+     * own checks its options name (`resumable.recheck`): they run again first, inside the job, so its preconditions are
+     * judged again (a refusal stops it again before anything is written). The step it stopped at is retried as
+     * `retryStep` retries one: a definite failure as new work with a new key; one that may have applied keeps its key and
+     * is verified before anything is sent again, so a create is never made twice. Every step after it is queued again.
+     * Only a job whose options say it can be resumed here (a package or a rename; a recreate is finished by its own
+     * restore, which plans only what is missing).
+     */
+    resumeStopped: (
+      projectId: string,
+      jobId: string,
+    ): { readonly job: JobView; readonly from: number; readonly rechecked: readonly number[] } => {
+      const job = this.requireJob(jobId, projectId);
+      if (this.active.has(jobId) || (job.status !== 'failed' && job.status !== 'cancelled')) {
+        throw new InvalidControlError(
+          `Job ${jobId} has not stopped part-way (it is ${job.status}); only a failed or cancelled job is resumed`,
+          { jobId },
+        );
+      }
+      const r = this.repo.jobOptions(jobId)[RESUMABLE_OPTION] as ResumableShape | undefined;
+      if (!r || r.kind === 'recreate') {
+        throw new InvalidControlError(`Job ${jobId} cannot be resumed in place`, { jobId });
+      }
+      const steps = this.repo.steps(jobId);
+      const stopped = steps.find((s) => s.status !== 'succeeded');
+      if (!stopped) throw new InvalidControlError(`Job ${jobId} has nothing left to run`, { jobId });
+      const rechecked: number[] = [];
+      for (const n of r.recheck ?? []) {
+        const s = steps.find((x) => x.stepNo === n);
+        if (!s || s.stepNo >= stopped.stepNo || s.status !== 'succeeded' || !isInternalStep(s.opId)) continue;
+        this.repo.updateStep(jobId, n, {
+          status: 'pending',
+          error: null,
+          finishedAt: null,
+          firstSentAt: null,
+          maybeSent: false,
+        });
+        rechecked.push(n);
+      }
+      for (const s of steps) {
+        if (s.stepNo < stopped.stepNo || s.status === 'succeeded') continue;
+        const def = getOperation(s.opId);
+        const ambiguous = s.maybeSent || s.status === 'uncertain';
+        if (ambiguous) {
+          // It may have applied: its key, version and first-send time stay, so it is verified before any re-send.
+          this.repo.updateStep(jobId, s.stepNo, {
+            status: 'pending',
+            maybeSent: true,
+            error: null,
+            finishedAt: null,
+          });
+        } else if (s.status === 'failed') {
+          const attempt0 = s.attempt0 + 1;
+          this.repo.updateStep(jobId, s.stepNo, {
+            status: 'pending',
+            attempt0,
+            idempotencyKey: def?.method === 'POST' ? idempotencyKeyFor(jobId, s.stepNo, attempt0) : null,
+            error: null,
+            maybeSent: false,
+            firstSentAt: null,
+            ifMatch: null,
+            finishedAt: null,
+          });
+        } else {
+          // Cancelled (or never started): it never ran.
+          this.repo.updateStep(jobId, s.stepNo, { status: 'pending', error: null, finishedAt: null });
+        }
+      }
+      this.refreshProgress(jobId);
+      const after = this.repo.steps(jobId);
+      this.repo.updateJob(jobId, {
+        status: 'queued',
+        finishedAt: null,
+        lastError: null,
+        waitReason: null,
+        cancelRequested: false,
+        pauseRequested: false,
+        uncertain: after.some((s) => s.status === 'uncertain'),
+      });
+      this.pump();
+      return { job: this.emitJob(jobId, 'updated'), from: stopped.stepNo, rechecked };
+    },
   };
 
   /**
@@ -1961,9 +2087,35 @@ export class JobEngine {
         }
         continue;
       }
+      // v3 F3d (ADR 0058): a job that waits for something before it starts (a rename waiting for the owner to approve
+      // the pack version holding its new token map). Asked again each time the scheduler runs (`poke` wakes it).
+      const waiting = step ? this.waitingFor(job.id) : null;
+      if (waiting) {
+        if (job.waitReason?.held !== 'waiting_for' || job.waitReason.message !== waiting.message) {
+          this.repo.updateJob(job.id, {
+            waitReason: { held: 'waiting_for', message: waiting.message, waitFor: waiting.waitFor },
+          });
+          this.emitJob(job.id, 'updated');
+        }
+        continue;
+      }
+      if (job.waitReason?.held === 'waiting_for') this.repo.updateJob(job.id, { waitReason: null });
       this.launch(job.id);
       capacity--;
     }
+  }
+
+  /** v3 F3d (ADR 0058): what a queued job still waits for (its `waitFor`, judged by the registered check), or null. */
+  private waitingFor(jobId: string): { message: string; waitFor: WaitForShape } | null {
+    const w = this.repo.jobOptions(jobId)[WAIT_FOR_OPTION] as WaitForShape | undefined;
+    if (!w) return null;
+    let still: string | null;
+    try {
+      still = this.waitForCheck ? this.waitForCheck(w) : `waits for ${w.reason || w.kind}`;
+    } catch (e) {
+      still = `the wait could not be judged (${e instanceof Error ? e.message : String(e)})`;
+    }
+    return still === null ? null : { message: still, waitFor: w };
   }
 
   private launch(jobId: string): Active {
@@ -3176,6 +3328,24 @@ function normaliseOrigin(origin: JobOrigin): JobOrigin {
   return origin;
 }
 
+/** v3 F3d (ADR 0058): `BatchSubmit.resumable` as stored (bridge code only; anything malformed is left out). */
+function resumableOf(r: BatchSubmit['resumable']): ResumableShape | undefined {
+  if (!r || (r.kind !== 'package' && r.kind !== 'rename' && r.kind !== 'recreate')) return undefined;
+  const recheck = (r.recheck ?? []).filter((n) => Number.isInteger(n) && n >= 1);
+  return {
+    kind: r.kind,
+    ...(recheck.length > 0 ? { recheck } : {}),
+    ...(typeof r.ref === 'string' && r.ref !== '' ? { ref: r.ref.slice(0, 100) } : {}),
+  };
+}
+
+/** v3 F3d (ADR 0058): `BatchSubmit.waitFor` as stored (bridge code only). */
+function waitForOf(w: BatchSubmit['waitFor']): WaitForShape | undefined {
+  if (!w || w.kind !== 'pack_version' || typeof w.packId !== 'string' || !Number.isInteger(w.version))
+    return undefined;
+  return { kind: w.kind, packId: w.packId, version: w.version, reason: String(w.reason ?? '').slice(0, 500) };
+}
+
 function stepOptions(o: StepOptions): StepOptions {
   return {
     ...(o.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
@@ -3260,6 +3430,11 @@ function stepOptions(o: StepOptions): StepOptions {
       : {}),
     // v3 F3.4 (ADR 0055): set by the engine only (readBeforeSteps).
     ...(o.readBefore === true ? { readBefore: true } : {}),
+    // v3 F3d (ADR 0058): a proposal's items (the owner's selection reads them; the engine runs the step the same).
+    ...(Array.isArray(o.items) && o.items.length > 0 && o.items.every((x) => typeof x === 'string')
+      ? { items: [...o.items] }
+      : {}),
+    ...itemPartsOf(o.itemParts),
   };
 }
 
@@ -3332,4 +3507,22 @@ export function describeStep(op: Readonly<Record<string, unknown>> | undefined):
       : []),
   ].filter((x): x is string => x !== null);
   return parts.length > 0 ? parts.join(', ') : null;
+}
+
+/** v3 F3d (ADR 0058): a step's item parts, as stored (each a path and, per element there, its items), or nothing. */
+function itemPartsOf(v: unknown): { itemParts?: { path: string; items: string[][] }[] } {
+  if (!Array.isArray(v) || v.length === 0) return {};
+  const out: { path: string; items: string[][] }[] = [];
+  for (const p of v as unknown[]) {
+    if (typeof p !== 'object' || p === null) return {};
+    const { path, items } = p as { path?: unknown; items?: unknown };
+    if (typeof path !== 'string' || !Array.isArray(items)) return {};
+    out.push({
+      path,
+      items: (items as unknown[]).map((x) =>
+        Array.isArray(x) ? (x as unknown[]).filter((y): y is string => typeof y === 'string') : [],
+      ),
+    });
+  }
+  return { itemParts: out };
 }

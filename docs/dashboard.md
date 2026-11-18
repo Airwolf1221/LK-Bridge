@@ -505,6 +505,44 @@ its note (indexes are marked as having no Status). The related pages are listed 
 the set left out. One "Approve and accept as canon" runs the whole set; a page added, removed or moved under the set
 since the proposal makes it conflicted (ADR 0036 decision 5).
 
+## Proposals: items and selective approval (v3 F3d (renames))
+
+[ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md), the design's section 2 (decision D5). A proposal made of
+**items** (an `arkona_rename`, and every setting-pack package) shows an **Items** card in its review, grouped (Page names,
+Identity facts, Resource aliases, Mention labels, Index routing, Chronology, Taxonomy and art, Identity token, Textual
+restatements; a package's New pages and Changes to existing pages):
+
+- a **tickbox per item**, ticked as the plan proposes. An item the plan left unticked says why ("Unticked by the plan: it is
+  inside quotation marks", "it follows “formerly” in the same sentence", "it is under Unresolved Material", "the row is
+  dated before the rename's effective date"). An AU page's item is labelled **AU**;
+- its **change** (before → after, the sentence around a restatement, each fact of a page), and what it **needs**;
+- **Tick all / Untick all** per group;
+- unticking an item that others need **leaves them out too**, and the card says which, with what they need, **before** you
+  confirm; the count ("12 of 41 items will be approved") follows your ticks.
+
+**Approve selected** (or **Approve selected and accept as canon** for a canonical proposal, which every rename is) sends
+exactly that selection, through the same confirmation as the whole: the dialog repeats what is approved, what is left out
+and which items were left out because they need an unticked one. Nothing is written for a left-out item; a selection the
+server finds not closed is refused (`SELECTION_NOT_CLOSED`) and the proposal stays pending. Approving with everything as
+the plan ticked it is the ordinary Approve; for a package that is every item, as before. The audit records
+`proposal.approve_selected` (or `…_as_canon`) with the items approved and left out.
+
+Once decided, the card says how many were approved and left out, lists what was left out, and offers **Propose these
+again**: one new proposal of exactly those items (planned as they were, every target read again), shown as "Proposed
+again as prop_…"; the new proposal names the one it came from. Agents can never approve.
+
+## Jobs and Review: Resume (v3 F3d (renames))
+
+The design's section 3 (decision D6). A package, a rename or a recreate whose job **stopped part-way** (a failed step, a
+cancel) shows a **Stopped part-way** card on its job page (and in the Review page's detail of a direct job): the step it
+stopped at and why, its last verified step (every step up to it succeeded and read back as planned), and how often it was
+resumed. **Resume** (after a confirmation that says from which step it continues and how many are left) continues the
+same job: its own check runs again first, inside its locks; no step that succeeded is sent again, no page or document is
+made twice, and a step that is no longer safe is refused with its reason (the card shows it; resume again once the page
+is as it should be, or revert). Work you approved resumes without a new approval; every resume is audited (`job.resume`,
+with where it stopped and who approved the work). A recreate is finished as before (F2's Finish: a new proposal of what
+is still missing). Revert (Review page, ADR 0055) stays the other way out for a direct job: it undoes the completed steps.
+
 ## Archive and lifecycle (v2 C2c)
 
 The **Archive and lifecycle** page (navigation: Repository) lists the selected project's lifecycle record,

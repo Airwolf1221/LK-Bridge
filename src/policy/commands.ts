@@ -5,6 +5,7 @@
  * (test/policy/no-agent-escalation.test.ts enumerates every registered tool and checks).
  */
 import type { AuthStore } from '../auth/store.js';
+import type { JobOrigin } from '../jobs/types.js';
 import type { ConnectionManager } from './connections.js';
 import { PolicyError } from './errors.js';
 import type { ProposalDetail, ProposalService } from './proposals.js';
@@ -85,9 +86,24 @@ export interface OwnerCommands {
   /** v2 A1: `filter.project` is one project's id or `ALL_PROJECTS`. */
   listProposals(actor: OwnerActor, filter: ProposalFilter): ProposalView[];
   getProposal(actor: OwnerActor, id: string): ProposalDetail;
-  approve(actor: OwnerActor, id: string): Promise<ProposalView>;
+  /** v3 F3d (ADR 0058): `items`, a selection of a proposal made of items (closed: its dependencies selected too). */
+  approve(
+    actor: OwnerActor,
+    id: string,
+    opts?: { readonly items?: readonly string[] },
+  ): Promise<ProposalView>;
   /** v2 C2a: "Approve and accept as canon", the only approval of a proposal flagged requiresCanonicalApproval. */
-  approveAsCanon(actor: OwnerActor, id: string): Promise<ProposalView>;
+  approveAsCanon(
+    actor: OwnerActor,
+    id: string,
+    opts?: { readonly items?: readonly string[] },
+  ): Promise<ProposalView>;
+  /** v3 F3d (ADR 0058): "propose these again": a new proposal of the items left out of an approved one. */
+  reproposeOmitted(
+    actor: OwnerActor,
+    id: string,
+    origin: JobOrigin,
+  ): Promise<{ readonly proposalId: string; readonly summary: string | null }>;
   reject(actor: OwnerActor, id: string, reason?: string): ProposalView;
   /** Ordinary approval for each id. A canonical proposal is skipped (`skipped: true`), and stays pending. */
   bulkApprove(actor: OwnerActor, ids: readonly string[]): Promise<BulkResult[]>;
@@ -292,14 +308,19 @@ export function createOwnerCommands(d: OwnerCommandDeps): OwnerCommands {
       return p;
     },
 
-    approve(actor, id) {
+    approve(actor, id, opts) {
       assertOwner(actor);
-      return proposals.approve(actor, id);
+      return proposals.approve(actor, id, opts?.items ? { items: opts.items } : {});
     },
 
-    approveAsCanon(actor, id) {
+    approveAsCanon(actor, id, opts) {
       assertOwner(actor);
-      return proposals.approveAsCanon(actor, id);
+      return proposals.approveAsCanon(actor, id, opts?.items ? { items: opts.items } : {});
+    },
+
+    reproposeOmitted(actor, id, origin) {
+      assertOwner(actor);
+      return proposals.reproposeOmitted(actor, id, origin);
     },
 
     reject(actor, id, reason) {

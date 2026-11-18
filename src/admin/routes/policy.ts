@@ -110,21 +110,41 @@ export const registerPolicy: Register = (api, ctx) => {
     };
   });
 
+  /**
+   * v3 F3d (ADR 0058): `items`, the owner's selection of a proposal made of items ("Approve selected"): it must be
+   * closed (409 SELECTION_NOT_CLOSED names what else it would drop), and needs exactly what approving the whole proposal
+   * would (an ordinary one nothing more; a canonical one only "Approve and accept as canon").
+   */
+  const itemsBody = z.object({ items: z.array(z.string().min(1).max(300)).min(1).max(2000).optional() });
+
   api.post('/proposals/:id/approve', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    const b = parseInput(itemsBody, req.body ?? {});
     const project = ctx.project(parseInput(projectQuery, req.query).project);
-    return { proposal: redactDeep(await actions.approve(project.id, id)) };
+    return { proposal: redactDeep(await actions.approve(project.id, id, b.items)) };
   });
 
   /**
    * v2 C2a (ADR 0032): the only approval of a proposal that makes a protected canonical change. A separate action, with
-   * its own confirmation in the body; audited as `proposal.approve_as_canon`, with who accepted it as canon.
+   * its own confirmation in the body; audited as `proposal.approve_as_canon`, with who accepted it as canon. v3 F3d:
+   * `items` approves a selection (audited `proposal.approve_selected_as_canon`).
    */
   api.post('/proposals/:id/approve-as-canon', async (req) => {
     const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    const b = parseInput(itemsBody.extend({ confirm: z.literal(true) }), req.body);
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    return { proposal: redactDeep(await actions.approveAsCanon(project.id, id, b.items)) };
+  });
+
+  /**
+   * v3 F3d (ADR 0058): "Propose these again": the items left out of an approved proposal, as a new proposal for the
+   * owner (by the bridge, as "Propose a fix" is), captured afresh. Audited `proposal.repropose`.
+   */
+  api.post('/proposals/:id/repropose', async (req) => {
+    const { id } = parseInput(z.object({ id: idSchema }), req.params);
     parseInput(z.object({ confirm: z.literal(true) }), req.body);
     const project = ctx.project(parseInput(projectQuery, req.query).project);
-    return { proposal: redactDeep(await actions.approveAsCanon(project.id, id)) };
+    return { repropose: await actions.reproposeOmitted(project.id, id) };
   });
 
   api.post('/proposals/:id/reject', (req) => {

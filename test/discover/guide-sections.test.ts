@@ -81,6 +81,9 @@ describe('the misses of the owner’s evaluation (14 to 15 November 2026)', () =
     ['arkona_appraisal_fix', 'Setting packs (Arkona) > Arkona appraisal'],
     ['Appraise Arkona pages, or see what a change breaks', 'Setting packs (Arkona) > Arkona appraisal'],
     ['appraisal', 'Setting packs (Arkona) > Arkona appraisal'],
+    // v3 F3d (ADR 0058): the renames part.
+    ['arkona_rename', 'Setting packs (Arkona) > Arkona renames'],
+    ['Arkona renames', 'Setting packs (Arkona) > Arkona renames'],
     ['Make a character', 'Create a page or a character (Working first)'],
     ['set_facts', 'Change facts and links'],
     ['write_page', "Edit a page's text"],

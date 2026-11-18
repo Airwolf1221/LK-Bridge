@@ -429,7 +429,8 @@ describe('migration 0600 on a v1.0.2 database', () => {
         expect(without(without(now, 'project_id'), 'operation'), t).toEqual(rows);
       } else if (t === 'proposals') {
         // v2 C1 (1200) adds `operation`; v2 C2a (1300) the operations list, page summary, canonical approval, job
-        // options and verification; v3 F3.4 (3200) the safety rail that sent it: all empty on rows written before them.
+        // options and verification; v3 F3.4 (3200) the safety rail that sent it; v3 F3d (renames) (3400) the items, what
+        // was approved and left out, and "propose these again": all empty on rows written before them.
         const added = [
           'operation',
           'operations',
@@ -440,6 +441,11 @@ describe('migration 0600 on a v1.0.2 database', () => {
           'job_options',
           'verification',
           'proposed_because',
+          'items',
+          'approved_items',
+          'omitted_items',
+          'reproposed_as',
+          'reproposal_of',
         ];
         for (const r of now) {
           for (const c of added) expect(r[c], `${t}.${c}`).toBeNull();

@@ -195,6 +195,22 @@ export interface Packs {
     /** Replaces a pack's rules (the owner's command, used by the tests; never an agent). A new version. Audited. */
     replaceRules(actor: string, packId: string, rules: PackRules, reason: string): Pack;
     /**
+     * v3 F3d (renames), ADR 0058 decision D3: the token change of a culture or race rename the owner approved: the map's
+     * entry for the old value renamed to the new value, with the new token. A new version, waiting for the owner's
+     * approval on the Packs page like any other (the rename's job waits for it). Audited as `pack.rename_token`.
+     */
+    renameToken(
+      actor: string,
+      packId: string,
+      change: {
+        readonly map: 'race' | 'culture';
+        readonly from: string;
+        readonly to: string;
+        readonly token: string;
+        readonly reason: string;
+      },
+    ): Pack;
+    /**
      * v3 F3.4 (ADR 0055 decision D): the owner sets write tools' switches (`propose`: always a proposal; `scope`: the
      * agent's scope). A new version, waiting for approval as usual (until then every package is refused, as for any
      * new version). Audited as `pack.set_tool_modes` with the switches before and after. Unchanged: the pack as it is.
@@ -932,6 +948,39 @@ export function createPacks(d: PacksDeps): Packs {
         );
         changed();
         return { pack: after, governance: await governance(pack.id) };
+      },
+      renameToken(actor, packId, change) {
+        if (actor !== ACTOR_OWNER) throw new PackError('NOT_OWNER', 'Only the owner edits a pack.');
+        const pack = requirePack(packId);
+        const before = pack.rules.tags[change.map];
+        const next: Record<string, string> = {};
+        const fromKey = (k: string) => k.trim().toLowerCase() === change.from.trim().toLowerCase();
+        for (const [k, v] of Object.entries(before)) if (!fromKey(k)) next[k] = v;
+        next[change.to] = change.token;
+        const map = tokenMap(next, change.map);
+        if (pack.rules.tags.never.some((t) => t.toLowerCase() === change.token.toLowerCase()))
+          throw new PackError('INVALID_TOKEN', `“${change.token}” is never a tag.`);
+        if (stableJson(map) === stableJson(before)) return pack;
+        const rules = packRulesSchema.parse({
+          ...pack.rules,
+          tags: { ...pack.rules.tags, [change.map]: map },
+        });
+        const after = store.newVersion(pack.id, rules, change.reason);
+        d.audit(
+          actor,
+          'pack.rename_token',
+          pack.id,
+          { version: pack.version, map: change.map, [change.map]: before },
+          {
+            version: after.version,
+            from: change.from,
+            to: change.to,
+            token: change.token,
+            reason: change.reason,
+          },
+        );
+        changed();
+        return after;
       },
       replaceRules(actor, packId, rules, reason) {
         const pack = requirePack(packId);

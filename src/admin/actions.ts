@@ -13,7 +13,7 @@ import { plausibleApiKey } from '../config/check.js';
 import { ProjectChangeError, type KeyProbe } from '../projects/registry.js';
 import { keyHint } from '../secrets/crypto.js';
 import { WRITERS_LIMIT, WRITERS_MIN } from '../config/jobs.js';
-import type { ControlsView, JobView } from '../jobs/index.js';
+import { SYSTEM_PRINCIPAL, type ControlsView, type JobView } from '../jobs/index.js';
 import type { Profile, Scope } from '../policy/index.js';
 import { SettingValueError, parseSettingValue } from '../projects/index.js';
 import {
@@ -826,14 +826,26 @@ export function createAdminActions(d: AdminDeps) {
 
     // ---------------------------------------------------------------------------------------- proposals
     // The dashboard approves or rejects within the project it shows; approval executes against the proposal's project.
-    approve: (projectId: string, id: string) => {
+    /** v3 F3d (ADR 0058): `items`, the owner's selection of a proposal made of items (audited as approve_selected). */
+    approve: (projectId: string, id: string, items?: readonly string[]) => {
       proposalIn(projectId, id);
-      return cmd.approve(OWNER, id);
+      return cmd.approve(OWNER, id, items ? { items } : {});
     },
     /** v2 C2a: "Approve and accept as canon" (audited as proposal.approve_as_canon by the proposal service). */
-    approveAsCanon: (projectId: string, id: string) => {
+    approveAsCanon: (projectId: string, id: string, items?: readonly string[]) => {
       proposalIn(projectId, id);
-      return cmd.approveAsCanon(OWNER, id);
+      return cmd.approveAsCanon(OWNER, id, items ? { items } : {});
+    },
+    /** v3 F3d (ADR 0058): "propose these again" (audited as proposal.repropose by the proposal service). */
+    reproposeOmitted: (projectId: string, id: string) => {
+      proposalIn(projectId, id);
+      return cmd.reproposeOmitted(OWNER, id, {
+        kind: 'ui',
+        client: 'owner',
+        tool: 'proposal.repropose',
+        detail: `repropose:${id}`,
+        principal: SYSTEM_PRINCIPAL,
+      });
     },
     reject: (projectId: string, id: string, reason?: string) => {
       proposalIn(projectId, id);

@@ -82,7 +82,9 @@ export type ChronologyTool =
   /** v2 E5 hotfix: the "Propose a fix" of a count mismatch (src/chronology/count.ts); no MCP tool. */
   | 'chronology_count_fix'
   /** v3 F3.4 (ADR 0055): the owner's revert of a direct chronology change (src/review/revert-chronology.ts). */
-  | 'job_revert';
+  | 'job_revert'
+  /** v3 F3d (renames), ADR 0058: the chronology rows (and their events) of an approved rename (src/packs/rename). */
+  | 'arkona_rename';
 
 /** One write a change makes, as the record keeps it (what resuming checks against the documents as they are). */
 export type TargetWrite =

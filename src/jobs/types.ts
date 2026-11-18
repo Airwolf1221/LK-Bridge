@@ -231,6 +231,50 @@ export interface StepOptions {
    * recorded as succeeded with `{ skipped }`): a duplicate folder is deleted only when the merge has emptied it.
    */
   readonly onlyIfEmpty?: boolean;
+  /**
+   * v3 F3d (renames), ADR 0058, set by bridge code only: the items of a proposal this step belongs to (src/jobs/items.ts).
+   * Kept when ANY of them is approved; a step with none is shared. Only the owner's selection on the Proposals page
+   * reads it; the engine runs a step the same with or without it.
+   */
+  readonly items?: readonly string[];
+  /**
+   * v3 F3d (ADR 0058), set by bridge code only: arrays inside a shared bridge step's params whose elements belong to
+   * items (a check, a read-back target, a chronology record's writes). Only the elements of approved items stay.
+   */
+  readonly itemParts?: readonly ItemPartShape[];
+}
+
+/** v3 F3d: one array of a shared step whose elements belong to items (src/jobs/items.ts, `ItemPart`). */
+export interface ItemPartShape {
+  readonly path: string;
+  readonly items: readonly (readonly string[])[];
+}
+
+/**
+ * v3 F3d (ADR 0058, design section 3), bridge code only: a job that can be resumed after it stops part-way (a setting
+ * pack's package, a rename, a recreate), and the steps it checks again first (its preconditions, re-run inside the
+ * job before it continues from where it stopped).
+ */
+export interface ResumableShape {
+  readonly kind: 'package' | 'rename' | 'recreate';
+  /** The steps (1-based) run again on resume before the step it stopped at (the job's own checks). */
+  readonly recheck?: readonly number[];
+  /** What the kind needs to find its record (a recreate's restore id). */
+  readonly ref?: string;
+}
+
+/**
+ * v3 F3d (ADR 0058, decision D3), bridge code only: the job waits before its first step until this holds (queued, with
+ * `waitReason.held` naming it). A culture or race rename waits for the owner to approve the pack version holding its new
+ * token map.
+ */
+export interface WaitForShape {
+  readonly kind: 'pack_version';
+  readonly packId: string;
+  /** The version the job waits for the owner to approve (or a later one). */
+  readonly version: number;
+  /** Shown to the owner while the job waits. */
+  readonly reason: string;
 }
 
 export interface StepSpec extends StepOptions {
@@ -324,6 +368,10 @@ export interface BatchSubmit {
   readonly stagedPlacement?: boolean;
   /** v3 F3c (ADR 0051 decision 1): the caller's Last Major Revision override (absent: `auto`, the rule decides). */
   readonly lastMajorRevision?: LmrMode;
+  /** v3 F3d (ADR 0058), bridge code only: the job can be resumed after it stops part-way (see `ResumableShape`). */
+  readonly resumable?: ResumableShape;
+  /** v3 F3d (ADR 0058), bridge code only: the job waits before its first step until this holds. */
+  readonly waitFor?: WaitForShape;
 }
 
 /** C2d: one entry of `BatchSubmit.pageScope` (src/policy/page-scope.ts has the logic). */

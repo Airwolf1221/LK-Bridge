@@ -67,3 +67,71 @@ export function addPackTaxonomyEntry(
   });
   return { recorded: 'taxonomy_entry', entryId: entry.id, plural: entry.plural, singular: entry.singular };
 }
+
+/**
+ * v3 F3d (renames), ADR 0058: an approved race rename renames the race's taxonomy entry with its navigation index: the
+ * plural becomes the new name, the singular is worked out again by the same rules (an owner's own singular is kept and
+ * flagged for review), and the old plural and singular are kept as aliases (a character whose Race / Species still says
+ * the old name is still placed). The asset folder is left as it is (the race's art stays where it is). A resumed job
+ * that finds the entry renamed already leaves it alone.
+ */
+export function renamePackTaxonomyEntry(
+  store: RegistryStore,
+  r: { readonly entryId: string; readonly from: string; readonly plural: string },
+  audit: (actor: string, action: string, target: string | null, before?: unknown, after?: unknown) => void,
+  actor: string,
+): Record<string, unknown> {
+  const e = store.entry(r.entryId);
+  if (!e) return { recorded: null, why: 'the taxonomy entry is gone' };
+  if (e.plural === r.plural) return { recorded: 'taxonomy_rename', entryId: e.id, unchanged: true };
+  if (e.plural !== r.from)
+    return { recorded: null, why: `the entry is now named “${e.plural}”, not “${r.from}”`, entryId: e.id };
+  const keepOwner = e.singularSource === 'owner';
+  const s = keepOwner
+    ? { singular: e.singular, source: 'owner' as const, rule: null }
+    : singularFor(r.plural);
+  const aliases = [...e.aliases];
+  for (const a of [e.plural, e.singular])
+    if (a !== r.plural && a !== s.singular && !aliases.some((x) => x.toLowerCase() === a.toLowerCase()))
+      aliases.push(a);
+  const review = [
+    ...e.review.filter((x) => x.code !== 'singular_guess' && x.code !== 'renamed'),
+    ...(keepOwner
+      ? [
+          {
+            code: 'renamed',
+            message: `Renamed from “${e.plural}”: the singular “${e.singular}” was yours and is kept; check it.`,
+          },
+        ]
+      : s.source === 'rule'
+        ? [
+            {
+              code: 'singular_guess',
+              message: `The singular “${s.singular}” is a guess (${s.rule ?? 'a rule'}); check it.`,
+            },
+          ]
+        : []),
+  ];
+  const next = store.renameEntry(e.id, {
+    plural: r.plural,
+    singular: s.singular,
+    singularSource: s.source,
+    aliases,
+    status: review.length > 0 ? 'needs_review' : e.status,
+    review,
+  });
+  audit(
+    actor,
+    'registry.taxonomy_rename_entry',
+    e.typeId,
+    { plural: e.plural, singular: e.singular },
+    {
+      entryId: e.id,
+      plural: next.plural,
+      singular: next.singular,
+      aliases: next.aliases,
+      by: 'arkona_rename',
+    },
+  );
+  return { recorded: 'taxonomy_rename', entryId: e.id, plural: next.plural, singular: next.singular };
+}

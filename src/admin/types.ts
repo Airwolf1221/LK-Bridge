@@ -27,6 +27,8 @@ import type { RevertService } from '../review/revert.js';
 /**
  * What the admin API needs from the running bridge. `Runtime` (src/runtime.ts) satisfies it; tests may build their own.
  */
+import type { ResumeService } from '../resume/service.js';
+
 export interface AdminRuntime {
   readonly engine: JobEngine;
   /** The projects this bridge serves (v2 A1): each one's governor, flags and whether it is served now. */
@@ -70,6 +72,8 @@ export interface AdminRuntime {
   readonly review?: ReviewService;
   /** v3 F3.4 (ADR 0055): Revert of a direct-write job (the Review and Jobs pages); optional for tests' runtimes. */
   readonly reverts?: RevertService;
+  /** v3 F3d (ADR 0058): Resume of a package, a rename or a recreate that stopped part-way; optional for tests. */
+  readonly resume?: ResumeService;
   /** The configuration the running components were built from (environment plus the dashboard's stored values). */
   readonly config: Config;
   /** The environment's values alone: what clearing a stored setting falls back to. */

@@ -365,6 +365,40 @@ appropriate interactive follow-up; do not silently perform the repair." So:
 The full-text index also serves the general `search` tool (`content: true`), for every project with snapshots, not
 only Arkona's: the pack decides only the appraisal tools.
 
+## Renames, items and resuming a package (v3 F3d (renames))
+
+[ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md); the owner-approved design:
+[design/F3d-renames.md](design/F3d-renames.md). The tool: [tools.md](tools.md#arkona_rename).
+
+**`arkona_rename`** renames a character or an owner everywhere it is named, as one canonical proposal made of **items**:
+its page names (ids kept), identity facts, the old name kept as an alias (the Aliases fact and the pages' search aliases),
+mention labels, index routing lines, chronology rows (with their events, by the chronology tools' own path), the art
+folder and asset names, a race's taxonomy entry, a culture's or race's identity token (with every character's fact and
+tag) and each textual restatement elsewhere. What it reads: the pack's approved rules (the keys of the name parts, the
+Aliases fact, Naming Culture and Race / Species; the routing and Unresolved Material headings; the token maps), the
+full-text index (A1) to find every mention, and each page or document it plans to edit, live.
+
+**The token change is the pack's (D3).** A culture or race whose token map entry changes comes with a NEW pack version in
+the same package: when the owner approves the rename with its token item, the bridge makes the version (the pack's
+`renameToken` command: the entry for the old value renamed to the new value, with its new token; audited
+`pack.rename_token`), and the rename's job **waits** until the owner approves that version on the Packs page (its check
+confirms, inside the lock, that the approved version maps the new value to the new token). Until then the pack is "waiting
+for approval", so every package tool refuses, as for any new version. Left out, the token item makes no version, and the
+characters' tags (which need it) are left out with it.
+
+**Name parts are never inferred (D4).** The planner compares the character's Given and Family facts with the old and new
+names: a part that is in the old name and not in the new one must be given (`given`, `family`), or the plan is refused
+(`NAME_PARTS_REQUIRED`).
+
+**Items, for every package.** Since F3d each F3a and F3b package is made of items too: the new character's set (its index
+with its identity page), each other new page, and the changes to each existing page. Everything ticked runs exactly as
+before; the owner can leave a page out (the pages that need it go with it), and propose what was left out again later
+(the package's own check still knows the pages the first part made: `ownIds`).
+
+**Resuming.** A package or a rename whose job stops part-way records where; the owner resumes it (Jobs and Review pages), an
+agent its own direct job (`bridge_job_resume`). The package's check runs again first: a page this package already made is
+its own (`ownIds`), and an image this job already placed is not "busy". Nothing is made twice.
+
 ## Types as data, and what F3b extends
 
 The engine never assumes it is making a character: a type's rules say what it makes, and a hook (`src/packs/hooks.ts`)

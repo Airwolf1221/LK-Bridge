@@ -14,6 +14,7 @@ import {
   ErrorNote,
   Loading,
   PageHeader,
+  ResumeCard,
   StatusBadge,
   useAction,
   useConfirm,
@@ -25,6 +26,7 @@ import { useProject, useProjectReloadOn, useScopedApi } from '../project';
 import { useReauth } from '../reauth';
 import { Link } from '../router';
 import type {
+  ResumeView,
   ReviewChange,
   ReviewDetail,
   ReviewItem,
@@ -229,12 +231,24 @@ function ChangeBody({ c }: { c: ReviewChange }) {
 }
 
 function ItemDetail({ jobId }: { jobId: string }) {
-  const d = useScopedApi<{ item: ReviewDetail }>(`/review/${encodeURIComponent(jobId)}`);
+  const { selected, withProject } = useProject();
+  // v3 F3d (ADR 0058): a stopped package's Resume, beside its Revert.
+  const d = useScopedApi<{ item: ReviewDetail; resume?: ResumeView }>(`/review/${encodeURIComponent(jobId)}`);
   if (d.error) return <ErrorNote error={d.error} onRetry={d.reload} />;
   if (!d.data) return <Loading />;
   const item = d.data.item;
+  const resume = d.data.resume;
   return (
     <div className="review-detail">
+      {resume?.stop && (
+        <ResumeCard
+          jobId={jobId}
+          stop={resume.stop}
+          view={resume}
+          resumeUrl={withProject(`/jobs/${encodeURIComponent(jobId)}/resume-stopped`, selected)}
+          onDone={d.reload}
+        />
+      )}
       {item.pageChanges.length === 0 && (
         <p className="muted">The journal no longer holds this job’s changes.</p>
       )}

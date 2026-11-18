@@ -338,6 +338,34 @@ export interface JobDetail extends Job {
   artifacts: Artifact[];
 }
 
+/** v3 F3d (ADR 0058): where a package, a rename or a recreate stopped part-way. */
+export interface JobStop {
+  jobId: string;
+  kind: 'package' | 'rename' | 'recreate';
+  /** Every step up to this one succeeded and none was read back different from its plan (0: none). */
+  lastVerifiedStep: number;
+  lastVerifiedLabel: string | null;
+  stoppedStep: number | null;
+  stoppedLabel: string | null;
+  reason: string | null;
+  status: 'failed' | 'cancelled';
+  stoppedAt: number;
+  resumes: number;
+  lastResumedAt: number | null;
+  lastResumedBy: string | null;
+}
+
+/** v3 F3d (ADR 0058): whether Resume applies to a stopped job now, and what it would do. */
+export interface ResumeView {
+  resumable: boolean;
+  reason: { code: string; message: string } | null;
+  kind: JobStop['kind'] | null;
+  stop: JobStop | null;
+  left: { stepNo: number; op: string; status: string }[];
+  recheck: number[];
+  approvedBy: string | null;
+}
+
 export interface ErrorGroup {
   fingerprint: string;
   opId: string;
@@ -483,6 +511,32 @@ export interface Proposal {
   canonicalApprovedAt?: number | null;
   /** v2 C2a: the page-level summary, one plain line per page. */
   pages?: string[];
+  /** v3 F3d (ADR 0058): a proposal made of items: how many, and (once decided) how many approved and left out. */
+  items?: { total: number; approved: number | null; omitted: number | null } | null;
+  /** v3 F3d: the proposal made of this one's left-out items ("Propose these again"), and the one this one came from. */
+  reproposedAs?: string | null;
+  reproposalOf?: string | null;
+}
+
+/** v3 F3d (ADR 0058): one item of a proposal made of items (a package's page, one edit of a rename). */
+export interface PlanItem {
+  id: string;
+  kind: string;
+  group: string;
+  label: string;
+  page?: { id: string; name: string } | null;
+  diff?: {
+    before?: string | null;
+    after?: string | null;
+    context?: string;
+    changes?: { what: string; before: string | null; after: string | null }[];
+  };
+  /** The items it needs: leaving one of them out leaves this one out too. */
+  dependsOn: string[];
+  /** Ticked by the plan (a rename's D1 (a) rules untick some, saying why). */
+  selected: boolean;
+  why?: string;
+  tags?: string[];
 }
 
 /** v2 C2a: one line of a proposal's page-level summary. */
@@ -595,6 +649,8 @@ export interface ProposalDetail extends Proposal {
   pageSummary?: PageSummaryEntry[];
   /** v2 C2a: the protected changes, when the proposal needs canonical approval. */
   canonical?: { reason: string; changes: ProtectedChange[] } | null;
+  /** v3 F3d (ADR 0058): its items, and (once decided) the ids approved and left out; null for an ordinary proposal. */
+  itemPlan?: { items: PlanItem[]; approved: string[] | null; omitted: string[] | null } | null;
 }
 
 /** v2 C2a: a project's protected canonical facts rules. */
