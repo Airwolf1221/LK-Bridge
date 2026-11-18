@@ -11,6 +11,7 @@
  */
 import type { OperationDef } from '../lk/registry-types.js';
 import { PolicyDeniedError } from './errors.js';
+import type { PlanItem } from './items.js';
 import type {
   JobKind,
   JobOrigin,
@@ -20,7 +21,9 @@ import type {
   PageScopeEntryShape,
   Principal,
   PriorityClass,
+  ResumableShape,
   StepOptions,
+  WaitForShape,
 } from './types.js';
 
 /** What the gate knows about an operation: the registry metadata plus the step options. */
@@ -155,6 +158,12 @@ export interface ProposalJobOptions {
   readonly holdMore?: { readonly resources?: readonly string[]; readonly documents?: readonly string[] };
   /** C2d (ADR 0036 decision 5): the pages the request touches without naming them, as planned. */
   readonly pageScope?: { readonly subtrees: readonly PageScopeEntryShape[] };
+  /** v3 F3d (ADR 0058): the approved job can be resumed after it stops part-way. */
+  readonly resumable?: ResumableShape;
+  /** v3 F3d (ADR 0058): the approved job waits before its first step until this holds (a pack version approved). */
+  readonly waitFor?: WaitForShape;
+  /** v3 F3d (ADR 0058): assets the approved job holds the locks of from start to end (a rename's art). */
+  readonly holdAssets?: readonly string[];
 }
 
 /**
@@ -186,6 +195,12 @@ export interface ProposalExtras {
     readonly path: Readonly<Record<string, string>>;
     readonly body: unknown;
   }[];
+  /**
+   * v3 F3d (ADR 0058; the design's section 2): the proposal is made of ITEMS the owner can approve one by one (a
+   * package's pages, a rename's edits), each with its diff and dependencies; the steps name their items
+   * (`StepOptions.items`). Absent: an ordinary proposal, approved whole.
+   */
+  readonly items?: readonly PlanItem[];
 }
 
 export interface ProposalSink {

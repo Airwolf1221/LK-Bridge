@@ -134,6 +134,19 @@ export interface ProposalView {
    * (`proposed because: bulk change (14 pages > 10)`); null for any other proposal.
    */
   readonly proposedBecause: string | null;
+  /**
+   * v3 F3d (ADR 0058): a proposal made of items (a package's pages, a rename's edits), counted: how many, and once the
+   * owner decided, how many were approved and how many left out. Null: an ordinary proposal, approved whole.
+   */
+  readonly items: {
+    readonly total: number;
+    readonly approved: number | null;
+    readonly omitted: number | null;
+  } | null;
+  /** v3 F3d: the proposal made of this one's left-out items ("propose these again"), when there is one. */
+  readonly reproposedAs: string | null;
+  /** v3 F3d: the proposal whose left-out items this one proposes again. */
+  readonly reproposalOf: string | null;
 }
 
 export interface ProposalConflict {

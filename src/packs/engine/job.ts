@@ -198,6 +198,8 @@ export function buildPackJob(env: PlanEnv, plan: PackPlan): Result<PackJob> {
         // CR-2026-11-R2 (R2-34): each image's own pending placement proposal this package takes over (a direct job runs
         // before that proposal is withdrawn: it is withdrawn once the job has succeeded).
         ...(plan.takeovers?.length ? { takeovers: plan.takeovers } : {}),
+        // v3 F3d (ADR 0058): the pages this package makes are its own when the job is resumed.
+        ...(plan.pages.length > 0 ? { ownIds: plan.pages.map((p) => p.id) } : {}),
       },
     });
   }

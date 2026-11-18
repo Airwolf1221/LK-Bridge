@@ -47,6 +47,10 @@ export interface WriteJobSpec {
   readonly proposal: ProposalExtras;
   /** v3 F3c (ADR 0051): the caller's Last Major Revision override. */
   readonly lastMajorRevision?: LmrMode | undefined;
+  /** v3 F3d (ADR 0058): the job can be resumed after it stops part-way (a package, a rename). */
+  readonly resumable?: BatchSubmit['resumable'];
+  /** v3 F3d (ADR 0058): assets the job holds the locks of from start to end (a rename's art). */
+  readonly holdAssets?: readonly string[];
   /** The plan, as every answer shows it. */
   readonly head: Record<string, unknown>;
   readonly preview: () => unknown;
@@ -94,6 +98,8 @@ export async function runWriteJob(
       ...(spec.forceProposal === true ? { forceProposal: true } : {}),
       ...(spec.stagedPlacement ? { stagedPlacement: true } : {}),
       ...(spec.lastMajorRevision ? { lastMajorRevision: spec.lastMajorRevision } : {}),
+      ...(spec.resumable ? { resumable: spec.resumable } : {}),
+      ...(spec.holdAssets && spec.holdAssets.length > 0 ? { holdAssets: spec.holdAssets } : {}),
       internal: true,
       proposal: spec.proposal,
     });

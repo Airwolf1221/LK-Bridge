@@ -167,7 +167,13 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
     kind?: 'character' | 'owner' | 'relationship' | 'art';
     images?: string[];
     takeovers?: { stagedId: string; proposalId: string }[];
+    /**
+     * v3 F3d (ADR 0058): the pages this package makes (their ids minted when it was planned). A page found with one of
+     * these ids is this job's own (a package resumed after it stopped part-way), never a duplicate.
+     */
+    ownIds?: string[];
   };
+  const own = new Set(input.ownIds ?? []);
   const subject = input.subject ?? '?';
   const what = (input.type ?? 'character').toLowerCase();
   const kind = input.kind ?? 'character';
@@ -222,6 +228,8 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
   // v3 F3b (design section 6): every staged image the job places is still staged, on the server, placed by nothing else.
   for (const id of input.images ?? []) {
     const row = d.stagedImage?.(ctx.projectId, id);
+    // v3 F3d (ADR 0058): placed already by this very job (a package resumed after it stopped part-way).
+    if (row && !row.staged && row.placementJobId === ctx.jobId) continue;
     // CR-2026-11-R2 (R2-34): the image's own placement proposal this package takes over, still waiting (no job), is this
     // job's to supersede: a direct job runs before it is withdrawn (withdrawn once the job has succeeded).
     const takenOver = (pid: string) =>
@@ -258,6 +266,7 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
       for (const x of Array.isArray(body.data) ? (body.data as Obj[]) : []) {
         const raw = str(x.name) ?? '';
         if (typeof x.deletedAt === 'string') continue;
+        if (own.has(str(x.id) ?? '')) continue;
         const display = cleanPrefixes(raw).name;
         if (names.has(nameKey(display)) || prefixes.some((p) => nameKey(display).startsWith(p))) {
           if (u.code)
@@ -301,8 +310,9 @@ async function absentCheck(d: PackEngineDeps, ctx: RegisteredCheckContext): Prom
     const ids =
       r?.status === 'resolved' ? [r.node.id] : r?.status === 'ambiguous' ? r.candidates.map((c) => c.id) : [];
     for (const id of ids) {
+      if (own.has(id)) continue;
       const c = types.characterOfPage(id);
-      if (c.ok) {
+      if (c.ok && !own.has(c.value.core.id)) {
         return {
           differences: [],
           refusal: {
