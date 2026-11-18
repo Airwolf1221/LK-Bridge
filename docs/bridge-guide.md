@@ -37,6 +37,7 @@ tasks come first and the reference after. The last section, **Operations**, list
 | Make any other Arkona owner page (polity, race…)    | `arkona_create_owner` (one package; its home checked)                   | `create_resource` and `set_facts` calls           |
 | Relate two Arkona characters, or add art to one     | `arkona_create_relationship`, `arkona_add_character_art`                | separate creates; `upload_image` to a destination |
 | Recall who an Arkona character is                   | `arkona_character_brief` (free: the bridge's own records)               | many `get_resource` and `read_document` calls     |
+| Rename an Arkona character or owner everywhere      | `arkona_rename` (one canonical proposal, approved item by item)         | `update_resource` and `write_page` page by page   |
 | Appraise Arkona pages, or see what a change breaks  | `arkona_appraise_owner`, `arkona_change_impact` (free, read-only)       | reading every page yourself                       |
 | Make any other page                                 | `create_resource` (template), `create_index` for a category             | `create_bare_resource` (rare: see Create a page)  |
 | Move a page                                         | `move_resource`                                                         | `lk_api_write` `moveResource`                     |
@@ -67,8 +68,8 @@ loosely, but only a clear match is returned, and each miss costs a call):
 - `Edit a page's text`
 - `Change facts and links`
 - `Create a page or a character (Working first)`
-- `Setting packs (Arkona)` (the Arkona pack's ten tools), and under it `Arkona characters`, `Arkona owners`,
-  `Arkona relationships, art and the brief`, `Arkona appraisal`
+- `Setting packs (Arkona)` (the Arkona pack's eleven tools), and under it `Arkona characters`, `Arkona owners`,
+  `Arkona relationships, art and the brief`, `Arkona appraisal`, `Arkona renames`
 - `Rename, move, delete and restore`
 - `The page lifecycle` (promote, archive, unarchive, move to Working)
 - `Dates and the chronology`
@@ -315,20 +316,21 @@ whose answer was lost: it may have been made, so read the pages before anything 
 A **setting pack** is one world's own rules, held by the bridge as data: its page sets, names, templates, homes and tags,
 taken from the world's governance pages and approved by the owner. A pack's tools carry its prefix and are in your list
 only when the bridge serves a project the pack is attached to; on any other project they refuse (`PACK_NOT_ATTACHED`,
-naming the projects they work on). The Arkona pack has ten tools. Ask for the part you need:
+naming the projects they work on). The Arkona pack has eleven tools. Ask for the part you need:
 
-| You want                                          | Use                          | Part to ask for                           |
-| ------------------------------------------------- | ---------------------------- | ----------------------------------------- |
-| Make an Arkona character, or add pages to one     | `arkona_create_character`    | `Arkona characters`                       |
-| Make any other Arkona owner page                  | `arkona_create_owner`        | `Arkona owners`                           |
-| Relate two existing Arkona characters             | `arkona_create_relationship` | `Arkona relationships, art and the brief` |
-| Add art to an existing Arkona character           | `arkona_add_character_art`   | `Arkona relationships, art and the brief` |
-| Recall who an Arkona character is (free, no read) | `arkona_character_brief`     | `Arkona relationships, art and the brief` |
-| Appraise pages against Source Formatting (free)   | `arkona_appraise_owner`      | `Arkona appraisal`                        |
-| See what depends on a page, a rename, a proposal  | `arkona_change_impact`       | `Arkona appraisal`                        |
-| See what is in progress (Working pages and more)  | `arkona_working_digest`      | `Arkona appraisal`                        |
-| Check the images and the asset library            | `arkona_visual_hygiene`      | `Arkona appraisal`                        |
-| Make the fix an appraisal finding offers          | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
+| You want                                           | Use                          | Part to ask for                           |
+| -------------------------------------------------- | ---------------------------- | ----------------------------------------- |
+| Make an Arkona character, or add pages to one      | `arkona_create_character`    | `Arkona characters`                       |
+| Make any other Arkona owner page                   | `arkona_create_owner`        | `Arkona owners`                           |
+| Relate two existing Arkona characters              | `arkona_create_relationship` | `Arkona relationships, art and the brief` |
+| Add art to an existing Arkona character            | `arkona_add_character_art`   | `Arkona relationships, art and the brief` |
+| Recall who an Arkona character is (free, no read)  | `arkona_character_brief`     | `Arkona relationships, art and the brief` |
+| Appraise pages against Source Formatting (free)    | `arkona_appraise_owner`      | `Arkona appraisal`                        |
+| See what depends on a page, a rename, a proposal   | `arkona_change_impact`       | `Arkona appraisal`                        |
+| See what is in progress (Working pages and more)   | `arkona_working_digest`      | `Arkona appraisal`                        |
+| Check the images and the asset library             | `arkona_visual_hygiene`      | `Arkona appraisal`                        |
+| Make the fix an appraisal finding offers           | `arkona_appraisal_fix`       | `Arkona appraisal`                        |
+| Rename a character or owner everywhere it is named | `arkona_rename`              | `Arkona renames`                          |
 
 **What every pack tool that makes pages does the same way** (the appraisal tools only read: see `Arkona appraisal`).
 
@@ -680,10 +682,58 @@ the Working digest is shown, never judged. Blocked cases say what could not be c
 report again without re-running it. `live: true` (A2, A3) re-reads the pages concerned first and costs reads (A2: 2 a
 page, at most 25 pages): use it only when the person needs what changed since the snapshot.
 
+### Arkona renames
+
+`arkona_rename` renames an Arkona **character** (name any page of its set) or **owner** (a culture, a polity, a place, a
+race) **everywhere it is named**, as ONE **canonical proposal** for the owner, whatever your scope: a rename changes how
+canon names its subject, so it is never made at once and never routed round. The owner approves it whole or item by item.
+
+**What you supply.**
+
+- `subject` (a name, alias, path or id) and `newName`, the name as the pages are to show it.
+- `given` and/or `family` when the rename changes a character's name part. **Name parts are never inferred**: if the old
+  given or family name is not in the new name and you did not give it, the call is refused (`NAME_PARTS_REQUIRED`,
+  naming the part). Ask the person; never derive a name part from the shape of a name.
+- `keepOldAsAlias` (default `true`): the old name goes into the Aliases fact and the pages' search aliases.
+- `effectiveDate` (optional, a date of the calendar): chronology rows dated before it start unticked.
+- `token` for a culture or race whose tag is not its own name (`Draconic (True Dragons)` is tagged `Draconic`): the new
+  tag, as the person decided. Never invent one (`TOKEN_REQUIRED`).
+- `dryRun: true` first: the plan, item by item, with what each changes, and the cost.
+
+**What it plans, each as an item** (ids are kept: nothing is recreated): the subject's page names (its index, Core or
+Reference, every `<Old> - …` child, every relationship naming it, either way round), its identity facts, the old name as
+an alias, mentions whose **custom label** holds the old name (a plain mention shows the new name by itself, so it is not
+an item), index routing lines, chronology rows naming it (their timeline events kept in step), the art folder and asset
+names, a race's taxonomy entry, a culture's or race's **identity token** (a new pack version the owner approves on the
+Packs page; the job waits for it) with every character's fact and tag, and each **textual restatement** elsewhere, one
+item per occurrence, with its sentence.
+
+**Ticked or not (D1 (a)).** A restatement on a current page starts ticked, except inside quotation marks, after
+"formerly", "previously", "once called" or "originally" in the same sentence, under Unresolved Material, or in a
+chronology row dated before `effectiveDate`: those start unticked, and the item says why. The owner decides; never argue
+a tick from the agent's side.
+
+**Never edited (D2).** Archived pages, the Legacy Canon Archive and the Design References keep the old name; the plan lists
+them as "left as historical". AU pages are included, labelled AU. Text in a table cell or a code block, or a name split by
+formatting, is reported in `notPlanned` (the owner edits it by hand).
+
+**After it runs.** The job checks inside its locks that the subject still has its old name (renamed meanwhile: nothing is
+written), writes the approved items in order (names, then facts, then everything pointing at them), reads back every page
+it touched, and dates Last Major Revision by the owner's rule (a name, an alias or a fact that only swaps the name never
+counts; 8 or more restated words, a heading or a chronology row do). Then `arkona_rename { "report": "<rename, proposal or
+job id>" }` (free) lists what is still left of the old name on current pages, each with its link: what the owner left out,
+what the rename does not edit, and anything written since. To propose exactly those, call it again with
+`from: "<the old name>"` (the subject already has the new one); tell the person first.
+
+**Never resubmit a rename**: follow it with `bridge_proposal_status`. A rename's job that stops part-way is resumed by the
+owner on the dashboard (it ran work the owner approved); `bridge_job_status` shows where it stopped.
+
 ## Rename, move, delete and restore
 
 - **Rename, tags, aliases, icon, banner, hidden, locked:** `update_resource` (a rename keeps the prefix and re-places
-  the page; give the name without a prefix).
+  the page; give the name without a prefix). It renames one page. To rename an Arkona character or owner everywhere it
+  is named (its set, its facts, mentions, chronology, art, other pages' text), use `arkona_rename` ([Arkona
+  renames](#arkona-renames)).
 - **Move:** `move_resource` `{ page, to }`. Within a lifecycle area it is an ordinary move ([below](#the-page-lifecycle)).
 - **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
   lists every page removed). To retire a page, use `archive_page`, not a delete. Deleting an Authoritative page is protected
@@ -999,6 +1049,11 @@ audit), and page with `limit` and `offset`; `detail: "full"` adds each finding's
   `bridge_proposal_status` (leave `proposalId` out to list yours). If the page changes before the owner approves, the
   proposal becomes **conflicted** instead of being applied: read the page again and propose afresh. Never submit a
   proposal twice.
+- **A package or a rename that stops part-way** (a failed step, a cancel) keeps what it wrote, and `bridge_job_status`
+  shows where it stopped (`stoppedAt`: its last verified step, the step it stopped at, why). A job **you** ran at scope
+  `write` (one the owner did not approve) can be resumed with `bridge_job_resume { "jobId": "…" }`: its own check runs
+  again first, no step that succeeded runs again, and a step that is no longer safe is refused with its reason. Work the
+  owner approved is resumed by the owner only. Resume once, then follow the job; never loop on a refusal.
 - You cannot approve your own proposals, change your scope, or see other connections' jobs.
 
 ## Canon and approval
@@ -1048,6 +1103,8 @@ was asked.
   keeps `[BSRC]`: canonical or ordinary proposals at every scope;
 - a setting pack's package (`arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship`), unless the
   owner switched the tool to follow your scope;
+- a rename with `arkona_rename`: always ONE canonical proposal (the bulk rail does not apply to it: the owner reads it
+  item by item);
 - `restore_snapshot`, always.
 
 **Never route round a rail.** Do not split a bulk change into smaller jobs, rename instead of deleting, or reach the

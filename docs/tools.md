@@ -64,7 +64,10 @@ tools on). **Since v3 F3c** it lists ten ([below](#setting-packs-appraisal-and-f
 41,080 tokens** in a `propose` or `write` profile (the five appraisal tools about 2,820 of them: `arkona_appraise_owner`
 705, `arkona_change_impact` 636, `arkona_visual_hygiene` 525, `arkona_working_digest` 504, `arkona_appraisal_fix` 449;
 `search` 620 with its `content` and `include`; 71 with the low-level tools on), and **30, about 11,670**, in a `read`
-profile (the four read-only appraisal tools; 33 with the low-level tools on). The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
+profile (the four read-only appraisal tools; 33 with the low-level tools on). **Since v3 F3d** the Arkona pack lists eleven
+tools ([below](#setting-packs-renames-selective-approval-and-resume-v3-f3d)), and `bridge_job_resume` is added: **68 tools** in
+a `propose` or `write` profile (`arkona_rename` and `bridge_job_resume` are write tools; 73 with the low-level tools on), and
+the same **30** in a `read` profile. The review, with the owner's answers on the proposed merges and hiding and what the wording changes did:
 [reviews/E3-tools.md](reviews/E3-tools.md). The script the owner runs in ChatGPT and Claude:
 [reviews/E3-evaluation.md](reviews/E3-evaluation.md). What each assistant really called is on the dashboard's **Tool calls**
 page ([dashboard.md](dashboard.md#tool-calls-v2-e3)).
@@ -149,6 +152,7 @@ budget (arkona): writes 0/120·min …
 | `bridge_estimate`           | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_job_status`         | read   | true / false / true / false                                     | none (`wait_seconds` waits at most 25 s)                                                                   |
 | `bridge_job_cancel`         | write  | false / false / true / false                                    | none                                                                                                       |
+| `bridge_job_resume`         | write  | false / false / false / false                                   | none to ask; the job's own steps that are left (`wait_seconds`-style wait of at most 25 s)                 |
 | `bridge_errors_recent`      | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_journal_lookup`     | read   | true / false / true / false                                     | none                                                                                                       |
 | `bridge_result_page`        | read   | true / false / true / false                                     | none                                                                                                       |
@@ -204,7 +208,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 **`lk_upload_image`** `{ name, base64 | url, contentType?, description?, folderId?, waitSeconds? }`: see [Image upload](#image-upload-v1-lk_upload_image). For converted, verified and placed images use `upload_image` ([Images](#images-v2-d3)).
 
-**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (161 tools in all with the Arkona pack's ten tools, v3 F3a's `arkona_create_character`, v3 F3b's four and v3 F3c's five, 163 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
+**Per-operation tools.** With `MCP_EXPOSE_PER_OP_TOOLS=true` the bridge also registers `lk_op_<operationId>` for all 89 operations (163 tools in all with the Arkona pack's eleven tools, v3 F3a's `arkona_create_character`, v3 F3b's four, v3 F3c's five and v3 F3d's `arkona_rename`, and v3 F3d's `bridge_job_resume`; 165 with the policy layer’s two proposal tools; a generic pack tool for a data-only type, below, adds one more). Each takes the operation's own input (`path`, `query`, `ifMatch`, `body`) plus `detail` (and `allowUnsupportedLoss` / `confirm` on writes), runs through exactly the same path, and records its own name as the job's tool. `access` equals the operation's kind. Annotations come from the operation: reads are read-only and idempotent; writes are `destructiveHint: true` when the operation's risk is `destructive` or `admin`, and `idempotentHint: true` for PUT, DELETE, move, restore, assign-block-ids and delete-shapes. This lists about 600 KB of schemas, which is why it is off by default.
 
 ### Bridge awareness
 
@@ -219,6 +223,8 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 **`bridge_job_status`** `{ jobId?, steps?, status?, limit?, wait_seconds? }`: one job (status, progress, last error, result, failed steps; `done` is true when it has finished), or recent jobs when `jobId` is omitted. `wait_seconds` (1 to 25, needs a `jobId`: `JOB_ID_REQUIRED` otherwise) waits for the job to finish first and then answers (v2 E3b: this is the former `bridge_job_wait`; call again if `done` is false). Signed-URL material is redacted.
 
 **`bridge_job_cancel`** `{ jobId }`: the step in flight finishes; nothing further is sent; finished steps are not undone. A job the owner approved (an approved proposal's job, which runs as the connection that proposed it) is refused with `OWNER_APPROVED_JOB`: only the owner stops approved work, on the dashboard (CR-2026-11).
+
+**`bridge_job_resume`** `{ jobId }` (v3 F3d, ADR 0058): resumes one of **your own** jobs that stopped part-way (a setting-pack package or a rename that failed or was cancelled after doing some of its work), in the same job: its own check runs again first, inside its locks; a step that succeeded is never sent again and nothing is made twice; a step that is no longer safe (its page changed since) is refused with its reason, and the job stops again where it was. Only at scope `write`, and only for a job the owner did not approve (`OWNER_APPROVED_JOB`: the owner resumes approved work on the dashboard); another connection's job answers `JOB_NOT_FOUND`. Audited as `job.resume`. `bridge_job_status` shows where a resumable job stopped (`stoppedAt`: its last verified step, the step it stopped at, why, how often it was resumed, and `youMayResume`).
 
 **`bridge_errors_recent`** `{ grouped?, limit?, sinceMinutes?, jobId? }`: failures grouped by operation, code and path (default), or one row each, with LegendKeeper `requestId`s.
 
@@ -549,10 +555,10 @@ and the engine's guards exactly as before. The change applies at the next `tools
 
 The tools a profile sees:
 
-| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). **Since v3 F3b: 61 for `propose` or `write`, 26 for `read`** with the Arkona pack attached (its five tools; `arkona_character_brief` is a read tool). **Since v3 F3c: 66 for `propose` or `write`, 30 for `read`** (its ten tools; the four appraisal reports are read tools, `arkona_appraisal_fix` a write tool). A `read` profile does not see the write tools |
-| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; with the Arkona pack attached 66 and 29 since v3 F3b, 62 with F3a's one tool), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Setting | Tools                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| off     | the 12 above, `write_page` (v2 C1), `set_facts` (v2 C2a), the 12 Resources, Documents and character tools (v2 C2b), the 4 lifecycle tools (v2 C2c), `calendar_date` and the 5 timeline tools (v2 D1 and D1.1), `upload_image` and `prepare_image_upload` (v2 D3), `list_projects`, `lk_api_read`, `lk_api_write`, `lk_api_batch` and the `bridge_*` tools. **Since v2 E3b: 56 tools for a profile with scope `propose` or `write`, 25 for a `read` profile** (61 and 28 before: `get_resources`, `bridge_proposals_mine` and `bridge_job_wait` are merged into their siblings, and `lk_upload_image` and `create_bare_resource` are hidden). **Since v3 F3a: 57 for `propose` or `write`** while the bridge serves a project with a setting pack attached (the pack's `arkona_create_character`; a pack tool is never listed otherwise). **Since v3 F3b: 61 for `propose` or `write`, 26 for `read`** with the Arkona pack attached (its five tools; `arkona_character_brief` is a read tool). **Since v3 F3c: 66 for `propose` or `write`, 30 for `read`** (its ten tools; the four appraisal reports are read tools, `arkona_appraisal_fix` a write tool). **Since v3 F3d: 68 for `propose` or `write`, 30 for `read`** (`arkona_rename` and `bridge_job_resume`, both write tools). A `read` profile does not see the write tools |
+| on      | all of those, plus `lk_api_list_operations`, `lk_api_describe_operation`, `lk_api_paginate_all`, `lk_upload_image`, `create_bare_resource` (61 for `propose` or `write`, 28 for `read`: 56 + 5, 25 + 3; with the Arkona pack attached 66 and 29 since v3 F3b, 62 with F3a's one tool), and with `MCP_EXPOSE_PER_OP_TOOLS=true` the 89 `lk_op_*`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 
 ## Facts and links: `set_facts` (v2 C2a)
 
@@ -1635,6 +1641,83 @@ and for A3 `PROPOSAL_NOT_FOUND` and `PROPOSAL_NOT_PENDING` (only a pending propo
 The full-text index is built and updated from the snapshot store (no LegendKeeper read). On a fixture of Arkona's size
 (1,500 pages) it builds in about 2 seconds, takes a five-page change snapshot in about 40 ms, answers a phrase in about
 1 ms and takes about 21 MB of the bridge's database ([ADR 0054](adr/0054-arkona-appraisal-tools-and-full-text-search.md#decision-1-the-overlay-materialised-in-the-bridges-database-with-an-fts5-index-a1)).
+
+## Setting packs: renames, selective approval and resume (v3 F3d)
+
+[ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md); the owner-approved design:
+[design/F3d-renames.md](design/F3d-renames.md).
+
+### `arkona_rename`
+
+`{ subject, newName, given?, family?, keepOldAsAlias?, effectiveDate?, token?, from?, lastMajorRevision?, dryRun?, operation_id?, project? }`,
+or `{ report, project? }`. Renames an Arkona character (any page of its set) or owner (a culture, a polity, a place, a race)
+everywhere it is named, as **ONE canonical proposal**, whatever the caller's scope (ADR 0057 decision 5: renaming canon is
+canon). It is **not subject to the bulk rail** (ADR 0055): one subject, one proposal the owner reads item by item.
+
+**The plan** (A1's full-text index and A3's references find where the name is; each page or document with a planned edit
+is read live): one package of **items**, each with an id, its change (`diff`) and its dependencies:
+
+| Group                | Items                                                                                                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Page names           | the index, the Core or Reference, every `<Old> - …` child, every relationship naming it (either way round); ids kept; re-placed only when its place among its siblings changes |
+| Identity facts       | Subject and Canonical Display Name (and any fact naming it) on each page of the set; Given and Family as supplied; the old name added to Aliases                               |
+| Resource aliases     | each renamed page's old name added to its search aliases (`keepOldAsAlias`, default true)                                                                                      |
+| Mention labels       | a mention whose custom label holds the old name (a plain mention shows the page's new name by itself: no item)                                                                 |
+| Index routing        | a line of an index's routing section naming it                                                                                                                                 |
+| Chronology           | each table row naming it, with its timeline event (when the bridge links them) kept in step, by the chronology tools' own path                                                 |
+| Taxonomy and art     | the art folder and the asset names holding the old name; a race's Character taxonomy entry (the old plural kept as an alias)                                                   |
+| Identity token       | a culture's or race's token map (a NEW pack version the owner approves; the job waits for it), and each character's fact and tag                                               |
+| Textual restatements | each plain-text occurrence elsewhere, one item with its sentence (sidebar facts of other pages: one item per page)                                                             |
+
+**Ticks (D1 (a)).** Every item starts ticked except a restatement inside quotation marks, after "formerly", "previously",
+"once called" or "originally" in the same sentence, under Unresolved Material, in a chronology row dated before
+`effectiveDate`, or on a page that is not current; each says why (`why`). **Never edited (D2):** Archived pages, the
+Legacy Canon Archive and the Design References (`leftAsHistorical`). AU pages are included, labelled `AU`. Text in a table
+cell or a code block, and a name split by formatting, are listed in `notPlanned`.
+
+**Refusals.** `NAME_PARTS_REQUIRED` (a given or family name in the old name but not the new one, not supplied: never
+inferred), `NAME_PARTS_NOT_APPLICABLE`, `TOKEN_REQUIRED` (a token that is not the culture's or race's own name),
+`NAME_TAKEN` (a renamed page would sit beside a page of that name), `NOTHING_TO_RENAME`, `FOLLOW_UP_MISMATCH`,
+`SUBJECT_NOT_FOUND`, `SUBJECT_AMBIGUOUS`, `SUBJECT_ARCHIVED`, `PACK_NOT_CURRENT`, `NO_SNAPSHOT` (no full-text index yet).
+
+**The job** (one, after the owner's approval of all or some items): one check first, inside every lock the job holds —
+the subject still has its old name (renamed meanwhile: `SUBJECT_RENAMED`, nothing is written), every page, block and asset
+it edits is as planned, the pack version the owner approved maps a new token — then the approved items in dependency
+order (names, then facts, then everything that points at them), Last Major Revision per page by ADR 0051's rule measured
+from what was approved (a name, an alias, a tag or a fact that only swaps the name never counts; a page with nothing else
+has no step at all), and the read-back of every page it touched.
+
+**What is left.** When the job ends, the full-text index is searched for the old name again (once the job's change
+snapshot is in it): every occurrence still on a current page is listed with its link (`lk://resources/<id>`), with the
+follow-up call that proposes exactly those: `arkona_rename { subject, newName, from: "<old name>" }` (the subject already
+has the new name; only what is left is planned). `report` (a rename's id, its proposal or its job) answers the rename's
+state and that list, free.
+
+**Costs (measured against the mock).** Planning reads each page of the set and each document holding the name once, plus
+the pack's three governance reads: 22 reads for the test character (seven pages, six other pages naming her, two
+chronology rows); its approved job (the plan's ticks: 7 items left out) 185 requests, 49 of them writes, its check,
+read-back and change snapshot included. The culture with six characters: 13 reads to plan, its job 98 requests, 20 of
+them writes. `dryRun` states the plan's own estimate (`cost`).
+
+### Selective approval (every proposal made of items)
+
+A proposal made of items (a rename, and every F3a and F3b package: its new pages and its changes to each existing page)
+carries them (`items` on the proposal: total, approved, left out). The owner approves the plan's ticks, everything, or a
+selection: a selection must be **closed** (every item it keeps has what it needs), or it is refused
+(`SELECTION_NOT_CLOSED`, naming each item and what it needs); the dashboard drops the dependants itself and shows them
+before the owner confirms. The proposal records what was approved and what was left out, the job runs only the approved
+steps (each write named by its items; shared checks and the read-back trimmed to them; references to a page left out
+removed), and "propose these again" makes ONE new proposal of exactly the items left out (`reproposedAs`,
+`reproposalOf`). Agents cannot approve anything. An ordinary proposal is unchanged.
+
+### Resume
+
+A package or a rename that stops part-way records where (its last verified step, the step it stopped at, why). The owner
+resumes it on the Jobs or Review page; an agent resumes its own direct job with `bridge_job_resume`. The job continues in
+place: its own check runs again first, no succeeded step runs again, nothing is made twice, and a step that is no longer
+safe is refused with its reason. Work the owner approved resumes without a new approval and is audited (`job.resume`). F2's
+"Finish" of a recreate uses the same mechanism (its new proposal of what is missing, as before). Revert (ADR 0055) stays
+the alternative for a direct job.
 
 ## The calendar and the timelines (v2 D1)
 

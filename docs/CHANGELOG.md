@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased: v3 F3d (renames) (18 November 2026): `arkona_rename`, selective approval and Resume
+
+[ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md) (Proposed), the owner-approved design
+[design/F3d-renames.md](design/F3d-renames.md) (D1 (a), D2 to D6). Migration `3400_renames_items_resume.sql` (runs at
+start). Nothing was run against a live system: mocks and fixtures only.
+
+- **`arkona_rename`** (new pack tool): renames an Arkona character or owner everywhere it is named, as ONE canonical
+  proposal made of items: page names (ids kept), identity facts, the old name kept as an alias (the Aliases fact and the
+  pages' search aliases), mention labels, index routing lines, chronology rows with their events, the art folder and asset
+  names, a race's taxonomy entry, a culture's or race's identity token (a new pack version the owner approves; the job
+  waits for it) with every character's fact and tag, and each textual restatement elsewhere. D1 (a) unticks restatements
+  in quotation marks, after "formerly", "previously", "once called" or "originally", under Unresolved Material, or in a
+  chronology row before `effectiveDate`; Archived pages, the Legacy Canon Archive and the Design References are never
+  edited; AU pages are included, labelled AU; name parts are never inferred (`NAME_PARTS_REQUIRED`). Always a canonical
+  proposal, whatever the scope; not subject to the bulk rail. After its job, `report` lists what is left of the old name
+  on current pages, and `from` proposes exactly that.
+- **Selective approval** of every proposal made of items (a rename, every setting-pack package): the dashboard's
+  tickboxes, each item's change and what it needs; unticking an item leaves out what needs it, shown before confirming;
+  Approve selected goes through the same confirmation (and canonical approval) as the whole; the approved and left-out
+  items are recorded and audited; **Propose these again** makes one proposal of what was left out. Approving without a
+  selection approves the plan's ticks (for a package, everything: as before).
+- **Resume** of a package, a rename or a recreate that stopped part-way: where it stopped is recorded (its last verified
+  step); the owner resumes it on the Jobs and Review pages, an agent its own direct job with **`bridge_job_resume`** (new
+  tool; never work the owner approved). Its check runs again first; nothing is repeated or made twice; a step that is no
+  longer safe is refused with its reason; audited `job.resume`. F2's recreate Finish uses the same mechanism, unchanged.
+- **The pack**: a rename's token change is the new pack command `renameToken` (audited `pack.rename_token`); a race
+  rename renames its taxonomy entry with its navigation index.
+- **Tool counts**: 68 tools for `propose` or `write` (30 for `read`); 163 with the per-operation tools.
+- **After deploying**: (1) approve the new pack version, if one was made; (2) try a rename on the test world first, using
+  one character and the selective approval; (3) then use it on Arkona.
+
 ## Unreleased: ADR 0057 accepted, the second review's owner decisions built (17 November 2026)
 
 The owner accepted every decision of [ADR 0057](adr/0057-cr-2026-11-r2-owner-decisions.md) as recommended; each is built
@@ -235,6 +266,8 @@ page in LegendKeeper (the link's pattern could not be checked from here). Agents
 LegendKeeper now get the index; `content: "live"` keeps the old behaviour.
 
 ## Unreleased: v3 F3d (17 November 2026): the lifecycle tag leads on Arkona, AU in the lifecycle, owner routing lines
+
+(this was session F3.3; F3d is the renames session)
 
 [ADR 0053](adr/0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md) (Proposed). No migration. Nothing was
 run against a live system: mocks and fixtures only.
