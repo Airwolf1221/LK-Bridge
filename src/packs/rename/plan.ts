@@ -509,83 +509,100 @@ export async function planRename(
   /** The item every other depends on: the subject's own new name (none in a follow-up: it has it already). */
   const root = (): string[] => (items.some((i) => i.id === rootItem) ? [rootItem] : []);
 
-  // 1. Page names (and each page's place among its siblings), then the in-lock check of each page.
+  // 1. Page names (and each page's place among its siblings), then the in-lock check of each page. Every name of the
+  // set changes at once in the simulation first, so a page is moved only when its place among its siblings (as they
+  // will all be named) really changes: renaming a whole set keeps its own order.
   const sim = new SiblingSim((parentId) => ctx.tree.children(projectId, parentId).data);
+  const renamed = new Map<string, { display: string; raw: string }>();
   for (const p of pages) {
     const n = p.node;
-    const c = classifyName(n.rawName);
-    const display = c.displayName;
+    const display = classifyName(n.rawName).displayName;
     const nextDisplay = renamedDisplay(display, oldName, newName);
+    if (nextDisplay === display) continue;
     const prefix = n.rawName.slice(0, n.rawName.length - display.length);
-    const nextRaw = `${prefix}${nextDisplay}`;
-    const tags = Array.isArray(p.resource.tags) ? (p.resource.tags as string[]) : [...n.tags];
-    if (nextDisplay !== display) {
-      const parentId = n.parentId;
-      if (parentId) {
-        const twin = ctx.tree
-          .children(projectId, parentId)
-          .data.find((s) => s.id !== n.id && s.kind === n.kind && nameKey(s.displayName) === nameKey(nextDisplay));
-        if (twin)
-          refusals.push(
-            issue(
-              'NAME_TAKEN',
-              `${n.rawName} cannot be renamed to “${nextRaw}”: ${twin.rawName} is already beside it. Nothing is planned until the owner decides.`,
-              { page: { id: n.id, name: n.rawName }, existing: { id: twin.id, name: twin.rawName } },
-            ),
-          );
-      }
-      const p2 = nameProblem(nextDisplay, rules);
-      if (p2) refusals.push(issue(p2.code, p2.message, { page: { id: n.id, name: n.rawName } }));
-      const item = `name:${n.id}`;
-      nameItemOf.set(n.id, item);
-      touch(n.id, item);
-      const at = stepNo();
-      body.push({
-        op: 'updateResource',
-        params: { path: { resourceId: n.id }, body: { name: nextRaw } },
-        expectCurrent: { state: 'resource', hash: stateHash({ name: n.rawName, tags }), label: n.rawName },
-        judgedInLock: true,
-        deferTreeReread: true,
-        items: [item],
-        journalOperation: journal({ id: n.id, name: n.rawName }, `renamed to ${nextRaw}`),
-      });
-      bodyLabels.push(`rename ${n.rawName} to ${nextRaw}`);
-      wrote(n.id, at);
-      let moved = false;
-      if (parentId) {
-        const now = sim.neighbours(parentId, n.id);
-        sim.remove(parentId, n.id);
-        const slot = sim.slot(parentId, { displayName: nextDisplay, kind: n.kind });
-        sim.insert(parentId, { id: n.id, displayName: nextDisplay, kind: n.kind }, slot);
-        const then = sim.neighbours(parentId, n.id);
-        if (now.after !== then.after || now.before !== then.before) {
-          moved = true;
-          wrote(n.id, stepNo());
-          body.push({
-            op: 'moveResource',
-            params: { path: { resourceId: n.id }, body: { parentId, ...slot } },
-            judgedInLock: true,
-            deferTreeReread: true,
-            items: [item],
-            journalOperation: journal({ id: n.id, name: nextRaw }, 're-placed after the rename'),
-          });
-          bodyLabels.push(`re-place ${nextRaw} among its siblings`);
-        }
-      }
-      items.push({
-        id: item,
-        kind: 'page_name',
-        group: GROUPS.names,
-        label: `${n.rawName} → ${nextRaw}${moved ? ' (re-placed alphabetically)' : ''}`,
-        page: { id: n.id, name: n.rawName },
-        diff: { before: n.rawName, after: nextRaw },
-        dependsOn: n.id === identity.id ? [] : [],
-        selected: true,
-        ...((await auOf(n.id)) ? { tags: ['AU'] } : {}),
-      });
-      verify.push({ kind: 'resource', label: `${nextRaw}: name`, resourceId: n.id, fields: { name: nextRaw } });
-      verifyItems.push([item]);
+    renamed.set(n.id, { display: nextDisplay, raw: `${prefix}${nextDisplay}` });
+    if (n.parentId) {
+      const list = sim.list(n.parentId);
+      const at = list.findIndex((x) => x.id === n.id);
+      if (at >= 0) list[at] = { ...list[at]!, displayName: nextDisplay };
     }
+  }
+  for (const p of pages) {
+    const n = p.node;
+    const next = renamed.get(n.id);
+    if (!next) continue;
+    const { display: nextDisplay, raw: nextRaw } = next;
+    const tags = Array.isArray(p.resource.tags) ? (p.resource.tags as string[]) : [...n.tags];
+    const parentId = n.parentId;
+    if (parentId) {
+      const twin = ctx.tree
+        .children(projectId, parentId)
+        .data.find(
+          (s) =>
+            s.id !== n.id &&
+            s.kind === n.kind &&
+            nameKey(renamed.get(s.id)?.display ?? s.displayName) === nameKey(nextDisplay),
+        );
+      if (twin)
+        refusals.push(
+          issue(
+            'NAME_TAKEN',
+            `${n.rawName} cannot be renamed to “${nextRaw}”: ${twin.rawName} is already beside it. Nothing is planned until the owner decides.`,
+            { page: { id: n.id, name: n.rawName }, existing: { id: twin.id, name: twin.rawName } },
+          ),
+        );
+    }
+    const p2 = nameProblem(nextDisplay, rules);
+    if (p2) refusals.push(issue(p2.code, p2.message, { page: { id: n.id, name: n.rawName } }));
+    const item = `name:${n.id}`;
+    nameItemOf.set(n.id, item);
+    touch(n.id, item);
+    const at = stepNo();
+    body.push({
+      op: 'updateResource',
+      params: { path: { resourceId: n.id }, body: { name: nextRaw } },
+      expectCurrent: { state: 'resource', hash: stateHash({ name: n.rawName, tags }), label: n.rawName },
+      judgedInLock: true,
+      deferTreeReread: true,
+      items: [item],
+      journalOperation: journal({ id: n.id, name: n.rawName }, `renamed to ${nextRaw}`),
+    });
+    bodyLabels.push(`rename ${n.rawName} to ${nextRaw}`);
+    wrote(n.id, at);
+    let moved = false;
+    if (parentId) {
+      const now = sim.neighbours(parentId, n.id);
+      sim.remove(parentId, n.id);
+      const slot = sim.slot(parentId, { displayName: nextDisplay, kind: n.kind });
+      sim.insert(parentId, { id: n.id, displayName: nextDisplay, kind: n.kind }, slot);
+      const then = sim.neighbours(parentId, n.id);
+      if (now.after !== then.after || now.before !== then.before) {
+        moved = true;
+        wrote(n.id, stepNo());
+        body.push({
+          op: 'moveResource',
+          params: { path: { resourceId: n.id }, body: { parentId, ...slot } },
+          judgedInLock: true,
+          deferTreeReread: true,
+          items: [item],
+          journalOperation: journal({ id: n.id, name: nextRaw }, 're-placed after the rename'),
+        });
+        bodyLabels.push(`re-place ${nextRaw} among its siblings`);
+      }
+    }
+    items.push({
+      id: item,
+      kind: 'page_name',
+      group: GROUPS.names,
+      label: `${n.rawName} → ${nextRaw}${moved ? ' (re-placed alphabetically)' : ''}`,
+      page: { id: n.id, name: n.rawName },
+      diff: { before: n.rawName, after: nextRaw },
+      dependsOn: [],
+      selected: true,
+      ...((await auOf(n.id)) ? { tags: ['AU'] } : {}),
+    });
+    verify.push({ kind: 'resource', label: `${nextRaw}: name`, resourceId: n.id, fields: { name: nextRaw } });
+    verifyItems.push([item]);
   }
   // Every other page name needs the subject's own (a set renamed in part is not a rename).
   for (let i = 0; i < items.length; i++)

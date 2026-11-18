@@ -46,6 +46,7 @@ import {
 import { mintClientId } from '../jobs/ids.js';
 import {
   closeSelection,
+  defaultSelection,
   filterSteps,
   ItemFilterError,
   validateItems,
@@ -1108,8 +1109,14 @@ export class ProposalService implements ProposalSink {
       approvedItems = closed.kept;
       omittedItems = itemSet.items.map((i) => i.id).filter((x) => !closed.kept.includes(x));
     } else if (itemSet) {
-      approvedItems = itemSet.items.map((i) => i.id);
-      omittedItems = [];
+      // No selection given: the plan's own, its pre-ticked items (every item of a package; a rename's D1 (a) ticks).
+      approvedItems = defaultSelection(itemSet.items);
+      if (approvedItems.length === 0)
+        throw new PolicyError(
+          'NOTHING_SELECTED',
+          `No item of proposal ${id} is ticked by its plan; select the items to approve, or reject it. Nothing was approved.`,
+        );
+      omittedItems = itemSet.items.map((i) => i.id).filter((x) => !approvedItems!.includes(x));
     }
     const partial = omittedItems !== null && omittedItems.length > 0;
     // v2 A1: the proposal's own project, and only that one: its read-only flag, its availability, its data.
