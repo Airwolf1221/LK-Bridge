@@ -9,7 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PROJECT } from '../tools/helpers.js';
 import { approve } from './world.js';
-import { C, O, P, renameWorld, type RenameWorld } from './rename-world.js';
+import { C, P, renameWorld, type RenameWorld } from './rename-world.js';
 import type { JobOrigin } from '../../src/jobs/types.js';
 
 vi.setConfig({ testTimeout: 300_000, hookTimeout: 300_000 });
@@ -101,7 +101,7 @@ describe('Resume: a step that is no longer safe', () => {
   });
   afterAll(() => w?.close());
 
-  it('is refused with its reason: the check inside the lock runs again first, and nothing more is written', async () => {
+  it('is refused with its reason: the check runs again first, and nothing more is written', async () => {
     const r = await w.call('arkona_rename', {
       subject: C.nadira,
       newName: 'Laila al-Khalid',
@@ -112,20 +112,16 @@ describe('Resume: a step that is no longer safe', () => {
     const done = await approve(w, proposalId);
     expect(done.job?.status).toBe('failed');
     const jobId = done.jobId!;
-    // Someone edits Qasr's sentence (planned, not yet written) in the app.
-    const doc = w.repo.blocks.get(w.mainOf(O.qasr))!;
-    const qs4 = (doc.blocks as Record<string, unknown>[]).find((b) => b.id === 'qs4')!;
-    qs4.content = [{ text: 'Nadira al-Khalid catalogued every charter of the emirate.' }];
-    doc.version += 1;
+    // Someone renames a page of her set (already renamed by the job) in the app. ADR 0058 amendment (A): a page of the
+    // subject's own set is core, so the job's check stops it again (a changed restatement would only be skipped).
+    w.repo.outside.rename(P.nadiraArt, '[BSRC] Laila al-Khalid - Portraits');
     const before = w.requests().writes;
     await w.stack.runtime.resume.resume(PROJECT, jobId, { kind: 'owner' }, OWNER_ORIGIN);
     const job = await settle(w, jobId);
     expect(job.status).toBe('failed');
-    expect(JSON.stringify(job.lastError)).toContain('an outside edit is never overwritten');
+    expect(JSON.stringify(job.lastError)).toContain('renamed meanwhile');
     expect(w.requests().writes).toBe(before);
-    expect((qs4.content as { text: string }[])[0]!.text).toBe(
-      'Nadira al-Khalid catalogued every charter of the emirate.',
-    );
+    expect(w.repo.live(P.nadiraArt)!.name).toBe('[BSRC] Laila al-Khalid - Portraits');
     // Still resumable: the owner can look, then resume or revert it.
     expect(w.stack.runtime.resume.view(PROJECT, jobId).resumable).toBe(true);
   });

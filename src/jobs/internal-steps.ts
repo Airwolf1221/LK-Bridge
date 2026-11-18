@@ -16,7 +16,7 @@
 import * as z from 'zod';
 import type { PolicyOpMeta } from './policy.js';
 import type { CollectionState, RowState, SidebarPropertyState, StateDifference } from './sidebar-state.js';
-import type { StepOptions } from './types.js';
+import type { SkippedItem, StepOptions } from './types.js';
 
 export const EXPECT_STEP = 'bridge.expect';
 export const VERIFY_STEP = 'bridge.verify';
@@ -119,6 +119,11 @@ const uploadVerifyParamsSchema = z
 
 const id = z.string().min(1).max(256);
 const label = z.string().min(1).max(300);
+/**
+ * v3 F3d amendment (ADR 0058, A): a check whose difference skips these items (recorded as "changed meanwhile", the job
+ * carrying on with its other items) instead of stopping the job. Bridge code only.
+ */
+const skipItems = z.array(z.string().min(1).max(300)).min(1).max(200).optional();
 const runs = z.array(z.record(z.string(), z.unknown())).max(10_000);
 // `rank` is optional: an expectation stored before ranks were kept has none and is still compared by id.
 const rowState = z
@@ -275,6 +280,7 @@ const documentCheck = z
     documentId: id,
     checker: z.string().min(1).max(100),
     input: z.unknown(),
+    skipItems,
   })
   .strict();
 
@@ -288,6 +294,7 @@ const eventCheck = z
     eventId: id,
     present: z.boolean(),
     fields: z.record(z.string(), z.unknown()).optional(),
+    skipItems,
   })
   .strict();
 
@@ -629,6 +636,8 @@ export interface DocumentCheck {
   readonly documentId: string;
   readonly checker: string;
   readonly input: unknown;
+  /** v3 F3d amendment (ADR 0058, A): a difference skips these items instead of stopping the job. */
+  readonly skipItems?: readonly string[];
 }
 
 /** v2 D1: one timeline event. */
@@ -640,6 +649,8 @@ export interface EventCheck {
   readonly eventId: string;
   readonly present: boolean;
   readonly fields?: Readonly<Record<string, unknown>>;
+  /** v3 F3d amendment (ADR 0058, A): a difference skips these items instead of stopping the job. */
+  readonly skipItems?: readonly string[];
 }
 
 /** v2 D1: one lane of a timeline. */
@@ -668,6 +679,11 @@ export interface DocumentCheckResult {
   readonly bodies?: Readonly<Record<string, unknown>>;
   /** What the checker saw, kept in the step's result (`observed[label]`). */
   readonly observed?: unknown;
+  /**
+   * v3 F3d amendment (ADR 0058, A), `bridge.expect` only: items whose target changed meanwhile, skipped (the job carries
+   * on with its other items); kept in the step's result (`skippedItems`).
+   */
+  readonly skipped?: readonly SkippedItem[];
 }
 
 export type DocumentChecker = (ctx: DocumentCheckContext) => DocumentCheckResult;
@@ -921,6 +937,13 @@ export interface RegisteredCheckResult {
   readonly bodies?: Readonly<Record<string, unknown>>;
   /** What the checker saw, kept in the step's result. */
   readonly observed?: unknown;
+  /**
+   * v3 F3d amendment (ADR 0058, A), `bridge.expect` only: items whose target changed meanwhile, skipped (the job carries
+   * on with its other items); kept in the step's result (`skippedItems`).
+   */
+  readonly skipped?: readonly SkippedItem[];
+  /** v3 F3d amendment, `bridge.expect` only: the version the check read, kept as `versions[label]` for a chain. */
+  readonly version?: string | null;
 }
 
 export type RegisteredChecker = (ctx: RegisteredCheckContext) => Promise<RegisteredCheckResult>;

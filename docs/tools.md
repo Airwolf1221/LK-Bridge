@@ -183,7 +183,8 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 
 `params` is `{ path?, query?, ifMatch?, body? }`; `projectId` is supplied by the bridge, from the `project` argument (every tool below also takes `project`, which these signatures leave out).
 
-**`lk_api_write`** `{ operationId, params?, allowUnsupportedLoss?, confirm?, detail?, lastMajorRevision? }`: runs ONE operation whose kind is not `read`, including the raw `createImageUpload` and `createImageAsset`. A read operation is refused with `useTool: "lk_api_read"`. Every engine guard applies:
+**`lk_api_write`** `{ operationId, params?, allowUnsupportedLoss?, confirm?, detail?, lastMajorRevision?, plainRename? }`
+(`plainRename`: see [`USE_ARKONA_RENAME`](#changing-moving-deleting-and-restoring)): runs ONE operation whose kind is not `read`, including the raw `createImageUpload` and `createImageAsset`. A read operation is refused with `useTool: "lk_api_read"`. Every engine guard applies:
 
 - versioned writes always send `If-Match`: your `params.ifMatch` if you give it (a stale one is refused with the current version), otherwise the version the bridge reads just before writing;
 - a replace that would delete `unsupported` blocks, or a `deleteBlock` whose block or subtree holds one, is refused unless `allowUnsupportedLoss: true` (an `unsupported` block without an id can never be kept: run `assignBlockIds` first);
@@ -202,7 +203,7 @@ on the page, in the same job or proposal, measured when the job runs; `lastMajor
 }
 ```
 
-**`lk_api_batch`** `{ calls: [{ operationId, params?, allowUnsupportedLoss?, confirm? }], onError?, title?, lastMajorRevision? }`: one persisted `batch_ops` job. `onError` is `stop` (stop on error, default) or `continue`. Every step is validated and checked against the guards and policy before anything is queued. Returns `{ jobId, status: "queued", eta }`.
+**`lk_api_batch`** `{ calls: [{ operationId, params?, allowUnsupportedLoss?, confirm?, plainRename? }], onError?, title?, lastMajorRevision? }`: one persisted `batch_ops` job. `onError` is `stop` (stop on error, default) or `continue`. Every step is validated and checked against the guards and policy before anything is queued. Returns `{ jobId, status: "queued", eta }`.
 
 **`lk_api_paginate_all`** `{ operationId, params?, maxItems?, maxPages? }`: a `paginate_all` job over a paged read (`listResources`, `listTemplates`, `listEvents`, `listAssets`, `listProjects`). Each page is its own governed read at job priority. Returns `{ jobId, handle }`; the items are readable through `bridge_result_page` while the job runs.
 
@@ -821,11 +822,22 @@ Every create answers with `pages` (each `id`, `name`, `parent`, `after` / `befor
 ### Changing, moving, deleting and restoring
 
 **`update_resource`** `{ page, name?, tags?: { add?, remove? }, aliases?: { add?, remove? }, icon?: { glyph?, color?,
-shape?, size? }, banner?: { url?, yPosition?, enabled? }, hidden?, locked?, dryRun?, project }`: one read of the page,
-then one `updateResource` (and, after a rename that changes the page's place, one `moveResource` among the same
-siblings), under the page's lock, journalled with the page as it was. A rename keeps the page's prefix (`PREFIX_CHANGE`
-for a name with another prefix; never a reclassification) and refuses a sibling's name (`NAME_TAKEN`). Tags and aliases
-are compared without case. An unchanged request sends nothing (`no_change`).
+shape?, size? }, banner?: { url?, yPosition?, enabled? }, hidden?, locked?, plainRename?: { reason }, dryRun?, project }`:
+one read of the page, then one `updateResource` (and, after a rename that changes the page's place, one `moveResource`
+among the same siblings), under the page's lock, journalled with the page as it was. A rename keeps the page's prefix
+(`PREFIX_CHANGE` for a name with another prefix; never a reclassification) and refuses a sibling's name (`NAME_TAKEN`).
+Tags and aliases are compared without case. An unchanged request sends nothing (`no_change`).
+
+**`USE_ARKONA_RENAME`** (ADR 0058 amendment C). On a project with an approved setting pack, a rename that changes the
+**subject** part of a page's name (the text before " - ", or the whole name of an index) is refused, with nothing sent,
+for a page of a character's set, a page with a Subject fact, or a pack owner (a page tagged with an owner type's primary
+tag). The refusal's `hint` names `arkona_rename`, which renames the subject everywhere it is referred to (its set, its
+identity facts and aliases, routing lines, chronology, art and every restatement), as one proposal the owner approves item
+by item. Renaming only the descriptor (after " - ") is never refused. **`plainRename: { reason }`** (3 to 500
+characters) lets such a rename through, for a genuinely plain rename (a typo): the reason is shown with the proposal (its
+summary and operation) or, for a direct write, on the Review page (the job's title) and in the journal entry. The same
+refusal and the same `plainRename` apply to `updateResource` through `lk_api_write`, `lk_op_updateResource` and each call
+of `lk_api_batch` (a refused call refuses the whole batch, `callIndex` naming it).
 
 **`move_resource`** `{ page, to, dryRun?, project }`: the page and everything under it, to a new parent index inside
 the repository, in its alphabetical place there (one `moveResource`, journalled with the page as it was).
@@ -1662,8 +1674,7 @@ is read live): one package of **items**, each with an id, its change (`diff`) an
 | Page names           | the index, the Core or Reference, every `<Old> - …` child, every relationship naming it (either way round); ids kept; re-placed only when its place among its siblings changes |
 | Identity facts       | Subject and Canonical Display Name (and any fact naming it) on each page of the set; Given and Family as supplied; the old name added to Aliases                               |
 | Resource aliases     | each renamed page's old name added to its search aliases (`keepOldAsAlias`, default true)                                                                                      |
-| Mention labels       | a mention whose custom label holds the old name (a plain mention shows the page's new name by itself: no item)                                                                 |
-| Index routing        | a line of an index's routing section naming it                                                                                                                                 |
+| Index routing        | a line of an index's routing section naming it in its text                                                                                                                     |
 | Chronology           | each table row naming it, with its timeline event (when the bridge links them) kept in step, by the chronology tools' own path                                                 |
 | Taxonomy and art     | the art folder and the asset names holding the old name; a race's Character taxonomy entry (the old plural kept as an alias)                                                   |
 | Identity token       | a culture's or race's token map (a NEW pack version the owner approves; the job waits for it), and each character's fact and tag                                               |
@@ -1675,17 +1686,41 @@ is read live): one package of **items**, each with an id, its change (`diff`) an
 Legacy Canon Archive and the Design References (`leftAsHistorical`). AU pages are included, labelled `AU`. Text in a table
 cell or a code block, and a name split by formatting, are listed in `notPlanned`.
 
+**Review only, never items (`reviewOnly`, ADR 0058 amendment B and D).** The plan (and `report` after the job) lists what
+the bridge never edits and nothing approves, for the agent to bring to the owner: each occurrence of the old **given
+name**, **family name** and each old **alias** on its own (a whole word, through the full-text index; not inside the full
+old name; only the parts the new name no longer holds) on a current page, with its page, section and sentence, and
+`sharedWith` ("this page is in Azhar al-Rashid's set") when the page belongs to another character whose name holds the
+same part; and each mention whose **custom label** holds the old name (`note: "custom label: change it in the app if
+wanted"`): LegendKeeper's API cannot change a mention's custom label, so no rename writes one and none fails on one. At
+most 200 occurrences (`count`, `more` for the rest). The owner can ask for a follow-up rename (`from`) of specific ones.
+
 **Refusals.** `NAME_PARTS_REQUIRED` (a given or family name in the old name but not the new one, not supplied: never
 inferred), `NAME_PARTS_NOT_APPLICABLE`, `TOKEN_REQUIRED` (a token that is not the culture's or race's own name),
 `NAME_TAKEN` (a renamed page would sit beside a page of that name), `NOTHING_TO_RENAME`, `FOLLOW_UP_MISMATCH`,
 `SUBJECT_NOT_FOUND`, `SUBJECT_AMBIGUOUS`, `SUBJECT_ARCHIVED`, `PACK_NOT_CURRENT`, `NO_SNAPSHOT` (no full-text index yet).
 
-**The job** (one, after the owner's approval of all or some items): one check first, inside every lock the job holds —
-the subject still has its old name (renamed meanwhile: `SUBJECT_RENAMED`, nothing is written), every page, block and asset
-it edits is as planned, the pack version the owner approved maps a new token — then the approved items in dependency
-order (names, then facts, then everything that points at them), Last Major Revision per page by ADR 0051's rule measured
-from what was approved (a name, an alias, a tag or a fact that only swaps the name never counts; a page with nothing else
-has no step at all), and the read-back of every page it touched.
+**The job** (one, after the owner's approval of all or some items): one check first — the subject still has its old name
+(renamed meanwhile: `SUBJECT_RENAMED`, nothing is written), each page of its set has its old name (or the new one), each
+block's planned edits re-applied to it as it is (or skipped), each asset as planned (or skipped), the pack version the
+owner approved maps a new token — then the approved items in dependency order (names, then facts, then everything that
+points at them), Last Major Revision per page by ADR 0051's rule measured from what was approved (a name, an alias, a tag
+or a fact that only swaps the name never counts; a page with nothing else has no step at all; a skipped item's write is not
+measured), and the read-back of every page it touched (the skipped items left out).
+
+**Locks and conflicts (ADR 0058 amendment A).** The job holds no lock for its whole run: each write takes its own page's,
+document's or asset's lock only for itself, and re-checks inside it. When a write finds its target changed (another
+version or state when it reads it inside its lock, or LegendKeeper answers 412), it is **rebased**: what the item edits
+must still be exactly there (a restatement's occurrence in its sentence; a fact's old value; a page's old name; a row's
+text; an alias or tag list as it now is), and the same change is re-applied to the fresh content and version, at most 3
+attempts, with the governor's backoff before each re-read that follows a refused send. When it is gone or changed (someone
+edited that exact text meanwhile), or now appears more than once in its paragraph, the item is **skipped** ("changed
+meanwhile", with a `before` and `after` excerpt) and the job carries on; three conflicts in a row skip it too. Rebasing
+never widens an edit. **Core items** (the subject's own page names and the identity facts of its set) are never skipped:
+their conflict stops the job, which stays resumable. Skipped items are listed on the proposal (`itemPlan.skipped`), in
+`report` (`skipped`) and are proposed again with the left-out ones (**Propose these again**). Cost: a conflict seen on the
+read a write makes anyway costs no extra read; one refused by LegendKeeper (412) costs one read (the re-read) and the send
+again.
 
 **What is left.** When the job ends, the full-text index is searched for the old name again (once the job's change
 snapshot is in it): every occurrence still on a current page is listed with its link (`lk://resources/<id>`), with the
@@ -1695,9 +1730,10 @@ state and that list, free.
 
 **Costs (measured against the mock).** Planning reads each page of the set and each document holding the name once, plus
 the pack's three governance reads: 22 reads for the test character (seven pages, six other pages naming her, two
-chronology rows); its approved job (the plan's ticks: 7 items left out) 185 requests, 49 of them writes, its check,
-read-back and change snapshot included. The culture with six characters: 13 reads to plan, its job 98 requests, 20 of
-them writes. `dryRun` states the plan's own estimate (`cost`).
+chronology rows); its approved job (the plan's ticks: 7 items left out) 177 requests, 47 of them writes, its check,
+read-back and change snapshot included (185 and 49 before the amendment, which no longer writes the two custom labels).
+The culture with six characters: 13 reads to plan, its job 93 requests, 20 of them writes (98 before: each character's
+tag is re-checked on the read its own write makes). `dryRun` states the plan's own estimate (`cost`).
 
 ### Selective approval (every proposal made of items)
 

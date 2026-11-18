@@ -24,6 +24,8 @@ import type { ProposalView } from '../../policy/types.js';
 import { textKey } from '../engine/text.js';
 import type { Packs } from '../service.js';
 import { names as namesIn } from './text.js';
+import { reviewList, type ReviewList, type ReviewOccurrence, type ReviewPart } from './review.js';
+import type { SkippedItem } from '../../jobs/types.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -58,6 +60,23 @@ export interface LeftoverReport {
   /** The call that proposes a rename of exactly what is left (null when nothing is). */
   readonly followUp: { readonly tool: 'arkona_rename'; readonly args: Obj } | null;
   readonly note: string;
+  /**
+   * ADR 0058 amendment (A): the items the job skipped because what they edit changed meanwhile, each with a before and
+   * after excerpt; the owner can propose them again ("Propose these again" on the Proposals page).
+   */
+  readonly skipped?: {
+    readonly count: number;
+    readonly items: readonly SkippedItem[];
+    readonly note: string;
+  };
+  /** ADR 0058 amendment (B, D): review only, never edited: the old name's parts on their own, custom labels. */
+  readonly reviewOnly?: ReviewList;
+}
+
+/** ADR 0058 amendment (B, D): what a rename lists for review, as planned (kept with the record). */
+export interface RenameReview {
+  readonly parts: readonly ReviewPart[];
+  readonly customLabels: readonly ReviewOccurrence[];
 }
 
 export interface RenameRecord {
@@ -74,6 +93,7 @@ export interface RenameRecord {
   readonly token: RenameToken | null;
   readonly leftovers: LeftoverReport | null;
   readonly leftoversAt: number | null;
+  readonly review: RenameReview | null;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -92,6 +112,7 @@ interface Row {
   token: string | null;
   leftovers: string | null;
   leftovers_at: number | null;
+  review: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -119,13 +140,17 @@ const toRecord = (r: Row): RenameRecord => ({
   token: parse<RenameToken>(r.token),
   leftovers: parse<LeftoverReport>(r.leftovers),
   leftoversAt: r.leftovers_at,
+  review: parse<RenameReview>(r.review ?? null),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
 });
 
 export interface RenameServiceDeps {
   readonly db: Db;
-  readonly engine: Pick<JobEngine, 'events' | 'setWaitForCheck' | 'poke'>;
+  readonly engine: Pick<JobEngine, 'events' | 'setWaitForCheck' | 'poke'> &
+    Partial<Pick<JobEngine, 'skippedItems'>>;
+  /** ADR 0058 amendment (B): the character a page belongs to (its subject's name), for the review list. */
+  readonly characterOf?: (projectId: string, pageId: string) => string | null;
   readonly packs: Pick<Packs, 'get' | 'onChange' | 'commands'>;
   readonly proposals: {
     addHooks(h: ProposalHooks): () => void;
@@ -190,13 +215,14 @@ export class RenameService {
     readonly proposalId: string | null;
     readonly jobId: string | null;
     readonly token: RenameToken | null;
+    readonly review?: RenameReview | null;
   }): RenameRecord {
     const now = this.d.now();
     this.d.db
       .prepare(
         `INSERT INTO pack_renames (id, project_id, pack_id, subject_id, subject_kind, old_name, new_name, proposal_id,
-           job_id, state, token, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           job_id, state, token, review, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         r.id,
@@ -210,6 +236,7 @@ export class RenameService {
         r.jobId,
         r.jobId ? 'running' : 'proposed',
         r.token ? JSON.stringify(r.token) : null,
+        r.review ? JSON.stringify(r.review) : null,
         now,
         now,
       );
@@ -352,6 +379,7 @@ export class RenameService {
       proposalId,
       jobId: null,
       token,
+      review: rec.review,
     });
   }
 
@@ -431,6 +459,32 @@ export class RenameService {
         au,
       });
     }
+    // ADR 0058 amendment (A): the items the job skipped (changed meanwhile), to propose again.
+    const skippedItems = rec.jobId ? (this.d.engine.skippedItems?.(projectId, rec.jobId) ?? []) : [];
+    // ADR 0058 amendment (B, D): review only, searched again (free).
+    const review = rec.review
+      ? reviewList(
+          {
+            projectId,
+            search: (pid, value) => a.fullText.search(pid, [{ value, phrase: true }], { limit: 5000 }),
+            labels: (pageId) => {
+              try {
+                return reader.labels(pageId);
+              } catch {
+                return null;
+              }
+            },
+            pageName: (pageId) => reader.page(pageId)?.rawName ?? null,
+            characterOf: (pageId) => this.d.characterOf?.(projectId, pageId) ?? null,
+          },
+          {
+            subjectName: rec.newName,
+            oldName: rec.oldName,
+            parts: rec.review.parts,
+            customLabels: rec.review.customLabels,
+          },
+        )
+      : null;
     const report: LeftoverReport = {
       asOf: state ? new Date(state.newestTakenAt).toISOString() : null,
       count: out.length,
@@ -446,6 +500,16 @@ export class RenameService {
         out.length > 0
           ? `“${rec.oldName}” is still on ${new Set(out.map((x) => x.page.id)).size} current page(s) (as of the newest snapshot): what was left out, what the rename does not edit (tables, code, a name split by formatting), and anything written since the plan. Propose a rename of exactly these with the follow-up call; historical pages and the old name kept as an alias are not listed.`
           : `Nothing of “${rec.oldName}” is left on current pages (as of the newest snapshot); historical pages keep it (D2), and the old name stays an alias where it was kept.`,
+      ...(skippedItems.length > 0
+        ? {
+            skipped: {
+              count: skippedItems.length,
+              items: skippedItems.slice(0, 200),
+              note: `${skippedItems.length} item${skippedItems.length === 1 ? ' was' : 's were'} skipped when the job ran: what ${skippedItems.length === 1 ? 'it edits' : 'they edit'} changed meanwhile (each with a before and after excerpt). The owner can propose ${skippedItems.length === 1 ? 'it' : 'them'} again ("Propose these again" on the Proposals page); for a sentence that now reads differently, a follow-up rename (from) plans it afresh.`,
+            },
+          }
+        : {}),
+      ...(review && review.count > 0 ? { reviewOnly: review } : {}),
     };
     this.d.db
       .prepare('UPDATE pack_renames SET leftovers = ?, leftovers_at = ?, updated_at = ? WHERE id = ?')

@@ -11,6 +11,7 @@ import type { BudgetSnapshot } from '../lk/governor/types.js';
 import type { ErrorClassification } from '../lk/errors.js';
 import { idempotencyKeyFor } from '../lk/idempotency.js';
 import { newArtifactId } from './ids.js';
+import { skippedIn } from './rebase.js';
 import { isAllProjects, type ProjectScope } from '../projects/types.js';
 import type {
   ArtifactView,
@@ -24,6 +25,7 @@ import type {
   OnError,
   OpParams,
   PriorityClass,
+  SkippedItem,
   StepOptions,
   StepStatus,
   StepView,
@@ -628,6 +630,23 @@ export class JobsRepo {
     return (
       this.db.prepare('SELECT * FROM steps WHERE job_id = ? ORDER BY step_no').all(jobId) as StepRow[]
     ).map(toStep);
+  }
+
+  /**
+   * v3 F3d amendment (ADR 0058, A): the items the job's succeeded steps skipped (changed meanwhile), before `beforeStep`
+   * (all of them without it), in step order. One query: only results that name skipped items (or are kept whole as an
+   * artefact) are read.
+   */
+  skippedItems(jobId: string, beforeStep?: number): SkippedItem[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM steps WHERE job_id = ? AND step_no < ? AND status = 'succeeded'
+           AND (result_summary LIKE '%skippedItems%' OR result_artifact_id IS NOT NULL) ORDER BY step_no`,
+      )
+      .all(jobId, beforeStep ?? Number.MAX_SAFE_INTEGER) as StepRow[];
+    const out: SkippedItem[] = [];
+    for (const r of rows) out.push(...skippedIn(this.stepResult(toStep(r))));
+    return out;
   }
 
   /** The next step to run: the first that is pending or was running (a restart left it in flight). */

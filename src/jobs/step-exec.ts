@@ -11,6 +11,9 @@ import type { JobsSettings } from '../config/jobs.js';
 import { matchesIntent } from './compare.js';
 import type { CustomStepHandler, CustomStepHandlers } from './custom-steps.js';
 import type { StepPlanner } from './planners.js';
+import { withoutSkippedParts } from './items.js';
+import { excerpt, MAX_CONFLICTS, type RebaseResult, type Rebaser } from './rebase.js';
+import { backoffMs } from '../lk/governor/retry.js';
 import { compareStoredBlocks, VERIFY_IGNORED_FIELDS } from './verify-blocks.js';
 import {
   CheckRefusedError,
@@ -74,7 +77,7 @@ import { callOp, isNotFound, newCallStats, type CallStats } from './lk-call.js';
 import type { LockManager } from './locks.js';
 import { READERS, opMeta, type OpMeta, type ReaderDef } from './op-meta.js';
 import type { JobsRepo } from './repo.js';
-import type { JobView, OpParams, ReadInfo, StepView } from './types.js';
+import type { JobView, OpParams, ReadInfo, SkippedItem, StepView } from './types.js';
 import type { WriterPool } from './writers.js';
 
 export type StepOutcome =
@@ -118,6 +121,10 @@ export interface StepExecDeps {
   readonly customSteps?: CustomStepHandlers | undefined;
   /** v2 C1: the in-lock planners, by name (src/jobs/planners.ts). */
   readonly planner?: (name: string) => StepPlanner | undefined;
+  /** v3 F3d amendment (ADR 0058, A): the rebasers of `StepOptions.rebase`, by name (src/jobs/rebase.ts). */
+  readonly rebaser?: (name: string) => Rebaser | undefined;
+  /** v3 F3d amendment: waits (the governor's backoff between a refused send and the re-read), on the engine's clock. */
+  readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   /** v2 C1: a page write that did not land as planned (recorded in the errors table, with the job). */
   readonly recordVerifyMismatch?: (job: JobView, step: StepView, verification: WriteVerification) => void;
   /** v2 C2a: the write guard (protected canonical facts), asked before each write is sent, inside its lock. */
@@ -553,7 +560,7 @@ export class StepExecutor {
       status: 'running',
       startedAt: step.startedAt ?? this.d.now(),
     });
-    const params = this.d.repo.stepParams(step);
+    const params = this.withoutSkipped(job, step, this.d.repo.stepParams(step));
     try {
       if (step.opId === EXPECT_STEP) {
         return this.succeed(job, step, stats, await this.runExpect(job, step, params, stats));
@@ -578,6 +585,37 @@ export class StepExecutor {
     } catch (e) {
       return this.fail(job, step, stats, e);
     }
+  }
+
+  /**
+   * v3 F3d amendment (ADR 0058, A): a shared bridge step without what belongs only to items skipped earlier in the job
+   * (changed meanwhile): a check's or read-back's parts, a Last Major Revision step's evidence. Never stored.
+   */
+  private withoutSkipped(job: JobView, step: StepView, params: OpParams): OpParams {
+    const parts = step.options.itemParts ?? [];
+    const lmr = step.opId === LMR_STEP;
+    if (parts.length === 0 && !lmr) return params;
+    const skipped = new Set(this.d.repo.skippedItems(job.id, step.stepNo).map((x) => x.item));
+    if (skipped.size === 0) return params;
+    let out = parts.length > 0 ? (withoutSkippedParts(params, parts, skipped) as OpParams) : params;
+    if (lmr) {
+      const body = (out.body ?? {}) as Record<string, unknown>;
+      const measure = body.measure as { known?: unknown } | undefined;
+      if (measure && Array.isArray(measure.known))
+        out = {
+          ...out,
+          body: {
+            ...body,
+            measure: {
+              ...measure,
+              known: (measure.known as { item?: unknown }[]).filter(
+                (e) => typeof e?.item !== 'string' || !skipped.has(e.item),
+              ),
+            },
+          },
+        };
+    }
+    return out;
   }
 
   /**
@@ -749,8 +787,24 @@ export class StepExecutor {
     idsByPage?: Record<string, Record<string, string>>;
     bodies?: Record<string, unknown>;
     observed?: Record<string, unknown>;
+    skippedItems?: SkippedItem[];
   }> {
     const checks = ((params.body ?? {}) as { checks?: ExpectCheck[] }).checks ?? [];
+    // v3 F3d amendment (ADR 0058, A): items whose target changed meanwhile, skipped rather than stopping the job.
+    const skippedItems: SkippedItem[] = [];
+    const skipFor = (items: readonly string[], label: string, diffs: readonly StateDifference[]) => {
+      const d = diffs[0];
+      const show = (v: unknown) =>
+        v === undefined || v === null ? null : excerpt(typeof v === 'string' ? v : JSON.stringify(v));
+      for (const item of items)
+        skippedItems.push({
+          item,
+          reason: 'changed meanwhile',
+          before: show(d?.expected),
+          after: show(d?.actual),
+          where: label,
+        });
+    };
     const ref = { jobId: job.id, stepNo: step.stepNo };
     const versions: Record<string, string | null> = {};
     const ids: Record<string, string> = {};
@@ -817,7 +871,9 @@ export class StepExecutor {
           throw new StateConflictError(EXPECT_STEP, c.label, [...out.differences], null, null, ref);
         Object.assign(bodies, out.bodies ?? {});
         if (out.observed !== undefined) observed[c.label] = out.observed;
-        if (c.resourceId) keep(c.resourceId, c.label, null);
+        if (out.skipped) skippedItems.push(...out.skipped);
+        if (c.resourceId) keep(c.resourceId, c.label, out.version ?? null);
+        else if (out.version !== undefined) versions[c.label] = out.version;
         continue;
       }
       // v2 D1: a whole document judged by a registered checker (the chronology's tables), one event, one lane.
@@ -856,10 +912,16 @@ export class StepExecutor {
           input: c.input,
           document: { version, blocks: Array.isArray(b.blocks) ? (b.blocks as unknown[]) : [] },
         });
+        if (out.differences.length > 0 && c.skipItems && c.skipItems.length > 0) {
+          skipFor(c.skipItems, c.label, out.differences);
+          keep(c.resourceId, c.label, version);
+          continue;
+        }
         if (out.differences.length > 0)
           throw new StateConflictError(EXPECT_STEP, c.label, [...out.differences], null, version, ref);
         Object.assign(bodies, out.bodies ?? {});
         if (out.observed !== undefined) observed[c.label] = out.observed;
+        if (out.skipped) skippedItems.push(...out.skipped);
         keep(c.resourceId, c.label, version);
         continue;
       }
@@ -901,6 +963,11 @@ export class StepExecutor {
       }
       if (c.kind === 'event' || c.kind === 'lane') {
         const diffs = await this.timelineDiffs(job, step, c, stats);
+        if (diffs.length > 0 && c.kind === 'event' && c.skipItems && c.skipItems.length > 0) {
+          skipFor(c.skipItems, c.label, diffs);
+          keep(c.resourceId, c.label, null);
+          continue;
+        }
         if (diffs.length > 0) throw new StateConflictError(EXPECT_STEP, c.label, diffs, null, null, ref);
         keep(c.resourceId, c.label, null);
         continue;
@@ -993,6 +1060,7 @@ export class StepExecutor {
       ...(Object.keys(ids).length > 0 ? { ids, idsByPage } : {}),
       ...(Object.keys(bodies).length > 0 ? { bodies } : {}),
       ...(Object.keys(observed).length > 0 ? { observed } : {}),
+      ...(skippedItems.length > 0 ? { skippedItems } : {}),
     };
   }
 
@@ -1728,6 +1796,14 @@ export class StepExecutor {
     const stats = newCallStats();
     let forcedIfMatch: string | undefined;
     let ambiguous = false;
+    // v3 F3d amendment (ADR 0058, A): an item's write rebased on a conflict (src/jobs/rebase.ts).
+    const rebase = step.options.rebase;
+    const rebaser = rebase ? this.d.rebaser?.(rebase.rebaser) : undefined;
+    let conflicts = 0;
+    const skipped: SkippedItem[] = [];
+    let rebaseNote: Record<string, unknown> | undefined;
+    /** The target read after a refused send, judged by the rebaser: the next attempt is built on it (no second read). */
+    let carried: Current | undefined;
 
     // A step that may already have reached LK is verified before anything is re-sent.
     if (step.status === 'running' || step.maybeSent) {
@@ -1740,336 +1816,528 @@ export class StepExecutor {
       }
     }
 
-    try {
-      let callerVersion = str(params.ifMatch);
-      const journalled = this.d.journal.hasEntry(job.id, step.stepNo);
-      const resend = forcedIfMatch !== undefined;
-      const needRead =
-        !resend &&
-        meta.reader !== undefined &&
-        // v3 F3.4 (ADR 0055 decision E): the engine asked for the "before" the Last Major Revision rule measures.
-        ((step.options.readBefore === true && !journalled) ||
-          (op.versioned && !callerVersion) ||
-          meta.guard !== undefined ||
-          (step.options.expectCurrent !== undefined && !callerVersion) ||
-          // v2 E4: a step whose pre-image the tool supplied needs no read for it.
-          (meta.journal === 'pre-image' && !journalled && step.options.journalPreImage === undefined));
-
-      // ONE read serves the If-Match version, the unsupported-block guard and the journal pre-image.
-      const current = needRead
-        ? await this.readCurrent(job, step, op, meta, params, step.clientIds)
-        : undefined;
-
-      let ifMatch: string | undefined;
-      if (op.versioned) {
-        ifMatch = forcedIfMatch ?? callerVersion ?? current?.version;
-        if (!ifMatch) {
-          throw new JobsError('BRIDGE_ERROR', `${op.operationId}: could not read the current version`, ref);
-        }
-        if (callerVersion && current?.version && current.version !== callerVersion) {
-          // v2 C1 (PLAN-v2 10.6): the bridge's own compare-and-swap, inside the lock. A step that names a planner may be
-          // re-planned on the current document (section edits whose section is unchanged); anything else is a conflict.
-          const planner = step.options.replan ? this.d.planner?.(step.options.replan.planner) : undefined;
-          if (!planner || !step.options.replan) {
-            throw new VersionConflictError(op.operationId, callerVersion, current.version, ref);
-          }
-          const r = planner({
-            projectId: job.projectId,
-            jobId: job.id,
-            stepNo: step.stepNo,
-            opId: op.operationId,
-            params,
-            input: step.options.replan.input,
-            plannedVersion: callerVersion,
-            current: { version: current.version, body: current.body },
-          });
-          if (r.kind === 'unchanged') {
-            // The document already holds the result: nothing is sent, nothing is journalled.
-            const value: VerifiedWriteValue = {
-              document: { id: params.path?.documentId ?? null, version: current.version },
-              verification: {
-                status: 'not_checked',
-                version: current.version,
-                reason: 'nothing was written: the document already holds this change',
-                ignored: VERIFY_IGNORED_FIELDS,
-              },
-              unchanged: true,
-              replanned: { from: callerVersion, to: current.version, ...r.note },
-            };
-            return this.succeed(job, step, stats, value, false, store);
-          }
-          if (str(r.params.ifMatch) !== current.version) {
-            throw new JobsError(
-              'BRIDGE_ERROR',
-              `${op.operationId}: a re-plan must be built on the current version`,
-              ref,
-            );
-          }
-          replanned = { from: callerVersion, to: current.version, ...r.note };
-          params = r.params;
-          this.d.repo.setStepParams(job.id, step.stepNo, params);
-          callerVersion = current.version;
-          ifMatch = current.version;
-        }
-      }
-
-      // v3 F3a (ADR 0050): a page the job made from a template already holds the template's content: the registered
-      // filler works out what to send from the document as it is now (read just above, inside the lock), once. The
-      // result is stored with the version read as its If-Match, so a later attempt compares with it.
-      const fill = step.options.fill;
-      if (fill && op.operationId === 'replaceDocumentBlocks' && !resend && callerVersion === undefined) {
-        if (!current?.exists || !current.version) {
-          throw new StateConflictError(
-            op.operationId,
-            'the new page’s document',
-            [{ path: 'document', expected: 'present', actual: '(gone)' }],
-            null,
-            null,
-            ref,
-          );
-        }
-        const filler = this.d.filler?.(fill.filler);
-        if (!filler)
-          throw new JobsError(
-            'BRIDGE_ERROR',
-            `The filler ${fill.filler} is not available; nothing was sent.`,
-            ref,
-          );
-        let r;
-        try {
-          r = filler({
-            projectId: job.projectId,
-            jobId: job.id,
-            stepNo: step.stepNo,
-            input: fill.input,
-            planned: (((params.body ?? {}) as { blocks?: unknown }).blocks ?? []) as unknown[],
-            current: {
-              version: current.version,
-              blocks: (((current.body ?? {}) as { blocks?: unknown }).blocks ?? []) as unknown[],
-            },
-          });
-        } catch (e) {
-          if (e instanceof JobsError) throw e;
-          throw new StateConflictError(
-            op.operationId,
-            'the new page’s document',
-            [
-              {
-                path: 'document',
-                expected: 'a template copy the plan can fill',
-                actual: e instanceof Error ? e.message : String(e),
-              },
-            ],
-            null,
-            current.version,
-            ref,
-          );
-        }
-        params = { ...params, ifMatch: current.version, body: { blocks: [...r.blocks] } };
-        this.d.repo.setStepParams(job.id, step.stepNo, params);
-        callerVersion = current.version;
-        ifMatch = current.version;
-        replanned = { filled: true, ...(r.note ?? {}) };
-      }
-
-      if (meta.guard && current?.exists) {
-        const sides = unsupportedGuardSides(meta.guard, op.operationId, params, current);
-        if (sides) assertNoUnsupportedLoss(op.operationId, sides.existing, sides.incoming, step.options, ref);
-      }
-
-      // v2 C2a: the bridge's own compare-and-swap for a write LegendKeeper does not version (a link collection's
-      // updateProperty): the read just made inside the lock must show the state the plan was built on.
-      const expect = step.options.expectCurrent;
-      if (expect && !resend && needRead) {
-        if (!current || (expect.state === 'collection' && !current.exists)) {
-          throw new StateConflictError(
-            op.operationId,
-            expect.label ?? op.operationId,
-            [{ path: expect.label ?? 'target', expected: 'present', actual: 'gone' }],
-            null,
-            null,
-            ref,
-          );
-        }
-        const ent = (current.entity ?? current.body) as { name?: unknown; tags?: unknown } | undefined;
-        const now =
-          expect.state === 'resource'
-            ? { name: ent?.name ?? null, tags: Array.isArray(ent?.tags) ? ent.tags : [] }
-            : expect.state === 'rows'
-              ? rowsState(
-                  (current.body as { data?: unknown } | undefined)?.data ??
-                    (current.entity as { rows?: unknown } | undefined)?.rows,
-                )
-              : collectionState(current.entity ?? current.body);
-        // Rows in rank order on both sides (rowsState and rowsContentHash sort them), whichever endpoint gave them.
-        const hash = expect.state === 'rows' ? rowsContentHash(now as RowState[]) : stateHash(now);
-        if (hash !== expect.hash) {
-          throw new StateConflictError(
-            op.operationId,
-            expect.label ?? op.operationId,
-            [{ path: expect.label ?? 'state', expected: `state ${expect.hash.slice(0, 12)}…`, actual: now }],
-            null,
-            current.version ?? null,
-            ref,
-          );
-        }
-      }
-
-      // v2 C2a (ADR 0032): the write guard, inside the lock, on what is there now (protected canonical facts).
-      const guard = this.d.writeGuard?.();
-      if (guard?.inLock && !resend) {
-        await guard.inLock({
-          job,
-          step,
-          opId: op.operationId,
-          params,
-          jobOptions: this.d.repo.jobOptions(job.id),
-          current: current ? { body: current.body, entity: current.entity } : undefined,
-          read: (opId, p) => this.guardRead(job, step, opId, p),
+    /**
+     * A conflict met by a step with a rebaser: the rebaser judges the target as read now. Returns the params to send,
+     * or the step's outcome (already done, or its items skipped). Throws `conflict` for a core item that cannot be
+     * rebased (the job stops, resumable).
+     */
+    const rebaseOn = (
+      cur: Current,
+      conflict: JobsError,
+      counted = true,
+    ): { params: OpParams } | StepOutcome => {
+      if (counted) conflicts++;
+      const items = [...new Set([...(step.options.items ?? []), ...(rebase?.with ?? [])])];
+      const skipAll = (reason: string, before?: string | null, after?: string | null): StepOutcome => {
+        if (rebase?.core) throw conflict;
+        const list: SkippedItem[] = [
+          ...skipped,
+          ...items
+            .filter((i) => !skipped.some((x) => x.item === i))
+            .map((item) => ({ item, reason, before: excerpt(before), after: excerpt(after) })),
+        ];
+        return this.succeed(job, step, stats, {
+          skipped: reason,
+          skippedItems: list,
+          rebased: { conflicts, ...(rebaseNote ?? {}) },
+          version: cur.version ?? str(params.ifMatch) ?? null,
         });
-      }
-
-      // Chunk 8 (required change A): EVERY write gets a journal entry before it is sent (outcome `pending`, settled
-      // below), so agents can see each other's edits. Only destructive writes (`meta.journal`) keep a pre-image or ids.
-      let journalId: number | undefined;
-      if (!journalled) {
-        const created = meta.verify === 'client-id' ? step.clientIds : [];
-        journalId = this.d.journal.record({
+      };
+      if (counted && conflicts >= MAX_CONFLICTS)
+        return skipAll(`conflicted ${MAX_CONFLICTS} times in a row (another writer kept changing it)`);
+      let r: RebaseResult;
+      try {
+        r = rebaser!({
           projectId: job.projectId,
           jobId: job.id,
           stepNo: step.stepNo,
           opId: op.operationId,
-          principalId: job.principalId,
-          profile: job.profile,
-          approvedBy: job.approvedBy,
-          risk: op.risk,
-          targetKind: meta.reader ?? op.tag,
-          // A create's target is the new entity: its client-chosen id, or (set after success) the id LK gives it.
-          // The container stays visible in resourceId / documentId.
-          targetId: created[0] ?? (CREATES.test(op.operationId) ? null : targetIdOf(op, params)),
-          resourceId:
-            params.path?.resourceId ?? (RESOURCE_CREATES.has(op.operationId) ? (created[0] ?? null) : null),
-          documentId: params.path?.documentId ?? null,
-          version: ifMatch ?? current?.version ?? null,
           params,
-          ...(step.options.journalOperation
-            ? {
-                operation: {
-                  ...step.options.journalOperation,
-                  ...(replanned ? { replannedInLock: replanned } : {}),
-                },
-              }
-            : {}),
-          ...(created.length > 1 ? { targets: created } : {}),
-          ...(meta.journal === 'pre-image' && current
-            ? {
-                preImage:
-                  step.options.journalPreImageWith !== undefined &&
-                  current.entity !== null &&
-                  typeof current.entity === 'object'
-                    ? {
-                        ...(current.entity as Record<string, unknown>),
-                        with: step.options.journalPreImageWith,
-                      }
-                    : (current.entity ?? current.body),
-              }
-            : step.options.journalPreImage !== undefined
-              ? { preImage: step.options.journalPreImage }
-              : step.options.readBefore === true && current?.exists
-                ? { preImage: current.entity ?? current.body }
-                : {}),
+          input: rebase!.input,
+          conflict: conflicts,
+          current: {
+            exists: cur.exists,
+            version: cur.version ?? null,
+            body: cur.body,
+            entity: cur.entity,
+          },
+        });
+      } catch (e) {
+        return skipAll(`could not be rebased: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      if (r.kind === 'skip') {
+        if (rebase?.core) {
+          // A core item (the subject's own page names and identity facts) is never skipped: the job stops, resumable.
+          const d = r.skipped[0];
+          const why = `${d?.reason ?? 'changed meanwhile'} (a core item: the job stops; Resume it once this is as planned)`;
+          throw new StateConflictError(
+            op.operationId,
+            d?.where ? `${d.where}: ${why}` : why,
+            [
+              {
+                path: d?.where ? `${d.where}: ${why}` : why,
+                expected: d?.before ?? 'as planned',
+                actual: d?.after ?? 'changed meanwhile',
+              },
+            ],
+            null,
+            cur.version ?? null,
+            ref,
+          );
+        }
+        const list = [...skipped, ...r.skipped];
+        const covered = new Set(list.map((x) => x.item));
+        for (const i of items)
+          if (!covered.has(i)) list.push({ item: i, reason: r.skipped[0]?.reason ?? 'changed meanwhile' });
+        return this.succeed(job, step, stats, {
+          skipped: r.skipped[0]?.reason ?? 'changed meanwhile',
+          skippedItems: list,
+          ...(conflicts > 0 ? { rebased: { conflicts } } : {}),
+          version: cur.version ?? str(params.ifMatch) ?? null,
         });
       }
-
-      // Durable "running" marker before the request leaves: a restart from here verifies before re-sending.
-      const now = this.d.now();
-      this.d.repo.updateStep(job.id, step.stepNo, {
-        status: 'running',
-        ifMatch: ifMatch ?? null,
-        startedAt: step.startedAt ?? now,
-        firstSentAt: step.firstSentAt ?? now,
-      });
-
-      try {
-        const send = (p: OpParams) =>
-          callOp(this.lk(job), op, p, {
-            ...this.callOptions(job, step, stats),
-            ifMatch,
-            verify: (ctx) => this.verifyHook(job, step, op, meta, p, ctx.error),
-          });
-        let value: unknown;
-        try {
-          value = await send(params);
-        } catch (first) {
-          // v2 E1a (ADR 0042 decision 9): a field LegendKeeper refuses although the rest is sound (an icon name) is dropped
-          // and the write sent once more; the result says what was dropped. Any other refusal fails the step as before.
-          const refused = refusedFields(step.options.dropIfRefused, params, first);
-          if (!refused) throw first;
-          const body = { ...(params.body as Record<string, unknown>) };
-          const droppedFields: Record<string, unknown> = {};
-          const write = step.options.journalOperation?.write;
-          const droppedWhere = typeof write === 'string' ? write : op.operationId;
-          for (const k of refused) {
-            droppedFields[k] = body[k];
-            delete body[k];
-          }
-          params = { ...params, body };
-          this.d.repo.setStepParams(job.id, step.stepNo, params);
-          const retried = await send(params);
-          value =
-            retried !== null && typeof retried === 'object' && !Array.isArray(retried)
-              ? { ...(retried as Record<string, unknown>), droppedFields, droppedWhere }
-              : { droppedFields, droppedWhere };
-        }
-        if (journalId !== undefined) {
-          this.d.journal.setOutcome(journalId, 'applied');
-          // An insert or create without a client-chosen id: note the id LegendKeeper gave it.
-          const createdId = op.method === 'POST' ? (value as { id?: unknown } | null)?.id : undefined;
-          if (typeof createdId === 'string' && createdId !== '')
-            this.d.journal.setCreatedTarget(journalId, createdId);
-        } else this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
-        if (step.options.verifyAfterWrite === true && op.operationId === 'replaceDocumentBlocks') {
-          const verification = await this.verifyWrite(job, step, op, meta, params, journalId);
-          if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
-          const sent = (value ?? {}) as { id?: unknown; version?: unknown };
-          const out: VerifiedWriteValue = {
-            document: { id: sent.id ?? params.path?.documentId ?? null, version: sent.version ?? null },
-            verification,
-            ...(replanned ? { replanned } : {}),
-          };
-          return this.succeed(job, step, stats, out, false, store);
-        }
-        return this.succeed(job, step, stats, value, false, store, this.etagOf(job, op, stats));
-      } catch (e) {
-        const outcome = stats.maybeSent && !(e instanceof BudgetWaitError) ? 'unknown' : 'not_applied';
-        this.d.journal.setOutcomeForStep(job.id, step.stepNo, outcome);
-        if (e instanceof BridgeLkError && (e.status === 412 || e.code === 'VERSION_MISMATCH')) {
-          // PLAN §4 rule 1: re-read, and return a clear conflict with the current version. Never retried.
-          const now = meta.reader
-            ? await this.readCurrent(job, step, op, meta, params, step.clientIds).catch(() => undefined)
-            : undefined;
-          throw new VersionConflictError(op.operationId, ifMatch ?? null, now?.version ?? null, ref, e);
-        }
-        // A failure after the write may have applied: find out now rather than leave it ambiguous. A batch create is
-        // not atomic (LK's guide): a failure part-way, or DUPLICATE_ID on a retry, leaves some items created.
-        // CR-2026-11-R2 (R2-05): DUPLICATE_ID on a first, unambiguous send is a refusal, not an ambiguous outcome:
-        // LegendKeeper checks every item before it creates any, so an id is held by something this step never sent.
-        const batch = meta.clientId === 'body.resources[].id';
-        const mayHaveApplied =
-          e instanceof BridgeLkError &&
-          !(e instanceof BudgetWaitError) &&
-          ((stats.maybeSent && (e.classification === 'upstream' || batch)) ||
-            (batch && e.code === 'DUPLICATE_ID' && this.sentBefore(job, step, op)));
-        if (mayHaveApplied) {
-          const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
-          const r = await this.safeRecover(job, { ...latest, maybeSent: true }, op, meta, params);
-          const settled = this.settle(job, step, op, meta, params, stats, r, ref);
-          if (settled) return settled;
-        }
-        throw e;
+      if (r.kind === 'unchanged')
+        return this.succeed(job, step, stats, {
+          unchanged: true,
+          ...(conflicts > 0 || r.note ? { rebased: { conflicts, ...(r.note ?? {}) } } : {}),
+          version: cur.version ?? null,
+          ...(skipped.length > 0 ? { skippedItems: [...skipped] } : {}),
+        });
+      if (r.skipped && r.skipped.length > 0) {
+        if (rebase?.core) throw conflict;
+        skipped.push(...r.skipped);
       }
-    } catch (e) {
-      return this.fail(job, step, stats, e, ambiguous);
+      rebaseNote = { ...(rebaseNote ?? {}), ...(r.note ?? {}) };
+      const next: OpParams =
+        op.versioned && cur.version ? { ...r.params, ifMatch: cur.version } : { ...r.params };
+      this.d.repo.setStepParams(job.id, step.stepNo, next);
+      return { params: next };
+    };
+
+    for (;;) {
+      try {
+        let callerVersion = str(params.ifMatch);
+        const journalled = this.d.journal.hasEntry(job.id, step.stepNo);
+        const resend = forcedIfMatch !== undefined;
+        const needRead =
+          !resend &&
+          meta.reader !== undefined &&
+          // v3 F3.4 (ADR 0055 decision E): the engine asked for the "before" the Last Major Revision rule measures.
+          ((step.options.readBefore === true && !journalled) ||
+            (op.versioned && !callerVersion) ||
+            meta.guard !== undefined ||
+            (step.options.expectCurrent !== undefined && !callerVersion) ||
+            // v2 E4: a step whose pre-image the tool supplied needs no read for it.
+            (meta.journal === 'pre-image' && !journalled && step.options.journalPreImage === undefined));
+
+        // ONE read serves the If-Match version, the unsupported-block guard and the journal pre-image.
+        const current =
+          carried ??
+          (needRead ? await this.readCurrent(job, step, op, meta, params, step.clientIds) : undefined);
+        /** v3 F3d amendment: the rebaser judged the target as read (after a refused send): not compared again. */
+        let judged = carried !== undefined;
+        carried = undefined;
+        // v3 F3d amendment (ADR 0058, A): a write re-checked inside its lock every time (`rebase.always`: a page's aliases
+        // or tags, which LegendKeeper does not version): its change is worked out from what is there now.
+        if (rebase?.always === true && rebaser && current?.exists && !judged && !resend) {
+          const r = rebaseOn(
+            current,
+            new StateConflictError(
+              op.operationId,
+              op.operationId,
+              [{ path: op.operationId, expected: 'as planned', actual: 'changed meanwhile' }],
+              null,
+              current.version ?? null,
+              ref,
+            ),
+            false,
+          );
+          if (!('params' in r)) return r;
+          params = r.params;
+          judged = true;
+        }
+
+        let ifMatch: string | undefined;
+        if (op.versioned) {
+          ifMatch = forcedIfMatch ?? callerVersion ?? current?.version;
+          if (!ifMatch) {
+            throw new JobsError('BRIDGE_ERROR', `${op.operationId}: could not read the current version`, ref);
+          }
+          if (callerVersion && current?.version && current.version !== callerVersion && !judged && rebaser) {
+            // v3 F3d amendment (ADR 0058, A): the target changed since the plan (or since the write before it): rebased.
+            const r = rebaseOn(
+              current,
+              new VersionConflictError(op.operationId, callerVersion, current.version, ref),
+            );
+            if (!('params' in r)) return r;
+            params = r.params;
+            callerVersion = current.version;
+            ifMatch = current.version;
+            judged = true;
+          } else if (callerVersion && current?.version && current.version !== callerVersion && !judged) {
+            // v2 C1 (PLAN-v2 10.6): the bridge's own compare-and-swap, inside the lock. A step that names a planner may be
+            // re-planned on the current document (section edits whose section is unchanged); anything else is a conflict.
+            const planner = step.options.replan ? this.d.planner?.(step.options.replan.planner) : undefined;
+            if (!planner || !step.options.replan) {
+              throw new VersionConflictError(op.operationId, callerVersion, current.version, ref);
+            }
+            const r = planner({
+              projectId: job.projectId,
+              jobId: job.id,
+              stepNo: step.stepNo,
+              opId: op.operationId,
+              params,
+              input: step.options.replan.input,
+              plannedVersion: callerVersion,
+              current: { version: current.version, body: current.body },
+            });
+            if (r.kind === 'unchanged') {
+              // The document already holds the result: nothing is sent, nothing is journalled.
+              const value: VerifiedWriteValue = {
+                document: { id: params.path?.documentId ?? null, version: current.version },
+                verification: {
+                  status: 'not_checked',
+                  version: current.version,
+                  reason: 'nothing was written: the document already holds this change',
+                  ignored: VERIFY_IGNORED_FIELDS,
+                },
+                unchanged: true,
+                replanned: { from: callerVersion, to: current.version, ...r.note },
+              };
+              return this.succeed(job, step, stats, value, false, store);
+            }
+            if (str(r.params.ifMatch) !== current.version) {
+              throw new JobsError(
+                'BRIDGE_ERROR',
+                `${op.operationId}: a re-plan must be built on the current version`,
+                ref,
+              );
+            }
+            replanned = { from: callerVersion, to: current.version, ...r.note };
+            params = r.params;
+            this.d.repo.setStepParams(job.id, step.stepNo, params);
+            callerVersion = current.version;
+            ifMatch = current.version;
+          }
+        }
+
+        // v3 F3a (ADR 0050): a page the job made from a template already holds the template's content: the registered
+        // filler works out what to send from the document as it is now (read just above, inside the lock), once. The
+        // result is stored with the version read as its If-Match, so a later attempt compares with it.
+        const fill = step.options.fill;
+        if (fill && op.operationId === 'replaceDocumentBlocks' && !resend && callerVersion === undefined) {
+          if (!current?.exists || !current.version) {
+            throw new StateConflictError(
+              op.operationId,
+              'the new page’s document',
+              [{ path: 'document', expected: 'present', actual: '(gone)' }],
+              null,
+              null,
+              ref,
+            );
+          }
+          const filler = this.d.filler?.(fill.filler);
+          if (!filler)
+            throw new JobsError(
+              'BRIDGE_ERROR',
+              `The filler ${fill.filler} is not available; nothing was sent.`,
+              ref,
+            );
+          let r;
+          try {
+            r = filler({
+              projectId: job.projectId,
+              jobId: job.id,
+              stepNo: step.stepNo,
+              input: fill.input,
+              planned: (((params.body ?? {}) as { blocks?: unknown }).blocks ?? []) as unknown[],
+              current: {
+                version: current.version,
+                blocks: (((current.body ?? {}) as { blocks?: unknown }).blocks ?? []) as unknown[],
+              },
+            });
+          } catch (e) {
+            if (e instanceof JobsError) throw e;
+            throw new StateConflictError(
+              op.operationId,
+              'the new page’s document',
+              [
+                {
+                  path: 'document',
+                  expected: 'a template copy the plan can fill',
+                  actual: e instanceof Error ? e.message : String(e),
+                },
+              ],
+              null,
+              current.version,
+              ref,
+            );
+          }
+          params = { ...params, ifMatch: current.version, body: { blocks: [...r.blocks] } };
+          this.d.repo.setStepParams(job.id, step.stepNo, params);
+          callerVersion = current.version;
+          ifMatch = current.version;
+          replanned = { filled: true, ...(r.note ?? {}) };
+        }
+
+        if (meta.guard && current?.exists) {
+          const sides = unsupportedGuardSides(meta.guard, op.operationId, params, current);
+          if (sides)
+            assertNoUnsupportedLoss(op.operationId, sides.existing, sides.incoming, step.options, ref);
+        }
+
+        // v2 C2a: the bridge's own compare-and-swap for a write LegendKeeper does not version (a link collection's
+        // updateProperty): the read just made inside the lock must show the state the plan was built on.
+        const expect = step.options.expectCurrent;
+        if (expect && !resend && needRead && !judged) {
+          if (!current || (expect.state === 'collection' && !current.exists)) {
+            throw new StateConflictError(
+              op.operationId,
+              expect.label ?? op.operationId,
+              [{ path: expect.label ?? 'target', expected: 'present', actual: 'gone' }],
+              null,
+              null,
+              ref,
+            );
+          }
+          const ent = (current.entity ?? current.body) as { name?: unknown; tags?: unknown } | undefined;
+          const now =
+            expect.state === 'resource'
+              ? { name: ent?.name ?? null, tags: Array.isArray(ent?.tags) ? ent.tags : [] }
+              : expect.state === 'rows'
+                ? rowsState(
+                    (current.body as { data?: unknown } | undefined)?.data ??
+                      (current.entity as { rows?: unknown } | undefined)?.rows,
+                  )
+                : collectionState(current.entity ?? current.body);
+          // Rows in rank order on both sides (rowsState and rowsContentHash sort them), whichever endpoint gave them.
+          const hash = expect.state === 'rows' ? rowsContentHash(now as RowState[]) : stateHash(now);
+          if (hash !== expect.hash && rebaser) {
+            // v3 F3d amendment (ADR 0058, A): the target's state changed since the plan: rebased on it.
+            const r = rebaseOn(
+              current,
+              new StateConflictError(
+                op.operationId,
+                expect.label ?? op.operationId,
+                [
+                  {
+                    path: expect.label ?? 'state',
+                    expected: `state ${expect.hash.slice(0, 12)}…`,
+                    actual: now,
+                  },
+                ],
+                null,
+                current.version ?? null,
+                ref,
+              ),
+            );
+            if (!('params' in r)) return r;
+            params = r.params;
+            judged = true;
+          } else if (hash !== expect.hash) {
+            throw new StateConflictError(
+              op.operationId,
+              expect.label ?? op.operationId,
+              [
+                {
+                  path: expect.label ?? 'state',
+                  expected: `state ${expect.hash.slice(0, 12)}…`,
+                  actual: now,
+                },
+              ],
+              null,
+              current.version ?? null,
+              ref,
+            );
+          }
+        }
+
+        // v2 C2a (ADR 0032): the write guard, inside the lock, on what is there now (protected canonical facts).
+        const guard = this.d.writeGuard?.();
+        if (guard?.inLock && !resend) {
+          await guard.inLock({
+            job,
+            step,
+            opId: op.operationId,
+            params,
+            jobOptions: this.d.repo.jobOptions(job.id),
+            current: current ? { body: current.body, entity: current.entity } : undefined,
+            read: (opId, p) => this.guardRead(job, step, opId, p),
+          });
+        }
+
+        // Chunk 8 (required change A): EVERY write gets a journal entry before it is sent (outcome `pending`, settled
+        // below), so agents can see each other's edits. Only destructive writes (`meta.journal`) keep a pre-image or ids.
+        let journalId: number | undefined;
+        if (!journalled) {
+          const created = meta.verify === 'client-id' ? step.clientIds : [];
+          journalId = this.d.journal.record({
+            projectId: job.projectId,
+            jobId: job.id,
+            stepNo: step.stepNo,
+            opId: op.operationId,
+            principalId: job.principalId,
+            profile: job.profile,
+            approvedBy: job.approvedBy,
+            risk: op.risk,
+            targetKind: meta.reader ?? op.tag,
+            // A create's target is the new entity: its client-chosen id, or (set after success) the id LK gives it.
+            // The container stays visible in resourceId / documentId.
+            targetId: created[0] ?? (CREATES.test(op.operationId) ? null : targetIdOf(op, params)),
+            resourceId:
+              params.path?.resourceId ?? (RESOURCE_CREATES.has(op.operationId) ? (created[0] ?? null) : null),
+            documentId: params.path?.documentId ?? null,
+            version: ifMatch ?? current?.version ?? null,
+            params,
+            ...(step.options.journalOperation
+              ? {
+                  operation: {
+                    ...step.options.journalOperation,
+                    ...(replanned ? { replannedInLock: replanned } : {}),
+                  },
+                }
+              : {}),
+            ...(created.length > 1 ? { targets: created } : {}),
+            ...(meta.journal === 'pre-image' && current
+              ? {
+                  preImage:
+                    step.options.journalPreImageWith !== undefined &&
+                    current.entity !== null &&
+                    typeof current.entity === 'object'
+                      ? {
+                          ...(current.entity as Record<string, unknown>),
+                          with: step.options.journalPreImageWith,
+                        }
+                      : (current.entity ?? current.body),
+                }
+              : step.options.journalPreImage !== undefined
+                ? { preImage: step.options.journalPreImage }
+                : step.options.readBefore === true && current?.exists
+                  ? { preImage: current.entity ?? current.body }
+                  : {}),
+          });
+        }
+
+        // Durable "running" marker before the request leaves: a restart from here verifies before re-sending.
+        const now = this.d.now();
+        this.d.repo.updateStep(job.id, step.stepNo, {
+          status: 'running',
+          ifMatch: ifMatch ?? null,
+          startedAt: step.startedAt ?? now,
+          firstSentAt: step.firstSentAt ?? now,
+        });
+
+        try {
+          const send = (p: OpParams) =>
+            callOp(this.lk(job), op, p, {
+              ...this.callOptions(job, step, stats),
+              ifMatch,
+              verify: (ctx) => this.verifyHook(job, step, op, meta, p, ctx.error),
+            });
+          let value: unknown;
+          try {
+            value = await send(params);
+          } catch (first) {
+            // v2 E1a (ADR 0042 decision 9): a field LegendKeeper refuses although the rest is sound (an icon name) is dropped
+            // and the write sent once more; the result says what was dropped. Any other refusal fails the step as before.
+            const refused = refusedFields(step.options.dropIfRefused, params, first);
+            if (!refused) throw first;
+            const body = { ...(params.body as Record<string, unknown>) };
+            const droppedFields: Record<string, unknown> = {};
+            const write = step.options.journalOperation?.write;
+            const droppedWhere = typeof write === 'string' ? write : op.operationId;
+            for (const k of refused) {
+              droppedFields[k] = body[k];
+              delete body[k];
+            }
+            params = { ...params, body };
+            this.d.repo.setStepParams(job.id, step.stepNo, params);
+            const retried = await send(params);
+            value =
+              retried !== null && typeof retried === 'object' && !Array.isArray(retried)
+                ? { ...(retried as Record<string, unknown>), droppedFields, droppedWhere }
+                : { droppedFields, droppedWhere };
+          }
+          if (journalId !== undefined) {
+            this.d.journal.setOutcome(journalId, 'applied');
+            // An insert or create without a client-chosen id: note the id LegendKeeper gave it.
+            const createdId = op.method === 'POST' ? (value as { id?: unknown } | null)?.id : undefined;
+            if (typeof createdId === 'string' && createdId !== '')
+              this.d.journal.setCreatedTarget(journalId, createdId);
+          } else this.d.journal.setOutcomeForStep(job.id, step.stepNo, 'applied');
+          if (step.options.verifyAfterWrite === true && op.operationId === 'replaceDocumentBlocks') {
+            const verification = await this.verifyWrite(job, step, op, meta, params, journalId);
+            if (verification.status === 'mismatch') this.d.recordVerifyMismatch?.(job, step, verification);
+            const sent = (value ?? {}) as { id?: unknown; version?: unknown };
+            const out: VerifiedWriteValue = {
+              document: { id: sent.id ?? params.path?.documentId ?? null, version: sent.version ?? null },
+              verification,
+              ...(replanned ? { replanned } : {}),
+            };
+            return this.succeed(job, step, stats, out, false, store);
+          }
+          if (conflicts > 0) {
+            // v3 F3d amendment: what the rebase did, kept with the write's result (the items it left out, if any).
+            const base =
+              value !== null && typeof value === 'object' && !Array.isArray(value)
+                ? (value as Record<string, unknown>)
+                : { value };
+            value = {
+              ...base,
+              rebased: { conflicts, ...(rebaseNote ?? {}) },
+              ...(skipped.length > 0 ? { skippedItems: [...skipped] } : {}),
+            };
+          }
+          return this.succeed(job, step, stats, value, false, store, this.etagOf(job, op, stats));
+        } catch (e) {
+          const outcome = stats.maybeSent && !(e instanceof BudgetWaitError) ? 'unknown' : 'not_applied';
+          this.d.journal.setOutcomeForStep(job.id, step.stepNo, outcome);
+          if (e instanceof BridgeLkError && (e.status === 412 || e.code === 'VERSION_MISMATCH')) {
+            // v3 F3d amendment (ADR 0058, A): a step with a rebaser waits the governor's backoff, re-reads inside its
+            // lock (the read PLAN §4 rule 1 makes anyway) and re-applies its change to what is there now.
+            if (rebaser && meta.reader && conflicts + 1 < MAX_CONFLICTS) {
+              const retry = this.lk(job).governor.settings.retry;
+              await this.d.sleep?.(backoffMs(conflicts, retry.backoffBaseMs, retry.backoffCapMs));
+            }
+            // PLAN §4 rule 1: re-read, and return a clear conflict with the current version. Never retried as it was.
+            const now = meta.reader
+              ? await this.readCurrent(job, step, op, meta, params, step.clientIds).catch(() => undefined)
+              : undefined;
+            const conflict = new VersionConflictError(
+              op.operationId,
+              ifMatch ?? null,
+              now?.version ?? null,
+              ref,
+              e,
+            );
+            if (!rebaser || !now) throw conflict;
+            const r = rebaseOn(now, conflict);
+            if (!('params' in r)) return r;
+            params = r.params;
+            carried = now;
+            continue;
+          }
+          // A failure after the write may have applied: find out now rather than leave it ambiguous. A batch create is
+          // not atomic (LK's guide): a failure part-way, or DUPLICATE_ID on a retry, leaves some items created.
+          // CR-2026-11-R2 (R2-05): DUPLICATE_ID on a first, unambiguous send is a refusal, not an ambiguous outcome:
+          // LegendKeeper checks every item before it creates any, so an id is held by something this step never sent.
+          const batch = meta.clientId === 'body.resources[].id';
+          const mayHaveApplied =
+            e instanceof BridgeLkError &&
+            !(e instanceof BudgetWaitError) &&
+            ((stats.maybeSent && (e.classification === 'upstream' || batch)) ||
+              (batch && e.code === 'DUPLICATE_ID' && this.sentBefore(job, step, op)));
+          if (mayHaveApplied) {
+            const latest = this.d.repo.step(job.id, step.stepNo) ?? step;
+            const r = await this.safeRecover(job, { ...latest, maybeSent: true }, op, meta, params);
+            const settled = this.settle(job, step, op, meta, params, stats, r, ref);
+            if (settled) return settled;
+          }
+          throw e;
+        }
+      } catch (e) {
+        return this.fail(job, step, stats, e, ambiguous);
+      }
     }
   }
 

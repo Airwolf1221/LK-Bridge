@@ -10,7 +10,6 @@
  * | page names | the subject's own pages (index, Core or Reference, every `<Old> - …` child, every relationship naming it); ids kept |
  * | identity facts | Subject and Canonical Display Name; Given and Family only as supplied; Aliases gains the old name |
  * | resource aliases | the old name added to the pages' search aliases |
- * | mention labels | mentions whose custom label holds the old name (a plain mention shows the new name by itself) |
  * | index routing | lines in an index's routing section that name the subject |
  * | chronology | table rows naming the subject, their timeline events kept in step (the chronology tools' path) |
  * | taxonomy and art | a race's taxonomy entry; the art folder and the asset names holding the old name |
@@ -20,10 +19,16 @@
  * Archived pages, the Legacy Canon Archive and the Design References are never edited: listed as "left as historical"
  * (D2). AU pages are included and labelled AU. Name parts are never inferred (D4: `NAME_PARTS_REQUIRED`).
  *
- * The job (always a canonical proposal, ADR 0057 decision 5): one `bridge.expect` first, inside every lock the job holds
- * (the subject still has its old name; every page, block and asset it edits as planned), then the names, the facts and
- * everything that points at them, Last Major Revision by ADR 0051's rule per page (measured when it runs, from what
- * was approved), and the read-back of every page it touched.
+ * The amendment of 18 November 2026 (ADR 0058, A to D): REVIEW ONLY, never items (`review`): the old name's parts on their
+ * own and the old aliases, and every mention whose custom label holds the old name (LegendKeeper's API cannot change a
+ * custom label; a plain mention shows the new name by itself). Each write rebases itself on a conflict (`rebase`), or
+ * its item is skipped; core items (the set's page names and identity facts) stop the job instead.
+ *
+ * The job (always a canonical proposal, ADR 0057 decision 5): one `bridge.expect` first (the subject still has its old
+ * name; each page of its set as planned; each block's edits re-applied to it as it is, or skipped), then the names, the
+ * facts and everything that points at them, each write under its own page's lock only, Last Major Revision by ADR 0051's
+ * rule per page (measured when it runs, from what was approved and not skipped), and the read-back of every page it
+ * touched.
  */
 import { randomBytes } from 'node:crypto';
 import { buildJob, type WriteContext } from '../../chronology/plan.js';
@@ -58,7 +63,15 @@ import { shiftStep } from '../engine/job.js';
 import { nameProblem, replaceDashes, textKey, type Replacement } from '../engine/text.js';
 import type { PackBasis } from '../run.js';
 import type { PackRules } from '../types.js';
-import { blockKey, RENAME_CHECKS, type DocumentEditsInput } from './checks.js';
+import { reviewList, reviewParts, type ReviewList, type ReviewOccurrence } from './review.js';
+import {
+  blockKey,
+  RENAME_CHECKS,
+  RENAME_REBASERS,
+  type DocumentEditsInput,
+  runsValue,
+  type FactChangeInput,
+} from './checks.js';
 import {
   blockOccurrences,
   d1Why,
@@ -73,7 +86,8 @@ import {
   textOf,
   walkBlocks,
   writable,
-  type BlockEdit,
+  renameTextRuns,
+  type PlannedEdit,
 } from './text.js';
 
 type Obj = Record<string, unknown>;
@@ -88,6 +102,7 @@ export const GROUPS = {
   names: 'Page names',
   facts: 'Identity facts',
   aliases: 'Resource aliases',
+  /** No longer planned (ADR 0058 amendment D): kept for proposals made before it. */
   labels: 'Mention labels',
   routing: 'Index routing',
   chronology: 'Chronology',
@@ -134,13 +149,6 @@ export interface RenamePlan {
   readonly items: PlanItem[];
   readonly steps: StepSpec[];
   readonly labels: string[];
-  readonly holds: {
-    readonly lock: string;
-    readonly resources: string[];
-    readonly documents: string[];
-    readonly chronologyDocuments: string[];
-    readonly assets: string[];
-  };
   /** D2: occurrences left as historical (Archived pages, the Legacy Canon Archive, the Design References). */
   readonly historical: {
     readonly page: { id: string; name: string };
@@ -184,6 +192,11 @@ export interface RenamePlan {
   readonly summary: string;
   /** For the proposal: the reads the plan made, so capture does not repeat them. */
   readonly prefetched: { op: string; path: Record<string, string>; body: unknown }[];
+  /**
+   * ADR 0058 amendment (B, D): REVIEW ONLY, never items: the old name's parts on their own (and the old aliases), and
+   * the custom mention labels holding the old name, for the owner to look at.
+   */
+  readonly review: ReviewList;
 }
 
 export interface RenameEnv {
@@ -218,17 +231,14 @@ function namedFor(display: string, name: string): boolean {
   return new RegExp(` & ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} - `).test(display);
 }
 
-const RUN_TEXT_KEYS = new Set(['text']);
-
-/** A fact row's runs with the old name renamed (text, and a mention's custom label). */
+/**
+ * A fact row's runs with the old name renamed in its text. A mention's custom label is kept as it is: LegendKeeper's API
+ * cannot change one (ADR 0058 amendment, D); it is listed for review instead.
+ */
 function renamedRuns(content: readonly Obj[], oldName: string, newName: string): Obj[] {
-  return content.map((r) => {
-    if (typeof r.text === 'string') return { ...r, text: replaceName(r.text, oldName, newName) };
-    const m = r.mention;
-    if (isObj(m) && typeof m.text === 'string' && m.text !== '')
-      return { ...r, mention: { ...m, text: replaceName(m.text, oldName, newName) } };
-    return r;
-  });
+  return content.map((r) =>
+    typeof r.text === 'string' ? { ...r, text: replaceName(r.text, oldName, newName) } : r,
+  );
 }
 
 const valueOf = (content: readonly Obj[]): string =>
@@ -498,16 +508,35 @@ export async function planRename(
   const bodyLabels: string[] = [];
   const verify: VerifyTarget[] = [];
   const verifyItems: string[][] = [];
-  const holdResources = new Set<string>();
-  const holdDocuments = new Set<string>();
-  const chronologyDocuments = new Set<string>();
-  const holdAssets = new Set<string>();
+  const verifyParts: ItemPartShape[] = [];
+  /** ADR 0058 amendment (D): custom mention labels naming the old name (never written; for review). */
+  const customLabels: ReviewOccurrence[] = [];
+  /** A row's (or a paragraph's) mentions whose custom label names the old name: listed for review, never written. */
+  const labelsIn = (
+    content: readonly Obj[],
+    page: { id: string; name: string },
+    section: string,
+    sentence: string,
+  ) => {
+    for (const r of content) {
+      const m = r.mention;
+      if (!isObj(m) || typeof m.text !== 'string' || !namesIn(m.text, oldName)) continue;
+      customLabels.push({
+        kind: 'custom label',
+        part: oldName,
+        page,
+        section,
+        sentence: sentence.slice(0, 300),
+        label: m.text,
+        note: 'custom label: change it in the app if wanted',
+      });
+    }
+  };
   const stepNo = () => body.length + 2; // the number the next step pushed will have
   const touch = (pageId: string, item: string) => {
     const s = pageItems.get(pageId) ?? new Set<string>();
     s.add(item);
     pageItems.set(pageId, s);
-    if (pageId !== identity.id) holdResources.add(pageId);
   };
   const wrote = (pageId: string, n: number) => pageWrites.set(pageId, [...(pageWrites.get(pageId) ?? []), n]);
   /** Pages whose text the job writes (blocks, chronology rows): measured for Last Major Revision when it runs. */
@@ -596,6 +625,13 @@ export async function planRename(
       judgedInLock: true,
       deferTreeReread: true,
       items: [item],
+      // ADR 0058 amendment (A): a core item. Its tags changed meanwhile: renamed all the same (the name is still the old
+      // one); its name changed meanwhile: the job stops (resumable).
+      rebase: {
+        rebaser: RENAME_REBASERS.resource,
+        input: { kind: 'name', from: n.rawName, to: nextRaw, item },
+        core: true,
+      },
       journalOperation: journal({ id: n.id, name: n.rawName }, `renamed to ${nextRaw}`),
     });
     bodyLabels.push(`rename ${n.rawName} to ${nextRaw}`);
@@ -652,6 +688,7 @@ export async function planRename(
       const before = valueOf(row.content);
       if (!namesIn(before, oldName)) continue;
       if (textKey(row.key) === textKey(aliasesKey)) continue; // the Aliases fact keeps the old name
+      labelsIn(row.content, { id: n.id, name: n.rawName }, `sidebar: ${row.key}`, before);
       const runs = renamedRuns(row.content, oldName, newName);
       facts.push({ key: row.key, value: runs });
       changes.push({ what: row.key, before, after: valueOf(runs) });
@@ -681,7 +718,7 @@ export async function planRename(
     if (facts.length === 0) continue;
     const item = `facts:${n.id}`;
     const deps = nameItemOf.get(n.id) ? [nameItemOf.get(n.id)!] : root();
-    const added = addFacts(p, facts, item, `${n.rawName}: identity facts`);
+    const added = addFacts(p, facts, item, `${n.rawName}: identity facts`, true);
     if (!added) continue;
     items.push({
       id: item,
@@ -718,6 +755,12 @@ export async function planRename(
         judgedInLock: true,
         deferTreeReread: true,
         items: [item],
+        // ADR 0058 amendment (A): the alias is added to the page's aliases as they are when it runs (inside its lock).
+        rebase: {
+          rebaser: RENAME_REBASERS.resource,
+          input: { kind: 'alias', alias: oldDisplay, item },
+          always: true,
+        },
         journalOperation: journal({ id: n.id, name: nowName }, `alias “${oldDisplay}” added`),
       });
       bodyLabels.push(`${nowName}: alias “${oldDisplay}”`);
@@ -745,8 +788,8 @@ export async function planRename(
     const its = [...(pageItems.get(p.node.id) ?? [])];
     if (its.length === 0) continue;
     const n = p.node;
-    const aliases = Array.isArray(p.resource.aliases) ? (p.resource.aliases as string[]) : [...n.aliases];
-    const aliasItem = items.find((i) => i.id === `aliases:${n.id}`);
+    // ADR 0058 amendment (A): a page of the set keeps its old name (or has the new one) until its rename runs: core.
+    // Its aliases and tags are not compared here: each write that changes them works them out inside its own lock.
     checks.push({
       label: `page:${n.id}`,
       kind: 'registered',
@@ -755,19 +798,13 @@ export async function planRename(
       input: {
         resourceId: n.id,
         names: [n.rawName, renamedRaw(n.rawName, newName, oldName, followUp, 'new')],
-        aliases: aliasItem
-          ? [
-              aliases,
-              [...aliases, ...(aliasItem.diff?.after ? [aliasItem.diff.after.split(', ').at(-1)!] : [])],
-            ]
-          : [aliases],
       },
     });
     checkItems.push(its);
   }
 
-  // 4. The text: found through the full-text index, each document read live (mention labels, routing lines, and
-  // restatements, each occurrence its own item).
+  // 4. The text: found through the full-text index, each document read live (routing lines and restatements, each
+  // occurrence its own item; custom mention labels listed for review).
   const chronologyReady = (() => {
     const ch = pd.services?.chronology;
     if (!ch) return null;
@@ -824,7 +861,7 @@ export async function planRename(
   const docEdits: {
     pageId: string;
     documentId: string;
-    blocks: { block: Obj; edits: { edit: BlockEdit; item: string }[]; where: string }[];
+    blocks: { block: Obj; edits: { edit: PlannedEdit; item: string }[]; where: string }[];
   }[] = [];
   try {
     for (const { pageId, documentId, snippet } of docsToRead.values()) {
@@ -858,7 +895,7 @@ export async function planRename(
           });
         const routing = isIndex && section.some((h) => textKey(h) === textKey(routingHeading));
         const where = `${pageName}${section.length ? ` › ${section.at(-1)}` : ''}`;
-        const edits: { edit: BlockEdit; item: string }[] = [];
+        const edits: { edit: PlannedEdit; item: string }[] = [];
         const text = textOf(block);
         let offset = 0;
         const runStarts: number[] = [];
@@ -872,7 +909,7 @@ export async function planRename(
           const id = `${routing ? 'routing' : 'text'}:${documentId}:${String(block.id)}:${k}`;
           const why = routing ? null : d1Why(text, start, section, unresolved);
           const sentence = sentenceAround(text, start, start + oldName.length);
-          edits.push({ edit: { kind: 'text', ordinal: k }, item: id });
+          edits.push({ edit: { kind: 'text', ordinal: k, item: id, sentence }, item: id });
           items.push({
             id,
             kind: routing ? 'index_routing' : 'restatement',
@@ -886,27 +923,18 @@ export async function planRename(
             ...(au ? { tags: ['AU'] } : {}),
           });
         });
-        found.mentions.forEach((m, k) => {
+        // ADR 0058 amendment (D): a mention's custom label cannot be changed through LegendKeeper's API (and Arkona's
+        // repository does not use custom labels): never a write, listed for review ("change it in the app if wanted").
+        found.mentions.forEach((m) => {
           if (!m.isOld) return;
-          const run = (runsOf(block) ?? [])[m.run]!;
-          const target = isObj(run.mention) ? str(run.mention.resourceId) : null;
-          const id = `${routing ? 'routing' : 'label'}:${documentId}:${String(block.id)}:m${k}`;
-          edits.push({ edit: { kind: 'mention', ordinal: k }, item: id });
-          const dep = target && nameItemOf.get(target) ? [nameItemOf.get(target)!] : root();
-          items.push({
-            id,
-            kind: routing ? 'index_routing' : 'mention_label',
-            group: routing ? GROUPS.routing : GROUPS.labels,
-            label: `${where}: mention labelled “${m.label}”`,
+          customLabels.push({
+            kind: 'custom label',
+            part: oldName,
             page: { id: pageId, name: pageName },
-            diff: {
-              before: m.label,
-              after: replaceName(m.label, oldName, newName),
-              context: plain.slice(0, 300),
-            },
-            dependsOn: dep,
-            selected: true,
-            ...(au ? { tags: ['AU'] } : {}),
+            section: section.at(-1) ?? null,
+            sentence: plain.slice(0, 300),
+            label: m.label,
+            note: 'custom label: change it in the app if wanted',
           });
         });
         if (edits.length > 0) out.blocks.push({ block, edits, where });
@@ -936,6 +964,7 @@ export async function planRename(
         where: b.where,
       })),
     };
+    const blockInput = (k: number) => input.blocks[k]!;
     const c = checks.length;
     checks.push({
       label: `doc:${d.documentId}`,
@@ -956,12 +985,12 @@ export async function planRename(
         items: b.edits.map((e) => [e.item]),
       }),
     );
-    holdDocuments.add(d.documentId);
     let prev: number | null = null;
-    for (const b of d.blocks) {
+    for (const [k, b] of d.blocks.entries()) {
       const its = [...new Set(b.edits.map((e) => e.item))];
       for (const it of its) touch(d.pageId, it);
       const at = stepNo();
+      const planned = blockInput(k);
       body.push({
         op: 'replaceBlock',
         params: {
@@ -972,6 +1001,18 @@ export async function planRename(
         ifMatchFrom: prev === null ? { step: 1, key: `doc:${d.documentId}` } : { step: prev },
         judgedInLock: true,
         items: its,
+        // ADR 0058 amendment (A): the document changed since the check (another writer, between this page's writes):
+        // each occurrence is found again by its sentence and renamed there, or its item skipped.
+        rebase: {
+          rebaser: RENAME_REBASERS.block,
+          input: {
+            oldName,
+            newName,
+            fingerprint: planned.fingerprint,
+            edits: planned.edits,
+            where: b.where,
+          },
+        },
         journalOperation: journal(
           { id: d.pageId, name: ctx.tree.node(projectId, d.pageId).data?.rawName ?? d.pageId },
           `${b.edits.length} occurrence(s) of “${oldName}” renamed`,
@@ -982,6 +1023,7 @@ export async function planRename(
       textPages.add(d.pageId);
       prev = at;
     }
+    const v = verify.length;
     verify.push({
       kind: 'checked',
       label: `${ctx.tree.node(projectId, d.pageId).data?.rawName ?? d.pageId}: text read back`,
@@ -991,6 +1033,17 @@ export async function planRename(
       input,
     });
     verifyItems.push(docItems);
+    // The read-back of a block covers only its items that were approved and not skipped.
+    verifyParts.push({
+      path: `body.targets.${v}.input.blocks`,
+      items: d.blocks.map((b) => [...new Set(b.edits.map((e) => e.item))]),
+    });
+    d.blocks.forEach((b, k) =>
+      verifyParts.push({
+        path: `body.targets.${v}.input.blocks.${k}.edits`,
+        items: b.edits.map((e) => [e.item]),
+      }),
+    );
   }
 
   // 4b. Restatements in other pages' sidebar facts: each page one item (its rows are written in one checked chain).
@@ -1006,6 +1059,7 @@ export async function planRename(
       for (const row of kv?.rows ?? []) {
         const before = valueOf(row.content);
         if (!namesIn(before, oldName) || textKey(row.key) === textKey(aliasesKey)) continue;
+        labelsIn(row.content, { id: pageId, name: node.rawName }, `sidebar: ${row.key}`, before);
         const runs = renamedRuns(row.content, oldName, newName);
         facts.push({ key: row.key, value: runs });
         changes.push({ what: row.key, before, after: valueOf(runs) });
@@ -1013,7 +1067,7 @@ export async function planRename(
       }
       if (facts.length === 0) continue;
       const item = `factText:${pageId}`;
-      if (!addFacts(p, facts, item, `${node.rawName}: facts naming “${oldName}”`)) continue;
+      if (!addFacts(p, facts, item, `${node.rawName}: facts naming “${oldName}”`, false)) continue;
       const lifecycle = labelsOf(pageId)?.lifecycle ?? null;
       const current = lifecycle === null || lifecycle === 'Authoritative' || lifecycle === 'Working';
       items.push({
@@ -1086,6 +1140,8 @@ export async function planRename(
     const writeItems: string[][] = [];
     const ages: string[] = [];
     const links = ch.store.links(projectId);
+    /** Each row as planned (its block before the rename), for its write's rebase. */
+    const planned = new Map<string, { block: Obj; description: string; where: string }>();
     for (const doc of [...new Set(docIds)]) {
       const age = ageTables.get(doc)!;
       const b = (await read('getDocumentBlocks', {
@@ -1104,7 +1160,14 @@ export async function planRename(
         const runs = row.descriptionRuns as Obj[];
         const before = valueOf(runs);
         if (!namesIn(before, oldName)) continue;
-        const after = replaceName(before, oldName, newName);
+        const chronologyPage = {
+          id: config.resourceId!,
+          name: ctx.tree.node(projectId, config.resourceId!).data?.rawName ?? 'Chronology',
+        };
+        // ADR 0058 amendment (D): a custom mention label is kept and listed for review; only the text is renamed.
+        labelsIn(runs, chronologyPage, `${age.name} row “${row.dateText}”`, before);
+        if (!namesIn(runs.map((r) => (typeof r.text === 'string' ? r.text : '')).join(''), oldName)) continue;
+        const after = valueOf(renamedRuns(runs, oldName, newName));
         const date = row.date ?? row.eventDate;
         if (!date) {
           notPlanned.push({
@@ -1119,7 +1182,12 @@ export async function planRename(
         }
         const item = `chronology:${row.id}`;
         if (!ages.includes(age.name)) ages.push(age.name);
-        const block = renameInBlock(row.row.block, oldName, newName);
+        const block = renameTextRuns(row.row.block, oldName, newName);
+        planned.set(row.id, {
+          block: row.row.block,
+          description: before,
+          where: `${age.name} row “${row.dateText}”`,
+        });
         writes.push({
           kind: 'row.replace',
           age: age.name,
@@ -1212,32 +1280,36 @@ export async function planRename(
       const b = (s.params?.body ?? {}) as Obj;
       let its: string[] = chItems;
       const partsOut: ItemPartShape[] = [];
+      let step: StepSpec = shifted;
       if (s.op === EXPECT_STEP) {
-        const cs = (b.checks as Obj[]) ?? [];
+        // ADR 0058 amendment (A): one check per row (and per event), each skipping only its own row's item when that
+        // row (or its event) changed meanwhile. Every row's check keeps the table's label, so whichever rows are approved
+        // (and not skipped), the chain reads the table's version under it.
+        const cs: Obj[] = [];
+        for (const c of (b.checks as Obj[]) ?? []) {
+          const cin = isObj(c.input) ? c.input : null;
+          if (c.kind === 'document' && cin && Array.isArray(cin.ops)) {
+            const byRow = new Map<string, Obj[]>();
+            const loose: Obj[] = [];
+            for (const o of cin.ops as Obj[])
+              if (typeof o.rowId === 'string') byRow.set(o.rowId, [...(byRow.get(o.rowId) ?? []), o]);
+              else loose.push(o);
+            if (byRow.size === 0) cs.push(c);
+            [...byRow].forEach(([rowId, ops], k) =>
+              cs.push({
+                ...c,
+                input: { ...cin, ops: k === 0 ? [...loose, ...ops] : ops },
+                skipItems: itemOfRow(rowId),
+              }),
+            );
+          } else if (c.kind === 'event' && itemOfEvent(String(c.eventId)).length > 0) {
+            cs.push({ ...c, skipItems: itemOfEvent(String(c.eventId)) });
+          } else cs.push(c);
+        }
+        step = { ...shifted, params: { ...shifted.params, body: { ...b, checks: cs } } };
         partsOut.push({
           path: 'body.checks',
-          items: cs.map((c) =>
-            c.kind === 'event'
-              ? itemOfEvent(String(c.eventId))
-              : c.kind === 'document' && isObj(c.input) && Array.isArray(c.input.ops)
-                ? [
-                    ...new Set(
-                      (c.input.ops as Obj[]).flatMap((o) =>
-                        typeof o.rowId === 'string' ? itemOfRow(o.rowId) : [],
-                      ),
-                    ),
-                  ]
-                : [],
-          ),
-        });
-        cs.forEach((c, k) => {
-          if (c.kind === 'document' && isObj(c.input) && Array.isArray(c.input.ops))
-            partsOut.push({
-              path: `body.checks.${k}.input.ops`,
-              items: (c.input.ops as Obj[]).map((o) =>
-                typeof o.rowId === 'string' ? itemOfRow(o.rowId) : [],
-              ),
-            });
+          items: cs.map((c) => (Array.isArray(c.skipItems) ? (c.skipItems as string[]) : [])),
         });
       } else if (s.op === VERIFY_STEP) {
         const ts = (b.targets as Obj[]) ?? [];
@@ -1274,12 +1346,31 @@ export async function planRename(
           items: ((target.writes as TargetWrite[]) ?? []).map((w) => itemOfWrite(w)),
         });
       } else if (s.op === 'replaceBlock') {
-        its = itemOfRow(String(s.params?.path?.blockId ?? ''));
+        const rowId = String(s.params?.path?.blockId ?? '');
+        its = itemOfRow(rowId);
+        const was = planned.get(rowId);
+        // ADR 0058 amendment (A): the table changed since the check: the row renamed again on its text as it is, if that
+        // text is exactly as planned; otherwise the row's item is skipped.
+        if (was)
+          step = {
+            ...shifted,
+            rebase: {
+              rebaser: RENAME_REBASERS.row,
+              input: {
+                oldName,
+                newName,
+                fingerprint: fingerprint(was.block, oldName, newName),
+                item: `chronology:${rowId}`,
+                before: was.description,
+                where: was.where,
+              },
+            },
+          };
       } else if (s.op === 'updateEvent') {
         its = itemOfEvent(String(s.params?.path?.eventId ?? ''));
       }
       const at = stepNo();
-      body.push({ ...shifted, items: its, ...(partsOut.length > 0 ? { itemParts: partsOut } : {}) });
+      body.push({ ...step, items: its, ...(partsOut.length > 0 ? { itemParts: partsOut } : {}) });
       bodyLabels.push(label);
       if (!s.op.startsWith('bridge.')) {
         wrote(config.resourceId!, at);
@@ -1287,7 +1378,6 @@ export async function planRename(
       }
     }
     for (const it of chItems) touch(config.resourceId!, it);
-    for (const d of built.holdDocuments) chronologyDocuments.add(d);
   }
 
   // 6. Taxonomy and art: the character's art folder (where its art is placed, F3b) and the asset names in it holding the
@@ -1395,12 +1485,11 @@ export async function planRename(
     what: 'folder' | 'asset',
   ) {
     const item = `${what}:${id}`;
-    holdAssets.add(id);
     checks.push({
       label: `asset:${id}`,
       kind: 'registered',
       checker: RENAME_CHECKS.asset,
-      input: { assetId: id, names: [name, nextName], folderId },
+      input: { assetId: id, names: [name, nextName], folderId, item },
     });
     checkItems.push([item]);
     body.push({
@@ -1478,7 +1567,15 @@ export async function planRename(
         const item = `character:${pageId}`;
         const tags = Array.isArray(p.resource.tags) ? (p.resource.tags as string[]) : [...node.tags];
         const nextTags = token ? tags.map((t) => (t === token!.oldToken ? token!.newToken : t)) : tags;
-        if (!addFacts(p, [{ key: row.key, value: [{ text: newName }] }], item, `${node.rawName}: ${factKey}`))
+        if (
+          !addFacts(
+            p,
+            [{ key: row.key, value: [{ text: newName }] }],
+            item,
+            `${node.rawName}: ${factKey}`,
+            false,
+          )
+        )
           continue;
         const changes: Change[] = [{ what: factKey, before: valueOf(row.content), after: newName }];
         if (nextTags.join('\u0001') !== tags.join('\u0001')) {
@@ -1495,6 +1592,12 @@ export async function planRename(
             judgedInLock: true,
             deferTreeReread: true,
             items: [item],
+            // ADR 0058 amendment (A): the tag swapped on the page's tags as they are when it runs (inside its lock).
+            rebase: {
+              rebaser: RENAME_REBASERS.resource,
+              input: { kind: 'tags', from: token!.oldToken, to: token!.newToken, item },
+              always: true,
+            },
             journalOperation: journal(
               { id: pageId, name: node.rawName },
               `identity tag ${token!.oldToken} → ${token!.newToken}`,
@@ -1502,14 +1605,6 @@ export async function planRename(
           });
           bodyLabels.push(`${node.rawName}: tag ${token!.oldToken} → ${token!.newToken}`);
           changes.push({ what: 'tags', before: tags.join(', '), after: nextTags.join(', ') });
-          checks.push({
-            label: `page:${pageId}`,
-            kind: 'registered',
-            checker: RENAME_CHECKS.resource,
-            resourceId: pageId,
-            input: { resourceId: pageId, names: [node.rawName], tags: [tags, nextTags] },
-          });
-          checkItems.push([item]);
           verify.push({
             kind: 'resource',
             label: `${node.rawName}: tags`,
@@ -1542,6 +1637,7 @@ export async function planRename(
     facts: { key: string; value: Obj[] }[],
     item: string,
     what: string,
+    core: boolean,
   ): boolean {
     let plan;
     try {
@@ -1567,7 +1663,69 @@ export async function planRename(
     if (plan.empty) return false;
     const fx = expandFacts(plan, { id: p.node.id, name: p.node.rawName }, p.sidebar, { facts, links: null });
     const base = stepNo() - 1;
-    for (const s of fx.steps) {
+    // ADR 0058 amendment (A): each fact the rename changes must still hold its old value (or already its new one): a
+    // page's other facts may change meanwhile. Core (the set's identity facts): a fact changed meanwhile stops the job;
+    // otherwise the item is skipped.
+    const changed = new Set(
+      plan.facts.filter((f) => f.change === 'added' || f.change === 'changed').map((f) => textKey(f.key)),
+    );
+    const changes: FactChangeInput[] = facts
+      .filter((f) => changed.has(textKey(f.key)))
+      .map((f) => {
+        const row = rowOf(p.sidebar, f.key);
+        return { key: f.key, before: row ? runsValue(row.content) : null, after: runsValue(f.value) };
+      });
+    const propertyId = plan.property?.id ?? '';
+    const kvLabel = plan.property ? plan.property.title : 'facts';
+    const where = `${p.node.rawName} (sidebar)`;
+    for (const s0 of fx.steps) {
+      let s: StepSpec = s0;
+      if (s.op === EXPECT_STEP) {
+        s = {
+          ...s,
+          params: {
+            body: {
+              checks: [
+                {
+                  label: kvLabel,
+                  kind: 'registered',
+                  checker: RENAME_CHECKS.facts,
+                  resourceId: p.node.id,
+                  input: { resourceId: p.node.id, propertyId, facts: changes, core, item, where },
+                },
+              ],
+            },
+          },
+        };
+      } else if (s.op === VERIFY_STEP) {
+        s = {
+          ...s,
+          params: {
+            body: {
+              targets: [
+                {
+                  kind: 'registered',
+                  label: `${p.node.rawName}: facts`,
+                  checker: RENAME_CHECKS.factsVerify,
+                  input: { resourceId: p.node.id, propertyId, facts: changes },
+                },
+              ],
+            },
+          },
+        };
+      } else if (s.op === 'updatePropertyRow' || s.op === 'createPropertyRow') {
+        const key = typeof s.journalOperation?.factKey === 'string' ? s.journalOperation.factKey : null;
+        const change = changes.find((c) => key !== null && textKey(c.key) === textKey(key));
+        if (change)
+          s = {
+            ...s,
+            rebase: {
+              rebaser: RENAME_REBASERS.factRow,
+              input: { ...change, item, where },
+              ...(core ? { core: true } : {}),
+            },
+          };
+      }
       const at = stepNo();
       body.push({
         ...shiftStep(s, base),
@@ -1661,6 +1819,48 @@ export async function planRename(
     }
   }
 
+  // ---------------------------------------------------------------------------------------------- review only (B, D)
+  // ADR 0058 amendment: the old name's parts on their own and the old aliases, and the custom labels, for the owner to
+  // look at; never items. A follow-up has no old parts to read (the identity facts hold the new ones by then).
+  const plainValue = (key: string) => {
+    const v = valueOf(rowOf(identityPage.sidebar, key)?.content ?? []).trim();
+    return v === '' || rules.types[0]?.placeholders.some((x) => textKey(x) === textKey(v)) === true
+      ? null
+      : v;
+  };
+  const aliasValue = plainValue(aliasesKey);
+  const review = reviewList(
+    {
+      projectId,
+      search: (pid, value) => env.appraisal.fullText.search(pid, [{ value, phrase: true }], { limit: 5000 }),
+      labels: (pageId) => labelsOf(pageId),
+      pageName: (pageId) =>
+        reader.page(pageId)?.rawName ?? ctx.tree.node(projectId, pageId).data?.rawName ?? null,
+      characterOf: (pageId) => {
+        try {
+          const c = ctx.types.characterOfPage(pageId);
+          return c.ok ? c.value.subject || null : null;
+        } catch {
+          return null;
+        }
+      },
+    },
+    {
+      subjectName: followUp ? newName : oldName,
+      oldName,
+      parts: followUp
+        ? []
+        : reviewParts({
+            oldName,
+            newName,
+            given: kind === 'character' ? plainValue(givenKey) : null,
+            family: kind === 'character' ? plainValue(familyKey) : null,
+            aliases: aliasValue ? aliasValue.split(/\s*;\s*/) : [],
+          }),
+      customLabels,
+    },
+  );
+
   // ---------------------------------------------------------------------------------------------- the job
   if (items.length === 0 && refusals.length === 0)
     refusals.push(
@@ -1681,7 +1881,7 @@ export async function planRename(
     {
       op: VERIFY_STEP,
       params: { body: { targets: verify } },
-      itemParts: [{ path: 'body.targets', items: verifyItems }],
+      itemParts: [{ path: 'body.targets', items: verifyItems }, ...verifyParts],
     },
   ];
   const labels = ['check', ...bodyLabels, 'verify'];
@@ -1710,13 +1910,7 @@ export async function planRename(
       items: sorted,
       steps,
       labels,
-      holds: {
-        lock: identity.id,
-        resources: [...holdResources].filter((x) => x !== identity.id).sort(),
-        documents: [...holdDocuments].sort(),
-        chronologyDocuments: [...chronologyDocuments].sort(),
-        assets: [...holdAssets].sort(),
-      },
+      review,
       historical,
       notPlanned,
       refusals,
@@ -1788,25 +1982,6 @@ function renamedRaw(
     return which === 'new' ? raw : `${prefix}${renamedDisplay(c.displayName, newName, oldName)}`;
   }
   return which === 'old' ? raw : `${prefix}${renamedDisplay(c.displayName, oldName, newName)}`;
-}
-
-/** A block (a table row) with the old name renamed in its text and its mentions' custom labels, ids kept. */
-function renameInBlock(block: Obj, oldName: string, newName: string): Obj {
-  const walk = (v: unknown, depth = 0): unknown => {
-    if (depth > 40) return v;
-    if (Array.isArray(v)) return v.map((x) => walk(x, depth + 1));
-    if (!isObj(v)) return v;
-    const out: Obj = {};
-    for (const [k, x] of Object.entries(v)) {
-      if (k === 'version') continue;
-      if (RUN_TEXT_KEYS.has(k) && typeof x === 'string') out[k] = replaceName(x, oldName, newName);
-      else if (k === 'mention' && isObj(x) && typeof x.text === 'string')
-        out[k] = { ...x, text: replaceName(x.text, oldName, newName) };
-      else out[k] = walk(x, depth + 1);
-    }
-    return out;
-  };
-  return walk(block) as Obj;
 }
 
 /** The items in the design's order: by group, then as found. */

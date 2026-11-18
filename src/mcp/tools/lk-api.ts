@@ -11,6 +11,8 @@ import type { McpToolContext, McpToolProvider, McpToolResult } from '../server.j
 import { defineTool, READ_ANNOTATIONS } from './define.js';
 import { unknownOperationBody } from './discovery.js';
 import { canonicalBody } from './shape.js';
+import { subjectRenameRefusal } from '../../packs/rename/guard.js';
+import { plainRenameArg } from './resources.js';
 import {
   costClass,
   detailSchema,
@@ -51,6 +53,43 @@ export interface ExecuteInput {
   readonly confirm?: 'cascade' | undefined;
   /** v3 F3c (ADR 0051): the caller's Last Major Revision override (writes only). */
   readonly lastMajorRevision?: LmrMode | undefined;
+  /** ADR 0058 amendment (C): why a subject is renamed plainly (an `updateResource` on a pack project). */
+  readonly plainRename?: { readonly reason: string } | undefined;
+}
+
+/**
+ * ADR 0058 amendment (C): an `updateResource` that changes a subject's name on a project with an approved setting pack
+ * is `arkona_rename`'s: the refusal body (`USE_ARKONA_RENAME`), or null.
+ */
+export function subjectRenameIn(
+  pd: ProjectDeps,
+  opId: string,
+  params: OpParams,
+): Record<string, unknown> | null {
+  if (opId !== 'updateResource') return null;
+  const name = (params.body as { name?: unknown } | undefined)?.name;
+  const id = params.path?.resourceId;
+  const services = pd.services;
+  if (typeof name !== 'string' || typeof id !== 'string' || !services?.packs) return null;
+  const projectId = pd.project.id;
+  const node = services.tree.queries.node(projectId, id).data;
+  if (!node) return null;
+  const types = services.registry.forProject(projectId);
+  const sidebar = services.tree.queries.sidebars(projectId, [id]).data.get(id) ?? null;
+  return subjectRenameRefusal({
+    packs: services.packs,
+    projectId,
+    node,
+    newName: name,
+    characterOf: (pageId) => {
+      try {
+        return types.characterOfPage(pageId).ok;
+      } catch {
+        return false;
+      }
+    },
+    factKeys: sidebar ? sidebar.flatMap((b) => (b.rows ?? []).map((r) => r.key)) : null,
+  });
 }
 
 /**
@@ -84,6 +123,10 @@ export async function executeOne(
       deps,
     );
   }
+  if (!input.plainRename) {
+    const refusal = subjectRenameIn(deps, op.operationId, input.params);
+    if (refusal) return errorResult(refusal as { code: string; message: string }, deps);
+  }
   try {
     const origin = mcpOrigin(ctx, tool);
     const r = await deps.engine.run(op.operationId, input.params, {
@@ -91,6 +134,9 @@ export async function executeOne(
       origin,
       priority: 'P1',
       signal: ctx.signal,
+      ...(input.plainRename
+        ? { title: `${op.operationId} (plain rename: ${input.plainRename.reason})`.slice(0, 300) }
+        : {}),
       ...(input.allowUnsupportedLoss === true ? { allowUnsupportedLoss: true } : {}),
       ...(input.confirm ? { confirm: input.confirm } : {}),
       ...(input.lastMajorRevision ? { lastMajorRevision: input.lastMajorRevision } : {}),
@@ -296,11 +342,12 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
         .describe('Required on deleteResource with query.cascade = true.'),
       detail: detailSchema,
       lastMajorRevision: lastMajorRevisionArg,
+      plainRename: plainRenameArg,
       project: projectArg,
     }),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     handler: (
-      { operationId, params, allowUnsupportedLoss, confirm, detail, lastMajorRevision, project },
+      { operationId, params, allowUnsupportedLoss, confirm, detail, lastMajorRevision, plainRename, project },
       ctx,
     ) =>
       withProject(deps, project, 'write', (pd) =>
@@ -315,6 +362,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             allowUnsupportedLoss,
             confirm,
             lastMajorRevision,
+            plainRename,
           },
           ctx,
         ),
@@ -335,6 +383,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             params: paramsSchema.optional(),
             allowUnsupportedLoss: z.boolean().optional(),
             confirm: z.literal('cascade').optional(),
+            plainRename: plainRenameArg,
           }),
         )
         .min(1)
@@ -359,6 +408,26 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             pd,
           );
         }
+        // ADR 0058 amendment (C): a subject's rename on a pack project is arkona_rename's (unless plainRename says why).
+        const plain: string[] = [];
+        for (const [i, c] of calls.entries()) {
+          if (c.plainRename) {
+            if (c.operationId === 'updateResource') plain.push(c.plainRename.reason);
+            continue;
+          }
+          const refusal = subjectRenameIn(pd, c.operationId, (c.params ?? {}) as OpParams);
+          if (refusal)
+            return errorResult(
+              {
+                ...(refusal as { code: string; message: string }),
+                callIndex: i,
+                message: `${String(refusal.message)} (call ${i + 1} of ${calls.length}; nothing was queued)`,
+              },
+              pd,
+            );
+        }
+        const batchTitle =
+          plain.length > 0 ? `${title ?? 'batch'} (plain rename: ${plain.join('; ')})`.slice(0, 300) : title;
         try {
           const r = await deps.engine.submit({
             kind: 'batch_ops',
@@ -372,7 +441,7 @@ export function lkApiTools(deps: ToolDeps): McpToolProvider[] {
             onError: onError === 'continue' ? 'continue' : 'stop',
             origin: mcpOrigin(ctx, 'lk_api_batch'),
             priority: 'P2',
-            ...(title ? { title } : {}),
+            ...(batchTitle ? { title: batchTitle } : {}),
             ...(lastMajorRevision ? { lastMajorRevision } : {}),
           });
           return render(submitBody(r, calls.length), pd);

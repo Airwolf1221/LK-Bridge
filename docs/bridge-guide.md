@@ -21,6 +21,10 @@ tasks come first and the reference after. The last section, **Operations**, list
 5. **Do not invent.** Names and ids come from `search`, `browse_repository_tree` and `get_resource`; dates from
    `calendar_date`; operation ids from the Operations list. A name that matches several pages is never guessed: pass the id.
 
+**Rename a subject → `arkona_rename` (never `update_resource`).** On a project with a setting pack, a character, culture,
+race or other subject is renamed with `arkona_rename`, which renames it everywhere it is referred to; `update_resource`
+refuses it (`USE_ARKONA_RENAME`).
+
 **Which tool?**
 
 | You want to…                                        | Use                                                                     | Not                                               |
@@ -31,7 +35,7 @@ tasks come first and the reference after. The last section, **Operations**, list
 | Read a page's text (or one section)                 | `read_document` (`outline`, `section`)                                  | `lk_api_read` `getDocumentBlocks`                 |
 | Change a page's text                                | `write_page`, section modes                                             | `replace` of the whole page, `lk_api_write`       |
 | Change facts or links                               | `set_facts` (all changes in one call)                                   | `lk_api_write` on properties                      |
-| Rename, tag, alias, hide, lock                      | `update_resource`                                                       | `lk_api_write`                                    |
+| Rename, tag, alias, hide, lock                      | `update_resource` (a subject's rename: `arkona_rename`)                 | `lk_api_write`                                    |
 | Make a character                                    | `create_character` (Working), then `create_resource` for its pages      | `create_many_resources`                           |
 | Make an Arkona character, or add pages to one       | `arkona_create_character` (one package; projects with the pack)         | `create_character` and `create_resource` calls    |
 | Make any other Arkona owner page (polity, race…)    | `arkona_create_owner` (one package; its home checked)                   | `create_resource` and `set_facts` calls           |
@@ -702,11 +706,23 @@ canon names its subject, so it is never made at once and never routed round. The
 
 **What it plans, each as an item** (ids are kept: nothing is recreated): the subject's page names (its index, Core or
 Reference, every `<Old> - …` child, every relationship naming it, either way round), its identity facts, the old name as
-an alias, mentions whose **custom label** holds the old name (a plain mention shows the new name by itself, so it is not
-an item), index routing lines, chronology rows naming it (their timeline events kept in step), the art folder and asset
+an alias, index routing lines, chronology rows naming it (their timeline events kept in step), the art folder and asset
 names, a race's taxonomy entry, a culture's or race's **identity token** (a new pack version the owner approves on the
 Packs page; the job waits for it) with every character's fact and tag, and each **textual restatement** elsewhere, one
-item per occurrence, with its sentence.
+item per occurrence, with its sentence. A plain mention shows the page's new name by itself, so it is not an item.
+
+**Review only: bring these to the owner (never items).** The plan's `reviewOnly` (and the report's after the job) lists
+what the bridge never edits:
+
+- **Name parts**: the old given name, the old family name and each old alias **on their own** (not inside the full old
+  name), on current pages, each with its page, section and sentence. Characters share names (renaming Azhar al-Nasir
+  leaves plain "Azhar", which may be Azhar al-Rashid), so an occurrence on a page of another character whose name holds
+  the same part says so ("this page is in Azhar al-Rashid's set"). Nothing is approved here: tell the person, and if
+  they want specific occurrences renamed, propose a follow-up with `from`.
+- **Custom mention labels** holding the old name: LegendKeeper's API cannot change a mention's custom label, so the rename
+  never writes one ("custom label: change it in the app if wanted"); a rename never fails on one.
+
+At most 200 are listed, with the count of the rest.
 
 **Ticked or not (D1 (a)).** A restatement on a current page starts ticked, except inside quotation marks, after
 "formerly", "previously", "once called" or "originally" in the same sentence, under Unresolved Material, or in a
@@ -717,9 +733,13 @@ a tick from the agent's side.
 them as "left as historical". AU pages are included, labelled AU. Text in a table cell or a code block, or a name split by
 formatting, is reported in `notPlanned` (the owner edits it by hand).
 
-**After it runs.** The job checks inside its locks that the subject still has its old name (renamed meanwhile: nothing is
-written), writes the approved items in order (names, then facts, then everything pointing at them), reads back every page
-it touched, and dates Last Major Revision by the owner's rule (a name, an alias or a fact that only swaps the name never
+**After it runs.** The job first checks that the subject still has its old name (renamed meanwhile: nothing is written),
+then writes the approved items in order (names, then facts, then everything pointing at them), each inside its own page's
+lock. **Another writer part-way** (the owner in the app, another job) does not stop it: each item's write re-reads its
+target and, when what it edits is still exactly there, re-applies the same change to the fresh text (at most 3 tries).
+When that exact text changed meanwhile (or now appears more than once), the item is **skipped**, listed with a before and
+after excerpt, and the job carries on; the owner can propose skipped items again. Only the subject's own page names and
+identity facts stop the job (resumable). It reads back every page it touched, and dates Last Major Revision by the owner's rule (a name, an alias or a fact that only swaps the name never
 counts; 8 or more restated words, a heading or a chronology row do). Then `arkona_rename { "report": "<rename, proposal or
 job id>" }` (free) lists what is still left of the old name on current pages, each with its link: what the owner left out,
 what the rename does not edit, and anything written since. To propose exactly those, call it again with
@@ -732,8 +752,12 @@ owner on the dashboard (it ran work the owner approved); `bridge_job_status` sho
 
 - **Rename, tags, aliases, icon, banner, hidden, locked:** `update_resource` (a rename keeps the prefix and re-places
   the page; give the name without a prefix). It renames one page. To rename an Arkona character or owner everywhere it
-  is named (its set, its facts, mentions, chronology, art, other pages' text), use `arkona_rename` ([Arkona
-  renames](#arkona-renames)).
+  is named (its set, its facts, chronology, art, other pages' text), use `arkona_rename` ([Arkona
+  renames](#arkona-renames)). On a project with a setting pack, `update_resource` (and `updateResource` through
+  `lk_api_*`) **refuses** a rename that changes a subject's name (the part before " - ", or an index's whole name) of a
+  page in a character's set, a page with a Subject fact or a pack owner: `USE_ARKONA_RENAME`, with a hint. Renaming
+  only the descriptor (after " - ") is never refused. For a genuinely plain rename (a typo), pass
+  `plainRename: { "reason": "…" }`; the reason is shown to the owner.
 - **Move:** `move_resource` `{ page, to }`. Within a lifecycle area it is an ordinary move ([below](#the-page-lifecycle)).
 - **Delete:** `delete_resource` `{ page, confirm: true }` (and `cascade: true` for a page with pages under it; the result
   lists every page removed). To retire a page, use `archive_page`, not a delete. Deleting an Authoritative page is protected

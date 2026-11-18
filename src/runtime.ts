@@ -928,6 +928,15 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       get: (id) => policy.proposals.get(id),
     },
     appraisal,
+    // ADR 0058 amendment (B): whose set a page is in, for the review list's shared names.
+    characterOf: (projectId, pageId) => {
+      try {
+        const c = registry.forProject(projectId).characterOfPage(pageId);
+        return c.ok ? c.value.subject || null : null;
+      } catch {
+        return null;
+      }
+    },
     audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
     now: () => (o.clock ?? systemClock).now(),
     log: { warn: (obj, msg) => log.warn(obj, msg) },

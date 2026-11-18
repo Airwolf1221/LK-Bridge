@@ -311,3 +311,166 @@ export function writable(block: Obj): Obj {
   for (const [k, v] of Object.entries(block)) if (!VOLATILE.has(k)) out[k] = v;
   return out;
 }
+
+// ============================================================================================ rebasing (ADR 0058, A)
+
+/** One planned text edit of a block, with what it rests on: its item and the sentence it is in (with the old name). */
+export interface PlannedEdit extends BlockEdit {
+  readonly item: string;
+  /** The sentence around the occurrence, as planned (with the old name). */
+  readonly sentence: string;
+}
+
+const norm = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * The text occurrences of the old or the new name in a block, each with the sentence around it (as `sentenceAround`
+ * gives it over the block's text runs), numbered as `blockOccurrences` numbers them.
+ */
+export function occurrencesWithSentences(
+  block: unknown,
+  oldName: string,
+  newName: string,
+): { readonly ordinal: number; readonly isOld: boolean; readonly sentence: string }[] {
+  const found = blockOccurrences(block, oldName, newName);
+  const runs = runsOf(block) ?? [];
+  const starts: number[] = [];
+  let offset = 0;
+  for (const r of runs) {
+    starts.push(offset);
+    if (typeof r.text === 'string') offset += r.text.length;
+  }
+  const text = textOf(block);
+  return found.text.map((o, k) => {
+    const start = starts[o.run]! + o.start;
+    return {
+      ordinal: k,
+      isOld: o.isOld,
+      sentence: norm(sentenceAround(text, start, start + (o.end - o.start))),
+    };
+  });
+}
+
+/**
+ * ADR 0058 amendment (A): a block's planned edits re-applied to the block as it is NOW. Rebasing never widens an edit:
+ *
+ * - the block differs from the plan only by this rename's own edits (equal fingerprints): each edit keeps its number;
+ * - otherwise each edit is found again by its SENTENCE: exactly one occurrence of the old name in the same sentence is
+ *   the one meant (its number now); none, and the sentence already shows the new name, it is done; none at all, the text
+ *   changed meanwhile (skipped, with a before and after excerpt); more than one, which is meant cannot be told (skipped).
+ *
+ * Returns the edits to apply now (numbered in the block as it is), the items done already and the items skipped.
+ */
+export function rebaseEdits(
+  block: Obj | null,
+  plan: {
+    readonly fingerprint: string;
+    readonly edits: readonly PlannedEdit[];
+    readonly oldName: string;
+    readonly newName: string;
+    readonly where?: string;
+  },
+): {
+  readonly edits: BlockEdit[];
+  readonly items: string[];
+  readonly done: string[];
+  readonly skipped: { item: string; reason: string; before: string; after: string | null; where?: string }[];
+} {
+  const { oldName, newName } = plan;
+  const where = plan.where !== undefined ? { where: plan.where } : {};
+  const now = block ? norm(plainText(block)) : null;
+  const short = (s: string | null) => (s === null ? null : s.length > 300 ? `${s.slice(0, 299)}…` : s);
+  if (!block)
+    return {
+      edits: [],
+      items: [],
+      done: [],
+      skipped: plan.edits.map((e) => ({
+        item: e.item,
+        reason: 'changed meanwhile: the paragraph is gone',
+        before: e.sentence,
+        after: null,
+        ...where,
+      })),
+    };
+  if (fingerprint(block, oldName, newName) === plan.fingerprint) {
+    const found = blockOccurrences(block, oldName, newName);
+    const edits: BlockEdit[] = [];
+    const items: string[] = [];
+    const done: string[] = [];
+    for (const e of plan.edits) {
+      // A proposal made before the amendment may hold a mention label's edit: kept as it was planned.
+      const o = e.kind === 'mention' ? found.mentions[e.ordinal] : found.text[e.ordinal];
+      if (o && !o.isOld) done.push(e.item);
+      else {
+        edits.push({ kind: e.kind, ordinal: e.ordinal });
+        items.push(e.item);
+      }
+    }
+    return { edits, items, done, skipped: [] };
+  }
+  const occ = occurrencesWithSentences(block, oldName, newName);
+  const edits: BlockEdit[] = [];
+  const items: string[] = [];
+  const done: string[] = [];
+  const skipped: { item: string; reason: string; before: string; after: string | null; where?: string }[] =
+    [];
+  const taken = new Set<number>();
+  for (const e of plan.edits) {
+    const kept = (e as { sentence?: unknown }).sentence;
+    if (e.kind !== 'text' || typeof kept !== 'string') {
+      // An edit planned before the amendment (a mention label, or no sentence kept): it cannot be found again.
+      skipped.push({
+        item: e.item,
+        reason: 'changed meanwhile',
+        before: typeof kept === 'string' ? kept : '',
+        after: short(now),
+        ...where,
+      });
+      continue;
+    }
+    const want = norm(e.sentence);
+    const renamed = norm(replaceName(e.sentence, oldName, newName));
+    const olds = occ.filter((o) => o.isOld && o.sentence === want);
+    if (olds.length === 1 && !taken.has(olds[0]!.ordinal)) {
+      taken.add(olds[0]!.ordinal);
+      edits.push({ kind: 'text', ordinal: olds[0]!.ordinal });
+      items.push(e.item);
+    } else if (olds.length > 1) {
+      skipped.push({
+        item: e.item,
+        reason: 'the sentence now appears more than once, so which occurrence is meant cannot be told',
+        before: e.sentence,
+        after: short(now),
+        ...where,
+      });
+    } else if (occ.some((o) => !o.isOld && o.sentence === renamed)) {
+      done.push(e.item);
+    } else {
+      skipped.push({
+        item: e.item,
+        reason: 'changed meanwhile',
+        before: e.sentence,
+        after: short(now),
+        ...where,
+      });
+    }
+  }
+  return { edits, items, done, skipped };
+}
+
+/** A block's text runs with the old name renamed (mentions, and their custom labels, kept as they are). */
+export function renameTextRuns(block: Obj, oldName: string, newName: string, depth = 0): Obj {
+  if (depth > 40) return block;
+  const out: Obj = {};
+  for (const [k, v] of Object.entries(block)) {
+    if (VOLATILE.has(k)) continue;
+    if (k === 'text' && typeof v === 'string') out[k] = replaceName(v, oldName, newName);
+    else if (k === 'mention') out[k] = v;
+    else if (Array.isArray(v))
+      out[k] = (v as unknown[]).map((x) => (isObj(x) ? renameTextRuns(x, oldName, newName, depth + 1) : x));
+    else if (isObj(v)) out[k] = renameTextRuns(v, oldName, newName, depth + 1);
+    else out[k] = v;
+  }
+  return out;
+}

@@ -242,6 +242,38 @@ export interface StepOptions {
    * items (a check, a read-back target, a chronology record's writes). Only the elements of approved items stay.
    */
   readonly itemParts?: readonly ItemPartShape[];
+  /**
+   * v3 F3d amendment (ADR 0058, A), set by bridge code only: when this write finds its target changed inside its lock
+   * (another version or state, or a 412), the rebaser named here is asked with the target as it is now (src/jobs/rebase.ts):
+   * retry the same change on the fresh content, already done, or skip the step's items ("changed meanwhile"). `core`: a
+   * conflict that cannot be rebased stops the job (resumable) instead of skipping. `with`: further items skipped with
+   * this step's (the items that depend on them).
+   */
+  readonly rebase?: {
+    readonly rebaser: string;
+    readonly input: unknown;
+    readonly core?: boolean;
+    readonly with?: readonly string[];
+    /** Asked every time the write runs (after its read inside the lock), not only on a conflict. */
+    readonly always?: boolean;
+  };
+}
+
+/**
+ * v3 F3d amendment (ADR 0058, A): an item a job skipped when it ran, because what it edits had changed meanwhile (or
+ * could not be told apart, or kept conflicting), with a before and after excerpt. Kept in the step's result
+ * (`skippedItems`); the job carries on with its other items, and the owner can propose the skipped ones again.
+ */
+export interface SkippedItem {
+  readonly item: string;
+  /** Why, in words ("changed meanwhile", "appears more than once now", "conflicted three times in a row"). */
+  readonly reason: string;
+  /** What the item expected to edit (the planned sentence, value or name). */
+  readonly before?: string | null;
+  /** What is there now. */
+  readonly after?: string | null;
+  /** Where, for the owner (page › section). */
+  readonly where?: string;
 }
 
 /** v3 F3d: one array of a shared step whose elements belong to items (src/jobs/items.ts, `ItemPart`). */

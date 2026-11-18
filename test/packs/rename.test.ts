@@ -115,14 +115,27 @@ describe('arkona_rename: a character', () => {
     expect(core.label).not.toContain('Family');
     for (const id of [C.nadira, C.nadiraIndex, P.nadiraArt, P.relationship, R.tarekRelationship])
       expect(ids, id).toContain(`aliases:${id}`);
-    // A custom label holding the name is an item; a plain mention and another label are not.
-    const labels = all.filter((i) => i.group === 'Mention labels');
-    expect(labels.map((i) => i.label)).toEqual([
-      expect.stringContaining('mention labelled “Nadira al-Khalid”'),
+    // ADR 0058 amendment (D): a custom label holding the name is never an item (LegendKeeper's API cannot change it): it
+    // is listed for review; a plain mention and another label are neither.
+    expect(all.filter((i) => i.group === 'Mention labels')).toEqual([]);
+    expect(ids.some((i) => i.includes(':tr4:') || i.includes(':tr5:') || i.includes(':tr6:'))).toBe(false);
+    const review = r.body.reviewOnly as { occurrences: Obj[]; note: string };
+    // The index's routing line is a mention labelled with the Core's name: a custom label too, so review only.
+    expect(review.occurrences.filter((o) => o.kind === 'custom label')).toEqual([
+      expect.objectContaining({
+        page: expect.objectContaining({ id: C.nadiraIndex }),
+        section: 'How to Use This Index',
+        label: 'Nadira al-Khalid - Character Core',
+        note: 'custom label: change it in the app if wanted',
+      }),
+      expect.objectContaining({
+        page: expect.objectContaining({ id: O.tarim }),
+        label: OLD,
+        note: 'custom label: change it in the app if wanted',
+      }),
     ]);
-    expect(ids.some((i) => i.includes(':tr5:') || i.includes(':tr6:'))).toBe(false);
-    // The index's routing line.
-    expect(all.filter((i) => i.group === 'Index routing')).toHaveLength(1);
+    // The index's routing line is a labelled mention (review only, above): no routing item.
+    expect(all.filter((i) => i.group === 'Index routing')).toHaveLength(0);
     // Chronology: the linked row with its event, and the row before the effective date unticked.
     expect(byId.get(`chronology:${R.rowLinked}`)).toMatchObject({ ticked: true });
     expect(String(byId.get(`chronology:${R.rowLinked}`)!.label)).toContain(
@@ -225,12 +238,13 @@ describe('arkona_rename: a character', () => {
     });
     expect(w.repo.live(C.nadira)!.aliases).toContain('Nadira al-Khalid - Character Core');
     expect(w.repo.live(C.nadiraIndex)!.aliases).toContain(OLD);
-    // The mention label and the routing line; the plain mention and the other label untouched.
+    // The routing line; the custom label (never written: ADR 0058 amendment D), the plain mention and the other label
+    // untouched.
     expect((block(w, O.tarim, 'tr4').content as Obj[])[1]).toMatchObject({
-      mention: { resourceId: C.nadira, text: NEW },
+      mention: { resourceId: C.nadira, text: OLD },
     });
     expect(textOf(block(w, O.tarim, 'tr5'))).toBe('Later the archivist moved to Menkhet.');
-    expect(textOf(block(w, C.nadiraIndex, `${C.nadiraIndex}i1p`))).toBe('Laila al-Khalid - Character Core');
+    expect(textOf(block(w, C.nadiraIndex, `${C.nadiraIndex}i1p`))).toBe('Nadira al-Khalid - Character Core');
     // Restatements: the ticked one renamed, the unticked ones kept; history untouched.
     expect(textOf(block(w, O.qasr, 'qs4'))).toBe(
       'Laila al-Khalid catalogued the emirate’s charters in her youth.',
@@ -281,9 +295,11 @@ describe('arkona_rename: a character', () => {
     expect(rep.body).toMatchObject({ state: 'done', oldName: OLD, newName: NEW });
     expect(w.requests().all).toBe(before2);
 
-    // The costs, measured: the capture, and the approved job (its read-back and change snapshot included).
-    expect(capture).toBe(28);
-    expect(job).toEqual({ requests: 185, writes: 49 });
+    // The costs, measured: the capture, and the approved job (its read-back and change snapshot included). ADR 0058
+    // amendment: the two custom labels (Tarim's mention, the index's routing line) are no longer written (185 → 177
+    // requests, 49 → 47 writes; the capture reads the index's document no more: 28 → 27).
+    expect(capture).toBe(27);
+    expect(job).toEqual({ requests: 177, writes: 47 });
   });
 
   it('plans exactly what is left as a follow-up (from: the old name)', async () => {
@@ -387,7 +403,9 @@ describe('arkona_rename: a culture', () => {
     expect(facts(w, C.working)['Naming Culture']).toBe('Velarine');
     expect(w.repo.live(C.working)!.tags).toEqual(['Working', 'Character', 'Human']);
     const cost = { requests: w.requests().all - mid.all, writes: w.requests().writes - mid.writes };
-    expect(cost).toEqual({ requests: 98, writes: 20 });
+    // ADR 0058 amendment: each character's tag is re-checked inside its own write's lock, on the read that write makes
+    // anyway, instead of by the job's first check (98 → 93 requests).
+    expect(cost).toEqual({ requests: 93, writes: 20 });
   });
 });
 

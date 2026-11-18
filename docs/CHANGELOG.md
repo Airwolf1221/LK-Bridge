@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased: v3 F3d (renames), the amendment after the live test (18 November 2026)
+
+[ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md), its new
+[Amendment](adr/0058-v3-f3d-renames-selective-approval-resume.md#amendment-18-november-2026-after-the-live-test) (A to D).
+Migration `3500_rename_review.sql` (runs at start). Nothing was run against a live system: mocks and fixtures only.
+
+- **A conflict part-way no longer stops a rename.** Each item's write re-reads its target inside its lock and, when what it
+  edits is still exactly there, re-applies the same change to the fresh content and version (at most 3 attempts, with the
+  governor's backoff). An item whose exact text changed meanwhile (or now appears more than once) is **skipped**, listed
+  with a before and after excerpt, and the job carries on; the subject's own page names and identity facts still stop it
+  (resumable). Skipped items show on the Proposals page and in `report`, and **Propose these again** includes them.
+- **Locks:** a rename holds no lock for its whole run; each write takes its own page's lock only for itself, so ordinary
+  writes to those pages no longer wait for the whole rename.
+- **Review only: name parts.** The plan and the report list the old given name, family name and aliases on their own
+  (with page, section and sentence; a page of another character sharing the part is flagged), capped at 200. Never items.
+- **`USE_ARKONA_RENAME`.** On a pack project, `update_resource` and `updateResource` through `lk_api_*` refuse a subject's
+  rename with a hint to `arkona_rename`; `plainRename: { reason }` (new argument) lets a plain rename through with its
+  reason shown; a descriptor-only rename is never refused. The bridge guide's "How to decide" has the line.
+- **Custom mention labels are no longer written** (LegendKeeper's API cannot change them): they are listed for review.
+- **Behaviour change for agents:** a plan no longer has "Mention labels" items; a routing line that is a labelled mention
+  is review only. Costs: the test character's job 177 requests (47 writes), the culture's 93; a conflict costs no extra
+  read when seen before sending, one read when LegendKeeper refuses the write.
+- **After deploying:** a rename proposed before this release keeps the steps it was captured with (its job holds its
+  locks for the whole run and stops on a conflict, as before; its check skips, rather than stops on, a changed
+  paragraph). Reject and plan it again to get the new behaviour.
+
 ## Unreleased: v3 F3d (renames) (18 November 2026): `arkona_rename`, selective approval and Resume
 
 [ADR 0058](adr/0058-v3-f3d-renames-selective-approval-resume.md) (Proposed), the owner-approved design

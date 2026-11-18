@@ -62,6 +62,8 @@ import { finish, liveRead, repoContext, resolvePage, type RepoCtx } from './repo
 import { factValue, linkRef, pageRef } from './set-facts.js';
 import { errorResult, projectArg, render, withProject, type ProjectDeps, type ToolDeps } from './shape.js';
 import { runWriteJob } from './write-job.js';
+import { sidebarFrom } from '../../facts/sidebar.js';
+import { subjectRenameRefusal } from '../../packs/rename/guard.js';
 
 export const CREATE_ANNOTATIONS = {
   readOnlyHint: false,
@@ -91,6 +93,23 @@ const dryRunArg = z
   .optional()
   .describe('Show the plan (pages, names, parents, places, facts, canon); write nothing.');
 const tagsArg = z.array(z.string().trim().min(1).max(100)).max(50).optional();
+/** ADR 0058 amendment (C): a plain rename of a subject on a pack project, with the reason shown to the owner. */
+export const plainRenameArg = z
+  .object({ reason: z.string().trim().min(3).max(500) })
+  .strict()
+  .optional()
+  .describe(
+    'Only to rename a subject’s page plainly on a pack project (a typo fix, say): why. Without it such a rename is refused with USE_ARKONA_RENAME (arkona_rename renames it everywhere). The reason is shown to the owner.',
+  );
+
+/** Whether a page belongs to a character's set (its Core or Reference, its index, a specialist page). */
+function characterOfPage(ctx: RepoCtx, id: string): boolean {
+  try {
+    return ctx.types.characterOfPage(id).ok;
+  } catch {
+    return false;
+  }
+}
 const aliasesArg = z.array(z.string().trim().min(1).max(256)).max(128).optional();
 
 // ============================================================================================ shared
@@ -1066,7 +1085,7 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
     title: 'Change a page’s name, tags and settings',
     access: 'write',
     description:
-      'Changes a page’s `name` (give it without a prefix: the [INDEX], [BSRC], [BWRK] or [BARC] prefix is kept and the page is re-placed alphabetically), `tags` and `aliases` ({ add, remove }), `icon`, `banner`, `hidden` or `locked`. Facts and links are set_facts, page text is write_page, moves are move_resource. The tags CANON, Working and Archived change only through the lifecycle tools. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write for a rename.',
+      'To rename a character, culture, race or other subject on a pack project, use `arkona_rename`, which renames it everywhere it is referred to (here such a rename is refused with USE_ARKONA_RENAME unless plainRename gives a reason). Changes a page’s `name` (give it without a prefix: the [INDEX], [BSRC], [BWRK] or [BARC] prefix is kept and the page is re-placed alphabetically), `tags` and `aliases` ({ add, remove }), `icon`, `banner`, `hidden` or `locked`. Renaming only the descriptor (after " - ") is never refused. Facts and links are set_facts, page text is write_page, moves are move_resource. The tags CANON, Working and Archived change only through the lifecycle tools. At scope propose it becomes a proposal: nothing is written, never resubmit it, follow it with bridge_proposal_status. Cost: about 4 reads and 1 write for a rename.',
     inputSchema: z.object({
       page: pageRef.describe('The page (name or id).'),
       name: z
@@ -1101,6 +1120,7 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
         .optional(),
       hidden: z.boolean().optional(),
       locked: z.boolean().optional(),
+      plainRename: plainRenameArg,
       dryRun: dryRunArg,
       project: projectArg,
     }),
@@ -1180,6 +1200,21 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
                 },
                 pd,
               );
+            }
+            // ADR 0058 amendment (C): a subject's rename on a pack project is arkona_rename's (unless plainRename says why).
+            if (!args.plainRename) {
+              const props = Array.isArray(cur.properties) ? cur.properties : [];
+              const refusal = subjectRenameRefusal({
+                packs: pd.services?.packs,
+                projectId: pd.project.id,
+                node,
+                newName: name,
+                characterOf: (id) => characterOfPage(ctx, id),
+                factKeys: sidebarFrom({ data: props })
+                  .filter((x) => x.kind === 'keyValue')
+                  .flatMap((x) => (x.rows ?? []).map((row) => row.key)),
+              });
+              if (refusal) return errorResult(refusal, pd);
             }
             rename = { rawName, displayName: name };
             body.name = rawName;
@@ -1275,7 +1310,11 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
           {
             op: 'updateResource',
             params: { path: { resourceId: node.id }, body },
-            journalOperation: { tool: 'update_resource', page },
+            journalOperation: {
+              tool: 'update_resource',
+              page,
+              ...(args.plainRename ? { plainRename: args.plainRename.reason } : {}),
+            },
             // v2 E4 (E4-01): LegendKeeper does not version a resource, and `tags` replaces the whole list: inside the
             // lock the page's name and tags must still be what this plan read, or the write is a conflict (two
             // update_resource calls at once both answered "written" while one tag was lost; an app edit made meanwhile
@@ -1336,8 +1375,13 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
         };
         steps.push({ op: VERIFY_STEP, params: { body: { targets: [target] } } });
         labels.push('verify');
-        const head = { page, changes };
-        const summary = `update_resource on “${node.rawName}”: ${Object.keys(changes).join(', ')}`;
+        const head = {
+          page,
+          changes,
+          ...(args.plainRename && rename ? { plainRename: args.plainRename.reason } : {}),
+        };
+        // ADR 0058 amendment (C): a plain rename's reason, shown with the proposal or on the Review page.
+        const summary = `update_resource on “${node.rawName}”: ${Object.keys(changes).join(', ')}${args.plainRename && rename ? ` (plain rename: ${args.plainRename.reason})` : ''}`;
         if (args.dryRun === true) {
           return render(
             {
@@ -1361,6 +1405,7 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
                 page: { id: node.id, name: node.rawName },
                 pageParts: Object.keys(changes),
                 changes,
+                ...(args.plainRename && rename ? { plainRename: args.plainRename.reason } : {}),
               },
             ],
             summary,

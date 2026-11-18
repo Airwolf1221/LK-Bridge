@@ -10,7 +10,7 @@ import type { LkClient } from '../lk/client.js';
 import type { ProjectsRuntime } from '../projects/registry.js';
 import type { ProjectScope } from '../projects/types.js';
 import { BridgeLkError, BudgetWaitError } from '../lk/errors.js';
-import { systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
+import { sleep, systemClock, type Clock, type TimerHandle } from '../lk/governor/clock.js';
 import type { BudgetSnapshot } from '../lk/governor/types.js';
 import { getOperation, operationInputSchema } from '../lk/registry.js';
 import type { OperationDef } from '../lk/registry-types.js';
@@ -82,6 +82,7 @@ import {
   type AssetDeleteKeeper,
 } from './step-exec.js';
 import type { StepPlanner, StepPlanners } from './planners.js';
+import type { Rebaser } from './rebase.js';
 import {
   SYSTEM_PRINCIPAL,
   TERMINAL_JOB_STATUSES,
@@ -90,6 +91,7 @@ import {
   type InternalReadOptions,
   type ReadInfo,
   type WriteObserver,
+  type SkippedItem,
   type WriteStepInfo,
   type JobKind,
   type JobOrigin,
@@ -232,6 +234,8 @@ export class JobEngine {
   private readonly writeObservers = new Set<WriteObserver>();
   /** v2 C1: in-lock planners (write_page's section re-plan), by name. */
   private readonly planners = new Map<string, StepPlanner>();
+  /** v3 F3d amendment (ADR 0058, A): rebasers of an item's write on a conflict, by name (src/jobs/rebase.ts). */
+  private readonly rebasers = new Map<string, Rebaser>();
   /** v2 C2a: the write guard (protected canonical facts), asked at entry and inside the lock. */
   private writeGuard: WriteGuard | undefined;
   /** v3 F3d (ADR 0058): judges a job's `waitFor` (`setWaitForCheck`). */
@@ -292,6 +296,8 @@ export class JobEngine {
       writeHold: (projectId) => this.writeHold(projectId),
       customSteps: o.customSteps,
       planner: (name) => this.planners.get(name),
+      rebaser: (name) => this.rebasers.get(name),
+      sleep: (ms, signal) => sleep(this.clock, ms, signal),
       recordVerifyMismatch: (job, step, v) => this.recordVerifyMismatch(job, step, v),
       writeGuard: () => this.writeGuard,
       recordHandler: (store) => this.recordHandlers.get(store),
@@ -564,6 +570,25 @@ export class JobEngine {
     return () => {
       if (this.planners.get(name) === planner) this.planners.delete(name);
     };
+  }
+
+  /**
+   * v3 F3d amendment (ADR 0058, A): registers a rebaser (src/jobs/rebase.ts) under `name`, replacing any earlier one.
+   * Write steps name it in `options.rebase`; a step whose rebaser is missing meets a conflict as before. Returns an
+   * unregister.
+   */
+  registerRebaser(name: string, rebaser: Rebaser): () => void {
+    this.rebasers.set(name, rebaser);
+    return () => {
+      if (this.rebasers.get(name) === rebaser) this.rebasers.delete(name);
+    };
+  }
+
+  /** v3 F3d amendment (ADR 0058, A): the items a job skipped when it ran (changed meanwhile), in step order. */
+  skippedItems(projectId: string, jobId: string): SkippedItem[] {
+    const job = this.repo.job(jobId);
+    if (!job || job.projectId !== projectId) return [];
+    return this.repo.skippedItems(jobId);
   }
 
   /**
@@ -1565,6 +1590,54 @@ export class JobEngine {
     return null;
   }
 
+  /**
+   * v3 F3d amendment (ADR 0058, A): a step whose items were ALL skipped earlier in the job (what they edit changed
+   * meanwhile) is not sent: it is recorded as succeeded with `{ skipped }`, passing on the version it would have
+   * chained from, so a write chained after it still finds one (and rebases if the target moved on).
+   */
+  private skipForItems(job: JobView, step: StepView): boolean {
+    const items = step.options.items ?? [];
+    if (items.length === 0 || step.status === 'running' || step.maybeSent || step.firstSentAt !== null)
+      return false;
+    const skipped = new Set(this.repo.skippedItems(job.id, step.stepNo).map((x) => x.item));
+    if (skipped.size === 0 || !items.every((i) => skipped.has(i))) return false;
+    const version = this.chainVersion(job, step);
+    const now = this.clock.now();
+    this.repo.updateStep(job.id, step.stepNo, {
+      status: 'succeeded',
+      resultSummary: {
+        skipped: 'its items were skipped earlier in the job (changed meanwhile)',
+        items: [...items],
+        ...(typeof version === 'string' && version !== '' ? { version } : {}),
+      },
+      startedAt: step.startedAt ?? now,
+      finishedAt: now,
+    });
+    return true;
+  }
+
+  /** The version a step's `ifMatchFrom` names (undefined when it names none, or the source gave none). */
+  private chainVersion(job: JobView, step: StepView): unknown {
+    const from = step.options.ifMatchFrom;
+    if (!from) return undefined;
+    const source = from.step < step.stepNo ? this.repo.step(job.id, from.step) : undefined;
+    const result =
+      source?.status === 'succeeded'
+        ? (this.repo.stepResult(source) as {
+            version?: unknown;
+            etag?: unknown;
+            versions?: Record<string, unknown>;
+            versionsByPage?: Record<string, Record<string, unknown>>;
+          } | null)
+        : null;
+    const page = this.repo.stepParams(step).path?.resourceId;
+    if (from.key !== undefined)
+      return result?.versionsByPage && typeof page === 'string'
+        ? result.versionsByPage[page]?.[from.key]
+        : result?.versions?.[from.key];
+    return result?.version ?? (this.etagVersions?.(job.projectId) === false ? undefined : result?.etag);
+  }
+
   private bindIfMatch(job: JobView, step: StepView): JobsError | null {
     const from = step.options.ifMatchFrom;
     if (!from || step.status === 'running' || step.maybeSent || step.firstSentAt !== null) return null;
@@ -2290,6 +2363,13 @@ export class JobEngine {
       this.repo.updateJob(jobId, { currentStep: step.stepNo });
       // v2 C2b: a write to a page this job created from a template gets the copy's ids now; v2 C2a: a write that chains
       // its If-Match from an earlier step gets it now (both stored before anything is sent).
+      // v3 F3d amendment (ADR 0058, A): a step whose items were all skipped earlier in the job is not sent.
+      if (this.skipForItems(job, step)) {
+        this.emitStep(job, step.stepNo);
+        this.refreshProgress(jobId);
+        this.emitJob(jobId, 'updated');
+        continue;
+      }
       // v3 F2 (ADR 0049): a write an earlier `bridge.lmr` step decided: bound to its decision now, or skipped.
       if (this.bindDecision(job, step)) {
         this.emitStep(job, step.stepNo);
@@ -3435,6 +3515,24 @@ function stepOptions(o: StepOptions): StepOptions {
       ? { items: [...o.items] }
       : {}),
     ...itemPartsOf(o.itemParts),
+    // v3 F3d amendment (ADR 0058, A): set by bridge code only.
+    ...rebaseOf(o.rebase),
+  };
+}
+
+/** v3 F3d amendment (ADR 0058, A): `StepOptions.rebase` as stored (bridge code only). */
+export function rebaseOf(r: StepOptions['rebase']): Pick<StepOptions, 'rebase'> {
+  if (!r || typeof r.rebaser !== 'string' || r.rebaser === '') return {};
+  return {
+    rebase: {
+      rebaser: r.rebaser,
+      input: r.input,
+      ...(r.core === true ? { core: true } : {}),
+      ...(r.always === true ? { always: true } : {}),
+      ...(Array.isArray(r.with) && r.with.length > 0 && r.with.every((x) => typeof x === 'string')
+        ? { with: [...r.with] }
+        : {}),
+    },
   };
 }
 

@@ -60,6 +60,7 @@ import {
   type JobView,
   type OpParams,
   type Principal,
+  type SkippedItem,
   type StepOptions,
   type StepSpec,
   type LifecycleMarker,
@@ -193,6 +194,11 @@ export interface ProposalDetail extends ProposalView {
     readonly items: readonly PlanItem[];
     readonly approved: readonly string[] | null;
     readonly omitted: readonly string[] | null;
+    /**
+     * v3 F3d amendment (ADR 0058, A): the approved items the job SKIPPED when it ran (what they edit changed meanwhile),
+     * each with why and a before and after excerpt; proposed again with the left-out ones.
+     */
+    readonly skipped?: readonly SkippedItem[];
   } | null;
 }
 
@@ -1906,8 +1912,16 @@ export class ProposalService implements ProposalSink {
       operations,
       pageSummary: parseJson<PageSummaryEntry[]>(extra?.page_summary, []),
       canonical: p.requiresCanonicalApproval ? this.canonicalOf(id) : null,
-      itemPlan: this.itemsOf(id),
+      itemPlan: this.itemPlanOf(p),
     };
+  }
+
+  /** The items with what was decided, and (once its job ran) what the job skipped. */
+  private itemPlanOf(p: ProposalView): ProposalDetail['itemPlan'] {
+    const set = this.itemsOf(p.id);
+    if (!set) return null;
+    const skipped = p.jobId && this.engine ? this.engine.skippedItems(p.projectId, p.jobId) : [];
+    return { ...set, ...(skipped.length > 0 ? { skipped } : {}) };
   }
 
   /**
@@ -1932,18 +1946,25 @@ export class ProposalService implements ProposalSink {
         'INVALID_TRANSITION',
         `Proposal ${id} is ${p.state}: its left-out items are proposed again once the approved part has run`,
       );
-    if (set.omitted.length === 0)
+    // v3 F3d amendment (ADR 0058, A): the items the approved job SKIPPED when it ran (what they edit changed meanwhile)
+    // are proposed again with those left out, once the job has ended.
+    const skippedIds =
+      p.jobId && ['executed', 'failed'].includes(p.state)
+        ? engine.skippedItems(p.projectId, p.jobId).map((x) => x.item)
+        : [];
+    const leftOut = [...new Set([...set.omitted, ...skippedIds])];
+    if (leftOut.length === 0)
       throw new PolicyError(
         'NOTHING_LEFT_OUT',
-        `Every item of proposal ${id} was approved; nothing was left out`,
+        `Every item of proposal ${id} was approved and none was skipped; nothing was left out`,
       );
     if (p.reproposedAs)
       throw new PolicyError(
         'ALREADY_REPROPOSED',
         `The items left out of proposal ${id} were proposed again as ${p.reproposedAs}`,
       );
-    const omitted = new Set(set.omitted);
-    // The left-out items, each needing only what was left out with it (what was approved has run).
+    const omitted = new Set(leftOut);
+    // The left-out (and skipped) items, each needing only what was left out with it (what was approved has run).
     const items: PlanItem[] = set.items
       .filter((i) => omitted.has(i.id))
       .map((i) => ({ ...i, dependsOn: i.dependsOn.filter((d) => omitted.has(d)) }));
@@ -1966,7 +1987,7 @@ export class ProposalService implements ProposalSink {
       { operations: string | null; origin: string | null } | undefined;
     const operations = parseJson<Record<string, unknown>[] | null>(extra?.operations, null);
     const labels = items.slice(0, 3).map((i) => i.label);
-    const summary = `Again, the ${items.length} item${items.length === 1 ? '' : 's'} left out of ${id}: ${labels.join('; ')}${items.length > 3 ? '; …' : ''}`;
+    const summary = `Again, the ${items.length} item${items.length === 1 ? '' : 's'} ${skippedIds.length > 0 ? (set.omitted.length > 0 ? 'left out of or skipped by' : 'skipped by') : 'left out of'} ${id}: ${labels.join('; ')}${items.length > 3 ? '; …' : ''}`;
     let r: Awaited<ReturnType<JobEngine['submit']>>;
     try {
       r = await engine.submit({
@@ -2013,6 +2034,7 @@ export class ProposalService implements ProposalSink {
     this.store.audit('owner', 'proposal.repropose', id, undefined, {
       proposalId: r.proposalId,
       items: items.map((i) => i.id),
+      ...(skippedIds.length > 0 ? { skipped: skippedIds } : {}),
     });
     for (const h of this.hooks) {
       try {
@@ -2274,6 +2296,9 @@ function stepOptions(o: StepOptions): StepOptions {
     // v3 F3d (ADR 0058): the items each step belongs to, for the owner's selection (left out when the job runs).
     ...(o.items && o.items.length > 0 ? { items: o.items } : {}),
     ...(o.itemParts && o.itemParts.length > 0 ? { itemParts: o.itemParts } : {}),
+    // v3 F3d amendment (ADR 0058, A): a rename's write rebases itself on a conflict when the approved job runs (the same
+    // change on the fresh content, or its item skipped), never wider than the owner approved.
+    ...(o.rebase ? { rebase: o.rebase } : {}),
   };
 }
 
