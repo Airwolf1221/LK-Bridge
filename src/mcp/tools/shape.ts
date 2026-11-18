@@ -49,6 +49,8 @@ import type {
 import type { ProjectView } from '../../projects/types.js';
 import type { McpToolResult } from '../server.js';
 import { unknownOperationBody } from './discovery.js';
+import type { RenameService } from '../../packs/rename/service.js';
+import type { ResumeService } from '../../resume/service.js';
 import type { GuardOptions } from './upload-http.js';
 
 /** The projects as the tools see them (v2 A1): `ProjectRegistry` and `StaticProjects` both provide this. */
@@ -92,6 +94,10 @@ export interface DiscoverServices {
   readonly packs?: Packs;
   /** v3 F3c (ADR 0054): the appraisal tools and the full-text index (read-only; fixes are proposals). */
   readonly appraisal?: Appraisal;
+  /** v3 F3d (ADR 0058): resuming a package or a rename that stopped part-way (bridge_job_resume). */
+  readonly resume?: ResumeService;
+  /** v3 F3d (ADR 0058): `arkona_rename`'s records, token versions and leftover reports. */
+  readonly renames?: RenameService;
 }
 
 /** What every tool handler needs. */

@@ -10,6 +10,7 @@ import * as z from 'zod';
 import { characterBrief } from '../../packs/brief.js';
 import { runArt, runRelationship } from '../../packs/character-tools.js';
 import { runOwner, runPackage } from '../../packs/run.js';
+import { renameReport, runRename } from '../../packs/rename/run.js';
 import type { PackageInput } from '../../packs/engine/plan.js';
 import type { McpToolProvider } from '../server.js';
 import { defineTool, READ_ANNOTATIONS } from './define.js';
@@ -224,6 +225,7 @@ export const EXPLICIT_PACK_TOOLS: ReadonlySet<string> = new Set([
   'arkona_create_relationship',
   'arkona_add_character_art',
   'arkona_character_brief',
+  'arkona_rename',
 ]);
 
 /** v3 F3b: how an agent stages art for a pack (design section 6): no destination, so nothing is proposed. */
@@ -615,6 +617,102 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
             lastMajorRevision: args.lastMajorRevision,
           }),
         ),
+    }),
+    defineTool({
+      name: 'arkona_rename',
+      title: 'Rename an Arkona character or owner (pack)',
+      access: 'write',
+      description:
+        'The Arkona pack (v3 F3d, ADR 0058): rename a character (any page of its set) or an owner (a culture, a polity, a place, a race) EVERYWHERE, as ONE canonical proposal the owner approves whole or item by item: its pages (ids kept: the index, Core or Reference, every “<Old> - …” child, every relationship naming it), its identity facts, the old name kept as an alias (keepOldAsAlias, default true), mentions whose custom label holds the old name (a plain mention shows the new name by itself), index routing lines, chronology rows (their events in step), the art folder and asset names, a race’s taxonomy entry, a culture’s or race’s identity token (a NEW pack version the owner approves; the job waits for it) with every character’s fact and tag, and each textual restatement elsewhere, one item each with its sentence. ' +
+        'Restatements start unticked inside quotation marks, after “formerly”, “previously”, “once called” or “originally”, under Unresolved Material, or in a chronology row dated before effectiveDate. Archived pages, the Legacy Canon Archive and the Design References are never edited (listed as left as historical); AU pages are included, labelled AU. ' +
+        'Name parts are never inferred: when the old name’s given or family part changes, give given and/or family or it is NAME_PARTS_REQUIRED. A token that is not the culture’s or race’s own name needs token. ' +
+        'Always a proposal (never direct), whatever your scope; never resubmit it: follow it with bridge_proposal_status. Once its job has ended, report (the rename’s id, proposal or job) lists what is still left of the old name on current pages (free) and gives the follow-up call (from: the old name) that proposes exactly those. dryRun shows every item first. ' +
+        'Cost: about 12 reads to plan the test character (one per page of its set and per document holding the name; 3 of them the pack’s governance); its job about 75 reads and 35 writes with every item approved; a culture with five characters about 9 reads to plan, its job about 31 reads and 12 writes.',
+      inputSchema: z.object({
+        subject: z
+          .string()
+          .min(1)
+          .max(300)
+          .optional()
+          .describe('The character (any page of its set) or owner: name, alias, path or id. Not with report.'),
+        newName: z.string().min(1).max(200).optional().describe('The new name, as the pages are to show it.'),
+        given: z
+          .string()
+          .max(200)
+          .optional()
+          .describe('A character’s new given name, when it changes (never inferred).'),
+        family: z
+          .string()
+          .max(200)
+          .optional()
+          .describe('A character’s new family name, when it changes (never inferred).'),
+        keepOldAsAlias: z
+          .boolean()
+          .optional()
+          .describe('Default true: the old name is added to the Aliases fact and the pages’ search aliases.'),
+        effectiveDate: z
+          .string()
+          .max(100)
+          .optional()
+          .describe('A date of the calendar: chronology rows dated before it start unticked.'),
+        token: z
+          .string()
+          .max(100)
+          .optional()
+          .describe('A culture’s or race’s new tag token, when its old token is not its name.'),
+        from: z
+          .string()
+          .max(200)
+          .optional()
+          .describe(
+            'A follow-up of an earlier rename: the OLD name, when the subject already has newName (only what is left is planned).',
+          ),
+        report: z
+          .string()
+          .max(100)
+          .optional()
+          .describe('Read-only: a rename’s id, proposal or job: its state and what it left (free).'),
+        lastMajorRevision: lastMajorRevisionArg.describe(
+          'Last Major Revision of the pages the rename changes: "auto" (default: ADR 0051’s rule, measured when the job runs from what was approved: a name, an alias, a tag or a fact that only swaps the name never counts; 8+ words of restated text, a heading or a chronology row does), "set" or "skip".',
+        ),
+        dryRun: z.boolean().optional().describe('The full preview; nothing written or proposed.'),
+        preview: z.boolean().optional().describe('The same as dryRun.'),
+        operation_id: operationIdArg,
+        project: projectArg,
+      }),
+      annotations: CREATE_ANNOTATIONS,
+      listed: () => packs()?.toolListed('arkona') ?? false,
+      handler: (args, mctx) => {
+        if (args.report !== undefined)
+          return withProject(deps, args.project, 'read', (pd) => renameReport(pd, mctx, args.report!));
+        return withProject(deps, args.project, 'write', (pd) => {
+          if (args.subject === undefined || args.newName === undefined)
+            return errorResult(
+              {
+                code: 'INVALID_INPUT',
+                message: 'Give subject and newName (or report: a rename’s id, proposal or job).',
+              },
+              pd,
+            );
+          return runRename(pd, mctx, {
+            packId: 'arkona',
+            input: {
+              subject: args.subject,
+              newName: args.newName,
+              ...(args.given !== undefined ? { given: args.given } : {}),
+              ...(args.family !== undefined ? { family: args.family } : {}),
+              ...(args.keepOldAsAlias !== undefined ? { keepOldAsAlias: args.keepOldAsAlias } : {}),
+              ...(args.effectiveDate !== undefined ? { effectiveDate: args.effectiveDate } : {}),
+              ...(args.token !== undefined ? { token: args.token } : {}),
+              ...(args.from !== undefined ? { from: args.from } : {}),
+              ...(args.lastMajorRevision !== undefined ? { lastMajorRevision: args.lastMajorRevision } : {}),
+            },
+            dryRun: args.dryRun === true || args.preview === true,
+            operationId: args.operation_id,
+            args,
+          });
+        });
+      },
     }),
     defineTool({
       name: 'arkona_character_brief',

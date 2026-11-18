@@ -216,6 +216,9 @@ export class Restores {
   ): Promise<ProposeResult> {
     const plan = planned ?? (await this.plan(input));
     if (plan.empty) return { status: 'nothing_to_do', plan };
+    // v3 F3d (ADR 0058): minted first, so a recreate's job knows its restore (Resume finishes it by its record).
+    const id = `rst_${randomBytes(8).toString('hex')}`;
+    const recreate = input.scope === 'deleted' && plan.mode === 'recreate';
     const r = await this.o.engine.submit({
       kind: 'batch_ops',
       project: input.projectId,
@@ -228,6 +231,8 @@ export class Restores {
       ...(plan.holdDocuments ? { holdDocuments: plan.holdDocuments } : {}),
       ...(plan.lifecycle ? { lifecycle: plan.lifecycle } : {}),
       ...(input.lastMajorRevision ? { lastMajorRevision: input.lastMajorRevision } : {}),
+      // v3 F3d (ADR 0058): a recreate that stops part-way is resumed by finishing it (F2's Finish, ADR 0049 decision 6).
+      ...(recreate ? { resumable: { kind: 'recreate' as const, ref: id } } : {}),
       internal: true,
       forceProposal: true,
       proposal: {
@@ -245,7 +250,6 @@ export class Restores {
     });
     if (!('proposalId' in r) || typeof r.proposalId !== 'string')
       throw new RestoreError('NOT_PROPOSED', 'The restore was not captured as a proposal; nothing was done.');
-    const id = `rst_${randomBytes(8).toString('hex')}`;
     const now = this.o.now();
     this.o.db
       .prepare(
@@ -420,6 +424,14 @@ export class Restores {
     this.o.db
       .prepare('UPDATE snapshot_restores SET state = ?, updated_at = ? WHERE id = ?')
       .run(state, this.o.now(), id);
+  }
+
+  /** v3 F3d (ADR 0058): one restore record of a project, by its id, or null. */
+  record(projectId: string, id: string): RestoreRecord | null {
+    const r = this.o.db
+      .prepare('SELECT * FROM snapshot_restores WHERE project_id = ? AND id = ?')
+      .get(projectId, id) as Raw | undefined;
+    return r ? recordOf(r) : null;
   }
 
   byProposal(proposalId: string): RestoreRecord | null {

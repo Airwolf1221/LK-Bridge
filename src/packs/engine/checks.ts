@@ -65,6 +65,12 @@ export interface PackEngineDeps {
     r: { readonly resourceId: string; readonly plural: string; readonly parentNodeId: string },
     actor: string,
   ) => Record<string, unknown>;
+  /** v3 F3d (renames), ADR 0058: renames a race's taxonomy entry with its navigation index (an approved rename). */
+  readonly renameTaxonomyEntry?: (
+    projectId: string,
+    r: { readonly entryId: string; readonly from: string; readonly plural: string },
+    actor: string,
+  ) => Record<string, unknown>;
 }
 
 /** Registers the pack's checkers, filler and record handler with the engine. Returns an unregister. */
@@ -94,6 +100,19 @@ export function registerPackEngine(
         return d.addTaxonomyEntry(
           job.projectId,
           { resourceId: r.resourceId, plural: r.plural, parentNodeId: r.parentNodeId },
+          job.approvedBy ?? job.principalId,
+        );
+      }
+      if (
+        r.kind === 'taxonomy_rename' &&
+        typeof r.entryId === 'string' &&
+        typeof r.from === 'string' &&
+        typeof r.plural === 'string' &&
+        d.renameTaxonomyEntry
+      ) {
+        return d.renameTaxonomyEntry(
+          job.projectId,
+          { entryId: r.entryId, from: r.from, plural: r.plural },
           job.approvedBy ?? job.principalId,
         );
       }

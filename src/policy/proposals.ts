@@ -1761,6 +1761,26 @@ export class ProposalService implements ProposalSink {
     }
   }
 
+  /** v3 F3d (ADR 0058): the proposal an approved job ran from, or null. */
+  byJob(projectId: string, jobId: string): { readonly id: string; readonly state: ProposalState } | null {
+    const r = this.store.db
+      .prepare('SELECT id, state FROM proposals WHERE job_id = ? AND project_id = ?')
+      .get(jobId, projectId) as { id: string; state: ProposalState } | undefined;
+    return r ? { id: r.id, state: r.state } : null;
+  }
+
+  /**
+   * v3 F3d (ADR 0058, decision D6): the approved job was resumed. It is the same approved plan, so no fresh approval:
+   * the proposal goes back from `failed` to `executing` and follows the job again (audited `proposal.resumed`).
+   */
+  jobResumed(projectId: string, jobId: string): boolean {
+    const p = this.byJob(projectId, jobId);
+    if (!p || p.state !== 'failed') return false;
+    if (!this.transition(p.id, ['failed'], 'executing', { error: null, finished_at: null })) return false;
+    this.store.audit('system', 'proposal.resumed', p.id, { state: 'failed' }, { state: 'executing', jobId });
+    return true;
+  }
+
   // ============================================================================================ queries
 
   state(id: string): ProposalState | undefined {

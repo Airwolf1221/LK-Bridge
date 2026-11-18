@@ -412,6 +412,41 @@ export class RegistryStore {
     return this.requireEntry(id);
   }
 
+  /**
+   * v3 F3d (renames), ADR 0058: an approved race rename's entry: its plural (the renamed index's name), its singular and
+   * aliases (the old names kept as aliases, so a character's old Race / Species still places it) and its review state.
+   */
+  renameEntry(
+    id: string,
+    f: {
+      plural: string;
+      singular: string;
+      singularSource: 'list' | 'rule' | 'owner';
+      aliases: readonly string[];
+      status: ReviewStatus;
+      review: readonly ReviewReason[];
+    },
+  ): TaxonomyEntry {
+    this.db
+      .prepare(
+        `UPDATE taxonomy_entries SET plural = ?, singular = ?, singular_source = ?, aliases = ?, status = ?, review = ?,
+           updated_at = ?
+         WHERE project_id = ? AND id = ?`,
+      )
+      .run(
+        f.plural,
+        f.singular,
+        f.singularSource,
+        j(f.aliases),
+        f.status,
+        j(f.review),
+        this.now(),
+        this.projectId,
+        id,
+      );
+    return this.requireEntry(id);
+  }
+
   deleteEntry(id: string): TaxonomyEntry {
     const e = this.requireEntry(id);
     const children = this.db

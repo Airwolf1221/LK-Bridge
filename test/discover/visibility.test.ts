@@ -65,6 +65,9 @@ describe('showLowLevelTools, per profile', () => {
         'arkona_working_digest',
         'arkona_visual_hygiene',
         'arkona_appraisal_fix',
+        // v3 F3d: the Arkona pack's rename, and resuming a job that stopped part-way
+        'arkona_rename',
+        'bridge_job_resume',
         'create_document',
         'create_index',
         'create_many_resources',
@@ -124,13 +127,14 @@ describe('showLowLevelTools, per profile', () => {
     expect(await list(a.token)).not.toContain('lk_api_list_operations');
   });
 
-  it('shows 66 tools off and 66 + 3 + 2 + 89 on', async () => {
+  it('shows 68 tools off and 68 + 3 + 2 + 89 on', async () => {
     const t = w.stack.newToken('counting', 'write');
     // 61 before v2 E3b; get_resources, bridge_proposals_mine and bridge_job_wait were merged (-3) and lk_upload_image and
-    // create_bare_resource are hidden by default (-2); v3 F3b's four pack tools (+4); v3 F3c's five appraisal tools (+5).
-    expect(await list(t.token)).toHaveLength(66);
+    // create_bare_resource are hidden by default (-2); v3 F3b's four pack tools (+4); v3 F3c's five appraisal tools (+5);
+    // v3 F3d's bridge_job_resume and arkona_rename (+2).
+    expect(await list(t.token)).toHaveLength(68);
     w.stack.policy.commands.setShowLowLevelTools('owner', t.profileId, true);
-    expect(await list(t.token)).toHaveLength(66 + 3 + 2 + operations.length);
+    expect(await list(t.token)).toHaveLength(68 + 3 + 2 + operations.length);
   });
 
   it('leaves call-time enforcement exactly as it was: a hidden tool is still allowed or refused by policy', async () => {

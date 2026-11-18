@@ -1,7 +1,7 @@
 import { EXPLICIT_PACK_TOOLS, genericPackTool, genericPackToolNames } from './mcp/tools/packs.js';
 import { createPacks, type Packs } from './packs/service.js';
 import { registerPackEngine } from './packs/engine/checks.js';
-import { addPackTaxonomyEntry } from './packs/taxonomy.js';
+import { addPackTaxonomyEntry, renamePackTaxonomyEntry } from './packs/taxonomy.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
 import { listDropsReader } from './policy/list-drops.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
@@ -42,6 +42,9 @@ import type { GuardOptions } from './mcp/tools/upload-http.js';
 import { footerFor } from './mcp/tools/shape.js';
 import { ReviewService } from './review/service.js';
 import { RevertService } from './review/revert.js';
+import { ResumeService } from './resume/service.js';
+import { registerRenameChecks } from './packs/rename/checks.js';
+import { RenameService } from './packs/rename/service.js';
 import { createMaintenance, type Maintenance } from './maintenance/index.js';
 import { createMappings, type Mappings } from './mappings/index.js';
 import { createPolicy, type Policy } from './policy/index.js';
@@ -154,6 +157,10 @@ export interface Runtime {
   readonly review: ReviewService;
   /** v3 F3.4 (ADR 0055): the owner's revert of a finished direct-write job. */
   readonly reverts: RevertService;
+  /** v3 F3d (ADR 0058): resuming a package, a rename or a recreate that stopped part-way. */
+  readonly resume: ResumeService;
+  /** v3 F3d (ADR 0058): arkona_rename's records, token versions and leftover reports. */
+  readonly renames: RenameService;
   readonly tools: readonly McpToolProvider[];
   /** v2 B2: the guides, published as MCP resources. */
   readonly resources: readonly McpResourceProvider[];
@@ -372,6 +379,13 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     proposalJob: (proposalId) => policy.proposals.get(proposalId)?.jobId ?? null,
     addTaxonomyEntry: (projectId, r, actor) =>
       addPackTaxonomyEntry(
+        registry.forProject(projectId).store,
+        r,
+        (...a) => policy.store.audit(...a),
+        actor,
+      ),
+    renameTaxonomyEntry: (projectId, r, actor) =>
+      renamePackTaxonomyEntry(
         registry.forProject(projectId).store,
         r,
         (...a) => policy.store.audit(...a),
@@ -877,6 +891,50 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     log: { warn: (obj, msg) => log.warn(obj, msg) },
   });
   const detachReverts = reverts.start();
+  // v3 F3d (ADR 0058): resuming a package, a rename or a recreate that stopped part-way.
+  const resume = new ResumeService({
+    db: o.db,
+    engine,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    proposals: {
+      byJob: (projectId, jobId) => policy.proposals.byJob(projectId, jobId),
+      jobResumed: (projectId, jobId) => policy.proposals.jobResumed(projectId, jobId),
+    },
+    finishRecreate: async (projectId, restoreId, origin, by) => {
+      const r = await restores.finish(projectId, restoreId, origin, by);
+      return r.status === 'nothing_to_do'
+        ? { status: 'nothing_to_do' as const, summary: r.plan.summary }
+        : { status: 'proposal_captured' as const, proposalId: r.proposalId, summary: r.summary };
+    },
+    revertState: (projectId, jobId) => {
+      const row = o.db
+        .prepare(
+          `SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`,
+        )
+        .get(projectId, jobId) as { state: string } | undefined;
+      return row?.state === 'submitted' || row?.state === 'succeeded' ? row.state : null;
+    },
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachResume = resume.start();
+  // v3 F3d (ADR 0058): `arkona_rename`: its in-job checks, its record, the token change's pack version (the job waits for
+  // the owner to approve it) and what a rename left, from the full-text index.
+  const unregisterRenameChecks = registerRenameChecks(engine, packs);
+  const renames = new RenameService({
+    db: o.db,
+    engine,
+    packs,
+    proposals: {
+      addHooks: (h) => policy.proposals.addHooks(h),
+      get: (id) => policy.proposals.get(id),
+    },
+    appraisal,
+    audit: (actor, action, target, before, after) => policy.store.audit(actor, action, target, before, after),
+    now: () => (o.clock ?? systemClock).now(),
+    log: { warn: (obj, msg) => log.warn(obj, msg) },
+  });
+  const detachRenames = renames.start();
 
   // Chunk 6: the maintenance scheduler (budget sampler, journal prune, proposal expiry, SQLite optimise). Its state is
   // in SQLite; at most one overdue run per job happens now, before any timer fires.
@@ -946,6 +1004,10 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       packs,
       // v3 F3c (ADR 0054): the appraisal tools and the full-text index.
       appraisal,
+      // v3 F3d (ADR 0058): resuming a package or a rename that stopped part-way.
+      resume,
+      // v3 F3d (ADR 0058): arkona_rename's records and leftover reports.
+      renames,
     },
   };
   const bridgeTools = createBridgeTools(toolDeps, { exposePerOpTools: config.mcp.exposePerOpTools });
@@ -1032,6 +1094,8 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     packs,
     review,
     reverts,
+    resume,
+    renames,
     tools,
     resources: guideResources(),
     instructions: BRIDGE_INSTRUCTIONS,
@@ -1068,6 +1132,9 @@ export function createRuntime(o: RuntimeOptions): Runtime {
       detachBlockIds();
       detachBlockwiseUndo();
       detachReverts();
+      detachResume();
+      detachRenames();
+      unregisterRenameChecks();
       detachReview();
       detachRestores();
       unregisterPackEngine();

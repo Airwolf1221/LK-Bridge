@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import type { JobStatus, JobWithSteps, StepView } from '../../jobs/index.js';
-import { TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
+import { SYSTEM_PRINCIPAL, TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
+import { ResumeError } from '../../resume/service.js';
 import { AdminHttpError } from '../http.js';
 import { redactDeep } from '../redact.js';
 import { csv, idSchema, limitSchema, parseInput, projectParam, type Register } from './util.js';
@@ -78,10 +79,52 @@ export const registerJobs: Register = (api, ctx) => {
     const job = engine.queries.getJob(project.id, id);
     if (!job) throw new AdminHttpError(404, 'JOB_NOT_FOUND', `No job ${id} in project ${project.name}`);
     const steps = job.steps.map((s) => ({ ...s, retry: retryAdvice(job, s) }));
+    // v3 F3d (ADR 0058): where a package or a rename stopped, and whether Resume applies now.
+    const resume = ctx.deps.runtime.resume;
+    const stop = resume?.stopOf(project.id, id) ?? null;
     return {
       job: redactDeep({ ...job, steps }, { maxString: 4000 }),
       principals: ctx.principals([job.principalId]),
+      ...(stop ? { stop, resume: resume!.view(project.id, id) } : {}),
     };
+  });
+
+  /**
+   * v3 F3d (ADR 0058; the design's section 3): what Resume would do for a job that stopped part-way (a package, a
+   * rename, a recreate): where it stopped, its last verified step, the steps left and the checks run again first; or why
+   * it cannot be resumed. Reads nothing from LegendKeeper.
+   */
+  api.get('/jobs/:id/resume-stopped', (req) => {
+    const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    const resume = ctx.deps.runtime.resume;
+    if (!resume) throw new AdminHttpError(503, 'UNAVAILABLE', 'Resuming jobs is not available here.');
+    return { resume: resume.view(project.id, id) };
+  });
+
+  /**
+   * Resumes it (`{ confirm: true }`): no fresh approval for an approved plan (decision D6), audited `job.resume`. A
+   * refusal is 409 with its code and reason; a recreate answers with the proposal its finish made.
+   */
+  api.post('/jobs/:id/resume-stopped', async (req) => {
+    const { id } = parseInput(z.object({ id: idSchema }), req.params);
+    parseInput(z.object({ confirm: z.literal(true) }), req.body);
+    const project = ctx.project(parseInput(projectQuery, req.query).project);
+    const resume = ctx.deps.runtime.resume;
+    if (!resume) throw new AdminHttpError(503, 'UNAVAILABLE', 'Resuming jobs is not available here.');
+    try {
+      const r = await resume.resume(
+        project.id,
+        id,
+        { kind: 'owner' },
+        { kind: 'ui', client: 'owner', tool: 'job.resume', detail: `resume:${id}`, principal: SYSTEM_PRINCIPAL },
+      );
+      return { resume: redactDeep(r, { maxString: 4000 }) };
+    } catch (e) {
+      if (e instanceof ResumeError)
+        throw new AdminHttpError(e.code === 'JOB_NOT_FOUND' ? 404 : 409, e.code, e.message, e.details);
+      throw e;
+    }
   });
 
   api.get('/jobs/:id/artifacts/:artifactId', (req) => {

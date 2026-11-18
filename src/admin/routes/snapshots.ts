@@ -20,6 +20,7 @@
  * `snapshots.rehearsal_delete_root`).
  */
 import * as z from 'zod';
+import { ResumeError } from '../../resume/service.js';
 import { SYSTEM_PRINCIPAL, type JobOrigin } from '../../jobs/index.js';
 import { diffText } from '../../snapshots/diff.js';
 import { documentsOf, historyOf, pieceNow, pieceThen } from '../../snapshots/history.js';
@@ -261,12 +262,25 @@ export const registerSnapshots: Register = (api, ctx) => {
     const project = ctx.project(q.project);
     const { restores } = services();
     try {
+      // v3 F3d (ADR 0058): the same mechanism as Resume on the Jobs page: the recreate's job (when it has one that can
+      // be resumed) is resumed, which finishes it exactly as before (only what is missing, as a proposal).
+      const resume = ctx.deps.runtime.resume;
+      const jobId = restoreJob(ctx.deps.runtime.policy, restores, project.id, id);
+      if (resume && jobId && resume.view(project.id, jobId).resumable) {
+        const r = await resume.resume(project.id, jobId, { kind: 'owner' }, ORIGIN('snapshots.finish_recreate'));
+        if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', summary: r.summary };
+        if (r.status === 'proposal_captured') {
+          audit('snapshots.finish_recreate', r.proposalId, { project: project.id, restoreId: id, jobId });
+          return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary };
+        }
+      }
       const r = await restores.finish(project.id, id, ORIGIN('snapshots.finish_recreate'), 'owner');
       if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', summary: r.plan.summary };
       audit('snapshots.finish_recreate', r.proposalId, { project: project.id, restoreId: id });
       return { status: 'proposal_captured', proposalId: r.proposalId, summary: r.summary };
     } catch (e) {
       if (e instanceof RestoreError) throw new AdminHttpError(409, e.code, e.message, e.details);
+      if (e instanceof ResumeError) throw new AdminHttpError(409, e.code, e.message, e.details);
       throw e;
     }
   });
@@ -489,3 +503,15 @@ export const registerSnapshots: Register = (api, ctx) => {
     }
   });
 };
+
+/** v3 F3d (ADR 0058): the job a restore's proposal ran as, when it has one. */
+function restoreJob(
+  policy: { readonly proposals: { get(id: string): { readonly jobId: string | null } | undefined } },
+  restores: { record(projectId: string, id: string): { readonly proposalId: string | null } | null },
+  projectId: string,
+  restoreId: string,
+): string | null {
+  const rec = restores.record(projectId, restoreId);
+  if (!rec?.proposalId) return null;
+  return policy.proposals.get(rec.proposalId)?.jobId ?? null;
+}

@@ -9,6 +9,7 @@ import type { McpToolContext } from '../server.js';
 import { TERMINAL_JOB_STATUSES } from '../../jobs/index.js';
 import type { BudgetSnapshot, OperationTierSnapshot, TierSnapshot } from '../../lk/index.js';
 import { defineTool, READ_ANNOTATIONS, renamedTool } from './define.js';
+import { ResumeError } from '../../resume/service.js';
 import {
   errorFromThrown,
   errorResult,
@@ -445,7 +446,36 @@ function jobTools(deps: ToolDeps) {
           }
           const job = ownJob(pd, ctx, id);
           if (!job) return jobNotFound(pd, id);
-          return render(jobBody(job, steps ? 'steps' : 'summary'), pd);
+          // v3 F3d (ADR 0058): where a package or a rename stopped, and whether you may resume it.
+          const stop = pd.services?.resume?.stopOf(pd.project.id, id) ?? null;
+          const resume =
+            stop && pd.services?.resume
+              ? pd.services.resume.view(pd.project.id, id, {
+                  kind: 'agent',
+                  principalId: ctx.principal?.principalId ?? '',
+                  scope: ctx.scope,
+                })
+              : null;
+          return render(
+            {
+              ...jobBody(job, steps ? 'steps' : 'summary'),
+              ...(stop
+                ? {
+                    stoppedAt: {
+                      lastVerifiedStep: stop.lastVerifiedStep,
+                      ...(stop.lastVerifiedLabel ? { lastVerified: stop.lastVerifiedLabel } : {}),
+                      stoppedStep: stop.stoppedStep,
+                      ...(stop.stoppedLabel ? { stopped: stop.stoppedLabel } : {}),
+                      ...(stop.reason ? { reason: stop.reason } : {}),
+                      resumes: stop.resumes,
+                      youMayResume: resume?.resumable === true,
+                      ...(resume && !resume.resumable && resume.reason ? { why: resume.reason.message } : {}),
+                    },
+                  }
+                : {}),
+            },
+            pd,
+          );
         }),
     }),
     /** The old name, kept one release (ADR 0045, P3). */
@@ -486,6 +516,55 @@ function jobTools(deps: ToolDeps) {
             const job = deps.engine.controls.cancel(pd.project.id, id);
             return render(jobBody(deps.engine.queries.getJob(pd.project.id, job.id) ?? job, 'summary'), pd);
           } catch (e) {
+            return errorFromThrown(e, pd);
+          }
+        }),
+    }),
+    // v3 F3d (ADR 0058; the design's section 3): resuming one of the agent's own jobs that stopped part-way.
+    defineTool({
+      name: 'bridge_job_resume',
+      title: 'Resume a job that stopped part-way',
+      access: 'write',
+      description:
+        'Resumes one of your own jobs that stopped part-way: a setting-pack package (or a rename) that failed or was cancelled after doing some of its work. It continues where it stopped, in the same job: its own checks run again first (inside its locks), every step that is left re-reads its page and checks it as it would have, a step that succeeded is never repeated, and no page or document is ever made twice. A step that is no longer safe (its page changed since) is refused with its reason: then read the pages and tell the user; never work around it. ' +
+        'Only at scope write, and only for your own direct jobs: a job the owner approved (a proposal, a rename) is the owner’s to resume, on the dashboard. bridge_job_status shows where a job stopped (stoppedAt). Cost: the job’s remaining steps, nothing more.',
+      inputSchema: z.object({ jobId, project: projectArg }),
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      handler: ({ jobId: id, project: asked }, ctx) =>
+        withProject(deps, asked, 'write', async (pd) => {
+          const own = ownJob(pd, ctx, id);
+          if (!own) return jobNotFound(pd, id);
+          const svc = pd.services?.resume;
+          if (!svc)
+            return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Resuming jobs is not available here.' }, pd);
+          const who = ctx.principal!;
+          try {
+            const r = await svc.resume(
+              pd.project.id,
+              id,
+              { kind: 'agent', principalId: who.principalId, scope: ctx.scope },
+              mcpOrigin(ctx, 'bridge_job_resume'),
+            );
+            if (r.status !== 'resumed') return render({ ...r }, pd);
+            const now = (await deps.engine.wait(pd.project.id, id, 25_000)) ?? r.job;
+            return render(
+              {
+                status: 'resumed',
+                jobId: id,
+                from: r.from,
+                rechecked: r.rechecked,
+                job: jobBody(deps.engine.queries.getJob(pd.project.id, id) ?? now, 'summary'),
+                hint: 'Follow it with bridge_job_status; never resubmit the original request.',
+              },
+              pd,
+            );
+          } catch (e) {
+            if (e instanceof ResumeError) return errorResult(e.toJSON() as never, pd);
             return errorFromThrown(e, pd);
           }
         }),
