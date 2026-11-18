@@ -8,6 +8,7 @@
  * token map as a new pack version, the job waiting for its approval, the characters' facts and tags.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { londonDate } from '../../src/jobs/internal-steps.js';
 import { approve } from './world.js';
 import { C, O, P, PROJECT, R, renameWorld, type RenameWorld } from './rename-world.js';
 
@@ -254,7 +255,8 @@ describe('arkona_rename: a character', () => {
     expect(w.assets.assets.get('imgpng01')!.name).toBe('Laila al-Khalid - Primary Reference - Portrait.png');
     // Last Major Revision by ADR 0051's rule: Archive Notes' heading changed (set); a page whose only change is its name
     // and name facts has no step at all (Tarek's relationship); one restated name (Qasr) is not a major revision.
-    const today = new Date().toISOString().slice(0, 10);
+    // The date the job set, as the bridge dates it (Europe/London), not the UTC date: they differ in British Summer Time.
+    const today = londonDate(Date.now());
     expect(facts(w, R.archiveNotes)['Last Major Revision']).toBe(today);
     expect(facts(w, R.tarekRelationship)['Last Major Revision']).toBe('2026-11-01');
     expect(facts(w, O.qasr)['Last Major Revision']).not.toBe(today);
