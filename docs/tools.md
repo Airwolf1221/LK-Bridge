@@ -1737,7 +1737,9 @@ row and never the Main count (the count is the table's row count); without `age`
 is refused when the event is paired with a row after all (`EVENT_HAS_ROW`: delete both without `orphan`, or repair a
 mismatch with `sync_timeline_event`) or when an unpaired row could be its own (`PAIRING_AMBIGUOUS`, v3 F2.1: "This event
 is not an orphan: N rows of the table could be its own (…). Pair it with one instead of deleting it."). The check reports
-such an event as `event_in_tie`, never `event_without_row`. The answer (and `dryRun`) names the event, its date and the
+such an event as `event_in_tie`, never `event_without_row`. It is also refused while the age's table has an unpaired row
+whose date cannot be read and that is not marked table-only (`ORPHAN_NEAR_UNREADABLE`, naming the rows: ADR 0057
+decision 2; mark the row table-only or fix its date). The answer (and `dryRun`) names the event, its date and the
 three rows nearest it by date. Inside the lock
 the table must still have no row for it, and the event must be as read; the journal keeps the event.
 
@@ -1749,7 +1751,7 @@ proposals for one age all land correctly.
 **Refusals** besides the date's: `AGE_MISMATCH`, `AGE_NOT_CONFIGURED`, `DUPLICATE_EVENT`, `EVENT_NOT_FOUND`,
 `EVENT_AMBIGUOUS`, `PAIRING_AMBIGUOUS`, `EVENT_TAKEN`, `EVENT_MISMATCH`, `ROW_MISMATCH`, `ROW_DATE_UNREADABLE`,
 `SHAPE_CHANGE_UNCONFIRMED`, `ROW_TABLE_ONLY`, `EVENT_HAS_ROW` (v2 E6), `ROW_NOT_FOUND`, `ROW_AMBIGUOUS`,
-`ROW_PREFIX_TOO_SHORT`, `ROW_HAS_EVENT` (v3 F2.1),
+`ROW_PREFIX_TOO_SHORT`, `ROW_HAS_EVENT` (v3 F2.1), `ORPHAN_NEAR_UNREADABLE` (ADR 0057 decision 2),
 `CHRONOLOGY_DRIFT` (repaired by `sync_timeline_event`), `CHRONOLOGY_INCOMPLETE` (another change of the age stopped part-way),
 `CHRONOLOGY_IN_PROGRESS`, `CHRONOLOGY_RESUME_CONFLICT`, `CHRONOLOGY_TIMELINE` and `LANE_EXISTS`.
 
@@ -1878,6 +1880,11 @@ reused), so `create_map_feature` and `update_map_feature` cost 7 reads, a single
 [ADR 0041](adr/0041-image-pipeline.md) has the decisions and the threat review. `upload_image` is the tool to use;
 `lk_upload_image` (below) stays as it was, for raw uploads.
 
+**A deleted image is not private** (W5, the write-scope rehearsal of 17 November 2026): LegendKeeper keeps serving a
+deleted image's file at its old URL, so anyone who has that URL (a page's history, a snapshot, a copy of a page, an
+agent's transcript) can still fetch it. Deleting an image takes it out of the library, not off the web. This is
+LegendKeeper's behaviour; the bridge cannot change it. For an image that must not be seen again, ask LegendKeeper.
+
 **`upload_image`** `{ data_base64 | url | file | upload_id | staged_id, name?, description?, destination?, stage?,
 deduplicate?, dryRun?, waitSeconds?, operation_id?, project }`. Exactly one of the five sources:
 
@@ -1901,9 +1908,10 @@ asset id is still returned, nothing is retried), and for a staged image `updateA
 
 - `folder`: an asset folder id, a path from the library's root (`"Characters / Beastkin / Qishen / Mehrana al-Khalid"`;
   `Undetermined / Unknown` is one folder) or a list of names;
-- `for_character { name, race?, type? }`: a folder named after the character is reused wherever it is (several:
-  `AMBIGUOUS_FOLDER`, listed); otherwise `Characters / Group / Race / Name` (or `Characters / Race / Name` for a race with
-  no group), the folder names from the taxonomy's asset folder field; an unknown or omitted race goes to
+- `for_character { name, race?, type? }`: `Characters / Group / Race / Name` (or `Characters / Race / Name` for a race
+  with no group), the folder names from the taxonomy's asset folder field, and only that exact path (ADR 0057 decision 8:
+  a folder with the character's name anywhere else is never used; a path that is ambiguous or blocked by an asset that is
+  not a folder is `ART_FOLDER_AMBIGUOUS`, listed); an unknown or omitted race goes to
   `Undetermined / Unknown`; a declared race that does not resolve fails (`RACE_NOT_FOUND` and the other refusals of
   `create_character`);
 - `for_page`: a Core, Reference or character index page under the Characters index gives its character (the race from where
@@ -1938,7 +1946,9 @@ what happened. Two placements into one missing chain (two proposals, two jobs, o
 ["file"] }` in `tools/list`: ChatGPT then replaces a conversation attachment given to `file` with a file object (`download_url`
 and `file_id` always; `mime_type` and `file_name` sometimes). The bridge downloads the bytes **during the call, at every
 scope** (the link expires long before an owner approves anything: at `propose` the bytes are staged at once and only the
-placement waits), through the `url` source's guarded transport whatever `UPLOAD_ALLOW_URL_SOURCE` says: https only,
+placement waits), through the `url` source's guarded transport whatever `UPLOAD_ALLOW_URL_SOURCE` says (ADR 0057
+decision 7: `file` has its own switch, the project setting `fileSourceEnabled`, on by default; switched off, a `file` is
+refused before anything is fetched, `UPLOAD_FILE_SOURCE_DISABLED`; switching it on asks for the owner's password): https only,
 public addresses only, the port allow-list, the DNS answer pinned, no credentials (never the LegendKeeper key),
 `UPLOAD_MAX_BYTES` enforced while streaming, a timeout, at most 3 redirects with every hop checked by the same rules.
 `mime_type` is never trusted: the magic bytes decide. `name` defaults to `file_name` with its extension dropped; with
@@ -2058,6 +2068,7 @@ proposes nothing. Scopes:
   in the meantime is not rewritten: the job stops after the upload, the asset stays, and the job and the restore's record
   carry an `image_relink_failed` follow-up naming the pages to relink by hand; nothing is retried. The restore's record
   keeps the new asset (`plan.newAsset`).
+  The deleted asset's old URL may still serve its file (W5): a restore does not make the old copy private.
 
 What a restore cannot bring back is in its result and on the proposal, never hidden:
 
@@ -2156,7 +2167,7 @@ Codes: `UPLOAD_SOURCE_INVALID`, `UPLOAD_TOO_LARGE`, `UPLOAD_NOT_AN_IMAGE`, `UPLO
 | `MCP_EXPOSE_PER_OP_TOOLS`         | `false`                                            | Also register `lk_op_<operationId>` for all 89 operations                                                                                                                                                                                                                       |
 | `MCP_RESULT_MAX_CHARS`            | `40000`                                            | Results longer than this are stored and returned as a handle                                                                                                                                                                                                                    |
 | `UPLOAD_MAX_BYTES`                | `10485760` (10 MB)                                 | Largest image `lk_upload_image` accepts. The `/mcp` request body limit is sized from it (below)                                                                                                                                                                                 |
-| `UPLOAD_ALLOW_URL_SOURCE`         | `true`                                             | `false`: no `url` source; ChatGPT's `file` source is still fetched (CR-2026-11-R2, R2-45; ADR 0057 decision 7)                                                                                                                                                                  |
+| `UPLOAD_ALLOW_URL_SOURCE`         | `true`                                             | `false`: no `url` source; ChatGPT's `file` source has its own switch, the project setting `fileSourceEnabled` (CR-2026-11-R2, R2-45; ADR 0057 decision 7)                                                                                                                       |
 | `UPLOAD_FETCH_TIMEOUT_MS`         | `15000`                                            | Deadline for fetching an image from a URL                                                                                                                                                                                                                                       |
 | `UPLOAD_PUT_TIMEOUT_MS`           | `120000`                                           | Per-attempt deadline of the signed-URL PUT (5 s to 10 min), separate from the 30 s LegendKeeper request timeout                                                                                                                                                                 |
 | `OUTBOUND_EXTRA_PORTS_ALLOWLIST`  | empty                                              | Exact `host:port` pairs, comma-separated, that the image fetch, its redirects, the PUT and the CIMD fetch may use besides 443 (v1.0.1). No wildcards; a malformed entry stops the bridge at start-up, naming the entry                                                          |

@@ -77,6 +77,8 @@ export type TableOp =
       readonly op: 'orphan';
       readonly event: DateRef & { readonly name: string };
       readonly ignore: readonly { readonly rowId: string; readonly texts: RowTexts }[];
+      /** ADR 0057 decision 2: the rows whose date cannot be read that may stay (accounted for when it was planned). */
+      readonly unreadableKnown?: readonly string[];
     }
   | {
       readonly op: 'replace';
@@ -200,6 +202,20 @@ export function chronologyCheckers(calendarOf: (projectId: string) => Calendar |
             ),
           );
         }
+        // ADR 0057 decision 2: a row whose date cannot be read, not accounted for when the delete was planned, could be
+        // the event's own.
+        if (op.unreadableKnown)
+          for (const r of t.rows) {
+            if (r.eventDate !== null || (r.id !== null && op.unreadableKnown.includes(r.id))) continue;
+            if (couldBeRowOf(r, op.event)) continue; // already reported above
+            differences.push(
+              diff(
+                `${ctx.label} row ${r.id ?? r.index + 1}`,
+                'no row whose date cannot be read (it could be the event’s own)',
+                `${r.dateText} | ${r.description}`,
+              ),
+            );
+          }
         continue;
       }
       if (op.op === 'insert') {

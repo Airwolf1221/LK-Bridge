@@ -285,6 +285,55 @@ export function canonicalReason(changes: readonly ProtectedChange[]): string {
   );
 }
 
+/**
+ * ADR 0057 decision 5 (17 November 2026): renaming an Authoritative page is a canonical change, whatever the new name
+ * (keeping its `[BSRC]` prefix included; dropping it is also the lifecycle guard's, R2-12). A page is Authoritative by
+ * its `[BSRC]` prefix or by a Status the rules protect as Authoritative. A Working or Archived page's rename is not
+ * judged here (the renames-and-moves rail still applies when it is on). Pure.
+ */
+export function assessRename(
+  rules: readonly CanonicalRule[],
+  facts: readonly FactValue[],
+  from: string,
+  to: string,
+): ProtectedChange | null {
+  if (from === to) return null;
+  const authoritative =
+    kindOfName(from) === 'bsrc' ||
+    authoritativeKeys(rules).some(({ key, values }) =>
+      facts.some(
+        (f) =>
+          factKey(f.key) === key &&
+          values.some((v) => factValueKey(valueText(f.content)) === factValueKey(v)),
+      ),
+    );
+  if (!authoritative) return null;
+  return {
+    ruleId: 'rename-authoritative',
+    key: 'name',
+    direction: 'change',
+    before: [from],
+    after: [to],
+    page: from,
+    text: `renaming “${from}”, an Authoritative page, to “${to}”`,
+  };
+}
+
+/** The facts (and their values) that make a page Authoritative: the rules' Status Authoritative, else the default. */
+function authoritativeKeys(rules: readonly CanonicalRule[]): { key: string; values: string[] }[] {
+  const out = rules
+    .filter(
+      (r): r is Extract<CanonicalRule, { values: readonly string[] }> =>
+        (r.kind === 'value' || r.kind === 'delete') &&
+        r.values.some((v) => factValueKey(v) === factValueKey('Authoritative')),
+    )
+    .map((r) => ({
+      key: factKey(r.key),
+      values: r.values.filter((v) => factValueKey(v) === factValueKey('Authoritative')),
+    }));
+  return out.length > 0 ? out : [{ key: factKey('Status'), values: ['Authoritative'] }];
+}
+
 const rowsOf = (sidebar: Sidebar): FactValue[] =>
   factRows(sidebar).map((r) => ({ key: r.key, content: r.content }));
 
@@ -381,7 +430,9 @@ export class CanonicalGuard implements WriteGuard {
           it.op === 'createResourceFromTemplate' ||
           it.op === 'saveResourceAsTemplate' ||
           (it.op === 'deleteResource' && rules.some((r) => r.kind === 'delete' || r.kind === 'deleteKind')) ||
-          (it.op === 'deleteDocument' && rules.some((r) => r.kind === 'deleteDocument')),
+          (it.op === 'deleteDocument' && rules.some((r) => r.kind === 'deleteDocument')) ||
+          // ADR 0057 decision 5: a rename (a lifecycle tool's included: those are canonical proposals already).
+          (it.op === 'updateResource' && renames(it.params)),
       );
     const restores =
       (this.d.restoredPage !== undefined || this.d.restoreSet !== undefined) &&
@@ -633,6 +684,27 @@ export class CanonicalGuard implements WriteGuard {
         }
         continue;
       }
+      if (it.op === 'updateResource') {
+        // ADR 0057 decision 5: renaming an Authoritative page, judged on its name and facts as they are now.
+        const rid = it.params.path?.resourceId;
+        const to = (it.params.body as { name: string }).name;
+        if (!rid) continue;
+        const page = await this.pageLive(input, rid, priority);
+        if (page === undefined) {
+          unchecked.push({ i: it.i, why: `the page ${rid} could not be read` });
+          continue;
+        }
+        if (page === null || page.name === to) continue; // not there (LegendKeeper refuses it), or not a rename
+        const now = page.name;
+        const sb = kindOfName(now) === 'bsrc' ? [] : (page.sidebar ?? (await read(rid)));
+        if (!sb) {
+          unchecked.push({ i: it.i, why: `the sidebar of ${rid} could not be read` });
+          continue;
+        }
+        const c = assessRename(rules, rowsOf(sb), now, to);
+        if (c) changes.push({ ...c, stepIndex: it.i, resourceId: rid });
+        continue;
+      }
       const rid = it.params.path?.resourceId;
       if (!rid) continue;
       const before = await read(rid);
@@ -770,6 +842,78 @@ export class CanonicalGuard implements WriteGuard {
       throw new CanonicalApprovalRequiredError(input.opId, canonicalReason(changes), changes, ref);
   }
 
+  /**
+   * ADR 0057 decision 5: a page as it is now, its name and sidebar (`getResource` holds both: the tool's own read, else
+   * one read); undefined when it cannot be read, null when it is gone.
+   */
+  private async pageLive(
+    input: WriteGuardEntry,
+    resourceId: string,
+    priority: 'P0' | 'P1',
+  ): Promise<{ readonly name: string; readonly sidebar: SidebarProperty[] | null } | null | undefined> {
+    const of = (r: unknown) => {
+      const o = r as { name?: unknown; properties?: unknown } | undefined;
+      return typeof o?.name === 'string'
+        ? { name: o.name, sidebar: Array.isArray(o.properties) ? sidebarFrom(o.properties) : null }
+        : null;
+    };
+    const pre = input.prefetched?.find((p) => p.op === 'getResource' && p.path.resourceId === resourceId);
+    const fromPre = pre ? of(pre.body) : null;
+    if (fromPre) return fromPre;
+    try {
+      return of(
+        await this.d.engine.internalRead(
+          input.project,
+          'getResource',
+          { path: { resourceId } },
+          { priority, notFoundIsAnswer: true },
+        ),
+      );
+    } catch (e) {
+      if (e instanceof LkOperationError && e.lk.status === 404) return null;
+      return undefined;
+    }
+  }
+
+  /**
+   * ADR 0057 decision 5: a rename, judged again inside the lock on the page as it is now (it may have become
+   * Authoritative since the entry check).
+   */
+  private async renameInLock(input: WriteGuardInLock): Promise<void> {
+    if (input.job.origin.canonicalApprovedBy !== undefined) return;
+    if (!renames(input.params)) return;
+    const project = input.job.projectId;
+    const rules = this.rules(project);
+    const rid = input.params.path?.resourceId;
+    if (rules.length === 0 || !rid) return;
+    const ref = { jobId: input.job.id, stepNo: input.step.stepNo };
+    let entity = input.current?.entity as { name?: unknown; properties?: unknown } | undefined;
+    if (typeof entity?.name !== 'string')
+      entity = (await input.read('getResource', { path: { resourceId: rid } })) as
+        { name?: unknown; properties?: unknown } | undefined;
+    if (typeof entity?.name !== 'string') return; // gone: LegendKeeper refuses the write itself
+    const to = (input.params.body as { name: string }).name;
+    if (entity.name === to) return;
+    const facts =
+      kindOfName(entity.name) === 'bsrc'
+        ? []
+        : rowsOf(
+            sidebarFrom(
+              Array.isArray(entity.properties)
+                ? entity.properties
+                : await input.read('listProperties', { path: { resourceId: rid } }),
+            ),
+          );
+    const c = assessRename(rules, facts, entity.name, to);
+    if (c)
+      throw new CanonicalApprovalRequiredError(
+        input.opId,
+        `${canonicalReason([{ ...c, resourceId: rid }])} (checked inside the lock)`,
+        [{ ...c, resourceId: rid }],
+        ref,
+      );
+  }
+
   /** v2 C2c: a page's kind from its name, read live (undefined when it cannot be read; null when it is gone). */
   private async kindLive(
     project: string,
@@ -832,6 +976,7 @@ export class CanonicalGuard implements WriteGuard {
     if (input.opId === 'deleteDocument') return this.deleteDocumentInLock(input);
     if (input.opId === 'createResourceFromTemplate') return this.copyInLock(input);
     if (input.opId === 'restoreResource') return this.restoreInLock(input);
+    if (input.opId === 'updateResource') return this.renameInLock(input);
     if (!SIDEBAR_WRITE_OPS.has(input.opId)) return; // a template copy is checked at entry (the template is not locked)
     if (input.job.origin.canonicalApprovedBy !== undefined) return; // approved as canon (checked at entry)
     const rules = this.rules(input.job.projectId);
@@ -1005,6 +1150,12 @@ export class CanonicalGuard implements WriteGuard {
 }
 
 /** v2 C2c: a page's kind from its raw name (`bsrc`, `bwrk`, `barc`, `index`, `unclassified`). */
+/** ADR 0057 decision 5: an `updateResource` that sets a name. */
+function renames(params: OpParams): boolean {
+  const body = params.body as { name?: unknown } | undefined;
+  return typeof body?.name === 'string';
+}
+
 function kindOfName(name: string): string {
   return classifyName(name).kind;
 }

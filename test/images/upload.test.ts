@@ -256,29 +256,44 @@ describe('upload_image: deduplication and verification', () => {
 });
 
 describe('upload_image: destinations (the old bridge’s rules)', () => {
-  it('reuses a folder named after the character wherever it is', async () => {
+  // ADR 0057 decision 8: the art folder is resolved only from the character's exact path under Characters.
+  it('the character’s own folder at the exact path is reused', async () => {
     w = await imagesWorld();
     const r = await call(w, {
       data_base64: b64('alpha.png'),
       name: 'Inae',
-      destination: { for_character: { name: 'inae mikumo', race: 'Foxian' } },
+      destination: { for_character: { name: 'Inae Mikumo', race: 'Moon Elves' } },
+      dryRun: true,
     });
-    expect(r.body).toMatchObject({
+    expect(r.body, r.text).toMatchObject({
       destination: { path: ['Characters', 'Elves', 'Moon Elves', 'Inae Mikumo'], createsFolders: [] },
     });
   });
 
-  it('several folders with the character’s name are refused, listed', async () => {
+  it('a folder named after the character under another race is never used: the declared race’s path is', async () => {
     w = await imagesWorld();
-    w.assets.folder('Inae Mikumo', w.assets.at('Characters', 'Humans'));
+    const r = await call(w, {
+      data_base64: b64('alpha.png'),
+      name: 'Inae',
+      destination: { for_character: { name: 'Inae Mikumo', race: 'Foxian' } },
+      dryRun: true,
+    });
+    const d = r.body.destination as { path: string[] };
+    expect(d.path, r.text).toEqual(['Characters', 'Beastkin', 'Foxians', 'Inae Mikumo']);
+  });
+
+  it('two folders of the character’s name at the exact path are refused (ART_FOLDER_AMBIGUOUS), listed', async () => {
+    w = await imagesWorld();
+    w.assets.folder('Inae Mikumo', w.assets.at('Characters', 'Elves', 'Moon Elves'));
     refreshTree(w);
     const r = await call(w, {
       data_base64: b64('alpha.png'),
       name: 'I',
-      destination: { for_character: { name: 'Inae Mikumo' } },
+      destination: { for_character: { name: 'Inae Mikumo', race: 'Moon Elves' } },
     });
-    expect(r.body.error).toMatchObject({ code: 'AMBIGUOUS_FOLDER' });
+    expect(r.body.error, r.text).toMatchObject({ code: 'ART_FOLDER_AMBIGUOUS' });
     expect((r.body.error as { candidates: unknown[] }).candidates).toHaveLength(2);
+    expect(w.lkUploads).toHaveLength(0);
   });
 
   it('a race with no group: Characters / Race / Name', async () => {
@@ -321,7 +336,8 @@ describe('upload_image: destinations (the old bridge’s rules)', () => {
       name: 'Z',
       destination: { for_character: { name: 'Zed', race: 'Human' } },
     });
-    expect(r.body.error).toMatchObject({ code: 'ASSET_NAME_CONFLICT' });
+    // ADR 0057 decision 8: on a character's path, ART_FOLDER_AMBIGUOUS (the cause in the details).
+    expect(r.body.error).toMatchObject({ code: 'ART_FOLDER_AMBIGUOUS', cause: 'ASSET_NAME_CONFLICT' });
   });
 
   it('subfolders are appended and created in order; a folder id and a path work', async () => {

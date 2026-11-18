@@ -275,6 +275,11 @@ describe('a Compact Reference with no index (the Kamigawa Miyuki pattern), and u
     );
     const p = await call(pkg);
     expect(p.body.status, p.text).toBe('proposal_captured');
+    // ADR 0057 decision 5: renaming an Authoritative page (keeping [BSRC]) is canon, through a pack tool too.
+    expect(p.body.requiresCanonicalApproval, p.text).toBe(true);
+    expect(String(p.body.reason), p.text).toMatch(
+      /renaming “\[BSRC\] Kamigawa Miyuki[^”]*”, an Authoritative page/,
+    );
     const done = await approve(w, String(p.body.proposalId));
     expect(done.job?.status, JSON.stringify(done.job?.lastError)).toBe('succeeded');
     const res = done.job?.result as { verified?: boolean; verification?: unknown };

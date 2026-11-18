@@ -3,6 +3,7 @@ import { createPacks, type Packs } from './packs/service.js';
 import { registerPackEngine } from './packs/engine/checks.js';
 import { addPackTaxonomyEntry } from './packs/taxonomy.js';
 import { deletedPageRecord, restoreSetReader } from './lifecycle/deleted.js';
+import { listDropsReader } from './policy/list-drops.js';
 import { BLOCKWISE_CHECK, blockwiseChecker } from './pages/blockwise.js';
 import { BlockwiseUndo } from './pages/undo.js';
 import { pino } from 'pino';
@@ -474,6 +475,18 @@ export function createRuntime(o: RuntimeOptions): Runtime {
         return null;
       }
     },
+  });
+  // ADR 0057 decision 9: a restore counts, for the bulk rail, every page its restore set says may come back with it (an
+  // unknown set fails closed). Decision 4: a whole-list write through a low-level tool is a removal when it drops an
+  // entry LegendKeeper holds now (read live; a read that fails counts as a removal).
+  policy.gate.setRailLookups({
+    restored: async (projectId, id) => {
+      const set = await restoreSet(projectId, id);
+      return set.known ? set.pages.length : null;
+    },
+    drops: listDropsReader((projectId, opId, params) =>
+      engine.internalRead(projectId, opId, params, { priority: 'P1' }),
+    ),
   });
   const lifecycleGuard = new LifecycleGuard({
     settings: (projectId) => projectStore.byId(projectId)?.settings,

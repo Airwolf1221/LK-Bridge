@@ -8,6 +8,10 @@ an image. Number 0040 and migration 1900 are left to D2, built alongside; this s
 this session touched a live system: every test runs against the mock LegendKeeper, and the sandbox test is written, not
 run.
 
+Amended by [ADR 0057](0057-cr-2026-11-r2-owner-decisions.md) decision 8 (17 November 2026): the destination rule that
+reused a folder named after the character wherever it is is retired; a character's folder comes from its exact path under
+Characters only (`ART_FOLDER_AMBIGUOUS` when that path is ambiguous or blocked).
+
 ## Context
 
 v1's `lk_upload_image` uploads bytes as they come (base64 or a URL) into a folder id. The owner wants the old bridge's

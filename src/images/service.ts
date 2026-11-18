@@ -836,6 +836,14 @@ export class ImageService {
     return this.stagedBytes.get(r.serverSha256);
   }
 
+  /**
+   * ADR 0057 decision 7: whether ChatGPT's file source (`file.download_url`) is fetched for this project (the project's
+   * `fileSourceEnabled`, on by default; separate from UPLOAD_ALLOW_URL_SOURCE, which covers `url` only).
+   */
+  fileSourceEnabled(projectId: string): boolean {
+    return (this.o.projectSettings(projectId) as { fileSourceEnabled?: unknown }).fileSourceEnabled !== false;
+  }
+
   /** v3 F2: days an unplaced staged image is kept (the project's imageStagingMaxDays, else IMAGE_STAGING_MAX_DAYS). */
   stagingMaxDays(projectId: string): number {
     const v = (this.o.projectSettings(projectId) as { imageStagingMaxDays?: unknown }).imageStagingMaxDays;

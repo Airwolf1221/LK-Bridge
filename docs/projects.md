@@ -154,4 +154,7 @@ v3 F3c; `lmrWritePage`,
 [tools.md](tools.md#last-major-revision-only-for-real-revisions-v3-f2-v3-f3c). `imageStagingMaxDays` (default
 `IMAGE_STAGING_MAX_DAYS`, 90) is how long an unplaced staged image is kept on the server. `imageStagingFolder` now only
 names the old LegendKeeper staging folder for `npm run images -- migrate-staging`, and can be cleared once that folder is
-gone. All are edited on the Projects page (audited `project.set_setting`).
+gone. `fileSourceEnabled` (on by default; ADR 0057 decision 7) says whether ChatGPT's attached `file` is downloaded for
+the project (`upload_image` and the setting-pack tools), through the same guarded download as a `url`; it is separate
+from `UPLOAD_ALLOW_URL_SOURCE`, which covers `url` only. Switching it on (or clearing it, back to on) asks for your
+password again; switching it off is one click. All are edited on the Projects page (audited `project.set_setting`).

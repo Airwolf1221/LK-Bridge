@@ -226,6 +226,8 @@ const NEXT_STEP: Readonly<Record<string, string>> = {
     'Changing members or invites is switched off by the owner. Nothing was done. Tell the person; do not look for another route.',
   CASCADE_CONFIRM_REQUIRED:
     'Nothing was deleted. Deleting a page with everything under it needs the person’s say-so: ask them, and only then pass confirm: "cascade". For a high-level delete use delete_resource with confirm: true and cascade: true.',
+  TEMPLATES_DESTINATION:
+    'Nothing was moved. A page never moves under "templates" (it would leave the repository). Move it under a page of the repository instead; templates are the owner’s.',
   CANONICAL_APPROVAL_REQUIRED:
     'Nothing was written. This change is protected canon: only the owner can accept it, with “Approve and accept as canon”. Tell the person it is waiting for them; never retry it or look for another route.',
   JOB_NOT_FOUND:

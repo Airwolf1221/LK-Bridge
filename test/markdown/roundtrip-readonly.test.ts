@@ -101,7 +101,9 @@ describe('the round trip’s read-only runtime', () => {
     await expect(
       ro.runtime.engine.run(
         'updateResource',
-        { path: { resourceId: 'page0001' }, body: { name: 'Renamed' } },
+        // Not a rename: since ADR 0057 decision 5 the canon guard reads a renamed page first (that read is refused here
+        // too, so a rename is refused as unjudgeable before the read-only check is reached).
+        { path: { resourceId: 'page0001' }, body: { isHidden: true } },
         { project: ro.projectId, origin },
       ),
     ).rejects.toMatchObject({ code: 'READ_ONLY' });

@@ -11,7 +11,8 @@
  * - ATK-19: the audits' fixes it hands over (tags) stay proposals at scope write;
  * - ATK-13: the asset-extension fix renames from the name it read, with no check in the job (src/appraisal/fixes.ts:
  *   442-451: no expectCurrent, no job-level lock): an owner's rename between the fix's read and its write is lost;
- * - ATK-14, ATK-15: the name fix (expectCurrent) and the body fix (block-by-block check) refuse such a race;
+ * - ATK-14: the name fix of an Authoritative page is a canonical proposal at every scope (ADR 0057 decision 5), so no
+ *   race arises; ATK-15: the body fix (block-by-block check) refuses such a race;
  * - ATK-16: the Related Sources fix judges the LINKED page's state from the repository tree only
  *   (fixes.ts:478-480), so a page the owner has unarchived in the app (the tree not yet re-read) is unlinked from an
  *   Authoritative page's Related Sources at scope write.
@@ -156,17 +157,17 @@ describe('a fix at scope write re-checks what it fixes before it writes', () => 
     });
   });
 
-  it('ATK-14: the page is renamed between the name fix’s read and its write: refused (HELD expected)', async () => {
+  // ADR 0057 decision 5: renaming an Authoritative page is a canonical proposal by every route, the pack tools' fixes
+  // included, so the name fix of a [BSRC] page is never a direct job at scope write (the race below it cannot arise).
+  it('ATK-14: the name fix of an Authoritative page at scope write is a canonical proposal; nothing is written (HELD)', async () => {
     const f = finding('em_dash_name', P.dashName);
-    const { jobId, call } = await heldFix(f.id);
-    w.repo.outside.rename(P.dashName, '[BSRC] Gata—Lund Reach - Polity Reference');
-    engine().controls.resumeWrites('test');
-    const job = await engine().wait(PROJECT, jobId, 30_000);
-    await call;
-    expect({ name: w.repo.res.get(P.dashName)!.name, status: job.status }).toEqual({
-      name: '[BSRC] Gata—Lund Reach - Polity Reference',
-      status: 'failed',
+    const before = w.repo.res.get(P.dashName)!.name;
+    const r = await fix(f.id);
+    expect({ status: r.body.status, canonical: r.body.requiresCanonicalApproval }, r.text).toEqual({
+      status: 'proposal_captured',
+      canonical: true,
     });
+    expect(w.repo.res.get(P.dashName)!.name).toBe(before);
   });
 
   it('ATK-15: the paragraph is edited between the body fix’s read and its write: refused (HELD expected)', async () => {

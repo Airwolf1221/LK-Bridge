@@ -99,7 +99,13 @@ export interface PolicyGate {
   rails?(
     principal: Principal,
     items: readonly RailRequestItem[],
-    ctx: { readonly project: string; readonly jobKind: JobKind; readonly stagedPlacement?: boolean },
+    ctx: {
+      readonly project: string;
+      readonly jobKind: JobKind;
+      readonly stagedPlacement?: boolean;
+      /** The tool the request came through (`origin.tool`): the low-level tools' removals meet the deletes rail. */
+      readonly tool?: string;
+    },
   ): RailDecision | null | Promise<RailDecision | null>;
 }
 

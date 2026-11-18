@@ -70,7 +70,7 @@ const destinationArg = z
       .strict()
       .optional()
       .describe(
-        'The character’s folder (an existing one reused wherever it is), else Characters / Group / Race / Name.',
+        'The character’s folder: Characters / Group / Race / Name, that exact path only (a folder with the name elsewhere is never used).',
       ),
     subfolders: z
       .union([z.string().min(1).max(2000), z.array(name200).max(10)])
@@ -498,7 +498,7 @@ async function uploadBytes(
       fileSeen = { id: args.file.file_id, host };
       const img = await resolveImage(
         { fileUrl: args.file.download_url },
-        pd.settings.upload,
+        { ...pd.settings.upload, allowFileSource: svc.fileSourceEnabled(pd.project.id) },
         pd.uploadGuard,
         mctx.signal,
       );

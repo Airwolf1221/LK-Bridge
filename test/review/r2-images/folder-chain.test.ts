@@ -7,9 +7,10 @@
  * - E3: folder names that LOOK the same and are not the same bytes (NFC and NFD "é", a zero-width space): the planner
  *   and the job's find (src/jobs/step-exec.ts `findFolder`: `x.name === body.name`) compare bytes, so two agents
  *   writing one name make two folders that show identically. Safe: one folder (or a refusal naming the look-alike).
- * - E4: `for_character` reuses "a folder named after the character wherever it is" (ADR 0041): an agent at scope write
- *   makes a decoy folder of that name under a folder of its choosing first; every later image of the character goes
- *   there. Safe: an image for a character goes under Characters (or the placement is refused as ambiguous).
+ * - E4: `for_character` reused "a folder named after the character wherever it is" (ADR 0041): an agent at scope write
+ *   made a decoy folder of that name under a folder of its choosing first; every later image of the character went
+ *   there. Safe: an image for a character goes under Characters (or the placement is refused as ambiguous). ADR 0057
+ *   decision 8 makes it so: the exact path only.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { ADMIN_CSRF_PURPOSE } from '../../../src/admin/guard.js';
@@ -141,34 +142,31 @@ describe('E3: names that look the same', () => {
 });
 
 describe('E4: a decoy folder named after a character', () => {
-  // Open (CR-2026-11-R2 section 7): ADR 0041 reuses a folder named after the character wherever it is, by design; the owner decides.
-  it.fails(
-    'an image for_character goes under Characters, not into a folder another agent named after the character',
-    async () => {
-      w = await imagesWorld();
-      const c = await w.stack.connect();
-      // Another agent, at scope write, makes a folder named after a character (whose real folder does not exist yet).
-      const junk = await w.stack.call(c, 'lk_api_write', {
-        project: 'test',
-        operationId: 'createAssetFolder',
-        params: { body: { name: 'Junk' } },
-      });
-      const junkId = String((junk.body.result as { id?: string } | undefined)?.id ?? junk.body.id ?? '');
-      const decoy = await w.stack.call(c, 'lk_api_write', {
-        project: 'test',
-        operationId: 'createAssetFolder',
-        params: { body: { name: 'Asagiri Miyabi', ...(junkId ? { folderId: junkId } : {}) } },
-      });
-      expect(decoy.isError, decoy.text).toBe(false);
-      await w.stack.runtime.assets.refresh?.(PROJECT, 'test').catch(() => undefined);
-      const r = await call(w, {
-        data_base64: fixture('alpha.png').toString('base64'),
-        name: 'Miyabi portrait',
-        destination: { for_character: { name: 'Asagiri Miyabi', race: 'Foxian' } },
-        dryRun: true,
-      });
-      const path = (r.body.destination as { path?: string[] } | undefined)?.path ?? [];
-      expect(path[0], JSON.stringify(r.body.destination ?? r.body.error)).toBe('Characters');
-    },
-  );
+  // ADR 0057 decision 8 (R2-46): the art folder is resolved only from the character's exact path under Characters.
+  it('an image for_character goes under Characters, not into a folder another agent named after the character', async () => {
+    w = await imagesWorld();
+    const c = await w.stack.connect();
+    // Another agent, at scope write, makes a folder named after a character (whose real folder does not exist yet).
+    const junk = await w.stack.call(c, 'lk_api_write', {
+      project: 'test',
+      operationId: 'createAssetFolder',
+      params: { body: { name: 'Junk' } },
+    });
+    const junkId = String((junk.body.result as { id?: string } | undefined)?.id ?? junk.body.id ?? '');
+    const decoy = await w.stack.call(c, 'lk_api_write', {
+      project: 'test',
+      operationId: 'createAssetFolder',
+      params: { body: { name: 'Asagiri Miyabi', ...(junkId ? { folderId: junkId } : {}) } },
+    });
+    expect(decoy.isError, decoy.text).toBe(false);
+    await w.stack.runtime.assets.refresh?.(PROJECT, 'test').catch(() => undefined);
+    const r = await call(w, {
+      data_base64: fixture('alpha.png').toString('base64'),
+      name: 'Miyabi portrait',
+      destination: { for_character: { name: 'Asagiri Miyabi', race: 'Foxian' } },
+      dryRun: true,
+    });
+    const path = (r.body.destination as { path?: string[] } | undefined)?.path ?? [];
+    expect(path[0], JSON.stringify(r.body.destination ?? r.body.error)).toBe('Characters');
+  });
 });

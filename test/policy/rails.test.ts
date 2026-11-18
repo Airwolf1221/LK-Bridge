@@ -102,7 +102,7 @@ describe('deletes', () => {
     expect(many?.reason).toBe('proposed because: deletes (2 pages, 1 timeline event)');
   });
 
-  it('editing text and facts is never a delete (blocks, fact rows, rows of a block)', () => {
+  it('through the high-level tools, removing blocks, fact rows and rows of a block is an edit (planned and revertible)', () => {
     // CR-2026-11-R2 (R2-02): deleteBlockProperty (an infobox property and its rows) left this list: it is a delete now.
     const edits = ['deleteBlock', 'deletePropertyRow', 'deleteBlockRow', 'deleteBlockPropertyRow'].map((op) =>
       w(op, { path: { resourceId: 'pg1', documentId: 'd1', blockId: 'b1' } }),
@@ -110,10 +110,63 @@ describe('deletes', () => {
     expect(railsVerdict(DEFAULT_WRITE_RAILS, edits)).toBeNull();
   });
 
+  // ADR 0057 decision 4 (R2-52): through lk_api_write, lk_api_batch or lk_op_*, every removal is a delete for the rail.
+  it.each([
+    ['deleteBlock', 'block'],
+    ['deleteBlockRow', 'row of a block'],
+    ['deletePropertyRow', 'sidebar row'],
+    ['deleteBlockPropertyRow', 'infobox row'],
+  ])('through a low-level tool, %s is a delete (%s)', (op, what) => {
+    const v = railsVerdict(
+      DEFAULT_WRITE_RAILS,
+      [w(op, { path: { resourceId: 'pg1', documentId: 'd1', blockId: 'b1', rowId: 'r1' } })],
+      { lowLevel: true },
+    );
+    expect(v?.reason).toBe(`proposed because: delete (1 ${what})`);
+  });
+
+  it('through a low-level tool, a whole-list write is a delete only when it drops an entry held now', () => {
+    const write = w('updateProperty', { path: { resourceId: 'pg1', propertyId: 'p1' }, body: { items: [] } });
+    expect(railsVerdict(DEFAULT_WRITE_RAILS, [write], { lowLevel: true, drops: () => true })?.reason).toBe(
+      'proposed because: delete (1 sidebar property write that drops entries)',
+    );
+    expect(railsVerdict(DEFAULT_WRITE_RAILS, [write], { lowLevel: true, drops: () => false })).toBeNull();
+    // Not known: fails closed.
+    expect(
+      railsVerdict(DEFAULT_WRITE_RAILS, [write], { lowLevel: true, drops: () => null })?.hits[0]?.rail,
+    ).toBe('deletes');
+    expect(railsVerdict(DEFAULT_WRITE_RAILS, [write], { lowLevel: true })?.hits[0]?.rail).toBe('deletes');
+    // A write that sends no list (a title) drops nothing; the deletes rail switched off lets it through.
+    const title = w('updateProperty', {
+      path: { resourceId: 'pg1', propertyId: 'p1' },
+      body: { title: 'X' },
+    });
+    expect(railsVerdict(DEFAULT_WRITE_RAILS, [title], { lowLevel: true })).toBeNull();
+    expect(railsVerdict({ ...DEFAULT_WRITE_RAILS, deletes: false }, [write], { lowLevel: true })).toBeNull();
+  });
+
   it('switched off, a delete runs directly', () => {
     expect(
       railsVerdict({ ...DEFAULT_WRITE_RAILS, deletes: false }, [w('deleteResource', page('x'))]),
     ).toBeNull();
+  });
+});
+
+describe('bulk changes: a restore (ADR 0057 decision 9)', () => {
+  const restore = w('restoreResource', page('box'));
+  it('counts every page its restore set says may come back with it', () => {
+    expect(railsVerdict(DEFAULT_WRITE_RAILS, [restore], { restored: () => 9 })).toBeNull();
+    expect(railsVerdict(DEFAULT_WRITE_RAILS, [restore], { restored: () => 15 })?.reason).toBe(
+      'proposed because: bulk change (16 pages > 10)',
+    );
+  });
+  it('an unknown restore set counts as over the limit (fails closed)', () => {
+    const v = railsVerdict(DEFAULT_WRITE_RAILS, [restore], { restored: () => null });
+    expect(v?.reason).toBe(
+      'proposed because: bulk change (a restore whose pages are not known, so more than 10 pages are assumed)',
+    );
+    expect(railsVerdict(DEFAULT_WRITE_RAILS, [restore])?.hits[0]?.rail).toBe('bulk');
+    expect(railsVerdict({ ...DEFAULT_WRITE_RAILS, bulk: false }, [restore])).toBeNull();
   });
 });
 
