@@ -47,7 +47,14 @@ export const R = {
 
 export const VELARAN_NAMES = ['Aren Tal', 'Bria Sel', 'Corin Hale', 'Dessa Morn', 'Eiren Lusk'] as const;
 
-export type RenameWorld = ChronologyWorld & AppraisalWorld;
+export type RenameWorld = ChronologyWorld &
+  AppraisalWorld & {
+    /**
+     * The `n`-th (0-based) request with this method whose path matches `path` fails once, with 400 VALIDATION_ERROR (a
+     * failure that is not retried: the job stops there). Consulted before every other route.
+     */
+    failNext(method: string, path: RegExp, n?: number): void;
+  };
 
 const heading = (id: string, level: number, text: string) => ({
   id,
@@ -318,6 +325,23 @@ export async function renameWorld(): Promise<RenameWorld> {
       PROJECT,
       id,
     );
+  w.failNext = (method, path, n = 0) => {
+    let seen = 0;
+    let fired = false;
+    const fn = (req: { method: string; path: string }) => {
+      if (fired || req.method !== method || !path.test(req.path.replace(/\/$/, ''))) return undefined;
+      if (seen++ !== n) return undefined;
+      fired = true;
+      return {
+        status: 400,
+        body: { message: 'model VALIDATION_ERROR (injected)', code: 'VALIDATION_ERROR', requestId: 'model-injected' },
+      };
+    };
+    const rest = [...w.overrides.entries()];
+    w.overrides.clear();
+    w.overrides.set(/./, fn);
+    for (const [re, f] of rest) w.overrides.set(re, f);
+  };
   // The full-text index (A1): a full snapshot of everything above.
   await w.snapshot();
   return w;

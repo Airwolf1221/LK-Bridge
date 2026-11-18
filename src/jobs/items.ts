@@ -372,11 +372,17 @@ function withoutRefsTo(v: unknown, gone: ReadonlySet<string>, depth = 0): unknow
   }
   if (isObj(v)) {
     const o: Obj = {};
-    for (const [k, x] of Object.entries(v)) o[k] = withoutRefsTo(x, gone, depth + 1);
+    for (const [k, x] of Object.entries(v)) o[k] = NOT_REFERENCES.has(k) ? x : withoutRefsTo(x, gone, depth + 1);
     return o;
   }
   return v;
 }
+
+/**
+ * Lists of ids that are not references to other pages: a package's check knows the pages it makes (`ownIds`), whether
+ * they are made now or were made by the job of the items approved first ("propose these again"), so they are kept.
+ */
+const NOT_REFERENCES: ReadonlySet<string> = new Set(['ownIds']);
 
 // ============================================================================================ the filter
 
