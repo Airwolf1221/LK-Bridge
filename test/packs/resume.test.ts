@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access -- parsed JSON tool results */
 /**
  * v3 F3d (renames), ADR 0058 (the design's section 3, decision D6): resuming a job that stopped part-way, against the
  * mock LegendKeeper. A rename stopped at each stage (a page name, a block, an asset) continues from where it stopped,
@@ -45,11 +46,15 @@ describe.each([
   afterAll(() => w?.close());
 
   it('continues from where it stopped, never repeating a verified write; audited', async () => {
-    const r = await w.call('arkona_rename', { subject: C.nadira, newName: 'Laila al-Khalid', given: 'Laila' });
+    const r = await w.call('arkona_rename', {
+      subject: C.nadira,
+      newName: 'Laila al-Khalid',
+      given: 'Laila',
+    });
     const proposalId = String(r.body.proposalId);
     w.failNext(method, path, at);
     const before = writesTo(w, path);
-    const done = await approve(w as never, proposalId);
+    const done = await approve(w, proposalId);
     expect(done.job?.status).toBe('failed');
     const jobId = done.jobId!;
     // Where it stopped is recorded: its last verified step, and the step it stopped at.
@@ -75,7 +80,9 @@ describe.each([
     expect(w.repo.live(C.nadira)!.name).toBe('[BSRC] Laila al-Khalid - Character Core');
     expect(w.assets.assets.get('afnadir1')!.name).toBe('Laila al-Khalid');
     // Audited, with where it stopped and who approved the work; the proposal is executed after all.
-    const audit = w.stack.runtime.policy.store.listAudit({ action: 'job.resume' }).find((a) => a.target === jobId)!;
+    const audit = w.stack.runtime.policy.store
+      .listAudit({ action: 'job.resume' })
+      .find((a) => a.target === jobId)!;
     expect(audit.after).toMatchObject({
       kind: 'rename',
       lastVerifiedStep: view.stop!.lastVerifiedStep,
@@ -95,10 +102,14 @@ describe('Resume: a step that is no longer safe', () => {
   afterAll(() => w?.close());
 
   it('is refused with its reason: the check inside the lock runs again first, and nothing more is written', async () => {
-    const r = await w.call('arkona_rename', { subject: C.nadira, newName: 'Laila al-Khalid', given: 'Laila' });
+    const r = await w.call('arkona_rename', {
+      subject: C.nadira,
+      newName: 'Laila al-Khalid',
+      given: 'Laila',
+    });
     const proposalId = String(r.body.proposalId);
     w.failNext('PUT', /\/blocks\/[^/]+$/, 1);
-    const done = await approve(w as never, proposalId);
+    const done = await approve(w, proposalId);
     expect(done.job?.status).toBe('failed');
     const jobId = done.jobId!;
     // Someone edits Qasr's sentence (planned, not yet written) in the app.
@@ -112,7 +123,9 @@ describe('Resume: a step that is no longer safe', () => {
     expect(job.status).toBe('failed');
     expect(JSON.stringify(job.lastError)).toContain('an outside edit is never overwritten');
     expect(w.requests().writes).toBe(before);
-    expect((qs4.content as { text: string }[])[0]!.text).toBe('Nadira al-Khalid catalogued every charter of the emirate.');
+    expect((qs4.content as { text: string }[])[0]!.text).toBe(
+      'Nadira al-Khalid catalogued every charter of the emirate.',
+    );
     // Still resumable: the owner can look, then resume or revert it.
     expect(w.stack.runtime.resume.view(PROJECT, jobId).resumable).toBe(true);
   });
@@ -128,13 +141,12 @@ describe('Resume: an agent’s own job', () => {
   it('the agent that ran it resumes it at its scope; another agent cannot see it', async () => {
     const a = w.stack.newToken('resume-agent-a', 'write');
     const b = w.stack.newToken('resume-agent-b', 'write');
-    const origin = (tok: { patId: string; profileId: string }): JobOrigin =>
-      ({
-        kind: 'mcp',
-        client: 'test',
-        tool: 'test_package',
-        principal: { principalId: tok.patId, profile: tok.profileId, label: 'agent' },
-      }) as JobOrigin;
+    const origin = (tok: { patId: string; profileId: string }): JobOrigin => ({
+      kind: 'mcp',
+      client: 'test',
+      tool: 'test_package',
+      principal: { principalId: tok.patId, profile: tok.profileId, label: 'agent' },
+    });
     w.failNext('PATCH', /\/resources\/[^/]+$/, 1);
     const sub = await w.stack.runtime.engine.submit({
       kind: 'batch_ops',
@@ -145,8 +157,20 @@ describe('Resume: an agent’s own job', () => {
       title: 'a package of two tags',
       resumable: { kind: 'package', recheck: [] },
       steps: [
-        { op: 'updateResource', params: { path: { resourceId: P.nadiraBio }, body: { tags: ['CANON', 'Character', 'Biography', 'One'] } } },
-        { op: 'updateResource', params: { path: { resourceId: P.nadiraArt }, body: { tags: ['CANON', 'Character', 'Character Art', 'Two'] } } },
+        {
+          op: 'updateResource',
+          params: {
+            path: { resourceId: P.nadiraBio },
+            body: { tags: ['CANON', 'Character', 'Biography', 'One'] },
+          },
+        },
+        {
+          op: 'updateResource',
+          params: {
+            path: { resourceId: P.nadiraArt },
+            body: { tags: ['CANON', 'Character', 'Character Art', 'Two'] },
+          },
+        },
       ],
     } as never);
     const jobId = (sub as { jobId: string }).jobId;
@@ -161,7 +185,9 @@ describe('Resume: an agent’s own job', () => {
     const job = await settle(w, jobId);
     expect(job.status).toBe('succeeded');
     expect(w.repo.live(P.nadiraArt)!.tags).toContain('Two');
-    const audit = w.stack.runtime.policy.store.listAudit({ action: 'job.resume' }).find((x) => x.target === jobId)!;
+    const audit = w.stack.runtime.policy.store
+      .listAudit({ action: 'job.resume' })
+      .find((x) => x.target === jobId)!;
     expect(audit.actor).toBe(a.patId);
   });
 });

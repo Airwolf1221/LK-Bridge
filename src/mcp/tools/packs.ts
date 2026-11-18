@@ -634,7 +634,9 @@ export function packTools(deps: ToolDeps): McpToolProvider[] {
           .min(1)
           .max(300)
           .optional()
-          .describe('The character (any page of its set) or owner: name, alias, path or id. Not with report.'),
+          .describe(
+            'The character (any page of its set) or owner: name, alias, path or id. Not with report.',
+          ),
         newName: z.string().min(1).max(200).optional().describe('The new name, as the pages are to show it.'),
         given: z
           .string()

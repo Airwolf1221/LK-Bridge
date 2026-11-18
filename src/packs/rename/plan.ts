@@ -142,9 +142,17 @@ export interface RenamePlan {
     readonly assets: string[];
   };
   /** D2: occurrences left as historical (Archived pages, the Legacy Canon Archive, the Design References). */
-  readonly historical: { readonly page: { id: string; name: string }; readonly why: string; readonly snippet: string | null }[];
+  readonly historical: {
+    readonly page: { id: string; name: string };
+    readonly why: string;
+    readonly snippet: string | null;
+  }[];
   /** Occurrences found but not planned, and why (the owner edits them by hand, or a later run plans them). */
-  readonly notPlanned: { readonly page: { id: string; name: string } | null; readonly why: string; readonly snippet: string | null }[];
+  readonly notPlanned: {
+    readonly page: { id: string; name: string } | null;
+    readonly why: string;
+    readonly snippet: string | null;
+  }[];
   readonly refusals: Issue[];
   readonly warnings: Issue[];
   readonly notes: string[];
@@ -167,7 +175,12 @@ export interface RenamePlan {
    * Last Major Revision: the pages it is measured on when the job runs (`pages`), the pages known at planning to change
    * only by names (`minor`: no steps), and whether the project's switch for setting-pack tools is off.
    */
-  readonly lmr: { readonly mode: LmrMode; readonly pages: number; readonly minor: number; readonly switchedOff: boolean };
+  readonly lmr: {
+    readonly mode: LmrMode;
+    readonly pages: number;
+    readonly minor: number;
+    readonly switchedOff: boolean;
+  };
   readonly summary: string;
   /** For the proposal: the reads the plan made, so capture does not repeat them. */
   readonly prefetched: { op: string; path: Record<string, string>; body: unknown }[];
@@ -232,7 +245,9 @@ const valueOf = (content: readonly Obj[]): string =>
 export async function planRename(
   env: RenameEnv,
   input: RenameInput,
-): Promise<{ ok: true; plan: RenamePlan } | { ok: false; result: McpToolResult; partial?: Partial<RenamePlan> }> {
+): Promise<
+  { ok: true; plan: RenamePlan } | { ok: false; result: McpToolResult; partial?: Partial<RenamePlan> }
+> {
   const { pd, mctx, basis } = env;
   const ctx = basis.ctx;
   const projectId = ctx.projectId;
@@ -245,11 +260,6 @@ export async function planRename(
   const notPlanned: RenamePlan['notPlanned'] = [];
   const prefetched: RenamePlan['prefetched'] = [];
   let reads = 0;
-  const fail = (code: string, message: string, more: Obj = {}) => ({
-    ok: false as const,
-    result: { content: [{ type: 'text' as const, text: '' }], isError: true } as McpToolResult,
-    refusal: issue(code, message, more),
-  });
   const read = async (op: string, params: Record<string, unknown>): Promise<unknown> => {
     reads++;
     const r = await liveRead(pd, mctx, RENAME_TOOL, op, params);
@@ -294,7 +304,7 @@ export async function planRename(
       index = start;
       const own = ctx.tree
         .children(projectId, start.id)
-        .data.find((c) => c.kind !== 'index' && c.displayName.startsWith(`${start!.displayName} - `));
+        .data.find((c) => c.kind !== 'index' && c.displayName.startsWith(`${start.displayName} - `));
       identity = own ?? start;
     }
     subjectName = identity.displayName.split(' - ')[0]!.trim();
@@ -324,7 +334,7 @@ export async function planRename(
   const followUp = input.from !== undefined && input.from.trim() !== '';
   let newName = replaceDashes(input.newName.trim(), 'newName', 'name', replacements);
   newName = newName.replace(/\s+/g, ' ').trim();
-  const oldName = followUp ? input.from!.trim() : subjectName;
+  const oldName = followUp ? input.from.trim() : subjectName;
   if (newName === '') return refused(pd, [issue('INVALID_INPUT', 'newName is empty.')]);
   const problem = nameProblem(newName, rules);
   if (problem) return refused(pd, [issue(problem.code, problem.message)]);
@@ -354,7 +364,8 @@ export async function planRename(
     [basis.lifecycle.workingIndexId, basis.lifecycle.archiveIndexId].filter((x): x is string => !!x),
   );
   const inArchive = (n: TreeNode) =>
-    n.kind === 'barc' || (basis.lifecycle.archiveIndexId !== null && n.path.ids.includes(basis.lifecycle.archiveIndexId));
+    n.kind === 'barc' ||
+    (basis.lifecycle.archiveIndexId !== null && n.path.ids.includes(basis.lifecycle.archiveIndexId));
   const setPages: TreeNode[] = [identity];
   const addSet = (n: TreeNode | null) => {
     if (!n || setPages.some((p) => p.id === n.id) || lifecycleIds.has(n.id)) return;
@@ -371,7 +382,10 @@ export async function planRename(
   // Relationships naming the subject anywhere (hosted under another participant's index too).
   for (const k of ['bsrc', 'bwrk', 'barc'] as const)
     for (const n of ctx.tree.byKind(projectId, k).data)
-      if (/ & .+ - /.test(n.displayName) && (namedFor(n.displayName, oldName) || namedFor(n.displayName, currentName)))
+      if (
+        / & .+ - /.test(n.displayName) &&
+        (namedFor(n.displayName, oldName) || namedFor(n.displayName, currentName))
+      )
         addSet(n);
   // A race's character navigation (Characters / … / <Race>).
   let raceNav: TreeNode | null = null;
@@ -393,7 +407,11 @@ export async function planRename(
   for (const p of [...setPages]) {
     if (p.id !== identity.id && inArchive(p)) {
       setPages.splice(setPages.indexOf(p), 1);
-      historical.push({ page: { id: p.id, name: p.rawName }, why: 'an Archived page keeps its name (D2)', snippet: null });
+      historical.push({
+        page: { id: p.id, name: p.rawName },
+        why: 'an Archived page keeps its name (D2)',
+        snippet: null,
+      });
     }
   }
 
@@ -462,7 +480,18 @@ export async function planRename(
   const pageItems = new Map<string, Set<string>>(); // page → every item that writes to it
   const pageWrites = new Map<string, number[]>(); // page → its write steps (local numbers, 1-based in `body`)
   const known = new Map<string, Obj[]>(); // page → Last Major Revision evidence the plan knows (with its item)
-  const checks: ExpectCheck[] = [{ label: 'subject', kind: 'registered', checker: RENAME_CHECKS.subject, input: { resourceId: identity.id, oldName: renamedRaw(identity.rawName, newName, oldName, followUp, 'old'), newName: renamedRaw(identity.rawName, newName, oldName, followUp, 'new') } }];
+  const checks: ExpectCheck[] = [
+    {
+      label: 'subject',
+      kind: 'registered',
+      checker: RENAME_CHECKS.subject,
+      input: {
+        resourceId: identity.id,
+        oldName: renamedRaw(identity.rawName, newName, oldName, followUp, 'old'),
+        newName: renamedRaw(identity.rawName, newName, oldName, followUp, 'new'),
+      },
+    },
+  ];
   const checkItems: string[][] = [[]];
   const checkParts: ItemPartShape[] = [];
   const body: StepSpec[] = []; // steps after the first check, numbered from 2
@@ -504,7 +533,9 @@ export async function planRename(
     const ct = loaded?.sidebar?.facts.get('continuity type')?.text ?? '';
     return textKey(ct) === 'au';
   };
-  const identityName = (followUp ? identity.rawName : renamedRaw(identity.rawName, newName, oldName, false, 'new'));
+  const identityName = followUp
+    ? identity.rawName
+    : renamedRaw(identity.rawName, newName, oldName, false, 'new');
   const rootItem = `name:${identity.id}`;
   /** The item every other depends on: the subject's own new name (none in a follow-up: it has it already). */
   const root = (): string[] => (items.some((i) => i.id === rootItem) ? [rootItem] : []);
@@ -621,14 +652,18 @@ export async function planRename(
       const before = valueOf(row.content);
       if (!namesIn(before, oldName)) continue;
       if (textKey(row.key) === textKey(aliasesKey)) continue; // the Aliases fact keeps the old name
-      const runs = renamedRuns(row.content as Obj[], oldName, newName);
+      const runs = renamedRuns(row.content, oldName, newName);
       facts.push({ key: row.key, value: runs });
       changes.push({ what: row.key, before, after: valueOf(runs) });
     }
     if (n.id === identity.id) {
       for (const part of parts) {
         facts.push({ key: part.key, value: [{ text: part.value }] });
-        changes.push({ what: part.key, before: valueOf(rowOf(p.sidebar, part.key)?.content ?? []), after: part.value });
+        changes.push({
+          what: part.key,
+          before: valueOf(rowOf(p.sidebar, part.key)?.content ?? []),
+          after: part.value,
+        });
       }
       if (keepAlias && kind === 'character') {
         const row = rowOf(p.sidebar, aliasesKey);
@@ -696,7 +731,12 @@ export async function planRename(
         dependsOn: nameItem ? [nameItem] : root(),
         selected: true,
       });
-      verify.push({ kind: 'resource', label: `${nowName}: aliases`, resourceId: n.id, fields: { aliases: next } });
+      verify.push({
+        kind: 'resource',
+        label: `${nowName}: aliases`,
+        resourceId: n.id,
+        fields: { aliases: next },
+      });
       verifyItems.push([item]);
     }
   }
@@ -715,7 +755,12 @@ export async function planRename(
       input: {
         resourceId: n.id,
         names: [n.rawName, renamedRaw(n.rawName, newName, oldName, followUp, 'new')],
-        aliases: aliasItem ? [aliases, [...aliases, ...(aliasItem.diff?.after ? [aliasItem.diff.after.split(', ').at(-1)!] : [])]] : [aliases],
+        aliases: aliasItem
+          ? [
+              aliases,
+              [...aliases, ...(aliasItem.diff?.after ? [aliasItem.diff.after.split(', ').at(-1)!] : [])],
+            ]
+          : [aliases],
       },
     });
     checkItems.push(its);
@@ -771,11 +816,16 @@ export async function planRename(
     if (!h.documentId) continue;
     if (ageTables.has(h.documentId)) continue; // chronology rows (below)
     const k = `${h.pageId}:${h.documentId}`;
-    if (!docsToRead.has(k)) docsToRead.set(k, { pageId: h.pageId, documentId: h.documentId, snippet: h.snippet });
+    if (!docsToRead.has(k))
+      docsToRead.set(k, { pageId: h.pageId, documentId: h.documentId, snippet: h.snippet });
   }
   const routingHeading = rules.types[0]?.index.routing ?? 'How to Use This Index';
   const unresolved = rules.types[0]?.text.unresolved ?? 'Unresolved Material';
-  const docEdits: { pageId: string; documentId: string; blocks: { block: Obj; edits: { edit: BlockEdit; item: string }[]; where: string }[] }[] = [];
+  const docEdits: {
+    pageId: string;
+    documentId: string;
+    blocks: { block: Obj; edits: { edit: BlockEdit; item: string }[]; where: string }[];
+  }[] = [];
   try {
     for (const { pageId, documentId, snippet } of docsToRead.values()) {
       const node = ctx.tree.node(projectId, pageId).data;
@@ -787,10 +837,13 @@ export async function planRename(
       const current = lifecycle === null || lifecycle === 'Authoritative' || lifecycle === 'Working';
       const out: (typeof docEdits)[number] = { pageId, documentId, blocks: [] };
       let unplanned = 0;
-      for (const { block, section, inTable } of walkBlocks(Array.isArray(b.blocks) ? (b.blocks as unknown[]) : [])) {
+      for (const { block, section, inTable } of walkBlocks(
+        Array.isArray(b.blocks) ? (b.blocks as unknown[]) : [],
+      )) {
         if (inTable || !runsOf(block) || typeof block.id !== 'string') {
           // A table's cells and a code block: not edited by the rename (reported once per document, below).
-          if (!runsOf(block) && !Array.isArray(block.children) && namesIn(deepText(block), oldName)) unplanned++;
+          if (!runsOf(block) && !Array.isArray(block.children) && namesIn(deepText(block), oldName))
+            unplanned++;
           else if (inTable && runsOf(block) && namesIn(deepText(block), oldName)) unplanned++;
           continue;
         }
@@ -846,7 +899,11 @@ export async function planRename(
             group: routing ? GROUPS.routing : GROUPS.labels,
             label: `${where}: mention labelled “${m.label}”`,
             page: { id: pageId, name: pageName },
-            diff: { before: m.label, after: replaceName(m.label, oldName, newName), context: plain.slice(0, 300) },
+            diff: {
+              before: m.label,
+              after: replaceName(m.label, oldName, newName),
+              context: plain.slice(0, 300),
+            },
             dependsOn: dep,
             selected: true,
             ...(au ? { tags: ['AU'] } : {}),
@@ -889,9 +946,15 @@ export async function planRename(
       input,
     });
     checkItems.push(docItems);
-    checkParts.push({ path: `body.checks.${c}.input.blocks`, items: d.blocks.map((b) => [...new Set(b.edits.map((e) => e.item))]) });
+    checkParts.push({
+      path: `body.checks.${c}.input.blocks`,
+      items: d.blocks.map((b) => [...new Set(b.edits.map((e) => e.item))]),
+    });
     d.blocks.forEach((b, k) =>
-      checkParts.push({ path: `body.checks.${c}.input.blocks.${k}.edits`, items: b.edits.map((e) => [e.item]) }),
+      checkParts.push({
+        path: `body.checks.${c}.input.blocks.${k}.edits`,
+        items: b.edits.map((e) => [e.item]),
+      }),
     );
     holdDocuments.add(d.documentId);
     let prev: number | null = null;
@@ -943,7 +1006,7 @@ export async function planRename(
       for (const row of kv?.rows ?? []) {
         const before = valueOf(row.content);
         if (!namesIn(before, oldName) || textKey(row.key) === textKey(aliasesKey)) continue;
-        const runs = renamedRuns(row.content as Obj[], oldName, newName);
+        const runs = renamedRuns(row.content, oldName, newName);
         facts.push({ key: row.key, value: runs });
         changes.push({ what: row.key, before, after: valueOf(runs) });
         why ??= d1Why(before, before.indexOf(oldName), [], unresolved);
@@ -1009,7 +1072,10 @@ export async function planRename(
         effective = cal.parser.parse(input.effectiveDate, config.style.date).start;
       } catch {
         warnings.push(
-          issue('EFFECTIVE_DATE_UNREADABLE', `effectiveDate “${input.effectiveDate}” is not a date of the calendar; ignored.`),
+          issue(
+            'EFFECTIVE_DATE_UNREADABLE',
+            `effectiveDate “${input.effectiveDate}” is not a date of the calendar; ignored.`,
+          ),
         );
       }
     }
@@ -1042,7 +1108,10 @@ export async function planRename(
         const date = row.date ?? row.eventDate;
         if (!date) {
           notPlanned.push({
-            page: { id: config.resourceId!, name: ctx.tree.node(projectId, config.resourceId!).data?.rawName ?? 'Chronology' },
+            page: {
+              id: config.resourceId!,
+              name: ctx.tree.node(projectId, config.resourceId!).data?.rawName ?? 'Chronology',
+            },
             why: `the ${age.name} row “${row.dateText}”: its date cannot be read, so it is not planned`,
             snippet: before.slice(0, 240),
           });
@@ -1069,10 +1138,15 @@ export async function planRename(
         };
         // Its event, by the bridge's link (kept in step: its name renamed when it names the subject).
         const link = links.find((l) => l.tableDocumentId === doc && l.rowId === row.id);
-        let eventNote = 'its timeline event is not linked to it by the bridge: rename the event with sync_timeline_event if it names the subject';
+        let eventNote =
+          'its timeline event is not linked to it by the bridge: rename the event with sync_timeline_event if it names the subject';
         if (link) {
           const ev = (await read('getEvent', {
-            path: { resourceId: config.resourceId!, documentId: link.timelineDocumentId, eventId: link.eventId },
+            path: {
+              resourceId: config.resourceId!,
+              documentId: link.timelineDocumentId,
+              eventId: link.eventId,
+            },
           }).catch(() => null)) as Obj | null;
           const evName = str(ev?.name);
           if (ev && evName) {
@@ -1097,11 +1171,16 @@ export async function planRename(
           kind: 'chronology',
           group: GROUPS.chronology,
           label: `${age.name} row “${row.dateText}”: ${before.slice(0, 160)} (${eventNote})`,
-          page: { id: config.resourceId!, name: ctx.tree.node(projectId, config.resourceId!).data?.rawName ?? 'Chronology' },
+          page: {
+            id: config.resourceId!,
+            name: ctx.tree.node(projectId, config.resourceId!).data?.rawName ?? 'Chronology',
+          },
           diff: { before, after, context: row.dateText },
           dependsOn: root(),
           selected: !dated,
-          ...(dated ? { why: `the row is dated before the rename’s effective date (${input.effectiveDate})` } : {}),
+          ...(dated
+            ? { why: `the row is dated before the rename’s effective date (${input.effectiveDate})` }
+            : {}),
         });
       }
     }
@@ -1141,7 +1220,13 @@ export async function planRename(
             c.kind === 'event'
               ? itemOfEvent(String(c.eventId))
               : c.kind === 'document' && isObj(c.input) && Array.isArray(c.input.ops)
-                ? [...new Set((c.input.ops as Obj[]).flatMap((o) => (typeof o.rowId === 'string' ? itemOfRow(o.rowId) : [])))]
+                ? [
+                    ...new Set(
+                      (c.input.ops as Obj[]).flatMap((o) =>
+                        typeof o.rowId === 'string' ? itemOfRow(o.rowId) : [],
+                      ),
+                    ),
+                  ]
                 : [],
           ),
         });
@@ -1149,7 +1234,9 @@ export async function planRename(
           if (c.kind === 'document' && isObj(c.input) && Array.isArray(c.input.ops))
             partsOut.push({
               path: `body.checks.${k}.input.ops`,
-              items: (c.input.ops as Obj[]).map((o) => (typeof o.rowId === 'string' ? itemOfRow(o.rowId) : [])),
+              items: (c.input.ops as Obj[]).map((o) =>
+                typeof o.rowId === 'string' ? itemOfRow(o.rowId) : [],
+              ),
             });
         });
       } else if (s.op === VERIFY_STEP) {
@@ -1160,7 +1247,13 @@ export async function planRename(
             t.kind === 'event'
               ? itemOfEvent(String(t.eventId))
               : isObj(t.input) && Array.isArray(t.input.rows)
-                ? [...new Set((t.input.rows as Obj[]).flatMap((r) => (typeof r.rowId === 'string' ? itemOfRow(r.rowId) : [])))]
+                ? [
+                    ...new Set(
+                      (t.input.rows as Obj[]).flatMap((r) =>
+                        typeof r.rowId === 'string' ? itemOfRow(r.rowId) : [],
+                      ),
+                    ),
+                  ]
                 : [],
           ),
         });
@@ -1168,10 +1261,12 @@ export async function planRename(
           if (isObj(t.input) && Array.isArray(t.input.rows))
             partsOut.push({
               path: `body.targets.${k}.input.rows`,
-              items: (t.input.rows as Obj[]).map((r) => (typeof r.rowId === 'string' ? itemOfRow(r.rowId) : [])),
+              items: (t.input.rows as Obj[]).map((r) =>
+                typeof r.rowId === 'string' ? itemOfRow(r.rowId) : [],
+              ),
             });
         });
-      } else if (s.op === RECORD_STEP && (b.action === 'begin')) {
+      } else if (s.op === RECORD_STEP && b.action === 'begin') {
         const rec = (b.record ?? {}) as Obj;
         const target = (rec.target ?? {}) as Obj;
         partsOut.push({
@@ -1224,19 +1319,32 @@ export async function planRename(
     const folder = assetsSvc!.queries.folder(projectId, artFolderId).data;
     if (folder && namesIn(folder.name, oldName)) {
       const nextName = replaceName(folder.name, oldName, newName);
-      const twin = assetsSvc!.queries.children(projectId, folder.parentId).data.find((f) => f.id !== folder.id && f.name === nextName);
+      const twin = assetsSvc!.queries
+        .children(projectId, folder.parentId)
+        .data.find((f) => f.id !== folder.id && f.name === nextName);
       if (twin)
-        notPlanned.push({ page: null, why: `the art folder “${folder.name}”: a folder “${nextName}” is already beside it`, snippet: null });
+        notPlanned.push({
+          page: null,
+          why: `the art folder “${folder.name}”: a folder “${nextName}” is already beside it`,
+          snippet: null,
+        });
       else addAsset(folder.id, folder.name, nextName, folder.parentId, 'folder');
     }
-    const folders = [artFolderId, ...assetsSvc!.queries.subtree(projectId, artFolderId).data.folders.map((f) => f.folder.id)];
+    const folders = [
+      artFolderId,
+      ...assetsSvc!.queries.subtree(projectId, artFolderId).data.folders.map((f) => f.folder.id),
+    ];
     for (const f of folders) {
       const list = assetsSvc!.queries.assetsIn(projectId, f, { limit: 2000 }).data.assets;
       for (const a of list) {
         if (!namesIn(a.name, oldName)) continue;
         const nextName = replaceName(a.name, oldName, newName);
         if (list.some((x) => x.id !== a.id && x.name === nextName)) {
-          notPlanned.push({ page: null, why: `the asset “${a.name}”: “${nextName}” is already in its folder`, snippet: null });
+          notPlanned.push({
+            page: null,
+            why: `the asset “${a.name}”: “${nextName}” is already in its folder`,
+            snippet: null,
+          });
           continue;
         }
         addAsset(a.id, a.name, nextName, a.folderId, 'asset');
@@ -1279,7 +1387,13 @@ export async function planRename(
     }
   }
 
-  function addAsset(id: string, name: string, nextName: string, folderId: string | null, what: 'folder' | 'asset') {
+  function addAsset(
+    id: string,
+    name: string,
+    nextName: string,
+    folderId: string | null,
+    what: 'folder' | 'asset',
+  ) {
     const item = `${what}:${id}`;
     holdAssets.add(id);
     checks.push({
@@ -1323,8 +1437,7 @@ export async function planRename(
     const oldKey = Object.keys(tokens).find((k) => textKey(k) === textKey(oldName)) ?? null;
     if (oldKey) {
       const oldToken = tokens[oldKey]!;
-      const newToken =
-        input.token?.trim() || (textKey(oldToken) === textKey(oldKey) ? newName : null);
+      const newToken = input.token?.trim() || (textKey(oldToken) === textKey(oldKey) ? newName : null);
       if (!newToken) {
         refusals.push(
           issue(
@@ -1352,7 +1465,8 @@ export async function planRename(
           selected: true,
         });
       }
-    } else notes.push(`The ${map} “${oldName}” has no tag token in the pack: no tag changes, only the facts.`);
+    } else
+      notes.push(`The ${map} “${oldName}” has no tag token in the pack: no tag changes, only the facts.`);
     const factKey = tokenFactKey!;
     try {
       for (const pageId of tokenPages) {
@@ -1364,7 +1478,8 @@ export async function planRename(
         const item = `character:${pageId}`;
         const tags = Array.isArray(p.resource.tags) ? (p.resource.tags as string[]) : [...node.tags];
         const nextTags = token ? tags.map((t) => (t === token!.oldToken ? token!.newToken : t)) : tags;
-        if (!addFacts(p, [{ key: row.key, value: [{ text: newName }] }], item, `${node.rawName}: ${factKey}`)) continue;
+        if (!addFacts(p, [{ key: row.key, value: [{ text: newName }] }], item, `${node.rawName}: ${factKey}`))
+          continue;
         const changes: Change[] = [{ what: factKey, before: valueOf(row.content), after: newName }];
         if (nextTags.join('\u0001') !== tags.join('\u0001')) {
           touch(pageId, item);
@@ -1372,11 +1487,18 @@ export async function planRename(
           body.push({
             op: 'updateResource',
             params: { path: { resourceId: pageId }, body: { tags: nextTags } },
-            expectCurrent: { state: 'resource', hash: stateHash({ name: node.rawName, tags }), label: node.rawName },
+            expectCurrent: {
+              state: 'resource',
+              hash: stateHash({ name: node.rawName, tags }),
+              label: node.rawName,
+            },
             judgedInLock: true,
             deferTreeReread: true,
             items: [item],
-            journalOperation: journal({ id: pageId, name: node.rawName }, `identity tag ${token!.oldToken} → ${token!.newToken}`),
+            journalOperation: journal(
+              { id: pageId, name: node.rawName },
+              `identity tag ${token!.oldToken} → ${token!.newToken}`,
+            ),
           });
           bodyLabels.push(`${node.rawName}: tag ${token!.oldToken} → ${token!.newToken}`);
           changes.push({ what: 'tags', before: tags.join(', '), after: nextTags.join(', ') });
@@ -1388,7 +1510,12 @@ export async function planRename(
             input: { resourceId: pageId, names: [node.rawName], tags: [tags, nextTags] },
           });
           checkItems.push([item]);
-          verify.push({ kind: 'resource', label: `${node.rawName}: tags`, resourceId: pageId, fields: { tags: nextTags } });
+          verify.push({
+            kind: 'resource',
+            label: `${node.rawName}: tags`,
+            resourceId: pageId,
+            fields: { tags: nextTags },
+          });
           verifyItems.push([item]);
         }
         items.push({
@@ -1428,7 +1555,11 @@ export async function planRename(
       });
     } catch (e) {
       if (e instanceof FactsPlanError) {
-        notPlanned.push({ page: { id: p.node.id, name: p.node.rawName }, why: `${what}: ${e.message}`, snippet: null });
+        notPlanned.push({
+          page: { id: p.node.id, name: p.node.rawName },
+          why: `${what}: ${e.message}`,
+          snippet: null,
+        });
         return false;
       }
       throw e;
@@ -1442,9 +1573,18 @@ export async function planRename(
         ...shiftStep(s, base),
         judgedInLock: s.op !== EXPECT_STEP && s.op !== VERIFY_STEP ? true : undefined,
         items: [item],
-        ...(s.journalOperation ? { journalOperation: { ...s.journalOperation, tool: RENAME_TOOL, rename: renameId } } : {}),
+        ...(s.journalOperation
+          ? { journalOperation: { ...s.journalOperation, tool: RENAME_TOOL, rename: renameId } }
+          : {}),
       } as StepSpec);
-      bodyLabels.push(s.op === EXPECT_STEP ? 'check' : s.op === VERIFY_STEP ? 'verify' : `${p.node.rawName}: ${String((s.journalOperation as Obj | undefined)?.write ?? s.op)}`);
+      const write = (s.journalOperation as Obj | undefined)?.write;
+      bodyLabels.push(
+        s.op === EXPECT_STEP
+          ? 'check'
+          : s.op === VERIFY_STEP
+            ? 'verify'
+            : `${p.node.rawName}: ${typeof write === 'string' ? write : s.op}`,
+      );
       if (s.op !== EXPECT_STEP && s.op !== VERIFY_STEP) wrote(p.node.id, at);
     }
     touch(p.node.id, item);
@@ -1634,7 +1774,13 @@ export function jobCost(steps: readonly StepSpec[]): { writes: number; reads: nu
 }
 
 /** A page's raw name before (`old`) or after (`new`) the rename. */
-function renamedRaw(raw: string, newName: string, oldName: string, followUp: boolean, which: 'old' | 'new'): string {
+function renamedRaw(
+  raw: string,
+  newName: string,
+  oldName: string,
+  followUp: boolean,
+  which: 'old' | 'new',
+): string {
   const c = classifyName(raw);
   const prefix = raw.slice(0, raw.length - c.displayName.length);
   if (followUp) {
@@ -1675,17 +1821,14 @@ export class PlanReadError extends Error {
   }
 }
 
-function refused(
-  pd: ProjectDeps,
-  refusals: Issue[],
-): { ok: false; result: McpToolResult } {
+function refused(pd: ProjectDeps, refusals: Issue[]): { ok: false; result: McpToolResult } {
   return { ok: false, result: refusalResult(pd, refusals) };
 }
 
 /** The refusal of a plan, as the pack tools give one: the first one's code and message, every one listed. */
 export function refusalResult(pd: ProjectDeps, refusals: readonly Issue[], extra: Obj = {}): McpToolResult {
   // Imported late to keep this module's surface small.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+
   const first = refusals[0]!;
   const { code, message, ...details } = first;
   return renderError(pd, {

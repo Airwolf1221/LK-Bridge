@@ -3434,16 +3434,7 @@ function stepOptions(o: StepOptions): StepOptions {
     ...(Array.isArray(o.items) && o.items.length > 0 && o.items.every((x) => typeof x === 'string')
       ? { items: [...o.items] }
       : {}),
-    ...(Array.isArray(o.itemParts) &&
-    o.itemParts.length > 0 &&
-    o.itemParts.every((p) => typeof p.path === 'string' && Array.isArray(p.items))
-      ? {
-          itemParts: o.itemParts.map((p) => ({
-            path: p.path,
-            items: p.items.map((x: readonly string[]) => [...x]),
-          })),
-        }
-      : {}),
+    ...itemPartsOf(o.itemParts),
   };
 }
 
@@ -3516,4 +3507,22 @@ export function describeStep(op: Readonly<Record<string, unknown>> | undefined):
       : []),
   ].filter((x): x is string => x !== null);
   return parts.length > 0 ? parts.join(', ') : null;
+}
+
+/** v3 F3d (ADR 0058): a step's item parts, as stored (each a path and, per element there, its items), or nothing. */
+function itemPartsOf(v: unknown): { itemParts?: { path: string; items: string[][] }[] } {
+  if (!Array.isArray(v) || v.length === 0) return {};
+  const out: { path: string; items: string[][] }[] = [];
+  for (const p of v as unknown[]) {
+    if (typeof p !== 'object' || p === null) return {};
+    const { path, items } = p as { path?: unknown; items?: unknown };
+    if (typeof path !== 'string' || !Array.isArray(items)) return {};
+    out.push({
+      path,
+      items: (items as unknown[]).map((x) =>
+        Array.isArray(x) ? (x as unknown[]).filter((y): y is string => typeof y === 'string') : [],
+      ),
+    });
+  }
+  return { itemParts: out };
 }

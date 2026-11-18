@@ -372,7 +372,8 @@ function withoutRefsTo(v: unknown, gone: ReadonlySet<string>, depth = 0): unknow
   }
   if (isObj(v)) {
     const o: Obj = {};
-    for (const [k, x] of Object.entries(v)) o[k] = NOT_REFERENCES.has(k) ? x : withoutRefsTo(x, gone, depth + 1);
+    for (const [k, x] of Object.entries(v))
+      o[k] = NOT_REFERENCES.has(k) ? x : withoutRefsTo(x, gone, depth + 1);
     return o;
   }
   return v;
@@ -403,8 +404,8 @@ function setPath(root: unknown, path: string, value: unknown): unknown {
     if (i === keys.length) return value;
     const k = keys[i]!;
     if (Array.isArray(cur)) {
-      const copy = [...cur];
-      copy[Number(k)] = go(cur[Number(k)], i + 1);
+      const copy: unknown[] = [...(cur as unknown[])];
+      copy[Number(k)] = go(copy[Number(k)], i + 1);
       return copy;
     }
     const o = isObj(cur) ? cur : {};
@@ -551,7 +552,7 @@ export function filterSteps(steps: readonly StepSpec[], keptItems: Iterable<stri
     if (s.ifMatchFrom && !newNo.has(s.ifMatchFrom.step)) {
       const link = rechain(s.ifMatchFrom);
       const { ifMatchFrom: _drop, ...rest } = s;
-      s = link ? ({ ...rest, ifMatchFrom: link } as StepSpec) : (rest as StepSpec);
+      s = link ? { ...rest, ifMatchFrom: link } : rest;
     }
     // A Last Major Revision step's row chain through a dropped write: it reads the rows itself instead.
     if (s.op === LMR_STEP) {

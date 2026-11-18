@@ -72,7 +72,7 @@ const cell = (id: string, content: unknown[]) => ({
 
 export async function renameWorld(): Promise<RenameWorld> {
   const w = (await chronologyWorld({
-    base: (o) => appraisalWorld(o as Parameters<typeof appraisalWorld>[0]),
+    base: (o) => appraisalWorld(o),
     confirm: false,
     seed: (world) => {
       const r = world.repo;
@@ -91,6 +91,8 @@ export async function renameWorld(): Promise<RenameWorld> {
         referenceType: 'Joint Character Relationship Reference',
         tags: ['CANON', 'Character', 'Relationship'],
       });
+      // A race's Core Information carries the owner type's primary tag (Species), as Arkona's race pages do.
+      r.outside.setTags(O.qishenCore, ['CANON', 'Species']);
       r.seed({ id: R.velaranIndex, name: '[INDEX] Velaran', parentId: O.arkonanCultures });
       r.seed({
         id: R.velaran,
@@ -212,7 +214,10 @@ export async function renameWorld(): Promise<RenameWorld> {
     para('au2', 'Kaito met Nadira al-Khalid in the sky archive.'),
   ]);
   // History (D2): never edited.
-  setBody(C.archived, [heading('ar1', 2, 'Purpose'), para('ar2', 'Seren Vale studied under Nadira al-Khalid.')]);
+  setBody(C.archived, [
+    heading('ar1', 2, 'Purpose'),
+    para('ar2', 'Seren Vale studied under Nadira al-Khalid.'),
+  ]);
   setBody(P.legacyPage, [
     heading('lg1', 2, 'Purpose'),
     para('lg2', 'The superseded tide charter of the old canon, kept by Nadira al-Khalid.'),
@@ -334,7 +339,11 @@ export async function renameWorld(): Promise<RenameWorld> {
       fired = true;
       return {
         status: 400,
-        body: { message: 'model VALIDATION_ERROR (injected)', code: 'VALIDATION_ERROR', requestId: 'model-injected' },
+        body: {
+          message: 'model VALIDATION_ERROR (injected)',
+          code: 'VALIDATION_ERROR',
+          requestId: 'model-injected',
+        },
       };
     };
     const rest = [...w.overrides.entries()];

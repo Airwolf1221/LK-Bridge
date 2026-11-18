@@ -961,14 +961,23 @@ export function createPacks(d: PacksDeps): Packs {
         if (pack.rules.tags.never.some((t) => t.toLowerCase() === change.token.toLowerCase()))
           throw new PackError('INVALID_TOKEN', `“${change.token}” is never a tag.`);
         if (stableJson(map) === stableJson(before)) return pack;
-        const rules = packRulesSchema.parse({ ...pack.rules, tags: { ...pack.rules.tags, [change.map]: map } });
+        const rules = packRulesSchema.parse({
+          ...pack.rules,
+          tags: { ...pack.rules.tags, [change.map]: map },
+        });
         const after = store.newVersion(pack.id, rules, change.reason);
         d.audit(
           actor,
           'pack.rename_token',
           pack.id,
           { version: pack.version, map: change.map, [change.map]: before },
-          { version: after.version, from: change.from, to: change.to, token: change.token, reason: change.reason },
+          {
+            version: after.version,
+            from: change.from,
+            to: change.to,
+            token: change.token,
+            reason: change.reason,
+          },
         );
         changed();
         return after;

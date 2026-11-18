@@ -267,7 +267,12 @@ export const registerSnapshots: Register = (api, ctx) => {
       const resume = ctx.deps.runtime.resume;
       const jobId = restoreJob(ctx.deps.runtime.policy, restores, project.id, id);
       if (resume && jobId && resume.view(project.id, jobId).resumable) {
-        const r = await resume.resume(project.id, jobId, { kind: 'owner' }, ORIGIN('snapshots.finish_recreate'));
+        const r = await resume.resume(
+          project.id,
+          jobId,
+          { kind: 'owner' },
+          ORIGIN('snapshots.finish_recreate'),
+        );
         if (r.status === 'nothing_to_do') return { status: 'nothing_to_do', summary: r.summary };
         if (r.status === 'proposal_captured') {
           audit('snapshots.finish_recreate', r.proposalId, { project: project.id, restoreId: id, jobId });

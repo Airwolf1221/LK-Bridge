@@ -1026,7 +1026,7 @@ export function closeSelection(
 ): { kept: string[]; dropped: { id: string; because: string[] }[] } {
   const byId = new Map(items.map((i) => [i.id, i]));
   const kept = new Set([...ticked].filter((id) => byId.has(id)));
-  for (let changed = true; changed; ) {
+  for (let changed = true; changed;) {
     changed = false;
     for (const id of [...kept]) {
       if (byId.get(id)!.dependsOn.some((d) => !kept.has(d))) {
@@ -1097,8 +1097,8 @@ function ItemsView({
           <strong>
             {closed.kept.length} of {items.length}
           </strong>{' '}
-          item{items.length === 1 ? '' : 's'} will be approved. Untick what should not be done: an item that needs an
-          unticked one is left out with it.
+          item{items.length === 1 ? '' : 's'} will be approved. Untick what should not be done: an item that
+          needs an unticked one is left out with it.
         </p>
       ) : decided ? (
         <p>
@@ -1125,10 +1125,28 @@ function ItemsView({
             </legend>
             {pending && its.length > 1 && (
               <div className="row">
-                <button type="button" className="small" onClick={() => onToggle(its.map((i) => i.id), true)}>
+                <button
+                  type="button"
+                  className="small"
+                  onClick={() =>
+                    onToggle(
+                      its.map((i) => i.id),
+                      true,
+                    )
+                  }
+                >
                   Tick all
                 </button>
-                <button type="button" className="small" onClick={() => onToggle(its.map((i) => i.id), false)}>
+                <button
+                  type="button"
+                  className="small"
+                  onClick={() =>
+                    onToggle(
+                      its.map((i) => i.id),
+                      false,
+                    )
+                  }
+                >
                   Untick all
                 </button>
               </div>
@@ -1152,7 +1170,9 @@ function ItemsView({
                 {i.why && <p className="muted small-text">Unticked by the plan: {i.why}.</p>}
                 <ItemDiffView diff={i.diff} />
                 {i.dependsOn.length > 0 && (
-                  <p className="muted small-text">Needs: {i.dependsOn.map((d) => labels.get(d) ?? d).join('; ')}</p>
+                  <p className="muted small-text">
+                    Needs: {i.dependsOn.map((d) => labels.get(d) ?? d).join('; ')}
+                  </p>
                 )}
                 {pending && selection.has(i.id) && !kept.has(i.id) && (
                   <p className="note note-warn small-text">Left out: it needs an item you unticked.</p>
@@ -1246,8 +1266,8 @@ function ProposalReview({
         <strong>
           {closed.kept.length} of {plan.items.length}
         </strong>{' '}
-        items are approved; {plan.items.length - closed.kept.length} are left out (recorded, and you can propose them
-        again once this has run).
+        items are approved; {plan.items.length - closed.kept.length} are left out (recorded, and you can
+        propose them again once this has run).
       </p>
       {closed.dropped.length > 0 && (
         <>
@@ -1320,8 +1340,9 @@ function ProposalReview({
                   title: 'Propose the items left out again?',
                   message: (
                     <p>
-                      One new proposal is made of the {plan.omitted?.length ?? 0} items left out, planned as they were and
-                      checked against LegendKeeper again. You approve it (whole or in part) like any other.
+                      One new proposal is made of the {plan.omitted?.length ?? 0} items left out, planned as
+                      they were and checked against LegendKeeper again. You approve it (whole or in part) like
+                      any other.
                     </p>
                   ),
                   confirmLabel: 'Propose these again',
@@ -1376,7 +1397,9 @@ function ProposalReview({
                       disabled={closed !== null && closed.kept.length === 0}
                       onClick={() => {
                         void confirm({
-                          title: partial ? 'Approve the selected items and accept them as canon?' : 'Approve and accept as canon?',
+                          title: partial
+                            ? 'Approve the selected items and accept them as canon?'
+                            : 'Approve and accept as canon?',
                           message: (
                             <>
                               <p>
@@ -1392,7 +1415,9 @@ function ProposalReview({
                               <p className="muted small-text">{p.summary}</p>
                             </>
                           ),
-                          confirmLabel: partial ? 'Approve selected and accept as canon' : 'Approve and accept as canon',
+                          confirmLabel: partial
+                            ? 'Approve selected and accept as canon'
+                            : 'Approve and accept as canon',
                         }).then((ok) => {
                           if (ok)
                             void run(
@@ -1438,7 +1463,10 @@ function ProposalReview({
                           void run(
                             () =>
                               closed
-                                ? api.post(withProject(`/proposals/${encodeURIComponent(p.id)}/approve`), itemsBody)
+                                ? api.post(
+                                    withProject(`/proposals/${encodeURIComponent(p.id)}/approve`),
+                                    itemsBody,
+                                  )
                                 : api.post(withProject(`/proposals/${encodeURIComponent(p.id)}/approve`)),
                             'Approved.',
                           ).then(done);

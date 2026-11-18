@@ -295,7 +295,8 @@ export class ResumeService {
       );
     if (!TERMINAL_JOB_STATUSES.has(job.status))
       return no('JOB_RUNNING', `Job ${jobId} is still ${job.status}: it is resumed once it has stopped.`);
-    if (job.status === 'succeeded') return no('NOTHING_LEFT', `Job ${jobId} has finished: nothing is left to do.`);
+    if (job.status === 'succeeded')
+      return no('NOTHING_LEFT', `Job ${jobId} has finished: nothing is left to do.`);
     if (actor.kind === 'agent') {
       if (job.approvedBy !== null)
         return no(
@@ -331,7 +332,10 @@ export class ResumeService {
     if (r.kind !== 'recreate' && left.length === 0)
       return no('NOTHING_LEFT', `Every step of job ${jobId} has succeeded: nothing is left to do.`);
     if (r.kind === 'recreate' && (!r.ref || !this.d.finishRecreate))
-      return no('NOT_RESUMABLE', `The recreate of job ${jobId} cannot be finished here (its restore is not known).`);
+      return no(
+        'NOT_RESUMABLE',
+        `The recreate of job ${jobId} cannot be finished here (its restore is not known).`,
+      );
     const first = left[0]?.stepNo ?? Number.POSITIVE_INFINITY;
     return {
       resumable: true,
@@ -348,7 +352,12 @@ export class ResumeService {
    * Resumes a job that stopped part-way (see the module comment). Throws `ResumeError` with the reason when it cannot.
    * `origin` is who asked (the dashboard's, or the agent's MCP origin): a recreate's new proposal is made with it.
    */
-  async resume(projectId: string, jobId: string, actor: ResumeActor, origin: JobOrigin): Promise<ResumeResult> {
+  async resume(
+    projectId: string,
+    jobId: string,
+    actor: ResumeActor,
+    origin: JobOrigin,
+  ): Promise<ResumeResult> {
     const v = this.view(projectId, jobId, actor);
     if (!v.resumable || !v.kind)
       throw new ResumeError(v.reason?.code ?? 'NOT_RESUMABLE', v.reason?.message ?? 'It cannot be resumed.');
@@ -378,10 +387,7 @@ export class ResumeService {
     try {
       done = this.d.engine.controls.resumeStopped(projectId, jobId);
     } catch (e) {
-      throw new ResumeError(
-        'NOT_RESUMABLE',
-        e instanceof Error ? e.message : String(e),
-      );
+      throw new ResumeError('NOT_RESUMABLE', e instanceof Error ? e.message : String(e));
     }
     this.counted(projectId, jobId, by);
     const proposal = this.d.proposals.byJob(projectId, jobId);

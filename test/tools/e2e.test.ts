@@ -70,6 +70,9 @@ describe('the MCP surface with the official client', () => {
         'arkona_working_digest',
         'arkona_visual_hygiene',
         'arkona_appraisal_fix',
+        // v3 F3d: the Arkona pack's rename, and resuming a job that stopped part-way
+        'arkona_rename',
+        'bridge_job_resume',
         'create_document',
         'create_index',
         'create_many_resources',

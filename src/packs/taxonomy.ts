@@ -87,10 +87,13 @@ export function renamePackTaxonomyEntry(
   if (e.plural !== r.from)
     return { recorded: null, why: `the entry is now named “${e.plural}”, not “${r.from}”`, entryId: e.id };
   const keepOwner = e.singularSource === 'owner';
-  const s = keepOwner ? { singular: e.singular, source: 'owner' as const, rule: null } : singularFor(r.plural);
+  const s = keepOwner
+    ? { singular: e.singular, source: 'owner' as const, rule: null }
+    : singularFor(r.plural);
   const aliases = [...e.aliases];
   for (const a of [e.plural, e.singular])
-    if (a !== r.plural && a !== s.singular && !aliases.some((x) => x.toLowerCase() === a.toLowerCase())) aliases.push(a);
+    if (a !== r.plural && a !== s.singular && !aliases.some((x) => x.toLowerCase() === a.toLowerCase()))
+      aliases.push(a);
   const review = [
     ...e.review.filter((x) => x.code !== 'singular_guess' && x.code !== 'renamed'),
     ...(keepOwner
@@ -117,12 +120,18 @@ export function renamePackTaxonomyEntry(
     status: review.length > 0 ? 'needs_review' : e.status,
     review,
   });
-  audit(actor, 'registry.taxonomy_rename_entry', e.typeId, { plural: e.plural, singular: e.singular }, {
-    entryId: e.id,
-    plural: next.plural,
-    singular: next.singular,
-    aliases: next.aliases,
-    by: 'arkona_rename',
-  });
+  audit(
+    actor,
+    'registry.taxonomy_rename_entry',
+    e.typeId,
+    { plural: e.plural, singular: e.singular },
+    {
+      entryId: e.id,
+      plural: next.plural,
+      singular: next.singular,
+      aliases: next.aliases,
+      by: 'arkona_rename',
+    },
+  );
   return { recorded: 'taxonomy_rename', entryId: e.id, plural: next.plural, singular: next.singular };
 }

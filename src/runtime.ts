@@ -908,9 +908,7 @@ export function createRuntime(o: RuntimeOptions): Runtime {
     },
     revertState: (projectId, jobId) => {
       const row = o.db
-        .prepare(
-          `SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`,
-        )
+        .prepare(`SELECT state FROM job_reverts WHERE project_id = ? AND job_id = ? ORDER BY id DESC LIMIT 1`)
         .get(projectId, jobId) as { state: string } | undefined;
       return row?.state === 'submitted' || row?.state === 'succeeded' ? row.state : null;
     },

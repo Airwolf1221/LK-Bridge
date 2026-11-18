@@ -228,7 +228,12 @@ export function blockOccurrences(
   oldName: string,
   newName: string,
 ): {
-  readonly text: { readonly run: number; readonly start: number; readonly end: number; readonly isOld: boolean }[];
+  readonly text: {
+    readonly run: number;
+    readonly start: number;
+    readonly end: number;
+    readonly isOld: boolean;
+  }[];
   readonly mentions: { readonly run: number; readonly isOld: boolean; readonly label: string }[];
 } {
   const text: { run: number; start: number; end: number; isOld: boolean }[] = [];

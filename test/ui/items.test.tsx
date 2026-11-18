@@ -25,7 +25,9 @@ const item = (id: string, label: string, over: Record<string, unknown> = {}) => 
 
 const ITEMS = [
   item('name:core', 'Nadira al-Khalid - Character Core → Laila al-Khalid - Character Core'),
-  item('name:art', 'Nadira al-Khalid - Character Art → Laila al-Khalid - Character Art', { dependsOn: ['name:core'] }),
+  item('name:art', 'Nadira al-Khalid - Character Art → Laila al-Khalid - Character Art', {
+    dependsOn: ['name:core'],
+  }),
   item('facts:art', 'Character Art: Subject', {
     kind: 'identity_facts',
     group: 'Identity facts',
@@ -87,7 +89,9 @@ describe('Selective approval', () => {
     expect(within(items).getByText(/4 of 5/)).toBeInTheDocument();
     const quoted = within(items).getByRole('checkbox', { name: /The plaque reads/ });
     expect(quoted).not.toBeChecked();
-    expect(within(items).getByText('Unticked by the plan: it is inside quotation marks.')).toBeInTheDocument();
+    expect(
+      within(items).getByText('Unticked by the plan: it is inside quotation marks.'),
+    ).toBeInTheDocument();
     expect(within(items).getByText('AU')).toBeInTheDocument();
     // Untick the Art page's new name: its facts need it, so they are left out too, and the page says so now.
     await user.click(within(items).getByRole('checkbox', { name: /Character Art → Laila/ }));
@@ -114,7 +118,11 @@ describe('Selective approval', () => {
     const decided = proposal({
       state: 'executed',
       items: { total: 5, approved: 3, omitted: 2 },
-      itemPlan: { items: ITEMS, approved: ['name:core', 'name:art', 'facts:art'], omitted: ['text:qs5', 'text:au2'] },
+      itemPlan: {
+        items: ITEMS,
+        approved: ['name:core', 'name:art', 'facts:art'],
+        omitted: ['text:qs5', 'text:au2'],
+      },
     });
     const api = installApi({
       ...baseRoutes(),
@@ -128,7 +136,9 @@ describe('Selective approval', () => {
     expect(within(items).getByText('3 of 5 approved; 2 left out.')).toBeInTheDocument();
     expect(within(items).getByText('Left out (2)')).toBeInTheDocument();
     await user.click(within(items).getByRole('button', { name: 'Propose these again' }));
-    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Propose these again' }));
+    await user.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Propose these again' }),
+    );
     await waitFor(() => expect(api.find('POST', '/proposals/prop_rn/repropose')).toHaveLength(1));
     expect(api.find('POST', '/proposals/prop_rn/repropose')[0]!.body).toEqual({ confirm: true });
   });
@@ -168,7 +178,10 @@ describe('Resume', () => {
           reason: null,
           kind: 'rename',
           stop,
-          left: [{ stepNo: 9, op: 'replaceBlock', status: 'failed' }, { stepNo: 10, op: 'bridge.verify', status: 'pending' }],
+          left: [
+            { stepNo: 9, op: 'replaceBlock', status: 'failed' },
+            { stepNo: 10, op: 'bridge.verify', status: 'pending' },
+          ],
           recheck: [1],
           approvedBy: 'owner',
         },
@@ -179,7 +192,9 @@ describe('Resume', () => {
     renderApp('/ui/jobs/job_rn');
     const card = await screen.findByRole('region', { name: 'Stopped part-way' });
     expect(card).toHaveTextContent('This rename stopped at step 9 (Qasr › Scholars: 1 occurrence renamed)');
-    expect(card).toHaveTextContent('Every step up to step 8 (rename the Art page) succeeded and was verified');
+    expect(card).toHaveTextContent(
+      'Every step up to step 8 (rename the Art page) succeeded and was verified',
+    );
     await user.click(within(card).getByRole('button', { name: 'Resume' }));
     const dialog = screen.getByRole('alertdialog');
     expect(dialog).toHaveTextContent('It continues from step 9: 2 steps left');

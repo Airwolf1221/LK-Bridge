@@ -133,7 +133,13 @@ export interface RenameServiceDeps {
   };
   /** The full-text index and the page labels (A1): what is left after the job. */
   readonly appraisal?: Pick<Appraisal, 'ensureIndex' | 'reader' | 'fullText'> | undefined;
-  readonly audit: (actor: string, action: string, target: string | null, before?: unknown, after?: unknown) => void;
+  readonly audit: (
+    actor: string,
+    action: string,
+    target: string | null,
+    before?: unknown,
+    after?: unknown,
+  ) => void;
   readonly now: () => number;
   readonly log?: { warn(o: unknown, m: string): void };
 }
@@ -224,7 +230,9 @@ export class RenameService {
 
   byJob(projectId: string, jobId: string): RenameRecord | null {
     const r = this.d.db
-      .prepare('SELECT * FROM pack_renames WHERE project_id = ? AND job_id = ? ORDER BY created_at DESC LIMIT 1')
+      .prepare(
+        'SELECT * FROM pack_renames WHERE project_id = ? AND job_id = ? ORDER BY created_at DESC LIMIT 1',
+      )
       .get(projectId, jobId) as Row | undefined;
     return r ? toRecord(r) : null;
   }
@@ -279,11 +287,13 @@ export class RenameService {
     readonly approved: readonly string[] | null;
   }): { readonly waitFor?: WaitForShape } | null {
     const rec = this.renameOf(ctx.proposal, ctx.operation);
-    const token = rec?.token ?? (isObj(ctx.operation?.token) ? (ctx.operation.token as unknown as RenameToken) : null);
+    const token =
+      rec?.token ?? (isObj(ctx.operation?.token) ? (ctx.operation.token as unknown as RenameToken) : null);
     if (!rec || !token) return null;
     if (ctx.approved && !ctx.approved.includes(token.item)) return null; // left out: no version, no tags
     const pack = this.d.packs.get(token.packId);
-    if (!pack) throw new Error(`the pack ${token.packId} is gone, so the new ${token.map} token cannot be made`);
+    if (!pack)
+      throw new Error(`the pack ${token.packId} is gone, so the new ${token.map} token cannot be made`);
     const map = pack.rules.tags[token.map];
     const has = Object.entries(map).some(
       ([k, v]) => textKey(k) === textKey(token.to) && v === token.newToken,
@@ -427,7 +437,10 @@ export class RenameService {
       occurrences: out.slice(0, 500),
       followUp:
         out.length > 0
-          ? { tool: 'arkona_rename', args: { subject: rec.subjectId, newName: rec.newName, from: rec.oldName } }
+          ? {
+              tool: 'arkona_rename',
+              args: { subject: rec.subjectId, newName: rec.newName, from: rec.oldName },
+            }
           : null,
       note:
         out.length > 0

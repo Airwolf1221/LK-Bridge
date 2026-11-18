@@ -117,7 +117,13 @@ export const registerJobs: Register = (api, ctx) => {
         project.id,
         id,
         { kind: 'owner' },
-        { kind: 'ui', client: 'owner', tool: 'job.resume', detail: `resume:${id}`, principal: SYSTEM_PRINCIPAL },
+        {
+          kind: 'ui',
+          client: 'owner',
+          tool: 'job.resume',
+          detail: `resume:${id}`,
+          principal: SYSTEM_PRINCIPAL,
+        },
       );
       return { resume: redactDeep(r, { maxString: 4000 }) };
     } catch (e) {

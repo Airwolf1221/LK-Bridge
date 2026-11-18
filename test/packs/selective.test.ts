@@ -68,7 +68,11 @@ describe('selective approval: a package', () => {
   const named = (name: string) => [...w.repo.res.values()].find((r) => r.name === name && !r.deletedAt);
 
   it('everything ticked approves exactly as before (no selection recorded as partial)', async () => {
-    const p = await w.call('arkona_create_character', { ...ayame, name: 'Mizuhara Kaede', identity: { ...ayame.identity, givenName: 'Kaede' } });
+    const p = await w.call('arkona_create_character', {
+      ...ayame,
+      name: 'Mizuhara Kaede',
+      identity: { ...ayame.identity, givenName: 'Kaede' },
+    });
     expect(p.body.status, p.text).toBe('proposal_captured');
     const id = String(p.body.proposalId);
     const view = w.stack.runtime.policy.proposals.get(id)!;
@@ -79,7 +83,9 @@ describe('selective approval: a package', () => {
     expect(after.items).toMatchObject({ approved: view.items!.total, omitted: 0 });
     expect(named('[BWRK] Mizuhara Kaede - Personality')).toBeTruthy();
     expect(
-      w.stack.runtime.policy.store.listAudit({ action: 'proposal.approve_selected' }).filter((a) => a.target === id),
+      w.stack.runtime.policy.store
+        .listAudit({ action: 'proposal.approve_selected' })
+        .filter((a) => a.target === id),
     ).toHaveLength(0);
   });
 
@@ -130,7 +136,11 @@ describe('selective approval: a rename', () => {
   afterAll(() => w?.close());
 
   it('unticking a page’s new name drops what needs it; only the approved set runs', async () => {
-    const r = await w.call('arkona_rename', { subject: C.nadira, newName: 'Laila al-Khalid', given: 'Laila' });
+    const r = await w.call('arkona_rename', {
+      subject: C.nadira,
+      newName: 'Laila al-Khalid',
+      given: 'Laila',
+    });
     const id = String(r.body.proposalId);
     const plan = w.stack.runtime.policy.proposals.itemsOf(id)!;
     const ticked = plan.items.filter((i) => i.selected).map((i) => i.id);
@@ -141,7 +151,9 @@ describe('selective approval: a rename', () => {
       .catch((e: unknown) => e);
     expect(refused).toBeInstanceOf(PolicyError);
     expect((refused as PolicyError).code).toBe('SELECTION_NOT_CLOSED');
-    const dropped = ((refused as PolicyError).details as { dropped: { id: string }[] }).dropped.map((d) => d.id).sort();
+    const dropped = ((refused as PolicyError).details as { dropped: { id: string }[] }).dropped
+      .map((d) => d.id)
+      .sort();
     expect(dropped).toEqual([`aliases:${P.nadiraArt}`, `facts:${P.nadiraArt}`]);
     // The proposal stays pending: nothing was approved.
     expect(w.stack.runtime.policy.proposals.get(id)!.state).toBe('pending');

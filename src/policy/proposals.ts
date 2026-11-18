@@ -2202,7 +2202,7 @@ function selectedOps(rows: readonly ProposalOpView[], approved: readonly string[
   return f.steps.map((st, k) => {
     const orig = rows[f.from[k]! - 1]!;
     const { op: _op, params, ...options } = st;
-    return { ...orig, params: params ?? {}, options: options as Record<string, unknown> };
+    return { ...orig, params: params ?? {}, options: options };
   });
 }
 

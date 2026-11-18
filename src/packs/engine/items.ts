@@ -221,8 +221,8 @@ export function itemizePackage(
   if (tags.some((t) => t !== null && t.some((x) => !known.has(x)))) return { steps, items: null };
   const tagged = steps.map((s, i) => ({
     ...s,
-    ...(tags[i] ? { items: tags[i]! } : {}),
-    ...(parts[i] ? { itemParts: parts[i]! } : {}),
+    ...(tags[i] ? { items: tags[i] } : {}),
+    ...(parts[i] ? { itemParts: parts[i] } : {}),
   }));
   // A change to an existing page made for new pages (a routing line, a link) needs them; between new pages, a link or
   // a line is soft (removed when its page is left out).

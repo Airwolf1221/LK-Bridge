@@ -134,7 +134,8 @@ export async function runRename(
     return errorResult(
       {
         code: 'TOOL_UNAVAILABLE',
-        message: 'A rename finds every mention of the name through the full-text index, which is not available here.',
+        message:
+          'A rename finds every mention of the name through the full-text index, which is not available here.',
       },
       pd,
     );
@@ -243,14 +244,21 @@ export async function runRename(
 }
 
 /** `report`: what a rename left (and its state), free. */
-export async function renameReport(pd: ProjectDeps, mctx: McpToolContext, ref: string): Promise<McpToolResult> {
+export async function renameReport(
+  pd: ProjectDeps,
+  mctx: McpToolContext,
+  ref: string,
+): Promise<McpToolResult> {
   const renames = pd.services?.renames;
   if (!renames)
     return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Renames are not available here.' }, pd);
   const rec = renames.find(pd.project.id, ref.trim());
   if (!rec)
     return errorResult(
-      { code: 'RENAME_NOT_FOUND', message: `No rename ${ref} on ${pd.project.name} (give its id, proposal or job).` },
+      {
+        code: 'RENAME_NOT_FOUND',
+        message: `No rename ${ref} on ${pd.project.name} (give its id, proposal or job).`,
+      },
       pd,
     );
   let leftovers = rec.leftovers;

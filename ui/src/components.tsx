@@ -472,19 +472,23 @@ export function ResumeCard({
                 <>
                   {stop.kind === 'recreate' ? (
                     <p>
-                      The recreate is finished as one new proposal of only what is still missing (F2’s Finish), checked
-                      against LegendKeeper again.
+                      The recreate is finished as one new proposal of only what is still missing (F2’s
+                      Finish), checked against LegendKeeper again.
                     </p>
                   ) : (
                     <>
                       <p>
                         It continues from step {view.left[0]?.stepNo ?? '?'}: {view.left.length} step
-                        {view.left.length === 1 ? '' : 's'} left. Its own check runs again first, inside its locks
-                        {view.recheck.length > 0 ? ` (step ${view.recheck.join(', ')})` : ''}; no step that succeeded is
-                        sent again, and a step that is no longer safe is refused with its reason.
+                        {view.left.length === 1 ? '' : 's'} left. Its own check runs again first, inside its
+                        locks
+                        {view.recheck.length > 0 ? ` (step ${view.recheck.join(', ')})` : ''}; no step that
+                        succeeded is sent again, and a step that is no longer safe is refused with its reason.
                       </p>
                       {view.approvedBy && (
-                        <p>You approved this work; it resumes without a new approval, and the resume is recorded.</p>
+                        <p>
+                          You approved this work; it resumes without a new approval, and the resume is
+                          recorded.
+                        </p>
                       )}
                     </>
                   )}

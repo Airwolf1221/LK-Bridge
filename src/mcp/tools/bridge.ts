@@ -541,7 +541,10 @@ function jobTools(deps: ToolDeps) {
           if (!own) return jobNotFound(pd, id);
           const svc = pd.services?.resume;
           if (!svc)
-            return errorResult({ code: 'TOOL_UNAVAILABLE', message: 'Resuming jobs is not available here.' }, pd);
+            return errorResult(
+              { code: 'TOOL_UNAVAILABLE', message: 'Resuming jobs is not available here.' },
+              pd,
+            );
           const who = ctx.principal!;
           try {
             const r = await svc.resume(

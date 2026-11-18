@@ -160,11 +160,13 @@ async function resourceCheck(ctx: RegisteredCheckContext): Promise<RegisteredChe
   const name = str(body.name) ?? '';
   if (!input.names.includes(name))
     differences.push({ path: `${ctx.label} name`, expected: input.names[0] ?? '', actual: name });
-  const aliases = Array.isArray(body.aliases) ? (body.aliases as unknown[]).filter((x) => typeof x === 'string') : [];
-  if (input.aliases && !input.aliases.some((a) => sameSet(a, aliases as string[])))
+  const aliases = Array.isArray(body.aliases)
+    ? (body.aliases as unknown[]).filter((x) => typeof x === 'string')
+    : [];
+  if (input.aliases && !input.aliases.some((a) => sameSet(a, aliases)))
     differences.push({ path: `${ctx.label} aliases`, expected: input.aliases[0] ?? [], actual: aliases });
   const tags = Array.isArray(body.tags) ? (body.tags as unknown[]).filter((x) => typeof x === 'string') : [];
-  if (input.tags && !input.tags.some((t) => sameList(t, tags as string[])))
+  if (input.tags && !input.tags.some((t) => sameList(t, tags)))
     differences.push({ path: `${ctx.label} tags`, expected: input.tags[0] ?? [], actual: tags });
   return { differences };
 }
@@ -177,7 +179,8 @@ async function assetCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckR
   const differences: StateDifference[] = [];
   const name = str(body.name) ?? '';
   const want = ctx.phase === 'verify' ? input.names.slice(-1) : input.names;
-  if (!want.includes(name)) differences.push({ path: `${ctx.label} name`, expected: want[0] ?? '', actual: name });
+  if (!want.includes(name))
+    differences.push({ path: `${ctx.label} name`, expected: want[0] ?? '', actual: name });
   const folder = str(body.folderId) ?? str(body.parentId);
   if (input.folderId !== undefined && folder !== input.folderId)
     differences.push({ path: `${ctx.label} folder`, expected: input.folderId, actual: folder });
@@ -201,7 +204,13 @@ function packCheck(packs: Pick<Packs, 'get' | 'store'>) {
         refusal: {
           code: 'PACK_TOKEN_NOT_APPROVED',
           message: `The pack version the owner approved does not map the ${input.map} “${input.value}” to the tag “${input.token}” (it maps it to ${have ? `“${have}”` : 'nothing'}). The new identity tags are not written until the owner approves the pack version holding the new token map on the Packs page; then Resume the job.`,
-          details: { pack: input.packId, map: input.map, value: input.value, token: input.token, approved: have ?? null },
+          details: {
+            pack: input.packId,
+            map: input.map,
+            value: input.value,
+            token: input.token,
+            approved: have ?? null,
+          },
         },
       });
     return Promise.resolve({ differences: [], observed: { version: pack?.approved?.version ?? null } });

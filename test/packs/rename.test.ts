@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment -- parsed JSON tool results */
 /**
  * v3 F3d (renames), ADR 0058: `arkona_rename` against the mock LegendKeeper (test/packs/rename-world.ts), never a real
  * one. The character rename (Nadira al-Khalid → Laila al-Khalid): every item kind planned and applied with ids kept,
@@ -24,9 +25,7 @@ function facts(w: RenameWorld, id: string): Record<string, string> {
   return Object.fromEntries(
     kv.rows!.map((r) => [
       r.key,
-      (r.content as Obj[])
-        .map((x) => (typeof x.text === 'string' ? x.text : ''))
-        .join(''),
+      (r.content as Obj[]).map((x) => (typeof x.text === 'string' ? x.text : '')).join(''),
     ]),
   );
 }
@@ -46,8 +45,12 @@ function block(w: RenameWorld, pageId: string, blockId: string): Obj {
   return find(w.repo.blocks.get(w.mainOf(pageId))!.blocks as Obj[])!;
 }
 const textOf = (b: Obj) =>
-  ((b.content as Obj[]) ?? [])
-    .map((r) => (typeof r.text === 'string' ? r.text : ((r.mention as Obj | undefined)?.text ?? '')))
+  ((b.content as Obj[] | undefined) ?? [])
+    .map((r) => {
+      if (typeof r.text === 'string') return r.text;
+      const label = (r.mention as Obj | undefined)?.text;
+      return typeof label === 'string' ? label : '';
+    })
     .join('');
 
 const items = (body: Obj) =>
@@ -113,13 +116,17 @@ describe('arkona_rename: a character', () => {
       expect(ids, id).toContain(`aliases:${id}`);
     // A custom label holding the name is an item; a plain mention and another label are not.
     const labels = all.filter((i) => i.group === 'Mention labels');
-    expect(labels.map((i) => i.label)).toEqual([expect.stringContaining('mention labelled “Nadira al-Khalid”')]);
+    expect(labels.map((i) => i.label)).toEqual([
+      expect.stringContaining('mention labelled “Nadira al-Khalid”'),
+    ]);
     expect(ids.some((i) => i.includes(':tr5:') || i.includes(':tr6:'))).toBe(false);
     // The index's routing line.
     expect(all.filter((i) => i.group === 'Index routing')).toHaveLength(1);
     // Chronology: the linked row with its event, and the row before the effective date unticked.
     expect(byId.get(`chronology:${R.rowLinked}`)).toMatchObject({ ticked: true });
-    expect(String(byId.get(`chronology:${R.rowLinked}`)!.label)).toContain('its event “Nadira al-Khalid founds the reading room” renamed with it');
+    expect(String(byId.get(`chronology:${R.rowLinked}`)!.label)).toContain(
+      'its event “Nadira al-Khalid founds the reading room” renamed with it',
+    );
     expect(byId.get(`chronology:${R.rowEarly}`)).toMatchObject({
       ticked: false,
       why: 'the row is dated before the rename’s effective date (4A 900)',
@@ -128,12 +135,16 @@ describe('arkona_rename: a character', () => {
     expect(ids).toEqual(expect.arrayContaining(['folder:afnadir1', 'asset:imgpng01', 'asset:imgfull1']));
     expect(ids).not.toContain('asset:imgsktch');
     // D1 (a): an ordinary sentence ticked; each excluded context unticked, saying why.
-    const qasr = (b: string) => all.find((i) => i.id.endsWith(`:${b}:0`) && i.group === 'Textual restatements')!;
+    const qasr = (b: string) =>
+      all.find((i) => i.id.endsWith(`:${b}:0`) && i.group === 'Textual restatements')!;
     expect(qasr('qs4')).toMatchObject({ ticked: true });
     expect(qasr('qs5')).toMatchObject({ ticked: false, why: 'it is inside quotation marks' });
     expect(qasr('qs6')).toMatchObject({ ticked: false, why: 'it follows “formerly” in the same sentence' });
     expect(qasr('qs7')).toMatchObject({ ticked: false, why: 'it follows “previously” in the same sentence' });
-    expect(qasr('qs8')).toMatchObject({ ticked: false, why: 'it follows “once called” in the same sentence' });
+    expect(qasr('qs8')).toMatchObject({
+      ticked: false,
+      why: 'it follows “once called” in the same sentence',
+    });
     expect(qasr('qs9')).toMatchObject({ ticked: false, why: 'it follows “originally” in the same sentence' });
     expect(qasr('qs11')).toMatchObject({ ticked: false, why: 'it is under Unresolved Material' });
     // Each restatement is one item with its sentence.
@@ -184,7 +195,7 @@ describe('arkona_rename: a character', () => {
     expect(p.items).toMatchObject({ total: expect.any(Number) });
     const capture = w.requests().all - before.all;
     const mid = w.requests();
-    const done = await approve(w as never, proposalId);
+    const done = await approve(w, proposalId);
     expect(done.job?.status).toBe('succeeded');
     const job = { requests: w.requests().all - mid.all, writes: w.requests().writes - mid.writes };
 
@@ -197,8 +208,12 @@ describe('arkona_rename: a character', () => {
     expect(w.repo.live(C.nadira)!.name).toBe('[BSRC] Laila al-Khalid - Character Core');
     expect(w.repo.live(C.nadiraIndex)!.name).toBe('[INDEX] Laila al-Khalid');
     expect(w.repo.live(R.archiveNotes)!.name).toBe('[BSRC] Laila al-Khalid - Archive Notes');
-    expect(w.repo.live(P.relationship)!.name).toBe('[BSRC] Mehrana I al-Khalid & Laila al-Khalid - Relationship');
-    expect(w.repo.live(R.tarekRelationship)!.name).toBe('[BSRC] Laila al-Khalid & Tarek Basri - Relationship');
+    expect(w.repo.live(P.relationship)!.name).toBe(
+      '[BSRC] Mehrana I al-Khalid & Laila al-Khalid - Relationship',
+    );
+    expect(w.repo.live(R.tarekRelationship)!.name).toBe(
+      '[BSRC] Laila al-Khalid & Tarek Basri - Relationship',
+    );
     // The old name kept as an alias: in the Aliases fact and in the pages' search aliases.
     expect(facts(w, C.nadira)).toMatchObject({
       Subject: NEW,
@@ -216,7 +231,9 @@ describe('arkona_rename: a character', () => {
     expect(textOf(block(w, O.tarim, 'tr5'))).toBe('Later the archivist moved to Menkhet.');
     expect(textOf(block(w, C.nadiraIndex, `${C.nadiraIndex}i1p`))).toBe('Laila al-Khalid - Character Core');
     // Restatements: the ticked one renamed, the unticked ones kept; history untouched.
-    expect(textOf(block(w, O.qasr, 'qs4'))).toBe('Laila al-Khalid catalogued the emirate’s charters in her youth.');
+    expect(textOf(block(w, O.qasr, 'qs4'))).toBe(
+      'Laila al-Khalid catalogued the emirate’s charters in her youth.',
+    );
     expect(textOf(block(w, O.qasr, 'qs5'))).toContain('“Nadira al-Khalid, keeper of charters”');
     expect(textOf(block(w, O.qasr, 'qs11'))).toContain(OLD);
     expect(textOf(block(w, C.au, 'au2'))).toBe('Kaito met Laila al-Khalid in the sky archive.');
@@ -249,7 +266,8 @@ describe('arkona_rename: a character', () => {
     const pages = new Set(report.occurrences.map((o) => o.page.id));
     expect(pages.has(O.qasr)).toBe(true);
     expect(pages.has(P.fourthAge)).toBe(true);
-    for (const id of [C.archived, P.legacyPage, P.designPage, C.nadira]) expect(pages.has(id), id).toBe(false);
+    for (const id of [C.archived, P.legacyPage, P.designPage, C.nadira])
+      expect(pages.has(id), id).toBe(false);
     expect(report.followUp).toEqual({
       tool: 'arkona_rename',
       args: { subject: C.nadira, newName: NEW, from: OLD },
@@ -295,7 +313,7 @@ describe('arkona_rename: the in-lock re-check', () => {
     const proposalId = String(r.body.proposalId);
     w.repo.outside.rename(C.nadira, '[BSRC] Nadira bint Khalid - Character Core');
     const before = w.requests();
-    const done = await approve(w as never, proposalId);
+    const done = await approve(w, proposalId);
     expect(done.job?.status).toBe('failed');
     expect(done.job?.lastError).toMatchObject({ code: 'SUBJECT_RENAMED' });
     expect(w.requests().writes - before.writes).toBe(0);
@@ -368,5 +386,49 @@ describe('arkona_rename: a culture', () => {
     expect(w.repo.live(C.working)!.tags).toEqual(['Working', 'Character', 'Human']);
     const cost = { requests: w.requests().all - mid.all, writes: w.requests().writes - mid.writes };
     expect(cost).toEqual({ requests: 98, writes: 20 });
+  });
+});
+
+describe('arkona_rename: a race', () => {
+  let w: RenameWorld;
+  beforeAll(async () => {
+    w = await renameWorld();
+  });
+  afterAll(() => w?.close());
+
+  it('renames its pages, its taxonomy entry and its token with every character; its art folder is kept', async () => {
+    const dry = await w.call('arkona_rename', { subject: O.qishenCore, newName: 'Qishani', dryRun: true });
+    expect(dry.isError, dry.text).toBeFalsy();
+    expect(dry.body.subject).toMatchObject({ id: O.qishenCore, kind: 'race' });
+    const all = items(dry.body);
+    const ids = all.map((i) => i.id);
+    expect(ids).toEqual(expect.arrayContaining([`name:${O.qishenCore}`, `name:${C.qishen}`, 'token:race']));
+    const taxonomy = all.find((i) => i.id.startsWith('taxonomy:'))!;
+    expect(taxonomy.dependsOn).toEqual([`name:${C.qishen}`]);
+    expect(String(taxonomy.label)).toContain('its asset folder “Qishen” kept');
+    expect(ids).toContain(`character:${C.nadira}`);
+
+    const r = await w.call('arkona_rename', { subject: O.qishenCore, newName: 'Qishani' });
+    const proposalId = String(r.body.proposalId);
+    await w.stack.runtime.policy.commands.approveAsCanon('owner', proposalId);
+    await w.stack.runtime.packs.commands.approve('owner', 'arkona');
+    const jobId = w.stack.runtime.policy.proposals.get(proposalId)!.jobId!;
+    for (let i = 0; i < 500; i++) {
+      const j = w.stack.runtime.engine.queries.getJob(PROJECT, jobId)!;
+      if (['succeeded', 'failed', 'cancelled'].includes(j.status)) break;
+      await new Promise((res) => setTimeout(res, 20));
+    }
+    const job = w.stack.runtime.engine.queries.getJob(PROJECT, jobId)!;
+    expect(job.status, JSON.stringify(job.lastError)).toBe('succeeded');
+    expect(w.repo.live(O.qishenCore)!.name).toBe('[BSRC] Qishani - Core Information');
+    expect(w.repo.live(C.qishen)!.name).toBe('[INDEX] Qishani');
+    const entry = w.stack.runtime.registry.forProject(PROJECT).store.entryBySource(C.qishen)!;
+    expect(entry.plural).toBe('Qishani');
+    expect(entry.aliases).toContain('Qishen');
+    expect(entry.assetFolder).toBe('Qishen');
+    expect(w.assets.assets.get('afqishe1')!.name).toBe('Qishen');
+    expect(facts(w, C.nadira)['Race / Species']).toBe('Qishani');
+    expect(w.repo.live(C.nadira)!.tags).toEqual(['CANON', 'Character', 'Qishani']);
+    expect(w.stack.runtime.packs.get('arkona')!.rules.tags.race).toMatchObject({ Qishani: 'Qishani' });
   });
 });
