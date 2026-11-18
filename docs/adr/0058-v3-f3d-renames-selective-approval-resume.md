@@ -15,6 +15,10 @@
   [ADR 0057](0057-cr-2026-11-r2-owner-decisions.md) decision 5 (renaming canon is a canonical proposal).
 - Migration: `3400_renames_items_resume.sql` (a proposal's items and what was approved and left out; where a resumable
   job stopped, `job_stops`; the renames, `pack_renames`).
+- **Amended** on 18 November 2026, after the owner's live test ([Amendment](#amendment-18-november-2026-after-the-live-test)):
+  conflicts part-way are rebased item by item (A), the old name's parts are listed for review and never edited (B),
+  agents are steered to `arkona_rename` (C), and custom mention labels are never written (D). Migration
+  `3500_rename_review.sql`.
 - Numbered 0058, the next free number. The session's label is "v3 F3d (renames)": PR #63, titled "v3 F3d", was session
   F3.3 (lifecycle tags, [ADR 0053](0053-v3-f3d-lifecycle-tag-leads-au-in-the-lifecycle-routing-lines.md)).
 
@@ -171,3 +175,108 @@ newName, from: "<old name>" }` plans exactly what is left. `report` answers it, 
   resumable, with nothing duplicated.
 - The owner's steps after deploying: (1) approve the new pack version, if one was made; (2) try a rename on the test
   world first, using one character and the selective approval; (3) then use it on Arkona.
+
+## Amendment (18 November 2026, after the live test)
+
+The owner's live test (18 November 2026): "It otherwise worked a treat": the chronology and the art folders were renamed
+correctly. Four issues remained; each is decided below, built and tested against the mock LegendKeeper and fixtures only
+(no live system was touched: no LegendKeeper, no bridge connector, no dashboard, no sandbox, soak, spike, rehearsal or
+round-trip script). No new ADR: this section amends decisions 1 and 2. Migration `3500_rename_review.sql` (what a rename
+lists for review, kept with its record).
+
+### A. A conflict part-way is rebased, item by item
+
+A heavily referenced character is a rename of hundreds of requests. When another writer changed one of its pages first,
+the rename stopped at `VERSION_CONFLICT` and had to be resumed by hand. Arkona's governance (Lifecycle › Concurrent
+LegendKeeper Writing): "Read the live target before editing, use the required expected version, and reconcile changed
+content rather than overwriting it."
+
+1. **Rebasing** (`StepOptions.rebase`, src/jobs/rebase.ts; the rename's rebasers in src/packs/rename/checks.ts). When an
+   item's write finds its target changed inside its lock (another version or state on the read it makes anyway, or a 412
+   / `VERSION_MISMATCH` from LegendKeeper), the target is re-read live inside the lock and the step's rebaser is asked:
+   if what the item edits is still exactly there (a restatement's occurrence in its sentence; a fact's old value; a page's
+   old name; a chronology row's text, apart from this rename's own edits; an alias or identity tag list as it now is), the
+   same change is recomputed against the fresh content and version and sent again. At most 3 attempts per item (the third
+   conflict ends it), with the governor's backoff (`backoffMs`, the retry settings' base and cap) before each re-read that
+   follows a refused send.
+2. **Skipped, "changed meanwhile".** When it is gone or changed (someone edited that exact text meanwhile), the item is
+   skipped, recorded with a before and after excerpt (`skippedItems` in the step's result; `engine.skippedItems`), and the
+   job carries on: every later step whose items are all skipped is not sent (passing on the version it would have chained
+   from), and the parts of a shared step (the read-back's targets, a Last Major Revision step's evidence) that belong only
+   to skipped items are left out each time it runs (never stored). The same holds for the job's first check: a block, an
+   asset, a chronology row or its event, or another page's fact that changed since the plan skips its item there
+   (`skipItems` on a document or event check; `skipped` from a registered checker).
+3. **Never wider.** A rebase only re-applies the same change to the same text: an occurrence is found again by its
+   sentence (exactly one occurrence of the old name in that sentence: the one meant; none, with the sentence showing the
+   new name: done; none at all: changed; **more than one: which is meant cannot be told, so skipped**). A block unchanged
+   apart from the rename's own edits keeps each edit's number.
+4. **Core items stop the job.** The subject's own page names (every page of its set) and the identity facts of its set
+   are core: when one cannot be rebased the job stops (a `VERSION_CONFLICT` naming the core item; Resume stays available),
+   because a half-renamed identity is worse than a stopped one. The first check also stops on a page of the set renamed
+   meanwhile.
+5. **The report** (`arkona_rename { report }`, the record's leftovers) lists every skipped item with its excerpts and says
+   "Propose these again"; the Proposals page shows them under "Skipped when the job ran" (`itemPlan.skipped`), and
+   **Propose these again** (decision 2.5) now proposes the skipped items with the ones left out (audited
+   `proposal.repropose` with `skipped`). An item whose sentence now reads differently is best planned afresh with a
+   follow-up (`from`); the report says so.
+6. **Chosen, details.** Aliases and identity tags are worked out inside their write's lock every time (`rebase.always`),
+   on the read the write makes anyway, so an alias or tag added meanwhile is kept. A chronology table's check is split
+   into one check per row (each skipping only its row's item; every one keeps the table's label for the chain), within the
+   one chronology record the job keeps. A fact is compared as its text with a plain mention by the page it points to (its
+   shown name follows the page's own, which the rename itself changes).
+
+**The locks (chosen).** The rename used to hold every lock (every page, document, asset and chronology document) for the
+whole job, so an ordinary agent write to any of those pages waited for all of it (several minutes for a 300-request
+rename, longer when the job is parked for budget). It now holds **no job-level lock**: each write takes its own page's
+(document's, asset's) lock only for itself, as every ordinary write does, and its in-lock re-check is the rebase above.
+The engine allows exactly this (a step holds at most one lock, for its own duration), and nothing coarser is needed: a
+page's next write in the same job chains its If-Match from the one before, so another writer between two of them is seen
+inside the lock and rebased. The engine does not offer a lock spanning a run of steps (one page's items), and building
+one would add the lock-ordering problem the engine's one-lock-per-step rule avoids; per-write locks give the owner's
+preference (each page locked only for its own items) with no new deadlock risk. The job's first check (the subject still
+has its old name, each page of the set as planned) now runs without locks: it is the gate that writes nothing when the
+subject was renamed, and each write re-checks inside its own lock anyway.
+
+**Measured cost of rebasing** (the tests pin them): a conflict the bridge sees on the read the write makes anyway (another
+version or state than the chain's) costs **no extra read** and the write is sent once; a conflict LegendKeeper refuses
+(412) costs **one read** (the re-read inside the lock, which the engine made before this amendment too, to report the
+conflict) and one more send, after the backoff. Three conflicts in a row: three sends and three re-reads, then the item is
+skipped. The normal path is cheaper: the test character's approved job is 177 requests, 47 of them writes (185 and 49
+before: the two custom labels below are no longer written), and the culture's 93 requests (98 before: each character's
+tag is re-checked on its own write's read, not by the first check).
+
+### B. Name parts: brought to the proposer's attention, never edited
+
+Renaming Azhar al-Nasir to Mikhar al-Narif leaves plain "Azhar" everywhere; characters share names, so the bridge never
+acts on them. The plan (`reviewOnly`) and the post-run report gain **review only: name parts** (src/packs/rename/review.ts):
+each occurrence of the old given name, the old family name and each old alias on its own (a whole word, through the
+full-text index, A1; not inside the full old name; only the parts the new name no longer holds), on current pages, with
+its page, section and sentence, and `sharedWith` ("this page is in Azhar al-Rashid's set") when the page belongs to
+another character whose name holds the same part. Never items, never selectable: the agent reading the plan is told to
+bring them to the owner, who can ask for a follow-up rename of specific occurrences (`from`). At most 200, with a count of
+the rest, and the note says so. **Chosen:** a follow-up (`from`) lists none (its identity facts already hold the new
+parts); the report after the job searches the planned parts again (free).
+
+### C. Agents are steered to `arkona_rename`
+
+Asked to rename a character "with the new bridge tools", ChatGPT first called `update_resource`.
+
+1. **A refusal with a pointer** (src/packs/rename/guard.ts). On a project with an approved pack, `update_resource`, and
+   `updateResource` through `lk_api_write`, `lk_op_updateResource` and `lk_api_batch`, refuse a rename that changes the
+   subject part of a page's name (the text before " - ", or an index's whole name) with `USE_ARKONA_RENAME`, its `hint`
+   naming `arkona_rename` and what it does that a plain rename does not; for a page in a character's set, a page with a
+   Subject fact, or a pack owner (**chosen:** a page tagged with an owner type's primary tag). `plainRename: { reason }`
+   lets it through; the reason is shown with the proposal (its summary and operation) or, for a direct write, on the
+   Review page (the job's title) and in the journal entry. Renaming only the descriptor (after " - ") is never refused.
+2. **Tool descriptions:** `update_resource`'s first sentence sends a subject's rename to `arkona_rename`;
+   `arkona_rename`'s description leads with when to use it.
+3. **The bridge guide:** "How to decide" has the line "Rename a subject → `arkona_rename` (never `update_resource`)".
+
+### D. Custom mention labels: LegendKeeper's API cannot change them
+
+The owner confirmed that LegendKeeper's API does not support changing a mention's custom label, and Arkona's AI
+REPOSITORY does not use custom labels. So mention-label items are no longer planned as writes (decision 1.2's "mention
+labels" and departure 4 are withdrawn): any custom label holding the old name, in a paragraph, a routing line, a sidebar
+fact or a chronology row, goes into the review list (B) marked "custom label: change it in the app if wanted"; the text
+around it is still renamed. A job never fails on one. The sandbox check this ADR's Consequences left open (a custom label
+changed through `replaceBlock`) is therefore no longer needed.

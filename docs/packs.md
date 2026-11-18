@@ -372,7 +372,7 @@ only Arkona's: the pack decides only the appraisal tools.
 
 **`arkona_rename`** renames a character or an owner everywhere it is named, as one canonical proposal made of **items**:
 its page names (ids kept), identity facts, the old name kept as an alias (the Aliases fact and the pages' search aliases),
-mention labels, index routing lines, chronology rows (with their events, by the chronology tools' own path), the art
+index routing lines, chronology rows (with their events, by the chronology tools' own path), the art
 folder and asset names, a race's taxonomy entry, a culture's or race's identity token (with every character's fact and
 tag) and each textual restatement elsewhere. What it reads: the pack's approved rules (the keys of the name parts, the
 Aliases fact, Naming Culture and Race / Species; the routing and Unresolved Material headings; the token maps), the
@@ -394,6 +394,24 @@ names: a part that is in the old name and not in the new one must be given (`giv
 with its identity page), each other new page, and the changes to each existing page. Everything ticked runs exactly as
 before; the owner can leave a page out (the pages that need it go with it), and propose what was left out again later
 (the package's own check still knows the pages the first part made: `ownIds`).
+
+**The amendment of 18 November 2026** (ADR 0058, after the owner's live test):
+
+- **A conflict part-way is rebased, not a stop.** A rename's job holds no lock for its whole run (each write takes its own
+  page's lock only for itself, so ordinary agent writes to those pages never wait for all of it) and re-checks inside that
+  lock. When another writer got there first, the same change is re-applied to the fresh content (at most 3 attempts); an
+  item whose exact text changed meanwhile, or now appears twice, is skipped and listed with a before and after excerpt, and
+  the job carries on. Only the subject's own page names and identity facts stop it (resumable). Skipped items are proposed
+  again with the left-out ones (**Propose these again**).
+- **Name parts are for review, never edited.** The plan and the report list the old given name, family name and aliases
+  on their own, each with its page, section and sentence, flagging a page of another character sharing the part (at most
+  200, with a count of the rest). There is nothing to approve: the agent brings them to the owner.
+- **Agents are steered to `arkona_rename`.** On a pack project, `update_resource` (and `updateResource` through
+  `lk_api_*`) refuses a subject's rename with `USE_ARKONA_RENAME` and a hint; `plainRename: { reason }` lets a plain rename
+  through with its reason shown; a descriptor-only rename (after " - ") is never refused.
+- **Custom mention labels are not written.** LegendKeeper's API cannot change a mention's custom label (and Arkona's
+  repository does not use them): a custom label holding the old name is listed for review ("change it in the app if
+  wanted"), never planned as a write, and never fails a rename.
 
 **Resuming.** A package or a rename whose job stops part-way records where; the owner resumes it (Jobs and Review pages), an
 agent its own direct job (`bridge_job_resume`). The package's check runs again first: a page this package already made is

@@ -650,7 +650,13 @@ export interface ProposalDetail extends Proposal {
   /** v2 C2a: the protected changes, when the proposal needs canonical approval. */
   canonical?: { reason: string; changes: ProtectedChange[] } | null;
   /** v3 F3d (ADR 0058): its items, and (once decided) the ids approved and left out; null for an ordinary proposal. */
-  itemPlan?: { items: PlanItem[]; approved: string[] | null; omitted: string[] | null } | null;
+  itemPlan?: {
+    items: PlanItem[];
+    approved: string[] | null;
+    omitted: string[] | null;
+    /** v3 F3d amendment (ADR 0058, A): the approved items the job skipped because what they edit changed meanwhile. */
+    skipped?: SkippedItem[];
+  } | null;
 }
 
 /** v2 C2a: a project's protected canonical facts rules. */
@@ -2572,4 +2578,13 @@ export interface RevertPreview {
   targets: RevertTarget[];
   ready: number;
   notReverted: number;
+}
+
+/** v3 F3d amendment (ADR 0058, A): an item a job skipped when it ran, with why and a before and after excerpt. */
+export interface SkippedItem {
+  item: string;
+  reason: string;
+  before?: string | null;
+  after?: string | null;
+  where?: string;
 }

@@ -69,6 +69,8 @@ export function renamePreview(plan: RenamePlan): Obj {
     ...(plan.warnings.length ? { warnings: plan.warnings } : {}),
     ...(plan.replacements.length ? { replacements: plan.replacements } : {}),
     ...(plan.notes.length ? { notes: plan.notes } : {}),
+    // ADR 0058 amendment (B, D): never items, nothing to approve: for the agent to bring to the owner.
+    ...(plan.review.count > 0 ? { reviewOnly: plan.review } : {}),
     lastMajorRevision: {
       mode: plan.lmr.mode,
       measuredWhenItRuns: plan.lmr.pages,
@@ -165,8 +167,7 @@ export async function runRename(
       {
         status: 'dry_run',
         ...preview,
-        message:
-          'Dry run: nothing was written and nothing was proposed. Call again without dryRun to propose it: ONE canonical proposal for the owner, who approves it whole or item by item.',
+        message: `Dry run: nothing was written and nothing was proposed. Call again without dryRun to propose it: ONE canonical proposal for the owner, who approves it whole or item by item.${plan.review.count > 0 ? ` Bring the ${plan.review.count} review-only occurrence${plan.review.count === 1 ? '' : 's'} (reviewOnly: name parts on their own, custom labels) to the owner: the bridge never edits them, and the owner can ask for a follow-up rename (from) of specific ones.` : ''}`,
       },
       () => ({ items: plan.items.length, summary: plan.summary }),
     );
@@ -193,10 +194,9 @@ export async function runRename(
         steps: plan.steps,
         labels: plan.labels,
         title: plan.summary,
-        holdLock: { resourceId: plan.holds.lock },
-        holdMore: { resources: plan.holds.resources, documents: plan.holds.documents },
-        holdDocuments: plan.holds.chronologyDocuments,
-        holdAssets: plan.holds.assets,
+        // ADR 0058 amendment (A): no job-level locks. Each write takes its own page's (document's, asset's) lock only for
+        // itself and re-checks inside it (a conflict is rebased, or its item skipped), so ordinary writes to those pages
+        // never wait for the whole rename.
         lifecycle: marker,
         forceProposal: true,
         // ADR 0058 (E3): a rename that stops part-way resumes from where it stopped: its check (the subject, every page,
@@ -217,6 +217,7 @@ export async function runRename(
             ...(plan.token ? { token: plan.token } : {}),
             ...(plan.historical.length ? { leftAsHistorical: plan.historical.slice(0, 100) } : {}),
             ...(plan.notPlanned.length ? { notPlanned: plan.notPlanned.slice(0, 100) } : {}),
+            ...(plan.review.count > 0 ? { reviewOnly: plan.review } : {}),
             cost: preview.cost,
           },
           prefetched: plan.prefetched,
@@ -237,6 +238,10 @@ export async function runRename(
           proposalId: out.proposalId ?? null,
           jobId: out.jobId ?? null,
           token: plan.token,
+          review: {
+            parts: plan.review.parts,
+            customLabels: plan.review.occurrences.filter((o) => o.kind === 'custom label'),
+          },
         });
       return { kind: 'job', head, labels: plan.labels, ...out };
     },

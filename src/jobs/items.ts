@@ -610,3 +610,31 @@ export function filterSteps(steps: readonly StepSpec[], keptItems: Iterable<stri
   });
   return { steps: out, from, notCreated: [...droppedSlots.keys()] };
 }
+
+// ============================================================================================ skipped when it ran
+
+/**
+ * v3 F3d amendment (ADR 0058, A): a shared step's params without the parts that belong only to items the job skipped
+ * when it ran (changed meanwhile). Worked out each time the step runs and never stored, so the parts' indices always
+ * name the full arrays (a resumed job trims the same way again).
+ */
+export function withoutSkippedParts(
+  params: unknown,
+  parts: readonly ItemPart[],
+  skipped: ReadonlySet<string>,
+): unknown {
+  const keep = (its: readonly string[] | undefined) =>
+    !its || its.length === 0 || its.some((i) => !skipped.has(i));
+  let out = params;
+  const sorted = [...parts].sort((a, b) => b.path.split('.').length - a.path.split('.').length);
+  for (const part of sorted) {
+    const arr = getPath(out, part.path);
+    if (!Array.isArray(arr)) continue;
+    out = setPath(
+      out,
+      part.path,
+      arr.filter((_, i) => keep(part.items[i])),
+    );
+  }
+  return out;
+}

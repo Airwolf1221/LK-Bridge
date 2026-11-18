@@ -1,16 +1,29 @@
 /**
- * v3 F3d (renames), ADR 0058: the checks a rename's job makes inside its locks (the design's section 1, "one job, then
- * verification"), registered with the job engine:
+ * v3 F3d (renames), ADR 0058: the checks a rename's job makes (the design's section 1, "one job, then verification"),
+ * and, since the amendment of 18 November 2026 (ADR 0058, A), the REBASERS of its writes, registered with the job engine.
  *
- * - `rename.subject` (expect): the subject still has its old name (or, for a job resumed after it renamed the subject,
- *   or a follow-up of the left-out items, the new one). Anything else ("someone renamed it meanwhile"): nothing runs.
- * - `rename.resource` (expect): each page the rename writes is as planned: its name (old, or new once renamed), its
- *   aliases and its tags (before, or after this rename's own change).
- * - `rename.document` (expect, a document check): each block the rename edits is as planned apart from this rename's
- *   own edits (its fingerprint), and its new body is worked out from the block as it is now (`bindBody`).
- * - `rename.document.verify` (read-back): each approved occurrence now shows the new name, nothing else changed.
- * - `rename.asset` (expect) and `rename.asset.verify` (read-back): an asset's (or folder's) name before and after.
- * - `rename.pack` (expect): the pack version the owner APPROVED maps the new culture or race value to its new token.
+ * A rename takes each page's lock only for that page's own writes (not every lock for the whole job), and re-checks
+ * inside that lock: what an item edits must still be exactly there. When it is, the same change is re-applied to the
+ * fresh content and version; when it is not (someone edited that exact text meanwhile), the item is SKIPPED ("changed
+ * meanwhile", with a before and after excerpt) and the job carries on. Core items (the subject's own page names and the
+ * identity facts of its set) are never skipped: their conflict stops the job, which stays resumable.
+ *
+ * Checks (`bridge.expect`):
+ * - `rename.subject`: the subject still has its old name (or, resumed or a follow-up, the new one); anything else and
+ *   nothing runs (`SUBJECT_RENAMED`, `SUBJECT_GONE`).
+ * - `rename.resource`: a page of the set is there with its old name (or the new one): core, a difference stops the job.
+ * - `rename.document`: each block the rename edits, its edits re-applied to the block as it is now (`rebaseEdits`):
+ *   the bodies for `bindBody`, the items done already, the items skipped.
+ * - `rename.facts`: a page's facts the rename changes still hold their old value (or the new one); the rows' version
+ *   for the chain. Core (the set's identity facts): a difference stops the job; otherwise the item is skipped.
+ * - `rename.asset`: an asset's (or folder's) name and folder as planned, else the item is skipped.
+ * - `rename.pack`: the pack version the owner APPROVED maps the new culture or race value to its new token.
+ *
+ * Read-backs (`bridge.verify`): `rename.document.verify` (each approved, not skipped, occurrence shows the new name in its
+ * sentence), `rename.facts.verify` (each changed fact shows its new value), `rename.asset.verify`.
+ *
+ * Rebasers (`StepOptions.rebase`, src/jobs/rebase.ts): `rename.block` (a block's restatements and routing lines),
+ * `rename.row` (a chronology row), `rename.resource` (a page name, an alias, an identity tag) and `rename.factRow`.
  */
 import type { JobEngine } from '../../jobs/engine.js';
 import type {
@@ -19,9 +32,25 @@ import type {
   RegisteredCheckContext,
   RegisteredCheckResult,
 } from '../../jobs/internal-steps.js';
+import type { RebaseContext, RebaseResult } from '../../jobs/rebase.js';
 import type { StateDifference } from '../../jobs/sidebar-state.js';
+import type { SkippedItem } from '../../jobs/types.js';
+import { textKey } from '../engine/text.js';
 import type { Packs } from '../service.js';
-import { applyEdits, blockOccurrences, findBlock, fingerprint, writable, type BlockEdit } from './text.js';
+import {
+  applyEdits,
+  blockOccurrences,
+  deepText,
+  findBlock,
+  fingerprint,
+  occurrencesWithSentences,
+  rebaseEdits,
+  renameTextRuns,
+  replaceName,
+  writable,
+  type BlockEdit,
+  type PlannedEdit,
+} from './text.js';
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -32,9 +61,18 @@ export const RENAME_CHECKS = {
   resource: 'rename.resource',
   document: 'rename.document',
   documentVerify: 'rename.document.verify',
+  facts: 'rename.facts',
+  factsVerify: 'rename.facts.verify',
   asset: 'rename.asset',
   assetVerify: 'rename.asset.verify',
   pack: 'rename.pack',
+} as const;
+
+export const RENAME_REBASERS = {
+  block: 'rename.block',
+  row: 'rename.row',
+  resource: 'rename.resource',
+  factRow: 'rename.factRow',
 } as const;
 
 /** The input of a document check: the blocks it edits, each with its fingerprint and its edits. */
@@ -45,7 +83,7 @@ export interface DocumentEditsInput {
   readonly blocks: readonly {
     readonly blockId: string;
     readonly fingerprint: string;
-    readonly edits: readonly BlockEdit[];
+    readonly edits: readonly PlannedEdit[];
     /** Where it is, for the owner. */
     readonly where?: string;
   }[];
@@ -54,63 +92,105 @@ export interface DocumentEditsInput {
 /** The key a block's new body is kept under in the check's result. */
 export const blockKey = (documentId: string, blockId: string) => `block:${documentId}:${blockId}`;
 
+/**
+ * A fact row's value as the rename compares it: its text runs, a mention by its custom label, and a plain mention by
+ * the page it points to (its shown name follows the page's own, which the rename itself changes).
+ */
+export function runsValue(content: unknown): string {
+  if (!Array.isArray(content)) return '';
+  return (content as unknown[])
+    .map((r) =>
+      !isObj(r)
+        ? ''
+        : typeof r.text === 'string'
+          ? r.text
+          : isObj(r.mention)
+            ? str(r.mention.text) || `@${str(r.mention.resourceId) ?? ''}`
+            : '',
+    )
+    .join('');
+}
+
+const skippedOf = (
+  list: readonly { item: string; reason: string; before: string; after: string | null; where?: string }[],
+): SkippedItem[] =>
+  list.map((s) => ({
+    item: s.item,
+    reason: s.reason,
+    before: s.before,
+    after: s.after,
+    ...(s.where ? { where: s.where } : {}),
+  }));
+
 function documentCheck(ctx: DocumentCheckContext): DocumentCheckResult {
   const input = ctx.input as DocumentEditsInput;
-  const differences: StateDifference[] = [];
   const bodies: Record<string, unknown> = {};
+  const skipped: SkippedItem[] = [];
   for (const b of input.blocks) {
     const block = findBlock(ctx.document.blocks, b.blockId);
-    if (!block) {
-      differences.push({ path: `${ctx.label} ${b.blockId}`, expected: 'the block', actual: '(gone)' });
-      continue;
-    }
-    if (fingerprint(block, input.oldName, input.newName) !== b.fingerprint) {
-      differences.push({
-        path: `${ctx.label} ${b.where ?? b.blockId}`,
-        expected: 'the block as the rename was planned on it',
-        actual: 'changed since (an outside edit is never overwritten)',
-      });
-      continue;
-    }
-    const next = applyEdits(block, b.edits, input.oldName, input.newName);
+    const r = rebaseEdits(block, {
+      fingerprint: b.fingerprint,
+      edits: b.edits,
+      oldName: input.oldName,
+      newName: input.newName,
+      ...(b.where ? { where: b.where } : {}),
+    });
+    skipped.push(...skippedOf(r.skipped));
+    if (!block || (r.edits.length === 0 && r.done.length === 0)) continue;
+    const next = r.edits.length > 0 ? applyEdits(block, r.edits, input.oldName, input.newName) : block;
     if (!next) {
-      differences.push({
-        path: `${ctx.label} ${b.where ?? b.blockId}`,
-        expected: 'the occurrences the rename was planned on',
-        actual: 'not found',
-      });
+      for (const item of r.items)
+        skipped.push({
+          item,
+          reason: 'changed meanwhile',
+          before: null,
+          after: null,
+          where: b.where ?? b.blockId,
+        });
       continue;
     }
     bodies[blockKey(input.documentId, b.blockId)] = writable(next);
   }
-  return { differences, bodies, observed: { blocks: input.blocks.length } };
+  return {
+    differences: [],
+    bodies,
+    ...(skipped.length > 0 ? { skipped } : {}),
+    observed: { blocks: input.blocks.length },
+  };
 }
 
 function documentVerify(ctx: DocumentCheckContext): DocumentCheckResult {
   const input = ctx.input as DocumentEditsInput;
   const differences: StateDifference[] = [];
   for (const b of input.blocks) {
+    if (b.edits.length === 0) continue;
     const block = findBlock(ctx.document.blocks, b.blockId);
     if (!block) {
       differences.push({ path: `${ctx.label} ${b.blockId}`, expected: 'the block', actual: '(gone)' });
       continue;
     }
-    if (fingerprint(block, input.oldName, input.newName) !== b.fingerprint) {
-      differences.push({
-        path: `${ctx.label} ${b.where ?? b.blockId}`,
-        expected: 'the block with only the rename’s edits',
-        actual: 'other changes',
-      });
-      continue;
-    }
-    const found = blockOccurrences(block, input.oldName, input.newName);
+    const occ = occurrencesWithSentences(block, input.oldName, input.newName);
+    const mentions = blockOccurrences(block, input.oldName, input.newName).mentions;
+    const same = fingerprint(block, input.oldName, input.newName) === b.fingerprint;
     for (const e of b.edits) {
-      const o = e.kind === 'text' ? found.text[e.ordinal] : found.mentions[e.ordinal];
-      if (!o || o.isOld)
+      // Unchanged apart from the rename's own edits: by its number; otherwise by its sentence (it was rebased). A mention
+      // label's edit (a proposal made before the amendment) by its number.
+      const ok =
+        e.kind === 'mention'
+          ? mentions[e.ordinal]?.isOld === false
+          : same
+            ? occ[e.ordinal]?.isOld === false
+            : occ.some(
+                (o) =>
+                  !o.isOld &&
+                  o.sentence ===
+                    replaceName(e.sentence, input.oldName, input.newName).replace(/\s+/g, ' ').trim(),
+              );
+      if (!ok)
         differences.push({
           path: `${ctx.label} ${b.where ?? b.blockId}`,
-          expected: input.newName,
-          actual: o ? input.oldName : '(not found)',
+          expected: replaceName(e.sentence, input.oldName, input.newName),
+          actual: deepText(block).slice(0, 300),
         });
     }
   }
@@ -145,6 +225,11 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
   a.length === b.length && [...a].sort().join('\u0001') === [...b].sort().join('\u0001');
 const sameList = (a: readonly string[], b: readonly string[]) => a.join('\u0001') === b.join('\u0001');
 
+/**
+ * A page of the subject's set: there, with its old name or the new one (core: a difference stops the job). A proposal
+ * made before the amendment also names the page's aliases and tags as planned (its writes do not re-check them inside
+ * their own lock): compared as before.
+ */
 async function resourceCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
   const input = ctx.input as {
     resourceId: string;
@@ -159,31 +244,142 @@ async function resourceCheck(ctx: RegisteredCheckContext): Promise<RegisteredChe
   const differences: StateDifference[] = [];
   const name = str(body.name) ?? '';
   if (!input.names.includes(name))
-    differences.push({ path: `${ctx.label} name`, expected: input.names[0] ?? '', actual: name });
-  const aliases = Array.isArray(body.aliases)
-    ? (body.aliases as unknown[]).filter((x) => typeof x === 'string')
-    : [];
+    differences.push({
+      path: `${ctx.label} name`,
+      expected: input.names[0] ?? '',
+      actual: `${name} (renamed meanwhile: a page of the subject's own set is core, so the job stops; resume it once the name is as planned, or plan the rename again)`,
+    });
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  const aliases = list(body.aliases);
   if (input.aliases && !input.aliases.some((a) => sameSet(a, aliases)))
     differences.push({ path: `${ctx.label} aliases`, expected: input.aliases[0] ?? [], actual: aliases });
-  const tags = Array.isArray(body.tags) ? (body.tags as unknown[]).filter((x) => typeof x === 'string') : [];
+  const tags = list(body.tags);
   if (input.tags && !input.tags.some((t) => sameList(t, tags)))
     differences.push({ path: `${ctx.label} tags`, expected: input.tags[0] ?? [], actual: tags });
   return { differences };
 }
 
+/** One fact a rename changes: its key, and its value before (null: the row is added) and after. */
+export interface FactChangeInput {
+  readonly key: string;
+  readonly before: string | null;
+  readonly after: string;
+}
+
+function factRows(body: unknown): Obj[] {
+  const b = (body ?? {}) as { data?: unknown; rows?: unknown };
+  const list = Array.isArray(b.data) ? b.data : Array.isArray(b.rows) ? b.rows : [];
+  return (list as unknown[]).filter(isObj);
+}
+
+/** Each fact's value now against its plan: as before, already as after, or something else. */
+function judgeFacts(
+  rows: readonly Obj[],
+  facts: readonly FactChangeInput[],
+): { key: string; state: 'before' | 'after' | 'changed'; now: string | null; before: string | null }[] {
+  return facts.map((f) => {
+    const row = rows.find((r) => typeof r.key === 'string' && textKey(r.key) === textKey(f.key));
+    const now = row ? runsValue(row.content) : null;
+    const state =
+      f.before === null
+        ? row === undefined || now === f.after
+          ? row === undefined
+            ? 'before'
+            : 'after'
+          : 'changed'
+        : now === f.before
+          ? 'before'
+          : now === f.after
+            ? 'after'
+            : 'changed';
+    return { key: f.key, state, now, before: f.before };
+  });
+}
+
+async function factsCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
+  const input = ctx.input as {
+    resourceId: string;
+    propertyId: string;
+    facts: FactChangeInput[];
+    core?: boolean;
+    item: string;
+    where: string;
+  };
+  const r = await ctx.read('listPropertyRows', {
+    path: { resourceId: input.resourceId, propertyId: input.propertyId },
+  });
+  const version = str((r.body as Obj | null)?.version);
+  const changed = r.exists
+    ? judgeFacts(factRows(r.body), input.facts).filter((j) => j.state === 'changed')
+    : [];
+  if (r.exists && changed.length === 0) return { differences: [], version };
+  const differences: StateDifference[] = r.exists
+    ? changed.map((c) => ({
+        path: `${input.where}: ${c.key}`,
+        expected: c.before ?? '(absent)',
+        actual: c.now ?? '(absent)',
+      }))
+    : [{ path: input.where, expected: 'the facts', actual: '(gone)' }];
+  if (input.core) return { differences };
+  return {
+    differences: [],
+    version,
+    skipped: [
+      {
+        item: input.item,
+        reason: 'changed meanwhile',
+        before: differences.map((d) => `${d.path.split(': ').at(-1)}: ${String(d.expected)}`).join('; '),
+        after: differences.map((d) => `${d.path.split(': ').at(-1)}: ${String(d.actual)}`).join('; '),
+        where: input.where,
+      },
+    ],
+  };
+}
+
+async function factsVerify(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
+  const input = ctx.input as { resourceId: string; propertyId: string; facts: FactChangeInput[] };
+  const r = await ctx.read('listPropertyRows', {
+    path: { resourceId: input.resourceId, propertyId: input.propertyId },
+  });
+  const rows = factRows(r.body);
+  const differences: StateDifference[] = [];
+  for (const f of input.facts) {
+    const row = rows.find((x) => typeof x.key === 'string' && textKey(x.key) === textKey(f.key));
+    const now = row ? runsValue(row.content) : null;
+    if (now !== f.after) differences.push({ path: `${ctx.label} ${f.key}`, expected: f.after, actual: now });
+  }
+  return { differences };
+}
+
 async function assetCheck(ctx: RegisteredCheckContext): Promise<RegisteredCheckResult> {
-  const input = ctx.input as { assetId: string; names: string[]; folderId: string | null };
+  const input = ctx.input as { assetId: string; names: string[]; folderId: string | null; item?: string };
   const r = await ctx.read('getAsset', { path: { assetId: input.assetId } });
   const body = (r.body ?? {}) as Obj;
-  if (!r.exists) return { differences: [{ path: ctx.label, expected: 'the asset', actual: '(gone)' }] };
   const differences: StateDifference[] = [];
-  const name = str(body.name) ?? '';
-  const want = ctx.phase === 'verify' ? input.names.slice(-1) : input.names;
-  if (!want.includes(name))
-    differences.push({ path: `${ctx.label} name`, expected: want[0] ?? '', actual: name });
-  const folder = str(body.folderId) ?? str(body.parentId);
-  if (input.folderId !== undefined && folder !== input.folderId)
-    differences.push({ path: `${ctx.label} folder`, expected: input.folderId, actual: folder });
+  if (!r.exists) differences.push({ path: ctx.label, expected: 'the asset', actual: '(gone)' });
+  else {
+    const name = str(body.name) ?? '';
+    const want = ctx.phase === 'verify' ? input.names.slice(-1) : input.names;
+    if (!want.includes(name))
+      differences.push({ path: `${ctx.label} name`, expected: want[0] ?? '', actual: name });
+    const folder = str(body.folderId) ?? str(body.parentId);
+    if (input.folderId !== undefined && folder !== input.folderId)
+      differences.push({ path: `${ctx.label} folder`, expected: input.folderId, actual: folder });
+  }
+  // ADR 0058 amendment (A): an asset renamed or moved meanwhile is skipped (the job carries on), never overwritten.
+  if (ctx.phase !== 'verify' && differences.length > 0 && input.item)
+    return {
+      differences: [],
+      skipped: [
+        {
+          item: input.item,
+          reason: 'changed meanwhile',
+          before: input.names[0] ?? null,
+          after: differences.map((d) => `${d.path}: ${String(d.actual)}`).join('; '),
+          where: ctx.label,
+        },
+      ],
+    };
   return { differences };
 }
 
@@ -217,9 +413,156 @@ function packCheck(packs: Pick<Packs, 'get' | 'store'>) {
   };
 }
 
-/** Registers the rename's checks with the engine. Returns an unregister. */
+// ============================================================================================ rebasers (ADR 0058, A)
+
+const blockOf = (body: unknown): Obj | null =>
+  isObj(body) ? (isObj(body.block) ? body.block : typeof body.id === 'string' ? body : null) : null;
+
+/** A block's restatements (or routing lines), re-applied to the block as it is now. */
+function rebaseBlock(ctx: RebaseContext): RebaseResult {
+  const input = ctx.input as {
+    oldName: string;
+    newName: string;
+    fingerprint: string;
+    edits: PlannedEdit[];
+    where?: string;
+  };
+  const block = ctx.current.exists ? blockOf(ctx.current.body) : null;
+  const r = rebaseEdits(block, input);
+  if (r.edits.length === 0) {
+    if (r.skipped.length === 0) return { kind: 'unchanged', note: { done: r.done } };
+    return { kind: 'skip', skipped: skippedOf(r.skipped) };
+  }
+  const next = applyEdits(block!, r.edits, input.oldName, input.newName);
+  if (!next)
+    return {
+      kind: 'skip',
+      skipped: input.edits.map((e) => ({
+        item: e.item,
+        reason: 'changed meanwhile',
+        before: e.sentence,
+        after: null,
+      })),
+    };
+  return {
+    kind: 'retry',
+    params: { ...ctx.params, body: writable(next) },
+    ...(r.skipped.length > 0 ? { skipped: skippedOf(r.skipped) } : {}),
+    note: { rebasedItems: r.items },
+  };
+}
+
+/** A chronology row: its text exactly as planned (apart from this rename's own edits), re-applied; else skipped. */
+function rebaseRow(ctx: RebaseContext): RebaseResult {
+  const input = ctx.input as {
+    oldName: string;
+    newName: string;
+    fingerprint: string;
+    item: string;
+    before: string;
+    where?: string;
+  };
+  const block = ctx.current.exists ? blockOf(ctx.current.body) : null;
+  if (!block || fingerprint(block, input.oldName, input.newName) !== input.fingerprint)
+    return {
+      kind: 'skip',
+      skipped: [
+        {
+          item: input.item,
+          reason: block ? 'changed meanwhile' : 'changed meanwhile: the row is gone',
+          before: input.before,
+          after: block ? deepText(block).slice(0, 300) : null,
+          ...(input.where ? { where: input.where } : {}),
+        },
+      ],
+    };
+  const next = renameTextRuns(block, input.oldName, input.newName);
+  if (JSON.stringify(writable(block)) === JSON.stringify(next)) return { kind: 'unchanged' };
+  return { kind: 'retry', params: { ...ctx.params, body: next } };
+}
+
+/** A page's name (core), one alias added, or one identity tag swapped, on the page as it is now. */
+function rebaseResource(ctx: RebaseContext): RebaseResult {
+  const input = ctx.input as
+    | { kind: 'name'; from: string; to: string; item: string }
+    | { kind: 'alias'; alias: string; item: string }
+    | { kind: 'tags'; from: string; to: string; item: string };
+  const page = (ctx.current.entity ?? ctx.current.body ?? {}) as Obj;
+  if (!ctx.current.exists)
+    return { kind: 'skip', skipped: [{ item: input.item, reason: 'changed meanwhile: the page is gone' }] };
+  const list = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  if (input.kind === 'name') {
+    const name = str(page.name) ?? '';
+    if (name === input.to) return { kind: 'unchanged' };
+    if (name === input.from) return { kind: 'retry', params: ctx.params };
+    return {
+      kind: 'skip',
+      skipped: [
+        {
+          item: input.item,
+          reason: 'changed meanwhile: the page was renamed',
+          before: input.from,
+          after: name,
+        },
+      ],
+    };
+  }
+  if (input.kind === 'alias') {
+    const aliases = list(page.aliases);
+    if (aliases.some((a) => textKey(a) === textKey(input.alias))) return { kind: 'unchanged' };
+    const body = isObj(ctx.params.body) ? ctx.params.body : {};
+    return {
+      kind: 'retry',
+      params: { ...ctx.params, body: { ...body, aliases: [...aliases, input.alias] } },
+    };
+  }
+  const tags = list(page.tags);
+  if (tags.includes(input.from)) {
+    const next = tags.map((t) => (t === input.from ? input.to : t));
+    const body = isObj(ctx.params.body) ? ctx.params.body : {};
+    return { kind: 'retry', params: { ...ctx.params, body: { ...body, tags: [...new Set(next)] } } };
+  }
+  if (tags.includes(input.to)) return { kind: 'unchanged' };
+  return {
+    kind: 'skip',
+    skipped: [
+      {
+        item: input.item,
+        reason: `changed meanwhile: the page no longer has the tag ${input.from}`,
+        before: input.from,
+        after: tags.join(', '),
+      },
+    ],
+  };
+}
+
+/** One fact row: still its old value (the same write, on the current version), already the new one, or skipped. */
+function rebaseFactRow(ctx: RebaseContext): RebaseResult {
+  const input = ctx.input as FactChangeInput & { item: string; where?: string };
+  const rows =
+    isObj(ctx.current.entity) && typeof ctx.current.entity.key === 'string'
+      ? [ctx.current.entity]
+      : factRows(ctx.current.body);
+  const [j] = judgeFacts(rows, [input]);
+  if (j?.state === 'after') return { kind: 'unchanged' };
+  if (j?.state === 'before' && ctx.current.exists) return { kind: 'retry', params: ctx.params };
+  return {
+    kind: 'skip',
+    skipped: [
+      {
+        item: input.item,
+        reason: 'changed meanwhile',
+        before: `${input.key}: ${input.before ?? '(absent)'}`,
+        after: `${input.key}: ${j?.now ?? '(absent)'}`,
+        ...(input.where ? { where: input.where } : {}),
+      },
+    ],
+  };
+}
+
+/** Registers the rename's checks and rebasers with the engine. Returns an unregister. */
 export function registerRenameChecks(
-  engine: Pick<JobEngine, 'registerAsyncChecker' | 'registerChecker'>,
+  engine: Pick<JobEngine, 'registerAsyncChecker' | 'registerChecker' | 'registerRebaser'>,
   packs: Pick<Packs, 'get' | 'store'>,
 ): () => void {
   const off = [
@@ -227,9 +570,15 @@ export function registerRenameChecks(
     engine.registerAsyncChecker(RENAME_CHECKS.resource, resourceCheck),
     engine.registerChecker(RENAME_CHECKS.document, documentCheck),
     engine.registerChecker(RENAME_CHECKS.documentVerify, documentVerify),
+    engine.registerAsyncChecker(RENAME_CHECKS.facts, factsCheck),
+    engine.registerAsyncChecker(RENAME_CHECKS.factsVerify, factsVerify),
     engine.registerAsyncChecker(RENAME_CHECKS.asset, assetCheck),
     engine.registerAsyncChecker(RENAME_CHECKS.assetVerify, assetCheck),
     engine.registerAsyncChecker(RENAME_CHECKS.pack, packCheck(packs)),
+    engine.registerRebaser(RENAME_REBASERS.block, rebaseBlock),
+    engine.registerRebaser(RENAME_REBASERS.row, rebaseRow),
+    engine.registerRebaser(RENAME_REBASERS.resource, rebaseResource),
+    engine.registerRebaser(RENAME_REBASERS.factRow, rebaseFactRow),
   ];
   return () => {
     for (const f of off) f();
@@ -238,6 +587,7 @@ export function registerRenameChecks(
 
 /** Exposed for tests. */
 export const renameCheckers = { documentCheck, documentVerify };
+export const renameRebasers = { rebaseBlock, rebaseRow, rebaseResource, rebaseFactRow };
 
 /** Whether a value is a block's edits list (for the planner's own checks). */
 export const isEdits = (v: unknown): v is BlockEdit[] =>

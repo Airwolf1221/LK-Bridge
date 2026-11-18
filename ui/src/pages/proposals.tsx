@@ -1088,6 +1088,7 @@ function ItemsView({
   const approved = plan.approved ? new Set(plan.approved) : null;
   const groups = [...new Set(items.map((i) => i.group))];
   const omitted = plan.omitted ?? [];
+  const skipped = plan.skipped ?? [];
   const decided = !pending && approved !== null;
   return (
     <section className="card" aria-label="Items">
@@ -1102,7 +1103,8 @@ function ItemsView({
         </p>
       ) : decided ? (
         <p>
-          {approved.size} of {items.length} approved; {omitted.length} left out.
+          {approved.size} of {items.length} approved; {omitted.length} left out
+          {skipped.length > 0 ? `; ${skipped.length} skipped when the job ran (changed meanwhile)` : ''}.
           {p.reproposedAs && (
             <>
               {' '}
@@ -1199,16 +1201,40 @@ function ItemsView({
           </ul>
         </div>
       )}
-      {decided && omitted.length > 0 && (
+      {decided && (omitted.length > 0 || skipped.length > 0) && (
         <div className="stack">
-          <details>
-            <summary>Left out ({omitted.length})</summary>
-            <ul>
-              {omitted.map((id) => (
-                <li key={id}>{labels.get(id) ?? id}</li>
-              ))}
-            </ul>
-          </details>
+          {omitted.length > 0 && (
+            <details>
+              <summary>Left out ({omitted.length})</summary>
+              <ul>
+                {omitted.map((id) => (
+                  <li key={id}>{labels.get(id) ?? id}</li>
+                ))}
+              </ul>
+            </details>
+          )}
+          {skipped.length > 0 && (
+            <details open>
+              <summary>Skipped when the job ran ({skipped.length})</summary>
+              <p className="muted small-text">
+                Someone changed what these edit while the job ran, so they were not written (an outside edit
+                is never overwritten).
+              </p>
+              <ul>
+                {skipped.map((x) => (
+                  <li key={x.item}>
+                    {labels.get(x.item) ?? x.item}: {x.reason}
+                    {x.before ? (
+                      <span className="muted small-text">
+                        {' '}
+                        (planned on “{x.before}”{x.after ? `; now “${x.after}”` : ''})
+                      </span>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           {!p.reproposedAs && ['executing', 'executed', 'failed'].includes(p.state) && (
             <div className="row">
               <Button busy={busy} onClick={onRepropose}>

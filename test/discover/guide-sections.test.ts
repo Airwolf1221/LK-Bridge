@@ -210,6 +210,12 @@ describe('through the tools', () => {
     expect(none.body.error.code).toBe('SECTION_NOT_FOUND');
   });
 
+  it('"How to decide" sends a subject’s rename to arkona_rename, on a line of its own (ADR 0058 amendment C)', () => {
+    const text = readFileSync(new URL('../../docs/bridge-guide.md', import.meta.url), 'utf8');
+    const decide = text.slice(text.indexOf('## How to decide'), text.indexOf('\n## Find and read a page'));
+    expect(decide).toMatch(/^\*\*Rename a subject → `arkona_rename` \(never `update_resource`\)\.\*\*/m);
+  });
+
   it('"How to decide" lists the exact section names to ask for', () => {
     const text = readFileSync(new URL('../../docs/bridge-guide.md', import.meta.url), 'utf8');
     const decide = text.slice(text.indexOf('## How to decide'), text.indexOf('\n## Find and read a page'));
