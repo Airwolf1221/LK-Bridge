@@ -83,7 +83,7 @@ export async function stageForPack(
       seen = `file ${src.file.file_id}`;
       const img = await resolveImage(
         { fileUrl: src.file.download_url },
-        pd.settings.upload,
+        { ...pd.settings.upload, allowFileSource: svc.fileSourceEnabled(pd.project.id) },
         pd.uploadGuard,
         mctx.signal,
       );

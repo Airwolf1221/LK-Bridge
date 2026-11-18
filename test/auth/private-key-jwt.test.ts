@@ -631,14 +631,18 @@ describe('ChatGPT end to end with private_key_jwt', () => {
     ['a kid absent from the key set', { kid: 'nope' }, 'unknown_kid'],
   ] as const)('refuses an assertion with %s', async (_name, spec, reason) => {
     const now = b.clock.now();
-    const times: Record<string, number> = { past: now - 61, far: now + 361, future: now + 61 };
+    // Well past each limit (exp: now + 300 + 60 skew; nbf and iat: now + 60; expiry: exp + 60). The test clock follows real
+    // time, so values ONE second past a limit were accepted whenever a second ticked between `now` here and the bridge's
+    // own check (signing and the request under full-suite load): the failure seen once under load. The exact limits are
+    // checked by the accepted cases above, which keep a wide margin on the other side.
+    const times: Record<string, number> = { past: now - 120, far: now + 420, future: now + 120 };
     const claims = Object.fromEntries(
       Object.entries((spec as { claims?: Record<string, unknown> }).claims ?? {}).map(([k, v]) => [
         k,
         typeof v === 'string' && v in times ? times[v] : v,
       ]),
     );
-    if (claims.exp !== undefined && claims.exp === times.past) claims.iat = now - 120;
+    if (claims.exp !== undefined && claims.exp === times.past) claims.iat = now - 200;
     const keyName = (spec as { key?: string }).key;
     const key =
       keyName === 'impostor'

@@ -5,16 +5,19 @@
  * LegendKeeper) and writes nothing. It returns which folders already exist (reused) and which would have to be created,
  * in order, or a typed refusal. D3's image pipeline creates what the plan says; folders are NEVER moved.
  *
- * The old bridge's rules, exactly:
- *   1. A folder named exactly after the character is reused WHEREVER it already is, if there is exactly one.
- *   2. Otherwise the destination is `Characters / Group / Race / Character`, or `Characters / Race / Character` when the
+ * The old bridge's rules, as the owner amended them (ADR 0057 decision 8, 17 November 2026):
+ *   1. (Retired.) The old bridge reused a folder named after the character wherever it was; a folder another agent made
+ *      first under any name chain then captured every later image of that character (R2-46). A character's folder is
+ *      now resolved ONLY from its exact path under Characters: a folder with the character's name anywhere else is never
+ *      used.
+ *   2. The destination is `Characters / Group / Race / Character`, or `Characters / Race / Character` when the
  *      race sits directly under Characters. The labels come from the character page's ancestry in the repository tree
  *      (display names, so the `[INDEX]` / `[BSRC]` prefixes are gone). "Characters" is the type registry's asset root
  *      folder name when A3's data exists, otherwise the literal "Characters".
  *   3. An unknown race uses the literal folder `Undetermined / Unknown`.
  *   4. Then the literal `subfolders` (plain names, never a slash path).
- *   5. A non-folder asset with the same name where a folder is needed is a conflict; more than one folder with the
- *      character's name is an ambiguity. Neither is guessed at.
+ *   5. A non-folder asset with the same name where a folder of the character's path is needed, or more than one folder
+ *      of one name there, is `ART_FOLDER_AMBIGUOUS` (ADR 0057 decision 8). Neither is guessed at.
  *
  * Names match exactly (Unicode NFC, ignoring case, like the repository tree's lookups): "inae mikumo" is the folder
  * "Inae Mikumo". The plan says so in its notes when the case differs.
@@ -44,7 +47,7 @@ export type PlanRequest =
       /**
        * v2 D3 (ADR 0041): the group and race folder names, already worked out from a DECLARED race (the taxonomy's
        * asset folder names, `[group, race]` or `[race]`), or null for an unknown race. Given, they replace the labels
-       * read from the character page's ancestry. Rule 1 (an existing folder named after the character) still comes first.
+       * read from the character page's ancestry (ADR 0057 decision 8: only that exact path is used).
        */
       readonly raceLabels?: readonly string[] | null | undefined;
       /**
@@ -164,7 +167,12 @@ export type PlanErrorCode =
   /** More than one folder with that name where one is needed (the typed ambiguity). */
   | 'AMBIGUOUS_FOLDER'
   /** An asset that is not a folder has the name where a folder is needed (the typed conflict). */
-  | 'ASSET_NAME_CONFLICT';
+  | 'ASSET_NAME_CONFLICT'
+  /**
+   * ADR 0057 decision 8: a character's exact path under Characters is ambiguous (two folders of one name in one place)
+   * or blocked by an asset that is not a folder. Nothing is guessed, and no folder elsewhere is used instead.
+   */
+  | 'ART_FOLDER_AMBIGUOUS';
 
 export interface PlanError {
   readonly code: PlanErrorCode;
@@ -302,43 +310,6 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
     name = c.name;
   }
 
-  // Rule 1: a folder named exactly after the character, wherever it is.
-  const existing = deps.assets.findFoldersByName(projectId, name).data;
-  if (existing.length > 1) {
-    return fail(
-      'AMBIGUOUS_FOLDER',
-      `${existing.length} folders are named “${name}” (${existing.map((f) => f.path.names.join(' / ')).join('; ')}). Say which one by giving a folderPath. Nothing was guessed.`,
-      { name, candidates: existing.map((f) => ({ id: f.id, path: f.path.names })) },
-    );
-  }
-  if (existing.length === 1) {
-    const f = existing[0]!;
-    if (f.name !== name) notes.push(`The folder is named “${f.name}”; names are compared ignoring case.`);
-    const steps: PlanStep[] = f.path.ids.map((id, i) => ({
-      name: f.path.names[i]!,
-      action: 'reuse',
-      folderId: id,
-      parentFolderId: i === 0 ? null : f.path.ids[i - 1]!,
-      path: f.path.names.slice(0, i + 1),
-    }));
-    const walk = walkPath(projectId, deps, f.id, f.path.names, subfolders, notes);
-    if (!walk.ok) return walk.result;
-    return done(
-      projectId,
-      'existing_character_folder',
-      {
-        name,
-        resourceId: page?.resourceId ?? null,
-        group: null,
-        race: null,
-        raceSource: 'not_needed',
-      },
-      [...steps, ...walk.value],
-      notes,
-      assetTree,
-    );
-  }
-
   // v2 D3: the race was declared and resolved through the taxonomy by the caller.
   if (request.raceLabels !== undefined) {
     const labels: string[] = [];
@@ -349,7 +320,7 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
     }
     if (request.raceLabels === null) notes.push('The race is unknown or was not given.');
     const walk = walkPath(projectId, deps, null, [], [rules.rootName, ...labels, name, ...subfolders], notes);
-    if (!walk.ok) return walk.result;
+    if (!walk.ok) return artFolder(walk.result, name);
     const known = request.raceLabels !== null;
     return done(
       projectId,
@@ -394,7 +365,7 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
     );
   }
   const walk = walkPath(projectId, deps, null, [], [rules.rootName, ...labels, name, ...subfolders], notes);
-  if (!walk.ok) return walk.result;
+  if (!walk.ok) return artFolder(walk.result, name);
   const group = raceSource === 'page_ancestry' && labels.length === 2 ? labels[0]! : null;
   const race = raceSource === 'page_ancestry' ? labels.at(-1)! : rules.unknownFolder;
   return done(
@@ -404,6 +375,21 @@ export function planAssetDestination(projectId: string, request: PlanRequest, de
     walk.value,
     notes,
     assetTree,
+  );
+}
+
+/**
+ * ADR 0057 decision 8: a character's path that is ambiguous or blocked is `ART_FOLDER_AMBIGUOUS`, naming what is in the
+ * way; no folder named after the character elsewhere is used instead.
+ */
+function artFolder(result: PlanResult, character: string): PlanResult {
+  if (result.ok) return result;
+  const e = result.error;
+  if (e.code !== 'AMBIGUOUS_FOLDER' && e.code !== 'ASSET_NAME_CONFLICT') return result;
+  return fail(
+    'ART_FOLDER_AMBIGUOUS',
+    `The art folder of ${character} is resolved only from its exact path under Characters, and that path cannot be told: ${e.message} Ask the owner to sort the folders out (or give a folder path for this one image).`,
+    { character, ...(e.details ?? {}), cause: e.code },
   );
 }
 

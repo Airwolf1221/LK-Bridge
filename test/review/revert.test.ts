@@ -207,7 +207,9 @@ describe('Revert, kind by kind (decision B)', () => {
   });
 
   it('a page’s name, tags and aliases, and its place among its siblings after the rename', async () => {
-    const page = 'bk000002';
+    // ADR 0057 decision 5: renaming an Authoritative ([BSRC]) page is a canonical proposal (never direct, so never
+    // reverted); an index's rename runs directly and is revertible.
+    const page = 'grp00007';
     const before = {
       name: resource(page).name,
       tags: [...(resource(page).tags ?? [])],
@@ -215,14 +217,14 @@ describe('Revert, kind by kind (decision B)', () => {
     };
     const r = await call('update_resource', {
       page,
-      name: '[BSRC] Aaa Source of the Hollow cycle',
+      name: '[INDEX] Aaa Group 7',
       tags: { add: ['draft-notes'] },
       aliases: { add: ['Scraps'] },
     });
     expect(r.body.status, r.text).toBe('written');
     const jobId = jobOf(r);
     await waitJob(jobId);
-    expect(resource(page).name).toBe('[BSRC] Aaa Source of the Hollow cycle');
+    expect(resource(page).name).toBe('[INDEX] Aaa Group 7');
     const { r: rv, job } = await revert(jobId);
     expect(rv.status, JSON.stringify(rv)).toBe('submitted');
     expect(job!.status, JSON.stringify(job!.lastError)).toBe('succeeded');

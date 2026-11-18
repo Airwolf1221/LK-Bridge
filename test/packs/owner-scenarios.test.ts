@@ -109,7 +109,7 @@ describe('the F3b Arkona evaluation scenarios, as a good run sends them', () => 
       status: 'authoritative',
       referenceType: 'Institution Reference',
       scope: 'The royal council of terrace-holders',
-      temporalScope: '3A 500 - 4A 12',
+      temporalScope: '3A 250 - 4A 12', // inside the Third Age (it ends in 3A 31x; 3A 500 was outside it)
       markdown: ownerText('The Terrace Council of the Kingdom of Saba.'),
       project: 'test',
     };

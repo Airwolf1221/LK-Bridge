@@ -13,6 +13,7 @@ export type JobsErrorCode =
   | 'READ_ONLY'
   | 'MEMBER_ADMIN_DISABLED'
   | 'CASCADE_CONFIRM_REQUIRED'
+  | 'TEMPLATES_DESTINATION'
   | 'DRAINING'
   | 'UNSUPPORTED_BLOCK_LOSS'
   | 'VERSION_CONFLICT'
@@ -177,6 +178,24 @@ export class MemberAdminDisabledError extends JobsError {
     super(
       'MEMBER_ADMIN_DISABLED',
       `${opId} changes project members or invites and is disabled (set LK_ALLOW_MEMBER_ADMIN=true to allow it)`,
+    );
+  }
+  override toJSON() {
+    return { ...super.toJSON(), opId: this.opId };
+  }
+}
+
+/**
+ * W18 (the write-scope rehearsal, 17 November 2026): LegendKeeper accepts a move to the reserved parent `templates`, and
+ * the page then reads with parentId "templates": out of the repository, among the templates. Only the bridge keeps
+ * pages in the repository, so it refuses that destination for every caller, at every scope, before anything is queued.
+ */
+export class TemplatesDestinationError extends JobsError {
+  override readonly name = 'TemplatesDestinationError';
+  constructor(readonly opId: string) {
+    super(
+      'TEMPLATES_DESTINATION',
+      `${opId} to the parent "templates" is refused: it takes the page out of the repository and makes it a template. Templates are made with saveResourceAsTemplate, by the owner. Nothing was done.`,
     );
   }
   override toJSON() {

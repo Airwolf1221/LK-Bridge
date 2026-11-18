@@ -1,6 +1,7 @@
 /**
  * Resolves the image for `lk_upload_image`: base64 (optionally a `data:` URI), or a public https URL when
- * `UPLOAD_ALLOW_URL_SOURCE` allows. Either way the result is verified: size cap, and the first bytes must be a PNG,
+ * `UPLOAD_ALLOW_URL_SOURCE` allows, or ChatGPT's file link when the project's `fileSourceEnabled` allows (ADR 0057
+ * decision 7). Either way the result is verified: size cap, and the first bytes must be a PNG,
  * JPEG, GIF or WebP image that agrees with any content type the caller named.
  */
 import { createHash } from 'node:crypto';
@@ -18,6 +19,8 @@ export type SourceFailureCode =
   | 'UPLOAD_TOO_LARGE'
   | 'UPLOAD_NOT_AN_IMAGE'
   | 'UPLOAD_URL_SOURCE_DISABLED'
+  /** ADR 0057 decision 7: the project's switch for ChatGPT's file source (`fileSourceEnabled`) is off. */
+  | 'UPLOAD_FILE_SOURCE_DISABLED'
   | 'UPLOAD_URL_REFUSED'
   | 'UPLOAD_URL_FAILED'
   /** v3 F2: a ChatGPT file link that no longer works (401, 403, 404 or 410): ask ChatGPT for a fresh one. */
@@ -46,8 +49,9 @@ export interface ImageSourceInput {
   readonly url?: string | undefined;
   /**
    * v3 F2 (ADR 0049 decision 11): a ChatGPT file's temporary `download_url` (a capability: never logged, stored,
-   * journalled or returned). Downloaded through the same guarded transport as `url`, whatever UPLOAD_ALLOW_URL_SOURCE
-   * says, with any declared content type (the magic bytes decide).
+   * journalled or returned). Downloaded through the same guarded transport as `url`, with any declared content type
+   * (the magic bytes decide). ADR 0057 decision 7: its own switch (`allowFileSource`, the project's
+   * `fileSourceEnabled`), separate from UPLOAD_ALLOW_URL_SOURCE.
    */
   readonly fileUrl?: string | undefined;
   readonly contentType?: string | undefined;
@@ -61,7 +65,8 @@ const DATA_URI = /^data:([a-z]+\/[a-z0-9.+-]+)?(?:;[a-z0-9=.+-]+)*;base64,/i;
 
 export async function resolveImage(
   input: ImageSourceInput,
-  settings: ToolsSettings['upload'],
+  /** `allowFileSource`: ADR 0057 decision 7 (absent: on, the default). */
+  settings: ToolsSettings['upload'] & { readonly allowFileSource?: boolean },
   guard: GuardOptions = {},
   signal?: AbortSignal,
 ): Promise<ResolvedImage> {
@@ -98,6 +103,13 @@ export async function resolveImage(
       throw new UploadSourceError('UPLOAD_NOT_AN_IMAGE', 'The data is not a PNG, JPEG, GIF or WebP image');
     }
   } else if (input.fileUrl !== undefined) {
+    // ADR 0057 decision 7: refused before anything is fetched when the project's switch is off.
+    if (settings.allowFileSource === false) {
+      throw new UploadSourceError(
+        'UPLOAD_FILE_SOURCE_DISABLED',
+        'ChatGPT’s file source is switched off for this project (the owner’s setting fileSourceEnabled); send the image another way (data_base64, or prepare_image_upload) or ask the owner',
+      );
+    }
     try {
       const got = await fetchImage(input.fileUrl, {
         ...guard,

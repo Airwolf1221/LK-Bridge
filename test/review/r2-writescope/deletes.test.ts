@@ -237,12 +237,11 @@ describe('the two deletes together, through lk_api_batch', () => {
 });
 
 /**
- * Design gaps (ADR 0055 C1 keeps blocks and fact rows out of the deletes rail as edits; B3 lists raw sidebar-row and
- * block writes as not revertible). The SAFE outcome asserted here: content removed through the low-level tools is
- * either proposed, or put back by Revert. Either failure mode means an agent can remove content the owner can only
- * restore by hand from the journal's pre-image.
+ * Found as design gaps (R2-52: ADR 0055 C1 kept blocks and fact rows out of the deletes rail as edits; B3 lists raw
+ * sidebar-row and block writes as not revertible). ADR 0057 decision 4: content removed through the low-level tools goes
+ * through the deletes rail, so with the default rails it is a proposal (Revert support stays open).
  */
-describe('content removed as an edit, outside the rail and outside Revert', () => {
+describe('content removed through the low-level tools (ADR 0057 decision 4)', () => {
   const directThenRevertible = async (r: { body: Record<string, any>; text: string }) => {
     if (r.body.status === 'proposal_captured') return { proposed: true, revertible: null };
     const jobId = String(r.body.jobId);
@@ -255,36 +254,34 @@ describe('content removed as an edit, outside the rail and outside Revert', () =
     };
   };
 
-  // Open (CR-2026-11-R2 section 7): raw removals that are edits (ADR 0055 C1) and not a Revert kind (B3): the owner's design decision.
-  it.fails(
-    'A5: updateProperty emptying a link collection (Dependencies, two items) is proposed or revertible',
-    async () => {
-      const r = await call('lk_api_write', {
-        operationId: 'updateProperty',
-        params: { path: { resourceId: P.miyabi, propertyId: 'depmiya1' }, body: { items: [] } },
-      });
-      const out = await directThenRevertible(r);
-      expect(out.proposed || out.revertible, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
-    },
-  );
+  // ADR 0057 decision 4 (R2-52): a removal through a low-level tool is a delete for the rail (Revert support is open).
+  it('A5: updateProperty emptying a link collection (Dependencies, two items) is proposed or revertible', async () => {
+    const r = await call('lk_api_write', {
+      operationId: 'updateProperty',
+      params: { path: { resourceId: P.miyabi, propertyId: 'depmiya1' }, body: { items: [] } },
+    });
+    const out = await directThenRevertible(r);
+    // ADR 0057 decision 4: proposed (the deletes rail), not merely revertible.
+    expect(out.proposed, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
+    expect(r.body.proposedBecause, r.text).toMatch(/delete/);
+  });
 
-  // Open (CR-2026-11-R2 section 7): a raw block delete is an edit (ADR 0055 C1) and not revertible (B3): the owner's design decision.
-  it.fails(
-    'A6: deleteBlock of the Fourth Age table (the whole 20-row table block) is proposed or revertible',
-    async () => {
-      const ver = await w.stack.call(a.client, 'lk_api_read', {
-        operationId: 'getDocumentBlocks',
-        params: { path: { resourceId: 'age40001', documentId: w.docs.ageMain } },
-      });
-      const r = await call('lk_api_write', {
-        operationId: 'deleteBlock',
-        params: {
-          path: { resourceId: 'age40001', documentId: w.docs.ageMain, blockId: 'tbl1' },
-          ifMatch: String(ver.body.result?.version ?? ver.body.version ?? 'v7'),
-        },
-      });
-      const out = await directThenRevertible(r);
-      expect(out.proposed || out.revertible, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
-    },
-  );
+  // ADR 0057 decision 4 (R2-52): as A5, a block delete.
+  it('A6: deleteBlock of the Fourth Age table (the whole 20-row table block) is proposed or revertible', async () => {
+    const ver = await w.stack.call(a.client, 'lk_api_read', {
+      operationId: 'getDocumentBlocks',
+      params: { path: { resourceId: 'age40001', documentId: w.docs.ageMain } },
+    });
+    const r = await call('lk_api_write', {
+      operationId: 'deleteBlock',
+      params: {
+        path: { resourceId: 'age40001', documentId: w.docs.ageMain, blockId: 'tbl1' },
+        ifMatch: String(ver.body.result?.version ?? ver.body.version ?? 'v7'),
+      },
+    });
+    const out = await directThenRevertible(r);
+    // ADR 0057 decision 4: proposed (the deletes rail), not merely revertible.
+    expect(out.proposed, `${r.text}\n${JSON.stringify(out)}`).toBe(true);
+    expect(r.body.proposedBecause, r.text).toMatch(/delete/);
+  });
 });

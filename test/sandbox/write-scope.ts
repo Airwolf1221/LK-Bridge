@@ -36,7 +36,8 @@
  * which the script approves as the owner would.
  * Rails: a delete and an 11-page batch become proposals under the default rails, saying why; both are rejected.
  * Clean-up: pending proposals rejected; the HELPER deletes the chronology event; the throwaway page (cascade) and the
- * image's folder are deleted. A 404 or "already deleted" counts as cleaned (only when a read says so).
+ * image's folder are deleted; R4's re-staged copy is discarded from the Staging page. A 404 or "already deleted" counts
+ * as cleaned (when a read says so, or when the delete itself answers not found: R4's approved deletion took the image).
  *
  * Every write of the script itself goes through test/sandbox/wait.ts (a write parked for budget or queued is waited
  * for, never sent again), and every agent tool's job is waited for the same way.
@@ -48,7 +49,7 @@ import { PatService } from '../../src/auth/pats.js';
 import { AuthStore } from '../../src/auth/store.js';
 import { readAgeTable } from '../../src/chronology/table.js';
 import type { Db } from '../../src/db/open.js';
-import type { Principal } from '../../src/jobs/index.js';
+import { SYSTEM_PRINCIPAL as SYSTEM, type Principal } from '../../src/jobs/index.js';
 import type { McpToolContext } from '../../src/mcp/server.js';
 import { packToolMode } from '../../src/packs/types.js';
 import type { Runtime } from '../../src/runtime.js';
@@ -784,6 +785,13 @@ export async function runWriteScopeRehearsal(
         const r = await attempt(op, { path });
         return r.ok ? r.body?.deletedAt != null : /\b404\b|NOT_FOUND/.test(r.error);
       };
+      /**
+       * The 17 November 2026 run: R4's approved deletion proposal had already deleted the image, so the clean-up's own
+       * delete answered "not found" while a read of the deleted asset still answered (W5: a deleted image's file still
+       * serves). A delete refused as not found means it is already gone: cleaned.
+       */
+      const notFound = (r: { ok: boolean; error?: string }) =>
+        !r.ok && /\b404\b|NOT_FOUND/.test(r.error ?? '');
       if (made.root) {
         const r = await attempt(
           'deleteResource',
@@ -798,13 +806,30 @@ export async function runWriteScopeRehearsal(
         const folder = rt.assets.queries.foldersByPath(pid, [name]).data[0];
         if (!folder) continue;
         const r = await attempt('deleteAsset', { path: { assetId: folder.id } });
-        if (!r.ok && !(await gone('getAsset', { assetId: folder.id })))
+        if (!r.ok && !notFound(r) && !(await gone('getAsset', { assetId: folder.id })))
           left.push(`asset folder “${name}” and what is in it (${r.error})`);
       }
       if (image.assetId && !(await gone('getAsset', { assetId: image.assetId }))) {
         const r = await attempt('deleteAsset', { path: { assetId: image.assetId } });
-        if (!r.ok && !(await gone('getAsset', { assetId: image.assetId })))
+        if (!r.ok && !notFound(r) && !(await gone('getAsset', { assetId: image.assetId })))
           left.push(`image ${image.assetId} (${r.error})`);
+      }
+      // R4's revert put the image back on the Staging page (its file on the bridge's server): discard that copy, as the
+      // owner does on the Staging page (nothing is in LegendKeeper for it, so nothing is sent).
+      const restaged = image.stagedId ? rt.images.staged(pid, image.stagedId) : null;
+      if (restaged?.staged === true && restaged.assetId === null) {
+        try {
+          const d = await rt.images.discard({
+            projectId: pid,
+            row: restaged,
+            origin: { kind: 'ui', tool: 'staging.discard', principal: SYSTEM },
+            by: 'owner',
+          });
+          if (!('status' in d && d.status === 'discarded'))
+            left.push(`the re-staged copy of the image on the Staging page (${JSON.stringify(d)})`);
+        } catch (e) {
+          left.push(`the re-staged copy of the image on the Staging page (${(e as Error).message})`);
+        }
       }
       if (left.length > 0) throw new Fails(`left behind, delete by hand: ${left.join('; ')}`);
       return `root ${made.root || '(none)'} with its pages, the run's asset folders${chron.made ? ', the chronology event' : ''}`;

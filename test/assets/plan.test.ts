@@ -115,10 +115,12 @@ beforeEach(async () => {
   await buildRepository(rig, 'alpha');
 });
 
-describe('rule 1: a folder named after the character is reused wherever it is', () => {
-  it('by name', () => {
+// ADR 0057 decision 8 (the owner's, 17 November 2026): the old rule 1 (a folder named after the character reused wherever
+// it is) is retired. A character's folder is resolved ONLY from its exact path under Characters.
+describe('the exact path only: a folder named after the character elsewhere is never used (ADR 0057 decision 8)', () => {
+  it('by name: the folder at the exact path is reused', () => {
     const p = ok(plan({ characterName: 'Inae Mikumo' }));
-    expect(p.mode).toBe('existing_character_folder');
+    expect(p.mode).toBe('character_path');
     expect(lines(p)).toEqual(['reuse Characters', 'reuse Elves', 'reuse Moon Elves', 'reuse Inae Mikumo']);
     expect(p.wouldCreate).toEqual([]);
     expect(p.destination).toEqual({
@@ -128,33 +130,38 @@ describe('rule 1: a folder named after the character is reused wherever it is', 
     });
     expect(p.steps.map((s) => s.folderId)).toEqual([w.characters, w.elves, w.moonElves, w.inae]);
     expect(p.steps[3]).toMatchObject({ parentFolderId: w.moonElves });
-    expect(p.character).toMatchObject({ name: 'Inae Mikumo', raceSource: 'not_needed' });
+    expect(p.character).toMatchObject({ name: 'Inae Mikumo', raceSource: 'page_ancestry' });
   });
 
   it('by the character’s page (the Core page, whose own [INDEX] gives the name)', () => {
     const p = ok(plan({ characterResourceId: page.inae }));
-    expect(p.mode).toBe('existing_character_folder');
+    expect(p.mode).toBe('character_path');
     expect(p.destination.folderId).toBe(w.inae);
     expect(p.character).toMatchObject({ name: 'Inae Mikumo', resourceId: page.inae });
   });
 
-  it('even when the folder is nowhere near Characters, as long as there is exactly one', async () => {
+  it('a folder with the character’s name anywhere else is never used: the exact path is planned instead', async () => {
     P().model.outsideMove(w.inae, w.recoveryCharacters);
     await refresh();
     const p = ok(plan({ characterName: 'Inae Mikumo' }));
-    expect(lines(p)).toEqual(['reuse Recovery originals 2026-11', 'reuse Characters', 'reuse Inae Mikumo']);
-    expect(p.destination.path).toEqual(['Recovery originals 2026-11', 'Characters', 'Inae Mikumo']);
-    // The folder was NOT moved: the plan only reports where it is.
+    expect(lines(p)).toEqual(['reuse Characters', 'reuse Elves', 'reuse Moon Elves', 'create Inae Mikumo']);
+    expect(p.destination).toMatchObject({
+      path: ['Characters', 'Elves', 'Moon Elves', 'Inae Mikumo'],
+      exists: false,
+    });
+    // The folder elsewhere was NOT moved, and not used.
     expect(P().model.assets.get(w.inae)!.folderId).toBe(w.recoveryCharacters);
   });
 
-  it('ignores case, and says so', () => {
+  it('names compare byte for byte, as every walk does: another case is another folder', () => {
     const p = ok(plan({ characterName: 'inae mikumo' }));
-    expect(p.destination.folderId).toBe(w.inae);
-    expect(p.notes.join(' ')).toMatch(/ignoring case/);
+    expect(p.destination).toMatchObject({
+      path: ['Characters', 'Elves', 'Moon Elves', 'inae mikumo'],
+      exists: false,
+    });
   });
 
-  it('takes the literal subfolders after the reused folder', () => {
+  it('takes the literal subfolders after the character’s folder', () => {
     const p = ok(plan({ characterName: 'Mehrana al-Khalid', subfolders: ['Portraits', 'Casual'] }));
     expect(lines(p)).toEqual([
       'reuse Characters',
@@ -165,18 +172,16 @@ describe('rule 1: a folder named after the character is reused wherever it is', 
       'create Casual',
     ]);
     expect(p.destination).toMatchObject({
-      path: [...p.reused.map((s) => s.name), 'Portraits', 'Casual']
-        .slice(0, 4)
-        .concat(['Portraits', 'Casual']),
+      path: ['Characters', 'Beastkin', 'Qishen', 'Mehrana al-Khalid', 'Portraits', 'Casual'],
       folderId: null,
       exists: false,
     });
     expect(p.wouldCreate.map((s) => s.parentFolderId)).toEqual([w.mehrana, null]);
   });
 
-  it('works without the repository tree (the name alone is enough when the folder exists)', () => {
+  it('needs the repository tree for the race (the name alone no longer finds a folder)', () => {
     rig.setSetting('alpha', 'aiRepositoryRootId', null);
-    expect(ok(plan({ characterName: 'Inae Mikumo' })).destination.folderId).toBe(w.inae);
+    expect(bad(plan({ characterName: 'Inae Mikumo' })).code).toBe('REPOSITORY_TREE_NOT_READY');
   });
 });
 
@@ -461,12 +466,15 @@ describe('a literal folder path', () => {
 });
 
 describe('rule 5: a conflict and an ambiguity are typed, never guessed', () => {
-  it('an asset (not a folder) with the character’s name where the folder is needed is a conflict', async () => {
+  // ADR 0057 decision 8: on a character's path both are ART_FOLDER_AMBIGUOUS (the cause kept in the details).
+  it('an asset (not a folder) with the character’s name where the folder is needed: ART_FOLDER_AMBIGUOUS', async () => {
     const image = P().model.image('Kitsu', w.foxians);
     await refresh();
     const e = bad(plan({ characterName: 'Kitsu' }));
-    expect(e.code).toBe('ASSET_NAME_CONFLICT');
+    expect(e.code).toBe('ART_FOLDER_AMBIGUOUS');
     expect(e.details).toMatchObject({
+      cause: 'ASSET_NAME_CONFLICT',
+      character: 'Kitsu',
       name: 'Kitsu',
       in: ['Characters', 'Beastkin', 'Foxians'],
       assets: [{ id: image, type: 'IMAGE' }],
@@ -477,14 +485,14 @@ describe('rule 5: a conflict and an ambiguity are typed, never guessed', () => {
   it('a conflict in the middle of the path stops the plan there', async () => {
     P().model.image('High Humans', w.humans);
     await refresh();
-    expect(bad(plan({ characterName: 'Aurelian' })).code).toBe('ASSET_NAME_CONFLICT');
+    expect(bad(plan({ characterName: 'Aurelian' })).code).toBe('ART_FOLDER_AMBIGUOUS');
   });
 
   it('a conflict in a subfolder, and in a literal path', async () => {
     P().model.image('Portraits', w.mehrana);
     await refresh();
     expect(bad(plan({ characterName: 'Mehrana al-Khalid', subfolders: ['Portraits'] })).code).toBe(
-      'ASSET_NAME_CONFLICT',
+      'ART_FOLDER_AMBIGUOUS',
     );
     P().model.image('Level 1', w.maps);
     await refresh();
@@ -499,30 +507,31 @@ describe('rule 5: a conflict and an ambiguity are typed, never guessed', () => {
     );
   });
 
-  it('more than one folder with the character’s name is an ambiguity, listing every candidate', async () => {
-    const twin = P().model.folder('Mehrana al-Khalid', w.recoveryCharacters);
+  it('a folder with the character’s name elsewhere is no ambiguity (never used); two at the exact path are', async () => {
+    P().model.folder('Mehrana al-Khalid', w.recoveryCharacters);
+    await refresh();
+    expect(ok(plan({ characterName: 'Mehrana al-Khalid' })).destination.folderId).toBe(w.mehrana);
+    const twin = P().model.folder('Mehrana al-Khalid', w.qishen);
     await refresh();
     const e = bad(plan({ characterName: 'Mehrana al-Khalid' }));
-    expect(e.code).toBe('AMBIGUOUS_FOLDER');
-    // Ordered by path.
-    expect(e.details!.candidates).toEqual([
-      { id: w.mehrana, path: ['Characters', 'Beastkin', 'Qishen', 'Mehrana al-Khalid'] },
-      { id: twin, path: ['Recovery originals 2026-11', 'Characters', 'Mehrana al-Khalid'] },
-    ]);
+    expect(e.code).toBe('ART_FOLDER_AMBIGUOUS');
+    expect(e.details).toMatchObject({ cause: 'AMBIGUOUS_FOLDER', in: ['Characters', 'Beastkin', 'Qishen'] });
+    expect((e.details!.candidates as { id: string }[]).map((c) => c.id).sort()).toEqual(
+      [w.mehrana, twin].sort(),
+    );
     expect(e.message).toMatch(/Nothing was guessed/);
-    // Naming the folder by its path settles it.
-    expect(
-      ok(plan({ folderPath: ['Characters', 'Beastkin', 'Qishen', 'Mehrana al-Khalid'] })).destination
-        .folderId,
-    ).toBe(w.mehrana);
   });
 
   it('two folders of one name in one place on the way down is an ambiguity too', async () => {
     P().model.folder('Foxians', w.beastkin);
     await refresh();
     const e = bad(plan({ characterName: 'Kitsu' }));
-    expect(e.code).toBe('AMBIGUOUS_FOLDER');
-    expect(e.details).toMatchObject({ name: 'Foxians', in: ['Characters', 'Beastkin'] });
+    expect(e.code).toBe('ART_FOLDER_AMBIGUOUS');
+    expect(e.details).toMatchObject({
+      cause: 'AMBIGUOUS_FOLDER',
+      name: 'Foxians',
+      in: ['Characters', 'Beastkin'],
+    });
   });
 
   it('folders are never moved: a plan only reads', () => {
@@ -593,11 +602,12 @@ describe('the request and the trees must be usable', () => {
     }
   });
 
-  it('no race can be read while the repository tree is not built (but a folder that exists needs none)', () => {
+  it('no race can be read while the repository tree is not built (a folder path still plans)', () => {
     rig.setSetting('alpha', 'aiRepositoryRootId', null);
     expect(bad(plan({ characterName: 'Kitsu' })).code).toBe('REPOSITORY_TREE_NOT_READY');
     expect(bad(plan({ characterResourceId: page.kitsu })).code).toBe('REPOSITORY_TREE_NOT_READY');
-    expect(ok(plan({ characterName: 'Inae Mikumo' })).mode).toBe('existing_character_folder');
+    // ADR 0057 decision 8: an existing folder named after the character no longer stands in for the race.
+    expect(bad(plan({ characterName: 'Inae Mikumo' })).code).toBe('REPOSITORY_TREE_NOT_READY');
     expect(ok(plan({ folderPath: ['Characters'] })).destination.exists).toBe(true);
   });
 

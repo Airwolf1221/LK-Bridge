@@ -119,20 +119,17 @@ describe('pages made or brought back in bulk that the bulk rail counts as one', 
     expect(r.body.proposedBecause).toMatch(/bulk change/);
   });
 
-  // Open (CR-2026-11-R2 section 7, R2-03): the bulk rail counts a restore as one page; counting it from the restore set the
-  // canon guard reads (R2-10) is ADR 0057 decision 9, the owner's.
-  it.fails(
-    'B3: restore_resource of a page deleted with 15 pages under it (16 pages back) is a proposal',
-    async () => {
-      const n = w.stack.mock.calls.length;
-      const r = await call('restore_resource', { page: RESTOREBOX });
-      const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
-      expect(
-        { status: r.body.status, pagesBack: back },
-        `${r.text}\nwrites sent: ${JSON.stringify(writeCallsSince(w, n).map((c) => `${c.method} ${c.path}`))}`,
-      ).toMatchObject({ status: 'proposal_captured', pagesBack: 0 });
-    },
-  );
+  // ADR 0057 decision 9 (R2-03): the bulk rail counts every page the restore set the canon guard reads (R2-10) says may
+  // come back with the page.
+  it('B3: restore_resource of a page deleted with 15 pages under it (16 pages back) is a proposal', async () => {
+    const n = w.stack.mock.calls.length;
+    const r = await call('restore_resource', { page: RESTOREBOX });
+    const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
+    expect(
+      { status: r.body.status, pagesBack: back },
+      `${r.text}\nwrites sent: ${JSON.stringify(writeCallsSince(w, n).map((c) => `${c.method} ${c.path}`))}`,
+    ).toMatchObject({ status: 'proposal_captured', pagesBack: 0 });
+  });
 
   it('B4: a batch of [saveResourceAsTemplate, createResourceFromTemplate] with children (32 pages) is not run directly', async () => {
     const m = w.repo.mutations.length;
@@ -174,30 +171,27 @@ describe('pages made or brought back in bulk that the bulk rail counts as one', 
     expect(writeCallsSince(w, n)).toEqual([]);
   });
 
-  // Open (CR-2026-11-R2 section 7, R2-03): as B3, through the low-level route (ADR 0057 decision 9).
-  it.fails(
-    'B6: restoreResource through lk_api_write (same cascade, low-level route) is a proposal',
-    async () => {
-      // The owner deletes the box again (the agent restored it above when B3 held no rail).
-      if (w.repo.live(RESTOREBOX)) {
-        await w.stack.runtime.engine.run(
-          'deleteResource',
-          { path: { resourceId: RESTOREBOX }, query: { cascade: true } },
-          { project: PROJECT, origin: { kind: 'ui', client: 'owner' }, confirm: 'cascade', priority: 'P1' },
-        );
-      }
-      expect(w.repo.live(RESTOREBOX)).toBeUndefined();
-      const r = await call('lk_api_write', {
-        operationId: 'restoreResource',
-        params: { path: { resourceId: RESTOREBOX } },
-      });
-      const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
-      expect({ status: r.body.status, pagesBack: back }, r.text).toMatchObject({
-        status: 'proposal_captured',
-        pagesBack: 0,
-      });
-    },
-  );
+  // ADR 0057 decision 9 (R2-03): as B3, through the low-level route.
+  it('B6: restoreResource through lk_api_write (same cascade, low-level route) is a proposal', async () => {
+    // The owner deletes the box again (the agent restored it above when B3 held no rail).
+    if (w.repo.live(RESTOREBOX)) {
+      await w.stack.runtime.engine.run(
+        'deleteResource',
+        { path: { resourceId: RESTOREBOX }, query: { cascade: true } },
+        { project: PROJECT, origin: { kind: 'ui', client: 'owner' }, confirm: 'cascade', priority: 'P1' },
+      );
+    }
+    expect(w.repo.live(RESTOREBOX)).toBeUndefined();
+    const r = await call('lk_api_write', {
+      operationId: 'restoreResource',
+      params: { path: { resourceId: RESTOREBOX } },
+    });
+    const back = w.repo.live(RESTOREBOX) ? 1 + liveUnder(w, RESTOREBOX).length : 0;
+    expect({ status: r.body.status, pagesBack: back }, r.text).toMatchObject({
+      status: 'proposal_captured',
+      pagesBack: 0,
+    });
+  });
 });
 
 describe('the bulk rail with the owner’s own choice of rails (deletes off, bulk on, N = 10)', () => {

@@ -145,6 +145,9 @@ export const registerProjects: Register = (api, ctx) => {
     // CR-2026-11-R2 (R2-51): the Status of pages agents create is a canon setting, saved with the same re-authentication
     // as the Canon section (ADR 0036 decision 4), whichever route saves it.
     if (b.key === 'agentDefaultStatus') requireReauth(ctx.deps.services, req);
+    // ADR 0057 decision 7: switching ChatGPT's file source on (or back to its default, on) lets an agent make the bridge
+    // download more, so it needs the re-authentication of ADR 0028 decision 7; switching it off stays one click.
+    if (b.key === 'fileSourceEnabled' && b.value !== false) requireReauth(ctx.deps.services, req);
     return { project: ctx.actions.setProjectSetting(name, b.key, b.value) };
   });
 

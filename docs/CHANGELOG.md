@@ -1,12 +1,47 @@
 # Changelog
 
+## Unreleased: ADR 0057 accepted, the second review's owner decisions built (17 November 2026)
+
+The owner accepted every decision of [ADR 0057](adr/0057-cr-2026-11-r2-owner-decisions.md) as recommended; each is built
+and tested, and no `it.fails` is left from CR-2026-11-R2. No migration; deploy normally. Nothing was run against a live
+system (mocks and fixtures only).
+
+- **Behaviour changes for agents at scope `write`:**
+  - **Low-level removals are deletes** (decision 4, R2-52): through `lk_api_write`, `lk_api_batch` or `lk_op_*`, a
+    block, block row, sidebar row or infobox row delete, and a whole-list write (`replaceDocumentBlocks`,
+    `updateProperty`, `updateBlockProperty`, `replaceBlock`, `updateBlock`) that drops an entry held now, become a
+    proposal under the deletes rail. Revert of them stays open.
+  - **Renaming an Authoritative page**, even keeping `[BSRC]`, is a canonical proposal by every route, pack tools
+    included (decision 5).
+  - **A restore counts every page it may bring back** towards the bulk rail; an unknown set counts as over (decision 9,
+    R2-03).
+  - **An orphan event is not deleted** while the age's table has an unpaired row whose date cannot be read
+    (`ORPHAN_NEAR_UNREADABLE`, naming the rows; decision 2, R2-49). Marking the row table-only, or fixing its date, lifts
+    it.
+  - **A character's art folder** comes from its exact path under Characters only; a folder with its name elsewhere is
+    never used (`ART_FOLDER_AMBIGUOUS` when the path is ambiguous or blocked; decision 8, R2-46).
+  - **A move to `templates` is refused** for every caller at every scope (`TEMPLATES_DESTINATION`; W18).
+- **New project setting** `fileSourceEnabled` (on by default): ChatGPT's `file` source has its own switch, separate from
+  `UPLOAD_ALLOW_URL_SOURCE`; off, a `file` is refused before anything is fetched (`UPLOAD_FILE_SOURCE_DISABLED`).
+  Switching it on needs re-authentication; both directions are audited (decision 7, R2-45).
+- **Confirmed and documented:** re-authentication for scope raises (decision 1), the chosen chronology link as a
+  proposal (decision 3), the rails judged when a request arrives with lowering the scope as the emergency brake
+  (decision 6; docs/policy.md and the bridge guide). A deleted image is not private: LegendKeeper keeps serving its file
+  at the old URL (W5; docs/tools.md, docs/dashboard.md).
+- **Backlog:** the write-scope rehearsal's clean-up counts a delete answered "not found" as already gone and discards
+  R4's re-staged copy from the Staging page; `test/auth/private-key-jwt.test.ts` no longer races a second boundary under
+  load (its refused cases sat one second past each limit); scenario 36's date is inside the Third Age (`3A 250`).
+- **Tests that changed from `it.fails` to passing:** `bulk.test.ts` B3 and B6, `deletes.test.ts` A5 and A6,
+  `idempotency.test.ts` G3 (as the decided behaviour), `url-switch.test.ts` (the new switch), `folder-chain.test.ts`
+  E4.
+
 ## Unreleased: CR-2026-11-R2, the second independent review, at write scope (17 November 2026)
 
 **Critical: on the reviewed code an agent at scope `write` could damage Arkona** (R2-10, R2-11): keep Claude and
 ChatGPT at scope `propose` until this is deployed. An independent review of everything merged since CR-2026-11
 (`08feec9` to `013c988`, ADRs 0037 to 0055), after the owner moved both agents to scope `write`
 ([docs/reviews/CR-2026-11-R2.md](reviews/CR-2026-11-R2.md); owner decisions in
-[ADR 0057](adr/0057-cr-2026-11-r2-owner-decisions.md), proposed). 52 findings (4 critical, 19 high, 19 medium, 10 low):
+[ADR 0057](adr/0057-cr-2026-11-r2-owner-decisions.md), proposed; accepted and built since, above). 52 findings (4 critical, 19 high, 19 medium, 10 low):
 48 fixed, each with a test that fails on the reviewed code; 4 open as owner decisions, their tests kept as
 `it.fails`. No migration; deploy normally. Nothing was run against a live system.
 

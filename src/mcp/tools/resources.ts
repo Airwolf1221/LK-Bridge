@@ -1364,6 +1364,8 @@ function updateResourceTool(deps: ToolDeps): McpToolProvider {
               },
             ],
             summary,
+            // ADR 0057 decision 5: the canon guard judges a rename on this read (no second read at entry).
+            prefetched: [{ op: 'getResource', path: { resourceId: node.id }, body: read.value }],
           },
           head,
           preview: () => ({ page }),

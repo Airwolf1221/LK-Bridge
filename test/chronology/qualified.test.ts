@@ -399,9 +399,19 @@ describe('the table-only mark and events without a row', () => {
     expect(nearest.map((n) => n.date)).toEqual(['4A 881 - 4A 900', 'Kumikas 3rd, 4A 881', '4A 881']);
     expect(nearest[0]!.words).toBe('The Quiet Years');
 
+    const chronology = w.stack.runtime.chronology;
+    // ADR 0057 decision 2: the unreadable row of the test before (its mark cleared) could be this event's own, so the
+    // delete is refused until the owner marks it table-only (or fixes its date).
+    await expect(
+      chronology.proposeFix('owner', PROJECT, { kind: 'orphan', age: FOURTH, eventId: 'eorphan1' }),
+    ).rejects.toMatchObject({
+      code: 'ORPHAN_NEAR_UNREADABLE',
+      details: { unreadable: [{ rowId: UNREAD.id }] },
+    });
+    await chronology.markTableOnly('owner', PROJECT, { age: FOURTH, rowId: UNREAD.id });
+
     const tableBefore = h.tableJson();
     const mainBefore = JSON.stringify(w.repo.blocks.get(w.mainDoc));
-    const chronology = w.stack.runtime.chronology;
     const done = w.mark();
     const fix = (await chronology.proposeFix('owner', PROJECT, {
       kind: 'orphan',
@@ -425,8 +435,8 @@ describe('the table-only mark and events without a row', () => {
     const entries = w.stack.runtime.engine.queries.journalLookup(PROJECT, { jobId: job });
     expect(entries.map((e) => e.opId)).toEqual(['deleteEvent']);
     expect(JSON.stringify(entries[0]!.preImage)).toContain('A superseded telling of the Quiet Years');
-    // Only the unreadable row of the test before (its mark cleared) is left.
-    expect((await h.check()).findings.map((f) => f.kind)).toEqual(['unreadable_date']);
+    // The unreadable row is marked table-only: nothing is left.
+    expect((await h.check()).findings).toEqual([]);
   });
 
   it('refuses an event a row owns, by date or by a mismatch (EVENT_HAS_ROW), and one an unpaired row could own (PAIRING_AMBIGUOUS)', async () => {

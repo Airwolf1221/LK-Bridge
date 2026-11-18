@@ -115,8 +115,16 @@ describe('Asset Tree page', () => {
     // "Try it": a read-only plan. Nothing is requested from LegendKeeper and nothing is audited.
     const requests = model.listCalls.length;
     const auditRows = stack.audit().length;
-    const reuse = (
+    // ADR 0057 decision 8: a character's folder comes from its exact path only (the race from the repository tree, not
+    // set up here); the path itself plans.
+    const byName = (
       await post('/asset-tree/plan', { characterName: 'Mehrana al-Khalid', subfolders: ['Art'] })
+    ).json;
+    expect(byName.result).toMatchObject({ ok: false, error: { code: 'REPOSITORY_TREE_NOT_READY' } });
+    const reuse = (
+      await post('/asset-tree/plan', {
+        folderPath: ['Characters', 'Beastkin', 'Qishen', 'Mehrana al-Khalid', 'Art'],
+      })
     ).json;
     expect(reuse.result.ok).toBe(true);
     expect(reuse.result.plan.steps.map((s: any) => `${s.action} ${s.name}`)).toEqual([

@@ -812,8 +812,10 @@ The full list of forms is in docs/chronology.md.
   no table row accounts for (the check's "event without a row"): no row is deleted and the count does not change. It
   is refused when the event has a row after all (`EVENT_HAS_ROW`) or an unpaired row could be its own
   (`PAIRING_AMBIGUOUS`: it is not an orphan; pair it with `sync_timeline_event` and `event_id` instead). The check
-  reports such an event as an "event in a tie", never as an event without a row. `dryRun` shows the event and the
-  three rows nearest it by date. The journal keeps the event.
+  reports such an event as an "event in a tie", never as an event without a row. While the age's table has a row whose
+  date cannot be read (not marked table-only), it is refused too (`ORPHAN_NEAR_UNREADABLE`, naming the rows): tell the
+  person; the owner marks the row table-only or fixes its date. `dryRun` shows the event and the three rows nearest it
+  by date. The journal keeps the event.
 - `sync_timeline_event { row: { date, description } | { row_id, age } }` repairs the timeline for ONE table row, the
   table being the authority: it creates the row's missing event, or corrects the paired event's minutes, `detail`, shape
   and `uri` to match the row. It never touches the table or the count and never renames an event; a row whose event
@@ -1037,12 +1039,13 @@ was asked.
 - protected canon and every lifecycle change ([Canon and approval](#canon-and-approval)), always;
 - whatever the owner's **safety rails** on your profile keep for approval. By default: **deletes** (pages, documents,
   timeline events and lanes, map features, assets, calendars, sidebar and infobox properties, board shapes, and replacing
-  a board's content or a calendar whole), **a job that touches more than 10 pages** (a copy with its children counts
-  every page it copies), and **asset deletes and moves**; the owner can also keep renames and moves of pages. The
-  result is `proposal_captured` with `proposedBecause`, for example `proposed because: bulk change (14 pages > 10)`;
+  a board's content or a calendar whole; through `lk_api_*`, also every block, row or list entry removed), **a job that
+  touches more than 10 pages** (a copy with its children counts every page it copies, a restore every page it brings
+  back), and **asset deletes and moves**; the owner can also keep renames and moves of pages. The result is
+  `proposal_captured` with `proposedBecause`, for example `proposed because: bulk change (14 pages > 10)`;
 - a chronology link you choose (`sync_timeline_event` with `event_id`), a restore that may bring back an Authoritative
-  page (`restore_resource` of a page deleted with others), and a rename that drops `[BSRC]`: canonical or ordinary
-  proposals at every scope;
+  page (`restore_resource` of a page deleted with others), and **any rename of an Authoritative page**, even one that
+  keeps `[BSRC]`: canonical or ordinary proposals at every scope;
 - a setting pack's package (`arkona_create_character`, `arkona_create_owner`, `arkona_create_relationship`), unless the
   owner switched the tool to follow your scope;
 - `restore_snapshot`, always.
@@ -1050,6 +1053,10 @@ was asked.
 **Never route round a rail.** Do not split a bulk change into smaller jobs, rename instead of deleting, or reach the
 same change through `lk_api_*`: tell the person the change is waiting for the owner, and follow it with
 `bridge_proposal_status`. Never retry a write that returned `proposal_captured`.
+
+The rails are judged when your request arrives; a job already accepted runs as accepted. The owner's emergency brake is
+your scope: lowered, your queued jobs stop before their next write. A page is never moved under `templates`
+(`TEMPLATES_DESTINATION`), whatever your scope.
 
 ## When the low-level tools are right
 
