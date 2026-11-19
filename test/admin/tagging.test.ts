@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call -- parsed JSON replies */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument -- parsed JSON replies */
 /**
  * v3 F3f (ADR 0060): the Tagging page's admin API. The owner's classification of a page needs a fresh
  * re-authentication, takes the closed list only, and is audited (`retag.classify`); withdrawing it likewise. Agents
